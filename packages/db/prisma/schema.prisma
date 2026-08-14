@@ -141,3 +141,24 @@ model Contract {
   @@index([tenantId])
   @@index([personId])
 }
+
+/// Append-only. Each row carries a hash of the previous row, so deletion or
+/// alteration behind the application is detectable.
+model AuditEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  sequence    Int
+  occurredAt  DateTime @default(now())
+  actorUserId String?  @db.Uuid
+  action      String
+  targetType  String
+  targetId    String?  @db.Uuid
+  outcome     String
+  sourceIp    String?
+  payload     Json
+  prevHash    String
+  hash        String
+
+  @@unique([tenantId, sequence])
+  @@index([tenantId, occurredAt])
+}
