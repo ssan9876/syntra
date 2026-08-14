@@ -180,3 +180,30 @@ model Secret {
   @@unique([tenantId, name])
   @@index([tenantId])
 }
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  name        String
+  description String?
+  permissions String[]
+  builtIn     Boolean  @default(false)
+
+  assignments RoleAssignment[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model RoleAssignment {
+  id             String  @id @default(uuid()) @db.Uuid
+  tenantId       String  @db.Uuid
+  roleId         String  @db.Uuid
+  role           Role    @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  userId         String  @db.Uuid
+  scopeOrgUnitId String? @db.Uuid
+
+  @@unique([roleId, userId, scopeOrgUnitId])
+  @@index([tenantId])
+  @@index([userId])
+}
