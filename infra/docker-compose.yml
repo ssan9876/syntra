@@ -6,6 +6,10 @@ services:
       POSTGRES_PASSWORD: syntra
       POSTGRES_DB: syntra
     ports: ['5432:5432']
+    volumes:
+      # Creates the non-superuser role the application connects as. Runs once,
+      # on an empty data directory.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U syntra']
       interval: 2s

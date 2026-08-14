@@ -18,7 +18,9 @@
 - **Node:** >= 22. Development and CI use Node 24.
 - **Database:** PostgreSQL 16. No feature may depend on a later version.
 - **Tenant isolation:** every tenant-scoped table carries `tenantId`, has `ENABLE ROW LEVEL SECURITY` **and** `FORCE ROW LEVEL SECURITY`, and a `tenant_isolation` policy. The application connects as a non-superuser role that does not own the tables' bypass privilege.
-- **Every database access from a request runs inside `withTenant`.** There is no supported path that reads tenant data outside it.
+- **The application connects as `syntra_app`, a NOSUPERUSER NOBYPASSRLS role** created by `infra/initdb/01-app-role.sql`. A superuser bypasses row-level security unconditionally, which would silently disable the only control enforcing tenancy. The role owns the tables and runs migrations; that is safe only because every tenant-scoped table is FORCE ROW LEVEL SECURITY.
+- **Every RLS policy wraps the setting in `NULLIF(..., )`.** A GUC set with `set_config(..., true)` reverts to an empty string when the transaction ends, not to NULL, and `::uuid` raises a type error rather than matching nothing.
+- **Every database access from a request runs inside `withTenant`.** There is no supported path that reads tenant data outside it. This includes test fixtures: seeding a tenant-scoped table with a bare `prisma.*.create` is rejected by the policy WITH CHECK clause.
 - **Passwords:** Argon2id only. Never MD5, SHA, bcrypt, or scrypt.
 - **Errors:** every HTTP error response is RFC 9457 `application/problem+json` with a stable `type` URI under `https://syntra.dev/problems/`.
 - **Secrets are never returned by any API once written.** They may only be replaced.
@@ -670,7 +672,7 @@ BEGIN
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format(
-      'CREATE POLICY tenant_isolation ON %I USING ("tenantId" = current_setting(''app.current_tenant'', true)::uuid) WITH CHECK ("tenantId" = current_setting(''app.current_tenant'', true)::uuid)',
+      'CREATE POLICY tenant_isolation ON %I USING ("tenantId" = NULLIF(current_setting(''app.current_tenant'', true), '''')::uuid) WITH CHECK ("tenantId" = NULLIF(current_setting(''app.current_tenant'', true), '''')::uuid)',
       t);
   END LOOP;
 END $$;
