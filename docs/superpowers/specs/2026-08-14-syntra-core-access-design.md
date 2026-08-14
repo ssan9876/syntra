@@ -26,15 +26,17 @@ This slice is done when a self-hosted Syntra instance can:
    read another's data.
 2. Hold users, groups, and organizational units, populated by hand and by
    synchronizing from Active Directory or another LDAP server.
-3. Authenticate a user with a password plus a second factor (TOTP or WebAuthn).
-4. Act as a SAML 2.0 identity provider and an OpenID Connect provider for
+3. Hold persons and their contracts, including a person with several concurrent
+   contracts, and link a person to the accounts they sign in with.
+4. Authenticate a user with a password plus a second factor (TOTP or WebAuthn).
+5. Act as a SAML 2.0 identity provider and an OpenID Connect provider for
    downstream applications.
-5. Delegate authentication upstream to Entra ID, Google, or a generic OpenID
+6. Delegate authentication upstream to Entra ID, Google, or a generic OpenID
    Connect provider, creating the local user on first login.
-6. Show each user a portal of the applications assigned to them, and sign them
+7. Show each user a portal of the applications assigned to them, and sign them
    in to any of those applications with one click.
-7. Let a user reset a forgotten password by email, without a helpdesk call.
-8. Record every privileged action in a tamper-evident audit log.
+8. Let a user reset a forgotten password by email, without a helpdesk call.
+9. Record every privileged action in a tamper-evident audit log.
 
 ---
 
@@ -45,9 +47,9 @@ document, implementation plan, and build cycle.
 
 | # | Sub-project | HelloID counterpart | Contents |
 |---|---|---|---|
-| 0 | **Core** | Platform, admin and user dashboards | Multi-tenancy, directory, admin RBAC, audit log, secrets vault, job scheduler, notifications, web shell |
+| 0 | **Core** | Platform, admin and user dashboards | Multi-tenancy, directory, persons and contracts, admin RBAC, audit log, secrets vault, job scheduler, notifications, web shell |
 | 1 | **Access** | Access Management | SAML 2.0 IdP, OIDC OP, upstream federation, application catalog, MFA, authentication policies, self-service password reset |
-| 2 | **Provision** | Provisioning | Source systems, persons and contracts, snapshots, business rules, evaluation and enforcement, target systems, entitlements |
+| 2 | **Provision** | Provisioning | Source systems, snapshots, business rules, evaluation and enforcement, target systems, entitlements — built on Core's person and contract model |
 | 3 | **Automate** | Service Automation | Product catalog, self-service requests, approval workflows, delegated dynamic forms, scripted task engine |
 | 4 | **Govern** | Governance | Reconciliation, orphan account detection, segregation of duties, recertification campaigns |
 | 5 | **Agent** | HelloID Agent | Outbound-connecting on-premises worker for Active Directory, LDAP, SQL, and PowerShell |
@@ -75,6 +77,7 @@ implementation plan.
 | License | Apache-2.0 | Permissive, with the explicit patent grant that matters in the identity space. |
 | Protocol engine | Protocol libraries embedded in the Syntra API | See section 4. |
 | Web application | One React application with role-gated routes | See section 5. |
+| Person and contract model | Established in Core now, not deferred to Provision | The account model and the employment model are separate concerns. Introducing persons and contracts later would mean migrating a populated `User` table and rewriting every claim mapping and policy rule that had leaned on flattened fields. |
 
 ---
 
@@ -201,19 +204,60 @@ A single bootstrap owner account is created when a tenant is provisioned.
 
 ### Directory
 
-- `User` — the identity of a person who signs in. Login name, email, display
-  name, status, organizational unit, credentials.
+- `User` — an account that can sign in. Login name, email, display name, status,
+  organizational unit, credentials, and an optional link to a `Person`. Service
+  accounts have no `Person`.
 - `Group`, `GroupMembership`, `OrgUnit` — grouping and hierarchy.
 - `UserAttribute` — typed key/value storage for tenant-defined attributes, so a
   tenant can carry attributes Syntra does not model natively.
 - `DirectorySource`, `SyncRun`, `SyncRecord` — synchronization configuration and
   per-run results.
 
-`User` deliberately contains no employment or human-resources concepts: no job
-title, no manager, no contract, no start and end date. Provision introduces
-`Person` and `Contract` in its own design and links them to `User`. Merging the
-two now would produce a `User` table that both modules fight over, and is the
-single modeling mistake most likely to poison the later work.
+`User` deliberately contains no employment or human-resources concepts. Those
+live on `Person` and `Contract` below, and `User` links to a `Person` rather
+than absorbing its fields.
+
+### Identity: persons and contracts
+
+This is the model HelloID's Provisioning module is built on, and it is
+established here rather than in the Provision design so that later modules
+extend it instead of introducing it.
+
+- `Person` — a human being known to the organization, independent of whether
+  they can sign in. Given name, family name, name-assembly convention, personal
+  and business contact details, external identifier from the eventual source
+  system, and lifecycle status.
+- `Contract` — one employment or engagement relationship held by a `Person`.
+  Start date, end date, job title, department, cost centre, employer, location,
+  manager reference, full-time equivalent, sequence number, and an explicit
+  `isPrimary` flag. A `Person` may hold several concurrent contracts, which is
+  precisely why this is a separate table and not a set of columns on `User`.
+  Exactly one active contract per person may be primary, enforced by a partial
+  unique index rather than by application code.
+- `PersonUserLink` — associates a `Person` with the `User` accounts belonging to
+  them. One `Person` may hold more than one account.
+
+The distinction that makes this worth modeling: **`Person` is who someone is,
+`Contract` is what they do, and `User` is how they sign in.** A contractor with
+two simultaneous engagements, an employee who changes department mid-year, and a
+shared service account with no person behind it are all representable. Flattened
+onto `User`, none of them are.
+
+Three consequences inside this slice:
+
+- Claim mappings (section 7) can emit contract attributes — department, job
+  title, manager — into SAML assertions and OIDC claims, which is what most
+  downstream applications actually want.
+- Authentication policy rules (section 8) can match on contract attributes, so a
+  tenant can require a stronger factor of, say, finance staff.
+- Contract start and end dates give the directory a defensible notion of when an
+  account should be active, without any business-rule engine yet.
+
+**What is not here:** source-system imports, snapshots, business rules,
+evaluation and enforcement, target systems, and entitlements. Persons and
+contracts are populated by administrators through the console, the API, or CSV
+import. The engine that derives them from an HR system and drives accounts out
+to target systems remains the Provision design's job.
 
 ### Credentials
 
@@ -238,8 +282,12 @@ single modeling mistake most likely to poison the later work.
   certificates, binding preferences.
 - `OidcClient` — client ID, hashed secret, redirect URIs, grant types, scopes,
   PKCE requirement.
-- `ClaimMapping` — maps directory attributes to SAML attributes and OIDC claims,
-  per application.
+- `ClaimMapping` — maps directory, person, and contract attributes to SAML
+  attributes and OIDC claims, per application. When a person holds several
+  concurrent contracts, the mapping declares which one supplies the value: the
+  primary contract, or the active contract with the lowest sequence number. If
+  the mapping resolves to no contract, the claim is omitted rather than emitted
+  empty.
 - `UpstreamIdp` — an external identity provider Syntra federates to, with its
   protocol configuration, attribute mapping, and just-in-time provisioning
   rules.
@@ -295,8 +343,10 @@ prevents a policy bypass from hiding in one protocol's code path.
 ## 8. Authentication policy engine
 
 A policy is an ordered list of rules. Each rule matches on any combination of:
-target application, group membership, source IP or CIDR range, and time window.
-The first matching rule decides the outcome:
+target application, group membership, contract attribute (department, job title,
+employer, location), source IP or CIDR range, and time window. A contract
+condition matches if **any** of the person's currently active contracts
+satisfies it. The first matching rule decides the outcome:
 
 - `allow` — proceed with primary authentication only.
 - `require_mfa` — require any registered second factor.
@@ -365,6 +415,12 @@ Deletion from the source never deletes a user. It marks the user inactive and
 records the reason, because an accidental source outage that empties a directory
 must not be irreversible.
 
+Directory synchronization populates **users, groups, and organizational units
+only**. It does not create persons or contracts — an LDAP directory is an
+account store, not an authoritative record of employment. A synced user is
+linked to a person by an administrator, or by the Provision engine once that
+exists. Users with no linked person are ordinary and expected.
+
 ---
 
 ## 11. Error handling
@@ -404,7 +460,10 @@ console, rather than only in server logs.
 Test-driven throughout: a failing test precedes the code that satisfies it.
 
 - **Unit** — Vitest against domain services in `core`, with the policy engine
-  and attribute mapping covered exhaustively since both are pure functions.
+  and attribute mapping covered exhaustively since both are pure functions. The
+  multi-contract cases get explicit tests: concurrent contracts, a contract that
+  has ended while another continues, and a person with no active contract at
+  all. These are the cases a flattened model silently gets wrong.
 - **Integration** — the API against a real PostgreSQL in Docker, including
   explicit tests that a request scoped to one tenant cannot read another's rows
   even when the query is written wrongly.
@@ -420,7 +479,14 @@ Test-driven throughout: a failing test precedes the code that satisfies it.
 
 ## 14. Out of scope for this slice
 
-Deferred to their own design documents: Provisioning, Service Automation,
-Governance, the on-premises Agent, SCIM, SMS-based factors, and the broad
-connector library. The interfaces above are shaped to receive them without
+Deferred to their own design documents: the Provisioning **engine**, Service
+Automation, Governance, the on-premises Agent, SCIM, SMS-based factors, and the
+broad connector library. The interfaces above are shaped to receive them without
 restructuring.
+
+Note the boundary on Provisioning specifically. Its *data model* — persons,
+contracts, and their link to accounts — is in this slice, per section 6. What is
+deferred is everything that moves data through that model automatically: HR
+source-system connectors, source snapshots and duplicate merging, the business
+rules engine, evaluation and enforcement, target systems, and entitlements. In
+this slice persons and contracts are maintained by hand.
