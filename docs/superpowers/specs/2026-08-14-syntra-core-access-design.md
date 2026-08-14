@@ -232,8 +232,12 @@ extend it instead of introducing it.
   manager reference, full-time equivalent, sequence number, and an explicit
   `isPrimary` flag. A `Person` may hold several concurrent contracts, which is
   precisely why this is a separate table and not a set of columns on `User`.
-  Exactly one active contract per person may be primary, enforced by a partial
-  unique index rather than by application code.
+  Exactly one contract per person may carry `isPrimary`, enforced by a partial
+  unique index rather than by application code. The constraint is over all of a
+  person's contracts, not only the active ones: a date-dependent predicate is
+  not immutable and PostgreSQL will not index it. Whether the primary contract
+  is currently active is a query-time question, and consumers that need an
+  active contract say so explicitly.
 - `PersonUserLink` — associates a `Person` with the `User` accounts belonging to
   them. One `Person` may hold more than one account.
 
