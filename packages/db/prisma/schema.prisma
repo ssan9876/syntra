@@ -162,3 +162,21 @@ model AuditEvent {
   @@unique([tenantId, sequence])
   @@index([tenantId, occurredAt])
 }
+
+/// Envelope encryption: the value is sealed under a per-secret data key, which
+/// is itself sealed under a master key held outside the database.
+model Secret {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @db.Uuid
+  name       String
+  ciphertext Bytes
+  iv         Bytes
+  tag        Bytes
+  wrappedDek Bytes
+  dekIv      Bytes
+  dekTag     Bytes
+  updatedAt  DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
