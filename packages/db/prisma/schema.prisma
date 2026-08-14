@@ -3,8 +3,11 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  // Used only by `migrate dev`. The application role deliberately lacks
+  // CREATEDB, so the shadow database is provisioned by infra/initdb.
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 model Tenant {
@@ -25,6 +28,69 @@ model OrgUnit {
   parentId String? @db.Uuid
   parent   OrgUnit?  @relation("OrgUnitTree", fields: [parentId], references: [id])
   children OrgUnit[] @relation("OrgUnitTree")
+  users    User[]
 
+  @@index([tenantId])
+}
+
+/// An account that can sign in. Carries no employment data: job title,
+/// department, manager, and dates belong to Contract, not here.
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @db.Uuid
+  login        String
+  email        String
+  displayName  String
+  status       String   @default("active")
+  statusReason String?
+  orgUnitId    String?  @db.Uuid
+  orgUnit      OrgUnit? @relation(fields: [orgUnitId], references: [id])
+  personId     String?  @db.Uuid
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships GroupMembership[]
+  attributes  UserAttribute[]
+
+  @@unique([tenantId, login])
+  @@index([tenantId])
+}
+
+model Group {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String  @db.Uuid
+  name        String
+  description String?
+
+  memberships GroupMembership[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model GroupMembership {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  groupId  String @db.Uuid
+  userId   String @db.Uuid
+  group    Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([tenantId])
+}
+
+/// Typed key/value storage so a tenant can carry attributes Syntra does not
+/// model natively.
+model UserAttribute {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  userId   String @db.Uuid
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key      String
+  type     String
+  value    String
+
+  @@unique([userId, key])
   @@index([tenantId])
 }

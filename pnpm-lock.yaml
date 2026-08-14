@@ -20,6 +20,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@syntra/db':
+        specifier: workspace:*
+        version: link:../db
       zod:
         specifier: ^3.24.0
         version: 3.25.76

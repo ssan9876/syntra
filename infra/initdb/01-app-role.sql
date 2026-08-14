@@ -20,3 +20,9 @@ CREATE ROLE syntra_app WITH
 
 ALTER SCHEMA public OWNER TO syntra_app;
 GRANT ALL ON SCHEMA public TO syntra_app;
+
+-- Prisma's `migrate dev` diffs the schema in a throwaway shadow database.
+-- Rather than granting syntra_app CREATEDB (a privilege it should not carry
+-- in production), the shadow database is provisioned here and referenced by
+-- SHADOW_DATABASE_URL. Development-only; `migrate deploy` never touches it.
+CREATE DATABASE syntra_shadow OWNER syntra_app;
