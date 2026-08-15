@@ -191,7 +191,7 @@ export function SyncRunDetailPage() {
               onClick={() => onApply(confirmable, partial ? included : null)}
               loading={applying}
               disabled={
-                (blocked && !(confirmable && confirmed)) ||
+                (blocked && !(confirmable && confirmed)) ||
                 included.length === 0
               }
             >
