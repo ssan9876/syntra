@@ -57,7 +57,24 @@ describe('SourcesPage transport column', () => {
     expect(await screen.findByText(/not encrypted/i)).toBeInTheDocument();
   });
 
-  it('treats a source saved before the mode existed by its URL scheme', async () => {
+  it('reads a legacy ldaps:// source as LDAPS, the way the connector does', async () => {
+    // Saved before `tlsMode` existed, so the scheme is all there is to go on.
+    // Falling through to "Not encrypted" errs safely and is still wrong, and a
+    // label that is wrong in a predictable direction stops being believed.
+    mockFetch([source({ config: { url: 'ldaps://dc.acme.test:636' } })]);
+    renderPage();
+
+    expect(await screen.findByText('LDAPS')).toBeInTheDocument();
+  });
+
+  it('reads a legacy ldap:// source as unencrypted, which it is', async () => {
+    mockFetch([source({ config: { url: 'ldap://dc.acme.test:389' } })]);
+    renderPage();
+
+    expect(await screen.findByText(/not encrypted/i)).toBeInTheDocument();
+  });
+
+  it('says unencrypted when there is no mode and no URL to read one from', async () => {
     mockFetch([source({ config: {} })]);
     renderPage();
 

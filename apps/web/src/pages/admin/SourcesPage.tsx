@@ -10,7 +10,11 @@ interface SourceRow {
   autoApply: boolean;
   enabled: boolean;
   lastRunAt: string | null;
-  config?: { tlsMode?: string; rejectUnauthorized?: boolean } | null;
+  config?: {
+    url?: string;
+    tlsMode?: string;
+    rejectUnauthorized?: boolean;
+  } | null;
 }
 
 const when = (iso: string | null) =>
@@ -22,10 +26,19 @@ const when = (iso: string | null) =>
  * page an administrator already looks at, not only in a JSON blob.
  *
  * A source saved before the mode existed carries no `tlsMode`, so the URL
- * scheme stands in for it here exactly as it does in the connector.
+ * scheme stands in for it — the same rule `ldapConfigSchema` applies when it
+ * resolves an absent mode, so the page and the connector cannot disagree about
+ * a legacy source. Falling through to "Not encrypted" for such a source would
+ * err safely but would still be wrong, and a label that is wrong in a
+ * predictable direction is a label nobody ends up believing.
  */
 function transport(source: SourceRow): { label: string; tone: 'active' | 'danger' } {
-  const mode = source.config?.tlsMode;
+  const mode =
+    source.config?.tlsMode ??
+    (source.config?.url?.trim().toLowerCase().startsWith('ldaps:')
+      ? 'ldaps'
+      : 'plain');
+
   switch (mode) {
     case 'ldaps':
       return { label: 'LDAPS', tone: 'active' };

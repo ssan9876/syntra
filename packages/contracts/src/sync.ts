@@ -1,10 +1,46 @@
+import { CronExpressionParser } from 'cron-parser';
 import { z } from 'zod';
+
+/**
+ * A cron expression the job scheduler will actually accept.
+ *
+ * Validated here, at the contract boundary, because pg-boss parses the
+ * expression *before* its upsert (`timekeeper.js`: `CronExpressionParser.parse`,
+ * then `executeSql`). A malformed expression therefore throws with the previous
+ * schedule row still in place — so without this check a `PATCH` returns 200, the
+ * console renders the string it was handed, and the scheduler goes on firing the
+ * expression it had. Displayed schedule and actual schedule diverge with no
+ * signal anywhere but a log line, which is the same silent divergence the rest
+ * of this work exists to remove. Refused before the transaction opens rather
+ * than reported after it commits.
+ *
+ * Parsed exactly the way pg-boss parses it — same library, same `tz`, same
+ * `strict: false` — so this accepts precisely what the scheduler accepts:
+ * neither a stricter dialect that rejects a working expression, nor a looser
+ * one that lets a broken one through.
+ */
+const cronExpression = z
+  .string()
+  .min(1)
+  .max(128)
+  .superRefine((value, ctx) => {
+    try {
+      CronExpressionParser.parse(value, { tz: 'UTC', strict: false });
+    } catch (cause) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `not a cron expression the scheduler can use: ${
+          cause instanceof Error ? cause.message : 'unparseable'
+        }`,
+      });
+    }
+  });
 
 export const createSourceRequest = z.object({
   name: z.string().min(1).max(256),
   config: z.record(z.unknown()),
   bindPassword: z.string().min(1).max(1024),
-  schedule: z.string().max(128).optional(),
+  schedule: cronExpression.optional(),
   autoApply: z.boolean().optional(),
   deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
 });
@@ -23,7 +59,7 @@ export const updateSourceRequest = z
     name: z.string().min(1).max(256).optional(),
     config: z.record(z.unknown()).optional(),
     bindPassword: z.string().min(1).max(1024).optional(),
-    schedule: z.string().max(128).nullable().optional(),
+    schedule: cronExpression.nullable().optional(),
     autoApply: z.boolean().optional(),
     deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
     enabled: z.boolean().optional(),

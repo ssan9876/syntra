@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '@syntra/db';
+import { syncScheduleKey } from '../sync/jobs.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
 
 let scheduler: Scheduler;
@@ -96,33 +97,43 @@ describe('scheduler', () => {
         SELECT key, cron FROM pgboss.schedule WHERE name = ${queue} ORDER BY key
       `;
 
+    // The production key shape, not a convenient stand-in. pg-boss runs every
+    // key through `Attorney.assertKey`, which allows only word characters,
+    // dots, hyphens and slashes -- so a test using `source-a` would prove the
+    // keying works and prove nothing about whether the keys this code actually
+    // generates are ones pg-boss will take. The two source ids differ in their
+    // last digit only, so the shared tenant prefix leaves them in this order.
+    const tenantId = '11111111-1111-4111-8111-111111111111';
+    const first = syncScheduleKey(tenantId, '22222222-2222-4222-8222-222222222221');
+    const second = syncScheduleKey(tenantId, '22222222-2222-4222-8222-222222222222');
+
     scheduler.register(queue, async () => {});
     await scheduler.start();
 
     try {
-      await scheduler.schedule(queue, '0 1 * * *', { n: 1 }, 'source-a');
-      await scheduler.schedule(queue, '0 2 * * *', { n: 2 }, 'source-b');
+      await scheduler.schedule(queue, '0 1 * * *', { n: 1 }, first);
+      await scheduler.schedule(queue, '0 2 * * *', { n: 2 }, second);
 
       expect(await schedules()).toEqual([
-        { key: 'source-a', cron: '0 1 * * *' },
-        { key: 'source-b', cron: '0 2 * * *' },
+        { key: first, cron: '0 1 * * *' },
+        { key: second, cron: '0 2 * * *' },
       ]);
 
       // Rescheduling one leaves the other alone, and replaces rather than
       // duplicates: this is the path an edited source takes.
-      await scheduler.schedule(queue, '0 3 * * *', { n: 1 }, 'source-a');
+      await scheduler.schedule(queue, '0 3 * * *', { n: 1 }, first);
       expect(await schedules()).toEqual([
-        { key: 'source-a', cron: '0 3 * * *' },
-        { key: 'source-b', cron: '0 2 * * *' },
+        { key: first, cron: '0 3 * * *' },
+        { key: second, cron: '0 2 * * *' },
       ]);
 
-      await scheduler.unschedule(queue, 'source-a');
-      expect((await schedules()).map((r) => r.key)).toEqual(['source-b']);
+      await scheduler.unschedule(queue, first);
+      expect((await schedules()).map((r) => r.key)).toEqual([second]);
     } finally {
       // pg-boss keeps its schema outside `public`, so resetDatabase() does not
       // truncate any of this.
-      await scheduler.unschedule(queue, 'source-a');
-      await scheduler.unschedule(queue, 'source-b');
+      await scheduler.unschedule(queue, first);
+      await scheduler.unschedule(queue, second);
     }
   }, 60_000);
 });

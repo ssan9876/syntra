@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { ZodError } from 'zod';
 import {
   createSourceRequest,
   deleteSourceQuery,
@@ -92,6 +93,24 @@ export async function registerAdminSourceRoutes(
       const body = createSourceRequest.parse(request.body);
 
       const source = await request.db(async (tx) => {
+        // The same pre-check `PATCH` does, for the same reason: without it the
+        // unique index on (tenantId, name) surfaces as a bare 500, and an
+        // administrator retyping a name they already used gets no idea why.
+        // Not a substitute for the constraint — two simultaneous creates can
+        // still race past this under READ COMMITTED, and the index is what
+        // makes that a failed request rather than two sources with one name.
+        const clash = await tx.directorySource.findFirst({
+          where: { name: body.name },
+        });
+        if (clash) {
+          throw new ProblemError(
+            409,
+            'conflict',
+            'Conflict',
+            `a source is already named ${body.name}`,
+          );
+        }
+
         const created = await createSource(tx, provider, body);
         await recordEvent(tx, {
           actorUserId: request.session.userId,
@@ -140,15 +159,27 @@ export async function registerAdminSourceRoutes(
         try {
           updated = await updateSource(tx, provider, id, body);
         } catch (cause) {
-          // A rejected connection configuration — a TLS mode contradicting
-          // the URL scheme, a missing search base — is the caller's mistake,
-          // not a server fault.
-          throw new ProblemError(
-            400,
-            'invalid-config',
-            'Invalid source configuration',
-            cause instanceof Error ? cause.message : undefined,
-          );
+          // `ZodError` only, and deliberately narrow. The one failure in here
+          // that is the caller's mistake is a rejected connection
+          // configuration — a TLS mode contradicting the URL scheme, a missing
+          // search base — and that is the only thing `ldapConfigSchema.parse`
+          // throws. Everything else this can raise is ours: a vault failure, a
+          // P2002 from the name-clash race the pre-check above cannot close
+          // under READ COMMITTED, a dropped connection. Repeating any of those
+          // back as a 400 with `cause.message` as the RFC 9457 `detail` both
+          // misstates whose fault it is and leaks whatever the message
+          // happened to carry, against this API's own stated policy (see
+          // plugins/problem-json.ts). Rethrown, they reach the error handler,
+          // which logs them and tells the client nothing but 500.
+          if (cause instanceof ZodError) {
+            throw new ProblemError(
+              400,
+              'invalid-config',
+              'Invalid source configuration',
+              cause.issues.map((i) => i.message).join('; '),
+            );
+          }
+          throw cause;
         }
         if (!updated) throw new ProblemError(404, 'not-found', 'Source not found');
 

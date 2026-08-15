@@ -99,6 +99,26 @@ describe('source administration', () => {
     expect(res.body).not.toContain('adminpassword');
   });
 
+  it('refuses a duplicate name with a 409, not a bare 500', async () => {
+    // The unique index on (tenantId, name) is what actually protects this, and
+    // it surfaced as a 500 with nothing an administrator could act on.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    const res = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect((await get('/api/admin/sources', cookie)).json().sources).toHaveLength(1);
+  });
+
   it('refuses to create a source with only sync.read', async () => {
     const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
     const res = await post('/api/admin/sources', cookie, {
@@ -460,6 +480,38 @@ describe('scheduling a source as it changes', () => {
     expect(scheduler.unscheduled.map((c) => c.key)).toContain(
       syncScheduleKey(ctx.tenantId, created.json().id),
     );
+  });
+
+  it('refuses a cron expression the scheduler could not parse, on create', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+
+    const res = await createSourceVia(cookie, { schedule: 'not a cron' });
+
+    expect(res.statusCode).toBe(400);
+    expect((await get('/api/admin/sources', cookie)).json().sources).toEqual([]);
+    expect(scheduler.scheduled).toEqual([]);
+  });
+
+  it('refuses a bad cron expression on edit, and leaves the working one running', async () => {
+    // pg-boss parses the expression *before* its upsert, so a malformed one
+    // throws with the old schedule row still in place. Without this check the
+    // PATCH returned 200, the console rendered "not a cron", and the scheduler
+    // went on firing the previous expression -- displayed schedule and actual
+    // schedule diverging with nothing but a log line to say so.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await createSourceVia(cookie, { schedule: cron });
+    const scheduledBefore = scheduler.scheduled.length;
+
+    const res = await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      schedule: 'not a cron',
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    // The stored schedule is still the one that works, and so is the scheduler.
+    const listed = (await get('/api/admin/sources', cookie)).json().sources;
+    expect(listed[0].schedule).toBe(cron);
+    expect(scheduler.scheduled).toHaveLength(scheduledBefore);
   });
 
   it('unschedules a deleted source, so it cannot fire against nothing', async () => {

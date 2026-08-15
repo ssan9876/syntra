@@ -64,7 +64,7 @@ Requires Node 22+, pnpm 9, and Docker.
 
 ```bash
 pnpm install
-pnpm db:up                                  # PostgreSQL 16 and MailDev
+pnpm db:up                                  # PostgreSQL 16, MailDev, OpenLDAP
 pnpm db:migrate
 
 cp .env.example .env                        # then fill in the secrets
@@ -105,6 +105,14 @@ itself. If they fail with `ERR_CONNECTION_REFUSED` while `curl` reaches the
 same URL, Vite is listening on IPv6 only: `localhost` resolves to `::1` on
 recent Node, while Chromium maps `*.localhost` to `127.0.0.1`. Start the web
 server with `vite --host 127.0.0.1`.
+
+**An OpenLDAP container started before the TLS tests existed has to be
+recreated:** `docker compose -f infra/docker-compose.yml up -d openldap`. The
+image's default `LDAP_TLS_VERIFY_CLIENT` is `demand`, which requires a client
+certificate and drops the socket mid-handshake for a client that has none. The
+failure reads `Client network socket disconnected before secure TLS connection
+was established`, which looks like a network fault and is not one — the compose
+file sets `try` instead, and also maps 636 so the LDAPS path is covered.
 
 ### Connecting a directory source
 

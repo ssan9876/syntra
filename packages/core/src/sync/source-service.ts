@@ -164,6 +164,24 @@ export class SourceOwnsObjectsError extends Error {
  *
  * Attribute mappings, runs and changes cascade with the row. They describe the
  * source itself and mean nothing without it, unlike the accounts, which stay.
+ *
+ * ## The transaction budget
+ *
+ * The caller runs all of this in one `withTenant`, which is
+ * `prisma.$transaction(fn)` on Prisma's default five-second budget. That is
+ * deliberate — the deactivation, the detach and the audit event have to commit
+ * together, or a half-deleted source leaves accounts detached from a source
+ * that still exists — and it is safe in a way the LDAP read never was: these
+ * are five index-driven bulk `updateMany`s against `sourceId`, no network I/O,
+ * nothing waiting on a third party.
+ *
+ * It is not unbounded, though. A source owning tens of thousands of rows could
+ * exceed the budget and abort with P2028, and the delete then has no recourse
+ * through this function: retrying re-runs the same statements against the same
+ * volume. If that happens, raise the budget for this call specifically —
+ * `prisma.$transaction(fn, { timeout })` — rather than splitting the phases
+ * apart, because the atomicity is the point. Splitting it to fit is how the
+ * accounts end up detached from a source that was never removed.
  */
 export async function deleteSource(
   tx: TenantClient,
