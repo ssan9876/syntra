@@ -220,6 +220,22 @@ describe('ldapConnector.discoverSchema', () => {
     expect(schema.attributes).toContain('mail');
     expect(schema.objectClasses).toContain('inetOrgPerson');
   });
+
+  it('includes the operational attributes, which is where the anchor lives', async () => {
+    // entryUUID is operational on OpenLDAP and is not returned by an ordinary
+    // search. A discovery report that omits it lists every attribute except
+    // the one an administrator opened it to find.
+    const schema = await ldapConnector.discoverSchema(config);
+    expect(schema.attributes).toContain('entryUUID');
+  });
+
+  it('does not report the selectors it asked with as attributes', async () => {
+    // ldapts echoes `*` and `+` back as keys on the entry. Listed, they read
+    // as two attributes the directory holds.
+    const schema = await ldapConnector.discoverSchema(config);
+    expect(schema.attributes).not.toContain('*');
+    expect(schema.attributes).not.toContain('+');
+  });
 });
 
 describe('ldapConnector.write', () => {

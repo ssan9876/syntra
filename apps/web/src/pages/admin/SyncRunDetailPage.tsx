@@ -140,8 +140,16 @@ export function SyncRunDetailPage() {
   // no records cannot be applied at all, because an empty directory and an
   // unreachable one look identical from here.
   const confirmable = blocked && data.requiresConfirmation;
-  const applied = data.status === 'applied' || data.status === 'partially_applied';
+  /**
+   * Whether anything is still waiting on a decision.
+   *
+   * Deliberately a property of the changes rather than of the run's status. A
+   * `partially_applied` run is not finished: it is precisely the run that had
+   * some of its changes held back, and refusing to apply the rest would make a
+   * partial apply a discard.
+   */
   const proposed = data.changes.filter((change) => change.status === 'proposed');
+  const settled = proposed.length === 0;
   const included = proposed
     .filter((change) => !excluded.has(change.id))
     .map((change) => change.id);
@@ -183,8 +191,7 @@ export function SyncRunDetailPage() {
               onClick={() => onApply(confirmable, partial ? included : null)}
               loading={applying}
               disabled={
-                (blocked && !(confirmable && confirmed)) ||
-                applied ||
+                (blocked && !(confirmable && confirmed)) ||
                 included.length === 0
               }
             >
@@ -264,7 +271,7 @@ export function SyncRunDetailPage() {
           </Alert>
         )}
 
-        {proposed.length > 0 && !applied && (
+        {!settled && (
           <p className="text-muted">
             Untick a change to leave it out of this apply — it stays proposed
             and can be applied later. Skip it to record that it will not be
@@ -310,7 +317,7 @@ export function SyncRunDetailPage() {
                       className="border-b border-border-subtle last:border-0"
                     >
                       <td className="px-4 py-2.5">
-                        {change.status === 'proposed' && !applied && (
+                        {change.status === 'proposed' && (
                           <input
                             type="checkbox"
                             checked={!excluded.has(change.id)}
@@ -363,7 +370,7 @@ export function SyncRunDetailPage() {
                             server says so with a 409. Offering the control on
                             an applied one would be offering a lie about what
                             the run did. */}
-                        {change.status === 'proposed' && !applied && (
+                        {change.status === 'proposed' && (
                           <Button
                             size="sm"
                             onClick={() => onSkip(change.id)}

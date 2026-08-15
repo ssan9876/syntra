@@ -180,9 +180,7 @@ export function SourceDetailPage() {
   const [rulesTouched, setRulesTouched] = useState(false);
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(
-    (location.state as { notice?: string } | null)?.notice ?? null,
-  );
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | 'save' | 'test' | 'run' | 'delete'>(
     null,
   );
@@ -200,6 +198,21 @@ export function SourceDetailPage() {
    */
   const mark = (field: string): { error?: string } =>
     invalid[field] ? { error: invalid[field] } : {};
+
+  /**
+   * The message a create left behind on its way here.
+   *
+   * Read in an effect rather than as initial state: creating a source
+   * navigates from /sources/new to /sources/:id, and React keeps the same
+   * component mounted across that move because it is the same element type.
+   * A `useState` initializer therefore never runs again, and the message —
+   * including the one that says the mappings were refused — was silently
+   * dropped exactly when it mattered.
+   */
+  const routedNotice = (location.state as { notice?: string } | null)?.notice;
+  useEffect(() => {
+    setNotice(routedNotice ?? null);
+  }, [routedNotice]);
 
   useEffect(() => {
     if (!data) return;

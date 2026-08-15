@@ -203,6 +203,75 @@ describe('creating a source', () => {
     expect(bodyOf(mapped).rules).toHaveLength(3);
   });
 
+  it('carries the outcome across the move to the saved source', async () => {
+    // The editor navigates from /sources/new to /sources/:id, and React keeps
+    // the same component mounted across that move, so a message read only as
+    // initial state is dropped exactly when it matters.
+    mockFetch();
+    render(
+      <MemoryRouter initialEntries={['/admin/sources/new']}>
+        <Routes>
+          <Route path="/admin/sources/new" element={<SourceDetailPage />} />
+          <Route path="/admin/sources/:id" element={<SourceDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await userEvent.type(await screen.findByLabelText('Name'), 'Acme LDAP');
+    await userEvent.type(screen.getByLabelText('Bind password'), 'secret');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(
+      await screen.findByText(/attribute mappings were saved/i),
+    ).toBeInTheDocument();
+  });
+
+  it('says so, on the saved source, when the mappings were refused', async () => {
+    // The source exists by then. Pretending otherwise would leave a source
+    // that syncs nothing and says nothing about why.
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      const request = (init ?? {}) as RequestInit;
+      if (request.method === 'PUT') {
+        return Promise.resolve(
+          json(
+            {
+              type: 'https://syntra.dev/problems/invalid-mappings',
+              title: 'Invalid mappings',
+              status: 400,
+              detail: 'exactly one user mapping must be marked as the correlation key',
+            },
+            400,
+          ),
+        );
+      }
+      if (request.method === 'POST') return Promise.resolve(json({ id: 'new-id' }));
+      if (url.includes('/sources/mapping-defaults')) {
+        return Promise.resolve(json(DEFAULTS));
+      }
+      if (url.includes('/mappings')) return Promise.resolve(json({ rules: [] }));
+      return Promise.resolve(json(savedSource()));
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/admin/sources/new']}>
+        <Routes>
+          <Route path="/admin/sources/new" element={<SourceDetailPage />} />
+          <Route path="/admin/sources/:id" element={<SourceDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await userEvent.type(await screen.findByLabelText('Name'), 'Acme LDAP');
+    await userEvent.type(screen.getByLabelText('Bind password'), 'secret');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(
+      await screen.findByText(/attribute mappings were refused/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/nothing will sync/i)).toBeInTheDocument();
+  });
+
   it('puts a rejected cron expression on the schedule field, not in a banner', async () => {
     const calls = mockFetch({
       onPost: (url) =>

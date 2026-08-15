@@ -331,6 +331,47 @@ describe('SyncRunDetailPage', () => {
     expect(screen.queryByRole('checkbox')).toBeNull();
   });
 
+  it('lets a partially applied run apply the rest', async () => {
+    // A partial apply is a pause, not a discard: applyRun leaves what was left
+    // out still proposed, and the run comes back partially_applied. Reading
+    // "finished" off the run's status rather than off its changes is what made
+    // this button dead on exactly the run that needed it.
+    mockFetch({
+      run: run({
+        status: 'partially_applied',
+        changes: [
+          {
+            id: 'c1',
+            changeType: 'create_user',
+            targetType: 'User',
+            targetId: 'u1',
+            sourceAnchor: 'a1',
+            before: null,
+            after: { login: 'nhaddad' },
+            status: 'applied',
+            message: null,
+          },
+          {
+            id: 'c2',
+            changeType: 'create_group',
+            targetType: 'Group',
+            targetId: null,
+            sourceAnchor: 'g1',
+            before: null,
+            after: { name: 'Nurses' },
+            status: 'proposed',
+            message: null,
+          },
+        ],
+      }),
+    });
+    renderPage();
+
+    await screen.findByText(/Nurses/);
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: 'Skip' })).toHaveLength(1);
+  });
+
   it('shows a skipped change as skipped rather than as a raw status', async () => {
     mockFetch({
       run: run({
