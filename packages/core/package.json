@@ -8,6 +8,7 @@
     "@syntra/connectors": "workspace:*",
     "@syntra/db": "workspace:*",
     "argon2": "^0.45.1",
+    "ldapts": "^9.0.0",
     "nodemailer": "^9.0.5",
     "pg-boss": "^12.27.0",
     "zod": "^3.24.0"

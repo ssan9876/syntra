@@ -127,6 +127,9 @@ importers:
       argon2:
         specifier: ^0.45.1
         version: 0.45.1
+      ldapts:
+        specifier: ^9.0.0
+        version: 9.0.0
       nodemailer:
         specifier: ^9.0.5
         version: 9.0.5
