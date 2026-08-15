@@ -131,6 +131,45 @@ describe('previewRun', () => {
     expect(users.every((u) => u.status === 'active')).toBe(true);
   });
 
+  it('proposes no membership removal for a group the connector could not read in full', async () => {
+    // Active Directory hands back `member;range=0-1499` for a group above its
+    // value-range limit, so `member` is absent and a naive read sees an empty
+    // group. Before this, that proposed removing every member it had.
+    const first = await previewRun(tenantId, provider, sourceId);
+    await applyRun(tenantId, first.id);
+
+    const real = ldapConnector.read.bind(ldapConnector);
+    vi.spyOn(ldapConnector, 'read').mockImplementation(async function* (config) {
+      for await (const record of real(config)) {
+        if (record.objectType === 'group') {
+          const { memberDns: _dropped, ...rest } = record;
+          yield { ...rest, readFailure: 'membership came back range-truncated' };
+        } else {
+          yield record;
+        }
+      }
+    });
+
+    const second = await previewRun(tenantId, provider, sourceId);
+
+    expect(second.mappingFailures).toBe(1);
+    expect(second.mappingFailureReasons).toEqual([
+      'membership came back range-truncated',
+    ]);
+
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: second.id } }),
+    );
+    expect(changes.filter((c) => c.changeType === 'remove_member')).toEqual([]);
+    expect(changes.filter((c) => c.changeType === 'deactivate_group')).toEqual([]);
+
+    // The membership it already had is untouched.
+    const memberships = await withTenant(tenantId, (tx) =>
+      tx.groupMembership.findMany(),
+    );
+    expect(memberships).toHaveLength(1);
+  });
+
   it('completes when the directory read takes longer than a transaction may', async () => {
     // Prisma's default interactive-transaction timeout is 5 seconds. A read
     // that takes longer than that must still produce a previewed run, which

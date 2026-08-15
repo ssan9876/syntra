@@ -13,6 +13,18 @@ export interface SourceRecord {
   attributes: Record<string, string[]>;
   /** Present on groups: the DNs of members, resolved to anchors by the reader. */
   memberDns?: string[];
+  /**
+   * Set when the source returned this object but the connector could not read
+   * it completely enough to diff against safely — an Active Directory group
+   * whose membership came back range-truncated, say.
+   *
+   * The record is still returned rather than dropped, because the difference
+   * between "this object is gone" and "we could not read this object" is the
+   * difference between a correct deactivation and a catastrophic one. A reader
+   * seeing this must count the record as read, exclude it from the diff, and
+   * never treat it as absent.
+   */
+  readFailure?: string;
 }
 
 export interface ConnectionResult {

@@ -222,6 +222,15 @@ function computeDiff(input: DiffInput) {
   };
 
   for (const record of input.records) {
+    // The connector could see the object but not read it in full — an Active
+    // Directory group whose membership came back range-truncated. Treated
+    // exactly like a mapping failure: counted, reported, excluded from the
+    // diff, and never counted as absent.
+    if (record.readFailure !== undefined) {
+      failed(record, record.readFailure);
+      continue;
+    }
+
     const mapped = mapRecord(record, input.rules);
     // The anchor and the object type come from the record, not the failure:
     // the failure only knows what went wrong, and the set has to be keyed the

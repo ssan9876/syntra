@@ -92,6 +92,38 @@ function toArray(value: unknown): string[] {
   return values.map((v) => (Buffer.isBuffer(v) ? v.toString('utf8') : String(v)));
 }
 
+/**
+ * Active Directory truncates a large multi-valued attribute rather than
+ * refusing it: a group with more members than `MaxValRange` (1500 by default)
+ * comes back carrying `member;range=0-1499` instead of `member`, and the
+ * caller is expected to ask for the next window. `ldapts` does not implement
+ * range retrieval, so the plain `member` attribute is simply *absent* on
+ * exactly the groups that matter most.
+ *
+ * Read naively that is a group with no members, and the diff proposes
+ * removing every one of the five thousand people in it. So the range marker
+ * is detected and turned into a read failure: the group is excluded from the
+ * diff and reported, rather than silently emptied.
+ *
+ * Implementing range retrieval properly is real feature work and is tracked
+ * separately. Failing loudly is the correct interim behaviour; failing
+ * silently is the bug.
+ */
+export function rangedMembershipFailure(
+  entry: Record<string, unknown>,
+): string | undefined {
+  const ranged = Object.keys(entry).find((key) =>
+    /^(member|uniqueMember);range=/i.test(key),
+  );
+  if (!ranged) return undefined;
+
+  return (
+    `the directory returned this group's membership as the ranged attribute ` +
+    `"${ranged}" because it exceeds the server's value-range limit; range ` +
+    `retrieval is not implemented, so its membership could not be read in full`
+  );
+}
+
 function toRecord(
   entry: Record<string, unknown>,
   objectType: ObjectType,
@@ -117,7 +149,14 @@ function toRecord(
   };
 
   if (objectType === 'group') {
-    record.memberDns = toArray(entry.member ?? entry.uniqueMember);
+    const truncated = rangedMembershipFailure(entry);
+    if (truncated) {
+      // Deliberately no memberDns: an empty list here would read as "this
+      // group has no members" and propose removing all of them.
+      record.readFailure = truncated;
+    } else {
+      record.memberDns = toArray(entry.member ?? entry.uniqueMember);
+    }
   }
   return record;
 }

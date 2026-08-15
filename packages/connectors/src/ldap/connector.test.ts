@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ldapConnector } from './connector.js';
+import { ldapConnector, rangedMembershipFailure } from './connector.js';
 import type { LdapConfig } from './config.js';
 
 const config: LdapConfig & { bindPassword: string } = {
@@ -104,5 +104,38 @@ describe('ldapConnector.write', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/not implemented/i);
+  });
+});
+
+describe('rangedMembershipFailure', () => {
+  it('detects the ranged member attribute Active Directory returns', () => {
+    const reason = rangedMembershipFailure({
+      dn: 'cn=Everyone,dc=acme,dc=test',
+      'member;range=0-1499': ['cn=a,dc=acme,dc=test'],
+    });
+    expect(reason).toMatch(/range/i);
+    expect(reason).toContain('member;range=0-1499');
+  });
+
+  it('detects it whatever case the server used', () => {
+    expect(
+      rangedMembershipFailure({ 'Member;Range=0-1499': [] }),
+    ).toMatch(/range/i);
+    expect(
+      rangedMembershipFailure({ 'uniqueMember;range=1500-*': [] }),
+    ).toMatch(/range/i);
+  });
+
+  it('says nothing about an ordinary group', () => {
+    expect(
+      rangedMembershipFailure({
+        dn: 'cn=Nurses,dc=acme,dc=test',
+        member: ['uid=jdoe,dc=acme,dc=test'],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('says nothing about an attribute that merely mentions member', () => {
+    expect(rangedMembershipFailure({ memberOf: [], memberUid: [] })).toBeUndefined();
   });
 });
