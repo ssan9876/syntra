@@ -24,10 +24,12 @@ const TRANSFORMS: { value: MappingRule['transform']; label: string }[] = [
   { value: 'lowercase', label: 'Lowercase' },
 ];
 
+// The same shape as Field's input, one size down. Focus is left to the global
+// :focus-visible rule in index.css, as every other control here does.
 const control =
   'h-8 w-full rounded-control border border-border-subtle bg-bg px-2 text-ink ' +
   'transition-colors duration-150 hover:border-border-strong ' +
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary';
+  'disabled:bg-surface-2 disabled:text-muted';
 
 /**
  * The rule the server enforces, stated where the choice is made.
@@ -152,12 +154,12 @@ export function MappingEditor({
                   </tr>
                 </thead>
                 <tbody>
-                  {indexed.map(({ rule, index }) => (
+                  {indexed.map(({ rule, index }, position) => (
                     <tr key={index}>
                       <td className="py-1 pr-3 align-middle">
                         <input
                           aria-label={`${TYPE_LABEL[objectType]} directory attribute ${
-                            indexed.findIndex((e) => e.index === index) + 1
+                            position + 1
                           }`}
                           value={rule.sourceAttribute}
                           disabled={disabled}
@@ -170,7 +172,7 @@ export function MappingEditor({
                       <td className="py-1 pr-3 align-middle">
                         <select
                           aria-label={`${TYPE_LABEL[objectType]} Syntra field ${
-                            indexed.findIndex((e) => e.index === index) + 1
+                            position + 1
                           }`}
                           value={rule.targetField}
                           disabled={disabled}
@@ -195,7 +197,7 @@ export function MappingEditor({
                       <td className="py-1 pr-3 align-middle">
                         <select
                           aria-label={`${TYPE_LABEL[objectType]} transform ${
-                            indexed.findIndex((e) => e.index === index) + 1
+                            position + 1
                           }`}
                           value={rule.transform}
                           disabled={disabled}
