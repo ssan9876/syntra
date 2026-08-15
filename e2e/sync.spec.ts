@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { Client } from 'ldapts';
+import { Client as PgClient } from 'pg';
 
 const ADMIN = process.env.SEED_ADMIN_PASSWORD;
 
@@ -43,13 +44,28 @@ async function elevateTo(page: Page, path: string, password: string) {
 // reconciling identity with the app seed. Added before the suite and removed
 // after, the same pattern packages/core/src/sync/test-support.ts uses for the
 // backend LDAP integration tests.
+//
+// Every identifier carries a per-run stamp, as e2e/access.spec.ts does, so
+// this suite can run twice without an intervening `pnpm db:reset`. Without
+// it, DirectorySource's unique (tenantId, name) rejected the second run and
+// the constraint error masked whatever the test was actually there to catch.
+// The stamp is what makes the suite repeatable; the cleanup below is what
+// keeps the database from accumulating a run's worth of rows every time.
+const STAMP = Date.now();
 const LDAP_URL = process.env.LDAP_URL ?? 'ldap://localhost:1389';
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  'postgresql://syntra_app:syntra_app@localhost:5432/syntra';
 const BIND_DN = 'cn=admin,dc=acme,dc=test';
 const BIND_PASSWORD = 'adminpassword';
-const OU_DN = 'ou=E2ESync,dc=acme,dc=test';
-const NURSE_DN = `uid=e2enurse,${OU_DN}`;
-const CLERK_DN = `uid=e2eclerk,${OU_DN}`;
-const GROUP_DN = `cn=E2E Team,${OU_DN}`;
+const OU_DN = `ou=E2ESync${STAMP},dc=acme,dc=test`;
+const NURSE_UID = `e2enurse${STAMP}`;
+const CLERK_UID = `e2eclerk${STAMP}`;
+const GROUP_CN = `E2E Team ${STAMP}`;
+const NURSE_DN = `uid=${NURSE_UID},${OU_DN}`;
+const CLERK_DN = `uid=${CLERK_UID},${OU_DN}`;
+const GROUP_DN = `cn=${GROUP_CN},${OU_DN}`;
+const SOURCE_NAME = `E2E OpenLDAP ${STAMP}`;
 
 async function ldapClient(): Promise<Client> {
   const client = new Client({ url: LDAP_URL });
@@ -57,50 +73,131 @@ async function ldapClient(): Promise<Client> {
   return client;
 }
 
+/**
+ * The DNs actually added, deepest last. Recorded as they are created rather
+ * than assumed, so a setup that fails halfway removes exactly what it made.
+ */
+const added: string[] = [];
+
+async function removeLdapFixture(): Promise<void> {
+  const client = await ldapClient();
+  try {
+    // Deepest entries first: an OU cannot be deleted while it still has
+    // children, and a stray failure here must not stop the rest from being
+    // attempted, or the fixture is left dirty for the next run.
+    for (const dn of [...added].reverse()) {
+      await client.del(dn).catch(() => undefined);
+    }
+    added.length = 0;
+  } finally {
+    await client.unbind().catch(() => undefined);
+  }
+}
+
+/**
+ * Removes the rows this suite's run created.
+ *
+ * Direct SQL because there is no delete endpoint for a directory source, and
+ * there is deliberately not going to be one in this slice. It connects as
+ * `syntra_app` like the application does -- never as a superuser -- so it
+ * binds the tenant first and row-level security applies to every statement
+ * exactly as it would in a request.
+ *
+ * `AuditEvent` is untouched on purpose: the log is append-only, and a test
+ * that deleted from it would be rehearsing the attack the hash chain exists
+ * to detect.
+ */
+async function removeDatabaseFixture(): Promise<void> {
+  const client = new PgClient({ connectionString: DATABASE_URL });
+  await client.connect();
+  try {
+    const tenant = await client.query<{ id: string }>(
+      'SELECT id FROM "Tenant" WHERE slug = $1',
+      ['acme'],
+    );
+    const tenantId = tenant.rows[0]?.id;
+    if (!tenantId) return;
+
+    await client.query("SELECT set_config('app.current_tenant', $1, false)", [
+      tenantId,
+    ]);
+
+    const sources = await client.query<{ id: string }>(
+      'DELETE FROM "DirectorySource" WHERE name = $1 RETURNING id',
+      [SOURCE_NAME],
+    );
+    // AttributeMapping, SyncRun and SyncChange all cascade from the source.
+    // The bind password does not: it lives in the vault under a name derived
+    // from the source id.
+    for (const source of sources.rows) {
+      await client.query('DELETE FROM "Secret" WHERE name = $1', [
+        `source.${source.id}.bindPassword`,
+      ]);
+    }
+
+    const logins = [NURSE_UID, CLERK_UID];
+    await client.query(
+      'DELETE FROM "GroupMembership" WHERE "userId" IN (SELECT id FROM "User" WHERE login = ANY($1))',
+      [logins],
+    );
+    await client.query('DELETE FROM "User" WHERE login = ANY($1)', [logins]);
+    await client.query('DELETE FROM "Group" WHERE name = $1', [GROUP_CN]);
+  } finally {
+    await client.end();
+  }
+}
+
 test.beforeAll(async () => {
   const client = await ldapClient();
   try {
-    await client.add(OU_DN, {
-      objectClass: ['organizationalUnit'],
-      ou: 'E2ESync',
-    });
-    await client.add(NURSE_DN, {
-      objectClass: ['inetOrgPerson'],
-      uid: 'e2enurse',
-      cn: 'E2E Nurse',
-      sn: 'Nurse',
-      mail: 'e2enurse@acme.test',
-    });
-    await client.add(CLERK_DN, {
-      objectClass: ['inetOrgPerson'],
-      uid: 'e2eclerk',
-      cn: 'E2E Clerk',
-      sn: 'Clerk',
-      mail: 'e2eclerk@acme.test',
-    });
-    await client.add(GROUP_DN, {
-      objectClass: ['groupOfNames'],
-      cn: 'E2E Team',
-      member: [NURSE_DN],
-    });
+    const add = async (
+      dn: string,
+      attributes: Record<string, string | string[]>,
+    ) => {
+      await client.add(dn, attributes);
+      added.push(dn);
+    };
+
+    // Cleaned up here as well as in afterAll: a beforeAll that throws halfway
+    // must not leave a half-seeded tree behind, whatever the runner does with
+    // afterAll hooks once a setup hook has failed.
+    try {
+      await add(OU_DN, {
+        objectClass: ['organizationalUnit'],
+        ou: `E2ESync${STAMP}`,
+      });
+      await add(NURSE_DN, {
+        objectClass: ['inetOrgPerson'],
+        uid: NURSE_UID,
+        cn: 'E2E Nurse',
+        sn: 'Nurse',
+        mail: `${NURSE_UID}@acme.test`,
+      });
+      await add(CLERK_DN, {
+        objectClass: ['inetOrgPerson'],
+        uid: CLERK_UID,
+        cn: 'E2E Clerk',
+        sn: 'Clerk',
+        mail: `${CLERK_UID}@acme.test`,
+      });
+      await add(GROUP_DN, {
+        objectClass: ['groupOfNames'],
+        cn: GROUP_CN,
+        member: [NURSE_DN],
+      });
+    } catch (cause) {
+      await client.unbind().catch(() => undefined);
+      await removeLdapFixture();
+      throw cause;
+    }
   } finally {
     await client.unbind().catch(() => undefined);
   }
 });
 
 test.afterAll(async () => {
-  const client = await ldapClient();
-  try {
-    // Deepest entries first: an OU cannot be deleted while it still has
-    // children, and a stray failure here must not stop the rest from being
-    // attempted, or the fixture is left dirty for the next run.
-    await client.del(GROUP_DN).catch(() => undefined);
-    await client.del(NURSE_DN).catch(() => undefined);
-    await client.del(CLERK_DN).catch(() => undefined);
-    await client.del(OU_DN).catch(() => undefined);
-  } finally {
-    await client.unbind().catch(() => undefined);
-  }
+  await removeLdapFixture();
+  await removeDatabaseFixture();
 });
 
 test('a directory source is connected, previewed, applied, and its users land in the directory', async ({
@@ -119,7 +216,7 @@ test('a directory source is connected, previewed, applied, and its users land in
   // See task-15-report.md for why this wasn't built as a new UI form.
   const created = await page.request.post('/api/admin/sources', {
     data: {
-      name: 'E2E OpenLDAP',
+      name: SOURCE_NAME,
       config: {
         url: LDAP_URL,
         bindDn: BIND_DN,
@@ -176,7 +273,7 @@ test('a directory source is connected, previewed, applied, and its users land in
 
   // The new source shows up in the list the console does have.
   await page.reload();
-  await expect(page.getByRole('table')).toContainText('E2E OpenLDAP');
+  await expect(page.getByRole('table')).toContainText(SOURCE_NAME);
 
   // Test the connection and see the counts.
   const tested = await page.request.post(
@@ -192,6 +289,9 @@ test('a directory source is connected, previewed, applied, and its users land in
   expect(run.ok(), await run.text()).toBe(true);
   const runBody = await run.json();
   expect(runBody.status).toBe('previewed');
+  // Everything the source returned was understood: a run with mapping
+  // failures is not a clean run, whatever recordsRead says.
+  expect(runBody.mappingFailures).toBe(0);
 
   // See the proposed creates grouped by type, on the review page the
   // console actually renders.
@@ -209,7 +309,7 @@ test('a directory source is connected, previewed, applied, and its users land in
   const createUserPanel = page.locator('section', {
     has: page.getByRole('heading', { name: 'Create user (2)' }),
   });
-  await expect(createUserPanel.getByRole('table')).toContainText('e2enurse');
+  await expect(createUserPanel.getByRole('table')).toContainText(NURSE_UID);
 
   // Apply.
   await page.getByRole('button', { name: 'Apply' }).click();
@@ -220,8 +320,8 @@ test('a directory source is connected, previewed, applied, and its users land in
   await page.goto('/admin/users');
   await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible();
   const users = page.getByRole('table');
-  await expect(users).toContainText('e2enurse');
+  await expect(users).toContainText(NURSE_UID);
   await expect(users).toContainText('E2E Nurse');
-  await expect(users).toContainText('e2eclerk');
+  await expect(users).toContainText(CLERK_UID);
   await expect(users).toContainText('E2E Clerk');
 });
