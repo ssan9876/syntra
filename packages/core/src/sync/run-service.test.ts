@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
+import { ldapConnector } from '@syntra/connectors';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createUser } from '../directory/user-service.js';
@@ -39,6 +40,10 @@ beforeEach(async () => {
     sourceId = source.id;
     await setMappings(tx, source.id, DEFAULT_MAPPINGS.openLdap);
   });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('previewRun', () => {
@@ -85,6 +90,24 @@ describe('previewRun', () => {
     );
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0]!.message).toMatch(/locally managed/i);
+  });
+
+  it('completes when the directory read takes longer than a transaction may', async () => {
+    // Prisma's default interactive-transaction timeout is 5 seconds. A read
+    // that takes longer than that must still produce a previewed run, which
+    // it can only do if the read happens outside a transaction. This fails
+    // with P2028 the moment anyone puts the read back inside `withTenant`.
+    const real = ldapConnector.read.bind(ldapConnector);
+    vi.spyOn(ldapConnector, 'read').mockImplementation(async function* (config) {
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      yield* real(config);
+    });
+
+    const run = await previewRun(tenantId, provider, sourceId);
+
+    expect(run.error).toBeNull();
+    expect(run.status).toBe('previewed');
+    expect(run.recordsRead).toBeGreaterThan(0);
   });
 });
 

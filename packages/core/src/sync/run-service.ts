@@ -4,9 +4,19 @@ import { ldapConnector, type SourceRecord } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { mappingsFor, sourceWithPassword } from './source-service.js';
-import { isMappingFailure, mapRecord, type DirectoryObject } from './mapping.js';
+import {
+  isMappingFailure,
+  mapRecord,
+  type DirectoryObject,
+  type MappingRule,
+} from './mapping.js';
 import { absentAnchors, correlate, type ExistingObject } from './correlate.js';
-import { diffMemberships, diffObjects, type MembershipState } from './diff.js';
+import {
+  diffMemberships,
+  diffObjects,
+  type MembershipState,
+  type ProposedChange,
+} from './diff.js';
 import { evaluateGuard } from './guard.js';
 import { applyChange } from './apply.js';
 
@@ -26,12 +36,37 @@ import { applyChange } from './apply.js';
  * transaction, and the very `syncRun.update()` meant to record the failure
  * would fail too — leaving the run stuck at `running` forever. Running the
  * failure-recording update in a fresh transaction is what makes it durable.
+ *
+ * ## Why this is several short transactions and not one
+ *
+ * `withTenant` is `prisma.$transaction(fn)`, and the client is built with no
+ * `transactionOptions`, so Prisma's defaults apply: a five-second budget for
+ * the whole callback. Reading a production-sized directory over the network
+ * takes longer than that on its own, so a single transaction spanning the
+ * LDAP read aborts with P2028 and every run against a real directory fails.
+ * Raising the timeout is not the fix either — that holds a pooled database
+ * connection open across a network read to a third-party server.
+ *
+ * So the work is phased. Each phase that touches a tenant-scoped table gets
+ * its own short `withTenant`; the LDAP read (phase 3) and the diff
+ * computation (phase 5) touch no database at all and run outside any
+ * transaction. Nothing carries a `tx` handle across a phase boundary.
+ *
+ * **Phase 6 must stay one transaction.** The proposed changes and the run's
+ * terminal status commit together or not at all, which is what keeps the
+ * spec's promise (section 8) that "a run that fails partway writes no changes
+ * at all". Splitting it would allow a run marked `previewed` with no changes
+ * recorded, or changes recorded against a run still marked `running`. Equally,
+ * do not re-merge the earlier phases back into it: one long transaction around
+ * the directory read is the exact bug this shape exists to prevent.
  */
 export async function previewRun(
   tenantId: string,
   provider: MasterKeyProvider,
   sourceId: string,
 ) {
+  // Phase 1: create the run row, so there is something to mark `failed` no
+  // matter where the rest of this gives out.
   const run = await withTenant(tenantId, async (tx) => {
     const source = await tx.directorySource.findUnique({ where: { id: sourceId } });
     if (!source) throw new Error(`no such source: ${sourceId}`);
@@ -40,54 +75,55 @@ export async function previewRun(
   });
 
   try {
-    return await withTenant(tenantId, async (tx) => {
-      const tenant = await currentTenant(tx);
+    // Phase 2: read the configuration out, then close the transaction. Plain
+    // data, deliberately not a `tx` handle — nothing downstream may hold one
+    // open across the directory read.
+    const prepared = await withTenant(tenantId, async (tx) => {
       const source = await tx.directorySource.findUnique({ where: { id: sourceId } });
       if (!source) throw new Error(`no such source: ${sourceId}`);
 
       const config = await sourceWithPassword(tx, provider, sourceId);
       if (!config) throw new Error('source configuration or credential missing');
-      const rules = await mappingsFor(tx, sourceId);
 
-      const records: SourceRecord[] = [];
-      for await (const record of ldapConnector.read(config)) records.push(record);
+      return {
+        config,
+        rules: await mappingsFor(tx, sourceId),
+        thresholdPercent: source.deactivationThresholdPercent,
+      };
+    });
 
-      const objects: DirectoryObject[] = [];
-      for (const record of records) {
-        const mapped = mapRecord(record, rules);
-        if (!isMappingFailure(mapped)) objects.push(mapped);
-      }
+    // Phase 3: the directory read, outside any transaction. This is the slow,
+    // network-bound part, and it holds no database connection while it runs.
+    const records: SourceRecord[] = [];
+    for await (const record of ldapConnector.read(prepared.config)) {
+      records.push(record);
+    }
 
-      const dnToAnchor = new Map(objects.map((o) => [o.dn, o.anchor]));
-      let unresolved = 0;
+    // Phase 4: one short transaction for the whole database-side snapshot the
+    // diff is computed against. `loadExisting` returns each row's current
+    // field values alongside it, so this is three `findMany`s and not the six
+    // it was when the field maps were loaded per object type.
+    const snapshot = await withTenant(tenantId, async (tx) => ({
+      existing: await loadExisting(tx),
+      memberships: await currentMemberships(tx, sourceId),
+    }));
 
-      const existing = await loadExisting(tx);
-      const changes = [];
+    // Phase 5: pure computation. No transaction, no I/O.
+    const computed = computeDiff({
+      records,
+      rules: prepared.rules,
+      sourceId,
+      existing: snapshot.existing,
+      currentMemberships: snapshot.memberships,
+      thresholdPercent: prepared.thresholdPercent,
+    });
 
-      for (const type of ['user', 'group', 'orgUnit'] as const) {
-        const ofType = objects.filter((o) => o.objectType === type);
-        const rows = existing.filter((e) => e.objectType === type);
-        const correlations = correlate(ofType, rows, sourceId);
-        const absent = absentAnchors(ofType, rows, sourceId);
-        changes.push(...diffObjects(correlations, absent, await currentFieldsFor(tx, type)));
-      }
-
-      const desired: MembershipState[] = objects
-        .filter((o) => o.objectType === 'group')
-        .map((group) => {
-          const memberAnchors: string[] = [];
-          for (const dn of group.memberDns) {
-            const anchor = dnToAnchor.get(dn);
-            if (anchor) memberAnchors.push(anchor);
-            else unresolved++;
-          }
-          return { groupAnchor: group.anchor, memberAnchors };
-        });
-
-      changes.push(...diffMemberships(desired, await currentMemberships(tx, sourceId)));
+    // Phase 6: the proposed changes and the run's terminal status, together.
+    return await withTenant(tenantId, async (tx) => {
+      const tenant = await currentTenant(tx);
 
       await tx.syncChange.createMany({
-        data: changes.map((c) => ({
+        data: computed.changes.map((c) => ({
           tenantId: tenant,
           runId: run.id,
           changeType: c.changeType,
@@ -101,29 +137,21 @@ export async function previewRun(
         })),
       });
 
-      const activeUsersFromSource = await tx.user.count({
-        where: { sourceId, status: 'active' },
-      });
-      const verdict = evaluateGuard({
-        changes,
-        recordsRead: records.length,
-        activeUsersFromSource,
-        thresholdPercent: source.deactivationThresholdPercent,
-      });
-
       return tx.syncRun.update({
         where: { id: run.id },
         data: {
-          status: verdict.blocked ? 'blocked' : 'previewed',
-          blockedReason: verdict.blocked ? verdict.reason : null,
-          requiresConfirmation: verdict.blocked,
+          status: computed.verdict.blocked ? 'blocked' : 'previewed',
+          blockedReason: computed.verdict.blocked ? computed.verdict.reason : null,
+          requiresConfirmation: computed.verdict.blocked,
           recordsRead: records.length,
-          unresolvedMembers: unresolved,
+          unresolvedMembers: computed.unresolvedMembers,
           finishedAt: new Date(),
         },
       });
     });
   } catch (cause) {
+    // Covers phases 2 through 6. Its own transaction, because the one that
+    // failed is already aborted and cannot accept this update.
     return withTenant(tenantId, (tx) =>
       tx.syncRun.update({
         where: { id: run.id },
@@ -137,64 +165,139 @@ export async function previewRun(
   }
 }
 
-async function loadExisting(tx: TenantClient): Promise<ExistingObject[]> {
+/** Everything the diff correlates against, snapshotted in one transaction. */
+interface ExistingSnapshot {
+  objects: ExistingObject[];
+  /**
+   * Current stored field values, keyed by row id. Ids are unique across the
+   * three object types, so one map serves all of them.
+   */
+  fields: Map<string, Record<string, string>>;
+}
+
+interface DiffInput {
+  records: SourceRecord[];
+  rules: MappingRule[];
+  sourceId: string;
+  existing: ExistingSnapshot;
+  currentMemberships: MembershipState[];
+  thresholdPercent: number;
+}
+
+/**
+ * The whole diff, as a pure function of what the source returned and what the
+ * snapshot held. No transaction, no I/O: everything here is reproducible from
+ * its inputs, which is what lets it sit between two short transactions rather
+ * than inside one long one.
+ */
+function computeDiff(input: DiffInput) {
+  const objects: DirectoryObject[] = [];
+
+  for (const record of input.records) {
+    const mapped = mapRecord(record, input.rules);
+    if (!isMappingFailure(mapped)) objects.push(mapped);
+  }
+
+  const dnToAnchor = new Map(objects.map((o) => [o.dn, o.anchor]));
+  let unresolvedMembers = 0;
+  const changes: ProposedChange[] = [];
+
+  for (const type of ['user', 'group', 'orgUnit'] as const) {
+    const ofType = objects.filter((o) => o.objectType === type);
+    const rows = input.existing.objects.filter((e) => e.objectType === type);
+    const correlations = correlate(ofType, rows, input.sourceId);
+    const absent = absentAnchors(ofType, rows, input.sourceId);
+    changes.push(...diffObjects(correlations, absent, input.existing.fields));
+  }
+
+  const desired: MembershipState[] = objects
+    .filter((o) => o.objectType === 'group')
+    .map((group) => {
+      const memberAnchors: string[] = [];
+      for (const dn of group.memberDns) {
+        const anchor = dnToAnchor.get(dn);
+        if (anchor) memberAnchors.push(anchor);
+        else unresolvedMembers++;
+      }
+      return { groupAnchor: group.anchor, memberAnchors };
+    });
+
+  changes.push(...diffMemberships(desired, input.currentMemberships));
+
+  // Derived from the same snapshot the diff was computed against rather than
+  // from a separate count query: the numerator and the denominator have to
+  // describe one moment for the share between them to mean anything.
+  const activeUsersFromSource = input.existing.objects.filter(
+    (e) =>
+      e.objectType === 'user' &&
+      e.sourceId === input.sourceId &&
+      e.status === 'active',
+  ).length;
+
+  const verdict = evaluateGuard({
+    changes,
+    recordsRead: input.records.length,
+    activeUsersFromSource,
+    thresholdPercent: input.thresholdPercent,
+  });
+
+  return { changes, unresolvedMembers, verdict };
+}
+
+/**
+ * Every row a run could correlate against, with its current field values, in
+ * three queries. The field values ride along with the rows because the diff
+ * needs both, and loading them separately meant reading each table twice.
+ */
+async function loadExisting(tx: TenantClient): Promise<ExistingSnapshot> {
   const users = await tx.user.findMany();
   const groups = await tx.group.findMany();
   const units = await tx.orgUnit.findMany();
 
-  return [
-    ...users.map((u) => ({
-      id: u.id,
-      objectType: 'user' as const,
-      sourceId: u.sourceId,
-      sourceAnchor: u.sourceAnchor,
-      correlationValue: u.login,
-      status: u.status,
-    })),
-    ...groups.map((g) => ({
-      id: g.id,
-      objectType: 'group' as const,
-      sourceId: g.sourceId,
-      sourceAnchor: g.sourceAnchor,
-      correlationValue: g.name,
-      status: g.status,
-    })),
-    ...units.map((o) => ({
-      id: o.id,
-      objectType: 'orgUnit' as const,
-      sourceId: o.sourceId,
-      sourceAnchor: o.sourceAnchor,
-      correlationValue: o.name,
-      status: 'active',
-    })),
-  ];
-}
-
-async function currentFieldsFor(
-  tx: TenantClient,
-  type: 'user' | 'group' | 'orgUnit',
-): Promise<Map<string, Record<string, string>>> {
-  const map = new Map<string, Record<string, string>>();
-
-  if (type === 'user') {
-    for (const u of await tx.user.findMany()) {
-      map.set(u.id, {
-        login: u.login,
-        email: u.email,
-        displayName: u.displayName,
-      });
-    }
-  } else if (type === 'group') {
-    for (const g of await tx.group.findMany()) {
-      map.set(g.id, { name: g.name, description: g.description ?? '' });
-    }
-  } else {
-    for (const o of await tx.orgUnit.findMany()) {
-      map.set(o.id, { name: o.name });
-    }
+  const fields = new Map<string, Record<string, string>>();
+  for (const u of users) {
+    fields.set(u.id, {
+      login: u.login,
+      email: u.email,
+      displayName: u.displayName,
+    });
+  }
+  for (const g of groups) {
+    fields.set(g.id, { name: g.name, description: g.description ?? '' });
+  }
+  for (const o of units) {
+    fields.set(o.id, { name: o.name });
   }
 
-  return map;
+  return {
+    fields,
+    objects: [
+      ...users.map((u) => ({
+        id: u.id,
+        objectType: 'user' as const,
+        sourceId: u.sourceId,
+        sourceAnchor: u.sourceAnchor,
+        correlationValue: u.login,
+        status: u.status,
+      })),
+      ...groups.map((g) => ({
+        id: g.id,
+        objectType: 'group' as const,
+        sourceId: g.sourceId,
+        sourceAnchor: g.sourceAnchor,
+        correlationValue: g.name,
+        status: g.status,
+      })),
+      ...units.map((o) => ({
+        id: o.id,
+        objectType: 'orgUnit' as const,
+        sourceId: o.sourceId,
+        sourceAnchor: o.sourceAnchor,
+        correlationValue: o.name,
+        status: 'active',
+      })),
+    ],
+  };
 }
 
 async function currentMemberships(
