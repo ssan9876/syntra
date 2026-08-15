@@ -6,6 +6,12 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    // Guards the highest-consequence switch in the product: applyChange, which
+    // already shipped one silent fallthrough on this branch — a `break` that
+    // left the switch instead of the function, so failed changes were audited
+    // as successes. Two switches repo-wide, both here, both with every case
+    // returning; there is no blast radius to weigh against that.
+    "noFallthroughCasesInSwitch": true,
     "exactOptionalPropertyTypes": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
