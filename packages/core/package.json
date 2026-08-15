@@ -5,6 +5,7 @@
   "main": "./src/index.ts",
   "license": "Apache-2.0",
   "dependencies": {
+    "@simplewebauthn/server": "13.3.2",
     "@syntra/connectors": "workspace:*",
     "@syntra/db": "workspace:*",
     "argon2": "^0.45.1",
