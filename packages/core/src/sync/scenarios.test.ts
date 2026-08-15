@@ -5,7 +5,7 @@ import { localMasterKeyProvider } from '../vault/master-key.js';
 import { DEFAULT_MAPPINGS } from './defaults.js';
 import { createSource, setMappings } from './source-service.js';
 import { applyRun, previewRun } from './run-service.js';
-import { moveLdapEntry, withLdapEntry } from './test-support.js';
+import { moveLdapEntry, replaceLdapAttribute, withLdapEntry } from './test-support.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 let tenantId: string;
@@ -190,25 +190,49 @@ describe('a membership change', () => {
   it('adds and removes members to match the source', async () => {
     await sync();
 
+    // Two members at creation: groupOfNames requires at least one member at
+    // all times, so proving removal means starting with two and dropping to
+    // one, never emptying the group outright.
     await withLdapEntry(
       'cn=Trainers,dc=acme,dc=test',
       {
         objectClass: ['groupOfNames'],
         cn: 'Trainers',
-        member: ['uid=sroe,ou=Care,dc=acme,dc=test'],
+        member: [
+          'uid=jdoe,ou=Care,dc=acme,dc=test',
+          'uid=sroe,ou=Care,dc=acme,dc=test',
+        ],
       },
       async () => {
         await sync();
-        const memberships = await withTenant(tenantId, (tx) =>
+        const afterAdd = await withTenant(tenantId, (tx) =>
           tx.groupMembership.findMany({
             include: { group: true, user: true },
           }),
         );
-        const trainers = memberships.filter(
+        const trainersAfterAdd = afterAdd
+          .filter((m) => m.group.name === 'Trainers')
+          .map((m) => m.user.login)
+          .sort();
+        expect(trainersAfterAdd).toEqual(['jdoe', 'sroe']);
+
+        // Drop jdoe from the group in the directory; a broken remove_member
+        // path would leave this membership row in place.
+        await replaceLdapAttribute('cn=Trainers,dc=acme,dc=test', 'member', [
+          'uid=sroe,ou=Care,dc=acme,dc=test',
+        ]);
+
+        await sync();
+        const afterRemove = await withTenant(tenantId, (tx) =>
+          tx.groupMembership.findMany({
+            include: { group: true, user: true },
+          }),
+        );
+        const trainersAfterRemove = afterRemove.filter(
           (m) => m.group.name === 'Trainers',
         );
-        expect(trainers).toHaveLength(1);
-        expect(trainers[0]!.user.login).toBe('sroe');
+        expect(trainersAfterRemove).toHaveLength(1);
+        expect(trainersAfterRemove[0]!.user.login).toBe('sroe');
       },
     );
   });
@@ -238,9 +262,51 @@ describe('the guard', () => {
 
     await expect(applyRun(tenantId, run.id)).rejects.toThrow(/blocked/i);
 
+    // Exactly the two users from the initial sync, none of them touched --
+    // not merely "some survived", which a partially-broken guard could also
+    // produce.
     const users = await withTenant(tenantId, (tx) =>
       tx.user.findMany({ where: { status: 'active' } }),
     );
-    expect(users.length).toBeGreaterThan(0);
+    expect(users).toHaveLength(2);
+  });
+
+  it('blocks a run where the source returns no records at all', async () => {
+    await sync();
+
+    // A nonexistent search base was tried first (e.g. ou=Nowhere,dc=acme,
+    // dc=test) and rejected: against the live server it makes ldapts throw
+    // NoSuchObjectError, which fails the whole run rather than blocking it,
+    // so it cannot exercise this branch. Filters that match nothing across
+    // all three object types do exercise it: each search still succeeds
+    // against a valid base, every one of them returns zero entries, and
+    // recordsRead ends up genuinely 0 -- distinct from "every user was
+    // filtered out but groups and org units still came back", which is the
+    // scenario the test above covers.
+    await withTenant(tenantId, (tx) =>
+      tx.directorySource.update({
+        where: { id: sourceId },
+        data: {
+          config: {
+            ...config,
+            userFilter: '(objectClass=nothingAtAll)',
+            groupFilter: '(objectClass=nothingAtAll)',
+            orgUnitFilter: '(objectClass=nothingAtAll)',
+          } as never,
+        },
+      }),
+    );
+
+    const run = await preview();
+    expect(run.recordsRead).toBe(0);
+    expect(run.status).toBe('blocked');
+    expect(run.blockedReason).toMatch(/no records/i);
+
+    await expect(applyRun(tenantId, run.id)).rejects.toThrow(/blocked/i);
+
+    const users = await withTenant(tenantId, (tx) =>
+      tx.user.findMany({ where: { status: 'active' } }),
+    );
+    expect(users).toHaveLength(2);
   });
 });

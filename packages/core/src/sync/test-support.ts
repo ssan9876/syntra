@@ -1,4 +1,4 @@
-import { Client } from 'ldapts';
+import { Attribute, Change, Client } from 'ldapts';
 
 const URL = process.env.LDAP_URL ?? 'ldap://localhost:1389';
 const BIND_DN = 'cn=admin,dc=acme,dc=test';
@@ -35,6 +35,29 @@ export async function moveLdapEntry(
   const c = await client();
   try {
     await c.modifyDN(dn, `${newRdn},${newParent}`);
+  } finally {
+    await c.unbind().catch(() => undefined);
+  }
+}
+
+/**
+ * Replaces every value of a multi-valued attribute on an entry, e.g.
+ * shrinking a `groupOfNames`'s `member` list to match a directory change.
+ */
+export async function replaceLdapAttribute(
+  dn: string,
+  type: string,
+  values: string[],
+): Promise<void> {
+  const c = await client();
+  try {
+    await c.modify(
+      dn,
+      new Change({
+        operation: 'replace',
+        modification: new Attribute({ type, values }),
+      }),
+    );
   } finally {
     await c.unbind().catch(() => undefined);
   }
