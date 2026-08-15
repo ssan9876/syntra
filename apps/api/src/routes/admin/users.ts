@@ -5,6 +5,7 @@ import {
   createUserRequest,
   deactivateUserRequest,
   idParam,
+  patchUserRequest,
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
@@ -101,6 +102,60 @@ export async function registerAdminUserRoutes(
         });
         return updated;
       });
+    },
+  );
+
+  /**
+   * Moves a user's password between Syntra and an upstream identity provider.
+   *
+   * The flag self-service reset reads: an `upstream` user cannot reset a
+   * password Syntra does not hold, and is mailed the name recorded here
+   * instead. That mail is the only place the distinction is visible — the HTTP
+   * response to a reset request is identical either way, because a different
+   * response would announce both that the account exists and that it is
+   * federated to anyone who can type a login name.
+   */
+  app.patch(
+    '/users/:id',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = patchUserRequest.parse(request.body);
+
+      const updated = await request.db(async (tx) => {
+        const existing = await tx.user.findUnique({ where: { id } });
+        if (!existing) {
+          throw new ProblemError(404, 'not-found', 'User not found');
+        }
+
+        const user = await tx.user.update({
+          where: { id },
+          data: {
+            ...(body.passwordSource === undefined
+              ? {}
+              : { passwordSource: body.passwordSource }),
+            ...(body.passwordSourceHint === undefined
+              ? {}
+              : { passwordSourceHint: body.passwordSourceHint }),
+          },
+        });
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'user.update',
+          targetType: 'User',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { passwordSource: user.passwordSource },
+        });
+        return user;
+      });
+
+      return {
+        id: updated.id,
+        passwordSource: updated.passwordSource,
+        passwordSourceHint: updated.passwordSourceHint,
+      };
     },
   );
 

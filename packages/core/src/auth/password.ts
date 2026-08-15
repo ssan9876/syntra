@@ -44,6 +44,24 @@ export async function setPassword(
   });
 }
 
+/**
+ * Writes an already-computed hash. The hashing itself is the caller's job, so
+ * it can happen outside a transaction — Argon2id is deliberately expensive and
+ * has no business inside Prisma's 5000 ms transaction budget.
+ */
+export async function setPasswordHash(
+  tx: TenantClient,
+  userId: string,
+  hash: string,
+): Promise<void> {
+  const tenantId = await currentTenant(tx);
+  await tx.passwordCredential.upsert({
+    where: { userId },
+    create: { tenantId, userId, hash },
+    update: { hash },
+  });
+}
+
 export async function hasPassword(
   tx: TenantClient,
   userId: string,

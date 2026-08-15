@@ -14,6 +14,7 @@ import {
 import { registerProblemJson } from './plugins/problem-json.js';
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerEnrolRoutes } from './routes/enrol.js';
+import { registerPasswordResetRoutes } from './routes/password-reset.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
@@ -104,6 +105,17 @@ export async function buildApp(
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
     transport,
+  });
+
+  // Self-service password reset. Unauthenticated by nature — the caller has
+  // forgotten the one credential they had — and it shares the transport so a
+  // completed reset mails the account owner from the same seam as everything
+  // else.
+  await app.register(registerPasswordResetRoutes, {
+    prefix: '/api/auth/password-reset',
+    transport,
+    publicUrl: config.publicUrl,
+    authRateLimitMax: config.authRateLimitMax,
   });
 
   // Every route below requires an administrative session; the guard is

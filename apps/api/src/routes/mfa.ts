@@ -15,6 +15,7 @@ import {
   confirmTotpEnrolment,
   countUnusedRecoveryCodes,
   createSession,
+  deliverMessage,
   enrolledFactorTypes,
   finishWebAuthnRegistration,
   findAttempt,
@@ -26,7 +27,6 @@ import {
   recordEvent,
   removeWebAuthnCredential,
   renderMessage,
-  sendMessage,
   type RelyingPartyIdentity,
   type SessionScope,
   type Transport,
@@ -90,6 +90,16 @@ export async function webauthnContext(
  * Module scope, and the transport is a parameter rather than a closure over
  * `options`, because the forced-enrolment router in Task 9 calls it too and is
  * registered separately.
+ *
+ * Delivery goes through `deliverMessage`, which does not throw. Every caller
+ * below reaches this line *after* the enrolment has committed, so a mail
+ * server that is down used to turn a successful enrolment into a 500: the
+ * factor was registered, and the user was told it had failed. It is not
+ * swallowed either — a failure is logged through the Fastify logger and
+ * recorded as `notify.delivery_failed` against the account it should have
+ * reached. This mail is one of only two things that make "a stolen password
+ * can enrol a factor" an acceptable trade, and a control nobody can tell has
+ * stopped working is not a control.
  */
 export async function tellOwnerAFactorWasAdded(
   request: FastifyRequest,
@@ -111,7 +121,13 @@ export async function tellOwnerAFactorWasAdded(
     when: new Date().toISOString(),
     sourceIp: request.ip,
   });
-  await sendMessage(transport, message);
+  await deliverMessage(transport, message, {
+    tenantId: request.tenantId,
+    userId: user.id,
+    purpose: 'factor-added',
+    log: (error, purpose) =>
+      request.log.error({ err: error, purpose }, 'notification not delivered'),
+  });
 }
 
 export const qrDataUrl = (text: string) =>
@@ -331,7 +347,8 @@ export async function registerMfaRoutes(
         }),
       );
       // Outside every transaction above, and awaited so a mail failure is
-      // logged rather than becoming an unhandled rejection.
+      // logged and audited rather than becoming an unhandled rejection — or,
+      // worse, a 500 on an enrolment that has already committed.
       await tellOwnerAFactorWasAdded(
         request,
         options.transport,

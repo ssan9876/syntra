@@ -293,3 +293,60 @@ describe('org unit administration', () => {
     expect(list.json().orgUnits).toHaveLength(2);
   });
 });
+
+describe('PATCH /api/admin/users/:id', () => {
+  const patch = (url: string, cookie: string, payload: unknown) =>
+    ctx.app.inject({
+      method: 'PATCH',
+      url,
+      headers: { host: ctx.host, cookie },
+      payload: payload as object,
+    });
+
+  it('moves a password upstream and records where it went', async () => {
+    const admin = await seedAdmin([
+      PERMISSIONS.DIRECTORY_READ,
+      PERMISSIONS.DIRECTORY_WRITE,
+    ]);
+    const cookie = await authCookie('admin');
+
+    const res = await patch(`/api/admin/users/${admin.id}`, cookie, {
+      passwordSource: 'upstream',
+      passwordSourceHint: 'Entra ID',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      id: admin.id,
+      passwordSource: 'upstream',
+      passwordSourceHint: 'Entra ID',
+    });
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'user.update' } }),
+    );
+    expect(events).toHaveLength(1);
+  });
+
+  it('refuses the change without directory.write', async () => {
+    const admin = await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await patch(`/api/admin/users/${admin.id}`, cookie, {
+      passwordSource: 'upstream',
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('reports an unknown user as not found rather than as a fault', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const res = await patch(
+      '/api/admin/users/00000000-0000-4000-8000-000000000000',
+      cookie,
+      { passwordSource: 'upstream' },
+    );
+    expect(res.statusCode).toBe(404);
+  });
+});

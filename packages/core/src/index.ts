@@ -12,6 +12,9 @@ export * from './identity/csv-import.js';
 export * from './rbac/permissions.js';
 export * from './rbac/rbac-service.js';
 export * from './auth/password.js';
+export * from './auth/password-policy.js';
+export * from './auth/refresh-token.js';
+export * from './auth/password-reset.js';
 export * from './auth/session-service.js';
 // authenticate() is deliberately NOT exported. It is the password half of
 // authorize(), and a caller that reached it directly would skip policy
@@ -33,6 +36,7 @@ export * from './policy/policy-service.js';
 export * from './policy/context.js';
 export * from './policy/impact.js';
 export * from './notify/notification-service.js';
+export * from './notify/delivery.js';
 export * from './notify/templates/index.js';
 export * from './jobs/scheduler.js';
 export * from './sync/mapping.js';
