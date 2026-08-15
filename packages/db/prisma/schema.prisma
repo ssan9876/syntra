@@ -11,26 +11,41 @@ datasource db {
 }
 
 model Tenant {
-  id            String   @id @default(uuid()) @db.Uuid
-  name          String
-  slug          String   @unique
-  primaryDomain String?  @unique
-  status        String   @default("active")
-  createdAt     DateTime @default(now())
+  id                   String   @id @default(uuid()) @db.Uuid
+  name                 String
+  slug                 String   @unique
+  primaryDomain        String?  @unique
+  status               String   @default("active")
+  /// When true, elevating to an administrative session requires a second
+  /// factor on top of the password. Default false so an existing tenant's
+  /// bootstrap owner is not locked out of the console by this migration.
+  adminMfaRequired     Boolean  @default(false)
+  /// The tenant's password policy. One number today; a policy object when
+  /// there is a second rule worth having.
+  passwordMinLength    Int      @default(12)
+  /// Whether a user who is required to hold a second factor may enrol one
+  /// themselves, mid-sign-in, after their password has been accepted.
+  ///
+  /// True by default, because the alternative is that the first tenant-wide
+  /// require_mfa rule locks out everyone who has not enrolled and there is no
+  /// self-service way back. A tenant that issues hardware keys by hand turns
+  /// this off, and then a missing factor really is a refusal.
+  selfEnrolmentEnabled Boolean  @default(true)
+  createdAt            DateTime @default(now())
 
   orgUnits OrgUnit[]
 }
 
 model OrgUnit {
-  id           String @id @default(uuid()) @db.Uuid
-  tenantId     String @db.Uuid
-  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id           String           @id @default(uuid()) @db.Uuid
+  tenantId     String           @db.Uuid
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name         String
-  parentId     String? @db.Uuid
-  parent       OrgUnit?  @relation("OrgUnitTree", fields: [parentId], references: [id])
-  children     OrgUnit[] @relation("OrgUnitTree")
+  parentId     String?          @db.Uuid
+  parent       OrgUnit?         @relation("OrgUnitTree", fields: [parentId], references: [id])
+  children     OrgUnit[]        @relation("OrgUnitTree")
   users        User[]
-  sourceId     String? @db.Uuid
+  sourceId     String?          @db.Uuid
   source       DirectorySource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   sourceAnchor String?
 
@@ -41,21 +56,28 @@ model OrgUnit {
 /// An account that can sign in. Carries no employment data: job title,
 /// department, manager, and dates belong to Contract, not here.
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
-  tenantId     String   @db.Uuid
-  login        String
-  email        String
-  displayName  String
-  status       String   @default("active")
-  statusReason String?
-  orgUnitId    String?  @db.Uuid
-  orgUnit      OrgUnit? @relation(fields: [orgUnitId], references: [id])
-  personId     String?  @db.Uuid
-  sourceId     String?  @db.Uuid
-  source       DirectorySource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  sourceAnchor String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @db.Uuid
+  login              String
+  email              String
+  displayName        String
+  status             String           @default("active")
+  statusReason       String?
+  /// Where this account's password lives. 'local' means Syntra holds an
+  /// Argon2id hash; 'upstream' means an external identity provider does, and
+  /// self-service reset must send the user there instead of mailing a token.
+  passwordSource     String           @default("local")
+  /// Human-readable destination for an upstream user: a provider name or a
+  /// URL, rendered into the "reset it over there" mail.
+  passwordSourceHint String?
+  orgUnitId          String?          @db.Uuid
+  orgUnit            OrgUnit?         @relation(fields: [orgUnitId], references: [id])
+  personId           String?          @db.Uuid
+  sourceId           String?          @db.Uuid
+  source             DirectorySource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  sourceAnchor       String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   memberships GroupMembership[]
   attributes  UserAttribute[]
@@ -66,14 +88,14 @@ model User {
 }
 
 model Group {
-  id           String  @id @default(uuid()) @db.Uuid
-  tenantId     String  @db.Uuid
+  id           String           @id @default(uuid()) @db.Uuid
+  tenantId     String           @db.Uuid
   name         String
   description  String?
-  sourceId     String? @db.Uuid
+  sourceId     String?          @db.Uuid
   source       DirectorySource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   sourceAnchor String?
-  status       String  @default("active")
+  status       String           @default("active")
   statusReason String?
 
   memberships GroupMembership[]
@@ -239,6 +261,11 @@ model Session {
   userId            String    @db.Uuid
   tokenHash         String    @unique
   scope             String
+  /// Which second factor, if any, was presented to establish this session.
+  /// Read back when the session is used as a principal — launching an
+  /// application re-enters authorize(), and without this the requirement it
+  /// already satisfied would be demanded again on every launch, forever.
+  satisfiedFactor   String?
   createdAt         DateTime  @default(now())
   lastSeenAt        DateTime  @default(now())
   absoluteExpiresAt DateTime
@@ -283,41 +310,41 @@ model DirectorySource {
 }
 
 model AttributeMapping {
-  id              String  @id @default(uuid()) @db.Uuid
-  tenantId        String  @db.Uuid
-  sourceId        String  @db.Uuid
+  id              String          @id @default(uuid()) @db.Uuid
+  tenantId        String          @db.Uuid
+  sourceId        String          @db.Uuid
   source          DirectorySource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   objectType      String
   sourceAttribute String
   targetField     String
-  transform       String  @default("none")
-  isCorrelation   Boolean @default(false)
+  transform       String          @default("none")
+  isCorrelation   Boolean         @default(false)
 
   @@unique([sourceId, objectType, targetField])
   @@index([tenantId])
 }
 
 model SyncRun {
-  id                   String    @id @default(uuid()) @db.Uuid
-  tenantId             String    @db.Uuid
-  sourceId             String    @db.Uuid
-  source               DirectorySource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  status               String    @default("running")
-  startedAt            DateTime  @default(now())
-  finishedAt           DateTime?
-  recordsRead          Int       @default(0)
-  requiresConfirmation Boolean   @default(false)
-  blockedReason        String?
-  error                String?
-  unresolvedMembers    Int       @default(0)
+  id                    String          @id @default(uuid()) @db.Uuid
+  tenantId              String          @db.Uuid
+  sourceId              String          @db.Uuid
+  source                DirectorySource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status                String          @default("running")
+  startedAt             DateTime        @default(now())
+  finishedAt            DateTime?
+  recordsRead           Int             @default(0)
+  requiresConfirmation  Boolean         @default(false)
+  blockedReason         String?
+  error                 String?
+  unresolvedMembers     Int             @default(0)
   /// Records the source returned that could not be turned into a directory
   /// object — a missing correlation attribute, a membership the connector
   /// could not read in full. They are deliberately NOT treated as absent, so
   /// a schema change at the source cannot propose deactivating real people.
-  mappingFailures      Int       @default(0)
+  mappingFailures       Int             @default(0)
   /// The distinct reasons behind `mappingFailures`, so a count on the run
   /// page comes with something an administrator can act on.
-  mappingFailureReasons String[] @default([])
+  mappingFailureReasons String[]        @default([])
 
   changes SyncChange[]
 
@@ -341,4 +368,239 @@ model SyncChange {
 
   @@index([tenantId])
   @@index([runId, changeType])
+}
+
+/// One authentication policy per tenant: an ordered list of rules plus the
+/// outcome that applies when none of them match.
+model AuthPolicy {
+  id                String   @id @default(uuid()) @db.Uuid
+  tenantId          String   @unique @db.Uuid
+  defaultOutcome    String   @default("allow")
+  defaultFactorType String?
+  updatedAt         DateTime @updatedAt
+
+  rules AuthPolicyRule[]
+}
+
+/// One rule. Every condition column that is empty or null is unconstrained;
+/// the conditions that are set must all hold for the rule to match.
+model AuthPolicyRule {
+  id             String     @id @default(uuid()) @db.Uuid
+  tenantId       String     @db.Uuid
+  policyId       String     @db.Uuid
+  policy         AuthPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  position       Int
+  name           String
+  enabled        Boolean    @default(true)
+  /// 'allow' | 'require_mfa' | 'require_factor' | 'deny'
+  outcome        String
+  /// 'totp' | 'webauthn'. Required when outcome is 'require_factor'.
+  factorType     String?
+  applicationIds String[]   @default([])
+  groupIds       String[]   @default([])
+  /// 'department' | 'jobTitle' | 'employer' | 'location'
+  contractField  String?
+  contractValues String[]   @default([])
+  /// CIDR ranges or bare addresses, IPv4 or IPv6.
+  ipRanges       String[]   @default([])
+  /// 0 = Sunday .. 6 = Saturday. Empty means every day.
+  daysOfWeek     Int[]      @default([])
+  /// Minutes from local midnight. A window may wrap past midnight.
+  startMinute    Int?
+  endMinute      Int?
+  /// IANA zone the window is expressed in. Treated as UTC when null.
+  timezone       String?
+
+  @@unique([policyId, position])
+  @@index([tenantId])
+}
+
+/// A SAML service provider, an OIDC relying party, or a plain bookmark tile.
+/// Access I implements the bookmark; `type` is a free string so Access II
+/// widens it without a migration.
+model Application {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  name        String
+  slug        String
+  description String?
+  iconUrl     String?
+  launchUrl   String?
+  type        String   @default("bookmark")
+  /// 'assigned' shows the tile to users it resolves for; 'hidden' keeps it
+  /// out of the portal entirely while leaving it assignable.
+  visibility  String   @default("assigned")
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assignments AppAssignment[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+/// Grants an application to a user, a group, or an organizational unit.
+/// Resolution is a union of all matching assignments.
+model AppAssignment {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @db.Uuid
+  applicationId String      @db.Uuid
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  /// 'user' | 'group' | 'orgUnit'
+  subjectType   String
+  userId        String?     @db.Uuid
+  groupId       String?     @db.Uuid
+  orgUnitId     String?     @db.Uuid
+  createdAt     DateTime    @default(now())
+
+  @@index([tenantId])
+  @@index([applicationId])
+}
+
+/// The encrypted shared secret lives in the vault under `secretName`; this row
+/// holds only the parameters and the replay watermark.
+model TotpCredential {
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @db.Uuid
+  userId      String    @unique @db.Uuid
+  secretName  String
+  algorithm   String    @default("SHA1")
+  digits      Int       @default(6)
+  period      Int       @default(30)
+  /// The highest counter step already accepted. A code from this step or an
+  /// earlier one is a replay and is refused even though it is arithmetically
+  /// valid for the current window.
+  lastCounter Int?
+  /// Null until the user proves possession by entering a code.
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+model WebAuthnCredential {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @db.Uuid
+  userId          String    @db.Uuid
+  /// base64url, as returned by @simplewebauthn/server.
+  credentialId    String    @unique
+  publicKey       Bytes
+  /// BigInt, not Int. WebAuthn signature counters are uint32 and Prisma's Int
+  /// is a signed int4, so a counter past 2^31 would fail to store on the one
+  /// write that matters for cloned-key detection. Converted with Number() at
+  /// the library boundary, which is exact well past uint32.
+  counter         BigInt    @default(0)
+  transports      String[]  @default([])
+  attestationType String    @default("none")
+  /// The relying-party ID this credential was registered against. An
+  /// assertion presented under a different RP ID is refused.
+  rpId            String
+  label           String
+  createdAt       DateTime  @default(now())
+  lastUsedAt      DateTime?
+
+  @@index([tenantId])
+  @@index([userId])
+}
+
+/// At most one live challenge per user and purpose, enforced by a partial
+/// unique index on (userId, purpose) WHERE "consumedAt" IS NULL.
+model WebAuthnChallenge {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
+  userId     String    @db.Uuid
+  /// 'register' | 'authenticate'
+  purpose    String
+  challenge  String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId])
+  @@index([userId, purpose])
+}
+
+model RecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @db.Uuid
+  userId    String    @db.Uuid
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([userId, codeHash])
+  @@index([tenantId])
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  /// Deliberately holds no WebAuthn challenge of its own. A reset that needs a
+  /// second factor issues an ordinary `WebAuthnChallenge` with purpose
+  /// 'authenticate', so there is one challenge store and one consumption rule
+  /// rather than two the verifier would have to choose between.
+  @@index([tenantId])
+  @@index([userId])
+}
+
+/// A primary authentication that succeeded but is waiting on a second factor —
+/// either one the user already holds, or one they are about to enrol.
+/// It is a credential in its own right, so only its digest is stored.
+model AuthAttempt {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @db.Uuid
+  userId          String    @db.Uuid
+  tokenHash       String    @unique
+  applicationId   String?   @db.Uuid
+  sourceIp        String?
+  /// 'verify' — present a factor you already hold.
+  /// 'enrol'  — enrol a factor of the required kind, because you hold none.
+  /// The two are not interchangeable: an enrolment attempt cannot be spent on
+  /// a verification, or a user could be walked into enrolling one factor and
+  /// signing in with another.
+  purpose         String    @default("verify")
+  /// The scope of the session to issue when this attempt is satisfied.
+  ///
+  /// Recorded by whoever issued the attempt, because they are the only party
+  /// that knows. Inferring it at the end from "was a session cookie present"
+  /// gives an administrative session to any portal user who completes a
+  /// step-up, since the browser sends its cookie on every request.
+  scope           String    @default("portal")
+  /// 'require_mfa' | 'require_factor'
+  requiredOutcome String
+  requiredFactor  String?
+  /// The rule that imposed the requirement, for the audit trail.
+  ruleId          String?   @db.Uuid
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+}
+
+/// Declared and revoked in Access I; issued by the OIDC provider in Access II.
+/// Password reset must revoke refresh tokens as well as sessions, so the table
+/// has to exist for that revocation to be real rather than aspirational.
+model RefreshToken {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  userId            String    @db.Uuid
+  tokenHash         String    @unique
+  clientId          String?
+  scope             String    @default("portal")
+  createdAt         DateTime  @default(now())
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+
+  @@index([tenantId])
+  @@index([userId])
 }

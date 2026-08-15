@@ -4,6 +4,7 @@ import { Alert, Button, Field } from '@syntra/ui';
 import { ApiError } from '../session/api.js';
 import { useSession } from '../session/SessionProvider.js';
 import { AppShell } from '../components/AppShell.js';
+import { routeFor, storeChallenge } from '../mfa/challenge-store.js';
 
 /**
  * Elevation is a fresh authentication, not a mode switch, so the screen asks
@@ -29,8 +30,29 @@ export function Elevate() {
     setError(null);
 
     try {
-      await elevate(password);
-      navigate(intended, { replace: true });
+      const outcome = await elevate(password);
+      if (outcome.status === 'authenticated') {
+        navigate(intended, { replace: true });
+        return;
+      }
+
+      // Elevation re-authenticates from scratch, so any require_mfa rule lands
+      // here every time — a factor presented at sign-in does not carry over.
+      // The handoff is the login page's, with one difference: the return is to
+      // wherever the guard bounced them from, so satisfying the factor does not
+      // also cost them their place.
+      const kind = outcome.status === 'enrol' ? 'enrol' : 'verify';
+      storeChallenge({
+        kind,
+        attemptToken: outcome.attemptToken,
+        expiresAt: outcome.expiresAt,
+        factors:
+          outcome.status === 'enrol'
+            ? outcome.enrollableFactors
+            : outcome.acceptableFactors,
+        returnTo: intended,
+      });
+      navigate(routeFor(kind), { replace: true });
     } catch (cause) {
       if (cause instanceof ApiError && cause.kind === 'not-an-administrator') {
         setError(

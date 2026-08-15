@@ -3,13 +3,19 @@
   "version": "0.0.0",
   "type": "module",
   "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "license": "Apache-2.0",
   "dependencies": {
+    "@simplewebauthn/server": "13.3.2",
     "@syntra/connectors": "workspace:*",
     "@syntra/db": "workspace:*",
     "argon2": "^0.45.1",
+    "ipaddr.js": "2.5.0",
     "ldapts": "^9.0.0",
     "nodemailer": "^9.0.5",
+    "otpauth": "9.5.1",
     "pg-boss": "^12.27.0",
     "zod": "^3.24.0"
   },

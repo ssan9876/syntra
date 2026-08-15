@@ -1,17 +1,33 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { withTenant } from '@syntra/db';
+import { prisma, withTenant } from '@syntra/db';
 import {
   PERMISSIONS,
+  addRule,
   assignRole,
   createRole,
   createUser,
-  setPassword,
+  generateRecoveryCodes,
+  hashPassword,
+  setPasswordHash,
 } from '@syntra/core';
+import * as OTPAuth from 'otpauth';
 import { buildTestApp } from '../test-support.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 
 const PASSWORD = 'correct horse battery staple';
+
+/**
+ * Hashed once for the whole file, outside every transaction.
+ *
+ * There is no helper that takes a plaintext and a transaction any more:
+ * Argon2id is deliberately expensive and has no business inside Prisma's
+ * 5000 ms budget, so `setPasswordHash` takes a hash and the hashing is the
+ * caller's to place. Hashing once per file rather than once per test is the
+ * same decision made cheaply.
+ */
+const PASSWORD_HASH = await hashPassword(PASSWORD);
+
 
 async function seedUser(opts: { admin?: boolean } = {}) {
   return withTenant(ctx.tenantId, async (tx) => {
@@ -20,7 +36,7 @@ async function seedUser(opts: { admin?: boolean } = {}) {
       email: 'j@acme.test',
       displayName: 'J Doe',
     });
-    await setPassword(tx, user.id, PASSWORD);
+    await setPasswordHash(tx, user.id, PASSWORD_HASH);
     if (opts.admin) {
       const role = await createRole(tx, 'Directory Admin', [
         PERMISSIONS.DIRECTORY_READ,
@@ -119,6 +135,48 @@ describe('POST /api/auth/login', () => {
       payload: { login: 'jdoe' },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('POST /api/auth/login and policy', () => {
+  it('reports a policy denial exactly as it reports a wrong password', async () => {
+    await seedUser();
+    await withTenant(ctx.tenantId, (tx) =>
+      addRule(tx, { name: 'No', outcome: 'deny' }),
+    );
+
+    const denied = await login(PASSWORD);
+    const wrong = await login('definitely-not-the-password');
+
+    expect(denied.statusCode).toBe(401);
+    expect(denied.json()).toEqual(wrong.json());
+    expect(
+      denied.cookies.find((c) => c.name === 'syntra_session'),
+    ).toBeUndefined();
+  });
+
+  it('marks a plain success as authenticated', async () => {
+    await seedUser();
+    const res = await login(PASSWORD);
+    expect(res.json()).toMatchObject({
+      status: 'authenticated',
+      scope: 'portal',
+    });
+  });
+
+  it('offers enrolment when the user holds no factor', async () => {
+    // Task 4 asserted a refusal here, because no verifier was installed and
+    // there was nothing to offer. Now there is, and refusing would lock out
+    // everyone the first time a tenant turns MFA on.
+    await seedUser();
+    await withTenant(ctx.tenantId, (tx) =>
+      addRule(tx, { name: 'MFA everywhere', outcome: 'require_mfa' }),
+    );
+    const res = await login(PASSWORD);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'enrol' });
+    // The password was accepted; nothing else was granted.
+    expect(res.cookies.find((c) => c.name === 'syntra_session')).toBeUndefined();
   });
 });
 
@@ -276,5 +334,242 @@ describe('rate limiting', () => {
       if (res.statusCode === 429) limited++;
     }
     expect(limited).toBeGreaterThan(0);
+  });
+
+  it("does not spend one tenant's allowance on another tenant's traffic", async () => {
+    // One deployment serves many tenants and the limit is keyed on both, so a
+    // tenant under attack — or with one noisy office NAT — must not lock
+    // everybody else out from the same address.
+    await seedUser();
+    const other = await prisma.tenant.create({
+      data: { name: 'Other', slug: 'other' },
+    });
+    expect(other.id).not.toBe(ctx.tenantId);
+
+    for (let i = 0; i < 15; i++) await login('wrong');
+    expect((await login('wrong')).statusCode).toBe(429);
+
+    const elsewhere = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { host: 'other.syntra.test' },
+      payload: { login: 'jdoe', password: 'wrong' },
+    });
+    expect(elsewhere.statusCode).toBe(401);
+  });
+
+  it('caps a tenant across every address, not only each one separately', async () => {
+    // Spec section 12 asks for per-tenant AND per-IP. A wrong second factor
+    // deliberately does not consume the attempt, so without this ceiling a
+    // six-digit code is guessable at the per-address rate from as many
+    // addresses as the attacker cares to rent.
+    ctx = await buildTestApp({
+      env: { AUTH_RATE_LIMIT_MAX: '2', AUTH_RATE_LIMIT_TENANT_MAX: '5' },
+    });
+    await ctx.app.ready();
+    await seedUser();
+
+    const fromAddress = (address: string) =>
+      ctx.app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        headers: { host: ctx.host },
+        remoteAddress: address,
+        payload: { login: 'jdoe', password: 'wrong' },
+      });
+
+    const codes: number[] = [];
+    // Eight addresses, one attempt each: nothing here trips the per-address
+    // limit of two, and only the tenant ceiling can refuse any of them.
+    for (let i = 1; i <= 8; i++) {
+      codes.push((await fromAddress(`203.0.113.${i}`)).statusCode);
+    }
+
+    expect(codes.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+    expect(codes.slice(5)).toEqual([429, 429, 429]);
+  });
+});
+
+describe('the source address', () => {
+  const attemptWithForwardedFor = async () => {
+    await seedUser();
+    await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { host: ctx.host, 'x-forwarded-for': '203.0.113.9' },
+      remoteAddress: '10.9.9.9',
+      payload: { login: 'jdoe', password: 'wrong' },
+    });
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ orderBy: { sequence: 'asc' } }),
+    );
+    return events.at(-1)!.sourceIp;
+  };
+
+  it('ignores X-Forwarded-For when no proxy is trusted', async () => {
+    // The default. Believing the header from anyone lets every client choose
+    // the address the policy engine matches its IP conditions against.
+    expect(await attemptWithForwardedFor()).toBe('10.9.9.9');
+  });
+
+  it('reads it from the proxy when TRUST_PROXY says how many hops', async () => {
+    ctx = await buildTestApp({ env: { TRUST_PROXY: '1' } });
+    await ctx.app.ready();
+    expect(await attemptWithForwardedFor()).toBe('203.0.113.9');
+  });
+});
+
+describe('POST /api/auth/elevate and admin MFA', () => {
+  it('elevates on the password alone when the tenant does not require a factor', async () => {
+    await seedUser({ admin: true });
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    expect(res.json()).toMatchObject({ status: 'authenticated', scope: 'admin' });
+  });
+
+  it('challenges instead when the tenant requires a factor for the console', async () => {
+    const user = await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true },
+    });
+    await withTenant(ctx.tenantId, (tx) => generateRecoveryCodes(tx, user.id));
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    expect(res.json()).toMatchObject({ status: 'challenge' });
+    expect(res.cookies.find((c) => c.name === 'syntra_session')).toBeUndefined();
+  });
+
+  it('offers enrolment to an administrator who has no factor yet', async () => {
+    await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true },
+    });
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    // Turning the requirement on must not strand the only administrator
+    // outside the console with nobody able to let them back in.
+    expect(res.json()).toMatchObject({ status: 'enrol' });
+    expect(res.cookies.find((c) => c.name === 'syntra_session')).toBeUndefined();
+  });
+
+  it('refuses outright when the tenant has also turned self-enrolment off', async () => {
+    await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true, selfEnrolmentEnabled: false },
+    });
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    // Two deliberate decisions stacked: factors are issued by hand, and the
+    // console needs one. There is genuinely no path forward from here.
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('issues an admin session when an elevation enrolment completes', async () => {
+    await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true },
+    });
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+    const offer = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    const attemptToken = offer.json().attemptToken as string;
+
+    const begin = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/enrol/totp/begin',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { attemptToken },
+    });
+    const code = OTPAuth.TOTP.generate({
+      secret: OTPAuth.Secret.fromBase32(begin.json().secret),
+      period: 30,
+      digits: 6,
+      algorithm: 'SHA1',
+    });
+
+    const done = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/enrol/totp/confirm',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { attemptToken, code },
+    });
+    // The caller already held a portal session, so the step-up ends in an
+    // administrative one rather than a second portal session.
+    expect(done.statusCode).toBe(200);
+    expect(done.json().scope).toBe('admin');
+  });
+
+  it('issues an admin session when the challenge is answered', async () => {
+    const user = await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true },
+    });
+    const codes = await withTenant(ctx.tenantId, (tx) =>
+      generateRecoveryCodes(tx, user.id),
+    );
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+    const challenge = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+
+    const verified = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/mfa/verify',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: {
+        type: 'recovery_code',
+        attemptToken: challenge.json().attemptToken,
+        code: codes[0],
+      },
+    });
+    expect(verified.statusCode).toBe(200);
+    expect(verified.json().scope).toBe('admin');
   });
 });

@@ -1,6 +1,4 @@
 import nodemailer from 'nodemailer';
-import type { TenantClient } from '@syntra/db';
-import { currentTenant } from '../tenant-context.js';
 import { TEMPLATES, type TemplateName } from './templates/index.js';
 
 export interface OutboundMessage {
@@ -73,28 +71,48 @@ function render(
   });
 }
 
-export async function notify(
-  tx: TenantClient,
-  transport: Transport,
+/**
+ * Renders a message. Pure: no database, no transport, no clock.
+ *
+ * The tenant name is a parameter rather than something read from a
+ * transaction, which is what makes this safe to call anywhere — and what stops
+ * the send being dragged inside a transaction along with the read.
+ */
+export function renderMessage(
+  tenantName: string,
   template: TemplateName,
   to: string,
   vars: Record<string, string>,
-): Promise<void> {
+): OutboundMessage {
   const definition = TEMPLATES[template];
   if (!definition) {
     throw new Error(`unknown template: ${template}`);
   }
 
-  const tenantId = await currentTenant(tx);
-  const tenant = await tx.tenant.findUnique({ where: { id: tenantId } });
-  const all = { ...vars, tenantName: tenant?.name ?? 'Syntra' };
-
-  await transport.send({
+  const all = { ...vars, tenantName };
+  return {
     to,
     subject: render(definition.subject, all, false),
     text: render(definition.text, all, false),
     // Only the HTML part is escaped; escaping the text part would show the
     // reader a literal &amp; instead of an ampersand.
     html: render(definition.html, all, true),
-  });
+  };
+}
+
+/**
+ * Sends a rendered message.
+ *
+ * Takes no transaction, and therefore cannot be given one. That is the whole
+ * design: the previous signature accepted a `TenantClient`, which made
+ * `withTenant(tx => notify(tx, …))` look like the obvious way to call it, and
+ * put an SMTP round trip inside `prisma.$transaction` under its 5000 ms
+ * timeout. The split is not a convention anyone has to remember — the old
+ * shape no longer type-checks.
+ */
+export async function sendMessage(
+  transport: Transport,
+  message: OutboundMessage,
+): Promise<void> {
+  await transport.send(message);
 }

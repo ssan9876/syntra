@@ -7,10 +7,29 @@ import {
   resolveSession,
   revokeAllForUser,
   revokeSession,
+  type SessionAllowance,
+  type SessionScope,
 } from './session-service.js';
 
 let tenantId: string;
 let userId: string;
+
+/**
+ * The decision a session is minted from. Assembled by hand here because there
+ * is no authorize() in this suite — which is the point of the type: outside a
+ * test, the only way to hold one of these is to have been past the chokepoint.
+ */
+const allowed = (
+  scope: SessionScope,
+  satisfiedFactor: SessionAllowance['satisfiedFactor'] = null,
+): SessionAllowance => ({
+  status: 'allow',
+  userId,
+  mayElevate: false,
+  applicationId: null,
+  scope,
+  satisfiedFactor,
+});
 
 beforeEach(async () => {
   await resetDatabase();
@@ -25,7 +44,7 @@ beforeEach(async () => {
 describe('sessions', () => {
   it('resolves a freshly issued token', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     const resolved = await withTenant(tenantId, (tx) =>
       resolveSession(tx, token),
@@ -35,7 +54,7 @@ describe('sessions', () => {
 
   it('stores only a hash of the token', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     const rows = await withTenant(tenantId, (tx) => tx.session.findMany());
     expect(rows[0]!.tokenHash).not.toBe(token);
@@ -44,27 +63,27 @@ describe('sessions', () => {
 
   it('issues a different token each time', async () => {
     const a = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     const b = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     expect(a.token).not.toBe(b.token);
   });
 
   it('gives an admin session a shorter absolute lifetime than a portal session', async () => {
     const portal = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     const admin = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'admin'),
+      createSession(tx, allowed('admin')),
     );
     expect(admin.expiresAt.getTime()).toBeLessThan(portal.expiresAt.getTime());
   });
 
   it('returns null for a revoked token', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     await withTenant(tenantId, (tx) => revokeSession(tx, token));
     expect(
@@ -80,7 +99,7 @@ describe('sessions', () => {
 
   it('returns null once the absolute expiry has passed', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     await withTenant(tenantId, (tx) =>
       tx.session.updateMany({
@@ -94,7 +113,7 @@ describe('sessions', () => {
 
   it('returns null once the idle timeout has passed', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'admin'),
+      createSession(tx, allowed('admin')),
     );
     // Admin idle timeout is 15 minutes; place the last sighting an hour ago.
     await withTenant(tenantId, (tx) =>
@@ -109,7 +128,7 @@ describe('sessions', () => {
 
   it('refreshes the idle clock on each use', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     const before = await withTenant(tenantId, (tx) => tx.session.findFirst());
 
@@ -124,10 +143,10 @@ describe('sessions', () => {
 
   it('revokes every session a user holds', async () => {
     const a = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     const b = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'admin'),
+      createSession(tx, allowed('admin')),
     );
     await withTenant(tenantId, (tx) => revokeAllForUser(tx, userId));
 
@@ -144,7 +163,7 @@ describe('sessions', () => {
       data: { name: 'Other', slug: 'other' },
     });
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal'),
+      createSession(tx, allowed('portal')),
     );
     expect(
       await withTenant(other.id, (tx) => resolveSession(tx, token)),

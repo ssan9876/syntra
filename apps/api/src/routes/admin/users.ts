@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
+  adminFactorParams,
   createUserRequest,
   deactivateUserRequest,
   idParam,
+  patchUserRequest,
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
@@ -11,6 +13,9 @@ import {
   deactivateUser,
   listUsers,
   recordEvent,
+  removeRecoveryCodes,
+  removeTotp,
+  revokeOrphanedRecoveryCodes,
   type UserStatus,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -98,6 +103,110 @@ export async function registerAdminUserRoutes(
         });
         return updated;
       });
+    },
+  );
+
+  /**
+   * Moves a user's password between Syntra and an upstream identity provider.
+   *
+   * The flag self-service reset reads: an `upstream` user cannot reset a
+   * password Syntra does not hold, and is mailed the name recorded here
+   * instead. That mail is the only place the distinction is visible — the HTTP
+   * response to a reset request is identical either way, because a different
+   * response would announce both that the account exists and that it is
+   * federated to anyone who can type a login name.
+   */
+  app.patch(
+    '/users/:id',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = patchUserRequest.parse(request.body);
+
+      const updated = await request.db(async (tx) => {
+        const existing = await tx.user.findUnique({ where: { id } });
+        if (!existing) {
+          throw new ProblemError(404, 'not-found', 'User not found');
+        }
+
+        const user = await tx.user.update({
+          where: { id },
+          data: {
+            ...(body.passwordSource === undefined
+              ? {}
+              : { passwordSource: body.passwordSource }),
+            ...(body.passwordSourceHint === undefined
+              ? {}
+              : { passwordSourceHint: body.passwordSourceHint }),
+          },
+        });
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'user.update',
+          targetType: 'User',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { passwordSource: user.passwordSource },
+        });
+        return user;
+      });
+
+      return {
+        id: updated.id,
+        passwordSource: updated.passwordSource,
+        passwordSourceHint: updated.passwordSourceHint,
+      };
+    },
+  );
+
+  /**
+   * Takes a factor off a user.
+   *
+   * The way back in for someone who lost their phone, and the way an
+   * administrator revokes a factor an attacker enrolled. It writes its own
+   * audit event in the same transaction as the removal, naming the
+   * administrator: a factor that disappears with nothing to show who removed
+   * it is indistinguishable from one the attacker removed.
+   */
+  app.delete(
+    '/users/:id/factors/:type',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request, reply) => {
+      const { id, type } = adminFactorParams.parse(request.params);
+
+      const orphanedCodes = await request.db(async (tx) => {
+        if (type === 'totp') await removeTotp(tx, id);
+        else if (type === 'recovery_code') await removeRecoveryCodes(tx, id);
+        else await tx.webAuthnCredential.deleteMany({ where: { userId: id } });
+
+        // Recovery codes are a way back in when a real factor is lost, not a
+        // factor of their own — which is why issuing them requires holding
+        // one. Taking the last real factor away and leaving the codes reaches
+        // the state that gate exists to prevent, by another door: a
+        // `require_mfa` rule stays satisfied by a printed page forever, and
+        // the forced-enrolment path is never reached.
+        const revoked = await revokeOrphanedRecoveryCodes(tx, id);
+
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'mfa.removed',
+          targetType: 'User',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: {
+            factor: type,
+            by: 'administrator',
+            // Named, so a user who finds their codes stopped working can be
+            // told why by someone reading the log.
+            recoveryCodesRevoked: revoked,
+          },
+        });
+        return revoked;
+      });
+
+      return reply.status(200).send({ recoveryCodesRevoked: orphanedCodes });
     },
   );
 }

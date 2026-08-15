@@ -7,7 +7,8 @@ import {
   assignRole,
   createRole,
   createUser,
-  setPassword,
+  hashPassword,
+  setPasswordHash,
   syncScheduleKey,
   type Permission,
 } from '@syntra/core';
@@ -20,6 +21,18 @@ import {
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 let scheduler: FakeScheduler;
 const PASSWORD = 'a-long-enough-password';
+
+/**
+ * Hashed once for the whole file, outside every transaction.
+ *
+ * There is no helper that takes a plaintext and a transaction any more:
+ * Argon2id is deliberately expensive and has no business inside Prisma's
+ * 5000 ms budget, so `setPasswordHash` takes a hash and the hashing is the
+ * caller's to place. Hashing once per file rather than once per test is the
+ * same decision made cheaply.
+ */
+const PASSWORD_HASH = await hashPassword(PASSWORD);
+
 
 const config = {
   url: process.env.LDAP_URL ?? 'ldap://localhost:1389',
@@ -38,7 +51,7 @@ async function adminCookie(permissions: Permission[]) {
       email: 'a@acme.test',
       displayName: 'Admin',
     });
-    await setPassword(tx, user.id, PASSWORD);
+    await setPasswordHash(tx, user.id, PASSWORD_HASH);
     const role = await createRole(tx, 'R', permissions);
     await assignRole(tx, user.id, role.id);
   });
@@ -584,7 +597,7 @@ describe('runs', () => {
         email: 'r@acme.test',
         displayName: 'Reader',
       });
-      await setPassword(tx, user.id, PASSWORD);
+      await setPasswordHash(tx, user.id, PASSWORD_HASH);
       const role = await createRole(tx, 'ReadOnly', [PERMISSIONS.SYNC_READ]);
       await assignRole(tx, user.id, role.id);
     });
@@ -747,7 +760,7 @@ async function readerCookie() {
       email: 'r@acme.test',
       displayName: 'Reader',
     });
-    await setPassword(tx, user.id, PASSWORD);
+    await setPasswordHash(tx, user.id, PASSWORD_HASH);
     const role = await createRole(tx, 'ReadOnly', [PERMISSIONS.SYNC_READ]);
     await assignRole(tx, user.id, role.id);
   });

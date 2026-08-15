@@ -2,6 +2,8 @@ import type { TenantClient } from '@syntra/db';
 import type { ObjectType } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
+import { revokeAllForUser } from '../auth/session-service.js';
+import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { unassignableFields } from './mapping.js';
 
 interface ChangeRow {
@@ -155,6 +157,13 @@ async function performChange(
           statusReason: `Absent from directory source, run ${runId}`,
         },
       });
+      // A leaver dropping out of the HR feed is the commonest offboarding
+      // there is, and it must take effect at their next request rather than
+      // at their next session expiry. Same transaction as the status change,
+      // for the same reason `deactivateUser` does it: a deactivation with the
+      // sessions left behind reads as done and is not.
+      await revokeAllForUser(tx, change.targetId!);
+      await revokeAllRefreshTokensForUser(tx, change.targetId!);
       await tx.syncChange.update({
         where: { id: change.id },
         data: { status: 'applied' },

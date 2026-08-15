@@ -31,6 +31,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                 Administration
               </Link>
             )}
+            <Link
+              to="/security"
+              className="rounded-control px-2.5 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+            >
+              Security
+            </Link>
             <span className="hidden text-sm text-muted sm:inline">
               {session?.displayName}
             </span>

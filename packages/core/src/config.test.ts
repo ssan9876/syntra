@@ -34,3 +34,55 @@ describe('loadConfig', () => {
     expect(() => loadConfig(rest)).toThrow(/DATABASE_URL/);
   });
 });
+
+describe('loadConfig — rate limits', () => {
+  it('gives the tenant ten times the allowance one address gets', () => {
+    const config = loadConfig({ ...valid, AUTH_RATE_LIMIT_MAX: '200' });
+    expect(config.authRateLimitMax).toBe(200);
+    // Derived rather than fixed: an end-to-end suite that raises the per-address
+    // allowance is not also asking to be capped at the default per tenant.
+    expect(config.authRateLimitTenantMax).toBe(2000);
+  });
+
+  it('takes an explicit tenant ceiling when one is given', () => {
+    const config = loadConfig({
+      ...valid,
+      AUTH_RATE_LIMIT_MAX: '10',
+      AUTH_RATE_LIMIT_TENANT_MAX: '40',
+    });
+    expect(config.authRateLimitTenantMax).toBe(40);
+  });
+});
+
+describe('loadConfig — TRUST_PROXY', () => {
+  it('trusts nothing when it is unset', () => {
+    expect(loadConfig(valid).trustProxy).toBe(false);
+  });
+
+  it('refuses a bare true, by name', () => {
+    // The one value that must never be accepted: it believes X-Forwarded-For
+    // from anyone, so every client picks its own source address — which is the
+    // address the policy engine's IP condition and every rate-limit key are
+    // built on.
+    expect(() => loadConfig({ ...valid, TRUST_PROXY: 'true' })).toThrow(
+      /TRUST_PROXY must not be `true`/,
+    );
+  });
+
+  it('takes a hop count', () => {
+    expect(loadConfig({ ...valid, TRUST_PROXY: '1' }).trustProxy).toBe(1);
+  });
+
+  it('takes a list of addresses and CIDRs', () => {
+    expect(
+      loadConfig({ ...valid, TRUST_PROXY: '10.0.0.0/8, 192.168.1.7' })
+        .trustProxy,
+    ).toBe('10.0.0.0/8,192.168.1.7');
+  });
+
+  it('refuses something that is neither', () => {
+    expect(() =>
+      loadConfig({ ...valid, TRUST_PROXY: 'the-load-balancer' }),
+    ).toThrow(/TRUST_PROXY/);
+  });
+});
