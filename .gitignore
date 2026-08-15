@@ -12,3 +12,5 @@ coverage/
 .tmp-shots/
 test-results/
 playwright-report/
+*.tsbuildinfo
+dist/
