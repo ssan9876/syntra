@@ -62,14 +62,17 @@ export function SyncRunDetailPage() {
   );
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
+  // Deliberately not persisted and not defaulted from anything: the tick is
+  // the administrator's, for this run, in this sitting.
+  const [confirmed, setConfirmed] = useState(false);
 
-  async function onApply() {
+  async function onApply(confirm: boolean) {
     setApplying(true);
     setApplyError(null);
     try {
       await api(`/api/admin/sync-runs/${id}/apply`, {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify(confirm ? { confirm: true } : {}),
       });
       reload();
     } catch {
@@ -92,6 +95,11 @@ export function SyncRunDetailPage() {
     sourcesData?.sources.find((source) => source.id === data.sourceId)
       ?.name ?? data.sourceId;
   const blocked = data.status === 'blocked';
+  // Two different refusals. A run over the deactivation threshold can be
+  // applied by someone who has read the numbers and said so; a run that read
+  // no records cannot be applied at all, because an empty directory and an
+  // unreachable one look identical from here.
+  const confirmable = blocked && data.requiresConfirmation;
   const applied = data.status === 'applied' || data.status === 'partially_applied';
   const grouped = new Map<string, Change[]>();
   for (const change of data.changes) {
@@ -118,9 +126,13 @@ export function SyncRunDetailPage() {
         actions={
           <Button
             variant="primary"
-            onClick={onApply}
+            onClick={() => onApply(confirmable)}
             loading={applying}
-            disabled={blocked || applied || data.changes.length === 0}
+            disabled={
+              (blocked && !(confirmable && confirmed)) ||
+              applied ||
+              data.changes.length === 0
+            }
           >
             Apply
           </Button>
@@ -131,8 +143,31 @@ export function SyncRunDetailPage() {
         {blocked && (
           // A blocked run leads with why. The numbers are the point: an
           // administrator needs to see the scale before deciding anything.
-          <Alert tone="danger" title="This run was blocked and will not apply">
-            {data.blockedReason}
+          <Alert
+            tone="danger"
+            title={
+              confirmable
+                ? 'This run is over the threshold and needs your confirmation'
+                : 'This run was blocked and will not apply'
+            }
+          >
+            <p>{data.blockedReason}</p>
+            {confirmable && (
+              // A deliberate step, stated in words, before Apply does
+              // anything at all. Never window.confirm: a native dialog is
+              // dismissed reflexively and shows none of the numbers above.
+              <label className="mt-3 flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={confirmed}
+                  onChange={(e) => setConfirmed(e.target.checked)}
+                  className="mt-0.5 size-4 shrink-0 accent-primary"
+                />
+                <span>
+                  I have read these numbers and want to apply this run anyway.
+                </span>
+              </label>
+            )}
           </Alert>
         )}
 

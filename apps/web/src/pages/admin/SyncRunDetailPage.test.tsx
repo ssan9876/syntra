@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { SyncRunDetailPage } from './SyncRunDetailPage.js';
 
@@ -115,20 +116,68 @@ describe('SyncRunDetailPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('leads with why a run was blocked, and disables apply', async () => {
-    mockFetch({
-      run: run({
-        status: 'blocked',
-        blockedReason:
-          'would deactivate 380 of 400 objects from this source (95.0%), above the 10% threshold',
-        requiresConfirmation: true,
-      }),
+  const overThreshold = () =>
+    run({
+      status: 'blocked',
+      blockedReason:
+        'would deactivate 380 of 400 active users from this source (95.0%), above the 10% threshold',
+      requiresConfirmation: true,
     });
+
+  it('leads with why a run was blocked', async () => {
+    mockFetch({ run: overThreshold() });
     renderPage();
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/95.0%/);
     expect(alert).toHaveTextContent(/threshold/);
+  });
+
+  it('keeps apply disabled on a threshold run until it is confirmed', async () => {
+    mockFetch({ run: overThreshold() });
+    renderPage();
+
+    const apply = await screen.findByRole('button', { name: /apply/i });
+    expect(apply).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('checkbox'));
+    expect(screen.getByRole('button', { name: /apply/i })).toBeEnabled();
+  });
+
+  it('sends the confirmation with the apply, once it is ticked', async () => {
+    mockFetch({ run: overThreshold() });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('checkbox'));
+    await userEvent.click(screen.getByRole('button', { name: /apply/i }));
+
+    const applyCall = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'POST',
+      );
+    expect(applyCall).toBeDefined();
+    expect(JSON.parse(String((applyCall![1] as RequestInit).body))).toEqual({
+      confirm: true,
+    });
+  });
+
+  it('offers no confirmation at all for a run that read no records', async () => {
+    // An empty directory and an unreachable one are indistinguishable, so
+    // this refusal is not something an administrator can wave through.
+    mockFetch({
+      run: run({
+        status: 'blocked',
+        blockedReason: 'the source returned no records',
+        requiresConfirmation: false,
+      }),
+    });
+    renderPage();
+
+    expect(
+      await screen.findByText(/blocked and will not apply/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
   });
 

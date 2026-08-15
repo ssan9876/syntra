@@ -4,6 +4,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { DEFAULT_MAPPINGS } from './defaults.js';
 import { createSource, setMappings } from './source-service.js';
+import { applyRun } from './run-service.js';
 import { runSyncJob, SYNC_JOB, syncJobPayload } from './jobs.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 11));
@@ -96,6 +97,43 @@ describe('runSyncJob', () => {
     expect(run?.status).toBe('blocked');
     const users = await withTenant(tenantId, (tx) => tx.user.findMany());
     expect(users).toEqual([]);
+  });
+
+  it('does not apply a requires-confirmation run even with autoApply on', async () => {
+    // The load-bearing guarantee of the whole subsystem: a run over the
+    // deactivation threshold can be waved through by a person who has read
+    // the numbers, and never by the scheduler. runSyncJob applies only a run
+    // that reached `previewed`, and a threshold run never does.
+    await runSyncJob(provider, syncJobPayload(tenantId, sourceId));
+    const first = await withTenant(tenantId, (tx) => tx.syncRun.findFirst());
+    await applyRun(tenantId, first!.id);
+
+    const before = await withTenant(tenantId, (tx) => tx.user.findMany());
+    expect(before).toHaveLength(2);
+
+    // Users vanish from the read while groups still come back, so records
+    // were read and the guard's zero-record branch does not fire: this is the
+    // threshold branch, the confirmable one.
+    await withTenant(tenantId, (tx) =>
+      tx.directorySource.update({
+        where: { id: sourceId },
+        data: {
+          autoApply: true,
+          config: { ...config, userFilter: '(objectClass=nothing)' } as never,
+        },
+      }),
+    );
+
+    await runSyncJob(provider, syncJobPayload(tenantId, sourceId));
+
+    const run = await withTenant(tenantId, (tx) =>
+      tx.syncRun.findFirst({ orderBy: { startedAt: 'desc' } }),
+    );
+    expect(run?.status).toBe('blocked');
+    expect(run?.requiresConfirmation).toBe(true);
+
+    const after = await withTenant(tenantId, (tx) => tx.user.findMany());
+    expect(after.every((u) => u.status === 'active')).toBe(true);
   });
 
   it('records lastRunAt on the source', async () => {

@@ -66,11 +66,10 @@ export async function registerAdminSyncRunRoutes(
       // change failed and continue with the rest.
       let run;
       try {
-        run = await applyRun(
-          request.tenantId,
-          id,
-          body.only ? { only: body.only } : {},
-        );
+        run = await applyRun(request.tenantId, id, {
+          ...(body.only ? { only: body.only } : {}),
+          ...(body.confirm ? { confirm: true } : {}),
+        });
       } catch (cause) {
         if (cause instanceof Error && /blocked/i.test(cause.message)) {
           throw new ProblemError(
@@ -91,7 +90,9 @@ export async function registerAdminSyncRunRoutes(
           targetId: id,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { status: run.status },
+          // Whether a threshold-blocked run was waved through is exactly the
+          // kind of decision the log exists to hold.
+          payload: { status: run.status, confirmed: body.confirm === true },
         });
       });
 

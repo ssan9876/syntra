@@ -268,6 +268,64 @@ describe('applyRun', () => {
 
     await expect(applyRun(tenantId, run.id)).rejects.toThrow(/blocked/i);
   });
+
+  it('refuses a requires-confirmation run that was not confirmed', async () => {
+    const run = await previewRun(tenantId, provider, sourceId);
+    await withTenant(tenantId, (tx) =>
+      tx.syncRun.update({
+        where: { id: run.id },
+        data: {
+          status: 'blocked',
+          requiresConfirmation: true,
+          blockedReason: 'over the threshold',
+        },
+      }),
+    );
+
+    await expect(applyRun(tenantId, run.id)).rejects.toThrow(/blocked/i);
+  });
+
+  it('applies a requires-confirmation run when the caller confirms it', async () => {
+    // A genuine cohort departure — a contractor batch, a closed site — has to
+    // be processable through sync rather than by hand.
+    const run = await previewRun(tenantId, provider, sourceId);
+    await withTenant(tenantId, (tx) =>
+      tx.syncRun.update({
+        where: { id: run.id },
+        data: {
+          status: 'blocked',
+          requiresConfirmation: true,
+          blockedReason: 'over the threshold',
+        },
+      }),
+    );
+
+    const applied = await applyRun(tenantId, run.id, { confirm: true });
+
+    expect(applied.status).toBe('applied');
+    const users = await withTenant(tenantId, (tx) => tx.user.findMany());
+    expect(users.map((u) => u.login).sort()).toEqual(['jdoe', 'sroe']);
+  });
+
+  it('refuses a run that read nothing however hard the caller confirms', async () => {
+    // The zero-record refusal is not confirmable: an empty directory and an
+    // unreachable one are indistinguishable from here.
+    const run = await previewRun(tenantId, provider, sourceId);
+    await withTenant(tenantId, (tx) =>
+      tx.syncRun.update({
+        where: { id: run.id },
+        data: {
+          status: 'blocked',
+          requiresConfirmation: false,
+          blockedReason: 'the source returned no records',
+        },
+      }),
+    );
+
+    await expect(
+      applyRun(tenantId, run.id, { confirm: true }),
+    ).rejects.toThrow(/blocked/i);
+  });
 });
 
 describe('applyChange membership failure paths', () => {

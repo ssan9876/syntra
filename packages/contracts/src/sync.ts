@@ -23,6 +23,14 @@ export const setMappingsRequest = z.object({
 
 export const applyRunRequest = z.object({
   only: z.array(z.string().uuid()).optional(),
+  /**
+   * Applies a run the guard blocked for exceeding the deactivation threshold.
+   * Only that refusal is confirmable: a run that read no records is refused
+   * outright, and nothing the caller sends changes that. The scheduler never
+   * sets this — an unattended schedule is the circumstance the guard exists
+   * for.
+   */
+  confirm: z.boolean().optional(),
 });
 
 /**

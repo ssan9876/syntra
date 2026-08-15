@@ -417,13 +417,21 @@ async function currentMemberships(
 export async function applyRun(
   tenantId: string,
   runId: string,
-  opts: { only?: string[] } = {},
+  opts: { only?: string[]; confirm?: boolean } = {},
 ) {
   const run = await withTenant(tenantId, (tx) =>
     tx.syncRun.findUnique({ where: { id: runId } }),
   );
   if (!run) throw new Error(`no such run: ${runId}`);
-  if (run.status === 'blocked') {
+
+  // A blocked run is still fully readable, and one blocked only for exceeding
+  // the threshold can be applied by someone who has read the numbers and said
+  // so explicitly (spec section 9). A genuine cohort departure — a contractor
+  // batch, a closed site — has to be processable through sync rather than by
+  // hand. A run that read no records has `requiresConfirmation` false and is
+  // refused whatever the caller sends, and the scheduler never passes
+  // `confirm` at all, so `autoApply` can never satisfy this.
+  if (run.status === 'blocked' && !(run.requiresConfirmation && opts.confirm)) {
     throw new Error(
       `run is blocked and cannot be applied: ${run.blockedReason ?? 'unknown reason'}`,
     );
