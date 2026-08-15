@@ -98,14 +98,36 @@ async function removeRule(page: Page, name: string) {
 }
 
 test.describe.serial('access, second factors and the console', () => {
-  test('a user sees the tiles their organization assigned them', async ({
+  test('a user sees the tiles assigned to them, and launching one opens it', async ({
     page,
+    context,
   }) => {
+    // The seeded launch URLs point at example.com. Fulfilled here so the suite
+    // neither depends on the public internet nor reaches it.
+    await context.route('https://example.com/**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<h1>The rota</h1>',
+      }),
+    );
+
     await signIn(page, 'jdoe', USER!);
     await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /rota planner/i })).toBeVisible();
     // Assigned to the owner only, so it must not appear here.
     await expect(page.getByRole('button', { name: /expenses/i })).toHaveCount(0);
+
+    // A launch is a fresh authorize() decision, not a link. It opens in a tab
+    // of its own — with noopener, so the application cannot reach back into
+    // the portal — which is why this waits on the context rather than on a
+    // popup opener the portal deliberately does not keep.
+    const [opened] = await Promise.all([
+      context.waitForEvent('page'),
+      page.getByRole('button', { name: /rota planner/i }).click(),
+    ]);
+    await expect(opened).toHaveURL('https://example.com/rota');
+    await opened.close();
   });
 
   test('a forgotten password answers the same for a real and an invented account', async ({
