@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Client } from 'ldapts';
 import { ldapConnector, rangedMembershipFailure } from './connector.js';
 import type { LdapConfig } from './config.js';
 
@@ -21,6 +22,57 @@ const readAll = async () => {
   for await (const record of ldapConnector.read(config)) records.push(record);
   return records;
 };
+
+/**
+ * The same server, reached over TLS. The container generates a self-signed
+ * certificate, so both of these have to disable verification explicitly --
+ * which is the point: with `rejectUnauthorized` left at its default, they
+ * refuse to connect at all, and there is a test below that says so.
+ */
+const startTlsConfig: LdapConfig & { bindPassword: string } = {
+  ...config,
+  tlsMode: 'starttls',
+  rejectUnauthorized: false,
+};
+
+const ldapsConfig: LdapConfig & { bindPassword: string } = {
+  ...config,
+  url: process.env.LDAPS_URL ?? 'ldaps://localhost:1636',
+  tlsMode: 'ldaps',
+  rejectUnauthorized: false,
+};
+
+/**
+ * Records the order in which the client secures and authenticates the
+ * connection, calling through to the real methods so the exchange with the
+ * server is genuine.
+ */
+function recordHandshake(): string[] {
+  const order: string[] = [];
+  const realStartTls = Client.prototype.startTLS;
+  const realBind = Client.prototype.bind;
+
+  vi.spyOn(Client.prototype, 'startTLS').mockImplementation(function (
+    this: Client,
+    ...args: Parameters<Client['startTLS']>
+  ) {
+    order.push('startTLS');
+    return realStartTls.apply(this, args);
+  });
+  vi.spyOn(Client.prototype, 'bind').mockImplementation(function (
+    this: Client,
+    ...args: Parameters<Client['bind']>
+  ) {
+    order.push('bind');
+    return realBind.apply(this, args);
+  });
+
+  return order;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('ldapConnector.test', () => {
   it('reports success and what it found', async () => {
@@ -45,6 +97,81 @@ describe('ldapConnector.test', () => {
       url: 'ldap://127.0.0.1:1',
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('transport security', () => {
+  it('upgrades an ldap:// connection with StartTLS and reads through it', async () => {
+    const result = await ldapConnector.test(startTlsConfig);
+    expect(result.ok).toBe(true);
+    expect(result.sampleCounts?.user).toBe(2);
+  });
+
+  it('completes StartTLS before the bind, so the password never crosses in the clear', async () => {
+    // The whole point of the mode. Bind first and StartTLS second secures
+    // everything except the one thing worth securing.
+    const order = recordHandshake();
+
+    const result = await ldapConnector.test(startTlsConfig);
+
+    expect(result.ok).toBe(true);
+    expect(order).toEqual(['startTLS', 'bind']);
+  });
+
+  it('upgrades before the bind on a read as well as a test', async () => {
+    // read() and test() each call connect() -- this fails the moment one of
+    // them grows its own connection path that binds first.
+    const order = recordHandshake();
+
+    for await (const _record of ldapConnector.read(startTlsConfig)) break;
+
+    expect(order).toEqual(['startTLS', 'bind']);
+  });
+
+  it('never starts TLS on a plain source, since ldapts reads tlsOptions as implicit TLS', async () => {
+    // The regression this guards: passing tlsOptions to the constructor makes
+    // ldapts open an implicit-TLS connection whatever the URL says, so a
+    // plain ldap:// bind throws a ClientHello at a plaintext listener and the
+    // socket drops. A plain source must do neither that nor StartTLS.
+    const order = recordHandshake();
+
+    const result = await ldapConnector.test(config);
+
+    expect(result.ok).toBe(true);
+    expect(order).toEqual(['bind']);
+  });
+
+  it('refuses a StartTLS connection whose certificate does not verify, by default', async () => {
+    // Certificate verification is on unless a source turns it off. The
+    // container's certificate is self-signed, so the default must refuse it.
+    const result = await ldapConnector.test({
+      ...startTlsConfig,
+      rejectUnauthorized: true,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('connects over LDAPS', async () => {
+    const result = await ldapConnector.test(ldapsConfig);
+    expect(result.ok).toBe(true);
+    expect(result.sampleCounts?.user).toBe(2);
+  });
+
+  it('refuses an LDAPS connection whose certificate does not verify, by default', async () => {
+    const result = await ldapConnector.test({
+      ...ldapsConfig,
+      rejectUnauthorized: true,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('does not call startTLS on an LDAPS connection, which is already TLS', async () => {
+    const order = recordHandshake();
+
+    const result = await ldapConnector.test(ldapsConfig);
+
+    expect(result.ok).toBe(true);
+    expect(order).toEqual(['bind']);
   });
 });
 

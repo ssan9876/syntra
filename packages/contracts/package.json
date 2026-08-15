@@ -5,6 +5,7 @@
   "main": "./src/index.ts",
   "license": "Apache-2.0",
   "dependencies": {
+    "cron-parser": "^5.10.0",
     "zod": "^3.24.0"
   }
 }

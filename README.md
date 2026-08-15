@@ -20,7 +20,7 @@ implemented.
 | Module | Status | Contents |
 |---|---|---|
 | **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications, web console |
-| **Directory Sync** | built | LDAP/OpenLDAP connector, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, source and run administration screens |
+| **Directory Sync** | built | LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, source lifecycle over the API and a run review screen in the console |
 | **Access** | planned | SAML 2.0 IdP, OpenID Connect provider, upstream federation, application catalog, MFA, authentication policies, self-service password reset |
 | **Provision** | planned | Source systems, business rules, evaluation and enforcement, target systems, entitlements |
 | **Automate** | planned | Product catalog, self-service requests, approval workflows, delegated forms |
@@ -64,7 +64,7 @@ Requires Node 22+, pnpm 9, and Docker.
 
 ```bash
 pnpm install
-pnpm db:up                                  # PostgreSQL 16 and MailDev
+pnpm db:up                                  # PostgreSQL 16, MailDev, OpenLDAP
 pnpm db:migrate
 
 cp .env.example .env                        # then fill in the secrets
@@ -106,19 +106,53 @@ same URL, Vite is listening on IPv6 only: `localhost` resolves to `::1` on
 recent Node, while Chromium maps `*.localhost` to `127.0.0.1`. Start the web
 server with `vite --host 127.0.0.1`.
 
+**An OpenLDAP container started before the TLS tests existed has to be
+recreated:** `docker compose -f infra/docker-compose.yml up -d openldap`. The
+image's default `LDAP_TLS_VERIFY_CLIENT` is `demand`, which requires a client
+certificate and drops the socket mid-handshake for a client that has none. The
+failure reads `Client network socket disconnected before secure TLS connection
+was established`, which looks like a network fault and is not one — the compose
+file sets `try` instead, and also maps 636 so the LDAPS path is covered.
+
 ### Connecting a directory source
 
 `infra/docker-compose.yml` already runs an OpenLDAP container for
 development (`ldap://localhost:1389`, seeded from `infra/ldap/seed.ldif`), so
 there is a real directory to sync against without standing anything up
-yourself.
+yourself. The same container serves StartTLS on that port and LDAPS on
+`ldaps://localhost:1636`, with a self-signed certificate.
 
-A source is created with `POST /api/admin/sources`, with its attribute
-mappings set through `PUT /api/admin/sources/:id/mappings`; the console's
-**Directory sources** page lists sources and their last run today, and
-creating one from the console is a later piece of work. Either way, the bind
-password goes into the secrets vault, not into the source's stored `config`
-— the API only ever accepts it, never returns it.
+A source's `config` carries a `tlsMode` — `plain`, `starttls` or `ldaps`.
+StartTLS completes before the bind, so the bind password never crosses the
+wire in the clear; `plain` means it does, and the **Directory sources** page
+says so in as many words. Left out, the mode is read from the URL scheme, so
+a source saved before the field existed keeps the transport it had. Server
+certificates are verified unless a source sets `rejectUnauthorized: false`,
+which the same page flags. The mode and the scheme have to agree: an
+`ldaps://` URL with any other mode is refused rather than quietly
+reinterpreted.
+
+A source is created with `POST /api/admin/sources`, edited with `PATCH
+/api/admin/sources/:id`, and removed with `DELETE /api/admin/sources/:id`;
+its attribute mappings are set through `PUT /api/admin/sources/:id/mappings`.
+The console's **Directory sources** page lists sources and their last run
+today, and editing one from the console is a later piece of work. Either way,
+the bind password goes into the secrets vault, not into the source's stored
+`config` — the API only ever accepts it, never returns it, and a `PATCH`
+carrying a new one replaces the vault entry rather than adding beside it.
+
+A `PATCH` mentioning a schedule takes effect immediately, not at the next
+restart; so does a create, and so does a delete. Each source has a schedule of
+its own on the shared job queue, so rescheduling one leaves the rest alone.
+
+**Deleting a source deactivates every account and group it owned**, gives them
+a status reason naming the source, and detaches them — it never deletes a
+directory object, in keeping with the rest of this subsystem. Because that
+revokes real access it is refused with a 409 and the counts unless the request
+says `?confirm=true`, the same shape as the run guard. A foreign key from
+`User`, `Group` and `OrgUnit` to the source makes that the only way a source
+can go: the database refuses to leave a row pointing at a source that no
+longer exists.
 
 A run always previews before it applies. `POST /api/admin/sources/:id/run`
 reads the directory, correlates it against what Syntra already holds, and

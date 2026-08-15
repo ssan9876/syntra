@@ -58,19 +58,31 @@ function searches(config: ResolvedConfig): Search[] {
   return list;
 }
 
+/**
+ * Opens a connection, secures it as the source's `tlsMode` asks, and binds.
+ *
+ * **StartTLS runs before the bind, and that order is not negotiable.** The
+ * bind carries the password; upgrading afterwards secures everything except
+ * the one thing worth securing. There is a test asserting the order for that
+ * reason.
+ */
 async function connect(config: ResolvedConfig): Promise<Client> {
+  const tlsOptions = { rejectUnauthorized: config.rejectUnauthorized };
+
   // ldapts treats the mere presence of `tlsOptions` (any defined key) as a
   // request for an implicit-TLS connection, independent of the URL scheme.
-  // Only pass it for ldaps:// URLs; otherwise a plain ldap:// connection gets
-  // a TLS ClientHello thrown at a plaintext listener and the socket drops.
-  const isSecure = config.url.toLowerCase().startsWith('ldaps:');
+  // Only pass it to the constructor for `ldaps`; a `starttls` connection
+  // starts out as plaintext and takes its options from startTLS() below, and
+  // a `plain` one would get a TLS ClientHello thrown at a plaintext listener
+  // and the socket would drop.
   const client = new Client({
     url: config.url,
-    ...(isSecure
-      ? { tlsOptions: { rejectUnauthorized: config.rejectUnauthorized } }
-      : {}),
+    ...(config.tlsMode === 'ldaps' ? { tlsOptions } : {}),
   });
   try {
+    if (config.tlsMode === 'starttls') {
+      await client.startTLS(tlsOptions);
+    }
     await client.bind(config.bindDn, config.bindPassword);
   } catch (cause) {
     // A rejected bind (bad credentials) throws without ldapts destroying the

@@ -1,12 +1,84 @@
+import { CronExpressionParser } from 'cron-parser';
 import { z } from 'zod';
+
+/**
+ * A cron expression the job scheduler will actually accept.
+ *
+ * Validated here, at the contract boundary, because pg-boss parses the
+ * expression *before* its upsert (`timekeeper.js`: `CronExpressionParser.parse`,
+ * then `executeSql`). A malformed expression therefore throws with the previous
+ * schedule row still in place — so without this check a `PATCH` returns 200, the
+ * console renders the string it was handed, and the scheduler goes on firing the
+ * expression it had. Displayed schedule and actual schedule diverge with no
+ * signal anywhere but a log line, which is the same silent divergence the rest
+ * of this work exists to remove. Refused before the transaction opens rather
+ * than reported after it commits.
+ *
+ * Parsed exactly the way pg-boss parses it — same library, same `tz`, same
+ * `strict: false` — so this accepts precisely what the scheduler accepts:
+ * neither a stricter dialect that rejects a working expression, nor a looser
+ * one that lets a broken one through.
+ */
+const cronExpression = z
+  .string()
+  .min(1)
+  .max(128)
+  .superRefine((value, ctx) => {
+    try {
+      CronExpressionParser.parse(value, { tz: 'UTC', strict: false });
+    } catch (cause) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `not a cron expression the scheduler can use: ${
+          cause instanceof Error ? cause.message : 'unparseable'
+        }`,
+      });
+    }
+  });
 
 export const createSourceRequest = z.object({
   name: z.string().min(1).max(256),
   config: z.record(z.unknown()),
   bindPassword: z.string().min(1).max(1024),
-  schedule: z.string().max(128).optional(),
+  schedule: cronExpression.optional(),
   autoApply: z.boolean().optional(),
   deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
+});
+
+/**
+ * Every field optional, and only what was sent is written: changing a
+ * schedule must not mean resending the whole connection configuration.
+ *
+ * `schedule` is nullable as well as optional, and the two mean different
+ * things — absent leaves the cron expression alone, `null` clears it and
+ * makes the source manual-only. `bindPassword` is write-only here as it is
+ * on create; the API accepts it and never returns it.
+ */
+export const updateSourceRequest = z
+  .object({
+    name: z.string().min(1).max(256).optional(),
+    config: z.record(z.unknown()).optional(),
+    bindPassword: z.string().min(1).max(1024).optional(),
+    schedule: cronExpression.nullable().optional(),
+    autoApply: z.boolean().optional(),
+    deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .refine((body) => Object.keys(body).length > 0, {
+    message: 'nothing to update',
+  });
+
+/**
+ * Deleting a source deactivates every account and group it owns. That
+ * revokes real access, so it is refused unless the caller says so — the same
+ * shape as the run guard, which will not apply an outsized deactivation
+ * without confirmation either.
+ */
+export const deleteSourceQuery = z.object({
+  confirm: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
 });
 
 export const mappingRule = z.object({

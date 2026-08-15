@@ -31,6 +31,7 @@ model OrgUnit {
   children     OrgUnit[] @relation("OrgUnitTree")
   users        User[]
   sourceId     String? @db.Uuid
+  source       DirectorySource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   sourceAnchor String?
 
   @@unique([tenantId, sourceId, sourceAnchor])
@@ -51,6 +52,7 @@ model User {
   orgUnit      OrgUnit? @relation(fields: [orgUnitId], references: [id])
   personId     String?  @db.Uuid
   sourceId     String?  @db.Uuid
+  source       DirectorySource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   sourceAnchor String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -69,6 +71,7 @@ model Group {
   name         String
   description  String?
   sourceId     String? @db.Uuid
+  source       DirectorySource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   sourceAnchor String?
   status       String  @default("active")
   statusReason String?
@@ -262,6 +265,18 @@ model DirectorySource {
 
   mappings AttributeMapping[]
   runs     SyncRun[]
+
+  /// Directory rows this source owns. `Restrict`, deliberately: without a
+  /// foreign key here, deleting a source stranded its users permanently
+  /// unsynced, and `SetNull` would have silently turned them into locally
+  /// managed accounts that no directory keeps current. The database now
+  /// refuses the delete outright, so releasing those rows -- deactivating
+  /// them and detaching them, in the same transaction as the delete -- is
+  /// the only way a source can go, and it is a decision an administrator has
+  /// to confirm rather than a side effect of removing a configuration row.
+  users    User[]
+  groups   Group[]
+  orgUnits OrgUnit[]
 
   @@unique([tenantId, name])
   @@index([tenantId])

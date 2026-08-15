@@ -6,11 +6,17 @@ import {
   createRole,
   createUser,
   setPassword,
+  syncScheduleKey,
   type Permission,
 } from '@syntra/core';
-import { buildTestApp } from '../../test-support.js';
+import {
+  buildTestApp,
+  createFakeScheduler,
+  type FakeScheduler,
+} from '../../test-support.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
+let scheduler: FakeScheduler;
 const PASSWORD = 'a-long-enough-password';
 
 const config = {
@@ -62,8 +68,20 @@ const post = (url: string, cookie: string, payload: unknown = {}) =>
 const get = (url: string, cookie: string) =>
   ctx.app.inject({ method: 'GET', url, headers: { host: ctx.host, cookie } });
 
+const patch = (url: string, cookie: string, payload: unknown) =>
+  ctx.app.inject({
+    method: 'PATCH',
+    url,
+    headers: { host: ctx.host, cookie },
+    payload: payload as object,
+  });
+
+const del = (url: string, cookie: string) =>
+  ctx.app.inject({ method: 'DELETE', url, headers: { host: ctx.host, cookie } });
+
 beforeEach(async () => {
-  ctx = await buildTestApp();
+  scheduler = createFakeScheduler();
+  ctx = await buildTestApp({ scheduler: () => scheduler });
   await ctx.app.ready();
 });
 
@@ -79,6 +97,26 @@ describe('source administration', () => {
 
     expect(res.statusCode).toBe(201);
     expect(res.body).not.toContain('adminpassword');
+  });
+
+  it('refuses a duplicate name with a 409, not a bare 500', async () => {
+    // The unique index on (tenantId, name) is what actually protects this, and
+    // it surfaced as a 500 with nothing an administrator could act on.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    const res = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect((await get('/api/admin/sources', cookie)).json().sources).toHaveLength(1);
   });
 
   it('refuses to create a source with only sync.read', async () => {
@@ -331,5 +369,436 @@ describe('skipping a change', () => {
       cookie,
     );
     expect(res.statusCode).toBe(404);
+  });
+});
+
+/** A second administrator holding only sync.read, for the permission tests. */
+async function readerCookie() {
+  await withTenant(ctx.tenantId, async (tx) => {
+    const user = await createUser(tx, {
+      login: 'reader',
+      email: 'r@acme.test',
+      displayName: 'Reader',
+    });
+    await setPassword(tx, user.id, PASSWORD);
+    const role = await createRole(tx, 'ReadOnly', [PERMISSIONS.SYNC_READ]);
+    await assignRole(tx, user.id, role.id);
+  });
+
+  const login = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    headers: { host: ctx.host },
+    payload: { login: 'reader', password: PASSWORD },
+  });
+  const token = login.cookies.find((c) => c.name === 'syntra_session')!.value;
+  const up = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/auth/elevate',
+    headers: { host: ctx.host, cookie: `syntra_session=${token}` },
+    payload: { password: PASSWORD },
+  });
+  return `syntra_session=${up.cookies.find((c) => c.name === 'syntra_session')!.value}`;
+}
+
+const createSourceVia = (cookie: string, body: Record<string, unknown> = {}) =>
+  post('/api/admin/sources', cookie, {
+    name: 'Head office',
+    config,
+    bindPassword: 'adminpassword',
+    ...body,
+  });
+
+describe('scheduling a source as it changes', () => {
+  const cron = '0 3 * * *';
+
+  it('schedules a new source there and then, not at the next restart', async () => {
+    // scheduleAllSyncSources runs once at boot and the create route never
+    // touched the scheduler, so before this a source created with a cron
+    // expression did not run until someone restarted the API.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+
+    const created = await createSourceVia(cookie, { schedule: cron });
+
+    expect(scheduler.scheduled).toHaveLength(1);
+    expect(scheduler.scheduled[0]!.cron).toBe(cron);
+    expect(scheduler.scheduled[0]!.key).toBe(
+      syncScheduleKey(ctx.tenantId, created.json().id),
+    );
+    expect(scheduler.scheduled[0]!.data).toEqual({
+      tenantId: ctx.tenantId,
+      sourceId: created.json().id,
+    });
+  });
+
+  it('schedules nothing for a source created without a cron expression', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+
+    await createSourceVia(cookie);
+
+    expect(scheduler.scheduled).toEqual([]);
+  });
+
+  it('reschedules on the new cron expression when the schedule is edited', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(cookie, { schedule: cron });
+
+    const res = await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      schedule: '15 4 * * *',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().schedule).toBe('15 4 * * *');
+    expect(scheduler.scheduled.at(-1)!.cron).toBe('15 4 * * *');
+    expect(scheduler.scheduled.at(-1)!.key).toBe(
+      syncScheduleKey(ctx.tenantId, created.json().id),
+    );
+  });
+
+  it('unschedules a source that is disabled, rather than leaving it running', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(cookie, { schedule: cron });
+
+    await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      enabled: false,
+    });
+
+    expect(scheduler.unscheduled.map((c) => c.key)).toContain(
+      syncScheduleKey(ctx.tenantId, created.json().id),
+    );
+  });
+
+  it('unschedules a source whose cron expression is cleared', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(cookie, { schedule: cron });
+
+    const res = await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      schedule: null,
+    });
+
+    expect(res.json().schedule).toBeNull();
+    expect(scheduler.unscheduled.map((c) => c.key)).toContain(
+      syncScheduleKey(ctx.tenantId, created.json().id),
+    );
+  });
+
+  it('refuses a cron expression the scheduler could not parse, on create', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+
+    const res = await createSourceVia(cookie, { schedule: 'not a cron' });
+
+    expect(res.statusCode).toBe(400);
+    expect((await get('/api/admin/sources', cookie)).json().sources).toEqual([]);
+    expect(scheduler.scheduled).toEqual([]);
+  });
+
+  it('refuses a bad cron expression on edit, and leaves the working one running', async () => {
+    // pg-boss parses the expression *before* its upsert, so a malformed one
+    // throws with the old schedule row still in place. Without this check the
+    // PATCH returned 200, the console rendered "not a cron", and the scheduler
+    // went on firing the previous expression -- displayed schedule and actual
+    // schedule diverging with nothing but a log line to say so.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await createSourceVia(cookie, { schedule: cron });
+    const scheduledBefore = scheduler.scheduled.length;
+
+    const res = await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      schedule: 'not a cron',
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    // The stored schedule is still the one that works, and so is the scheduler.
+    const listed = (await get('/api/admin/sources', cookie)).json().sources;
+    expect(listed[0].schedule).toBe(cron);
+    expect(scheduler.scheduled).toHaveLength(scheduledBefore);
+  });
+
+  it('unschedules a deleted source, so it cannot fire against nothing', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(cookie, { schedule: cron });
+
+    const res = await del(`/api/admin/sources/${created.json().id}`, cookie);
+
+    expect(res.statusCode).toBe(204);
+    expect(scheduler.unscheduled.map((c) => c.key)).toContain(
+      syncScheduleKey(ctx.tenantId, created.json().id),
+    );
+  });
+});
+
+describe('editing a source', () => {
+  it('changes the settings that used to be fixed at creation', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(cookie);
+
+    const res = await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      name: 'Head office (renamed)',
+      autoApply: true,
+      deactivationThresholdPercent: 25,
+      enabled: false,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      name: 'Head office (renamed)',
+      autoApply: true,
+      deactivationThresholdPercent: 25,
+      enabled: false,
+    });
+  });
+
+  it('leaves alone what the request did not mention', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(cookie, {
+      schedule: '0 3 * * *',
+      autoApply: true,
+    });
+
+    const res = await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      name: 'Renamed',
+    });
+
+    expect(res.json().schedule).toBe('0 3 * * *');
+    expect(res.json().autoApply).toBe(true);
+    expect(res.json().config).toEqual(created.json().config);
+  });
+
+  it('rotates the bind password, and the new one is what the connection uses', async () => {
+    // The strongest proof available that the vault entry was replaced rather
+    // than added alongside: the source could not bind before, and can after.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await createSourceVia(cookie, { bindPassword: 'wrong-password' });
+    const id = created.json().id;
+
+    expect((await post(`/api/admin/sources/${id}/test`, cookie)).json().ok).toBe(
+      false,
+    );
+
+    const res = await patch(`/api/admin/sources/${id}`, cookie, {
+      bindPassword: 'adminpassword',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain('adminpassword');
+    expect((await post(`/api/admin/sources/${id}/test`, cookie)).json().ok).toBe(
+      true,
+    );
+  });
+
+  it('refuses a configuration the connector could not use', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(cookie);
+
+    const res = await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      // An ldaps mode on an ldap:// URL. Reinterpreting either half silently
+      // is how a source ends up binding in the clear.
+      config: { ...config, tlsMode: 'ldaps' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().type).toContain('invalid-config');
+  });
+
+  it('refuses to rename a source onto another source name', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    await createSourceVia(cookie, { name: 'Head office' });
+    const second = await createSourceVia(cookie, { name: 'Branch' });
+
+    const res = await patch(`/api/admin/sources/${second.json().id}`, cookie, {
+      name: 'Head office',
+    });
+
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('lets a source keep its own name', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(cookie);
+
+    const res = await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      name: 'Head office',
+      autoApply: true,
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('returns a 404, not a 500, for a source that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+
+    const res = await patch(
+      '/api/admin/sources/00000000-0000-0000-0000-000000000000',
+      cookie,
+      { autoApply: true },
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses an edit with only sync.read', async () => {
+    const manage = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(manage);
+
+    const res = await patch(
+      `/api/admin/sources/${created.json().id}`,
+      await readerCookie(),
+      { autoApply: true },
+    );
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('audits which fields changed, and none of their values', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.AUDIT_READ]);
+    const created = await createSourceVia(cookie);
+
+    await patch(`/api/admin/sources/${created.json().id}`, cookie, {
+      bindPassword: 'a-rotated-secret',
+      autoApply: true,
+    });
+
+    const audit = await get('/api/admin/audit', cookie);
+    const event = audit
+      .json()
+      .events.find((e: { action: string }) => e.action === 'source.update');
+
+    expect(event).toBeDefined();
+    expect(event.targetId).toBe(created.json().id);
+    expect(event.payload.fields).toEqual(['autoApply', 'bindPassword']);
+    // A bind DN and a credential have no business in a log anyone holding
+    // audit.read can read.
+    expect(JSON.stringify(event)).not.toContain('a-rotated-secret');
+  });
+});
+
+describe('deleting a source', () => {
+  /** A source that has run once, so it owns the fixture's users and group. */
+  async function synced(cookie: string) {
+    const created = await createSourceVia(cookie);
+    const id = created.json().id;
+    await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/admin/sources/${id}/mappings`,
+      headers: { host: ctx.host, cookie },
+      payload: {
+        rules: [
+          { objectType: 'user', sourceAttribute: 'uid', targetField: 'login', transform: 'lowercase', isCorrelation: true },
+          { objectType: 'group', sourceAttribute: 'cn', targetField: 'name', transform: 'trim', isCorrelation: true },
+        ],
+      },
+    });
+    const run = await post(`/api/admin/sources/${id}/run`, cookie);
+    await post(`/api/admin/sync-runs/${run.json().id}/apply`, cookie);
+    return id;
+  }
+
+  it('deletes a source that owns nothing', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await createSourceVia(cookie);
+
+    const res = await del(`/api/admin/sources/${created.json().id}`, cookie);
+
+    expect(res.statusCode).toBe(204);
+    expect((await get('/api/admin/sources', cookie)).json().sources).toEqual([]);
+  });
+
+  it('refuses, with the numbers, to delete a source that still owns accounts', async () => {
+    // Deleting deactivates every account the source owns. That revokes real
+    // access, so it waits for a decision -- the same shape as the run guard,
+    // which will not apply an outsized deactivation unconfirmed either.
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.DIRECTORY_READ,
+    ]);
+    const id = await synced(cookie);
+
+    const res = await del(`/api/admin/sources/${id}`, cookie);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toContain('source-owns-directory-objects');
+    expect(res.json().owned.users).toBe(2);
+
+    // Nothing happened: the source is still there and so is everyone in it.
+    expect((await get('/api/admin/sources', cookie)).json().sources).toHaveLength(1);
+    const users = await get('/api/admin/users', cookie);
+    expect(
+      users.json().users.every((u: { status: string }) => u.status === 'active'),
+    ).toBe(true);
+  });
+
+  it('deactivates and detaches the accounts it owned when the caller confirms', async () => {
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.DIRECTORY_READ,
+    ]);
+    const id = await synced(cookie);
+
+    const res = await del(`/api/admin/sources/${id}?confirm=true`, cookie);
+    expect(res.statusCode).toBe(204);
+
+    expect((await get('/api/admin/sources', cookie)).json().sources).toEqual([]);
+
+    const all = await withTenant(ctx.tenantId, (tx) => tx.user.findMany());
+    const fromSource = all.filter((u) => u.login !== 'admin');
+    expect(fromSource).toHaveLength(2);
+    // Deactivated, never deleted: this subsystem removes no directory object
+    // anywhere else either.
+    expect(fromSource.every((u) => u.status === 'inactive')).toBe(true);
+    expect(fromSource.every((u) => u.statusReason?.includes('Head office'))).toBe(
+      true,
+    );
+    // And detached, so nothing carries an anchor into a source that is gone.
+    expect(fromSource.every((u) => u.sourceId === null)).toBe(true);
+    expect(fromSource.every((u) => u.sourceAnchor === null)).toBe(true);
+  });
+
+  it('records what the deletion deactivated', async () => {
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.AUDIT_READ,
+    ]);
+    const id = await synced(cookie);
+
+    await del(`/api/admin/sources/${id}?confirm=true`, cookie);
+
+    const audit = await get('/api/admin/audit', cookie);
+    const event = audit
+      .json()
+      .events.find((e: { action: string }) => e.action === 'source.delete');
+
+    expect(event).toBeDefined();
+    expect(event.targetId).toBe(id);
+    expect(event.payload.deactivated).toEqual({
+      users: 2,
+      groups: 1,
+      orgUnits: 0,
+    });
+  });
+
+  it('returns a 404, not a 500, for a source that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+
+    const res = await del(
+      '/api/admin/sources/00000000-0000-0000-0000-000000000000',
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a delete with only sync.read', async () => {
+    const manage = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const created = await createSourceVia(manage);
+
+    const res = await del(
+      `/api/admin/sources/${created.json().id}`,
+      await readerCookie(),
+    );
+
+    expect(res.statusCode).toBe(403);
   });
 });

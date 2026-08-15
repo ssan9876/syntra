@@ -1,18 +1,17 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { prisma, withTenant } from '@syntra/db';
 import {
+  applySourceSchedule,
   createScheduler,
   localMasterKeyProvider,
   registerSyncJobs,
-  syncJobPayload,
-  SYNC_JOB,
   type Config,
   type Scheduler,
 } from '@syntra/core';
 
 /**
- * Schedules every enabled directory source that has a cron expression,
- * across every tenant, on an already-started `Scheduler`.
+ * Reconciles the scheduler against every directory source in every tenant:
+ * enabled, cron-bearing sources are scheduled, and the rest are unscheduled.
  *
  * This runs once at process startup, not inside a request, so there is no
  * ambient tenant to scope the lookup to. It reads `Tenant` directly -- the
@@ -50,10 +49,13 @@ export async function scheduleAllSyncSources(
   for (const tenant of tenants) {
     let sources;
     try {
+      // Every source, not only the eligible ones. pg-boss keeps its schedules
+      // in the database, so a source disabled or unscheduled while this
+      // process was down still has a schedule row waiting for it; reading the
+      // whole list lets `applySourceSchedule` remove those as well as add the
+      // rest, which is the difference between reconciling and appending.
       sources = await withTenant(tenant.id, (tx) =>
-        tx.directorySource.findMany({
-          where: { enabled: true, schedule: { not: null } },
-        }),
+        tx.directorySource.findMany(),
       );
     } catch (cause) {
       logger.error(
@@ -65,11 +67,7 @@ export async function scheduleAllSyncSources(
 
     for (const source of sources) {
       try {
-        await scheduler.schedule(
-          SYNC_JOB,
-          source.schedule!,
-          syncJobPayload(tenant.id, source.id),
-        );
+        await applySourceSchedule(scheduler, tenant.id, source);
       } catch (cause) {
         logger.error(
           { err: cause, tenantId: tenant.id, sourceId: source.id },

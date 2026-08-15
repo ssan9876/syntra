@@ -2,34 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyBaseLogger } from 'fastify';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { SYNC_JOB, type Config, type Scheduler } from '@syntra/core';
+import { SYNC_JOB, syncScheduleKey, type Config } from '@syntra/core';
+import { createFakeScheduler } from './test-support.js';
 import { scheduleAllSyncSources, startSyncScheduler } from './scheduler.js';
-
-/**
- * A stub `Scheduler` that records every `schedule()` call instead of talking
- * to pg-boss, so scheduling behaviour can be asserted on directly. Sources
- * whose id is in `failSourceIds` reject, to exercise the "one bad source
- * doesn't stop the rest" path.
- */
-function createFakeScheduler(failSourceIds: Set<string> = new Set()): Scheduler & {
-  calls: Array<{ name: string; cron: string; data: unknown }>;
-} {
-  const calls: Array<{ name: string; cron: string; data: unknown }> = [];
-  return {
-    calls,
-    register: () => {},
-    start: async () => {},
-    stop: async () => {},
-    enqueue: async () => null,
-    schedule: async (name, cron, data) => {
-      const sourceId = (data as { sourceId?: string } | undefined)?.sourceId;
-      if (sourceId && failSourceIds.has(sourceId)) {
-        throw new Error(`schedule failed for source ${sourceId}`);
-      }
-      calls.push({ name, cron, data });
-    },
-  };
-}
 
 function createFakeLogger(): FastifyBaseLogger {
   const noop = () => {};
@@ -91,10 +66,10 @@ describe('scheduleAllSyncSources', () => {
     const scheduler = createFakeScheduler();
     await scheduleAllSyncSources(scheduler, createFakeLogger());
 
-    expect(scheduler.calls).toHaveLength(2);
+    expect(scheduler.scheduled).toHaveLength(2);
 
     const bySource = new Map(
-      scheduler.calls.map((c) => [(c.data as { sourceId: string }).sourceId, c]),
+      scheduler.scheduled.map((c) => [(c.data as { sourceId: string }).sourceId, c]),
     );
 
     const callA = bySource.get(sourceA.id);
@@ -102,11 +77,19 @@ describe('scheduleAllSyncSources', () => {
     expect(callA!.name).toBe(SYNC_JOB);
     expect(callA!.cron).toBe('0 1 * * *');
     expect(callA!.data).toEqual({ tenantId: tenantA.id, sourceId: sourceA.id });
+    // Every source on this queue needs a key of its own. pg-boss keys its
+    // schedule table on (queue, key) with key defaulting to '', so without
+    // one the second source scheduled silently replaces the first and only
+    // the last source in the last tenant ever runs.
+    expect(callA!.key).toBe(syncScheduleKey(tenantA.id, sourceA.id));
 
     const callB = bySource.get(sourceB.id);
     expect(callB).toBeDefined();
     expect(callB!.cron).toBe('0 2 * * *');
     expect(callB!.data).toEqual({ tenantId: tenantB.id, sourceId: sourceB.id });
+    expect(callB!.key).toBe(syncScheduleKey(tenantB.id, sourceB.id));
+
+    expect(new Set(scheduler.scheduled.map((c) => c.key)).size).toBe(2);
   });
 
   it('does not schedule a disabled source or a source with no cron expression', async () => {
@@ -118,8 +101,29 @@ describe('scheduleAllSyncSources', () => {
     const scheduler = createFakeScheduler();
     await scheduleAllSyncSources(scheduler, createFakeLogger());
 
-    expect(scheduler.calls).toHaveLength(1);
-    expect((scheduler.calls[0]!.data as { sourceId: string }).sourceId).toBe(eligible.id);
+    expect(scheduler.scheduled).toHaveLength(1);
+    expect((scheduler.scheduled[0]!.data as { sourceId: string }).sourceId).toBe(eligible.id);
+  });
+
+  it('unschedules a source that is no longer eligible, rather than merely skipping it', async () => {
+    // pg-boss keeps schedules in the database, so one written before a source
+    // was disabled outlives the process that wrote it. Skipping the source at
+    // boot would leave that schedule firing against a source an administrator
+    // believes is stopped.
+    const tenant = await createTenant('Acme', 'acme');
+    const disabled = await createDirectorySource(tenant.id, { enabled: false });
+    const manual = await createDirectorySource(tenant.id, { schedule: null });
+
+    const scheduler = createFakeScheduler();
+    await scheduleAllSyncSources(scheduler, createFakeLogger());
+
+    expect(scheduler.scheduled).toEqual([]);
+    expect(scheduler.unscheduled.map((c) => c.key).sort()).toEqual(
+      [
+        syncScheduleKey(tenant.id, disabled.id),
+        syncScheduleKey(tenant.id, manual.id),
+      ].sort(),
+    );
   });
 
   it('keeps scheduling the remaining sources when one schedule() call throws, and resolves rather than rejecting', async () => {
@@ -131,8 +135,8 @@ describe('scheduleAllSyncSources', () => {
 
     await expect(scheduleAllSyncSources(scheduler, createFakeLogger())).resolves.toBeUndefined();
 
-    expect(scheduler.calls).toHaveLength(1);
-    expect((scheduler.calls[0]!.data as { sourceId: string }).sourceId).toBe(good.id);
+    expect(scheduler.scheduled).toHaveLength(1);
+    expect((scheduler.scheduled[0]!.data as { sourceId: string }).sourceId).toBe(good.id);
   });
 
   it('resolves rather than rejecting, scheduling nothing, when listing tenants fails', async () => {
@@ -145,7 +149,7 @@ describe('scheduleAllSyncSources', () => {
 
     await expect(scheduleAllSyncSources(scheduler, createFakeLogger())).resolves.toBeUndefined();
 
-    expect(scheduler.calls).toHaveLength(0);
+    expect(scheduler.scheduled).toHaveLength(0);
   });
 });
 

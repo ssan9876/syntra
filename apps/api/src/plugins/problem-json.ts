@@ -13,6 +13,12 @@ export class ProblemError extends Error {
     readonly type: string,
     readonly title: string,
     readonly detail?: string,
+    /**
+     * Extension members, per RFC 9457 section 3.2 — problem-specific data a
+     * client can act on rather than parse out of the prose. Rendered
+     * alongside the standard members, and never over them.
+     */
+    readonly extensions?: Record<string, unknown>,
   ) {
     super(detail ?? title);
     this.name = 'ProblemError';
@@ -26,6 +32,9 @@ export function registerProblemJson(app: FastifyInstance): void {
         .status(error.status)
         .type('application/problem+json')
         .send({
+          // Extensions first, so a stray `status` or `type` among them cannot
+          // misreport what actually happened.
+          ...(error.extensions ?? {}),
           type: `${BASE}${error.type}`,
           title: error.title,
           status: error.status,

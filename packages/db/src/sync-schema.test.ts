@@ -107,6 +107,37 @@ describe('directory sync schema', () => {
     expect(off.statusReason).toBe('Absent from source');
   });
 
+  it('refuses to remove a source while directory rows still point at it', async () => {
+    // Without this foreign key a deleted source left its users carrying a
+    // sourceId that resolved to nothing: never synced again, and invisible as
+    // a problem. The database now refuses, so releasing those rows is a
+    // deliberate step rather than something a DELETE does behind your back.
+    const srcId = await withTenant(tenantId, async (tx) => {
+      const s = await tx.directorySource.create({
+        data: { tenantId, ...source() },
+      });
+      await tx.user.create({
+        data: {
+          tenantId,
+          login: 'a',
+          email: 'a@acme.test',
+          displayName: 'A',
+          sourceId: s.id,
+          sourceAnchor: 'anchor-1',
+        },
+      });
+      return s.id;
+    });
+
+    await expect(
+      withTenant(tenantId, (tx) =>
+        tx.directorySource.delete({ where: { id: srcId } }),
+      ),
+    ).rejects.toThrow();
+
+    expect(await withTenant(tenantId, (tx) => tx.directorySource.count())).toBe(1);
+  });
+
   it('cascades runs and changes when a source is removed', async () => {
     await withTenant(tenantId, async (tx) => {
       const s = await tx.directorySource.create({
