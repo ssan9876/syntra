@@ -9,12 +9,32 @@ interface UserRow {
   email: string;
   status: string;
   statusReason: string | null;
+  /** Set when a directory source owns this account. Null means locally managed. */
+  sourceId: string | null;
+}
+
+interface SourceRow {
+  id: string;
+  name: string;
 }
 
 export function UsersPage() {
   const { data, error, loading } = useApiResource<{ users: UserRow[] }>(
     '/api/admin/users',
   );
+  // Fetched alongside the users so a synced account can name the directory
+  // that owns it, the way the sync run pages do. A caller holding
+  // directory.read but not sync.read gets a 403 here; the hook turns that into
+  // its own error state, which is deliberately ignored — a missing source name
+  // is not a reason to fail the page, and the row still says the account is
+  // managed elsewhere.
+  const { data: sourcesData } = useApiResource<{ sources: SourceRow[] }>(
+    '/api/admin/sources',
+  );
+  const sourceNames = new Map(
+    (sourcesData?.sources ?? []).map((source) => [source.id, source.name]),
+  );
+  const anySynced = (data?.users ?? []).some((user) => user.sourceId !== null);
 
   return (
     <>
@@ -24,6 +44,21 @@ export function UsersPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+
+      {!error && anySynced && (
+        // Said once, above the table, and again per row. An administrator who
+        // edits the wrong account here would have their change overwritten by
+        // the next run without explanation; the spec asks for synced fields to
+        // read-only wherever they appear and to name the source that owns them.
+        <div className="mb-4">
+          <Alert tone="info" title="Some of these accounts are managed elsewhere">
+            An account with a directory source named against it has its login,
+            name and email owned by that directory: the fields are read-only
+            here and are rewritten on every run. Change them in the directory
+            itself.
+          </Alert>
+        </div>
+      )}
 
       {!error && (
         <Panel>
@@ -47,6 +82,9 @@ export function UsersPage() {
                   <th scope="col" className="px-4 py-2.5 font-medium max-sm:hidden">
                     Email
                   </th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">
+                    Managed by
+                  </th>
                   <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
                 </tr>
               </thead>
@@ -62,6 +100,22 @@ export function UsersPage() {
                     <td className="px-4 py-2.5 text-muted">{user.login}</td>
                     <td className="px-4 py-2.5 text-muted max-sm:hidden">
                       {user.email}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {user.sourceId === null ? (
+                        <span className="text-muted">Syntra</span>
+                      ) : (
+                        <span className="flex flex-wrap items-center gap-2">
+                          {/* Named, not merely flagged: "synced" tells an
+                              administrator nothing about where to go and
+                              change it. The id stands in when the caller
+                              cannot read the source list. */}
+                          <Status tone="primary">
+                            {sourceNames.get(user.sourceId) ?? 'Directory source'}
+                          </Status>
+                          <span className="text-sm text-muted">read-only</span>
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       {/*

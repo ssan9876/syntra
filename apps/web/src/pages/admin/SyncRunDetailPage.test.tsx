@@ -137,19 +137,24 @@ describe('SyncRunDetailPage', () => {
     mockFetch({ run: overThreshold() });
     renderPage();
 
-    const apply = await screen.findByRole('button', { name: /apply/i });
+    const apply = await screen.findByRole('button', { name: 'Apply' });
     expect(apply).toBeDisabled();
 
-    await userEvent.click(screen.getByRole('checkbox'));
-    expect(screen.getByRole('button', { name: /apply/i })).toBeEnabled();
+    // Named, not "the only checkbox on the page": every proposed change now
+    // carries one of its own for a partial apply. The confirmation is the one
+    // that gates the button.
+    await userEvent.click(screen.getByRole('checkbox', { name: /read these numbers/i }));
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
 
   it('sends the confirmation with the apply, once it is ticked', async () => {
     mockFetch({ run: overThreshold() });
     renderPage();
 
-    await userEvent.click(await screen.findByRole('checkbox'));
-    await userEvent.click(screen.getByRole('button', { name: /apply/i }));
+    await userEvent.click(
+      await screen.findByRole('checkbox', { name: /read these numbers/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
 
     const applyCall = vi
       .mocked(globalThis.fetch)
@@ -177,8 +182,10 @@ describe('SyncRunDetailPage', () => {
     expect(
       await screen.findByText(/blocked and will not apply/i),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    expect(
+      screen.queryByRole('checkbox', { name: /read these numbers/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
   });
 
   it('reports unresolved members rather than hiding them', async () => {

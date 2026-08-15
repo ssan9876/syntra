@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import type { SyncRunSummary } from '@syntra/contracts';
-import { api } from '../../session/api.js';
+import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -65,20 +65,60 @@ export function SyncRunDetailPage() {
   // Deliberately not persisted and not defaulted from anything: the tick is
   // the administrator's, for this run, in this sitting.
   const [confirmed, setConfirmed] = useState(false);
+  /**
+   * Changes held back from this apply, by id.
+   *
+   * Held as exclusions rather than as a selection so the default is "apply
+   * the run as reviewed" — which is what Apply has always done — and leaving
+   * something out is the deliberate act. `applyRun` takes an `only` list and
+   * leaves everything else `proposed`, so a partial apply is resumable: the
+   * run comes back `partially_applied` and the rest can be applied later.
+   */
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [skipping, setSkipping] = useState<string | null>(null);
 
-  async function onApply(confirm: boolean) {
+  async function onApply(confirm: boolean, only: string[] | null) {
     setApplying(true);
     setApplyError(null);
     try {
       await api(`/api/admin/sync-runs/${id}/apply`, {
         method: 'POST',
-        body: JSON.stringify(confirm ? { confirm: true } : {}),
+        body: JSON.stringify({
+          ...(only ? { only } : {}),
+          ...(confirm ? { confirm: true } : {}),
+        }),
       });
+      setExcluded(new Set());
       reload();
     } catch {
       setApplyError('The run could not be applied.');
     } finally {
       setApplying(false);
+    }
+  }
+
+  /**
+   * Marks one proposed change as skipped, permanently, so the run can be
+   * applied without it.
+   *
+   * Different from unticking it: a skip is recorded on the change and audited,
+   * and the run's own record says the change was never applied. Unticking only
+   * leaves it out of this apply, still proposed.
+   */
+  async function onSkip(changeId: string) {
+    setSkipping(changeId);
+    setApplyError(null);
+    try {
+      await api(`/api/admin/sync-changes/${changeId}/skip`, { method: 'POST' });
+      reload();
+    } catch (cause) {
+      setApplyError(
+        cause instanceof ApiError && cause.problem.status === 409
+          ? 'That change is no longer proposed, so it cannot be skipped. Reload to see where it got to.'
+          : 'That change could not be skipped.',
+      );
+    } finally {
+      setSkipping(null);
     }
   }
 
@@ -101,6 +141,11 @@ export function SyncRunDetailPage() {
   // unreachable one look identical from here.
   const confirmable = blocked && data.requiresConfirmation;
   const applied = data.status === 'applied' || data.status === 'partially_applied';
+  const proposed = data.changes.filter((change) => change.status === 'proposed');
+  const included = proposed
+    .filter((change) => !excluded.has(change.id))
+    .map((change) => change.id);
+  const partial = included.length > 0 && included.length < proposed.length;
   const grouped = new Map<string, Change[]>();
   for (const change of data.changes) {
     grouped.set(change.changeType, [
@@ -124,18 +169,28 @@ export function SyncRunDetailPage() {
           `, ${data.changes.length} proposed changes`
         }
         actions={
-          <Button
-            variant="primary"
-            onClick={() => onApply(confirmable)}
-            loading={applying}
-            disabled={
-              (blocked && !(confirmable && confirmed)) ||
-              applied ||
-              data.changes.length === 0
-            }
-          >
-            Apply
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            {partial && (
+              // Said next to the button rather than in its label, so the
+              // control an administrator (and every test) reaches for is still
+              // called Apply.
+              <span className="text-sm text-muted">
+                {included.length} of {proposed.length} changes selected
+              </span>
+            )}
+            <Button
+              variant="primary"
+              onClick={() => onApply(confirmable, partial ? included : null)}
+              loading={applying}
+              disabled={
+                (blocked && !(confirmable && confirmed)) ||
+                applied ||
+                included.length === 0
+              }
+            >
+              Apply
+            </Button>
+          </div>
         }
       />
 
@@ -209,6 +264,14 @@ export function SyncRunDetailPage() {
           </Alert>
         )}
 
+        {proposed.length > 0 && !applied && (
+          <p className="text-muted">
+            Untick a change to leave it out of this apply — it stays proposed
+            and can be applied later. Skip it to record that it will not be
+            applied at all.
+          </p>
+        )}
+
         {data.changes.length === 0 ? (
           <Empty title="Nothing to change">
             Syntra already matches the source. A run with no proposed changes is
@@ -223,6 +286,9 @@ export function SyncRunDetailPage() {
               <table className="w-full text-left">
                 <thead className="border-b border-border-subtle bg-surface-2">
                   <tr className="text-sm text-muted">
+                    <th scope="col" className="w-10 px-4 py-2.5 font-medium">
+                      <span className="sr-only">Apply</span>
+                    </th>
                     <th scope="col" className="px-4 py-2.5 font-medium">
                       From
                     </th>
@@ -232,6 +298,9 @@ export function SyncRunDetailPage() {
                     <th scope="col" className="px-4 py-2.5 font-medium">
                       Status
                     </th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">
+                      <span className="sr-only">Skip</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -240,6 +309,26 @@ export function SyncRunDetailPage() {
                       key={change.id}
                       className="border-b border-border-subtle last:border-0"
                     >
+                      <td className="px-4 py-2.5">
+                        {change.status === 'proposed' && !applied && (
+                          <input
+                            type="checkbox"
+                            checked={!excluded.has(change.id)}
+                            onChange={(e) =>
+                              setExcluded((current) => {
+                                const next = new Set(current);
+                                if (e.target.checked) next.delete(change.id);
+                                else next.add(change.id);
+                                return next;
+                              })
+                            }
+                            aria-label={`Apply this ${(
+                              LABELS[change.changeType] ?? change.changeType
+                            ).toLowerCase()} change`}
+                            className="size-4 accent-primary"
+                          />
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-muted">
                         {summarise(change.before)}
                       </td>
@@ -263,8 +352,26 @@ export function SyncRunDetailPage() {
                               {change.message}
                             </span>
                           </span>
+                        ) : change.status === 'skipped' ? (
+                          <Status tone="inactive">Skipped</Status>
                         ) : (
                           <Status tone="neutral">{change.status}</Status>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {/* Only a proposed change can be skipped, and the
+                            server says so with a 409. Offering the control on
+                            an applied one would be offering a lie about what
+                            the run did. */}
+                        {change.status === 'proposed' && !applied && (
+                          <Button
+                            size="sm"
+                            onClick={() => onSkip(change.id)}
+                            loading={skipping === change.id}
+                            disabled={applying || skipping !== null}
+                          >
+                            Skip
+                          </Button>
                         )}
                       </td>
                     </tr>
