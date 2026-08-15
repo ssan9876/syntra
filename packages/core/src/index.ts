@@ -8,6 +8,7 @@ export * from './vault/master-key.js';
 export * from './vault/vault-service.js';
 export * from './identity/person-service.js';
 export * from './identity/contract-service.js';
+export * from './identity/csv-import.js';
 export * from './rbac/permissions.js';
 export * from './rbac/rbac-service.js';
 export * from './auth/password.js';

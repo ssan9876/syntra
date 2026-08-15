@@ -8,6 +8,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
+import { registerAdminPersonRoutes } from './routes/admin/persons.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -38,6 +39,7 @@ export async function buildApp(
   await app.register(registerAdminUserRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminOrgUnitRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminPersonRoutes, { prefix: '/api/admin' });
 
   return app;
 }
