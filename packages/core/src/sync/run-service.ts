@@ -252,12 +252,28 @@ function computeDiff(input: DiffInput) {
   let unresolvedMembers = 0;
   const changes: ProposedChange[] = [];
 
+  // Groups that correlated cleanly. A conflict group is never created, so a
+  // membership referencing one could never be applied: at apply time the
+  // group lookup fails, the change is marked `failed`, and the whole run ends
+  // `partially_applied` even though everything appliable applied cleanly. One
+  // group colliding with a locally managed name should not make the run look
+  // half-broken.
+  const usableGroups = new Set<string>();
+
   for (const type of ['user', 'group', 'orgUnit'] as const) {
     const ofType = objects.filter((o) => o.objectType === type);
     const rows = input.existing.objects.filter((e) => e.objectType === type);
     const correlations = correlate(ofType, rows, input.sourceId);
     const absent = absentAnchors(ofType, rows, input.sourceId, unmappable[type]);
     changes.push(...diffObjects(correlations, absent, input.existing.fields));
+
+    if (type === 'group') {
+      for (const correlation of correlations) {
+        if (correlation.kind !== 'conflict') {
+          usableGroups.add(correlation.object.anchor);
+        }
+      }
+    }
   }
 
   const membersNow = new Map(
@@ -265,7 +281,7 @@ function computeDiff(input: DiffInput) {
   );
 
   const desired: MembershipState[] = objects
-    .filter((o) => o.objectType === 'group')
+    .filter((o) => o.objectType === 'group' && usableGroups.has(o.anchor))
     .map((group) => {
       const now = membersNow.get(group.anchor) ?? new Set<string>();
       const memberAnchors: string[] = [];

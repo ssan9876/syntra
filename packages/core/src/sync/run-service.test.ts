@@ -3,6 +3,7 @@ import { prisma, withTenant } from '@syntra/db';
 import { ldapConnector } from '@syntra/connectors';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
+import { createGroup } from '../directory/group-service.js';
 import { createUser } from '../directory/user-service.js';
 import { DEFAULT_MAPPINGS } from './defaults.js';
 import { createSource, setMappings } from './source-service.js';
@@ -211,6 +212,34 @@ describe('applyRun', () => {
     expect(memberships).toHaveLength(1);
     expect(memberships[0]!.user.login).toBe('jdoe');
     expect(memberships[0]!.group.name).toBe('Nurses');
+  });
+
+  it('does not let one conflicting group make the whole run partially applied', async () => {
+    // The fixture's Nurses group collides with a locally managed one, so it
+    // is a conflict and is never created. Proposing memberships against it
+    // guaranteed an add_member that could not resolve its group at apply
+    // time, and a run that reported itself half-broken while every appliable
+    // change applied cleanly.
+    await withTenant(tenantId, (tx) => createGroup(tx, 'Nurses'));
+
+    const run = await previewRun(tenantId, provider, sourceId);
+    const proposed = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: run.id } }),
+    );
+    expect(
+      proposed.filter((c) => c.changeType === 'add_member'),
+    ).toEqual([]);
+    expect(
+      proposed.filter((c) => c.status === 'conflict').map((c) => c.changeType),
+    ).toEqual(['create_group']);
+
+    const applied = await applyRun(tenantId, run.id);
+    expect(applied.status).toBe('applied');
+
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: run.id, status: 'failed' } }),
+    );
+    expect(changes).toEqual([]);
   });
 
   it('never applies a conflict', async () => {
