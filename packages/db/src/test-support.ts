@@ -2,6 +2,29 @@ import { Client } from 'pg';
 import { prisma } from './client.js';
 
 /**
+ * Points the superuser connection at whichever database the tests are actually
+ * using.
+ *
+ * `SUPERUSER_DATABASE_URL` names a database of its own, and it is read
+ * independently of `DATABASE_URL`. Parallel agents each run against a scratch
+ * database, so without this the tamper `UPDATE` lands in the *original*
+ * database while the chain under test sits in the scratch one — the chain is
+ * never broken, the test reports that tampering was detected, and it has
+ * proved nothing at all. A test that passes for the wrong reason is worse than
+ * one that fails, and this one guards the audit log.
+ *
+ * Credentials and host come from the superuser URL; the database name comes
+ * from the URL the application is using.
+ */
+function superuserUrlForCurrentDatabase(superuserUrl: string): string {
+  const appUrl = process.env.DATABASE_URL;
+  if (!appUrl) return superuserUrl;
+  const su = new URL(superuserUrl);
+  su.pathname = new URL(appUrl).pathname;
+  return su.toString();
+}
+
+/**
  * Runs SQL as a database superuser, bypassing row-level security and the
  * append-only rules.
  *
@@ -21,7 +44,7 @@ export async function asDatabaseSuperuser(
       'SUPERUSER_DATABASE_URL is not set; tamper-detection tests cannot run',
     );
   }
-  const client = new Client({ connectionString: url });
+  const client = new Client({ connectionString: superuserUrlForCurrentDatabase(url) });
   await client.connect();
   try {
     await client.query(sql, params);
