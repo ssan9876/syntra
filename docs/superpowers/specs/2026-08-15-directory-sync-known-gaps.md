@@ -18,33 +18,47 @@ omission reads as `remove_member` and revokes real access over a name collision.
 fails against exactly that mistake; the "never applies a conflict" test now asserts
 on the run's status as well as on the local account.
 
-## The administration surface is roughly a third built (spec section 11)
+## ~~The administration surface is roughly a third built~~ (spec section 11) — fixed
 
-Section 11 describes five things. Two exist.
+Section 11 describes five things. All five now exist.
 
 | Promised | State |
 |---|---|
-| A sources list | Built — read-only table |
-| A source editor with a **Test connection** action | **Missing.** `test()` is implemented and reachable over the API; nothing in the console calls it. `SourceDetailPage.tsx` appears in the plan's own file list and was never built. |
-| Attribute mapping editor seeded with AD and OpenLDAP defaults | **Missing.** `DEFAULT_MAPPINGS` exists with both flavours; there is no UI to see or change them. |
-| Run history, and a run detail screen with Apply and per-change skip | Partly. History and detail are built, Apply works. **Per-change skip is implemented server-side and has no control in the console.** |
-| A blocked run leads with why, and the numbers | Built |
+| A sources list | Built. Names link into the editor; **New source** is on the header and in the empty state. |
+| A source editor with a **Test connection** action | Built. `SourceDetailPage.tsx`, create and edit, every field section 5 names. `POST /sources/test` tests a configuration that was never saved, and calls `discoverSchema` as well as `test`. |
+| Attribute mapping editor seeded with AD and OpenLDAP defaults | Built. `DEFAULT_MAPPINGS` is served by `GET /sources/mapping-defaults` rather than duplicated in the bundle, alongside `ASSIGNABLE_FIELDS`, so the console cannot offer a target field the server would refuse. |
+| Run history, and a run detail screen with Apply and per-change skip | Built. Skip per change, and a tickbox per proposed change feeding `applyRun`'s `only`. |
+| A blocked run leads with why, and the numbers | Built, and unchanged — the threshold confirmation is still a deliberate tick before Apply does anything. |
 
-Consequence in plain terms: an administrator cannot create or configure a directory
-source from the console at all. Source creation, mapping, connection test and preview
-are API-only. The end-to-end test drives those four steps over HTTP for exactly this
-reason, and says so in its own comments.
+Both previously unreachable success criteria are now reachable from the console:
 
-Two spec success criteria are unreachable from the UI as a result:
+- Criterion 1, "report what object classes and attributes it found" — the test report
+  lists both. `discoverSchema` now asks for `*` and `+`: `entryUUID` is operational on
+  OpenLDAP, so the report used to list every attribute except the anchor, which is the
+  field it exists to help fill in.
+- Criterion 4, "apply part of it" — unticking a change leaves it out of this apply and
+  still proposed; the run comes back `partially_applied` and the rest can be applied
+  afterwards. The end-to-end test applies a run in two passes to prove it.
 
-- Criterion 1, "report what object classes and attributes it found" — `discoverSchema`
-  is implemented and has no caller outside its own test. `test()` returns three counts.
-- Criterion 4, "apply part of it" — `applyRun` accepts an `only` list and
-  `skipChange` works; neither has a control.
+Two things this exposed and fixed, both invisible until the console drove them:
 
-The README is honest about this. Its module table row claiming "source and run
-administration screens" overstated it and now says what is actually there: source
-lifecycle over the API, a run review screen in the console.
+- A `partially_applied` run could not be applied again. The page read "finished" off
+  the run's status, and that status is set on exactly the run that still has changes
+  waiting.
+- A source created with a cron expression is scheduled the moment it commits, before
+  its mappings can be written. `enabled` is now settable on create, so a source can be
+  saved configured-but-not-running.
+
+Still true of this surface, and deliberately left:
+
+- The editor exposes every field the spec's section 5 names, but not `pageSize`. It is
+  carried through untouched on a save rather than reset, since `config` is replaced
+  whole.
+- Groups and org units carry no source column of their own. `UsersPage` does, which is
+  where an administrator would try to edit a synced field. Extending it is a one-line
+  change per page once those pages grow rows worth labelling.
+- The mapping editor cannot reorder rules, and does not need to: mapping is a set, not
+  a sequence.
 
 ## ~~Transport security is weaker than promised~~ (spec section 8) — fixed
 
@@ -99,20 +113,30 @@ proposing to empty the group — which is the safe interim behaviour, not the co
 one. **Large AD groups cannot be synced until this is implemented.** If Active
 Directory is a launch target, this is the second thing to fix.
 
-## The manual run endpoint is synchronous
+## The manual run endpoint is synchronous, and the console now waits on it
 
 `POST /sources/:id/run` performs the whole read-and-diff inside the HTTP request. Spec
-section 7 says a run is a pg-boss job. Even with the transaction fix, a full directory
-read will outlast typical proxy timeouts. It should enqueue and return the run id.
+section 7 says a run is a pg-boss job. This mattered less while the endpoint had no
+caller in the browser; the editor's **Run now** button now holds a request open for
+the length of a full directory read, which is the shape that outlasts a proxy timeout.
+The button reports as loading and the console lands on the run when it returns, so a
+slow read looks like a slow button rather than a failure — but the fix is still to
+enqueue and return the run id, and then poll.
 
-## The default user filter is wrong for Active Directory
+## The default user filter is wrong for Active Directory — half closed
 
 `userFilter` defaults to `(objectClass=person)`. In AD, `computer` derives from
 `person`, so this matches every machine account in the domain and would create a Syntra
 user for each. The conventional filter is `(&(objectCategory=person)(objectClass=user))`.
-Left alone because changing the default breaks OpenLDAP, which has no `objectCategory` —
-the real fix is per-flavour config defaults to match the per-flavour `DEFAULT_MAPPINGS`
-that already exist.
+
+The console now seeds that filter when the editor's **Active Directory** button is
+used, alongside the anchor attribute and the mappings, so the flavour is chosen once
+and everything that depends on it follows. That is the per-flavour default the entry
+above asks for, in the one place a source is actually configured.
+
+The stored `ldapConfigSchema` default is unchanged and still wrong for Active
+Directory, because changing it breaks OpenLDAP, which has no `objectCategory`. A
+source created over the API without a `userFilter` still gets the OpenLDAP-shaped one.
 
 ## Smaller items, recorded but not urgent
 
