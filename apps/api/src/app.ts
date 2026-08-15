@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import type { Config } from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
+import { registerAuthRoutes } from './routes/auth.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -26,6 +27,8 @@ export async function buildApp(
   registerTenantContext(app);
 
   app.get('/health', async () => ({ status: 'ok' }));
+
+  await app.register(registerAuthRoutes, { prefix: '/api/auth' });
 
   return app;
 }
