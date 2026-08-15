@@ -142,6 +142,9 @@ importers:
       argon2:
         specifier: ^0.45.1
         version: 0.45.1
+      ipaddr.js:
+        specifier: 2.5.0
+        version: 2.5.0
       ldapts:
         specifier: ^9.0.0
         version: 9.0.0
