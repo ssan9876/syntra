@@ -11,6 +11,7 @@ import {
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
+import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
 
 const SECURE = process.env.NODE_ENV === 'production';
@@ -22,9 +23,22 @@ const cookieOptions = {
   secure: SECURE,
 };
 
-/** Password endpoints are limited far more tightly than ordinary reads. */
-function passwordRateLimit(max: number) {
-  return { rateLimit: { max, timeWindow: '1 minute' } };
+/**
+ * Password endpoints are limited far more tightly than ordinary reads, and in
+ * two dimensions at once: per tenant per address, and per tenant across every
+ * address. Spelled as a route-options fragment because the second limit is an
+ * onRequest hook — a route may carry only one `config.rateLimit`.
+ */
+function passwordRateLimit(app: FastifyInstance, options: AuthRouteOptions) {
+  return {
+    config: {
+      rateLimit: {
+        max: options.authRateLimitMax,
+        timeWindow: '1 minute',
+      },
+    },
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+  };
 }
 
 async function sessionBody(
@@ -47,7 +61,10 @@ async function sessionBody(
 }
 
 export interface AuthRouteOptions {
+  /** Attempts per minute, per tenant per address. */
   authRateLimitMax: number;
+  /** Attempts per minute for the whole tenant, across every address. */
+  authRateLimitTenantMax: number;
   /**
    * The deployment's own base URL. The relying party's scheme and port come
    * from here rather than from the request, because behind a TLS-terminating
@@ -61,7 +78,7 @@ export async function registerAuthRoutes(
   app: FastifyInstance,
   options: AuthRouteOptions,
 ): Promise<void> {
-  const PASSWORD_RATE_LIMIT = passwordRateLimit(options.authRateLimitMax);
+  const PASSWORD_RATE_LIMIT = passwordRateLimit(app, options);
 
   const relyingPartyFor = async (request: FastifyRequest) => {
     const tenant = await request.db((tx) =>
@@ -70,7 +87,7 @@ export async function registerAuthRoutes(
     return { tenant, rp: tenantRelyingParty(tenant, options.publicUrl) };
   };
 
-  app.post('/login', { config: PASSWORD_RATE_LIMIT }, async (request, reply) => {
+  app.post('/login', { ...PASSWORD_RATE_LIMIT }, async (request, reply) => {
     const body = loginRequest.parse(request.body);
     const { rp } = await relyingPartyFor(request);
 
@@ -125,7 +142,7 @@ export async function registerAuthRoutes(
 
   app.post(
     '/elevate',
-    { preHandler: requireSession('portal'), config: PASSWORD_RATE_LIMIT },
+    { preHandler: requireSession('portal'), ...PASSWORD_RATE_LIMIT },
     async (request, reply) => {
       const body = elevateRequest.parse(request.body);
       const { userId } = request.session;

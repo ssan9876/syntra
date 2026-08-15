@@ -33,12 +33,16 @@ import {
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
+import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { assertWebAuthnUsable, tenantRelyingParty } from './relying-party.js';
 
 export interface MfaRouteOptions {
   masterKey: Buffer;
   publicUrl: string;
+  /** Attempts per minute, per tenant per address. */
   authRateLimitMax: number;
+  /** Attempts per minute for the whole tenant, across every address. */
+  authRateLimitTenantMax: number;
   transport: Transport;
 }
 
@@ -141,9 +145,14 @@ export async function registerMfaRoutes(
   // Every endpoint below that presents or issues a credential carries it.
   // Guessing a six-digit code or a recovery code is only expensive if the
   // guesses are rationed, and the rate for that is the same one the password
-  // endpoints already use.
+  // endpoints already use — both halves of it. A wrong factor deliberately
+  // does not consume the attempt, so the per-tenant ceiling is what stands
+  // between a twenty-bit code and an attacker with a thousand addresses.
   const LIMIT = {
-    rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
+    config: {
+      rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
+    },
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
   };
 
   async function sessionBody(
@@ -167,7 +176,7 @@ export async function registerMfaRoutes(
 
   // ---- The step-up half of a sign-in. No session yet, so no session guard.
 
-  app.post('/verify', { config: LIMIT }, async (request, reply) => {
+  app.post('/verify', { ...LIMIT }, async (request, reply) => {
     const body = mfaVerifyRequest.parse(request.body);
 
     const factor =
@@ -244,7 +253,7 @@ export async function registerMfaRoutes(
    * read but not consumed, so a user who cancels the browser prompt can try
    * again.
    */
-  app.post('/webauthn/challenge', { config: LIMIT }, async (request) => {
+  app.post('/webauthn/challenge', { ...LIMIT }, async (request) => {
     const body = webauthnChallengeRequest.parse(request.body);
     const attempt = await request.db((tx) =>
       findAttempt(tx, body.attemptToken, new Date()),
@@ -303,7 +312,7 @@ export async function registerMfaRoutes(
       };
     });
 
-    secured.post('/totp/begin', { config: LIMIT }, async (request) => {
+    secured.post('/totp/begin', { ...LIMIT }, async (request) => {
       // beginTotpEnrolment throws when a *confirmed* credential already
       // exists. That is a conflict the caller can act on — remove the old one
       // first — not a server fault, and a 500 here would also print a stack
@@ -324,7 +333,7 @@ export async function registerMfaRoutes(
       return { ...enrolment, qr: qrDataUrl(enrolment.uri) };
     });
 
-    secured.post('/totp/confirm', { config: LIMIT }, async (request, reply) => {
+    secured.post('/totp/confirm', { ...LIMIT }, async (request, reply) => {
       const body = totpConfirmRequest.parse(request.body);
       const ok = await confirmTotpEnrolment(
         request.tenantId,
@@ -358,12 +367,12 @@ export async function registerMfaRoutes(
       return reply.status(204).send();
     });
 
-    secured.post('/webauthn/begin', { config: LIMIT }, async (request) => {
+    secured.post('/webauthn/begin', { ...LIMIT }, async (request) => {
       const { rp } = await webauthnContext(request, options.publicUrl);
       return beginWebAuthnRegistration(request.tenantId, request.session.userId, rp);
     });
 
-    secured.post('/webauthn/finish', { config: LIMIT }, async (request, reply) => {
+    secured.post('/webauthn/finish', { ...LIMIT }, async (request, reply) => {
       const body = webauthnRegisterRequest.parse(request.body);
       const { rp } = await webauthnContext(request, options.publicUrl);
       const outcome = await finishWebAuthnRegistration(
@@ -438,7 +447,7 @@ export async function registerMfaRoutes(
       return reply.status(204).send();
     });
 
-    secured.post('/recovery-codes', { config: LIMIT }, async (request) => {
+    secured.post('/recovery-codes', { ...LIMIT }, async (request) => {
       // Recovery codes are the fallback for a factor you already hold, not a
       // factor in themselves. Without this gate a user with nothing can mint
       // ten codes today, and a require_mfa rule saved next month is satisfied

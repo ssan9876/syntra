@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { withTenant } from '@syntra/db';
+import { prisma, withTenant } from '@syntra/db';
 import {
   PERMISSIONS,
   addRule,
@@ -319,5 +319,87 @@ describe('rate limiting', () => {
       if (res.statusCode === 429) limited++;
     }
     expect(limited).toBeGreaterThan(0);
+  });
+
+  it("does not spend one tenant's allowance on another tenant's traffic", async () => {
+    // One deployment serves many tenants and the limit is keyed on both, so a
+    // tenant under attack — or with one noisy office NAT — must not lock
+    // everybody else out from the same address.
+    await seedUser();
+    const other = await prisma.tenant.create({
+      data: { name: 'Other', slug: 'other' },
+    });
+    expect(other.id).not.toBe(ctx.tenantId);
+
+    for (let i = 0; i < 15; i++) await login('wrong');
+    expect((await login('wrong')).statusCode).toBe(429);
+
+    const elsewhere = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { host: 'other.syntra.test' },
+      payload: { login: 'jdoe', password: 'wrong' },
+    });
+    expect(elsewhere.statusCode).toBe(401);
+  });
+
+  it('caps a tenant across every address, not only each one separately', async () => {
+    // Spec section 12 asks for per-tenant AND per-IP. A wrong second factor
+    // deliberately does not consume the attempt, so without this ceiling a
+    // six-digit code is guessable at the per-address rate from as many
+    // addresses as the attacker cares to rent.
+    ctx = await buildTestApp({
+      env: { AUTH_RATE_LIMIT_MAX: '2', AUTH_RATE_LIMIT_TENANT_MAX: '5' },
+    });
+    await ctx.app.ready();
+    await seedUser();
+
+    const fromAddress = (address: string) =>
+      ctx.app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        headers: { host: ctx.host },
+        remoteAddress: address,
+        payload: { login: 'jdoe', password: 'wrong' },
+      });
+
+    const codes: number[] = [];
+    // Eight addresses, one attempt each: nothing here trips the per-address
+    // limit of two, and only the tenant ceiling can refuse any of them.
+    for (let i = 1; i <= 8; i++) {
+      codes.push((await fromAddress(`203.0.113.${i}`)).statusCode);
+    }
+
+    expect(codes.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+    expect(codes.slice(5)).toEqual([429, 429, 429]);
+  });
+});
+
+describe('the source address', () => {
+  const attemptWithForwardedFor = async () => {
+    await seedUser();
+    await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { host: ctx.host, 'x-forwarded-for': '203.0.113.9' },
+      remoteAddress: '10.9.9.9',
+      payload: { login: 'jdoe', password: 'wrong' },
+    });
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ orderBy: { sequence: 'asc' } }),
+    );
+    return events.at(-1)!.sourceIp;
+  };
+
+  it('ignores X-Forwarded-For when no proxy is trusted', async () => {
+    // The default. Believing the header from anyone lets every client choose
+    // the address the policy engine matches its IP conditions against.
+    expect(await attemptWithForwardedFor()).toBe('10.9.9.9');
+  });
+
+  it('reads it from the proxy when TRUST_PROXY says how many hops', async () => {
+    ctx = await buildTestApp({ env: { TRUST_PROXY: '1' } });
+    await ctx.app.ready();
+    expect(await attemptWithForwardedFor()).toBe('203.0.113.9');
   });
 });

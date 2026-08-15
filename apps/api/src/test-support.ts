@@ -69,7 +69,16 @@ export function createFakeScheduler(
  * impossible for a test run to reach MailDev — or anything else — by accident.
  */
 export async function buildTestApp(
-  options: { scheduler?: () => Scheduler | null } = {},
+  options: {
+    scheduler?: () => Scheduler | null;
+    /**
+     * Rate limits and proxy trust, for the tests that are about them. Left
+     * out, the app gets the defaults, which is what every other test wants —
+     * a suite that quietly ran with limits of its own would not be testing
+     * what ships.
+     */
+    env?: Record<string, string>;
+  } = {},
 ) {
   await resetDatabase();
   const tenant = await prisma.tenant.create({
@@ -85,6 +94,7 @@ export async function buildTestApp(
     SESSION_SECRET: 'x'.repeat(32),
     MASTER_KEY: Buffer.alloc(32, 7).toString('base64'),
     SMTP_URL: 'smtp://localhost:1025',
+    ...options.env,
   });
 
   const mail = memoryTransport();

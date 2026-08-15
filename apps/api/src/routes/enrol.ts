@@ -20,6 +20,7 @@ import {
   type Transport,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
+import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { SESSION_COOKIE } from '../plugins/require-session.js';
 import { tenantRelyingParty } from './relying-party.js';
 import { qrDataUrl, tellOwnerAFactorWasAdded, webauthnContext } from './mfa.js';
@@ -27,7 +28,10 @@ import { qrDataUrl, tellOwnerAFactorWasAdded, webauthnContext } from './mfa.js';
 export interface EnrolRouteOptions {
   masterKey: Buffer;
   publicUrl: string;
+  /** Attempts per minute, per tenant per address. */
   authRateLimitMax: number;
+  /** Attempts per minute for the whole tenant, across every address. */
+  authRateLimitTenantMax: number;
   transport: Transport;
 }
 
@@ -62,7 +66,10 @@ export async function registerEnrolRoutes(
 ): Promise<void> {
   const provider = localMasterKeyProvider(options.masterKey);
   const LIMIT = {
-    rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
+    config: {
+      rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
+    },
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
   };
 
   /**
@@ -161,7 +168,7 @@ export async function registerEnrolRoutes(
     };
   }
 
-  app.post('/totp/begin', { config: LIMIT }, async (request) => {
+  app.post('/totp/begin', { ...LIMIT }, async (request) => {
     const body = enrolBeginRequest.parse(request.body);
     const attempt = await attemptFor(request, body.attemptToken, 'totp');
 
@@ -173,7 +180,7 @@ export async function registerEnrolRoutes(
     return { ...enrolment, qr: qrDataUrl(enrolment.uri) };
   });
 
-  app.post('/totp/confirm', { config: LIMIT }, async (request, reply) => {
+  app.post('/totp/confirm', { ...LIMIT }, async (request, reply) => {
     const body = enrolTotpConfirmRequest.parse(request.body);
     const attempt = await attemptFor(request, body.attemptToken, 'totp');
 
@@ -214,7 +221,7 @@ export async function registerEnrolRoutes(
     return finish(request, reply, attempt, body.attemptToken, 'totp');
   });
 
-  app.post('/webauthn/begin', { config: LIMIT }, async (request) => {
+  app.post('/webauthn/begin', { ...LIMIT }, async (request) => {
     const body = enrolBeginRequest.parse(request.body);
     const attempt = await attemptFor(request, body.attemptToken, 'webauthn');
     // Refuses with a 409 naming the fix when this tenant has no primary domain
@@ -224,7 +231,7 @@ export async function registerEnrolRoutes(
     return beginWebAuthnRegistration(request.tenantId, attempt.userId, rp);
   });
 
-  app.post('/webauthn/finish', { config: LIMIT }, async (request, reply) => {
+  app.post('/webauthn/finish', { ...LIMIT }, async (request, reply) => {
     const body = enrolWebauthnFinishRequest.parse(request.body);
     const attempt = await attemptFor(request, body.attemptToken, 'webauthn');
     const { rp } = await webauthnContext(request, options.publicUrl);

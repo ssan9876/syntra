@@ -12,6 +12,7 @@ import {
   type Transport,
 } from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
+import { tenantAndIpKey } from './plugins/rate-limit.js';
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerEnrolRoutes } from './routes/enrol.js';
 import { registerPasswordResetRoutes } from './routes/password-reset.js';
@@ -55,12 +56,28 @@ export async function buildApp(
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: options.logger === false ? false : { level: process.env.LOG_LEVEL ?? 'info' },
+    // Which proxies may be believed about a request's source address. Off
+    // unless TRUST_PROXY says otherwise, and never a bare `true` — see the
+    // variable's own documentation in config.ts. request.ip feeds both the
+    // policy engine's source-address condition and every rate-limit key, so
+    // getting this wrong makes the first match everyone or nobody and
+    // collapses the second into one global bucket.
+    trustProxy: config.trustProxy,
   });
 
   await app.register(cookie, { secret: config.sessionSecret });
   // Off by default; applied per route, since a blanket limit would throttle
   // ordinary reads as hard as password attempts.
-  await app.register(rateLimit, { global: false });
+  //
+  // Keyed on tenant and address together rather than address alone: one
+  // deployment serves many tenants, and a shared bucket lets one tenant's
+  // traffic — or one tenant's attacker — spend everybody else's allowance.
+  // The per-tenant ceiling that has to hold across many addresses is a second
+  // limit, applied alongside this one at each credential-presenting route.
+  await app.register(rateLimit, {
+    global: false,
+    keyGenerator: tenantAndIpKey,
+  });
 
   registerProblemJson(app);
   registerTenantContext(app);
@@ -70,6 +87,7 @@ export async function buildApp(
   await app.register(registerAuthRoutes, {
     prefix: '/api/auth',
     authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
     publicUrl: config.publicUrl,
   });
 
@@ -95,6 +113,7 @@ export async function buildApp(
     masterKey: config.masterKey,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
     // The factor-added mail. The same transport the password routes will get.
     transport,
   });
@@ -104,6 +123,7 @@ export async function buildApp(
     masterKey: config.masterKey,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
     transport,
   });
 
@@ -116,6 +136,7 @@ export async function buildApp(
     transport,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
   });
 
   // Every route below requires an administrative session; the guard is

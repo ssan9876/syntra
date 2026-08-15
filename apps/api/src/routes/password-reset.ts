@@ -12,12 +12,16 @@ import {
   type Transport,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
+import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
 
 export interface PasswordResetRouteOptions {
   transport: Transport;
   publicUrl: string;
+  /** Attempts per minute, per tenant per address. */
   authRateLimitMax: number;
+  /** Attempts per minute for the whole tenant, across every address. */
+  authRateLimitTenantMax: number;
 }
 
 export async function registerPasswordResetRoutes(
@@ -28,10 +32,13 @@ export async function registerPasswordResetRoutes(
   // the request form is a free outbound-mail button for anyone who finds it.
   // Both get the rate the password endpoints already use.
   const LIMIT = {
-    rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
+    config: {
+      rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
+    },
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
   };
 
-  app.post('/request', { config: LIMIT }, async (request, reply) => {
+  app.post('/request', { ...LIMIT }, async (request, reply) => {
     const body = resetRequestRequest.parse(request.body);
 
     // Awaited, and it always resolves. The status and the body are fixed
@@ -46,7 +53,7 @@ export async function registerPasswordResetRoutes(
     return reply.status(202).send({ ok: true });
   });
 
-  app.post('/preflight', { config: LIMIT }, async (request) => {
+  app.post('/preflight', { ...LIMIT }, async (request) => {
     const body = resetPreflightRequest.parse(request.body);
     const result = await preflightPasswordReset(request.tenantId, body.token);
     return resetPreflightResponse.parse(
@@ -56,7 +63,7 @@ export async function registerPasswordResetRoutes(
     );
   });
 
-  app.post('/complete', { config: LIMIT }, async (request, reply) => {
+  app.post('/complete', { ...LIMIT }, async (request, reply) => {
     const body = resetCompleteRequest.parse(request.body);
     const tenant = await request.db((tx) =>
       tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
