@@ -1,4 +1,5 @@
 import { Client } from 'ldapts';
+import { z } from 'zod';
 import type {
   Connector,
   ConnectionResult,
@@ -10,7 +11,13 @@ import type {
 import { normaliseAnchor } from './anchor.js';
 import { ldapConfigSchema, type LdapConfig } from './config.js';
 
+// `LdapConfig` (see config.ts) is the schema's *input* type: defaulted
+// fields (orgUnitFilter, pageSize, ...) are optional there, matching what a
+// caller is actually allowed to omit. `ResolvedConfig` is the *output* type
+// instead -- every defaulted field guaranteed present -- which is what
+// `normalise()` below produces and everything past it operates on.
 type Config = LdapConfig & { bindPassword: string };
+type ResolvedConfig = z.output<typeof ldapConfigSchema> & { bindPassword: string };
 
 interface Search {
   base: string;
@@ -19,23 +26,24 @@ interface Search {
 }
 
 /**
- * Re-applies the config schema's defaults (filters, page size, anchor
- * attribute, TLS posture) to whatever the caller passed in.
+ * Runs the config schema's `.parse()` over whatever the caller passed in,
+ * turning the *input* type (`Config`, with defaulted fields optional) into
+ * the fully-resolved *output* type (`ResolvedConfig`) that the rest of this
+ * module relies on.
  *
- * `LdapConfig` is the schema's *output* type, which makes fields like
- * `orgUnitFilter` look mandatory to the type checker even though the schema
- * declares a `.default(...)` for them. A config assembled by hand — as in a
- * saved connection record, or a literal built for a test — can still omit
- * such fields at runtime. Without this, an unset `orgUnitFilter` reaches
- * ldapts as `undefined`, which it silently treats as `(objectClass=*)`: an
- * unfiltered subtree scan standing in for what looked like a scoped search.
+ * This isn't optional plumbing: a config that skips this (a hand-built
+ * literal, as in this module's own test fixture, or a saved connection
+ * record deserialised without validation) can omit a field like
+ * `orgUnitFilter` entirely. Left as `undefined`, ldapts treats a falsy
+ * filter as `(objectClass=*)` -- an unfiltered subtree scan standing in for
+ * what looked like a scoped search.
  */
-function normalise(config: Config): Config {
+function normalise(config: Config): ResolvedConfig {
   const { bindPassword, ...rest } = config;
   return { ...ldapConfigSchema.parse(rest), bindPassword };
 }
 
-function searches(config: Config): Search[] {
+function searches(config: ResolvedConfig): Search[] {
   const list: Search[] = [
     { base: config.userSearchBase, filter: config.userFilter, objectType: 'user' },
     { base: config.groupSearchBase, filter: config.groupFilter, objectType: 'group' },
@@ -50,7 +58,7 @@ function searches(config: Config): Search[] {
   return list;
 }
 
-async function connect(config: Config): Promise<Client> {
+async function connect(config: ResolvedConfig): Promise<Client> {
   // ldapts treats the mere presence of `tlsOptions` (any defined key) as a
   // request for an implicit-TLS connection, independent of the URL scheme.
   // Only pass it for ldaps:// URLs; otherwise a plain ldap:// connection gets
@@ -62,7 +70,18 @@ async function connect(config: Config): Promise<Client> {
       ? { tlsOptions: { rejectUnauthorized: config.rejectUnauthorized } }
       : {}),
   });
-  await client.bind(config.bindDn, config.bindPassword);
+  try {
+    await client.bind(config.bindDn, config.bindPassword);
+  } catch (cause) {
+    // A rejected bind (bad credentials) throws without ldapts destroying the
+    // socket underneath it -- unlike a connection-level failure (refused,
+    // timed out), which the library self-cleans. Left alone, this leaves a
+    // live, authenticated-at-the-TCP-level-but-not-bound socket open to the
+    // server on every failed bind. unbind() tears down the socket even though
+    // the client was never successfully bound.
+    await client.unbind().catch(() => undefined);
+    throw cause;
+  }
   return client;
 }
 

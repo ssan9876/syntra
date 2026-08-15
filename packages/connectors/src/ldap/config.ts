@@ -16,4 +16,11 @@ export const ldapConfigSchema = z.object({
   rejectUnauthorized: z.boolean().default(true),
 });
 
-export type LdapConfig = z.infer<typeof ldapConfigSchema>;
+// The *input* type, not `z.infer`'s output type: every field with a
+// `.default(...)` (userFilter, orgUnitFilter, pageSize, ...) stays optional
+// here, matching what a caller -- a saved connection record, a config built
+// by hand for a test -- is actually allowed to omit. The connector applies
+// the schema's `.parse()` before using any of these fields, so it never sees
+// an unresolved default; this type only governs what's required to *call*
+// the connector, not what the connector operates on internally.
+export type LdapConfig = z.input<typeof ldapConfigSchema>;
