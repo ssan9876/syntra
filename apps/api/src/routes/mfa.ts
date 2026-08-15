@@ -27,6 +27,7 @@ import {
   recordEvent,
   removeWebAuthnCredential,
   renderMessage,
+  revokeOrphanedRecoveryCodes,
   type RelyingPartyIdentity,
   type SessionScope,
   type Transport,
@@ -430,21 +431,32 @@ export async function registerMfaRoutes(
       const { credentialId } = webauthnCredentialRemoveParams.parse(
         request.params,
       );
-      await request.db((tx) =>
-        removeWebAuthnCredential(tx, request.session.userId, credentialId),
-      );
-      await request.db((tx) =>
-        recordEvent(tx, {
+      const revoked = await request.db(async (tx) => {
+        await removeWebAuthnCredential(tx, request.session.userId, credentialId);
+        // Removing the last real factor takes the recovery codes with it. They
+        // are the way back in when a factor is lost, which is why holding one
+        // is a precondition of issuing them; leaving them behind here would
+        // reach the state that gate exists to prevent from the other side.
+        const dropped = await revokeOrphanedRecoveryCodes(
+          tx,
+          request.session.userId,
+        );
+        await recordEvent(tx, {
           actorUserId: request.session.userId,
           action: 'mfa.removed',
           targetType: 'User',
           targetId: request.session.userId,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { factor: 'webauthn', credentialId },
-        }),
-      );
-      return reply.status(204).send();
+          payload: {
+            factor: 'webauthn',
+            credentialId,
+            recoveryCodesRevoked: dropped,
+          },
+        });
+        return dropped;
+      });
+      return reply.status(200).send({ recoveryCodesRevoked: revoked });
     });
 
     secured.post('/recovery-codes', { ...LIMIT }, async (request) => {

@@ -7,6 +7,7 @@ import {
   assignRole,
   beginTotpEnrolment,
   confirmTotpEnrolment,
+  countUnusedRecoveryCodes,
   createRole,
   createUser,
   generateRecoveryCodes,
@@ -385,6 +386,22 @@ describe('recovery codes over HTTP', () => {
   });
 });
 
+/** Enrols TOTP the way the browser does, so the user really holds a factor. */
+async function enrolTotpOverHttp(cookie: string) {
+  const begin = await call('POST', '/api/auth/mfa/totp/begin', { cookie });
+  const code = OTPAuth.TOTP.generate({
+    secret: OTPAuth.Secret.fromBase32(begin.json().secret),
+    period: 30,
+    digits: 6,
+    algorithm: 'SHA1',
+  });
+  const confirm = await call('POST', '/api/auth/mfa/totp/confirm', {
+    cookie,
+    payload: { code },
+  });
+  expect(confirm.statusCode).toBe(204);
+}
+
 describe('administrative factor removal', () => {
   it('removes a user factor and writes an audit event', async () => {
     const admin = await seedUser({ admin: true });
@@ -402,12 +419,73 @@ describe('administrative factor removal', () => {
     const res = await call('DELETE', `/api/admin/users/${admin.id}/factors/recovery_code`, {
       cookie: adminCookie,
     });
-    expect(res.statusCode).toBe(204);
+    expect(res.statusCode).toBe(200);
 
     const events = await withTenant(ctx.tenantId, (tx) =>
       tx.auditEvent.findMany({ where: { action: 'mfa.removed' } }),
     );
     expect(events).toHaveLength(1);
+  });
+
+  it('takes the recovery codes with the last real factor', async () => {
+    // Recovery codes are the way back in when a factor is lost, which is why
+    // issuing them requires already holding one. Leaving them behind here
+    // reaches the state that gate exists to prevent: a require_mfa rule
+    // satisfied by a printed page forever, with the forced-enrolment path
+    // never reached.
+    const admin = await seedUser({ admin: true });
+    const cookie = await portalCookie();
+    await enrolTotpOverHttp(cookie);
+    await withTenant(ctx.tenantId, (tx) => generateRecoveryCodes(tx, admin.id));
+
+    const elevated = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+
+    const res = await call('DELETE', `/api/admin/users/${admin.id}/factors/totp`, {
+      cookie: cookieOf(elevated)!,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ recoveryCodesRevoked: 10 });
+
+    const left = await withTenant(ctx.tenantId, (tx) =>
+      countUnusedRecoveryCodes(tx, admin.id),
+    );
+    expect(left).toBe(0);
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'mfa.removed' } }),
+    );
+    expect(events.at(-1)!.payload).toMatchObject({ recoveryCodesRevoked: 10 });
+  });
+
+  it('leaves the recovery codes alone while another factor remains', async () => {
+    const admin = await seedUser({ admin: true });
+    const cookie = await portalCookie();
+    await enrolTotpOverHttp(cookie);
+    await withTenant(ctx.tenantId, (tx) => generateRecoveryCodes(tx, admin.id));
+
+    const elevated = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+
+    // No security key was ever registered, so this removes nothing and the
+    // TOTP factor still stands.
+    const res = await call('DELETE', `/api/admin/users/${admin.id}/factors/webauthn`, {
+      cookie: cookieOf(elevated)!,
+    });
+    expect(res.json()).toEqual({ recoveryCodesRevoked: 0 });
+
+    const left = await withTenant(ctx.tenantId, (tx) =>
+      countUnusedRecoveryCodes(tx, admin.id),
+    );
+    expect(left).toBe(10);
   });
 
   it('refuses a portal session', async () => {

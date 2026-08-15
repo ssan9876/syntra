@@ -15,6 +15,7 @@ import {
   recordEvent,
   removeRecoveryCodes,
   removeTotp,
+  revokeOrphanedRecoveryCodes,
   type UserStatus,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -174,10 +175,18 @@ export async function registerAdminUserRoutes(
     async (request, reply) => {
       const { id, type } = adminFactorParams.parse(request.params);
 
-      await request.db(async (tx) => {
+      const orphanedCodes = await request.db(async (tx) => {
         if (type === 'totp') await removeTotp(tx, id);
         else if (type === 'recovery_code') await removeRecoveryCodes(tx, id);
         else await tx.webAuthnCredential.deleteMany({ where: { userId: id } });
+
+        // Recovery codes are a way back in when a real factor is lost, not a
+        // factor of their own — which is why issuing them requires holding
+        // one. Taking the last real factor away and leaving the codes reaches
+        // the state that gate exists to prevent, by another door: a
+        // `require_mfa` rule stays satisfied by a printed page forever, and
+        // the forced-enrolment path is never reached.
+        const revoked = await revokeOrphanedRecoveryCodes(tx, id);
 
         await recordEvent(tx, {
           actorUserId: request.session.userId,
@@ -186,11 +195,18 @@ export async function registerAdminUserRoutes(
           targetId: id,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { factor: type, by: 'administrator' },
+          payload: {
+            factor: type,
+            by: 'administrator',
+            // Named, so a user who finds their codes stopped working can be
+            // told why by someone reading the log.
+            recoveryCodesRevoked: revoked,
+          },
         });
+        return revoked;
       });
 
-      return reply.status(204).send();
+      return reply.status(200).send({ recoveryCodesRevoked: orphanedCodes });
     },
   );
 }

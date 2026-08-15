@@ -1,7 +1,7 @@
 import { createHash, randomInt } from 'node:crypto';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { currentTenant } from '../../tenant-context.js';
-import { registerFactorVerifier } from './registry.js';
+import { enrolledFactorTypes, registerFactorVerifier } from './registry.js';
 import type { FactorVerifier, FactorVerifyResult } from './types.js';
 
 export const RECOVERY_CODE_COUNT = 10;
@@ -84,6 +84,33 @@ export async function removeRecoveryCodes(
   userId: string,
 ): Promise<void> {
   await tx.recoveryCode.deleteMany({ where: { userId } });
+}
+
+/**
+ * Drops a user's recovery codes once they hold no real factor for the codes to
+ * be a way back into.
+ *
+ * The mirror of the gate on issuing them. That gate exists because a user with
+ * nothing could otherwise mint ten codes today and satisfy a `require_mfa`
+ * rule saved next month with a printed page forever, never reaching the
+ * forced-enrolment path. Removing the last real factor — by an administrator
+ * restoring access, or by the owner deleting their last key — arrives at
+ * exactly that state through a different door.
+ *
+ * Cascading rather than warning, because the alternative is a rule that
+ * silently buys the tenant nothing. Returns how many were dropped so the
+ * caller can say so in its audit event and to the person who did it.
+ */
+export async function revokeOrphanedRecoveryCodes(
+  tx: TenantClient,
+  userId: string,
+): Promise<number> {
+  const held = await enrolledFactorTypes(tx, userId);
+  if (held.length > 0) return 0;
+  const { count } = await tx.recoveryCode.deleteMany({
+    where: { userId, usedAt: null },
+  });
+  return count;
 }
 
 /**
