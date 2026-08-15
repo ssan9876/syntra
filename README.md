@@ -100,6 +100,12 @@ populated. And start the stack with `AUTH_RATE_LIMIT_MAX` raised, since the
 suite signs in far more often in a minute than a person would and the default
 limit is right to refuse it.
 
+The browser tests need the stack already running — Playwright starts nothing
+itself. If they fail with `ERR_CONNECTION_REFUSED` while `curl` reaches the
+same URL, Vite is listening on IPv6 only: `localhost` resolves to `::1` on
+recent Node, while Chromium maps `*.localhost` to `127.0.0.1`. Start the web
+server with `vite --host 127.0.0.1`.
+
 ### Connecting a directory source
 
 `infra/docker-compose.yml` already runs an OpenLDAP container for
