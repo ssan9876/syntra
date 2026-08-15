@@ -118,6 +118,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@syntra/connectors':
+        specifier: workspace:*
+        version: link:../connectors
       '@syntra/db':
         specifier: workspace:*
         version: link:../db
