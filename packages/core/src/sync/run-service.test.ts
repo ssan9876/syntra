@@ -6,6 +6,7 @@ import { createUser } from '../directory/user-service.js';
 import { DEFAULT_MAPPINGS } from './defaults.js';
 import { createSource, setMappings } from './source-service.js';
 import { applyRun, previewRun } from './run-service.js';
+import { applyChange } from './apply.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 5));
 let tenantId: string;
@@ -165,5 +166,107 @@ describe('applyRun', () => {
     );
 
     await expect(applyRun(tenantId, run.id)).rejects.toThrow(/blocked/i);
+  });
+});
+
+describe('applyChange membership failure paths', () => {
+  it('marks add_member failed and audits outcome failure when the group or member cannot be resolved', async () => {
+    const { updated, events } = await withTenant(tenantId, async (tx) => {
+      const run = await tx.syncRun.create({ data: { tenantId, sourceId } });
+      const change = await tx.syncChange.create({
+        data: {
+          tenantId,
+          runId: run.id,
+          changeType: 'add_member',
+          targetType: 'GroupMembership',
+          targetId: null,
+          sourceAnchor: 'group-anchor-x',
+          after: { groupAnchor: 'no-such-group', memberAnchor: 'no-such-member' },
+          status: 'proposed',
+        },
+      });
+
+      await applyChange(tx, change, sourceId, run.id);
+
+      return {
+        updated: await tx.syncChange.findUnique({ where: { id: change.id } }),
+        events: await tx.auditEvent.findMany({
+          where: { action: 'sync.add_member' },
+        }),
+      };
+    });
+
+    expect(updated!.status).toBe('failed');
+    expect(updated!.message).toMatch(/not found/i);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('failure');
+  });
+
+  it('marks remove_member failed and audits outcome failure when the group or member cannot be resolved', async () => {
+    const { updated, events } = await withTenant(tenantId, async (tx) => {
+      const run = await tx.syncRun.create({ data: { tenantId, sourceId } });
+      const change = await tx.syncChange.create({
+        data: {
+          tenantId,
+          runId: run.id,
+          changeType: 'remove_member',
+          targetType: 'GroupMembership',
+          targetId: null,
+          sourceAnchor: 'group-anchor-y',
+          before: { groupAnchor: 'no-such-group', memberAnchor: 'no-such-member' },
+          status: 'proposed',
+        },
+      });
+
+      await applyChange(tx, change, sourceId, run.id);
+
+      return {
+        updated: await tx.syncChange.findUnique({ where: { id: change.id } }),
+        events: await tx.auditEvent.findMany({
+          where: { action: 'sync.remove_member' },
+        }),
+      };
+    });
+
+    expect(updated!.status).toBe('failed');
+    expect(updated!.message).toMatch(/not found/i);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('failure');
+  });
+
+  it('applies remove_member and audits outcome success when the group and member both resolve', async () => {
+    const run = await previewRun(tenantId, provider, sourceId);
+    await applyRun(tenantId, run.id);
+
+    const { updated, events } = await withTenant(tenantId, async (tx) => {
+      const group = await tx.group.findFirstOrThrow({ where: { sourceId } });
+      const user = await tx.user.findFirstOrThrow({ where: { sourceId } });
+      const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });
+      const change = await tx.syncChange.create({
+        data: {
+          tenantId,
+          runId: newRun.id,
+          changeType: 'remove_member',
+          targetType: 'GroupMembership',
+          targetId: null,
+          sourceAnchor: group.sourceAnchor,
+          before: { groupAnchor: group.sourceAnchor, memberAnchor: user.sourceAnchor },
+          status: 'proposed',
+        },
+      });
+
+      await applyChange(tx, change, sourceId, newRun.id);
+
+      return {
+        updated: await tx.syncChange.findUnique({ where: { id: change.id } }),
+        events: await tx.auditEvent.findMany({
+          where: { action: 'sync.remove_member' },
+        }),
+      };
+    });
+
+    expect(updated!.status).toBe('applied');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('success');
   });
 });

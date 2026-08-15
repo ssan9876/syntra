@@ -16,6 +16,30 @@ interface ChangeRow {
 const fields = (value: unknown) => (value ?? {}) as Record<string, string>;
 
 /**
+ * Writes the one audit event for a change. Centralised so that "what
+ * actually happened" (success or failure) is always the value the calling
+ * branch decided, never a value the bottom of the function assumes on its
+ * behalf.
+ */
+async function audit(
+  tx: TenantClient,
+  change: ChangeRow,
+  runId: string,
+  outcome: 'success' | 'failure',
+  extra?: Record<string, unknown>,
+): Promise<void> {
+  await recordEvent(tx, {
+    actorUserId: null,
+    action: `sync.${change.changeType}`,
+    targetType: change.targetType,
+    targetId: change.targetId,
+    outcome,
+    sourceIp: null,
+    payload: { runId, anchor: change.sourceAnchor, ...extra },
+  });
+}
+
+/**
  * Applies one proposed change and records it. The caller runs this inside a
  * transaction, so the change and its audit entry commit together or not at
  * all: a directory change without a record of it is worse than no change.
@@ -163,6 +187,7 @@ export async function applyChange(
         where: { sourceId, sourceAnchor: after.memberAnchor ?? null },
       });
       if (!group || !user) {
+        const missing = !group && !user ? 'group and member' : !group ? 'group' : 'member';
         await tx.syncChange.update({
           where: { id: change.id },
           data: {
@@ -170,7 +195,10 @@ export async function applyChange(
             message: 'group or member not found after applying earlier changes',
           },
         });
-        break;
+        // Explicit return, not break: the change is failed, so the event
+        // must say `failure`, not fall through to the success event below.
+        await audit(tx, change, runId, 'failure', { missing });
+        return;
       }
       await tx.groupMembership.upsert({
         where: { groupId_userId: { groupId: group.id, userId: user.id } },
@@ -192,11 +220,24 @@ export async function applyChange(
       const user = await tx.user.findFirst({
         where: { sourceId, sourceAnchor: before.memberAnchor ?? null },
       });
-      if (group && user) {
-        await tx.groupMembership.deleteMany({
-          where: { groupId: group.id, userId: user.id },
+      if (!group || !user) {
+        const missing = !group && !user ? 'group and member' : !group ? 'group' : 'member';
+        await tx.syncChange.update({
+          where: { id: change.id },
+          data: {
+            status: 'failed',
+            message: 'group or member not found; cannot confirm the membership was removed',
+          },
         });
+        await audit(tx, change, runId, 'failure', { missing });
+        return;
       }
+      // Both resolved: removing a membership that is already gone is
+      // genuinely idempotent, so this is a success regardless of whether
+      // deleteMany actually deleted a row.
+      await tx.groupMembership.deleteMany({
+        where: { groupId: group.id, userId: user.id },
+      });
       await tx.syncChange.update({
         where: { id: change.id },
         data: { status: 'applied' },
@@ -215,13 +256,5 @@ export async function applyChange(
       return;
   }
 
-  await recordEvent(tx, {
-    actorUserId: null,
-    action: `sync.${change.changeType}`,
-    targetType: change.targetType,
-    targetId: change.targetId,
-    outcome: 'success',
-    sourceIp: null,
-    payload: { runId, anchor: change.sourceAnchor },
-  });
+  await audit(tx, change, runId, 'success');
 }
