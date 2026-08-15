@@ -7,6 +7,10 @@
   "dependencies": {
     "@syntra/db": "workspace:*",
     "argon2": "^0.45.1",
+    "nodemailer": "^9.0.5",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^8.0.1"
   }
 }

@@ -14,3 +14,5 @@ export * from './rbac/rbac-service.js';
 export * from './auth/password.js';
 export * from './auth/session-service.js';
 export * from './auth/login-service.js';
+export * from './notify/notification-service.js';
+export * from './notify/templates/index.js';
