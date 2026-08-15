@@ -105,7 +105,38 @@ export async function registerAdminSyncRunRoutes(
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      await request.db((tx) => skipChange(tx, id));
+
+      // The skip and its audit event in one transaction, as every other
+      // admin mutation on this branch does: a change to what a run says it
+      // did, with no record of who changed it, is the hole the hash chain
+      // exists to close.
+      await request.db(async (tx) => {
+        const change = await tx.syncChange.findUnique({ where: { id } });
+        if (!change) {
+          throw new ProblemError(404, 'not-found', 'Change not found');
+        }
+        if (change.status !== 'proposed') {
+          throw new ProblemError(
+            409,
+            'change-not-proposed',
+            'Change is not proposed',
+            `this change is already ${change.status}; only a proposed change ` +
+              `can be skipped, so that a run's record of what it did stays true`,
+          );
+        }
+
+        await skipChange(tx, id);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'sync.skip_change',
+          targetType: 'SyncChange',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { runId: change.runId, changeType: change.changeType },
+        });
+      });
+
       return reply.status(204).send();
     },
   );

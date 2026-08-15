@@ -491,14 +491,29 @@ export async function applyRun(
   );
 }
 
+/**
+ * Marks a proposed change as skipped, so a run can be applied without it.
+ *
+ * Only a `proposed` change may be skipped. Flipping an already-applied change
+ * to `skipped` would make the run's record state that a mutation which
+ * committed to the directory never happened — falsifying what a run did, in a
+ * product whose selling point is a tamper-evident log of exactly that.
+ *
+ * The status check is the `where` clause rather than a read followed by a
+ * write, so two concurrent requests cannot both see `proposed` and both
+ * proceed. The caller records the audit event in this same transaction.
+ */
 export async function skipChange(
   tx: TenantClient,
   changeId: string,
 ): Promise<void> {
-  await tx.syncChange.update({
-    where: { id: changeId },
+  const { count } = await tx.syncChange.updateMany({
+    where: { id: changeId, status: 'proposed' },
     data: { status: 'skipped' },
   });
+  if (count === 0) {
+    throw new Error('only a proposed change can be skipped');
+  }
 }
 
 export async function listRuns(tx: TenantClient, sourceId?: string) {

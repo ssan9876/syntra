@@ -242,3 +242,94 @@ describe('runs', () => {
     expect(res.json().type).toContain('run-blocked');
   });
 });
+
+describe('skipping a change', () => {
+  async function seededRun(cookie: string) {
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    const id = created.json().id;
+    await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/admin/sources/${id}/mappings`,
+      headers: { host: ctx.host, cookie },
+      payload: {
+        rules: [
+          { objectType: 'user', sourceAttribute: 'uid', targetField: 'login', transform: 'lowercase', isCorrelation: true },
+          { objectType: 'group', sourceAttribute: 'cn', targetField: 'name', transform: 'trim', isCorrelation: true },
+        ],
+      },
+    });
+    const run = await post(`/api/admin/sources/${id}/run`, cookie);
+    const detail = await get(`/api/admin/sync-runs/${run.json().id}`, cookie);
+    return { runId: run.json().id, changes: detail.json().changes };
+  }
+
+  it('skips a proposed change and records who did it', async () => {
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.AUDIT_READ,
+    ]);
+    const { runId, changes } = await seededRun(cookie);
+
+    const res = await post(
+      `/api/admin/sync-changes/${changes[0].id}/skip`,
+      cookie,
+    );
+    expect(res.statusCode).toBe(204);
+
+    const detail = await get(`/api/admin/sync-runs/${runId}`, cookie);
+    const skipped = detail
+      .json()
+      .changes.find((c: { id: string }) => c.id === changes[0].id);
+    expect(skipped.status).toBe('skipped');
+
+    const audit = await get('/api/admin/audit', cookie);
+    expect(
+      audit
+        .json()
+        .events.some(
+          (e: { action: string; targetId: string }) =>
+            e.action === 'sync.skip_change' && e.targetId === changes[0].id,
+        ),
+    ).toBe(true);
+  });
+
+  it('refuses to rewrite an already applied change as skipped', async () => {
+    // Marking an applied change `skipped` would make the run state that a
+    // mutation which committed to the directory never happened.
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.DIRECTORY_READ,
+    ]);
+    const { runId, changes } = await seededRun(cookie);
+    await post(`/api/admin/sync-runs/${runId}/apply`, cookie);
+
+    const res = await post(
+      `/api/admin/sync-changes/${changes[0].id}/skip`,
+      cookie,
+    );
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toContain('change-not-proposed');
+
+    const detail = await get(`/api/admin/sync-runs/${runId}`, cookie);
+    const still = detail
+      .json()
+      .changes.find((c: { id: string }) => c.id === changes[0].id);
+    expect(still.status).toBe('applied');
+  });
+
+  it('returns a 404 for a change that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+
+    const res = await post(
+      '/api/admin/sync-changes/00000000-0000-0000-0000-000000000000/skip',
+      cookie,
+    );
+    expect(res.statusCode).toBe(404);
+  });
+});
