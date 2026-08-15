@@ -1,0 +1,26 @@
+dn: ou=Care,dc=acme,dc=test
+objectClass: organizationalUnit
+ou: Care
+
+dn: ou=Learning,dc=acme,dc=test
+objectClass: organizationalUnit
+ou: Learning
+
+dn: uid=jdoe,ou=Care,dc=acme,dc=test
+objectClass: inetOrgPerson
+uid: jdoe
+cn: Jo Doe
+sn: Doe
+mail: jo.doe@acme.test
+
+dn: uid=sroe,ou=Care,dc=acme,dc=test
+objectClass: inetOrgPerson
+uid: sroe
+cn: Sam Roe
+sn: Roe
+mail: sam.roe@acme.test
+
+dn: cn=Nurses,dc=acme,dc=test
+objectClass: groupOfNames
+cn: Nurses
+member: uid=jdoe,ou=Care,dc=acme,dc=test
