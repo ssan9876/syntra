@@ -19,10 +19,19 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // Only declare a JSON body when there is one. Sending
+  // `content-type: application/json` with an empty body is rejected outright
+  // by the server, which silently broke sign-out: the request never arrived
+  // and the session stayed alive while the interface looked like it worked.
+  const headers: HeadersInit = {
+    ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
+    ...(init.headers ?? {}),
+  };
+
   const response = await fetch(path, {
     ...init,
     credentials: 'include',
-    headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+    headers,
   });
 
   if (!response.ok) {

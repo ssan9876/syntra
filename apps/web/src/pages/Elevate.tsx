@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { ApiError } from '../session/api.js';
 import { useSession } from '../session/SessionProvider.js';
@@ -12,6 +12,12 @@ import { AppShell } from '../components/AppShell.js';
 export function Elevate() {
   const { elevate } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Where the guard bounced them from, if anywhere.
+  const intended =
+    (location.state as { from?: { pathname?: string } } | null)?.from
+      ?.pathname ?? '/admin/users';
 
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +30,7 @@ export function Elevate() {
 
     try {
       await elevate(password);
-      navigate('/admin/users', { replace: true });
+      navigate(intended, { replace: true });
     } catch (cause) {
       if (cause instanceof ApiError && cause.kind === 'not-an-administrator') {
         setError(

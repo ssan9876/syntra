@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: syntra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: syntra
+    volumes:
+      - ./infra/initdb:/docker-entrypoint-initdb.d:ro
+      - syntra-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U syntra']
+      interval: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://syntra_app:syntra_app@postgres:5432/syntra
+      PORT: '3000'
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY}
+      SMTP_URL: ${SMTP_URL:?set SMTP_URL}
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports: ['8080:80']
+    depends_on: [api]
+
+volumes:
+  syntra-data:

@@ -27,7 +27,9 @@ function RequireSession({
   if (loading) return <BootScreen />;
   if (!session) return <Navigate to="/login" replace state={{ from: location }} />;
   if (scope === 'admin' && session.scope !== 'admin') {
-    return <Navigate to="/elevate" replace />;
+    // Carry where they were headed, so elevating from a deep link returns
+    // them there rather than dumping them on the console's first page.
+    return <Navigate to="/elevate" replace state={{ from: location }} />;
   }
   return children;
 }
