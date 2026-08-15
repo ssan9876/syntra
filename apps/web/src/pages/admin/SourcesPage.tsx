@@ -1,5 +1,12 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Empty,
+  Panel,
+  SkeletonRows,
+  Status,
+  buttonClasses,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -63,7 +70,7 @@ export function SourcesPage() {
         actions={
           <Link
             to="/admin/sources/new"
-            className="inline-flex h-9 items-center justify-center rounded-control border border-transparent bg-primary px-4 font-medium whitespace-nowrap text-bg transition-colors duration-150 hover:bg-primary-hover"
+            className={buttonClasses('primary')}
           >
             New source
           </Link>
@@ -83,7 +90,7 @@ export function SourcesPage() {
                 action={
                   <Link
                     to="/admin/sources/new"
-                    className="inline-flex h-9 items-center justify-center rounded-control border border-transparent bg-primary px-4 font-medium text-bg transition-colors duration-150 hover:bg-primary-hover"
+                    className={buttonClasses('primary')}
                   >
                     Connect a directory
                   </Link>

@@ -1095,6 +1095,52 @@ describe('deleting a source', () => {
     ).toBe(true);
   });
 
+  it('refuses when the numbers moved under the confirmation', async () => {
+    // A confirmation is worth only the figures it was given, and those are
+    // read when a screen opens. A run in between can turn two accounts into
+    // two thousand, and deleting anyway carries out a decision nobody made.
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.DIRECTORY_READ,
+    ]);
+    const id = await synced(cookie);
+
+    const res = await del(
+      `/api/admin/sources/${id}?confirm=true&ackUsers=1&ackGroups=0&ackOrgUnits=0`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toContain('source-counts-changed');
+    expect(res.json().owned.users).toBe(2);
+    // And nothing was deactivated on the way to saying so.
+    const users = await get('/api/admin/users', cookie);
+    expect(
+      users.json().users.every((u: { status: string }) => u.status === 'active'),
+    ).toBe(true);
+  });
+
+  it('goes ahead when the acknowledged numbers are the real ones', async () => {
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.DIRECTORY_READ,
+    ]);
+    const id = await synced(cookie);
+
+    // Read the way the console reads them, rather than assumed.
+    const owned = (await get(`/api/admin/sources/${id}`, cookie)).json().owned;
+    const res = await del(
+      `/api/admin/sources/${id}?confirm=true&ackUsers=${owned.users}` +
+        `&ackGroups=${owned.groups}&ackOrgUnits=${owned.orgUnits}`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(204);
+    expect((await get('/api/admin/sources', cookie)).json().sources).toHaveLength(0);
+  });
+
   it('deactivates and detaches the accounts it owned when the caller confirms', async () => {
     const cookie = await adminCookie([
       PERMISSIONS.SYNC_MANAGE,

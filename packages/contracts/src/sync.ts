@@ -87,6 +87,22 @@ export const deleteSourceQuery = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value === 'true'),
+  /**
+   * The counts the caller was shown when they confirmed.
+   *
+   * Confirmation is worth only as much as the numbers it was given, and those
+   * numbers are read when a page opens. A sync run between the reading and the
+   * clicking can turn "12 users will be deactivated" into twelve hundred, and
+   * the caller would have confirmed something they were never told. Sent back,
+   * they are checked against the counts inside the deleting transaction, and a
+   * disagreement is refused with the real ones rather than acted on.
+   *
+   * Optional, because an API caller who never saw a screen has nothing to
+   * acknowledge and `confirm=true` alone still means what it always meant.
+   */
+  ackUsers: z.coerce.number().int().min(0).optional(),
+  ackGroups: z.coerce.number().int().min(0).optional(),
+  ackOrgUnits: z.coerce.number().int().min(0).optional(),
 });
 
 export const mappingRule = z.object({

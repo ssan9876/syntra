@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Alert, Button, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
@@ -166,9 +166,11 @@ export function SourceDetailPage() {
   const { data, error, loading, reload } = useApiResource<SourceDetail>(
     isNew ? null : `/api/admin/sources/${id}`,
   );
-  const { data: mappingData } = useApiResource<{ rules: MappingRule[] }>(
-    isNew ? null : `/api/admin/sources/${id}/mappings`,
-  );
+  // Its own resource, and therefore its own reload: the source's `reload()`
+  // re-fetches the source and nothing else.
+  const { data: mappingData, reload: reloadMappings } = useApiResource<{
+    rules: MappingRule[];
+  }>(isNew ? null : `/api/admin/sources/${id}/mappings`);
   const { data: defaults } = useApiResource<{
     flavours: Record<Flavour, MappingRule[]>;
     assignableFields: AssignableFields;
@@ -226,9 +228,24 @@ export function SourceDetailPage() {
     );
   }, [data]);
 
+  /**
+   * Seeds the table from a *fetch*, once per fetch.
+   *
+   * Keyed on the identity of the fetched value rather than on a "has the user
+   * touched this" flag. The flag version reverted a saved edit on screen: the
+   * save set the flag back to false, which re-ran this effect against the
+   * mappings loaded when the page opened, and the table redrew the old
+   * attribute names under a "Saved." message. The data was right and the
+   * screen was wrong, which is the one failure this product cannot afford.
+   */
+  const seededFrom = useRef<{ rules: MappingRule[] } | null>(null);
   useEffect(() => {
-    if (mappingData && !rulesTouched) setRules(mappingData.rules);
-  }, [mappingData, rulesTouched]);
+    if (mappingData && seededFrom.current !== mappingData) {
+      seededFrom.current = mappingData;
+      setRules(mappingData.rules);
+      setRulesTouched(false);
+    }
+  }, [mappingData]);
 
   // A new source starts from the OpenLDAP defaults rather than from nothing,
   // which is what "the common case needs no typing" means in practice. The
@@ -376,15 +393,21 @@ export function SourceDetailPage() {
           deactivationThresholdPercent: threshold,
         }),
       });
-      await api(`/api/admin/sources/${id}/mappings`, {
-        method: 'PUT',
-        body: JSON.stringify({ rules }),
-      });
+      // The response is `mappingsFor` read back after the write, so it is
+      // what was stored rather than what was sent. Shown directly, and the
+      // resource behind it reloaded, so nothing on screen is left describing
+      // the state before the save.
+      const stored = await api<{ rules: MappingRule[] }>(
+        `/api/admin/sources/${id}/mappings`,
+        { method: 'PUT', body: JSON.stringify({ rules }) },
+      );
 
       setForm((current) => ({ ...current, bindPassword: '' }));
+      setRules(stored.rules);
       setRulesTouched(false);
       setNotice('Saved.');
       reload();
+      reloadMappings();
     } catch (cause) {
       fail(cause, 'The source could not be saved.');
     } finally {
@@ -407,14 +430,36 @@ export function SourceDetailPage() {
     }
   }
 
-  async function onDelete() {
+  async function onDelete(owned: OwnedCounts) {
     setBusy('delete');
     setProblem(null);
     try {
-      await api(`/api/admin/sources/${id}?confirm=true`, { method: 'DELETE' });
+      // The numbers that were on screen when the box was ticked go with the
+      // request, and the server refuses if they have moved since. Confirmation
+      // is worth only as much as the figures it was given, and those are read
+      // when the page opens — a run in between could multiply them.
+      const acknowledged = new URLSearchParams({
+        confirm: 'true',
+        ackUsers: String(owned.users),
+        ackGroups: String(owned.groups),
+        ackOrgUnits: String(owned.orgUnits),
+      });
+      await api(`/api/admin/sources/${id}?${acknowledged}`, {
+        method: 'DELETE',
+      });
       navigate('/admin/sources');
     } catch (cause) {
-      fail(cause, 'The source could not be deleted.');
+      if (cause instanceof ApiError && cause.kind === 'source-counts-changed') {
+        // Put the question again with the truth in it, rather than reporting a
+        // failure the administrator cannot act on.
+        setConfirmDelete(false);
+        setProblem(
+          `${cause.problem.detail ?? 'The numbers changed.'} Read them again below before deleting.`,
+        );
+        reload();
+      } else {
+        fail(cause, 'The source could not be deleted.');
+      }
     } finally {
       setBusy(null);
     }
@@ -630,7 +675,11 @@ export function SourceDetailPage() {
             checked={form.enabled}
             onChange={(v) => set('enabled', v)}
             label="Enabled"
-            hint="A disabled source is never read, on a schedule or otherwise. Save a new source disabled if you want to check the mappings before it runs."
+            // Precisely what it does. A disabled source is skipped by the
+            // scheduler; Run now still works, because running one by hand is
+            // how you check a source before letting it run unattended, and
+            // saying otherwise would be copy that the product contradicts.
+            hint="A disabled source is never read on its schedule. Run now still works, so a new source can be saved disabled and checked before it runs unattended."
           />
           <Check
             className="sm:col-span-2"
@@ -684,13 +733,22 @@ export function SourceDetailPage() {
                 <Check
                   checked={confirmDelete}
                   onChange={setConfirmDelete}
-                  label={`I understand ${owned.users + owned.groups} accounts and groups will be deactivated.`}
+                  // Every number the paragraph above states, so the tick
+                  // acknowledges all of what happens rather than the two
+                  // thirds of it that deactivates.
+                  label={
+                    `I understand that ${owned.users} ` +
+                    `${owned.users === 1 ? 'user' : 'users'} and ` +
+                    `${owned.groups} ${owned.groups === 1 ? 'group' : 'groups'} ` +
+                    `will be deactivated, and ${owned.orgUnits} ` +
+                    `${owned.orgUnits === 1 ? 'unit' : 'units'} detached.`
+                  }
                 />
               )}
 
               <Button
                 variant="danger"
-                onClick={onDelete}
+                onClick={() => onDelete(owned)}
                 loading={busy === 'delete'}
                 disabled={!!busy || (ownsSomething && !confirmDelete)}
               >

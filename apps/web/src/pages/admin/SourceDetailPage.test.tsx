@@ -432,6 +432,79 @@ describe('editing a source', () => {
   });
 });
 
+describe('saving a mapping change', () => {
+  const saved = [
+    {
+      objectType: 'user',
+      sourceAttribute: 'uid',
+      targetField: 'login',
+      transform: 'lowercase',
+      isCorrelation: true,
+    },
+  ];
+
+  it('leaves the edited attribute on screen rather than redrawing the old one', async () => {
+    // The screen used to revert to the mappings loaded when the page opened,
+    // under a "Saved." message: the data was right and the display was wrong,
+    // which is the one failure this product cannot afford.
+    // A server that actually stores what it is sent, so a re-read returns the
+    // edit. With the previous code the page never re-read the mappings at all
+    // and redrew this array as it was at page load.
+    let stored: unknown[] = saved;
+    const written: unknown[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      const request = (init ?? {}) as RequestInit;
+
+      if (request.method === 'PUT') {
+        const body = JSON.parse(String(request.body)) as { rules: unknown[] };
+        written.push(...body.rules);
+        stored = body.rules;
+        // What the route returns: `mappingsFor` read back after the write.
+        return Promise.resolve(json({ rules: stored }));
+      }
+      if (request.method === 'PATCH') return Promise.resolve(json({}));
+      if (url.includes('/sources/mapping-defaults')) {
+        return Promise.resolve(json(DEFAULTS));
+      }
+      if (url.includes('/mappings')) return Promise.resolve(json({ rules: stored }));
+      return Promise.resolve(json(savedSource()));
+    });
+
+    renderEdit();
+
+    const attribute = await screen.findByLabelText('Users directory attribute 1');
+    await userEvent.clear(attribute);
+    await userEvent.type(attribute, 'sAMAccountName');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    expect(written).toHaveLength(1);
+    expect(screen.getByLabelText('Users directory attribute 1')).toHaveValue(
+      'sAMAccountName',
+    );
+  });
+
+  it('re-reads the mappings after a save, not just the source', async () => {
+    const calls = mockFetch({ mappings: saved });
+    renderEdit();
+
+    await screen.findByDisplayValue('Corporate LDAP');
+    const before = calls.filter(
+      (c) => c.url.includes('/mappings') && c.init.method === undefined,
+    ).length;
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      const after = calls.filter(
+        (c) => c.url.includes('/mappings') && c.init.method === undefined,
+      ).length;
+      expect(after).toBeGreaterThan(before);
+    });
+  });
+});
+
 describe('testing the connection', () => {
   const result = {
     ok: true,
@@ -522,19 +595,74 @@ describe('deleting a source', () => {
     const remove = screen.getByRole('button', { name: 'Delete source' });
     expect(remove).toBeDisabled();
 
+    // Every number the paragraph states, org units included.
     await userEvent.click(
-      screen.getByRole('checkbox', { name: /15 accounts and groups/i }),
+      screen.getByRole('checkbox', {
+        name: /12 users and 3 groups will be deactivated, and 2 units detached/i,
+      }),
     );
     expect(remove).toBeEnabled();
 
     await userEvent.click(remove);
-    await waitFor(() =>
-      expect(
-        calls.some(
-          (c) => c.init.method === 'DELETE' && c.url.includes('confirm=true'),
-        ),
-      ).toBe(true),
+    const sent = await waitFor(
+      () => calls.find((c) => c.init.method === 'DELETE')!,
     );
+    expect(sent.url).toContain('confirm=true');
+    // The figures that were on screen go with it, so the server can refuse if
+    // they have moved since the page was read.
+    expect(sent.url).toContain('ackUsers=12');
+    expect(sent.url).toContain('ackGroups=3');
+    expect(sent.url).toContain('ackOrgUnits=2');
+  });
+
+  it('asks again, with the real numbers, when they moved under the tick', async () => {
+    const source = savedSource();
+    let counts = { users: 12, groups: 3, orgUnits: 2 };
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      const request = (init ?? {}) as RequestInit;
+
+      if (request.method === 'DELETE') {
+        // A run landed between the page being read and the box being ticked.
+        counts = { users: 1200, groups: 3, orgUnits: 2 };
+        return Promise.resolve(
+          json(
+            {
+              type: 'https://syntra.dev/problems/source-counts-changed',
+              title: 'The numbers changed',
+              status: 409,
+              detail:
+                'this source now owns 1200 user(s), 3 group(s) and 2 organizational unit(s), not the 12, 3 and 2 that were confirmed',
+              owned: counts,
+            },
+            409,
+          ),
+        );
+      }
+      if (url.includes('/sources/mapping-defaults')) {
+        return Promise.resolve(json(DEFAULTS));
+      }
+      if (url.includes('/mappings')) return Promise.resolve(json({ rules: [] }));
+      return Promise.resolve(json({ ...source, owned: counts }));
+    });
+
+    renderEdit();
+    await screen.findByText(/this source owns/i);
+    const acknowledge = () =>
+      screen.getByRole('checkbox', { name: /will be deactivated/i });
+    await userEvent.click(acknowledge());
+    await userEvent.click(screen.getByRole('button', { name: 'Delete source' }));
+
+    expect(await screen.findByText(/now owns 1200/i)).toBeInTheDocument();
+    // The tick is cleared and the panel redrawn with what is true now, so the
+    // second decision is made on the real figure.
+    expect(acknowledge()).not.toBeChecked();
+    await waitFor(() =>
+      expect(screen.getByText(/this source owns/i)).toHaveTextContent(
+        '1200 users',
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Delete source' })).toBeDisabled();
   });
 
   it('offers a plain delete when the source owns nothing', async () => {

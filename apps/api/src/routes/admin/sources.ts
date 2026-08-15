@@ -17,6 +17,7 @@ import {
   ASSIGNABLE_FIELDS,
   DEFAULT_MAPPINGS,
   PERMISSIONS,
+  SourceCountsChangedError,
   SourceOwnsObjectsError,
   applySourceSchedule,
   createSource,
@@ -445,13 +446,34 @@ export async function registerAdminSourceRoutes(
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      const { confirm } = deleteSourceQuery.parse(request.query);
+      const { confirm, ackUsers, ackGroups, ackOrgUnits } =
+        deleteSourceQuery.parse(request.query);
+
+      // All three or none: a partial acknowledgement would check some of the
+      // numbers the caller was shown and quietly ignore the rest.
+      const acknowledged =
+        ackUsers !== undefined &&
+        ackGroups !== undefined &&
+        ackOrgUnits !== undefined
+          ? { users: ackUsers, groups: ackGroups, orgUnits: ackOrgUnits }
+          : undefined;
 
       await request.db(async (tx) => {
         let released;
         try {
-          released = await deleteSource(tx, id, { confirm });
+          released = await deleteSource(tx, id, { confirm, acknowledged });
         } catch (cause) {
+          if (cause instanceof SourceCountsChangedError) {
+            // The same 409 shape as the unconfirmed case, because it is the
+            // same conversation: here are the numbers, ask me again.
+            throw new ProblemError(
+              409,
+              'source-counts-changed',
+              'The numbers changed',
+              cause.message,
+              { owned: cause.counts },
+            );
+          }
           if (cause instanceof SourceOwnsObjectsError) {
             // 409, and the counts, because this is not a refusal to act — it
             // is the same act awaiting a decision, and the decision needs the
