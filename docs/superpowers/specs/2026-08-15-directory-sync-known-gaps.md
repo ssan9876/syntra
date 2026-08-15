@@ -49,11 +49,28 @@ Two things this exposed and fixed, both invisible until the console drove them:
   its mappings can be written. `enabled` is now settable on create, so a source can be
   saved configured-but-not-running.
 
+Three defects the security review of this work found, all now closed:
+
+- **The stored bind password could be read back out of the vault.** A test that
+  borrowed a saved source's credential spliced it into the caller's own
+  configuration, `url` included, so anyone holding `sync.manage` could point it
+  at a socket they controlled and capture the password in the clear. Borrowing
+  now requires the transport — URL, TLS mode and certificate setting — to match
+  the saved source; testing anywhere else costs the password, which is the
+  proof of possession that was missing.
+- **`source.test` was not audited at all**, which contradicted this branch's
+  own rule. It is now, success and refusal alike, with the address it connected
+  to.
+- **`ldapts` was given no timeouts**, and defaults both to wait-forever. A host
+  that black-holes packets pinned a request handler indefinitely.
+  `connectTimeoutMs` and `timeoutMs` are config fields now, defaulting to 10s
+  and 60s.
+
 Still true of this surface, and deliberately left:
 
-- The editor exposes every field the spec's section 5 names, but not `pageSize`. It is
-  carried through untouched on a save rather than reset, since `config` is replaced
-  whole.
+- The editor exposes every field the spec's section 5 names, but not `pageSize`, nor
+  the two timeout fields added with them. All three are carried through untouched on a
+  save rather than reset, since `config` is replaced whole.
 - Groups and org units carry no source column of their own. `UsersPage` does, which is
   where an administrator would try to edit a synced field. Extending it is a one-line
   change per page once those pages grow rows worth labelling.

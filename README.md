@@ -169,6 +169,14 @@ including the operational ones, since the anchor lives among those. The
 editor also carries **Run now**, and a delete that states in words how many
 users and groups it would deactivate before the button will do anything.
 
+Editing a source and re-testing it reuses the stored bind password, but only
+against the address the source is saved with: changing the URL, the transport
+or the certificate setting means typing the password again. Otherwise anyone
+who can configure a source could ask Syntra to send a stored credential to a
+host of their choosing, which is a way of reading the vault rather than a way
+of testing a connection. Every test is recorded in the audit log with where it
+connected, refusals included.
+
 The same operations are available over HTTP — `POST /api/admin/sources`,
 `PATCH /api/admin/sources/:id`, `DELETE /api/admin/sources/:id`, `PUT
 /api/admin/sources/:id/mappings`, and `POST /api/admin/sources/test` for a
@@ -187,6 +195,12 @@ you get the mappings in place before the first run fires.
 A `PATCH` mentioning a schedule takes effect immediately, not at the next
 restart; so does a create, and so does a delete. Each source has a schedule of
 its own on the shared job queue, so rescheduling one leaves the rest alone.
+
+The console sends the counts it displayed along with the confirmation, and the
+server checks them inside the deleting transaction. A run that landed between
+the page being read and the box being ticked therefore stops the delete rather
+than quietly enlarging it, and the question is put again with the real
+numbers.
 
 **Deleting a source deactivates every account and group it owned**, gives them
 a status reason naming the source, and detaches them — it never deletes a
