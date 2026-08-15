@@ -13,6 +13,7 @@ import {
 } from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
 import { registerMfaRoutes } from './routes/mfa.js';
+import { registerEnrolRoutes } from './routes/enrol.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
@@ -83,13 +84,26 @@ export async function buildApp(
   installWebAuthnVerifier();
   installRecoveryCodeVerifier();
 
+  // One transport instance, shared by both routers below: the "a factor was
+  // added" mail is the same control whether the enrolment happened from a
+  // live session or under a forced-enrolment attempt.
+  const transport = options.transport ?? smtpTransport(config.smtpUrl);
+
   await app.register(registerMfaRoutes, {
     prefix: '/api/auth/mfa',
     masterKey: config.masterKey,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
     // The factor-added mail. The same transport the password routes will get.
-    transport: options.transport ?? smtpTransport(config.smtpUrl),
+    transport,
+  });
+
+  await app.register(registerEnrolRoutes, {
+    prefix: '/api/auth/enrol',
+    masterKey: config.masterKey,
+    publicUrl: config.publicUrl,
+    authRateLimitMax: config.authRateLimitMax,
+    transport,
   });
 
   // Every route below requires an administrative session; the guard is

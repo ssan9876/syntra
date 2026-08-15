@@ -114,7 +114,7 @@ export async function tellOwnerAFactorWasAdded(
   await sendMessage(transport, message);
 }
 
-const qrDataUrl = (text: string) =>
+export const qrDataUrl = (text: string) =>
   new Encoder({ level: 'M' }).encode(new Byte(text)).toDataURL(4, { margin: 8 });
 
 export async function registerMfaRoutes(
