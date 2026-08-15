@@ -8,11 +8,15 @@ import {
   resolveApplicationsForUser,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
+import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { requireSession } from '../plugins/require-session.js';
 import { tenantRelyingParty } from './relying-party.js';
 
 export interface PortalRouteOptions {
+  /** Attempts per minute, per tenant per address. */
   authRateLimitMax: number;
+  /** Attempts per minute for the whole tenant, across every address. */
+  authRateLimitTenantMax: number;
   publicUrl: string;
 }
 
@@ -41,7 +45,17 @@ export async function registerPortalRoutes(
 
   app.post(
     '/applications/:id/launch',
-    { config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } } },
+    {
+      // Both dimensions, like every other route that runs authorize(). A
+      // launch evaluates policy and can mint an attempt, so it is a
+      // credential-issuing endpoint whatever the URL suggests — and the
+      // per-address half alone is bounded only by how many addresses the
+      // attacker has.
+      config: {
+        rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
+      },
+      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    },
     async (request) => {
       const { id } = idParam.parse(request.params);
       const { userId, sessionId } = request.session;

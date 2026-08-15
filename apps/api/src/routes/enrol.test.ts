@@ -187,6 +187,26 @@ describe('POST /api/auth/enrol/totp', () => {
     expect(again.statusCode).toBe(401);
   });
 
+  it('reports an account that already has an app as a conflict, not a fault', async () => {
+    // Two enrolment attempts open at once — two tabs, or a retry — and the
+    // first one finishes. `beginTotpEnrolment` throws a plain Error when a
+    // confirmed credential exists, which used to reach the caller as a bare
+    // 500 and a stack trace in the log for what is an ordinary double-click.
+    // The self-service route beside it has always answered 409.
+    const first = await offer();
+    const second = await offer();
+    const secret = (await post('/api/auth/enrol/totp/begin', { attemptToken: first })).json()
+      .secret as string;
+    await post('/api/auth/enrol/totp/confirm', {
+      attemptToken: first,
+      code: codeFor(secret),
+    });
+
+    const again = await post('/api/auth/enrol/totp/begin', { attemptToken: second });
+    expect(again.statusCode).toBe(409);
+    expect(again.json().type).toBe('https://syntra.dev/problems/already-enrolled');
+  });
+
   it('refuses to spend a verification attempt on enrolment', async () => {
     // Give the user a factor, so the login produces a step-up challenge rather
     // than an enrolment demand, then try to use that token here.

@@ -30,7 +30,20 @@ export function isLaunchableUrl(value: string): boolean {
   }
 }
 
-const launchableUrl = z
+/**
+ * Every URL this API accepts for an application, whether the browser will
+ * navigate to it or render it.
+ *
+ * One schema for both, because the reason is one reason. `z.string().url()`
+ * accepts `javascript:` as readily as `https:`, and the difference between a
+ * launch target and an icon source is only which sink the value reaches — an
+ * `<img src>` today, an `<a href>` or a CSS `url()` the first time somebody
+ * builds a richer tile. `iconUrl` sat one line above the hardened `launchUrl`
+ * with the weaker check, plumbed all the way through to the web `Tile` type;
+ * the second field is not the safe one, it is only the one nothing renders
+ * yet.
+ */
+const webUrl = z
   .string()
   .max(2048)
   .refine(isLaunchableUrl, { message: 'Must be an http or https URL' });
@@ -39,11 +52,11 @@ export const createApplicationRequest = z.object({
   name: z.string().min(1).max(128),
   slug: applicationSlug,
   description: z.string().max(1024).optional(),
-  iconUrl: z.string().url().max(2048).optional(),
+  iconUrl: webUrl.optional(),
   // Access I launches bookmarks. Access II widens this enum; the column is
   // already a free string, so that is a code change and not a migration.
   type: z.literal('bookmark').default('bookmark'),
-  launchUrl: launchableUrl,
+  launchUrl: webUrl,
   visibility: z.enum(['assigned', 'hidden']).default('assigned'),
 });
 export type CreateApplicationRequest = z.input<typeof createApplicationRequest>;

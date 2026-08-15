@@ -104,6 +104,37 @@ describe('applications', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('holds an icon URL to the same schemes as a launch URL', async () => {
+    // The field is plumbed to the web `Tile` type. Nothing renders it today,
+    // which makes it the field that is one task away from being a sink rather
+    // than the field that is safe.
+    const res = await call('POST', '/api/admin/applications', {
+      name: 'CRM',
+      slug: 'crm',
+      launchUrl: 'https://crm.acme.test/',
+      iconUrl: 'javascript:alert(1)',
+    });
+    expect(res.statusCode).toBe(400);
+
+    const ok = await call('POST', '/api/admin/applications', {
+      name: 'CRM',
+      slug: 'crm',
+      launchUrl: 'https://crm.acme.test/',
+      iconUrl: 'https://crm.acme.test/icon.png',
+    });
+    expect(ok.statusCode).toBe(201);
+  });
+
+  it('names a duplicate slug as a conflict rather than as any error at all', async () => {
+    // The route used to turn every error out of createApplication into 409
+    // "That slug is already used", with the driver's message echoed into
+    // `detail`. A conflict is named; anything else is a fault and says so.
+    await newApp();
+    const conflict = await newApp();
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().type).toBe('https://syntra.dev/problems/slug-taken');
+  });
+
   it('refuses a portal session', async () => {
     const login = await ctx.app.inject({
       method: 'POST',

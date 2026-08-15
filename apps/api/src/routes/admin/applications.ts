@@ -65,13 +65,21 @@ export async function registerAdminApplicationRoutes(
         let application;
         try {
           application = await createApplication(tx, body);
-        } catch (cause) {
-          throw new ProblemError(
-            409,
-            'slug-taken',
-            'That slug is already used',
-            cause instanceof Error ? cause.message : undefined,
-          );
+        } catch (error) {
+          // Only the conflict the service raises by name. Catching everything
+          // told an administrator that a lost connection or a constraint they
+          // have never heard of was their own duplicate slug — and echoed the
+          // driver's message into `detail` to prove it. A fault is a fault:
+          // it goes up, and the problem-json handler answers 500.
+          if (error instanceof Error && /slug already exists/i.test(error.message)) {
+            throw new ProblemError(
+              409,
+              'slug-taken',
+              'That slug is already used',
+              error.message,
+            );
+          }
+          throw error;
         }
         await recordEvent(tx, {
           actorUserId: request.session.userId,

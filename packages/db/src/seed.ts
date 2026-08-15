@@ -189,12 +189,26 @@ await withTenant(tenant.id, async (tx) => {
   // factor is offered enrolment rather than refused — but a fresh install
   // should not push a developer through enrolment on their first sign-in
   // before they have seen anything. Turning it on is one click in the console.
+  //
+  // Named for what it actually matches, and matching somebody. It used to read
+  // "Finance, offsite, needs a second factor" while carrying neither an address
+  // condition nor anybody in Finance — the seeded departments are Care and
+  // Learning — so a developer who enabled it to watch MFA work saw nothing
+  // happen and concluded the policy engine was broken. Jo Doe's second contract
+  // is in Learning, which is the case worth demonstrating anyway: a rule about
+  // one of a person's jobs matches them even when it is not their primary one.
+  //
+  // There is no address condition because "offsite" cannot be written as one.
+  // `ipRanges` lists where a rule applies, so the office-network version of
+  // this is two ordered rules — an `allow` naming the office range, then this
+  // one — which is a thing to demonstrate in the console, not to ship enabled
+  // in a seed.
   await addRule(tx, {
-    name: 'Finance, offsite, needs a second factor',
+    name: 'Learning staff need a second factor',
     outcome: 'require_mfa',
     enabled: false,
     contractField: 'department',
-    contractValues: ['Finance'],
+    contractValues: ['Learning'],
   });
 
   console.log(`Seeded tenant ${tenant.slug} (${tenant.primaryDomain}).`);

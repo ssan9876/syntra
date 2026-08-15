@@ -9,6 +9,7 @@ import {
   beginTotpEnrolment,
   beginWebAuthnRegistration,
   confirmTotpEnrolment,
+  hasTotp,
   finishWebAuthnRegistration,
   findAttempt,
   localMasterKeyProvider,
@@ -142,9 +143,23 @@ export async function registerEnrolRoutes(
     const body = enrolBeginRequest.parse(request.body);
     const attempt = await attemptFor(request, body.attemptToken, 'totp');
 
-    const enrolment = await request.db((tx) =>
-      beginTotpEnrolment(tx, provider, attempt.userId),
-    );
+    // beginTotpEnrolment throws a plain Error when a *confirmed* credential
+    // already exists — two tabs, a double-click, or a factor enrolled from a
+    // signed-in session while this attempt was open. That is a conflict the
+    // caller can act on, not a server fault, and the sibling self-service
+    // route already answers it this way. A bare 500 here also prints a stack
+    // trace into the log for an ordinary double-click.
+    const enrolment = await request.db(async (tx) => {
+      if (await hasTotp(tx, attempt.userId)) {
+        throw new ProblemError(
+          409,
+          'already-enrolled',
+          'An authenticator app is already set up',
+          'Sign in with the code it shows, or remove it from your security settings first.',
+        );
+      }
+      return beginTotpEnrolment(tx, provider, attempt.userId);
+    });
     // QR encoding outside the transaction: pure CPU work with no business
     // inside Prisma's 5000 ms transaction budget.
     return { ...enrolment, qr: qrDataUrl(enrolment.uri) };

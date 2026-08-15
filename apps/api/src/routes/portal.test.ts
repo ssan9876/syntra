@@ -320,4 +320,49 @@ describe('POST /api/portal/applications/:id/launch', () => {
     expect(events).toHaveLength(1);
     expect(events[0]!.targetId).toBe(application.id);
   });
+
+  it('caps launches for the whole tenant, not only per address', async () => {
+    // A launch runs authorize() and can mint an attempt, so it is a
+    // credential-issuing endpoint whatever the URL looks like. It carried only
+    // the per-address limit, which is bounded by how many addresses the
+    // attacker has — the same reasoning that put the second dimension on every
+    // other route that reaches the chokepoint.
+    ctx = await buildTestApp({
+      env: { AUTH_RATE_LIMIT_MAX: '2', AUTH_RATE_LIMIT_TENANT_MAX: '4' },
+    });
+    await ctx.app.ready();
+    userId = await withTenant(ctx.tenantId, async (tx) => {
+      const u = await createUser(tx, {
+        login: 'jdoe',
+        email: 'j@acme.test',
+        displayName: 'J Doe',
+      });
+      await setPassword(tx, u.id, PASSWORD);
+      return u.id;
+    });
+    const signIn = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { host: ctx.host },
+      payload: { login: 'jdoe', password: PASSWORD },
+    });
+    cookie = signIn.cookies.find((c) => c.name === 'syntra_session')!.value;
+    const application = await assignedApp();
+
+    const codes: number[] = [];
+    // Six addresses, one launch each: nothing trips the per-address limit of
+    // two, so only the tenant ceiling can refuse any of them.
+    for (let i = 1; i <= 6; i++) {
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/portal/applications/${application.id}/launch`,
+        headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+        remoteAddress: `203.0.113.${i}`,
+      });
+      codes.push(res.statusCode);
+    }
+
+    expect(codes.slice(0, 4)).toEqual([200, 200, 200, 200]);
+    expect(codes.slice(4)).toEqual([429, 429]);
+  });
 });
