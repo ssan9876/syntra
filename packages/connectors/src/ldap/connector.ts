@@ -250,15 +250,22 @@ export const ldapConnector: Connector<Config> = {
     const client = await connect(config);
     try {
       for (const search of searches(config)) {
-        // Paged, and yielded as they arrive: a large directory must not
-        // become a large heap.
+        // Paged on the wire, but NOT streamed into memory. `search()` drains
+        // every page internally and hands back one complete array, which is
+        // then mapped into a second complete array before any of it is
+        // yielded — so one search base's worth of entries is resident at
+        // once, and the async-generator shape below buys nothing but a
+        // convenient interface.
+        //
+        // Real streaming means ldapts's separate `searchPaginated()`
+        // generator, which is a change to how failures and page boundaries
+        // are handled, not a swapped call. It is on the follow-up list.
         const records = await runSearch(
           client,
           search,
           {
-            // `search()` always drains every page itself (unlike the separate
-            // `searchPaginated()` generator); no extra option is needed to
-            // make it continue past the first page.
+            // No extra option is needed to make `search()` continue past the
+            // first page; it already does.
             paged: { pageSize: config.pageSize },
             attributes: ['*', config.anchorAttribute],
           },

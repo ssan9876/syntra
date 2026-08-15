@@ -75,6 +75,22 @@ describe('correlate', () => {
     expect(result[0]!.reason).toMatch(/another source/i);
   });
 
+  it('does not blame a second directory for a delete-and-recreate collision', () => {
+    // Same source, new anchor: the entry was deleted and recreated, so the
+    // name matches but the immutable id does not. Still a conflict, but an
+    // administrator told to look for "another source" would be hunting a
+    // directory that does not exist.
+    const result = correlate(
+      [obj('a2', 'jdoe')],
+      [existing('u1', 'jdoe', SOURCE, 'a1')],
+      SOURCE,
+    );
+    expect(result[0]!.kind).toBe('conflict');
+    if (result[0]!.kind !== 'conflict') return;
+    expect(result[0]!.reason).not.toMatch(/another source/i);
+    expect(result[0]!.reason).toMatch(/deleted and recreated/i);
+  });
+
   it('prefers the anchor over the correlation value', () => {
     // Two rows could both look plausible; the anchor is authoritative.
     const result = correlate(

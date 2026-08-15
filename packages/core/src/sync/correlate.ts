@@ -66,6 +66,24 @@ export function correlate(
       };
     }
 
+    // Same source, different anchor. The anchor lookup above already missed,
+    // so this is not the row this object came from: the directory entry was
+    // almost certainly deleted and recreated, which gives it a new immutable
+    // id under the same name. Still a conflict — adopting it silently would
+    // hand a fresh directory entry an existing account's history — but saying
+    // "another source" sends an administrator hunting for a second directory
+    // that does not exist.
+    if (candidate.sourceId === sourceId) {
+      return {
+        kind: 'conflict',
+        object,
+        existing: candidate,
+        reason:
+          'matches an object this source already owns under a different ' +
+          'identifier; the directory entry was probably deleted and recreated',
+      };
+    }
+
     return {
       kind: 'conflict',
       object,

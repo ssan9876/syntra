@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyBaseLogger } from 'fastify';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { SYNC_JOB, type Scheduler } from '@syntra/core';
-import { scheduleAllSyncSources } from './scheduler.js';
+import { SYNC_JOB, type Config, type Scheduler } from '@syntra/core';
+import { scheduleAllSyncSources, startSyncScheduler } from './scheduler.js';
 
 /**
  * A stub `Scheduler` that records every `schedule()` call instead of talking
@@ -146,5 +146,47 @@ describe('scheduleAllSyncSources', () => {
     await expect(scheduleAllSyncSources(scheduler, createFakeLogger())).resolves.toBeUndefined();
 
     expect(scheduler.calls).toHaveLength(0);
+  });
+});
+
+describe('startSyncScheduler', () => {
+  const config = {
+    databaseUrl: process.env.DATABASE_URL ?? '',
+    masterKey: Buffer.alloc(32, 7),
+  } as unknown as Config;
+
+  it('resolves with null rather than rejecting when the scheduler cannot start', async () => {
+    // server.ts states that a scheduling failure must never keep the API from
+    // coming up. pg-boss failing to start is the loudest way that could
+    // happen, so it is the one this asserts.
+    const scheduler = createFakeScheduler();
+    scheduler.start = async () => {
+      throw new Error('pg-boss could not reach the database');
+    };
+
+    await expect(
+      startSyncScheduler(config, createFakeLogger(), () => scheduler),
+    ).resolves.toBeNull();
+  });
+
+  it('starts the scheduler and hands it back when it comes up', async () => {
+    // Deliberately asserts on start() and the return value rather than on
+    // what got scheduled: scheduleAllSyncSources already has its own
+    // coverage above, and reaching for the database here would make this
+    // test order-dependent on the tenant-listing mock in that block.
+    const scheduler = createFakeScheduler();
+    let started = false;
+    scheduler.start = async () => {
+      started = true;
+    };
+
+    const result = await startSyncScheduler(
+      config,
+      createFakeLogger(),
+      () => scheduler,
+    );
+
+    expect(started).toBe(true);
+    expect(result).toBe(scheduler);
   });
 });

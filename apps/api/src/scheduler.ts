@@ -85,15 +85,36 @@ export async function scheduleAllSyncSources(
  * cron-bearing directory source across every tenant. See
  * `scheduleAllSyncSources` for the scheduling behaviour and its failure
  * handling.
+ *
+ * This never rejects, which is what `server.ts` relies on when it says a
+ * scheduling failure must not keep the API from coming up. `scheduler.start()`
+ * talks to PostgreSQL and creates pg-boss's queues, and it can fail for
+ * reasons that have nothing to do with whether people can sign in; when it
+ * does, that is logged and `null` is returned. An API serving sessions with
+ * sync unscheduled is strictly better than one that does not boot.
+ *
+ * Takes its scheduler factory as a parameter for the same reason
+ * `scheduleAllSyncSources` takes a `Scheduler`: so the failure path can be
+ * exercised without standing up pg-boss.
  */
 export async function startSyncScheduler(
   config: Config,
   logger: FastifyBaseLogger,
-): Promise<Scheduler> {
-  const scheduler = createScheduler(config.databaseUrl);
-  const provider = localMasterKeyProvider(config.masterKey);
-  registerSyncJobs(scheduler, provider);
-  await scheduler.start();
+  create: (databaseUrl: string) => Scheduler = createScheduler,
+): Promise<Scheduler | null> {
+  let scheduler: Scheduler;
+  try {
+    scheduler = create(config.databaseUrl);
+    const provider = localMasterKeyProvider(config.masterKey);
+    registerSyncJobs(scheduler, provider);
+    await scheduler.start();
+  } catch (cause) {
+    logger.error(
+      { err: cause },
+      'the background job scheduler failed to start; no directory sources were scheduled',
+    );
+    return null;
+  }
 
   await scheduleAllSyncSources(scheduler, logger);
 
