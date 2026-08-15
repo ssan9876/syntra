@@ -66,10 +66,62 @@ export async function createSession(
   return { token, expiresAt: absoluteExpiresAt };
 }
 
+/** The shape both readers work from. */
+interface SessionRow {
+  id: string;
+  userId: string;
+  scope: string;
+  satisfiedFactor: string | null;
+  lastSeenAt: Date;
+  absoluteExpiresAt: Date;
+  revokedAt: Date | null;
+}
+
+/**
+ * Whether a session row still authorises anything, asked in one place.
+ *
+ * Four conditions, and the fourth is the one that is easy to forget: the
+ * account behind the session must still be active. Deactivation revokes every
+ * session it can see (see `deactivateUser`), but a session that predates that
+ * fix — or one created by a path that forgets — would otherwise keep working
+ * until it expired, and for an administrator that is two hours of privileged
+ * writes after they were offboarded. Revocation closes the window going
+ * forward; this closes it for everything already issued.
+ *
+ * The user is read rather than joined because Session carries no relation to
+ * User. One extra indexed lookup per authenticated request is the price of
+ * offboarding taking effect at the next request instead of at the next
+ * expiry.
+ */
+async function isLive(
+  tx: TenantClient,
+  row: SessionRow,
+  now: number,
+): Promise<boolean> {
+  if (row.revokedAt) return false;
+  if (row.absoluteExpiresAt.getTime() <= now) return false;
+
+  const scope = row.scope as SessionScope;
+  if (now - row.lastSeenAt.getTime() > IDLE_TIMEOUT_MS[scope]) return false;
+
+  const user = await tx.user.findUnique({ where: { id: row.userId } });
+  if (!user || user.status !== 'active') return false;
+
+  return true;
+}
+
+const toResolved = (row: SessionRow): ResolvedSession => ({
+  sessionId: row.id,
+  userId: row.userId,
+  scope: row.scope as SessionScope,
+  satisfiedFactor: row.satisfiedFactor,
+});
+
 /**
  * Returns the session only if it is live: not revoked, within its absolute
- * lifetime, and not idle past its scope's timeout. Any failure returns null
- * rather than distinguishing why, since the caller's response is the same.
+ * lifetime, not idle past its scope's timeout, and belonging to an account
+ * that is still active. Any failure returns null rather than distinguishing
+ * why, since the caller's response is the same.
  */
 export async function resolveSession(
   tx: TenantClient,
@@ -78,25 +130,17 @@ export async function resolveSession(
   const row = await tx.session.findFirst({
     where: { tokenHash: hashToken(token) },
   });
-  if (!row || row.revokedAt) return null;
+  if (!row) return null;
 
   const now = Date.now();
-  if (row.absoluteExpiresAt.getTime() <= now) return null;
-
-  const scope = row.scope as SessionScope;
-  if (now - row.lastSeenAt.getTime() > IDLE_TIMEOUT_MS[scope]) return null;
+  if (!(await isLive(tx, row, now))) return null;
 
   await tx.session.update({
     where: { id: row.id },
     data: { lastSeenAt: new Date() },
   });
 
-  return {
-    sessionId: row.id,
-    userId: row.userId,
-    scope,
-    satisfiedFactor: row.satisfiedFactor,
-  };
+  return toResolved(row);
 }
 
 /**
@@ -114,20 +158,9 @@ export async function readSession(
   sessionId: string,
 ): Promise<ResolvedSession | null> {
   const row = await tx.session.findUnique({ where: { id: sessionId } });
-  if (!row || row.revokedAt) return null;
-
-  const now = Date.now();
-  if (row.absoluteExpiresAt.getTime() <= now) return null;
-
-  const scope = row.scope as SessionScope;
-  if (now - row.lastSeenAt.getTime() > IDLE_TIMEOUT_MS[scope]) return null;
-
-  return {
-    sessionId: row.id,
-    userId: row.userId,
-    scope,
-    satisfiedFactor: row.satisfiedFactor,
-  };
+  if (!row) return null;
+  if (!(await isLive(tx, row, Date.now()))) return null;
+  return toResolved(row);
 }
 
 export async function revokeSession(
@@ -140,7 +173,10 @@ export async function revokeSession(
   });
 }
 
-/** Used after a password change: every existing session stops working. */
+/**
+ * Used after a password change or a deactivation: every existing session stops
+ * working.
+ */
 export async function revokeAllForUser(
   tx: TenantClient,
   userId: string,
