@@ -1,6 +1,10 @@
 import type { TenantClient } from '@syntra/db';
 import { withTenant } from '@syntra/db';
-import { ldapConnector, type SourceRecord } from '@syntra/connectors';
+import {
+  ldapConnector,
+  type ObjectType,
+  type SourceRecord,
+} from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { mappingsFor, sourceWithPassword } from './source-service.js';
@@ -145,6 +149,8 @@ export async function previewRun(
           requiresConfirmation: computed.verdict.blocked,
           recordsRead: records.length,
           unresolvedMembers: computed.unresolvedMembers,
+          mappingFailures: computed.mappingFailures,
+          mappingFailureReasons: computed.mappingFailureReasons,
           finishedAt: new Date(),
         },
       });
@@ -193,12 +199,42 @@ interface DiffInput {
 function computeDiff(input: DiffInput) {
   const objects: DirectoryObject[] = [];
 
+  // Anchors the source returned but that we could not turn into an object,
+  // partitioned by type exactly as the correlation loop below is. These are
+  // *not* absent: a record we failed to understand is still a record the
+  // source has, and treating it as absent proposes deactivating a real person
+  // on the strength of our own failure.
+  const unmappable: Record<ObjectType, Set<string>> = {
+    user: new Set(),
+    group: new Set(),
+    orgUnit: new Set(),
+  };
+  const failureReasons: string[] = [];
+  let mappingFailures = 0;
+
+  const unmappableAnchors = new Set<string>();
+
+  const failed = (record: SourceRecord, reason: string) => {
+    mappingFailures++;
+    unmappable[record.objectType].add(record.anchor);
+    unmappableAnchors.add(record.anchor);
+    if (!failureReasons.includes(reason)) failureReasons.push(reason);
+  };
+
   for (const record of input.records) {
     const mapped = mapRecord(record, input.rules);
-    if (!isMappingFailure(mapped)) objects.push(mapped);
+    // The anchor and the object type come from the record, not the failure:
+    // the failure only knows what went wrong, and the set has to be keyed the
+    // same way the per-type loop reads it.
+    if (isMappingFailure(mapped)) failed(record, mapped.reason);
+    else objects.push(mapped);
   }
 
-  const dnToAnchor = new Map(objects.map((o) => [o.dn, o.anchor]));
+  // Built from every record the source returned, not only the ones that
+  // mapped. A member's anchor is known the moment the source names it; losing
+  // that because some other attribute was missing would report a member the
+  // source plainly returned as unresolved.
+  const dnToAnchor = new Map(input.records.map((r) => [r.dn, r.anchor]));
   let unresolvedMembers = 0;
   const changes: ProposedChange[] = [];
 
@@ -206,19 +242,34 @@ function computeDiff(input: DiffInput) {
     const ofType = objects.filter((o) => o.objectType === type);
     const rows = input.existing.objects.filter((e) => e.objectType === type);
     const correlations = correlate(ofType, rows, input.sourceId);
-    const absent = absentAnchors(ofType, rows, input.sourceId);
+    const absent = absentAnchors(ofType, rows, input.sourceId, unmappable[type]);
     changes.push(...diffObjects(correlations, absent, input.existing.fields));
   }
+
+  const membersNow = new Map(
+    input.currentMemberships.map((m) => [m.groupAnchor, new Set(m.memberAnchors)]),
+  );
 
   const desired: MembershipState[] = objects
     .filter((o) => o.objectType === 'group')
     .map((group) => {
+      const now = membersNow.get(group.anchor) ?? new Set<string>();
       const memberAnchors: string[] = [];
+
       for (const dn of group.memberDns) {
         const anchor = dnToAnchor.get(dn);
-        if (anchor) memberAnchors.push(anchor);
-        else unresolvedMembers++;
+        if (!anchor) {
+          unresolvedMembers++;
+          continue;
+        }
+        // A member we could not map is left exactly as it stands: kept if
+        // Syntra already holds the membership, not proposed if it does not.
+        // Revoking someone's access because one of their attributes went
+        // missing is the same mistake as deactivating them for it.
+        if (unmappableAnchors.has(anchor) && !now.has(anchor)) continue;
+        memberAnchors.push(anchor);
       }
+
       return { groupAnchor: group.anchor, memberAnchors };
     });
 
@@ -241,7 +292,15 @@ function computeDiff(input: DiffInput) {
     thresholdPercent: input.thresholdPercent,
   });
 
-  return { changes, unresolvedMembers, verdict };
+  return {
+    changes,
+    unresolvedMembers,
+    mappingFailures,
+    // Distinct, and capped: an outage that fails every record produces one
+    // reason repeated, and the page needs a list an administrator can read.
+    mappingFailureReasons: failureReasons.slice(0, 10),
+    verdict,
+  };
 }
 
 /**

@@ -136,4 +136,26 @@ describe('absentAnchors', () => {
     );
     expect(gone).toEqual([]);
   });
+
+  it('does not report a record the source returned but we could not map', () => {
+    // Absence means the source no longer has the object, not that we failed
+    // to understand it. Otherwise one missing attribute reads as a departure.
+    const gone = absentAnchors(
+      [],
+      [existing('u1', 'jdoe', SOURCE, 'a1')],
+      SOURCE,
+      new Set(['a1']),
+    );
+    expect(gone).toEqual([]);
+  });
+
+  it('still reports a row whose anchor was in neither the read nor the failures', () => {
+    const gone = absentAnchors(
+      [],
+      [existing('u1', 'jdoe', SOURCE, 'a1'), existing('u2', 'sroe', SOURCE, 'a2')],
+      SOURCE,
+      new Set(['a1']),
+    );
+    expect(gone.map((e) => e.id)).toEqual(['u2']);
+  });
 });

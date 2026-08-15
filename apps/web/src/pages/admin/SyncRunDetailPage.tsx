@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import type { SyncRunSummary } from '@syntra/contracts';
 import { api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -17,17 +18,8 @@ interface Change {
   message: string | null;
 }
 
-interface RunDetail {
-  id: string;
-  sourceId: string;
-  status: string;
-  startedAt: string;
-  finishedAt: string | null;
-  recordsRead: number;
-  requiresConfirmation: boolean;
-  blockedReason: string | null;
-  error: string | null;
-  unresolvedMembers: number;
+/** The run as the API returns it, plus the changes the detail route joins on. */
+interface RunDetail extends SyncRunSummary {
   changes: Change[];
 }
 
@@ -113,7 +105,16 @@ export function SyncRunDetailPage() {
     <>
       <PageHeader
         title="Sync run"
-        description={`${sourceName} — ${data.recordsRead} records read, ${data.changes.length} proposed changes`}
+        // A run that read 5,000 records and mapped 4,900 is not a clean run,
+        // so the shortfall is in the same sentence as the total rather than
+        // buried further down the page.
+        description={
+          `${sourceName} — ${data.recordsRead} records read` +
+          (data.mappingFailures > 0
+            ? `, ${data.mappingFailures} not mapped`
+            : '') +
+          `, ${data.changes.length} proposed changes`
+        }
         actions={
           <Button
             variant="primary"
@@ -142,6 +143,29 @@ export function SyncRunDetailPage() {
         )}
 
         {applyError && <Alert tone="danger">{applyError}</Alert>}
+
+        {data.mappingFailures > 0 && (
+          // These records were read but could not be understood. They are
+          // deliberately not proposed for deactivation — absence has to mean
+          // the source dropped them, not that we failed to map them — so this
+          // alert is the only place they are visible at all.
+          <Alert
+            tone="warning"
+            title={`${data.mappingFailures} of ${data.recordsRead} records could not be mapped`}
+          >
+            <p>
+              They were left exactly as they are: nothing was proposed for
+              them, and none of them counts as absent from the source.
+            </p>
+            {data.mappingFailureReasons.length > 0 && (
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {data.mappingFailureReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            )}
+          </Alert>
+        )}
 
         {data.unresolvedMembers > 0 && (
           <Alert tone="warning" title="Some memberships could not be resolved">

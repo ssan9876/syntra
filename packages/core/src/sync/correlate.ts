@@ -78,11 +78,20 @@ export function correlate(
 /**
  * Rows this source owns that were not seen in this read, and are still active.
  * Locally managed rows and rows owned by another source are never touched.
+ *
+ * `seenButUnmappable` holds the anchors of records the source *did* return but
+ * that could not be turned into a `DirectoryObject` — a missing correlation
+ * attribute, a membership the connector could not read in full. Absence has to
+ * mean "the source no longer has this object", not "we failed to understand
+ * it": without this, a schema change at the source that drops one attribute
+ * from a subset of the directory proposes deactivating exactly those people.
+ * A record the source returned is present, whatever we failed to make of it.
  */
 export function absentAnchors(
   objects: DirectoryObject[],
   existing: ExistingObject[],
   sourceId: string,
+  seenButUnmappable: ReadonlySet<string> = new Set(),
 ): ExistingObject[] {
   const seen = new Set(objects.map((o) => o.anchor));
   return existing.filter(
@@ -90,6 +99,7 @@ export function absentAnchors(
       row.sourceId === sourceId &&
       row.sourceAnchor !== null &&
       !seen.has(row.sourceAnchor) &&
+      !seenButUnmappable.has(row.sourceAnchor) &&
       row.status === 'active',
   );
 }

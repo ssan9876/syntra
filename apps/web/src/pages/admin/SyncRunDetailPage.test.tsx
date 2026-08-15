@@ -14,6 +14,8 @@ const run = (overrides: Record<string, unknown> = {}) => ({
   blockedReason: null,
   error: null,
   unresolvedMembers: 0,
+  mappingFailures: 0,
+  mappingFailureReasons: [],
   changes: [
     {
       id: 'c1',
@@ -135,6 +137,26 @@ describe('SyncRunDetailPage', () => {
     renderPage();
 
     expect(await screen.findByText(/3 group members/i)).toBeInTheDocument();
+  });
+
+  it('says plainly when records could not be mapped, with the reason', async () => {
+    mockFetch({
+      run: run({
+        recordsRead: 5000,
+        mappingFailures: 100,
+        mappingFailureReasons: [
+          'the correlation attribute is missing from this record',
+        ],
+      }),
+    });
+    renderPage();
+
+    expect(
+      await screen.findByText(/100 of 5000 records could not be mapped/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/correlation attribute is missing/i),
+    ).toBeInTheDocument();
   });
 
   it('says plainly when a run proposed nothing', async () => {

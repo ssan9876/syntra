@@ -24,3 +24,25 @@ export const setMappingsRequest = z.object({
 export const applyRunRequest = z.object({
   only: z.array(z.string().uuid()).optional(),
 });
+
+/**
+ * What a `SyncRun` looks like over the wire. The counts are the honest report
+ * of the run: `recordsRead` alone reads as a clean run even when a tenth of
+ * the directory could not be mapped, so `mappingFailures` sits beside it and
+ * carries its reasons.
+ */
+export const syncRunSummary = z.object({
+  id: z.string(),
+  sourceId: z.string(),
+  status: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  recordsRead: z.number(),
+  mappingFailures: z.number(),
+  mappingFailureReasons: z.array(z.string()),
+  unresolvedMembers: z.number(),
+  requiresConfirmation: z.boolean(),
+  blockedReason: z.string().nullable(),
+  error: z.string().nullable(),
+});
+export type SyncRunSummary = z.infer<typeof syncRunSummary>;

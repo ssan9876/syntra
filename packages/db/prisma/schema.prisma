@@ -295,6 +295,14 @@ model SyncRun {
   blockedReason        String?
   error                String?
   unresolvedMembers    Int       @default(0)
+  /// Records the source returned that could not be turned into a directory
+  /// object — a missing correlation attribute, a membership the connector
+  /// could not read in full. They are deliberately NOT treated as absent, so
+  /// a schema change at the source cannot propose deactivating real people.
+  mappingFailures      Int       @default(0)
+  /// The distinct reasons behind `mappingFailures`, so a count on the run
+  /// page comes with something an administrator can act on.
+  mappingFailureReasons String[] @default([])
 
   changes SyncChange[]
 

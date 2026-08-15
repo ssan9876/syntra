@@ -92,6 +92,45 @@ describe('previewRun', () => {
     expect(conflicts[0]!.message).toMatch(/locally managed/i);
   });
 
+  it('never proposes deactivating a record it merely failed to map', async () => {
+    // The failure mode this whole subsystem exists to prevent, arriving
+    // through the mapping door: an attribute disappears from a subset of the
+    // directory, those records stop mapping, and — before this — every one of
+    // them looked absent and was proposed for deactivation.
+    const first = await previewRun(tenantId, provider, sourceId);
+    await applyRun(tenantId, first.id);
+
+    await withTenant(tenantId, (tx) =>
+      setMappings(
+        tx,
+        sourceId,
+        DEFAULT_MAPPINGS.openLdap.map((rule) =>
+          rule.objectType === 'user' && rule.isCorrelation
+            ? { ...rule, sourceAttribute: 'attributeTheServerStoppedSending' }
+            : rule,
+        ),
+      ),
+    );
+
+    const second = await previewRun(tenantId, provider, sourceId);
+
+    expect(second.status).toBe('previewed');
+    expect(second.mappingFailures).toBe(2);
+    expect(second.mappingFailureReasons).toEqual([
+      'the correlation attribute is missing from this record',
+    ]);
+
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: second.id } }),
+    );
+    expect(changes.filter((c) => c.changeType === 'deactivate_user')).toEqual([]);
+    // Nor are their group memberships quietly revoked instead.
+    expect(changes.filter((c) => c.changeType === 'remove_member')).toEqual([]);
+
+    const users = await withTenant(tenantId, (tx) => tx.user.findMany());
+    expect(users.every((u) => u.status === 'active')).toBe(true);
+  });
+
   it('completes when the directory read takes longer than a transaction may', async () => {
     // Prisma's default interactive-transaction timeout is 5 seconds. A read
     // that takes longer than that must still produce a previewed run, which
