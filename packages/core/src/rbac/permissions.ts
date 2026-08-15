@@ -12,6 +12,8 @@ export const PERMISSIONS = {
   SECRETS_WRITE: 'secrets.write',
   RBAC_MANAGE: 'rbac.manage',
   TENANT_MANAGE: 'tenant.manage',
+  SYNC_READ: 'sync.read',
+  SYNC_MANAGE: 'sync.manage',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
