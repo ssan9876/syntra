@@ -474,11 +474,20 @@ async function decide(
     // so this is not a step backwards — but it is visible after the fact,
     // which is why the enrolment writes its own audit event naming the
     // forced-enrolment challenge it happened under.
-    const offerable = enrollableFactorTypes().filter((type) =>
-      decision.outcome === 'require_factor' && decision.factorType
-        ? type === decision.factorType
-        : true,
-    );
+    const offerable = enrollableFactorTypes().filter((type) => {
+      // A tenant with no primary domain has no relying party, so a security
+      // key cannot be registered against it — the WebAuthn endpoints refuse
+      // with a 409 the user standing at the enrolment screen can do nothing
+      // about. `policy-service.ts` catches this at write time for a rule that
+      // names WebAuthn, where an administrator is there to read the message;
+      // a plain `require_mfa` rule reaches the same dead end by another door,
+      // and offering the type at all is what walks the user into it.
+      if (type === 'webauthn' && !tenant.primaryDomain) return false;
+      if (decision.outcome === 'require_factor' && decision.factorType) {
+        return type === decision.factorType;
+      }
+      return true;
+    });
 
     if (tenant.selfEnrolmentEnabled && offerable.length > 0) {
       const attempt = await issueAttempt(tx, {

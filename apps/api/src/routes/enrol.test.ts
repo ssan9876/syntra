@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import * as OTPAuth from 'otpauth';
 import { prisma, withTenant } from '@syntra/db';
 import { addRule, createUser, generateRecoveryCodes, setPassword } from '@syntra/core';
-import { buildTestApp } from '../test-support.js';
+import { TEST_HOST, buildTestApp } from '../test-support.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 let userId: string;
@@ -49,11 +49,24 @@ describe('a login that requires a factor the user does not hold', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: 'enrol' });
-    expect(res.json().enrollableFactors).toEqual(
-      expect.arrayContaining(['totp', 'webauthn']),
-    );
+    // Only what this tenant can actually register. It has no primary domain,
+    // so it has no relying party, and offering a security key would send the
+    // user to an endpoint that answers 409 with nothing they can do about it.
+    expect(res.json().enrollableFactors).toEqual(['totp']);
     // The password was right, but nothing has been granted.
     expect(cookieOf(res)).toBeUndefined();
+  });
+
+  it('offers a security key once the tenant has a primary domain', async () => {
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { primaryDomain: TEST_HOST },
+    });
+    await requireMfa();
+
+    expect((await login()).json().enrollableFactors).toEqual(
+      expect.arrayContaining(['totp', 'webauthn']),
+    );
   });
 
   it('never offers recovery codes as the factor to enrol', async () => {

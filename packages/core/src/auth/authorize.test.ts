@@ -688,13 +688,33 @@ describe('authorize — forced enrolment', () => {
 
     expect(result).toMatchObject({
       status: 'enrol',
-      enrollableFactors: ['totp', 'webauthn'],
+      // Not WebAuthn: this tenant has no primary domain, so it has no relying
+      // party and a key cannot be registered against it. See below.
+      enrollableFactors: ['totp'],
     });
 
     const events = await auditActions();
     expect(events.some((e) => e.action === 'auth.enrolment_required')).toBe(
       true,
     );
+  });
+
+  it('does not offer a security key to a tenant that cannot register one', async () => {
+    // The dead end this closes: with no primary domain there is no relying
+    // party, the WebAuthn endpoints answer 409, and the user is looking at an
+    // enrolment screen offering the one option that cannot work. A rule that
+    // names WebAuthn is refused at write time for the same reason; a plain
+    // require_mfa rule arrives at it by another door.
+    await requireMfa();
+    expect(await signIn()).toMatchObject({ enrollableFactors: ['totp'] });
+
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { primaryDomain: 'acme.syntra.test' },
+    });
+    expect(await signIn()).toMatchObject({
+      enrollableFactors: ['totp', 'webauthn'],
+    });
   });
 
   it('denies instead when the tenant has turned self-enrolment off', async () => {
