@@ -11,12 +11,16 @@ Self-hosted, multi-tenant, Apache-2.0.
 The platform **Core** is built and tested: multi-tenancy, a directory, the
 person and contract model, role-based access control, a tamper-evident audit
 log, a secrets vault, a job scheduler, notifications, and an administration
-console. Access Management and the modules after it are designed but not yet
+console. **Directory Sync** is also built: an LDAP source can be read,
+mapped, and correlated against the directory, with every run previewed as a
+reviewable diff and guarded against mass deactivation before anything is
+applied. Access Management and the modules after it are designed but not yet
 implemented.
 
 | Module | Status | Contents |
 |---|---|---|
 | **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications, web console |
+| **Directory Sync** | built | LDAP/OpenLDAP connector, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, source and run administration screens |
 | **Access** | planned | SAML 2.0 IdP, OpenID Connect provider, upstream federation, application catalog, MFA, authentication policies, self-service password reset |
 | **Provision** | planned | Source systems, business rules, evaluation and enforcement, target systems, entitlements |
 | **Automate** | planned | Product catalog, self-service requests, approval workflows, delegated forms |
@@ -95,6 +99,30 @@ fixtures behind that fool the seed into thinking the tenant is already
 populated. And start the stack with `AUTH_RATE_LIMIT_MAX` raised, since the
 suite signs in far more often in a minute than a person would and the default
 limit is right to refuse it.
+
+### Connecting a directory source
+
+`infra/docker-compose.yml` already runs an OpenLDAP container for
+development (`ldap://localhost:1389`, seeded from `infra/ldap/seed.ldif`), so
+there is a real directory to sync against without standing anything up
+yourself.
+
+A source is created with `POST /api/admin/sources`, with its attribute
+mappings set through `PUT /api/admin/sources/:id/mappings`; the console's
+**Directory sources** page lists sources and their last run today, and
+creating one from the console is a later piece of work. Either way, the bind
+password goes into the secrets vault, not into the source's stored `config`
+— the API only ever accepts it, never returns it.
+
+A run always previews before it applies. `POST /api/admin/sources/:id/run`
+reads the directory, correlates it against what Syntra already holds, and
+writes a reviewable diff — creates, updates, deactivations, and membership
+changes, grouped by type on the **Sync runs** review screen — without
+touching anything yet. A guard blocks the run outright if it would deactivate
+an outsized share of the users it owns, or if the source returned no records
+at all, so a misconfigured filter or a directory outage can't be applied by
+mistake. Only an explicit `POST /api/admin/sync-runs/:id/apply`, from that
+same review screen, writes the changes.
 
 ## License
 
