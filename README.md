@@ -111,7 +111,18 @@ server with `vite --host 127.0.0.1`.
 `infra/docker-compose.yml` already runs an OpenLDAP container for
 development (`ldap://localhost:1389`, seeded from `infra/ldap/seed.ldif`), so
 there is a real directory to sync against without standing anything up
-yourself.
+yourself. The same container serves StartTLS on that port and LDAPS on
+`ldaps://localhost:1636`, with a self-signed certificate.
+
+A source's `config` carries a `tlsMode` — `plain`, `starttls` or `ldaps`.
+StartTLS completes before the bind, so the bind password never crosses the
+wire in the clear; `plain` means it does, and the **Directory sources** page
+says so in as many words. Left out, the mode is read from the URL scheme, so
+a source saved before the field existed keeps the transport it had. Server
+certificates are verified unless a source sets `rejectUnauthorized: false`,
+which the same page flags. The mode and the scheme have to agree: an
+`ldaps://` URL with any other mode is refused rather than quietly
+reinterpreted.
 
 A source is created with `POST /api/admin/sources`, with its attribute
 mappings set through `PUT /api/admin/sources/:id/mappings`; the console's

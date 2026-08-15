@@ -27,6 +27,17 @@ services:
       LDAP_ORGANISATION: Acme Care
       LDAP_DOMAIN: acme.test
       LDAP_ADMIN_PASSWORD: adminpassword
+      # The image generates a self-signed certificate and serves both LDAPS
+      # (636) and StartTLS (389) with it. Its default `demand` would also
+      # require a client certificate, which drops the socket mid-handshake
+      # for any client that has none -- so StartTLS could not be exercised at
+      # all. `try` keeps the server's certificate mandatory and the client's
+      # optional, which is what an ordinary LDAP deployment does.
+      LDAP_TLS_VERIFY_CLIENT: try
     volumes:
       - ./ldap:/container/service/slapd/assets/config/bootstrap/ldif/custom:ro
-    ports: ['1389:389']
+    # 636 is mapped so the LDAPS path is testable too. The certificate is
+    # self-signed, so a test that connects to either port has to say
+    # `rejectUnauthorized: false` deliberately -- which is the point: with
+    # verification left at its default, both refuse to connect.
+    ports: ['1389:389', '1636:636']
