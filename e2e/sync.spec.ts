@@ -298,6 +298,13 @@ test('a directory source is created, tested, mapped, run, partly applied and ski
     page.getByRole('heading', { name: 'Create group (1)' }),
   ).toBeVisible();
 
+  // Everything the source returned was understood. A run with mapping
+  // failures is not a clean run whatever recordsRead says, and the review
+  // screen is the only place those records are visible at all -- so their
+  // absence is what says nothing was silently dropped.
+  await expect(page.getByText(/could not be mapped/i)).toHaveCount(0);
+  await expect(page.getByText(/could not be resolved/i)).toHaveCount(0);
+
   // Skip one proposed change outright. It is recorded as skipped on the run
   // and never applied.
   const clerkRow = page.getByRole('row').filter({ hasText: CLERK_UID });
@@ -377,4 +384,18 @@ test('deleting a source states what it will deactivate before it will do it', as
   await expect(remove).toBeDisabled();
   await panel.getByRole('checkbox').check();
   await expect(remove).toBeEnabled();
+
+  // Driven to completion, because the half of this that matters is what the
+  // button actually does. The source goes; the accounts it owned stay, and
+  // are deactivated with a reason naming it.
+  await remove.click();
+  await expect(page).toHaveURL(/\/admin\/sources$/);
+  await expect(page.getByText(SOURCE_NAME)).toHaveCount(0);
+
+  await page.goto('/admin/users');
+  const nurse = page.getByRole('row').filter({ hasText: NURSE_UID });
+  await expect(nurse).toContainText('Inactive');
+  await expect(nurse).toContainText(SOURCE_NAME);
+  // Detached, so the row no longer claims a source that no longer exists.
+  await expect(nurse).toContainText('Syntra');
 });
