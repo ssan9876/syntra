@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { SessionProvider, useSession } from '../session/SessionProvider.js';
 import { Elevate } from './Elevate.js';
+import { takeChallenge } from '../mfa/challenge-store.js';
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -54,6 +55,8 @@ const renderElevate = () =>
         <Routes>
           <Route path="/elevate" element={<Elevate />} />
           <Route path="/admin/users" element={<h1>Console</h1>} />
+          <Route path="/mfa" element={<h1>Step up</h1>} />
+          <Route path="/enrol" element={<h1>Enrol</h1>} />
         </Routes>
       </SessionProvider>
     </MemoryRouter>,
@@ -97,7 +100,7 @@ describe('Elevate', () => {
       json({
         status: 'challenge',
         attemptToken: 'tok',
-        expiresAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
         acceptableFactors: ['totp'],
       }),
     );
@@ -105,11 +108,20 @@ describe('Elevate', () => {
     await screen.findByText('portal:directory.read');
     await submit();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /second factor/i,
-    );
-    // Still on the elevate screen, and still the session they arrived with.
+    // Hands off to the step-up screen rather than into the console.
+    expect(await screen.findByRole('heading', { name: 'Step up' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Console' })).toBeNull();
+
+    // The challenge carries the administrative destination, so satisfying the
+    // factor does not also cost them the page the guard bounced them from.
+    expect(takeChallenge()).toMatchObject({
+      kind: 'verify',
+      attemptToken: 'tok',
+      factors: ['totp'],
+      returnTo: '/admin/users',
+    });
+
+    // And the portal session they arrived with is untouched.
     expect(screen.getByTestId('probe')).toHaveTextContent(
       'portal:directory.read',
     );
@@ -120,7 +132,7 @@ describe('Elevate', () => {
       json({
         status: 'enrol',
         attemptToken: 'tok',
-        expiresAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
         enrollableFactors: ['totp'],
       }),
     );
@@ -128,10 +140,13 @@ describe('Elevate', () => {
     await screen.findByText('portal:directory.read');
     await submit();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /not registered/i,
-    );
+    expect(await screen.findByRole('heading', { name: 'Enrol' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Console' })).toBeNull();
+    expect(takeChallenge()).toMatchObject({
+      kind: 'enrol',
+      factors: ['totp'],
+      returnTo: '/admin/users',
+    });
     expect(screen.getByTestId('probe')).toHaveTextContent(
       'portal:directory.read',
     );
