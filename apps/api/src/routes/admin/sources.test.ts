@@ -204,4 +204,41 @@ describe('runs', () => {
     );
     expect(res.statusCode).toBe(403);
   });
+
+  it('returns a 404, not a 500, when applying a run that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+
+    const res = await post(
+      '/api/admin/sync-runs/00000000-0000-0000-0000-000000000000/apply',
+      cookie,
+    );
+    expect(res.statusCode).toBe(404);
+    expect(res.json().type).toContain('not-found');
+  });
+
+  it('refuses to apply a blocked run', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+
+    // Filters that match nothing across both object types make the source
+    // return zero records, which trips the guard's zero-records branch. The
+    // fixture config here has no orgUnitSearchBase, so the org-unit search
+    // never runs and zeroing these two filters is enough.
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Empty',
+      config: {
+        ...config,
+        userFilter: '(objectClass=nothingAtAll)',
+        groupFilter: '(objectClass=nothingAtAll)',
+      },
+      bindPassword: 'adminpassword',
+    });
+    const id = created.json().id;
+
+    const run = await post(`/api/admin/sources/${id}/run`, cookie);
+    expect(run.json().status).toBe('blocked');
+
+    const res = await post(`/api/admin/sync-runs/${run.json().id}/apply`, cookie);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toContain('run-blocked');
+  });
 });

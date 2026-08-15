@@ -52,6 +52,14 @@ export async function registerAdminSyncRunRoutes(
       const { id } = idParam.parse(request.params);
       const body = applyRunRequest.parse(request.body ?? {});
 
+      // Checked here, structurally, rather than by matching applyRun's error
+      // message: a missing run is a 404, and it should not depend on string
+      // matching to be told apart from a blocked one.
+      const existing = await request.db((tx) =>
+        tx.syncRun.findUnique({ where: { id } }),
+      );
+      if (!existing) throw new ProblemError(404, 'not-found', 'Run not found');
+
       // applyRun takes a tenantId, not a caller's transaction: it opens a
       // fresh transaction per change, since PostgreSQL aborts a transaction
       // on the first error and a shared transaction could not then mark that
