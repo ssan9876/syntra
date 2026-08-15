@@ -118,11 +118,22 @@ A run always previews before it applies. `POST /api/admin/sources/:id/run`
 reads the directory, correlates it against what Syntra already holds, and
 writes a reviewable diff — creates, updates, deactivations, and membership
 changes, grouped by type on the **Sync runs** review screen — without
-touching anything yet. A guard blocks the run outright if it would deactivate
-an outsized share of the users it owns, or if the source returned no records
-at all, so a misconfigured filter or a directory outage can't be applied by
-mistake. Only an explicit `POST /api/admin/sync-runs/:id/apply`, from that
-same review screen, writes the changes.
+touching anything yet. Only an explicit `POST /api/admin/sync-runs/:id/apply`,
+from that same review screen, writes the changes.
+
+A guard stands between the two. A run that read **no records** is refused
+outright: an empty directory and an unreachable one look the same from here,
+and the safe reading is the second. A run that would deactivate an outsized
+share of the users, groups or group memberships this source owns — each
+measured against its own population, so a filter that returns no groups
+cannot hide behind the user count — is refused *pending confirmation*: the
+review screen states the numbers, and an administrator has to tick the box
+before Apply does anything. `autoApply` never satisfies that, because an
+unattended schedule is precisely when nobody is watching.
+
+Records the source returned but that could not be mapped are counted and
+named on the run, and are never treated as absent. A missing attribute is our
+failure to understand a record, not evidence that the person has left.
 
 ## License
 
