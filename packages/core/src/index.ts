@@ -21,7 +21,15 @@ export * from './auth/session-service.js';
 // evaluation, second factors and the audit event. authorize() is the door.
 export type { AuthFailure, AuthResult } from './auth/login-service.js';
 export * from './auth/authorize.js';
-export * from './auth/attempt-service.js';
+// Only the read. `issueAttempt` plus `authorize({ kind: 'continue' })` is a
+// second door into an allow: an attempt issued by hand names its own userId,
+// scope and required factor, and satisfying it yields a session at that scope
+// with no primary authentication and no policy evaluation ever having run.
+// Nothing calls it today; Access II adds exactly the protocol adapters the
+// spec says must not have a second way in. The routes legitimately read an
+// attempt to find out what it was for, so that much is exported.
+export { findAttempt } from './auth/attempt-service.js';
+export type { AttemptPurpose, ResolvedAttempt } from './auth/attempt-service.js';
 export * from './auth/mfa/relying-party.js';
 export * from './auth/mfa/types.js';
 export * from './auth/mfa/registry.js';
