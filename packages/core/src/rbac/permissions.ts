@@ -14,6 +14,10 @@ export const PERMISSIONS = {
   TENANT_MANAGE: 'tenant.manage',
   SYNC_READ: 'sync.read',
   SYNC_MANAGE: 'sync.manage',
+  ACCESS_READ: 'access.read',
+  ACCESS_MANAGE: 'access.manage',
+  POLICY_READ: 'policy.read',
+  POLICY_MANAGE: 'policy.manage',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

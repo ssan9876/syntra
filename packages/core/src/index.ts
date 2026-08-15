@@ -56,3 +56,6 @@ export * from './sync/source-service.js';
 export * from './sync/run-service.js';
 export * from './sync/apply.js';
 export * from './sync/jobs.js';
+export * from './access/application-service.js';
+export * from './access/assignment-service.js';
+export * from './access/resolve.js';
