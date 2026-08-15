@@ -25,3 +25,4 @@ export * from './sync/defaults.js';
 export * from './sync/source-service.js';
 export * from './sync/run-service.js';
 export * from './sync/apply.js';
+export * from './sync/jobs.js';
