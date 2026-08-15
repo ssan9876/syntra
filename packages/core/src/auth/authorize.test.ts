@@ -21,6 +21,14 @@ import type {
   FactorVerifier,
 } from './mfa/types.js';
 import { authorize } from './authorize.js';
+import * as OTPAuth from 'otpauth';
+import { localMasterKeyProvider } from '../vault/master-key.js';
+import {
+  TOTP_PERIOD_SECONDS,
+  beginTotpEnrolment,
+  confirmTotpEnrolment,
+  installTotpVerifier,
+} from './mfa/totp.js';
 
 let tenantId: string;
 let userId: string;
@@ -850,5 +858,394 @@ describe('authorize — forced enrolment', () => {
       status: 'deny',
       reason: 'user_inactive',
     });
+  });
+});
+
+const totpProvider = localMasterKeyProvider(Buffer.alloc(32, 7));
+
+const codeAt = (secret: string, at: Date) =>
+  OTPAuth.TOTP.generate({
+    secret: OTPAuth.Secret.fromBase32(secret),
+    period: TOTP_PERIOD_SECONDS,
+    digits: 6,
+    algorithm: 'SHA1',
+    timestamp: at.getTime(),
+  });
+
+describe('authorize — TOTP step-up', () => {
+  // Installed here rather than at module scope: the outer beforeEach empties
+  // the registry, so each describe declares exactly what it exercises.
+  beforeEach(() => installTotpVerifier(totpProvider));
+
+  async function enrolTotp(): Promise<string> {
+    const enrolment = await withTenant(tenantId, (tx) =>
+      beginTotpEnrolment(tx, totpProvider, userId),
+    );
+    await confirmTotpEnrolment(
+      tenantId,
+      totpProvider,
+      userId,
+      codeAt(enrolment.secret, NOW),
+      NOW,
+    );
+    return enrolment.secret;
+  }
+
+  it('challenges instead of allowing when a rule requires MFA', async () => {
+    const secret = await enrolTotp();
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+
+    const later = new Date(NOW.getTime() + 60_000);
+    const challenge = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: '10.1.2.3',
+      relyingParty: RP,
+      scope: 'portal',
+      now: later,
+    });
+
+    expect(challenge).toMatchObject({
+      status: 'challenge',
+      acceptableFactors: ['totp'],
+      enrolledFactors: ['totp'],
+    });
+    if (challenge.status !== 'challenge') throw new Error('expected a challenge');
+
+    const allowed = await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken: challenge.attemptToken,
+      factor: { type: 'totp', code: codeAt(secret, later) },
+      sourceIp: '10.1.2.3',
+      relyingParty: RP,
+      now: later,
+    });
+    expect(allowed).toMatchObject({ status: 'allow', userId, satisfiedFactor: 'totp' });
+  });
+
+  it('refuses a wrong code without burning the attempt', async () => {
+    await enrolTotp();
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    const later = new Date(NOW.getTime() + 60_000);
+    const challenge = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: later,
+    });
+    if (challenge.status !== 'challenge') throw new Error('expected a challenge');
+
+    const wrong = await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken: challenge.attemptToken,
+      factor: { type: 'totp', code: '000000' },
+      sourceIp: null,
+      relyingParty: RP,
+      now: later,
+    });
+    expect(wrong).toEqual({ status: 'deny', reason: 'factor_invalid' });
+
+    const attempt = await withTenant(tenantId, (tx) => tx.authAttempt.findFirst());
+    expect(attempt!.consumedAt).toBeNull();
+  });
+
+  it('refuses to reuse a consumed attempt token', async () => {
+    const secret = await enrolTotp();
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    const later = new Date(NOW.getTime() + 60_000);
+    const challenge = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: later,
+    });
+    if (challenge.status !== 'challenge') throw new Error('expected a challenge');
+
+    await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken: challenge.attemptToken,
+      factor: { type: 'totp', code: codeAt(secret, later) },
+      sourceIp: null,
+      relyingParty: RP,
+      now: later,
+    });
+
+    const nextStep = new Date(later.getTime() + TOTP_PERIOD_SECONDS * 1000);
+    const again = await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken: challenge.attemptToken,
+      factor: { type: 'totp', code: codeAt(secret, nextStep) },
+      sourceIp: null,
+      relyingParty: RP,
+      now: nextStep,
+    });
+    expect(again).toEqual({ status: 'deny', reason: 'attempt_invalid' });
+  });
+
+  it('refuses an expired attempt token', async () => {
+    const secret = await enrolTotp();
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    const later = new Date(NOW.getTime() + 60_000);
+    const challenge = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: later,
+    });
+    if (challenge.status !== 'challenge') throw new Error('expected a challenge');
+
+    const muchLater = new Date(later.getTime() + 10 * 60 * 1000);
+    const expired = await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken: challenge.attemptToken,
+      factor: { type: 'totp', code: codeAt(secret, muchLater) },
+      sourceIp: null,
+      relyingParty: RP,
+      now: muchLater,
+    });
+    expect(expired).toEqual({ status: 'deny', reason: 'attempt_invalid' });
+  });
+
+  it('pairs every attempt it issues with an audit event, in one transaction', async () => {
+    await enrolTotp();
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: new Date(NOW.getTime() + 60_000),
+    });
+
+    const attempts = await withTenant(tenantId, (tx) => tx.authAttempt.count());
+    const challenged = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.count({ where: { action: 'auth.mfa_challenged' } }),
+    );
+    expect(attempts).toBe(1);
+    expect(challenged).toBe(1);
+  });
+});
+
+describe('authorize — real TOTP forced enrolment', () => {
+  beforeEach(() => installTotpVerifier(totpProvider));
+
+  it('offers enrolment rather than refusing a user who holds nothing', async () => {
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+
+    const result = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({ status: 'enrol', enrollableFactors: ['totp'] });
+
+    const events = await auditActions();
+    expect(events.some((e) => e.action === 'auth.enrolment_required')).toBe(true);
+  });
+
+  it('issues a session once the factor is enrolled, without asking for it twice', async () => {
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    const offer = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    if (offer.status !== 'enrol') throw new Error('expected an enrolment offer');
+
+    const enrolment = await withTenant(tenantId, (tx) =>
+      beginTotpEnrolment(tx, totpProvider, userId),
+    );
+    await confirmTotpEnrolment(
+      tenantId,
+      totpProvider,
+      userId,
+      codeAt(enrolment.secret, NOW),
+      NOW,
+    );
+
+    const allowed = await authorize(tenantId, {
+      kind: 'enrolled',
+      attemptToken: offer.attemptToken,
+      enrolledFactor: 'totp',
+      sourceIp: null,
+      relyingParty: RP,
+      now: NOW,
+    });
+    // Enrolling is proof of possession: a TOTP enrolment is confirmed with a
+    // live code, so the user is not immediately challenged for the same thing.
+    expect(allowed).toMatchObject({ status: 'allow', userId, satisfiedFactor: 'totp' });
+  });
+
+  it('records the enrolment as having happened under a forced challenge', async () => {
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    const offer = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    if (offer.status !== 'enrol') throw new Error('expected an enrolment offer');
+
+    const enrolment = await withTenant(tenantId, (tx) =>
+      beginTotpEnrolment(tx, totpProvider, userId),
+    );
+    await confirmTotpEnrolment(
+      tenantId,
+      totpProvider,
+      userId,
+      codeAt(enrolment.secret, NOW),
+      NOW,
+    );
+    await authorize(tenantId, {
+      kind: 'enrolled',
+      attemptToken: offer.attemptToken,
+      enrolledFactor: 'totp',
+      sourceIp: null,
+      relyingParty: RP,
+      now: NOW,
+    });
+
+    // A stolen password can now buy an attacker their own factor. The trade is
+    // accepted; being able to see it afterwards is what makes it acceptable.
+    const events = await auditActions();
+    const forced = events.find((e) => e.action === 'auth.forced_enrolment_completed');
+    expect(forced).toBeDefined();
+    expect(forced!.payload).toMatchObject({ factor: 'totp', underForcedEnrolment: true });
+  });
+
+  it('refuses an enrolled claim the database does not support', async () => {
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    const offer = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    if (offer.status !== 'enrol') throw new Error('expected an enrolment offer');
+
+    // Nothing was enrolled. Saying so must not be enough.
+    const result = await authorize(tenantId, {
+      kind: 'enrolled',
+      attemptToken: offer.attemptToken,
+      enrolledFactor: 'totp',
+      sourceIp: null,
+      relyingParty: RP,
+      now: NOW,
+    });
+    expect(result).toEqual({ status: 'deny', reason: 'factor_not_enrolled' });
+  });
+
+  it('refuses to spend an enrolment attempt on a verification', async () => {
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    const offer = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    if (offer.status !== 'enrol') throw new Error('expected an enrolment offer');
+
+    const result = await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken: offer.attemptToken,
+      factor: { type: 'totp', code: '000000' },
+      sourceIp: null,
+      relyingParty: RP,
+      now: NOW,
+    });
+    expect(result).toEqual({ status: 'deny', reason: 'attempt_invalid' });
+  });
+
+  it('refuses outright when the tenant has turned self-enrolment off', async () => {
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { selfEnrolmentEnabled: false },
+    });
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+
+    const result = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    // The tenant issues factors by hand. There is genuinely no way forward and
+    // saying so is honest.
+    expect(result).toEqual({ status: 'deny', reason: 'factor_not_enrolled' });
+  });
+
+  it('refuses when the rule names a factor this deployment cannot enrol', async () => {
+    // A primary domain is a write-time prerequisite for any webauthn rule
+    // (assertFactorUsable, added in Task 3) — unrelated to what this test
+    // exercises, which is that only TOTP is installed in this describe, so a
+    // rule demanding WebAuthn has nothing to offer and nothing to accept.
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { primaryDomain: 'acme.syntra.test' },
+    });
+    await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'Keys only', outcome: 'require_factor', factorType: 'webauthn' }),
+    );
+    const result = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    expect(result).toEqual({ status: 'deny', reason: 'factor_not_enrolled' });
+  });
+
+  it('does not offer a factor the rule did not ask for', async () => {
+    // A rule naming TOTP offers TOTP and nothing else, even when more types
+    // are installed.
+    await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'App codes only', outcome: 'require_factor', factorType: 'totp' }),
+    );
+    const result = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    expect(result).toMatchObject({ status: 'enrol', enrollableFactors: ['totp'] });
   });
 });

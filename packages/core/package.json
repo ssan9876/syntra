@@ -11,6 +11,7 @@
     "ipaddr.js": "2.5.0",
     "ldapts": "^9.0.0",
     "nodemailer": "^9.0.5",
+    "otpauth": "9.5.1",
     "pg-boss": "^12.27.0",
     "zod": "^3.24.0"
   },

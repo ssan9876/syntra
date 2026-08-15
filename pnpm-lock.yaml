@@ -151,6 +151,9 @@ importers:
       nodemailer:
         specifier: ^9.0.5
         version: 9.0.5
+      otpauth:
+        specifier: 9.5.1
+        version: 9.5.1
       pg-boss:
         specifier: ^12.27.0
         version: 12.27.0
@@ -681,6 +684,10 @@ packages:
     engines: {node: ^22.20 || ^24.12 || >=25}
     cpu: [x64]
     os: [linux]
+
+  '@noble/hashes@2.2.0':
+    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
+    engines: {node: '>= 20.19.0'}
 
   '@phc/format@1.0.0':
     resolution: {integrity: sha512-m7X9U6BG2+J+R1lSOdCiITLLrxm+cWlNI3HUFA92oLO77ObGNzaKdh8pMLqdZcshtkKuV84olNNXDfMc4FezBQ==}
@@ -1636,6 +1643,9 @@ packages:
     resolution: {integrity: sha512-0eJJY6hXLGf1udHwfNftBqH+g73EU4B504nZeKpz1sYRKafAghwxEJunB2O7rDZkL4PGfsMVnTXZ2EjibbqcsA==}
     engines: {node: '>=14.0.0'}
 
+  otpauth@9.5.1:
+    resolution: {integrity: sha512-fJmDAHc8wImfqqqOXIlBvT1dEKrZK0Cmb2VEgScpNTolCz0PHh6ExUZGv4sLtOsWNaHCQlD+rRqaPgnoxFoZjQ==}
+
   parse5@7.3.0:
     resolution: {integrity: sha512-IInvU7fabl34qmi9gY8XOVxhYyMyuH2xUNpb2q8/Y+7552KlejkRvqvD19nMoUW/uQGGbqNpA6Tufu5FL5BZgw==}
 
@@ -2544,6 +2554,8 @@ snapshots:
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
+
+  '@noble/hashes@2.2.0': {}
 
   '@phc/format@1.0.0': {}
 
@@ -3457,6 +3469,10 @@ snapshots:
   ohash@2.0.12: {}
 
   on-exit-leak-free@2.1.2: {}
+
+  otpauth@9.5.1:
+    dependencies:
+      '@noble/hashes': 2.2.0
 
   parse5@7.3.0:
     dependencies:
