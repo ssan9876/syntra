@@ -23,3 +23,5 @@ export * from './sync/diff.js';
 export * from './sync/guard.js';
 export * from './sync/defaults.js';
 export * from './sync/source-service.js';
+export * from './sync/run-service.js';
+export * from './sync/apply.js';
