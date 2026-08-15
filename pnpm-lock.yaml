@@ -20,6 +20,9 @@ importers:
       ldapts:
         specifier: ^9.0.0
         version: 9.0.0
+      otpauth:
+        specifier: 9.5.1
+        version: 9.5.1
       pg:
         specifier: ^8.23.0
         version: 8.23.0
