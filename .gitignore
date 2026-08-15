@@ -9,3 +9,4 @@ coverage/
 .turbo/
 .vite/
 .DS_Store
+.tmp-shots/

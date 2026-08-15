@@ -13,9 +13,12 @@
     "db:up": "docker compose -f infra/docker-compose.yml up -d",
     "db:down": "docker compose -f infra/docker-compose.yml down",
     "db:migrate": "pnpm --filter @syntra/db migrate",
-    "db:generate": "pnpm --filter @syntra/db generate"
+    "db:generate": "pnpm --filter @syntra/db generate",
+    "seed": "pnpm --filter @syntra/db seed",
+    "dev": "pnpm --parallel --filter @syntra/api --filter @syntra/web dev"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.10.0",
     "tsx": "^4.23.12",
     "typescript": "^5.7.2",
