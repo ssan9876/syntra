@@ -2,12 +2,29 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { Wordmark } from '../components/Wordmark.js';
-import { takeChallenge, storeChallenge, type PendingChallenge } from '../mfa/challenge-store.js';
+import {
+  routeFor,
+  takeChallenge,
+  storeChallenge,
+  type PendingChallenge,
+} from '../mfa/challenge-store.js';
 import { assertWebAuthn } from '../mfa/webauthn.js';
 import { ApiError, api } from '../session/api.js';
-import { useSession } from '../session/SessionProvider.js';
+import { useSession, type AuthOutcome } from '../session/SessionProvider.js';
 
 type Mode = 'totp' | 'webauthn' | 'recovery_code';
+
+const isMode = (value: string | undefined): value is Mode =>
+  value === 'totp' || value === 'webauthn' || value === 'recovery_code';
+
+/**
+ * Which factor to open on. The first the server named, not "totp unless
+ * webauthn": a user whose only remaining factor is a printed recovery code
+ * would otherwise land on a screen that opens a WebAuthn prompt for a key they
+ * do not have.
+ */
+const firstMode = (factors: string[]): Mode =>
+  isMode(factors[0]) ? factors[0] : 'totp';
 
 export function MfaChallenge() {
   const navigate = useNavigate();
@@ -27,13 +44,7 @@ export function MfaChallenge() {
       // Put it back: the token is spent on a successful verify, not on
       // rendering the screen, and a wrong code must not cost the user the flow.
       storeChallenge(pending);
-      // First offered, not "totp unless webauthn". A user whose only remaining
-      // factor is a printed recovery code would otherwise land on a screen
-      // that opens a WebAuthn prompt for a key they do not have.
-      const first = pending.factors[0];
-      if (first === 'totp' || first === 'webauthn' || first === 'recovery_code') {
-        setMode(first);
-      }
+      setMode(firstMode(pending.factors));
     }
     setReady(true);
   }, []);
@@ -54,10 +65,41 @@ export function MfaChallenge() {
             }
           : { type: mode, attemptToken: challenge.attemptToken, code };
 
-      await api('/api/auth/mfa/verify', {
+      const outcome = await api<AuthOutcome>('/api/auth/mfa/verify', {
         method: 'POST',
         body: JSON.stringify(body),
       });
+
+      // The factor was accepted and the policy now wants something else — a
+      // rule tightened while the user was reaching for their phone. The server
+      // returns that arm deliberately rather than issuing a session, and
+      // walking on as though it had sends the user to a page with no cookie,
+      // which bounces them to /login with nothing to explain it.
+      if (outcome.status !== 'authenticated') {
+        const kind = outcome.status === 'enrol' ? 'enrol' : 'verify';
+        const next: PendingChallenge = {
+          kind,
+          attemptToken: outcome.attemptToken,
+          expiresAt: outcome.expiresAt,
+          factors:
+            outcome.status === 'enrol'
+              ? outcome.enrollableFactors
+              : outcome.acceptableFactors,
+          returnTo: challenge.returnTo,
+        };
+        storeChallenge(next);
+        if (kind === 'enrol') {
+          navigate(routeFor(kind), { replace: true });
+          return;
+        }
+        setChallenge(next);
+        setCode('');
+        setMode(firstMode(next.factors));
+        setError(
+          'Your organization now asks for a different factor. Use one of the options below.',
+        );
+        return;
+      }
 
       takeChallenge();
       await refresh();
@@ -81,8 +123,15 @@ export function MfaChallenge() {
         setError('Your security key was not used. Try again, or use a code.');
       } else {
         // The server does not distinguish a wrong code from an expired attempt,
-        // and neither does this.
-        setError('That did not match. Try again, or use a recovery code.');
+        // and neither does this. The recovery-code suggestion is only made when
+        // this account actually has one to fall back on: advising it otherwise
+        // sends the user round the same loop, since the server refuses a
+        // recovery code against a rule that names a security key.
+        setError(
+          challenge.factors.includes('recovery_code')
+            ? 'That did not match. Try again, or use a recovery code.'
+            : 'That did not match. Try again.',
+        );
       }
     } finally {
       setBusy(false);
@@ -173,7 +222,11 @@ export function MfaChallenge() {
                 Use a code from your app
               </Button>
             )}
-            {mode !== 'recovery_code' && (
+            {/* `offers`, like the two above it. The server decides whether a
+                printed code is acceptable — it never is against a rule naming a
+                security key — and offering one it will refuse walks a user into
+                a loop with no way out of it. */}
+            {offers('recovery_code') && (
               <Button size="sm" variant="ghost" onClick={() => setMode('recovery_code')}>
                 Use a recovery code
               </Button>

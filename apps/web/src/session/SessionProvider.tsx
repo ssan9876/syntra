@@ -13,6 +13,15 @@ import { api } from './api.js';
 export type FactorKind = 'totp' | 'webauthn';
 
 /**
+ * What can be *presented* at a challenge, as against what can be enrolled.
+ *
+ * A recovery code is a way past a `require_mfa` rule and never past a rule
+ * naming a kind, so the server includes it in `acceptableFactors` only when it
+ * would take one — which is what the challenge screen keys its offer off.
+ */
+export type PresentableFactor = FactorKind | 'recovery_code';
+
+/**
  * What /api/auth/login and /api/auth/elevate can both answer. Two of the three
  * are not a session: the password was right and the policy wants a second
  * factor first, either one the user already holds or one they must enrol.
@@ -32,7 +41,7 @@ export type AuthOutcome =
       status: 'challenge';
       attemptToken: string;
       expiresAt: string;
-      acceptableFactors: FactorKind[];
+      acceptableFactors: PresentableFactor[];
     }
   | {
       /** Enrol a factor of the required kind. Still no session. */

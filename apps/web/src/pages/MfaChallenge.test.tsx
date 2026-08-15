@@ -102,7 +102,50 @@ describe('MfaChallenge', () => {
     expect(screen.getByRole('button', { name: /verify/i })).toBeEnabled();
   });
 
-  it('offers a recovery code as an alternative', async () => {
+  /**
+   * The server decides whether a printed code is acceptable and says so in
+   * `acceptableFactors`: it satisfies "any second factor" and never a rule
+   * naming a security key. The screen offers what the server named, and these
+   * two cases are the guard, not the gap — the version that offered the button
+   * unconditionally passed a test asserting it appeared against
+   * `factors: ['totp']`, which certified the defect.
+   */
+  it('offers a recovery code when the server says one would be taken', async () => {
+    storeChallenge({
+      kind: 'verify',
+      attemptToken: 'token-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      factors: ['totp', 'recovery_code'],
+      returnTo: '/',
+    });
+    stubFetch(() => problem(401));
+
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: /recovery code/i }));
+    expect(screen.getByLabelText(/recovery code/i)).toBeInTheDocument();
+  });
+
+  it('does not offer one the server would refuse', async () => {
+    storeChallenge({
+      kind: 'verify',
+      attemptToken: 'token-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      // A rule naming a security key. A recovery code is not that key, the
+      // server refuses it in both directions, and offering it here would leave
+      // the user pressing a button that can only ever fail.
+      factors: ['webauthn'],
+      returnTo: '/',
+    });
+    stubFetch(() => problem(401));
+
+    renderPage();
+    expect(await screen.findByRole('button', { name: /verify/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /recovery code/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not advise a recovery code in the retry message when there is none', async () => {
     storeChallenge({
       kind: 'verify',
       attemptToken: 'token-1',
@@ -113,7 +156,81 @@ describe('MfaChallenge', () => {
     stubFetch(() => problem(401));
 
     renderPage();
-    await userEvent.click(await screen.findByRole('button', { name: /recovery code/i }));
-    expect(screen.getByLabelText(/recovery code/i)).toBeInTheDocument();
+    await userEvent.type(await screen.findByLabelText(/code/i), '000000');
+    await userEvent.click(screen.getByRole('button', { name: /verify/i }));
+
+    // Advice the user cannot act on is how a retry becomes a loop.
+    expect(await screen.findByRole('alert')).not.toHaveTextContent(/recovery/i);
+  });
+
+  /**
+   * The server answers a verified factor with a fresh `challenge` or `enrol`
+   * when a rule tightened underneath the user. Both arms carry no cookie, so
+   * walking on as though a session had been issued lands them on a page that
+   * bounces to /login with nothing said.
+   */
+  it('takes a further challenge handed back instead of assuming a session', async () => {
+    storeChallenge({
+      kind: 'verify',
+      attemptToken: 'token-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      factors: ['totp'],
+      returnTo: '/',
+    });
+    stubFetch((url) =>
+      url.includes('/api/auth/mfa/verify')
+        ? ok({
+            status: 'challenge',
+            attemptToken: 'token-2',
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            acceptableFactors: ['webauthn'],
+          })
+        : problem(401),
+    );
+
+    renderPage();
+    await userEvent.type(await screen.findByLabelText(/code/i), '123456');
+    await userEvent.click(screen.getByRole('button', { name: /verify/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/different factor/i);
+    expect(screen.getByText(/security key or passkey/i)).toBeInTheDocument();
+    expect(JSON.parse(sessionStorage.getItem('syntra.challenge')!)).toMatchObject({
+      kind: 'verify',
+      attemptToken: 'token-2',
+      factors: ['webauthn'],
+    });
+  });
+
+  it('sends an enrolment handed back to the enrolment screen', async () => {
+    storeChallenge({
+      kind: 'verify',
+      attemptToken: 'token-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      factors: ['totp'],
+      returnTo: '/portal',
+    });
+    stubFetch((url) =>
+      url.includes('/api/auth/mfa/verify')
+        ? ok({
+            status: 'enrol',
+            attemptToken: 'token-3',
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            enrollableFactors: ['webauthn'],
+          })
+        : problem(401),
+    );
+
+    renderPage();
+    await userEvent.type(await screen.findByLabelText(/code/i), '123456');
+    await userEvent.click(screen.getByRole('button', { name: /verify/i }));
+
+    await waitFor(() => {
+      expect(JSON.parse(sessionStorage.getItem('syntra.challenge')!)).toMatchObject({
+        kind: 'enrol',
+        attemptToken: 'token-3',
+        factors: ['webauthn'],
+        returnTo: '/portal',
+      });
+    });
   });
 });

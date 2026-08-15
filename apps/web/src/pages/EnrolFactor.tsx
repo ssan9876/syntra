@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { Wordmark } from '../components/Wordmark.js';
 import {
+  routeFor,
   storeChallenge,
   takeChallenge,
   type PendingChallenge,
 } from '../mfa/challenge-store.js';
 import { enrolWebAuthnForAttempt } from '../mfa/webauthn.js';
 import { ApiError, api } from '../session/api.js';
-import { useSession } from '../session/SessionProvider.js';
+import { useSession, type AuthOutcome } from '../session/SessionProvider.js';
 
 interface Enrolment {
   secret: string;
@@ -70,16 +71,54 @@ export function EnrolFactor() {
     );
   }
 
+  /**
+   * What the enrolment endpoints answer when the policy moved underneath.
+   *
+   * Both routes hand back the chokepoint's own `challenge` and `enrol` arms —
+   * a rule tightened between the sign-in and the enrolment finishing, and no
+   * session was issued. Walking on as though one had takes the user to a page
+   * with no cookie, which bounces them straight to /login with nothing said.
+   * Returns true when the outcome was handled and the caller should stop.
+   */
+  function handedBack(outcome: AuthOutcome): boolean {
+    if (outcome.status === 'authenticated') return false;
+    const kind = outcome.status === 'enrol' ? 'enrol' : 'verify';
+    const next: PendingChallenge = {
+      kind,
+      attemptToken: outcome.attemptToken,
+      expiresAt: outcome.expiresAt,
+      factors:
+        outcome.status === 'enrol'
+          ? outcome.enrollableFactors
+          : outcome.acceptableFactors,
+      returnTo: challenge!.returnTo,
+    };
+    storeChallenge(next);
+    if (kind === 'enrol') {
+      // Still enrolment, but a different kind is wanted now. Reset this screen
+      // onto it rather than navigating to the route it is already on.
+      setChallenge(next);
+      setEnrolment(null);
+      setCode('');
+      setMode(next.factors.includes('totp') ? 'totp' : 'webauthn');
+      setError('Your organization now asks for a different kind of factor.');
+      return true;
+    }
+    navigate(routeFor(kind), { replace: true });
+    return true;
+  }
+
   async function confirmTotp(event: FormEvent) {
     event.preventDefault();
     if (!challenge) return;
     setBusy(true);
     setError(null);
     try {
-      await api('/api/auth/enrol/totp/confirm', {
+      const outcome = await api<AuthOutcome>('/api/auth/enrol/totp/confirm', {
         method: 'POST',
         body: JSON.stringify({ attemptToken: challenge.attemptToken, code }),
       });
+      if (handedBack(outcome)) return;
       done();
     } catch (cause) {
       if (cause instanceof ApiError && cause.problem.status === 429) {
@@ -99,7 +138,11 @@ export function EnrolFactor() {
     setBusy(true);
     setError(null);
     try {
-      await enrolWebAuthnForAttempt(challenge.attemptToken, label.trim() || 'Security key');
+      const outcome = await enrolWebAuthnForAttempt(
+        challenge.attemptToken,
+        label.trim() || 'Security key',
+      );
+      if (handedBack(outcome)) return;
       done();
     } catch (cause) {
       // A tenant with no primary domain set cannot register a security key at

@@ -1,5 +1,6 @@
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import { api } from '../session/api.js';
+import type { AuthOutcome } from '../session/SessionProvider.js';
 
 /**
  * Enrols a security key or passkey for a user who is already signed in.
@@ -32,13 +33,13 @@ export async function startWebAuthnRegistration(label: string): Promise<void> {
 export async function enrolWebAuthnForAttempt(
   attemptToken: string,
   label: string,
-): Promise<unknown> {
+): Promise<AuthOutcome> {
   const optionsJSON = await api<Record<string, unknown>>(
     '/api/auth/enrol/webauthn/begin',
     { method: 'POST', body: JSON.stringify({ attemptToken }) },
   );
   const response = await startRegistration({ optionsJSON: optionsJSON as never });
-  return api('/api/auth/enrol/webauthn/finish', {
+  return api<AuthOutcome>('/api/auth/enrol/webauthn/finish', {
     method: 'POST',
     body: JSON.stringify({ attemptToken, label, response }),
   });
