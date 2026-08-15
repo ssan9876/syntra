@@ -30,6 +30,13 @@ import {
   installTotpVerifier,
 } from './mfa/totp.js';
 import { generateRecoveryCodes, installRecoveryCodeVerifier } from './mfa/recovery-codes.js';
+import { SoftKey } from './mfa/soft-key.js';
+import {
+  beginWebAuthnAuthentication,
+  beginWebAuthnRegistration,
+  finishWebAuthnRegistration,
+  installWebAuthnVerifier,
+} from './mfa/webauthn.js';
 
 let tenantId: string;
 let userId: string;
@@ -1324,5 +1331,117 @@ describe('authorize — recovery codes', () => {
       now: NOW,
     });
     expect(result).toEqual({ status: 'deny', reason: 'factor_not_enrolled' });
+  });
+});
+
+describe('authorize — WebAuthn step-up, with a key that really signs', () => {
+  /** Registration wants a name for the browser prompt; verification does not. */
+  const RP_IDENTITY = { ...RP, name: 'Acme' };
+
+  /**
+   * A relying party that is not this tenant's. `tenant-context.ts` resolves a
+   * tenant from the leftmost label of the Host header, so a request arriving at
+   * `acme.attacker.example` reaches tenant `acme` — this is what the caller
+   * would be handing authorize() in a phishing flow if the relying party came
+   * from the request rather than from the tenant row.
+   */
+  const ATTACKER = {
+    id: 'acme.attacker.example',
+    origin: 'http://acme.attacker.example',
+  };
+
+  let key: SoftKey;
+
+  beforeEach(async () => {
+    installWebAuthnVerifier();
+    // A require_factor: webauthn rule is refused at write time unless the
+    // tenant has a primary domain, since that is where its relying party
+    // comes from.
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { primaryDomain: 'acme.syntra.test' },
+    });
+
+    key = new SoftKey();
+    const options = await beginWebAuthnRegistration(tenantId, userId, RP_IDENTITY);
+    const registered = await finishWebAuthnRegistration(
+      tenantId,
+      userId,
+      RP_IDENTITY,
+      'YubiKey',
+      key.register(options.challenge, RP) as never,
+    );
+    expect(registered).toMatchObject({ ok: true });
+
+    await withTenant(tenantId, (tx) =>
+      addRule(tx, {
+        name: 'Keys only',
+        outcome: 'require_factor',
+        factorType: 'webauthn',
+      }),
+    );
+  });
+
+  /** Signs a fresh assertion the way a browser would. */
+  const assertion = async () => {
+    const options = await beginWebAuthnAuthentication(tenantId, userId, RP, NOW);
+    return key.assert(options.challenge, RP);
+  };
+
+  const challengeToken = async () => {
+    const challenge = await signIn();
+    expect(challenge).toMatchObject({
+      status: 'challenge',
+      acceptableFactors: ['webauthn'],
+    });
+    return (challenge as { attemptToken: string }).attemptToken;
+  };
+
+  it('allows a real assertion presented against the tenant relying party', async () => {
+    const attemptToken = await challengeToken();
+
+    const verified = await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken,
+      factor: { type: 'webauthn', assertion: await assertion() },
+      sourceIp: '10.1.2.3',
+      relyingParty: RP,
+      now: NOW,
+    });
+
+    expect(verified).toEqual({
+      status: 'allow',
+      userId,
+      mayElevate: false,
+      applicationId: null,
+      scope: 'portal',
+      satisfiedFactor: 'webauthn',
+    });
+  });
+
+  it('refuses the same assertion when the caller names another relying party', async () => {
+    // The assertion is genuine and the challenge is live; only the relying
+    // party the caller supplies differs. This is what makes the threading of
+    // `request.relyingParty` into the verifier visible: a regression that
+    // dropped it, or answered from the credential row instead, would allow
+    // this — and a security key's whole purpose is that it does not.
+    const attemptToken = await challengeToken();
+
+    const denied = await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken,
+      factor: { type: 'webauthn', assertion: await assertion() },
+      sourceIp: '10.1.2.3',
+      relyingParty: ATTACKER,
+      now: NOW,
+    });
+
+    expect(denied).toEqual({ status: 'deny', reason: 'factor_invalid' });
+
+    const events = await auditActions();
+    expect(events.at(-1)).toMatchObject({
+      action: 'auth.mfa_failed',
+      payload: { reason: 'webauthn_wrong_rp' },
+    });
   });
 });
