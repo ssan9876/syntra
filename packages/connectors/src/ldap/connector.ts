@@ -77,6 +77,12 @@ async function connect(config: ResolvedConfig): Promise<Client> {
   // and the socket would drop.
   const client = new Client({
     url: config.url,
+    // Without these ldapts waits forever, and "forever" is reachable from
+    // outside: a host that black-holes packets, or one that accepts the
+    // connection and never answers the bind, holds this call — and the
+    // request handler that made it — open until something else gives up.
+    connectTimeout: config.connectTimeoutMs,
+    timeout: config.timeoutMs,
     ...(config.tlsMode === 'ldaps' ? { tlsOptions } : {}),
   });
   try {
@@ -238,14 +244,34 @@ export const ldapConnector: Connector<Config> = {
       const attributes = new Set<string>();
 
       for (const search of searches(config)) {
-        await runSearch(client, search, { sizeLimit: 20 }, (searchEntries) => {
-          for (const entry of searchEntries) {
-            for (const cls of toArray(entry.objectClass)) objectClasses.add(cls);
-            for (const key of Object.keys(entry)) {
-              if (key !== 'dn') attributes.add(key);
+        // `*` is every ordinary attribute — what a search returns anyway — and
+        // `+` is the operational ones. The second is the point: `entryUUID` is
+        // operational on OpenLDAP, so without it the discovery report lists
+        // every attribute except the one an administrator has come here to
+        // find, since the anchor is the field this report exists to help them
+        // fill in. A server that does not know `+` treats it as an attribute
+        // name that matches nothing and returns the same set as before.
+        await runSearch(
+          client,
+          search,
+          { sizeLimit: 20, attributes: ['*', '+'] },
+          (searchEntries) => {
+            for (const entry of searchEntries) {
+              for (const cls of toArray(entry.objectClass)) {
+                objectClasses.add(cls);
+              }
+              for (const key of Object.keys(entry)) {
+                // `dn` is not an attribute, and ldapts echoes the requested
+                // selectors back as keys of their own, so `*` and `+` would
+                // otherwise be reported to the administrator as two
+                // attributes the directory holds.
+                if (key !== 'dn' && key !== '*' && key !== '+') {
+                  attributes.add(key);
+                }
+              }
             }
-          }
-        });
+          },
+        );
       }
 
       return {

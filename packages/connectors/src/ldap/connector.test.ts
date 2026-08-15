@@ -220,6 +220,67 @@ describe('ldapConnector.discoverSchema', () => {
     expect(schema.attributes).toContain('mail');
     expect(schema.objectClasses).toContain('inetOrgPerson');
   });
+
+  it('includes the operational attributes, which is where the anchor lives', async () => {
+    // entryUUID is operational on OpenLDAP and is not returned by an ordinary
+    // search. A discovery report that omits it lists every attribute except
+    // the one an administrator opened it to find.
+    const schema = await ldapConnector.discoverSchema(config);
+    expect(schema.attributes).toContain('entryUUID');
+  });
+
+  it('does not report the selectors it asked with as attributes', async () => {
+    // ldapts echoes `*` and `+` back as keys on the entry. Listed, they read
+    // as two attributes the directory holds.
+    const schema = await ldapConnector.discoverSchema(config);
+    expect(schema.attributes).not.toContain('*');
+    expect(schema.attributes).not.toContain('+');
+  });
+});
+
+describe('a peer that never answers', () => {
+  /**
+   * A socket that accepts the connection and then says nothing at all —
+   * the shape a black-holed port has from the client's side, and the one that
+   * a connect timeout alone does not cover, since the connection itself
+   * succeeds.
+   */
+  async function silentServer(): Promise<{ port: number; close(): void }> {
+    const { createServer } = await import('node:net');
+    const sockets: import('node:net').Socket[] = [];
+    const server = createServer((socket) => {
+      sockets.push(socket);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    return {
+      port,
+      close: () => {
+        for (const socket of sockets) socket.destroy();
+        server.close();
+      },
+    };
+  }
+
+  it('gives up on the bind rather than waiting forever', async () => {
+    // Left to itself ldapts waits indefinitely: the caller of a connection
+    // test would pin a request handler for as long as the peer stays silent.
+    const server = await silentServer();
+    try {
+      const started = Date.now();
+      const result = await ldapConnector.test({
+        ...config,
+        url: `ldap://127.0.0.1:${server.port}`,
+        timeoutMs: 300,
+        connectTimeoutMs: 300,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      server.close();
+    }
+  }, 10_000);
 });
 
 describe('ldapConnector.write', () => {

@@ -20,7 +20,7 @@ implemented.
 | Module | Status | Contents |
 |---|---|---|
 | **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications, web console |
-| **Directory Sync** | built | LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, source lifecycle over the API and a run review screen in the console |
+| **Directory Sync** | built | LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, and console screens for the lot: a source editor with a connection test, a mapping editor, and a run review with per-change skip and partial apply |
 | **Access** | planned | SAML 2.0 IdP, OpenID Connect provider, upstream federation, application catalog, MFA, authentication policies, self-service password reset |
 | **Provision** | planned | Source systems, business rules, evaluation and enforcement, target systems, entitlements |
 | **Automate** | planned | Product catalog, self-service requests, approval workflows, delegated forms |
@@ -100,6 +100,30 @@ populated. And start the stack with `AUTH_RATE_LIMIT_MAX` raised, since the
 suite signs in far more often in a minute than a person would and the default
 limit is right to refuse it.
 
+**If another Syntra is already running, do not test through it.** A second
+checkout — a worktree, a colleague's branch — answers `/health` and every
+familiar route exactly as yours does, so a suite pointed at the wrong port
+passes while testing code you did not write. Give the second stack ports and
+a database of its own:
+
+```bash
+PORT=3100 pnpm --filter @syntra/api dev
+WEB_PORT=5174 API_TARGET=http://127.0.0.1:3100 \
+  pnpm --filter @syntra/web exec vite --host 127.0.0.1
+E2E_BASE_URL=http://acme.localhost:5174 pnpm e2e
+```
+
+Then prove it is yours before believing a result: request a route that exists
+only on your branch and check it is not a 404. `/health` proves nothing.
+Vite's dev server uses `strictPort`, so it fails rather than quietly moving to
+the next free port when 5173 is taken.
+
+The integration tests truncate the shared database between cases, so a
+browser suite running while someone else runs `pnpm test` will lose its seeded
+tenant mid-flight. `DATABASE_URL` pointed at a database of its own
+(`CREATE DATABASE syntra_e2e OWNER syntra_app`, then `pnpm db:migrate` and
+`pnpm seed` against it) removes that whole class of confusion.
+
 The browser tests need the stack already running — Playwright starts nothing
 itself. If they fail with `ERR_CONNECTION_REFUSED` while `curl` reaches the
 same URL, Vite is listening on IPv6 only: `localhost` resolves to `::1` on
@@ -132,18 +156,51 @@ which the same page flags. The mode and the scheme have to agree: an
 `ldaps://` URL with any other mode is refused rather than quietly
 reinterpreted.
 
-A source is created with `POST /api/admin/sources`, edited with `PATCH
-/api/admin/sources/:id`, and removed with `DELETE /api/admin/sources/:id`;
-its attribute mappings are set through `PUT /api/admin/sources/:id/mappings`.
-The console's **Directory sources** page lists sources and their last run
-today, and editing one from the console is a later piece of work. Either way,
-the bind password goes into the secrets vault, not into the source's stored
-`config` — the API only ever accepts it, never returns it, and a `PATCH`
-carrying a new one replaces the vault entry rather than adding beside it.
+Sources are created and edited from **Directory sources** in the console.
+**New source** opens an editor for the connection, the search bases and
+filters, the anchor attribute, the schedule and the deactivation threshold;
+**Start from Active Directory / OpenLDAP** seeds the attribute mappings, the
+anchor and the per-flavour filters, so the common case needs no typing.
+
+**Test connection** works before anything is saved, and reports what it
+found: the number of users, groups and organizational units in the configured
+search bases, and the object classes and attributes the directory returned —
+including the operational ones, since the anchor lives among those. The
+editor also carries **Run now**, and a delete that states in words how many
+users and groups it would deactivate before the button will do anything.
+
+Editing a source and re-testing it reuses the stored bind password, but only
+against the address the source is saved with: changing the URL, the transport
+or the certificate setting means typing the password again. Otherwise anyone
+who can configure a source could ask Syntra to send a stored credential to a
+host of their choosing, which is a way of reading the vault rather than a way
+of testing a connection. Every test is recorded in the audit log with where it
+connected, refusals included.
+
+The same operations are available over HTTP — `POST /api/admin/sources`,
+`PATCH /api/admin/sources/:id`, `DELETE /api/admin/sources/:id`, `PUT
+/api/admin/sources/:id/mappings`, and `POST /api/admin/sources/test` for a
+configuration that has not been saved. Either way, the bind password goes into
+the secrets vault, not into the source's stored `config` — the API only ever
+accepts it, never returns it, and a `PATCH` carrying a new one replaces the
+vault entry rather than adding beside it. The editor leaves the field blank on
+an edit, and blank means unchanged; re-testing a connection after changing a
+search base borrows the stored credential server-side rather than round-
+tripping it to the browser.
+
+A source can be saved **disabled**, which is worth knowing: a create with a
+cron expression is scheduled the moment it commits, so saving disabled is how
+you get the mappings in place before the first run fires.
 
 A `PATCH` mentioning a schedule takes effect immediately, not at the next
 restart; so does a create, and so does a delete. Each source has a schedule of
 its own on the shared job queue, so rescheduling one leaves the rest alone.
+
+The console sends the counts it displayed along with the confirmation, and the
+server checks them inside the deleting transaction. A run that landed between
+the page being read and the box being ticked therefore stops the delete rather
+than quietly enlarging it, and the question is put again with the real
+numbers.
 
 **Deleting a source deactivates every account and group it owned**, gives them
 a status reason naming the source, and detaches them — it never deletes a
@@ -154,12 +211,22 @@ says `?confirm=true`, the same shape as the run guard. A foreign key from
 can go: the database refuses to leave a row pointing at a source that no
 longer exists.
 
+A directory-managed account is labelled as such wherever it appears: **Users**
+names the source that owns it and says the fields are read-only, because a
+change made here is overwritten by the next run.
+
 A run always previews before it applies. `POST /api/admin/sources/:id/run`
 reads the directory, correlates it against what Syntra already holds, and
 writes a reviewable diff — creates, updates, deactivations, and membership
 changes, grouped by type on the **Sync runs** review screen — without
 touching anything yet. Only an explicit `POST /api/admin/sync-runs/:id/apply`,
 from that same review screen, writes the changes.
+
+The review screen applies all of it, part of it, or none of it. Unticking a
+change leaves it out of this apply and still proposed, so the run comes back
+partially applied and the rest can be applied afterwards; **Skip** records
+that a change will not be applied at all, and is refused once the change has
+stopped being proposed, so a run's account of what it did stays true.
 
 A guard stands between the two. A run that read **no records** is refused
 outright: an empty directory and an unreachable one look the same from here,

@@ -16,6 +16,13 @@ export interface CreateSourceInput {
   schedule?: string | undefined;
   autoApply?: boolean | undefined;
   deactivationThresholdPercent?: number | undefined;
+  /**
+   * Defaults to enabled, as every source did before this was settable. A
+   * source created disabled is configured but not scheduled, which is the
+   * only way to save a cron expression and its attribute mappings without the
+   * schedule firing between the two.
+   */
+  enabled?: boolean | undefined;
 }
 
 export async function createSource(
@@ -37,6 +44,7 @@ export async function createSource(
       schedule: input.schedule ?? null,
       autoApply: input.autoApply ?? false,
       deactivationThresholdPercent: input.deactivationThresholdPercent ?? 10,
+      enabled: input.enabled ?? true,
     },
   });
 
@@ -129,6 +137,31 @@ export async function ownedObjectCounts(
   };
 }
 
+/**
+ * Thrown when the caller confirmed one set of numbers and the database holds
+ * another.
+ *
+ * A confirmation is only worth the figures it was given. Those are read when a
+ * screen opens, and a scheduled run between then and the click can multiply
+ * them; deleting anyway would carry out a decision the administrator was never
+ * asked about. The current counts come back so the question can be put again
+ * with the truth in it.
+ */
+export class SourceCountsChangedError extends Error {
+  constructor(
+    readonly counts: OwnedObjectCounts,
+    readonly acknowledged: OwnedObjectCounts,
+  ) {
+    super(
+      `this source now owns ${counts.users} user(s), ${counts.groups} ` +
+        `group(s) and ${counts.orgUnits} organizational unit(s), not the ` +
+        `${acknowledged.users}, ${acknowledged.groups} and ` +
+        `${acknowledged.orgUnits} that were confirmed`,
+    );
+    this.name = 'SourceCountsChangedError';
+  }
+}
+
 /** Thrown when a source still owns directory rows and the caller has not said what should happen to them. */
 export class SourceOwnsObjectsError extends Error {
   constructor(readonly counts: OwnedObjectCounts) {
@@ -186,7 +219,7 @@ export class SourceOwnsObjectsError extends Error {
 export async function deleteSource(
   tx: TenantClient,
   id: string,
-  opts: { confirm?: boolean } = {},
+  opts: { confirm?: boolean; acknowledged?: OwnedObjectCounts | undefined } = {},
 ): Promise<OwnedObjectCounts | null> {
   const existing = await tx.directorySource.findUnique({ where: { id } });
   if (!existing) return null;
@@ -194,6 +227,18 @@ export async function deleteSource(
   const counts = await ownedObjectCounts(tx, id);
   if (!ownsNothing(counts) && !opts.confirm) {
     throw new SourceOwnsObjectsError(counts);
+  }
+
+  // Counted and compared inside the deleting transaction, so what is checked
+  // is what is about to be deactivated rather than what was true a moment ago.
+  const ack = opts.acknowledged;
+  if (
+    ack &&
+    (ack.users !== counts.users ||
+      ack.groups !== counts.groups ||
+      ack.orgUnits !== counts.orgUnits)
+  ) {
+    throw new SourceCountsChangedError(counts, ack);
   }
 
   const reason = `Directory source "${existing.name}" was removed`;
