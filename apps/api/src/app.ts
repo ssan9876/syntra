@@ -5,6 +5,9 @@ import type { Config } from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerAdminUserRoutes } from './routes/admin/users.js';
+import { registerAdminGroupRoutes } from './routes/admin/groups.js';
+import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -29,6 +32,12 @@ export async function buildApp(
   app.get('/health', async () => ({ status: 'ok' }));
 
   await app.register(registerAuthRoutes, { prefix: '/api/auth' });
+
+  // Every route below requires an administrative session; the guard is
+  // applied inside each plugin so a new admin route cannot forget it.
+  await app.register(registerAdminUserRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminOrgUnitRoutes, { prefix: '/api/admin' });
 
   return app;
 }
