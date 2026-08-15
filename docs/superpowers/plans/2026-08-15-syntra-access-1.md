@@ -19,7 +19,7 @@ Everything in the Core and Directory Sync plans' Global Constraints still applie
 - **An `AuthAttempt` and the audit event that explains it commit in the same transaction.** Both the issuing of an attempt and its consumption pair with their audit event inside one `withTenant`, the way every admin mutation on the previous slice does. A crash must not be able to leave an attempt with no record of why it exists.
 - **Request-derived authentication context travels as an explicit field on `AuthorizeRequest`.** `sourceIp` and `relyingParty` are both request-derived and both required by the type; there is no ambient store, no `AsyncLocalStorage`, and no module-level mutable holding either. A background job that has no relying party fails to compile rather than failing confusingly at run time.
 - **Never put network or long-running I/O inside a Prisma interactive transaction.** `withTenant` is `prisma.$transaction(fn)` and the client in `packages/db/src/client.ts` is constructed with no `transactionOptions`, so Prisma's default 5000 ms timeout applies. WebAuthn verification, Argon2 hashing, QR encoding and every SMTP send happen **between** transactions, never inside one. This is why `authorize()` takes a `tenantId` and opens its own transaction per phase, exactly as `previewRun` and `applyRun` do in `packages/core/src/sync/run-service.ts`.
-- **`notify(tx, transport, …)` is deleted in Task 10, not called.** Its body reads the tenant row and then awaits `transport.send()`, so every call from inside `withTenant` puts an SMTP round trip inside a transaction — the exact Critical the previous slice shipped. It is replaced by `renderMessage(tenantName, …)`, which is pure, and `sendMessage(transport, message)`, which takes no transaction and therefore cannot be put inside one by accident. Read the tenant name in a transaction, render and send outside it.
+- **`notify(tx, transport, …)` is deleted in Task 8, not called.** Its body reads the tenant row and then awaits `transport.send()`, so every call from inside `withTenant` puts an SMTP round trip inside a transaction — the exact Critical the previous slice shipped. It is replaced by `renderMessage(tenantName, …)`, which is pure, and `sendMessage(transport, message)`, which takes no transaction and therefore cannot be put inside one by accident. Read the tenant name in a transaction, render and send outside it.
 - **Session scope is carried, never inferred.** `AuthAttempt.scope` records what the issuer intended, and the session created at the end of a step-up reads it. Deriving scope from ambient request state — "a session cookie is present, so this must be an elevation" — hands an administrative session to any portal user who completes a step-up, because the web client sends `credentials: 'include'` on every call.
 - **The WebAuthn relying party comes from the tenant, never from the request.** `Tenant.primaryDomain` first, `PUBLIC_URL` as the fallback, and a request whose `Host` does not match is refused at the WebAuthn endpoints. `tenant-context.ts` resolves a tenant from the leftmost label of the `Host` header, so `acme.attacker.example` resolves tenant `acme`; taking the RP ID or the expected origin from that header lets a phisher choose what their own assertion is checked against, which is the entire property a security key exists to provide.
 - **An unevaluable condition fails closed on a `deny` rule and open on every other outcome.** A malformed CIDR, an absent source address or an unresolvable timezone means the condition cannot be decided. On `allow`, `require_mfa` and `require_factor` the rule does not match; on `deny` it does. A rule written to refuse people must not stop refusing them because one of its own fields is broken. The asymmetry is deliberate and is documented in `evaluate.ts` where the matcher lives.
@@ -65,10 +65,11 @@ packages/core/src/policy/
   impact.ts              previewRuleImpact — who a rule would force to enrol
 
 packages/core/src/notify/
-  notification-service.ts  MODIFIED — notify() split into renderMessage +
-                           sendMessage, so a send cannot sit in a transaction
-  templates/index.ts       + password-reset, password-reset-upstream,
-                           factor-added
+  notification-service.ts  MODIFIED (Task 8) — notify() split into
+                           renderMessage + sendMessage, so a send cannot sit
+                           in a transaction
+  templates/index.ts       + factor-added (Task 8), password-reset and
+                           password-reset-upstream (Task 10)
 
 packages/core/src/auth/
   authorize.ts           THE CHOKEPOINT
@@ -848,8 +849,12 @@ git commit -m "feat: add access management data model"
   - `interface PolicyDecision { outcome: PolicyOutcome; factorType: FactorType | null; ruleId: string | null; ruleName: string | null }`
   - `function evaluatePolicy(rules: PolicyRule[], fallback: PolicyFallback, context: AuthContext): PolicyDecision`
   - `function ruleMatches(rule: PolicyRule, context: AuthContext): boolean`
-  - `function matchesIpRanges(sourceIp: string | null, ranges: string[]): boolean`
-  - `function matchesTimeWindow(rule: Pick<PolicyRule, 'daysOfWeek' | 'startMinute' | 'endMinute' | 'timezone'>, now: Date): boolean`
+  - `type ConditionResult = 'match' | 'no-match' | 'unevaluable'`
+  - `function evaluateIpRanges(sourceIp: string | null, ranges: string[]): ConditionResult`
+  - `function isIpRangeUsable(range: string): boolean`
+  - `function evaluateTimeWindow(window: TimeWindow, now: Date): ConditionResult`
+  - `function matchesIpRanges(sourceIp: string | null, ranges: string[]): boolean` — `evaluateIpRanges(...) === 'match'`
+  - `function matchesTimeWindow(window: TimeWindow, now: Date): boolean` — `evaluateTimeWindow(...) === 'match'`
   - `function isValidTimeZone(zone: string): boolean`
 
 - [ ] **Step 1: Add the dependency**
@@ -868,7 +873,7 @@ dual-stack listener.
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { matchesIpRanges } from './ip-match.js';
+import { evaluateIpRanges, isIpRangeUsable, matchesIpRanges } from './ip-match.js';
 
 describe('matchesIpRanges', () => {
   it('treats an empty range list as unconstrained', () => {
@@ -919,6 +924,69 @@ describe('matchesIpRanges', () => {
   it('treats a malformed source address as no match', () => {
     expect(matchesIpRanges('unix:/tmp/sock', ['10.0.0.0/8'])).toBe(false);
   });
+
+  it('matches the private and documentation ranges a real tenant writes', () => {
+    // Every one of these was rejected by the first draft's validator, which
+    // used a matcher as a syntax check. They are the ranges people actually
+    // type into an office allowlist.
+    expect(matchesIpRanges('192.168.5.5', ['192.168.0.0/16'])).toBe(true);
+    expect(matchesIpRanges('172.16.4.1', ['172.16.0.0/12'])).toBe(true);
+    expect(matchesIpRanges('198.51.100.7', ['198.51.100.0/24'])).toBe(true);
+    expect(matchesIpRanges('8.8.8.8', ['8.8.8.8'])).toBe(true);
+  });
+});
+
+describe('isIpRangeUsable', () => {
+  it('accepts every well-formed range and address', () => {
+    for (const range of [
+      '10.0.0.0/8',
+      '192.168.0.0/16',
+      '172.16.0.0/12',
+      '198.51.100.0/24',
+      '0.0.0.0/0',
+      '8.8.8.8',
+      '2001:db8::/32',
+      'fd00::1',
+      '::ffff:10.0.0.1',
+    ]) {
+      expect(isIpRangeUsable(range)).toBe(true);
+    }
+  });
+
+  it('rejects a prefix length that is not a prefix length', () => {
+    expect(isIpRangeUsable('10.0.0.0/33')).toBe(false);
+    expect(isIpRangeUsable('10.0.0.0/-1')).toBe(false);
+  });
+
+  it('rejects an address that is not an address', () => {
+    expect(isIpRangeUsable('999.1.1.1/8')).toBe(false);
+    expect(isIpRangeUsable('10.0.0.256')).toBe(false);
+    expect(isIpRangeUsable('the office')).toBe(false);
+    expect(isIpRangeUsable('')).toBe(false);
+  });
+});
+
+describe('evaluateIpRanges', () => {
+  it('is unconstrained when no ranges are named', () => {
+    expect(evaluateIpRanges('10.0.0.1', [])).toBe('match');
+    expect(evaluateIpRanges(null, [])).toBe('match');
+  });
+
+  it('separates "did not match" from "could not be decided"', () => {
+    expect(evaluateIpRanges('11.0.0.1', ['10.0.0.0/8'])).toBe('no-match');
+    // No address to test: not a miss, an unanswerable question.
+    expect(evaluateIpRanges(null, ['10.0.0.0/8'])).toBe('unevaluable');
+    expect(evaluateIpRanges('unix:/tmp/sock', ['10.0.0.0/8'])).toBe('unevaluable');
+    expect(evaluateIpRanges('10.0.0.1', ['nonsense'])).toBe('unevaluable');
+  });
+
+  it('reports unevaluable when a usable range misses and an unusable one remains', () => {
+    // The rule meant to cover both. One of them cannot be read, so "no" is not
+    // an honest answer.
+    expect(evaluateIpRanges('11.0.0.1', ['10.0.0.0/8', 'nonsense'])).toBe('unevaluable');
+    // …but a hit on the readable half settles it.
+    expect(evaluateIpRanges('10.0.0.1', ['10.0.0.0/8', 'nonsense'])).toBe('match');
+  });
 });
 ```
 
@@ -935,25 +1003,56 @@ Expected: FAIL — cannot resolve `./ip-match.js`.
 import ipaddr from 'ipaddr.js';
 
 /**
+ * Three answers, not two. A condition can hold, fail to hold, or be
+ * undecidable — and the third is not the second. `ruleMatches` resolves
+ * `unevaluable` differently depending on the rule's outcome; see evaluate.ts.
+ */
+export type ConditionResult = 'match' | 'no-match' | 'unevaluable';
+
+/**
+ * Whether a stored range is syntactically a range at all.
+ *
+ * A parse in a try/catch, which is what a syntax check is. The first draft
+ * asked instead whether the range contained one of four probe addresses, and
+ * so rejected 192.168.0.0/16, 172.16.0.0/12, 198.51.100.0/24 and every literal
+ * host address — a matcher used as a validator answers a different question
+ * than the one being asked.
+ */
+export function isIpRangeUsable(range: string): boolean {
+  try {
+    if (range.includes('/')) ipaddr.parseCIDR(range);
+    else ipaddr.process(range);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether `sourceIp` falls in any of `ranges`, which may hold CIDR notation or
  * bare addresses, IPv4 or IPv6.
  *
  * An empty list is not a condition at all: a rule that names no ranges is
- * unconstrained by address and matches everything. A non-empty list with an
- * unknown source address matches nothing — a rule scoped to the office network
- * must not fire for a request whose origin could not be determined.
+ * unconstrained by address and holds for everything.
+ *
+ * Everything else that is not a clean hit or a clean miss is `unevaluable`: no
+ * source address to test, a source address that will not parse, or a range
+ * that will not parse. The caller decides what an undecidable condition means,
+ * because the answer differs between a rule that lets people in and one that
+ * keeps them out.
  *
  * ipaddr.js's match() throws when the families differ rather than returning
- * false, so kinds are compared before it is called. A malformed range is
- * skipped rather than failing the rule: one bad entry in an allowlist should
- * not silently widen or narrow the other entries.
+ * false, so kinds are compared before it is called.
  */
-export function matchesIpRanges(
+export function evaluateIpRanges(
   sourceIp: string | null,
   ranges: string[],
-): boolean {
-  if (ranges.length === 0) return true;
-  if (!sourceIp) return false;
+): ConditionResult {
+  if (ranges.length === 0) return 'match';
+
+  const usable = ranges.filter(isIpRangeUsable);
+  if (usable.length === 0) return 'unevaluable';
+  if (!sourceIp) return 'unevaluable';
 
   let addr: ReturnType<typeof ipaddr.process>;
   try {
@@ -961,33 +1060,38 @@ export function matchesIpRanges(
     // is the shape a dual-stack listener reports for an IPv4 client.
     addr = ipaddr.process(sourceIp);
   } catch {
-    return false;
+    return 'unevaluable';
   }
 
-  for (const range of ranges) {
+  for (const range of usable) {
     try {
       if (range.includes('/')) {
         const cidr = ipaddr.parseCIDR(range);
         if (cidr[0].kind() !== addr.kind()) continue;
-        if (addr.match(cidr)) return true;
+        if (addr.match(cidr)) return 'match';
       } else {
         const other = ipaddr.process(range);
         if (other.kind() !== addr.kind()) continue;
-        if (addr.toNormalizedString() === other.toNormalizedString()) return true;
+        if (addr.toNormalizedString() === other.toNormalizedString()) return 'match';
       }
     } catch {
       continue;
     }
   }
 
-  return false;
+  // Nothing hit. If part of the list could not be read, the rule covered
+  // addresses this cannot see, and "no" would be an overstatement.
+  return usable.length === ranges.length ? 'no-match' : 'unevaluable';
 }
+
+export const matchesIpRanges = (sourceIp: string | null, ranges: string[]): boolean =>
+  evaluateIpRanges(sourceIp, ranges) === 'match';
 ```
 
 - [ ] **Step 5: Run it to make sure it passes**
 
 Run: `pnpm vitest run packages/core/src/policy/ip-match.test.ts`
-Expected: PASS, 10 tests.
+Expected: PASS, 17 tests.
 
 - [ ] **Step 6: Write the failing time-window test**
 
@@ -995,7 +1099,7 @@ Expected: PASS, 10 tests.
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { isValidTimeZone, matchesTimeWindow } from './time-window.js';
+import { evaluateTimeWindow, isValidTimeZone, matchesTimeWindow } from './time-window.js';
 
 const at = (iso: string) => new Date(iso);
 
@@ -1083,6 +1187,28 @@ describe('matchesTimeWindow', () => {
     expect(matchesTimeWindow(halfOpen, at('2026-08-12T03:00:00Z'))).toBe(true);
   });
 });
+
+describe('evaluateTimeWindow', () => {
+  const unconstrained = {
+    daysOfWeek: [],
+    startMinute: null,
+    endMinute: null,
+    timezone: null,
+  };
+
+  it('separates "outside the window" from "could not be decided"', () => {
+    const office = { ...unconstrained, startMinute: 9 * 60, endMinute: 17 * 60 };
+    expect(evaluateTimeWindow(office, at('2026-08-12T12:00:00Z'))).toBe('match');
+    expect(evaluateTimeWindow(office, at('2026-08-12T03:00:00Z'))).toBe('no-match');
+
+    const broken = { ...office, timezone: 'Middle/Earth' };
+    expect(evaluateTimeWindow(broken, at('2026-08-12T12:00:00Z'))).toBe('unevaluable');
+  });
+
+  it('is unconstrained when neither dimension is set', () => {
+    expect(evaluateTimeWindow(unconstrained, at('2026-08-12T03:00:00Z'))).toBe('match');
+  });
+});
 ```
 
 - [ ] **Step 7: Run it to make sure it fails**
@@ -1095,6 +1221,8 @@ Expected: FAIL — cannot resolve `./time-window.js`.
 `packages/core/src/policy/time-window.ts`:
 
 ```ts
+import type { ConditionResult } from './ip-match.js';
+
 const DAY_INDEX: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -1161,27 +1289,28 @@ export interface TimeWindow {
  * and a range whose end is below its start wraps past midnight — 22:00 to
  * 06:00 is one window, not an empty one.
  *
- * A timezone the platform cannot resolve means the rule cannot be evaluated,
- * and an unevaluable rule does not match. Write-time validation is what keeps
- * that from happening; this is the backstop, and it must not throw, because a
- * throw here lands in the middle of a login.
+ * A timezone the platform cannot resolve means the condition cannot be
+ * decided, and `unevaluable` says so rather than pretending it was a miss.
+ * Write-time validation is what keeps that from happening; this is the
+ * backstop, and it must not throw, because a throw here lands in the middle of
+ * a login.
  */
-export function matchesTimeWindow(window: TimeWindow, now: Date): boolean {
+export function evaluateTimeWindow(window: TimeWindow, now: Date): ConditionResult {
   const constrainsDays = window.daysOfWeek.length > 0;
   const constrainsHours =
     window.startMinute !== null && window.endMinute !== null;
-  if (!constrainsDays && !constrainsHours) return true;
+  if (!constrainsDays && !constrainsHours) return 'match';
 
   const zone = window.timezone ?? 'UTC';
   let clock: LocalClock;
   try {
     clock = localClock(now, zone);
   } catch {
-    return false;
+    return 'unevaluable';
   }
-  if (clock.day < 0) return false;
+  if (clock.day < 0) return 'unevaluable';
 
-  if (constrainsDays && !window.daysOfWeek.includes(clock.day)) return false;
+  if (constrainsDays && !window.daysOfWeek.includes(clock.day)) return 'no-match';
 
   if (constrainsHours) {
     const start = window.startMinute!;
@@ -1190,17 +1319,20 @@ export function matchesTimeWindow(window: TimeWindow, now: Date): boolean {
       start <= end
         ? clock.minute >= start && clock.minute <= end
         : clock.minute >= start || clock.minute <= end;
-    if (!inside) return false;
+    if (!inside) return 'no-match';
   }
 
-  return true;
+  return 'match';
 }
+
+export const matchesTimeWindow = (window: TimeWindow, now: Date): boolean =>
+  evaluateTimeWindow(window, now) === 'match';
 ```
 
 - [ ] **Step 9: Run it to make sure it passes**
 
 Run: `pnpm vitest run packages/core/src/policy/time-window.test.ts`
-Expected: PASS, 11 tests.
+Expected: PASS, 13 tests.
 
 - [ ] **Step 10: Write the types**
 
@@ -1516,6 +1648,46 @@ describe('evaluatePolicy', () => {
     });
   });
 
+  it('does not let a broken condition stop a deny rule applying', () => {
+    // The only fail-closed branch in the engine. A malformed range in a rule
+    // written to refuse people must not silently turn into "refuse nobody".
+    const broken = rule({ outcome: 'deny', ipRanges: ['203.0.113.0/99'] });
+    expect(evaluatePolicy([broken], ALLOW, ctx()).outcome).toBe('deny');
+
+    // The same broken condition on an allow rule does not match, so the rule
+    // does not let anyone past a condition it cannot check.
+    const permissive = rule({ outcome: 'allow', ipRanges: ['203.0.113.0/99'] });
+    expect(
+      evaluatePolicy([permissive], { outcome: 'deny', factorType: null }, ctx()).outcome,
+    ).toBe('deny');
+  });
+
+  it('denies when there is no source address to test a deny rule against', () => {
+    const offsite = rule({ outcome: 'deny', ipRanges: ['203.0.113.0/24'] });
+    // A request whose origin could not be determined is not evidence that it
+    // came from somewhere allowed.
+    expect(evaluatePolicy([offsite], ALLOW, ctx({ sourceIp: null })).outcome).toBe('deny');
+  });
+
+  it('does not let an unresolvable timezone stop a deny rule applying', () => {
+    const nights = rule({
+      outcome: 'deny',
+      startMinute: 22 * 60,
+      endMinute: 6 * 60,
+      timezone: 'Middle/Earth',
+    });
+    expect(evaluatePolicy([nights], ALLOW, ctx()).outcome).toBe('deny');
+  });
+
+  it('still evaluates a deny rule normally when its conditions are readable', () => {
+    // Fail-closed is a backstop, not a shortcut: a well-formed deny rule that
+    // simply does not match must still not match.
+    const offsite = rule({ outcome: 'deny', ipRanges: ['203.0.113.0/24'] });
+    expect(evaluatePolicy([offsite], ALLOW, ctx({ sourceIp: '10.1.2.3' })).outcome).toBe(
+      'allow',
+    );
+  });
+
   it('exposes the per-rule match so the console can preview it', () => {
     const r = rule({ outcome: 'deny', groupIds: ['g-finance'] });
     expect(ruleMatches(r, ctx({ groupIds: ['g-finance'] }))).toBe(true);
@@ -1543,8 +1715,8 @@ Expected: FAIL — cannot resolve `./evaluate.js`.
 `packages/core/src/policy/evaluate.ts`:
 
 ```ts
-import { matchesIpRanges } from './ip-match.js';
-import { matchesTimeWindow } from './time-window.js';
+import { evaluateIpRanges, type ConditionResult } from './ip-match.js';
+import { evaluateTimeWindow } from './time-window.js';
 import type {
   AuthContext,
   ContractFacts,
@@ -1592,14 +1764,37 @@ function matchesGroups(rule: PolicyRule, groupIds: string[]): boolean {
  * that has not been saved yet, to count who it would affect before it is
  * stored. That preview and the live decision must agree, so they share this
  * function rather than each carrying their own reading of the conditions.
+ *
+ * THE ASYMMETRY, WHICH IS DELIBERATE. Two of the five conditions can be
+ * undecidable rather than simply false: a source-address condition with no
+ * address to test or a malformed range, and a time window in a timezone the
+ * platform cannot resolve. An undecidable condition resolves to *false* on
+ * `allow`, `require_mfa` and `require_factor`, and to *true* on `deny`.
+ *
+ * It looks like an inconsistency and it is not. Resolving to false everywhere
+ * means a rule written to refuse people quietly stops refusing them the moment
+ * one of its own fields is broken — a typo in a CIDR turns "block this range"
+ * into "block nobody", and nothing anywhere reports it. Resolving to true
+ * everywhere would be worse in the other direction: a broken `allow` rule
+ * would start letting people past conditions it was supposed to enforce. Each
+ * outcome fails towards refusing, which is the only direction that is safe in
+ * both cases.
+ *
+ * Write-time validation in policy-service.ts is what keeps this from arising;
+ * this is the backstop for a row that predates the check or arrives some other
+ * way.
  */
 export function ruleMatches(rule: PolicyRule, context: AuthContext): boolean {
+  const failClosed = rule.outcome === 'deny';
+  const decided = (result: ConditionResult): boolean =>
+    result === 'match' || (result === 'unevaluable' && failClosed);
+
   return (
     matchesApplication(rule, context.applicationId) &&
     matchesGroups(rule, context.groupIds) &&
     matchesContracts(rule, context.contracts) &&
-    matchesIpRanges(context.sourceIp, rule.ipRanges) &&
-    matchesTimeWindow(rule, context.now)
+    decided(evaluateIpRanges(context.sourceIp, rule.ipRanges)) &&
+    decided(evaluateTimeWindow(rule, context.now))
   );
 }
 
@@ -1659,7 +1854,7 @@ export function evaluatePolicy(
 - [ ] **Step 14: Run it to make sure it passes**
 
 Run: `pnpm vitest run packages/core/src/policy/evaluate.test.ts`
-Expected: PASS, 22 tests.
+Expected: PASS, 26 tests.
 
 - [ ] **Step 15: Export from core**
 
@@ -1698,7 +1893,7 @@ git commit -m "feat: add the authentication policy engine"
   - `function loadPolicy(tx: TenantClient): Promise<LoadedPolicy>`
   - `function setPolicyDefault(tx: TenantClient, fallback: PolicyFallback): Promise<void>`
   - `interface RuleInput { name: string; enabled?: boolean; outcome: PolicyOutcome; factorType?: FactorType | null; applicationIds?: string[]; groupIds?: string[]; contractField?: ContractField | null; contractValues?: string[]; ipRanges?: string[]; daysOfWeek?: number[]; startMinute?: number | null; endMinute?: number | null; timezone?: string | null }`
-  - `function addRule(tx: TenantClient, input: RuleInput): Promise<PolicyRule>`
+  - `function addRule(tx: TenantClient, input: RuleInput): Promise<PolicyRule>` — refuses a `require_factor: webauthn` rule when the tenant has no `primaryDomain`
   - `function updateRule(tx: TenantClient, ruleId: string, input: RuleInput): Promise<PolicyRule>`
   - `function deleteRule(tx: TenantClient, ruleId: string): Promise<void>`
   - `function reorderRules(tx: TenantClient, ruleIds: string[]): Promise<void>`
@@ -1796,6 +1991,50 @@ describe('addRule', () => {
         addRule(tx, { name: 'Bad range', outcome: 'deny', ipRanges: ['10.0.0.0/33'] }),
       ),
     ).rejects.toThrow(/ipRanges/);
+  });
+
+  it('refuses a security-key rule in a tenant that cannot use security keys', async () => {
+    // The relying party comes from Tenant.primaryDomain, so without one there
+    // is no way to register a key. Saving the rule anyway would leave every
+    // matched user at an enrolment screen whose only button returns a 409.
+    await expect(
+      withTenant(tenantId, (tx) =>
+        addRule(tx, {
+          name: 'Keys only',
+          outcome: 'require_factor',
+          factorType: 'webauthn',
+        }),
+      ),
+    ).rejects.toThrow(/primary domain/);
+  });
+
+  it('allows it once the tenant has a primary domain', async () => {
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { primaryDomain: 'acme.syntra.test' },
+    });
+    const rule = await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'Keys only', outcome: 'require_factor', factorType: 'webauthn' }),
+    );
+    expect(rule.factorType).toBe('webauthn');
+  });
+
+  it('stores the ranges a real tenant actually writes', async () => {
+    // The case whose absence let a validator that rejected 192.168.0.0/16 ship
+    // in the first draft: every test asserted a *rejection*, so nothing noticed
+    // that acceptance was broken too.
+    const ranges = [
+      '10.0.0.0/8',
+      '192.168.0.0/16',
+      '172.16.0.0/12',
+      '198.51.100.0/24',
+      '8.8.8.8',
+      '2001:db8::/32',
+    ];
+    const rule = await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'Office network', outcome: 'allow', ipRanges: ranges }),
+    );
+    expect(rule.ipRanges).toEqual(ranges);
   });
 
   it('refuses a day outside 0..6', async () => {
@@ -1903,7 +2142,7 @@ Expected: FAIL — cannot resolve `./policy-service.js`.
 ```ts
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
-import { matchesIpRanges } from './ip-match.js';
+import { isIpRangeUsable } from './ip-match.js';
 import { isValidTimeZone } from './time-window.js';
 import {
   CONTRACT_FIELDS,
@@ -2023,17 +2262,40 @@ function validate(input: RuleInput): void {
     throw new Error(`timezone is not a zone this platform knows: ${input.timezone}`);
   }
   for (const range of input.ipRanges ?? []) {
-    // Probing with an address of each family: a range this cannot be tested
-    // against at all is malformed, and storing it would leave a rule that can
-    // never fire and never explain why.
-    const usable =
-      matchesIpRanges('10.0.0.1', [range]) ||
-      matchesIpRanges('203.0.113.1', [range]) ||
-      matchesIpRanges('2001:db8::1', [range]) ||
-      matchesIpRanges('fd00::1', [range]);
-    if (!usable) {
+    // A parse, which is what a syntax check is. Asking instead whether the
+    // range happens to contain some probe address answers a different
+    // question, and rejects 192.168.0.0/16, 172.16.0.0/12, 198.51.100.0/24 and
+    // every literal host address — which is to say most of what a tenant
+    // actually types into an office allowlist.
+    if (!isIpRangeUsable(range)) {
       throw new Error(`ipRanges holds something that is not an address or CIDR: ${range}`);
     }
+  }
+}
+
+/**
+ * Refuses a rule that names WebAuthn in a tenant that cannot use it.
+ *
+ * Ruling F derives the relying party from `Tenant.primaryDomain`, so a tenant
+ * without one cannot register or assert a security key. A
+ * `require_factor: webauthn` rule saved in that state is a dead end nothing
+ * else catches: `authorize()` offers enrolment, the user reaches the enrolment
+ * screen, and the WebAuthn endpoint refuses with a 409 they can do nothing
+ * about. Catching it at write time, where an administrator is standing in front
+ * of the message, is the only place the fix is actionable.
+ */
+async function assertFactorUsable(
+  tx: TenantClient,
+  outcome: PolicyOutcome,
+  factorType: FactorType | null | undefined,
+): Promise<void> {
+  if (outcome !== 'require_factor' || factorType !== 'webauthn') return;
+  const tenantId = await currentTenant(tx);
+  const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+  if (!tenant.primaryDomain) {
+    throw new Error(
+      'this tenant has no primary domain set, so security keys cannot be registered — set one before requiring them',
+    );
   }
 }
 
@@ -2073,6 +2335,7 @@ export async function setPolicyDefault(
   if (fallback.outcome === 'require_factor' && !fallback.factorType) {
     throw new Error('factorType is required when the default outcome is require_factor');
   }
+  await assertFactorUsable(tx, fallback.outcome, fallback.factorType);
   const id = await policyId(tx);
   await tx.authPolicy.update({
     where: { id },
@@ -2101,6 +2364,7 @@ const data = (input: RuleInput) => ({
 
 export async function addRule(tx: TenantClient, input: RuleInput): Promise<PolicyRule> {
   validate(input);
+  await assertFactorUsable(tx, input.outcome, input.factorType);
   const tenantId = await currentTenant(tx);
   const id = await policyId(tx);
 
@@ -2122,6 +2386,7 @@ export async function updateRule(
   input: RuleInput,
 ): Promise<PolicyRule> {
   validate(input);
+  await assertFactorUsable(tx, input.outcome, input.factorType);
   const row = await tx.authPolicyRule.update({ where: { id: ruleId }, data: data(input) });
   return toRule(row);
 }
@@ -2185,7 +2450,7 @@ async function renumber(tx: TenantClient, orderedIds: string[]): Promise<void> {
 - [ ] **Step 4: Run it to make sure it passes**
 
 Run: `pnpm vitest run packages/core/src/policy/policy-service.test.ts`
-Expected: PASS, 15 tests.
+Expected: PASS, 18 tests.
 
 - [ ] **Step 5: Write the failing context test**
 
@@ -2426,9 +2691,9 @@ export async function buildAuthContext(
 }
 ```
 
-If `listGroupsForUser` returns membership rows rather than groups, map to
-`row.groupId` instead of `g.id` — check its return type in
-`packages/core/src/directory/group-service.ts` before running.
+`listGroupsForUser` returns `Group` rows, so `g.id` is the group id — verified
+against `packages/core/src/directory/group-service.ts`, which selects through
+the membership join and returns the groups themselves.
 
 - [ ] **Step 8: Run it to make sure it passes**
 
@@ -2461,19 +2726,24 @@ git commit -m "feat: add policy storage and authentication request context"
 - Create: `packages/core/src/auth/attempt-service.ts`
 - Create: `packages/core/src/auth/authorize.ts`
 - Modify: `packages/core/src/auth/login-service.ts` — stop exporting `authenticate` from the package
+- Modify: `packages/core/src/auth/session-service.ts` — carry `satisfiedFactor`
 - Modify: `packages/core/src/index.ts`
-- Modify: `apps/api/src/routes/auth.ts` — `/login` goes through `authorize()`
+- Create: `apps/api/src/routes/relying-party.ts`
+- Modify: `apps/api/src/routes/auth.ts` — `/login` and `/elevate` go through `authorize()`
 - Test: `packages/core/src/auth/authorize.test.ts`
 - Test: `apps/api/src/routes/auth.test.ts` — extend
 
 **Interfaces:**
-- Consumes: from Task 2 — `PolicyDecision`, `PolicyOutcome`, `FactorType`. From Task 3 — `loadPolicy`, `buildAuthContext`. From the existing codebase — `authenticate` (now internal), `recordEvent`, `isAdministrator`, `withTenant`.
+- Consumes: from Task 2 — `PolicyDecision`, `PolicyOutcome`, `FactorType`. From Task 3 — `loadPolicy`, `buildAuthContext`. From Task 1 — `AuthAttempt.scope`, `Session.satisfiedFactor`. From the existing codebase — `authenticate` (now internal), `recordEvent`, `isAdministrator`, `withTenant`, `SessionScope`, `createSession`, `resolveSession`, `ProblemError`.
 - Produces:
   - `interface RelyingParty { id: string; origin: string }` and `interface RelyingPartyIdentity extends RelyingParty { name: string }`
   - `type FactorPresentation = { type: 'totp'; code: string } | { type: 'webauthn'; assertion: unknown } | { type: 'recovery_code'; code: string }`
   - `type FactorPresentationType = FactorPresentation['type']`
   - `type FactorVerifyResult = { ok: true } | { ok: false; reason: string }`
   - `interface FactorVerifyContext { now: Date; relyingParty: RelyingParty }`
+  - `function tenantRelyingParty(tenant: { primaryDomain: string | null }, publicUrl: string): RelyingParty`
+  - `function assertWebAuthnUsable(request: FastifyRequest, tenant: { primaryDomain: string | null }, rp: RelyingParty): void`
+  - `createSession(tx, userId, scope, satisfiedFactor?)` and `ResolvedSession.satisfiedFactor`
   - `interface FactorVerifier { type: FactorPresentationType; enrollable: boolean; enrolled(tx: TenantClient, userId: string): Promise<boolean>; verify(tenantId: string, userId: string, presentation: FactorPresentation, context: FactorVerifyContext): Promise<FactorVerifyResult> }`
   - `function registerFactorVerifier(verifier: FactorVerifier): void`
   - `function resetFactorVerifiers(): void`
@@ -2482,12 +2752,12 @@ git commit -m "feat: add policy storage and authentication request context"
   - `function hasRecoveryCodes(tx: TenantClient, userId: string): Promise<boolean>`
   - `function verifyFactor(tenantId: string, userId: string, presentation: FactorPresentation, context: FactorVerifyContext): Promise<FactorVerifyResult>`
   - `type AttemptPurpose = 'verify' | 'enrol'`
-  - `type Principal = { kind: 'password'; login: string; password: string } | { kind: 'session'; userId: string; sessionId: string } | { kind: 'external'; userId: string; issuer: string }`
-  - `type AuthorizeRequest = { kind: 'primary'; principal: Principal; applicationId: string | null; sourceIp: string | null; relyingParty: RelyingParty; floor?: PolicyOutcome | undefined; now?: Date | undefined } | { kind: 'continue'; attemptToken: string; factor: FactorPresentation; sourceIp: string | null; relyingParty: RelyingParty; now?: Date | undefined } | { kind: 'enrolled'; attemptToken: string; enrolledFactor: FactorType; sourceIp: string | null; relyingParty: RelyingParty; now?: Date | undefined }`
-  - `type DenyReason = 'invalid_credentials' | 'user_inactive' | 'policy_denied' | 'factor_not_enrolled' | 'factor_invalid' | 'attempt_invalid'`
-  - `type AuthorizeResult = { status: 'allow'; userId: string; mayElevate: boolean; applicationId: string | null; satisfiedFactor: FactorPresentationType | null } | { status: 'challenge'; attemptToken: string; expiresAt: Date; acceptableFactors: FactorType[]; enrolledFactors: FactorType[] } | { status: 'enrol'; attemptToken: string; expiresAt: Date; enrollableFactors: FactorType[] } | { status: 'deny'; reason: DenyReason }`
+  - `type Principal = { kind: 'password'; login: string; password: string } | { kind: 'session'; userId: string; sessionId: string; satisfiedFactor: FactorPresentationType | null } | { kind: 'external'; userId: string; issuer: string }`
+  - `type AuthorizeRequest = { kind: 'primary'; principal: Principal; applicationId: string | null; sourceIp: string | null; relyingParty: RelyingParty; scope: SessionScope; floor?: PolicyOutcome | undefined; now?: Date | undefined } | { kind: 'continue'; attemptToken: string; factor: FactorPresentation; sourceIp: string | null; relyingParty: RelyingParty; now?: Date | undefined } | { kind: 'enrolled'; attemptToken: string; enrolledFactor: FactorType; sourceIp: string | null; relyingParty: RelyingParty; now?: Date | undefined }`
+  - `type DenyReason = 'invalid_credentials' | 'user_inactive' | 'policy_denied' | 'factor_not_enrolled' | 'factor_invalid' | 'factor_used_for_enrolment' | 'attempt_invalid'`
+  - `type AuthorizeResult = { status: 'allow'; userId: string; mayElevate: boolean; applicationId: string | null; scope: SessionScope; satisfiedFactor: FactorPresentationType | null } | { status: 'challenge'; attemptToken: string; expiresAt: Date; acceptableFactors: FactorPresentationType[]; enrolledFactors: FactorType[] } | { status: 'enrol'; attemptToken: string; expiresAt: Date; enrollableFactors: FactorType[] } | { status: 'deny'; reason: DenyReason }`
   - `function authorize(tenantId: string, request: AuthorizeRequest): Promise<AuthorizeResult>`
-  - `function issueAttempt(tx: TenantClient, input: IssueAttemptInput): Promise<{ token: string; expiresAt: Date }>`, `findAttempt(tx, token, now): Promise<ResolvedAttempt | null>`, `consumeAttempt(tx, attemptId, now): Promise<boolean>` — where `ResolvedAttempt` carries `{ id; userId; applicationId; purpose: AttemptPurpose; requiredOutcome; requiredFactor; ruleId }`
+  - `function issueAttempt(tx: TenantClient, input: IssueAttemptInput): Promise<{ token: string; expiresAt: Date }>`, `findAttempt(tx, token, now): Promise<ResolvedAttempt | null>`, `consumeAttempt(tx, attemptId, now): Promise<boolean>` — where `ResolvedAttempt` carries `{ id; userId; applicationId; purpose: AttemptPurpose; scope: SessionScope; requiredOutcome; requiredFactor; ruleId }`
 
 - [ ] **Step 1: Write the relying party and the factor plug-in types**
 
@@ -2676,6 +2946,7 @@ export function resetFactorVerifiers(): void {
 import { createHash, randomBytes } from 'node:crypto';
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
+import type { SessionScope } from './session-service.js';
 
 /** A step-up attempt is short-lived on purpose: it is a half-open door. */
 export const ATTEMPT_LIFETIME_MS = 5 * 60 * 1000;
@@ -2694,6 +2965,17 @@ export interface IssueAttemptInput {
   applicationId: string | null;
   sourceIp: string | null;
   purpose: AttemptPurpose;
+  /**
+   * The scope of the session to issue once this attempt is satisfied.
+   *
+   * Recorded here because the issuer is the only party that knows: signing in
+   * means 'portal', elevating means 'admin', and launching an application
+   * means 'portal' even though the caller already holds a session. Working it
+   * out at the far end from whether a cookie was present hands an
+   * administrative session to any portal user who completes a step-up, because
+   * the browser sends its cookie on every request.
+   */
+  scope: SessionScope;
   requiredOutcome: 'require_mfa' | 'require_factor';
   requiredFactor: string | null;
   ruleId: string | null;
@@ -2705,6 +2987,7 @@ export interface ResolvedAttempt {
   userId: string;
   applicationId: string | null;
   purpose: AttemptPurpose;
+  scope: SessionScope;
   requiredOutcome: 'require_mfa' | 'require_factor';
   requiredFactor: string | null;
   ruleId: string | null;
@@ -2734,6 +3017,7 @@ export async function issueAttempt(
       applicationId: input.applicationId,
       sourceIp: input.sourceIp,
       purpose: input.purpose,
+      scope: input.scope,
       requiredOutcome: input.requiredOutcome,
       requiredFactor: input.requiredFactor,
       ruleId: input.ruleId,
@@ -2761,6 +3045,7 @@ export async function findAttempt(
     userId: row.userId,
     applicationId: row.applicationId,
     purpose: row.purpose as AttemptPurpose,
+    scope: row.scope as SessionScope,
     requiredOutcome: row.requiredOutcome as 'require_mfa' | 'require_factor',
     requiredFactor: row.requiredFactor,
     ruleId: row.ruleId,
@@ -2842,6 +3127,7 @@ const signIn = (password = PASSWORD, sourceIp: string | null = '10.1.2.3') =>
     applicationId: null,
     sourceIp,
     relyingParty: RP,
+    scope: 'portal',
     now: NOW,
   });
 
@@ -2858,6 +3144,7 @@ describe('authorize — primary authentication', () => {
       userId,
       mayElevate: false,
       applicationId: null,
+      scope: 'portal',
       satisfiedFactor: null,
     });
   });
@@ -2876,6 +3163,7 @@ describe('authorize — primary authentication', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     expect(unknown).toEqual({ status: 'deny', reason: 'invalid_credentials' });
@@ -2893,6 +3181,7 @@ describe('authorize — primary authentication', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     expect(result).toMatchObject({ status: 'allow', userId });
@@ -2906,6 +3195,7 @@ describe('authorize — primary authentication', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     expect(result).toEqual({ status: 'deny', reason: 'user_inactive' });
@@ -2985,6 +3275,7 @@ describe('authorize — policy', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       floor: 'require_mfa',
       now: NOW,
     });
@@ -2999,6 +3290,7 @@ describe('authorize — policy', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       floor: 'allow',
       now: NOW,
     });
@@ -3072,6 +3364,7 @@ import {
   type ResolvedAttempt,
 } from './attempt-service.js';
 import { authenticate } from './login-service.js';
+import type { SessionScope } from './session-service.js';
 import {
   enrolledFactorTypes,
   enrollableFactorTypes,
@@ -3083,8 +3376,20 @@ import type { FactorPresentation, FactorPresentationType } from './mfa/types.js'
 
 export type Principal =
   | { kind: 'password'; login: string; password: string }
-  /** An existing Syntra session re-entering — used when launching an app. */
-  | { kind: 'session'; userId: string; sessionId: string }
+  /**
+   * An existing Syntra session re-entering — used when launching an app.
+   *
+   * `satisfiedFactor` is what that session was established with, read off the
+   * Session row. Without it every launch of an application covered by a
+   * `require_mfa` rule re-issues the same challenge the user just answered,
+   * and the application becomes permanently unreachable.
+   */
+  | {
+      kind: 'session';
+      userId: string;
+      sessionId: string;
+      satisfiedFactor: FactorPresentationType | null;
+    }
   /**
    * Primary authentication happened somewhere else. Access II's upstream
    * federation adapter constructs this after the upstream provider has
@@ -3100,6 +3405,13 @@ export type AuthorizeRequest =
       applicationId: string | null;
       sourceIp: string | null;
       relyingParty: RelyingParty;
+      /**
+       * What kind of session to issue if this succeeds, and what to record on
+       * any attempt this has to open along the way. The caller knows; nothing
+       * downstream can work it out from ambient state without getting it
+       * wrong.
+       */
+      scope: SessionScope;
       /**
        * A minimum the caller imposes regardless of policy. Elevation to an
        * administrative session uses it. It can only strengthen the outcome —
@@ -3136,6 +3448,14 @@ export type DenyReason =
   | 'policy_denied'
   | 'factor_not_enrolled'
   | 'factor_invalid'
+  /**
+   * The code was arithmetically correct but belongs to the counter step that
+   * completed enrolment, and the replay watermark refuses it. Distinct from
+   * `factor_invalid` because the caller must be able to say so: an unexplained
+   * rejection of a code the user can see on their screen is a support ticket,
+   * and an explained one is a sentence.
+   */
+  | 'factor_used_for_enrolment'
   | 'attempt_invalid';
 
 export type AuthorizeResult =
@@ -3144,6 +3464,8 @@ export type AuthorizeResult =
       userId: string;
       mayElevate: boolean;
       applicationId: string | null;
+      /** Carried from the request, or from the attempt on a step-up. */
+      scope: SessionScope;
       satisfiedFactor: FactorPresentationType | null;
     }
   | {
@@ -3151,7 +3473,14 @@ export type AuthorizeResult =
       status: 'challenge';
       attemptToken: string;
       expiresAt: Date;
-      acceptableFactors: FactorType[];
+      /**
+       * Includes 'recovery_code' when one would be accepted. It is a
+       * `FactorPresentationType[]` rather than `FactorType[]` for exactly that
+       * reason: a user whose only remaining factor is a printed code would
+       * otherwise be handed an empty list, and the screen would open a
+       * WebAuthn prompt for a key they do not have.
+       */
+      acceptableFactors: FactorPresentationType[];
       enrolledFactors: FactorType[];
     }
   | {
@@ -3315,8 +3644,13 @@ async function primary(
     userId: identified.userId,
     applicationId: request.applicationId,
     sourceIp: request.sourceIp,
+    scope: request.scope,
     floor: request.floor,
-    satisfied: null,
+    // A session principal brings whatever factor established it. Launching an
+    // application is a fresh decision, but it is not a fresh sign-in, and the
+    // factor the user already presented still counts.
+    satisfied:
+      request.principal.kind === 'session' ? request.principal.satisfiedFactor : null,
     now,
   });
 }
@@ -3325,8 +3659,13 @@ interface DecideInput {
   userId: string;
   applicationId: string | null;
   sourceIp: string | null;
+  /** What session to issue, and what to stamp on any attempt opened here. */
+  scope: SessionScope;
   floor: PolicyOutcome | undefined;
-  /** A factor already presented or enrolled during this flow. */
+  /**
+   * A factor presented or enrolled during this flow, or the one that
+   * established the caller's existing session.
+   */
   satisfied: FactorPresentationType | null;
   now: Date;
 }
@@ -3374,6 +3713,7 @@ async function decide(
         userId: input.userId,
         mayElevate,
         applicationId: input.applicationId,
+        scope: input.scope,
         satisfiedFactor: input.satisfied,
       } as const;
     };
@@ -3388,17 +3728,20 @@ async function decide(
     if (satisfiesRequirement(decision, input.satisfied)) return allow();
 
     const enrolled = await enrolledFactorTypes(tx, input.userId);
-    const acceptable: FactorType[] =
+    const acceptable: FactorPresentationType[] =
       decision.outcome === 'require_factor' && decision.factorType
         ? enrolled.filter((type) => type === decision.factorType)
-        : enrolled;
+        : [...enrolled];
 
     // A recovery code substitutes for "any second factor", never for a named
-    // one.
+    // one. It goes into the list the caller is shown, not just into the
+    // decision to issue a challenge — a user whose codes are all that is left
+    // must be offered them rather than shown an empty screen.
     const recovery =
       decision.outcome === 'require_mfa' && (await hasRecoveryCodes(tx, input.userId));
+    if (recovery) acceptable.push('recovery_code');
 
-    if (acceptable.length > 0 || recovery) {
+    if (acceptable.length > 0) {
       // The attempt and the audit event that explains it commit together. An
       // attempt row with no record of why it exists is a half-open door
       // nobody can account for.
@@ -3407,6 +3750,7 @@ async function decide(
         applicationId: input.applicationId,
         sourceIp: input.sourceIp,
         purpose: 'verify',
+        scope: input.scope,
         requiredOutcome:
           decision.outcome === 'require_factor' ? 'require_factor' : 'require_mfa',
         requiredFactor: decision.factorType,
@@ -3457,6 +3801,7 @@ async function decide(
         applicationId: input.applicationId,
         sourceIp: input.sourceIp,
         purpose: 'enrol',
+        scope: input.scope,
         requiredOutcome:
           decision.outcome === 'require_factor' ? 'require_factor' : 'require_mfa',
         requiredFactor: decision.factorType,
@@ -3557,6 +3902,17 @@ async function continueAttempt(
     return { status: 'deny', reason: 'factor_invalid' };
   }
 
+  // Checked before the factor is verified, not after. A recovery code is spent
+  // by the act of verifying it, so a user deactivated mid-flow would otherwise
+  // burn one of their ten codes on a sign-in that was always going to be
+  // refused. The window between this check and the consume below is still
+  // non-zero — a deactivation landing inside it spends the code — and that is
+  // accepted: the alternative is holding a transaction open across the
+  // verification, which is the constraint this whole design exists to respect.
+  if (!(await stillActive(tenantId, attempt.userId))) {
+    return { status: 'deny', reason: 'user_inactive' };
+  }
+
   // Phase 2 — verify. Outside any transaction: this is crypto and, for
   // WebAuthn, possibly a network read.
   const verification = await verifyFactor(tenantId, attempt.userId, request.factor, {
@@ -3574,6 +3930,16 @@ async function continueAttempt(
         payload: { reason: verification.reason, factor: request.factor.type },
       }),
     );
+    // One verifier reason is surfaced rather than collapsed: the code that
+    // completed enrolment is refused by the replay watermark, and a user
+    // looking at a correct-looking code on their phone needs to be told that
+    // rather than left to guess. It is safe to distinguish here and nowhere
+    // else, because reaching this point already required a valid attempt token
+    // issued after primary authentication succeeded — it discloses nothing an
+    // attacker does not already hold.
+    if (verification.reason === 'totp_used_for_enrolment') {
+      return { status: 'deny', reason: 'factor_used_for_enrolment' };
+    }
     return { status: 'deny', reason: 'factor_invalid' };
   }
 
@@ -3593,16 +3959,15 @@ async function continueAttempt(
   });
   if (!consumed) return { status: 'deny', reason: 'attempt_invalid' };
 
-  if (!(await stillActive(tenantId, attempt.userId))) {
-    return { status: 'deny', reason: 'user_inactive' };
-  }
-
   // Re-evaluating rather than trusting the stored decision means a rule
   // tightened while the user was reaching for their phone still applies.
   return decide(tenantId, {
     userId: attempt.userId,
     applicationId: attempt.applicationId,
     sourceIp: request.sourceIp,
+    // From the attempt, which recorded what its issuer intended. Never from
+    // whether this request happened to arrive with a cookie.
+    scope: attempt.scope,
     floor: undefined,
     satisfied: request.factor.type,
     now,
@@ -3616,6 +3981,9 @@ async function completeEnrolment(
 ): Promise<AuthorizeResult> {
   const attempt = await liveAttempt(tenantId, request.attemptToken, 'enrol', now);
   if (!attempt) return { status: 'deny', reason: 'attempt_invalid' };
+  if (!(await stillActive(tenantId, attempt.userId))) {
+    return { status: 'deny', reason: 'user_inactive' };
+  }
 
   if (
     attempt.requiredOutcome === 'require_factor' &&
@@ -3670,6 +4038,7 @@ async function completeEnrolment(
     userId: attempt.userId,
     applicationId: attempt.applicationId,
     sourceIp: request.sourceIp,
+    scope: attempt.scope,
     floor: undefined,
     satisfied: request.enrolledFactor,
     now,
@@ -3704,51 +4073,110 @@ export * from './auth/mfa/registry.js';
 Run: `pnpm vitest run packages/core/src/auth/authorize.test.ts`
 Expected: PASS, 18 tests.
 
-- [ ] **Step 9: Rewire the login route**
+- [ ] **Step 9: Derive the relying party from the tenant**
 
-In `apps/api/src/routes/auth.ts`, replace the `authenticate` import with
-`authorize`, add a helper that derives the relying party from the request, and
-replace the body of the `/login` handler.
-
-The relying party is computed from the Host header the tenant was resolved
-from, with the scheme taken from `PUBLIC_URL` rather than `request.protocol` —
-behind a TLS-terminating proxy Fastify reports `http` unless it is configured
-to trust the forwarded headers, and a wrong expected origin fails every
-WebAuthn assertion with a message that points nowhere useful.
+`apps/api/src/routes/relying-party.ts`:
 
 ```ts
+import type { FastifyRequest } from 'fastify';
 import type { RelyingParty } from '@syntra/core';
+import { ProblemError } from '../plugins/problem-json.js';
 
 /**
- * The WebAuthn relying party for this request. Exported so every route that
- * calls authorize() derives it the same way; a second derivation is a second
- * chance to get the origin wrong.
+ * The WebAuthn relying party for a tenant.
+ *
+ * From the tenant's own configuration, never from the request. `Host` is
+ * attacker-controlled and `tenant-context.ts` resolves a tenant from its
+ * leftmost label, so `acme.attacker.example` resolves tenant `acme` — deriving
+ * the RP ID or the expected origin from that header lets a phisher choose what
+ * their own assertion is checked against, which is precisely the property a
+ * security key exists to provide. Checking the stored `rpId` on the credential
+ * afterwards does not help, because a registration performed in the same
+ * phishing flow stamps the attacker's RP ID onto the row.
+ *
+ * The scheme and port come from `PUBLIC_URL`: behind a TLS-terminating proxy
+ * Fastify reports `http` unless it is told to trust the forwarded headers, and
+ * a wrong expected origin fails every assertion with a message that points
+ * nowhere useful.
  */
-export function relyingPartyFor(
-  request: FastifyRequest,
+export function tenantRelyingParty(
+  tenant: { primaryDomain: string | null },
   publicUrl: string,
 ): RelyingParty {
-  const host = request.headers.host ?? '';
+  const base = new URL(publicUrl);
+  if (!tenant.primaryDomain) {
+    // No primary domain configured. This is a usable relying party for a
+    // single-tenant deployment served straight off PUBLIC_URL; for anything
+    // else the Host check below refuses WebAuthn until an administrator sets
+    // one. That refusal is correct — there is no safe way to guess a tenant's
+    // own origin, and guessing it from the request is the vulnerability.
+    return { id: base.hostname, origin: base.origin };
+  }
+  const port = base.port ? `:${base.port}` : '';
   return {
-    id: host.split(':')[0]!,
-    origin: `${new URL(publicUrl).protocol}//${host}`,
+    id: tenant.primaryDomain,
+    origin: `${base.protocol}//${tenant.primaryDomain}${port}`,
   };
+}
+
+/**
+ * Refuses a WebAuthn operation whose request did not arrive on the tenant's own
+ * host.
+ *
+ * Applied at the WebAuthn endpoints only. Password authentication does not care
+ * what the relying party is, and refusing a sign-in because a tenant has not
+ * configured a primary domain would be a worse failure than the one being
+ * prevented.
+ */
+export function assertWebAuthnUsable(
+  request: FastifyRequest,
+  tenant: { primaryDomain: string | null },
+  rp: RelyingParty,
+): void {
+  const host = (request.headers.host ?? '').split(':')[0]!.toLowerCase();
+  if (host === rp.id.toLowerCase()) return;
+
+  throw new ProblemError(
+    409,
+    'webauthn-unavailable',
+    'Security keys are not available on this address',
+    tenant.primaryDomain
+      ? `This tenant registers security keys against ${rp.id}. Sign in at that address to use one.`
+      : 'An administrator must set this tenant a primary domain before security keys can be used. Until then, use an authenticator app.',
+  );
 }
 ```
 
-`registerAuthRoutes`'s options gain `publicUrl: string`; pass
+- [ ] **Step 10: Rewire the login and elevation routes**
+
+In `apps/api/src/routes/auth.ts`, replace the `authenticate` import with
+`authorize`. `registerAuthRoutes`'s options gain `publicUrl: string`; pass
 `config.publicUrl` when it is registered in `apps/api/src/app.ts`.
+
+Both handlers need the tenant row for its `primaryDomain`, so both read it
+through one helper:
+
+```ts
+  const relyingPartyFor = async (request: FastifyRequest) => {
+    const tenant = await request.db((tx) =>
+      tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+    );
+    return { tenant, rp: tenantRelyingParty(tenant, options.publicUrl) };
+  };
+```
 
 ```ts
   app.post('/login', { config: PASSWORD_RATE_LIMIT }, async (request, reply) => {
     const body = loginRequest.parse(request.body);
+    const { rp } = await relyingPartyFor(request);
 
     const result = await authorize(request.tenantId, {
       kind: 'primary',
       principal: { kind: 'password', login: body.login, password: body.password },
       applicationId: null,
       sourceIp: request.ip,
-      relyingParty: relyingPartyFor(request, options.publicUrl),
+      relyingParty: rp,
+      scope: 'portal',
     });
 
     // Every failure reason collapses into one response. Which of them applied
@@ -3781,27 +4209,151 @@ export function relyingPartyFor(
     }
 
     const { token } = await request.db((tx) =>
-      createSession(tx, result.userId, 'portal'),
+      createSession(tx, result.userId, result.scope, result.satisfiedFactor),
     );
     reply.setCookie(SESSION_COOKIE, token, cookieOptions);
 
-    return { status: 'authenticated', ...(await sessionBody(request, result.userId, 'portal')) };
+    return {
+      status: 'authenticated',
+      ...(await sessionBody(request, result.userId, result.scope)),
+    };
   });
 ```
 
-Leave `/elevate` on `authenticate` for now — Task 16 moves it, once a factor
-exists for it to demand.
-
-Fix `/elevate`'s import by importing `authenticate` from
-`@syntra/core/src/auth/login-service.js` there, with this comment above it:
+Elevation goes through `authorize()` in this same step. There is no interim
+where `/elevate` imports `authenticate` directly: the Global Constraint says
+`authorize()` is the only door, and a twelve-task exception to it is the kind of
+temporary arrangement that becomes permanent. Task 16 adds the MFA floor on top
+of this; the routing is done here.
 
 ```ts
-// Temporary: Task 16 routes elevation through authorize() with an MFA floor.
-// Until then this is the only caller outside authorize(), and it is a
-// re-authentication of an already-authorized session rather than a new door.
+  app.post(
+    '/elevate',
+    { preHandler: requireSession('portal'), config: PASSWORD_RATE_LIMIT },
+    async (request, reply) => {
+      const body = elevateRequest.parse(request.body);
+      const { userId } = request.session;
+
+      const admin = await request.db((tx) => isAdministrator(tx, userId));
+      if (!admin) {
+        throw new ProblemError(403, 'not-an-administrator', 'Not an administrator');
+      }
+
+      const user = await request.db((tx) => tx.user.findUnique({ where: { id: userId } }));
+      if (!user) throw new ProblemError(401, 'unauthenticated', 'Unauthenticated');
+
+      const { rp } = await relyingPartyFor(request);
+
+      // The password is re-entered rather than trusted from the existing
+      // session: elevation is a fresh authentication, not a flag flip.
+      const decision = await authorize(request.tenantId, {
+        kind: 'primary',
+        principal: { kind: 'password', login: user.login, password: body.password },
+        applicationId: null,
+        sourceIp: request.ip,
+        relyingParty: rp,
+        // The scope stamped on any attempt opened here, and the scope of the
+        // session issued at the end of it. Recorded, never inferred.
+        scope: 'admin',
+      });
+
+      if (decision.status === 'deny') {
+        throw new ProblemError(401, 'invalid-credentials', 'Invalid credentials');
+      }
+      if (decision.status === 'challenge') {
+        return reply.status(200).send({
+          status: 'challenge',
+          attemptToken: decision.attemptToken,
+          expiresAt: decision.expiresAt.toISOString(),
+          acceptableFactors: decision.acceptableFactors,
+        });
+      }
+      if (decision.status === 'enrol') {
+        return reply.status(200).send({
+          status: 'enrol',
+          attemptToken: decision.attemptToken,
+          expiresAt: decision.expiresAt.toISOString(),
+          enrollableFactors: decision.enrollableFactors,
+        });
+      }
+
+      const { token } = await request.db((tx) =>
+        createSession(tx, userId, decision.scope, decision.satisfiedFactor),
+      );
+      await request.db((tx) =>
+        recordEvent(tx, {
+          actorUserId: userId,
+          action: 'auth.elevate',
+          targetType: 'Session',
+          targetId: null,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: {},
+        }),
+      );
+
+      reply.setCookie(SESSION_COOKIE, token, cookieOptions);
+      return { status: 'authenticated', ...(await sessionBody(request, userId, 'admin')) };
+    },
+  );
 ```
 
-- [ ] **Step 10: Extend the route test**
+- [ ] **Step 11: Record what established a session**
+
+`createSession` and `resolveSession` must carry `satisfiedFactor`, or the
+application-launch path re-challenges forever. In
+`packages/core/src/auth/session-service.ts`, widen `createSession`:
+
+```ts
+export async function createSession(
+  tx: TenantClient,
+  userId: string,
+  scope: SessionScope,
+  satisfiedFactor: string | null = null,
+): Promise<{ token: string; expiresAt: Date }> {
+  const tenantId = await currentTenant(tx);
+  const token = randomBytes(32).toString('base64url');
+  const absoluteExpiresAt = new Date(Date.now() + ABSOLUTE_LIFETIME_MS[scope]);
+
+  await tx.session.create({
+    data: {
+      tenantId,
+      userId,
+      tokenHash: hashToken(token),
+      scope,
+      satisfiedFactor,
+      absoluteExpiresAt,
+    },
+  });
+
+  return { token, expiresAt: absoluteExpiresAt };
+}
+```
+
+and widen `ResolvedSession`:
+
+```ts
+export interface ResolvedSession {
+  sessionId: string;
+  userId: string;
+  scope: SessionScope;
+  /**
+   * The second factor this session was established with, if any.
+   *
+   * Read by anything that re-enters authorize() holding a session. Launching
+   * an application is a fresh decision, but it is not a fresh sign-in, and the
+   * factor the user already presented still counts. Without this, every launch
+   * of an application covered by a require_mfa rule issues the same challenge
+   * the user has just answered, and the application is unreachable forever.
+   */
+  satisfiedFactor: string | null;
+}
+```
+
+with `resolveSession` returning `satisfiedFactor: row.satisfiedFactor` alongside
+the fields it already returns.
+
+- [ ] **Step 12: Extend the route test**
 
 Append to `apps/api/src/routes/auth.test.ts`:
 
@@ -3842,13 +4394,13 @@ describe('POST /api/auth/login and policy', () => {
 
 Add `addRule` to the `@syntra/core` import at the top of that file.
 
-- [ ] **Step 11: Run the API suite**
+- [ ] **Step 13: Run the API suite**
 
 Run: `pnpm vitest run apps/api/src/routes/auth.test.ts`
 Expected: PASS. The pre-existing login tests still pass — with no policy
 configured the fallback is `allow`, so nothing about a plain sign-in changes.
 
-- [ ] **Step 12: Update the web client for the new shape**
+- [ ] **Step 14: Update the web client for the new shape**
 
 In `apps/web/src/session/SessionProvider.tsx`, the `login` callback currently
 assigns the response straight into the session. The response can now be a
@@ -3911,7 +4463,7 @@ to name both non-session outcomes for now — Task 14 gives each a screen:
       }
 ```
 
-- [ ] **Step 13: Run everything and commit**
+- [ ] **Step 15: Run everything and commit**
 
 ```bash
 pnpm exec tsc -b
@@ -4127,6 +4679,29 @@ describe('totpVerifier', () => {
       ok: false,
       reason: 'totp_replayed',
     });
+  });
+
+  it('names the enrolment code specifically when it is presented again', async () => {
+    // Enrol, then try to sign in with the same code seconds later. The refusal
+    // is correct; an unexplained one is a support ticket, so it carries its own
+    // reason all the way out to a sentence on the screen.
+    await withTenant(tenantId, (tx) => removeTotp(tx, userId));
+    const fresh = await enrol();
+    const code = codeAt(fresh.secret, NOW);
+    expect(await confirmTotpEnrolment(tenantId, provider, userId, code, NOW)).toBe(true);
+
+    expect(await verify(code, NOW)).toEqual({
+      ok: false,
+      reason: 'totp_used_for_enrolment',
+    });
+  });
+
+  it('still reports an ordinary replay as a replay', async () => {
+    const later = new Date(NOW.getTime() + 120_000);
+    const code = codeAt(secret, later);
+    expect(await verify(code, later)).toEqual({ ok: true });
+    // Not the enrolment step, so not the enrolment message.
+    expect(await verify(code, later)).toEqual({ ok: false, reason: 'totp_replayed' });
   });
 
   it('accepts the next step after one has been used', async () => {
@@ -4416,6 +4991,21 @@ export function totpVerifier(provider: MasterKeyProvider): FactorVerifier {
       if (!match) return { ok: false, reason: 'totp_invalid' };
 
       if (row.lastCounter !== null && match.counter <= row.lastCounter) {
+        // The watermark is set at confirmation, so the very code that
+        // completed enrolment is refused if it is presented again inside its
+        // own thirty-second step. That is the point — it stops the enrolment
+        // code being replayed as a login — but it is also the one refusal a
+        // user is guaranteed to meet while looking at a correct code, so it
+        // gets its own reason rather than disappearing into "invalid".
+        const enrolCounter = row.confirmedAt
+          ? OTPAuth.TOTP.counter({
+              period: row.period,
+              timestamp: row.confirmedAt.getTime(),
+            })
+          : null;
+        if (enrolCounter !== null && match.counter === enrolCounter) {
+          return { ok: false, reason: 'totp_used_for_enrolment' };
+        }
         return { ok: false, reason: 'totp_replayed' };
       }
 
@@ -4445,7 +5035,7 @@ export function installTotpVerifier(provider: MasterKeyProvider): void {
 - [ ] **Step 5: Run it to make sure it passes**
 
 Run: `pnpm vitest run packages/core/src/auth/mfa/totp.test.ts`
-Expected: PASS, 17 tests.
+Expected: PASS, 19 tests.
 
 If "refuses the same code twice" fails, the watermark is being written but not
 read back, or `updateMany`'s count is being ignored. Do not proceed — that is
@@ -4506,6 +5096,7 @@ describe('authorize — TOTP step-up', () => {
       applicationId: null,
       sourceIp: '10.1.2.3',
       relyingParty: RP,
+      scope: 'portal',
       now: later,
     });
 
@@ -4537,6 +5128,7 @@ describe('authorize — TOTP step-up', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: later,
     });
     if (challenge.status !== 'challenge') throw new Error('expected a challenge');
@@ -4565,6 +5157,7 @@ describe('authorize — TOTP step-up', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: later,
     });
     if (challenge.status !== 'challenge') throw new Error('expected a challenge');
@@ -4600,6 +5193,7 @@ describe('authorize — TOTP step-up', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: later,
     });
     if (challenge.status !== 'challenge') throw new Error('expected a challenge');
@@ -4625,6 +5219,7 @@ describe('authorize — TOTP step-up', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: new Date(NOW.getTime() + 60_000),
     });
 
@@ -4649,6 +5244,7 @@ describe('authorize — forced enrolment', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
 
@@ -4666,6 +5262,7 @@ describe('authorize — forced enrolment', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     if (offer.status !== 'enrol') throw new Error('expected an enrolment offer');
@@ -4702,6 +5299,7 @@ describe('authorize — forced enrolment', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     if (offer.status !== 'enrol') throw new Error('expected an enrolment offer');
@@ -4741,6 +5339,7 @@ describe('authorize — forced enrolment', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     if (offer.status !== 'enrol') throw new Error('expected an enrolment offer');
@@ -4765,6 +5364,7 @@ describe('authorize — forced enrolment', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     if (offer.status !== 'enrol') throw new Error('expected an enrolment offer');
@@ -4793,6 +5393,7 @@ describe('authorize — forced enrolment', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     // The tenant issues factors by hand. There is genuinely no way forward and
@@ -4812,6 +5413,7 @@ describe('authorize — forced enrolment', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     expect(result).toEqual({ status: 'deny', reason: 'factor_not_enrolled' });
@@ -4829,6 +5431,7 @@ describe('authorize — forced enrolment', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     expect(result).toMatchObject({ status: 'enrol', enrollableFactors: ['totp'] });
@@ -4842,7 +5445,7 @@ describe('authorize — forced enrolment', () => {
 pnpm exec tsc -b
 pnpm vitest run packages/core/src/auth
 ```
-Expected: PASS. `authorize.test.ts` now runs 32 tests.
+Expected: PASS. `authorize.test.ts` now runs 31 tests — the 18 from Task 4, plus five for the TOTP step-up and eight for forced enrolment.
 
 Add to `packages/core/src/index.ts`:
 
@@ -4899,8 +5502,9 @@ WebAuthn binds a credential to an RP ID and an origin, and Syntra selects a
 tenant from the Host header, so both are per request rather than configuration.
 Task 4 already declared `RelyingParty` in
 `packages/core/src/auth/mfa/relying-party.ts` and made it a required field on
-`AuthorizeRequest`; `relyingPartyFor(request, publicUrl)` in
-`apps/api/src/routes/auth.ts` is the one place it is derived.
+`AuthorizeRequest`; `tenantRelyingParty(tenant, publicUrl)` in
+`apps/api/src/routes/relying-party.ts` is the one place it is derived, from
+`Tenant.primaryDomain` and never from the `Host` header.
 
 Registration additionally wants a display name, which verification does not, so
 it takes `RelyingPartyIdentity` — the same two fields plus `name`, which routes
@@ -4912,7 +5516,11 @@ pure function of its inputs and what stops a background job compiling into a
 confusing run-time failure.
 
 The RP ID a credential was registered under is stored on the row and re-checked
-on every assertion, so a request arriving on a different host cannot use it.
+on every assertion. That check is a consistency guard, not the security
+control: a phisher who could choose the RP ID would stamp their own onto the
+row during registration and the comparison would pass. What makes the property
+hold is that the RP ID comes from the tenant's own configuration, which the
+attacker does not control.
 
 - [ ] **Step 3: Write the failing test**
 
@@ -5210,6 +5818,36 @@ describe('WebAuthn assertion', () => {
     expect(result).toEqual({ ok: false, reason: 'webauthn_counter_regressed' });
   });
 
+  it('still classifies the library counter error by its message', async () => {
+    // webauthnVerifier distinguishes a cloned key from a bad signature by
+    // looking for "counter" in the message @simplewebauthn/server throws.
+    // Confirmed against verifyAuthenticationResponse.js:144-150 in 13.3.2 —
+    // this test is what notices if a future version rewords it, because the
+    // classification would silently degrade to webauthn_assertion_rejected and
+    // a cloned key would look like a typo.
+    const { verifyAuthenticationResponse } = await import('@simplewebauthn/server');
+    const options = await beginWebAuthnAuthentication(tenantId, userId, RP);
+    const assertion = key.assert(options.challenge, RP);
+    const row = await withTenant(tenantId, (tx) => tx.webAuthnCredential.findFirst());
+
+    await expect(
+      verifyAuthenticationResponse({
+        response: assertion as never,
+        expectedChallenge: options.challenge,
+        expectedOrigin: RP.origin,
+        expectedRPID: RP.id,
+        credential: {
+          id: row!.credentialId,
+          publicKey: new Uint8Array(row!.publicKey),
+          // Ahead of what the authenticator will report, so the guard fires.
+          counter: key.counter + 5,
+          transports: [],
+        },
+        requireUserVerification: false,
+      }),
+    ).rejects.toThrow(/counter/i);
+  });
+
   it('refuses a counter that stands still', async () => {
     const first = await beginWebAuthnAuthentication(tenantId, userId, RP);
     await verify(key.assert(first.challenge, RP));
@@ -5462,7 +6100,7 @@ export async function finishWebAuthnRegistration(
         userId,
         credentialId: credential.id,
         publicKey: new Uint8Array(credential.publicKey),
-        counter: credential.counter,
+        counter: BigInt(credential.counter),
         transports: (credential.transports ?? []) as string[],
         attestationType: fmt,
         rpId: rp.id,
@@ -5596,7 +6234,10 @@ export function webauthnVerifier(): FactorVerifier {
           credential: {
             id: row.credentialId,
             publicKey: new Uint8Array(row.publicKey),
-            counter: row.counter,
+            // The column is BigInt because counters are uint32; the library
+            // wants a number. Exact well past uint32, so the conversion cannot
+            // lose a step.
+            counter: Number(row.counter),
             transports: row.transports as AuthenticatorTransportFuture[],
           },
           requireUserVerification: false,
@@ -5617,14 +6258,15 @@ export function webauthnVerifier(): FactorVerifier {
       }
 
       const next = verification.authenticationInfo.newCounter;
-      if (next <= row.counter && !(next === 0 && row.counter === 0)) {
+      const stored = Number(row.counter);
+      if (next <= stored && !(next === 0 && stored === 0)) {
         return { ok: false, reason: 'webauthn_counter_regressed' };
       }
 
       const advanced = await withTenant(tenantId, (tx) =>
         tx.webAuthnCredential.updateMany({
-          where: { id: row.id, counter: { lt: next } },
-          data: { counter: next, lastUsedAt: now },
+          where: { id: row.id, counter: { lt: BigInt(next) } },
+          data: { counter: BigInt(next), lastUsedAt: now },
         }),
       );
       if (advanced.count !== 1 && next !== 0) {
@@ -5655,7 +6297,7 @@ export function installWebAuthnVerifier(): void {
 - [ ] **Step 6: Run it to make sure it passes**
 
 Run: `pnpm vitest run packages/core/src/auth/mfa/webauthn.test.ts`
-Expected: PASS, 17 tests.
+Expected: PASS, 18 tests.
 
 If the software authenticator's attestation object fails to parse, check the
 CBOR byte-string header in `register()`: `0x59` introduces a two-byte length
@@ -6021,6 +6663,7 @@ describe('authorize — recovery codes', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     expect(challenge.status).toBe('challenge');
@@ -6048,6 +6691,7 @@ describe('authorize — recovery codes', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     // A printed code is not a hardware key, and a rule that asks for one is not
@@ -6067,6 +6711,7 @@ describe('authorize — recovery codes', () => {
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
+      scope: 'portal',
       now: NOW,
     });
     expect(result).toEqual({ status: 'deny', reason: 'factor_not_enrolled' });
@@ -6097,16 +6742,21 @@ git commit -m "feat: add single-use hashed recovery codes"
 - Create: `packages/contracts/src/mfa.ts`
 - Modify: `packages/contracts/src/index.ts`
 - Create: `apps/api/src/routes/mfa.ts`
+- Modify: `packages/core/src/notify/notification-service.ts` — replace `notify` with `renderMessage` + `sendMessage`
+- Modify: `packages/core/src/notify/notification-service.test.ts`
+- Modify: `packages/core/src/notify/templates/index.ts` — `factor-added`
 - Modify: `apps/api/src/app.ts`
 - Modify: `apps/api/src/routes/admin/users.ts` — remove a user's factor
 - Test: `apps/api/src/routes/mfa.test.ts`
 
 **Interfaces:**
-- Consumes: from Tasks 4–7 — `authorize`, `relyingPartyFor` (Task 4, `apps/api/src/routes/auth.ts`), `beginTotpEnrolment`, `confirmTotpEnrolment`, `hasTotp`, `removeTotp`, `installTotpVerifier`, `beginWebAuthnRegistration`, `finishWebAuthnRegistration`, `beginWebAuthnAuthentication`, `listWebAuthnCredentials`, `removeWebAuthnCredential`, `installWebAuthnVerifier`, `generateRecoveryCodes`, `countUnusedRecoveryCodes`, `removeRecoveryCodes`, `installRecoveryCodeVerifier`, `RelyingPartyIdentity`, `findAttempt`. From the existing codebase — `requireSession`, `requirePermission`, `ProblemError`, `createSession`, `recordEvent`, `PERMISSIONS`.
+- Consumes: from Tasks 4–7 — `authorize`, `tenantRelyingParty` and `assertWebAuthnUsable` (Task 4, `apps/api/src/routes/relying-party.ts`), `beginTotpEnrolment`, `confirmTotpEnrolment`, `hasTotp`, `removeTotp`, `installTotpVerifier`, `beginWebAuthnRegistration`, `finishWebAuthnRegistration`, `beginWebAuthnAuthentication`, `listWebAuthnCredentials`, `removeWebAuthnCredential`, `installWebAuthnVerifier`, `generateRecoveryCodes`, `countUnusedRecoveryCodes`, `removeRecoveryCodes`, `installRecoveryCodeVerifier`, `RelyingPartyIdentity`, `findAttempt`. From the existing codebase — `requireSession`, `requirePermission`, `ProblemError`, `createSession`, `recordEvent`, `PERMISSIONS`.
 - Produces:
   - Zod schemas `totpConfirmRequest`, `webauthnRegisterRequest`, `mfaVerifyRequest`, `webauthnChallengeRequest`, `mfaStatusResponse`, `adminFactorParams`
   - Routes under `/api/auth/mfa` and `/api/admin`
-  - `function relyingPartyIdentityFor(request: FastifyRequest, publicUrl: string, tenantName: string): RelyingPartyIdentity` — built on `relyingPartyFor` from Task 4's `routes/auth.ts`, so the origin is derived in exactly one place
+  - `function renderMessage(tenantName: string, template: TemplateName, to: string, vars: Record<string, string>): OutboundMessage` and `function sendMessage(transport: Transport, message: OutboundMessage): Promise<void>`, replacing `notify`
+  - the `factor-added` template
+  - `async function webauthnContext(request, publicUrl): Promise<{ rp: RelyingPartyIdentity }>` — reads the tenant, derives its relying party and refuses a mismatched `Host`
 
 - [ ] **Step 1: Write the contracts**
 
@@ -6200,16 +6850,23 @@ import {
   PERMISSIONS,
   addRule,
   assignRole,
+  beginTotpEnrolment,
+  confirmTotpEnrolment,
   createRole,
   createUser,
   generateRecoveryCodes,
+  localMasterKeyProvider,
   setPassword,
 } from '@syntra/core';
 import { buildTestApp } from '../test-support.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
+let userId: string;
 
 const PASSWORD = 'correct horse battery staple';
+
+/** The same master key buildTestApp configures, so the vault round-trips. */
+const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 
 beforeEach(async () => {
   ctx = await buildTestApp();
@@ -6217,22 +6874,24 @@ beforeEach(async () => {
 });
 
 async function seedUser(opts: { admin?: boolean } = {}) {
-  return withTenant(ctx.tenantId, async (tx) => {
-    const user = await createUser(tx, {
+  const user = await withTenant(ctx.tenantId, async (tx) => {
+    const created = await createUser(tx, {
       login: 'jdoe',
       email: 'j@acme.test',
       displayName: 'J Doe',
     });
-    await setPassword(tx, user.id, PASSWORD);
+    await setPassword(tx, created.id, PASSWORD);
     if (opts.admin) {
       const role = await createRole(tx, 'Owner', [
         PERMISSIONS.DIRECTORY_READ,
         PERMISSIONS.DIRECTORY_WRITE,
       ]);
-      await assignRole(tx, user.id, role.id);
+      await assignRole(tx, created.id, role.id);
     }
-    return user;
+    return created;
   });
+  userId = user.id;
+  return user;
 }
 
 const login = (password = PASSWORD) =>
@@ -6336,19 +6995,39 @@ describe('TOTP enrolment over HTTP', () => {
 });
 
 describe('the step-up round trip', () => {
+  /**
+   * Enrols through the core service at a timestamp two minutes in the past,
+   * not through HTTP at wall time.
+   *
+   * `confirmTotpEnrolment` sets the replay watermark to the counter step that
+   * confirmed the enrolment — which is the point, since it stops the enrolment
+   * code being replayed as a login. An HTTP enrolment followed immediately by
+   * an HTTP sign-in lands in that same thirty-second step, so a correct code is
+   * correctly refused and the test fails for a reason unrelated to what it is
+   * testing. Backdating the confirmation puts the watermark four steps behind,
+   * which makes the test deterministic rather than dependent on where in the
+   * half-minute it happened to run.
+   */
   async function enrolTotp(): Promise<string> {
-    const cookie = await portalCookie();
-    const begin = await call('POST', '/api/auth/mfa/totp/begin', { cookie });
-    const secret = begin.json().secret;
-    const code = OTPAuth.TOTP.generate({
-      secret: OTPAuth.Secret.fromBase32(secret),
-      period: 30,
-      digits: 6,
-      algorithm: 'SHA1',
-    });
-    await call('POST', '/api/auth/mfa/totp/confirm', { cookie, payload: { code } });
-    await call('POST', '/api/auth/logout', { cookie });
-    return secret;
+    const past = new Date(Date.now() - 120_000);
+    const enrolment = await withTenant(ctx.tenantId, (tx) =>
+      beginTotpEnrolment(tx, provider, userId),
+    );
+    const ok = await confirmTotpEnrolment(
+      ctx.tenantId,
+      provider,
+      userId,
+      OTPAuth.TOTP.generate({
+        secret: OTPAuth.Secret.fromBase32(enrolment.secret),
+        period: 30,
+        digits: 6,
+        algorithm: 'SHA1',
+        timestamp: past.getTime(),
+      }),
+      past,
+    );
+    expect(ok).toBe(true);
+    return enrolment.secret;
   }
 
   it('answers a login with a challenge and no cookie, then a session on verify', async () => {
@@ -6436,9 +7115,43 @@ describe('the step-up round trip', () => {
 });
 
 describe('recovery codes over HTTP', () => {
-  it('issues ten codes and reports the remaining count', async () => {
+  /** Recovery codes need a real factor to be a fallback for. */
+  async function withAFactor() {
+    await seedUser();
+    const past = new Date(Date.now() - 120_000);
+    const enrolment = await withTenant(ctx.tenantId, (tx) =>
+      beginTotpEnrolment(tx, provider, userId),
+    );
+    await confirmTotpEnrolment(
+      ctx.tenantId,
+      provider,
+      userId,
+      OTPAuth.TOTP.generate({
+        secret: OTPAuth.Secret.fromBase32(enrolment.secret),
+        period: 30,
+        digits: 6,
+        algorithm: 'SHA1',
+        timestamp: past.getTime(),
+      }),
+      past,
+    );
+    return portalCookie();
+  }
+
+  it('refuses a user who holds no other factor', async () => {
+    // Otherwise a user with nothing mints ten codes today, and a require_mfa
+    // rule saved next month is satisfied by a printed code forever — the
+    // forced-enrolment path is never reached and the rule buys the tenant
+    // nothing.
     await seedUser();
     const cookie = await portalCookie();
+    const res = await call('POST', '/api/auth/mfa/recovery-codes', { cookie });
+    expect(res.statusCode).toBe(409);
+    expect(await withTenant(ctx.tenantId, (tx) => tx.recoveryCode.count())).toBe(0);
+  });
+
+  it('issues ten codes and reports the remaining count', async () => {
+    const cookie = await withAFactor();
     const res = await call('POST', '/api/auth/mfa/recovery-codes', { cookie });
     expect(res.statusCode).toBe(200);
     expect(res.json().codes).toHaveLength(10);
@@ -6448,11 +7161,35 @@ describe('recovery codes over HTTP', () => {
   });
 
   it('never returns the codes again', async () => {
-    await seedUser();
-    const cookie = await portalCookie();
+    const cookie = await withAFactor();
     const codes = (await call('POST', '/api/auth/mfa/recovery-codes', { cookie })).json().codes;
     const status = await call('GET', '/api/auth/mfa', { cookie });
     expect(status.body).not.toContain(codes[0]);
+  });
+
+  it('mails the account owner when a factor is added', async () => {
+    // The only control that reaches the person who can tell a legitimate
+    // enrolment from an attacker's, and the reason it is unconditional: a
+    // factor added with a stolen password survives the password reset that
+    // would otherwise fix things.
+    await seedUser();
+    const cookie = await portalCookie();
+    const begin = await call('POST', '/api/auth/mfa/totp/begin', { cookie });
+    await call('POST', '/api/auth/mfa/totp/confirm', {
+      cookie,
+      payload: {
+        code: OTPAuth.TOTP.generate({
+          secret: OTPAuth.Secret.fromBase32(begin.json().secret),
+          period: 30,
+          digits: 6,
+          algorithm: 'SHA1',
+        }),
+      },
+    });
+
+    expect(ctx.mail.sent).toHaveLength(1);
+    expect(ctx.mail.sent[0]!.to).toBe('j@acme.test');
+    expect(ctx.mail.sent[0]!.subject).toContain('second factor');
   });
 });
 
@@ -6460,7 +7197,7 @@ describe('administrative factor removal', () => {
   it('removes a user factor and writes an audit event', async () => {
     const admin = await seedUser({ admin: true });
     const cookie = await portalCookie();
-    await call('POST', '/api/auth/mfa/recovery-codes', { cookie });
+    await withTenant(ctx.tenantId, (tx) => generateRecoveryCodes(tx, admin.id));
 
     const elevated = await ctx.app.inject({
       method: 'POST',
@@ -6495,7 +7232,117 @@ describe('administrative factor removal', () => {
 Run: `pnpm vitest run apps/api/src/routes/mfa.test.ts`
 Expected: FAIL — 404 on every MFA route.
 
-- [ ] **Step 4: Add the QR dependency**
+- [ ] **Step 4: Split the notification service so a send cannot sit in a transaction**
+
+`notify(tx, transport, …)` reads the tenant row and then awaits
+`transport.send()`. Every call from inside `withTenant` therefore puts an SMTP
+round trip inside `prisma.$transaction`, under the 5000 ms default — the exact
+Critical the previous slice shipped. This task is the first caller, so the trap
+is removed here rather than worked around.
+
+Replace `notify` in `packages/core/src/notify/notification-service.ts`:
+
+```ts
+/**
+ * Renders a message. Pure: no database, no transport, no clock.
+ *
+ * The tenant name is a parameter rather than something read from a
+ * transaction, which is what makes this safe to call anywhere — and what stops
+ * the send being dragged inside a transaction along with the read.
+ */
+export function renderMessage(
+  tenantName: string,
+  template: TemplateName,
+  to: string,
+  vars: Record<string, string>,
+): OutboundMessage {
+  const definition = TEMPLATES[template];
+  if (!definition) {
+    throw new Error(`unknown template: ${template}`);
+  }
+
+  const all = { ...vars, tenantName };
+  return {
+    to,
+    subject: render(definition.subject, all, false),
+    text: render(definition.text, all, false),
+    // Only the HTML part is escaped; escaping the text part would show the
+    // reader a literal &amp; instead of an ampersand.
+    html: render(definition.html, all, true),
+  };
+}
+
+/**
+ * Sends a rendered message.
+ *
+ * Takes no transaction, and therefore cannot be given one. That is the whole
+ * design: the previous signature accepted a `TenantClient`, which made
+ * `withTenant(tx => notify(tx, …))` look like the obvious way to call it.
+ */
+export async function sendMessage(
+  transport: Transport,
+  message: OutboundMessage,
+): Promise<void> {
+  await transport.send(message);
+}
+```
+
+Delete `notify` and its `TenantClient` and `currentTenant` imports. Rewrite
+`packages/core/src/notify/notification-service.test.ts` against the pair — the
+tenant name is now passed in, so most of its cases stop needing `withTenant` at
+all:
+
+```ts
+it('renders the tenant name into the message', () => {
+  const message = renderMessage('Acme Care', 'welcome', 'jo@acme.test', {
+    displayName: 'Jo',
+  });
+  expect(message.subject).toContain('Acme Care');
+  expect(message.text).toContain('Jo');
+  expect(message.to).toBe('jo@acme.test');
+});
+
+it('escapes html in a variable so a display name cannot inject markup', () => {
+  const message = renderMessage('Acme Care', 'welcome', 'jo@acme.test', {
+    displayName: '<script>alert(1)</script>',
+  });
+  expect(message.html).not.toContain('<script>');
+  expect(message.html).toContain('&lt;script&gt;');
+});
+
+it('refuses an unknown template', () => {
+  expect(() => renderMessage('Acme Care', 'nope' as never, 'jo@acme.test', {})).toThrow(
+    /unknown template/,
+  );
+});
+
+it('sends what it was given', async () => {
+  const transport = memoryTransport();
+  await sendMessage(transport, renderMessage('Acme Care', 'welcome', 'jo@acme.test', {}));
+  expect(transport.sent).toHaveLength(1);
+});
+```
+
+The per-tenant case that used two tenants keeps its `withTenant` calls to read
+the two names, and asserts the two rendered subjects differ.
+
+Then add the template Ruling H requires, in
+`packages/core/src/notify/templates/index.ts`:
+
+```ts
+  'factor-added': {
+    subject: 'A second factor was added to your {{tenantName}} account',
+    text: 'Hello {{displayName}},\n\nA {{factor}} was added to your account on {{when}}, from {{sourceIp}}.\n\nIf that was you, nothing further is needed. If it was not, contact your administrator immediately and change your password — a second factor added by someone else survives a password change, so the factor has to be removed too.',
+    html: '<p>Hello {{displayName}},</p><p>A <strong>{{factor}}</strong> was added to your account on {{when}}, from {{sourceIp}}.</p><p>If that was you, nothing further is needed. If it was not, contact your administrator immediately and change your password — a second factor added by someone else survives a password change, so the factor has to be removed too.</p>',
+  },
+```
+
+This is the only control that reaches the one person who can tell a legitimate
+enrolment from an attacker's. The audit event stays, but an audit row nobody
+reads does not discharge the obligation, and the sentence about surviving a
+password change is the part that makes the mail actionable.
+
+- [ ] **Step 5: Add the QR dependency**
 
 ```bash
 pnpm --filter @syntra/api add @nuintun/qrcode@5.0.3
@@ -6506,7 +7353,7 @@ runtime dependency, and it renders straight to a data URL. The alternative,
 `qrcode`, pulls `yargs` into a server dependency tree for the sake of a CLI
 nobody here runs.
 
-- [ ] **Step 5: Implement the routes**
+- [ ] **Step 6: Implement the routes**
 
 `apps/api/src/routes/mfa.ts`:
 
@@ -6541,12 +7388,13 @@ import {
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
-import { relyingPartyFor } from './auth.js';
+import { assertWebAuthnUsable, tenantRelyingParty } from './relying-party.js';
 
 export interface MfaRouteOptions {
   masterKey: Buffer;
   publicUrl: string;
   authRateLimitMax: number;
+  transport: Transport;
 }
 
 const SECURE = process.env.NODE_ENV === 'production';
@@ -6559,18 +7407,61 @@ const cookieOptions = {
 };
 
 /**
- * Registration also wants a display name for the browser prompt; verification
- * does not. The id and origin come from `relyingPartyFor` in auth.ts, so there
- * is exactly one derivation of the origin in the codebase — a second one is a
- * second chance to get it wrong, and a wrong expected origin fails every
- * assertion with a message that points nowhere useful.
+ * Reads the tenant, derives its relying party, and refuses if this request did
+ * not arrive on the tenant's own host.
+ *
+ * One helper rather than three call sites doing it by hand: every WebAuthn
+ * endpoint needs the same three things in the same order, and a site that
+ * forgot `assertWebAuthnUsable` would be a phishable endpoint that looked
+ * exactly like the others.
  */
-export function relyingPartyIdentityFor(
+async function webauthnContext(
   request: FastifyRequest,
   publicUrl: string,
-  tenantName: string,
-): RelyingPartyIdentity {
-  return { ...relyingPartyFor(request, publicUrl), name: tenantName };
+): Promise<{ rp: RelyingPartyIdentity }> {
+  const tenant = await request.db((tx) =>
+    tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+  );
+  const rp = tenantRelyingParty(tenant, publicUrl);
+  assertWebAuthnUsable(request, tenant, rp);
+  // Registration also wants a display name for the browser prompt;
+  // verification does not.
+  return { rp: { ...rp, name: tenant.name } };
+}
+
+/**
+ * Tells the account owner a factor was added.
+ *
+ * Rendered and sent outside every transaction. Ruling H makes this
+ * unconditional rather than reserved for forced enrolment: the plan already
+ * mails on a password change, and a factor added by a stolen password is the
+ * more serious of the two, because it survives the password reset that would
+ * otherwise fix things.
+ *
+ * Module scope, and the transport is a parameter rather than a closure over
+ * `options`, because the forced-enrolment router in Task 9 calls it too and is
+ * registered separately.
+ */
+export async function tellOwnerAFactorWasAdded(
+  request: FastifyRequest,
+  transport: Transport,
+  userId: string,
+  factor: string,
+): Promise<void> {
+  const { user, tenantName } = await request.db(async (tx) => ({
+    user: await tx.user.findUnique({ where: { id: userId } }),
+    tenantName: (await tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }))
+      .name,
+  }));
+  if (!user) return;
+
+  const message = renderMessage(tenantName, 'factor-added', user.email, {
+    displayName: user.displayName,
+    factor,
+    when: new Date().toISOString(),
+    sourceIp: request.ip,
+  });
+  await sendMessage(transport, message);
 }
 
 const qrDataUrl = (text: string) =>
@@ -6585,14 +7476,18 @@ export async function registerMfaRoutes(
     rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
   };
 
-  async function sessionBody(request: FastifyRequest, userId: string) {
+  async function sessionBody(
+    request: FastifyRequest,
+    userId: string,
+    scope: SessionScope,
+  ) {
     const user = await request.db((tx) => tx.user.findUnique({ where: { id: userId } }));
     const permissions = await request.db((tx) => permissionsForUser(tx, userId));
     return {
       status: 'authenticated' as const,
       userId,
       displayName: user?.displayName ?? '',
-      scope: 'portal' as const,
+      scope,
       mayElevate: permissions.size > 0,
       permissions: [...permissions],
     };
@@ -6608,17 +7503,35 @@ export async function registerMfaRoutes(
         ? ({ type: 'webauthn', assertion: body.assertion } as const)
         : ({ type: body.type, code: body.code } as const);
 
+    const tenant = await request.db((tx) =>
+      tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+    );
+
     const result = await authorize(request.tenantId, {
       kind: 'continue',
       attemptToken: body.attemptToken,
       factor,
       sourceIp: request.ip,
-      relyingParty: relyingPartyFor(request, options.publicUrl),
+      relyingParty: tenantRelyingParty(tenant, options.publicUrl),
     });
 
-    // A bad code, an unknown attempt token and an expired one all answer the
-    // same. Distinguishing them would tell an attacker which half to work on.
     if (result.status === 'deny') {
+      // One refusal is named, because the user is looking at a code that is
+      // arithmetically correct and needs to be told why it was not taken. It
+      // is safe to distinguish here and nowhere else: reaching this point
+      // required a valid attempt token, which only exists after primary
+      // authentication has already succeeded.
+      if (result.reason === 'factor_used_for_enrolment') {
+        throw new ProblemError(
+          400,
+          'code-already-used-for-setup',
+          'That code completed your setup',
+          'It cannot be used again to sign in. Wait for your app to show the next code.',
+        );
+      }
+      // Everything else collapses into one response. A bad code, an unknown
+      // attempt token and an expired one read identically, so nothing tells an
+      // attacker which half to work on.
       throw new ProblemError(401, 'invalid-credentials', 'Invalid credentials');
     }
 
@@ -6642,9 +7555,15 @@ export async function registerMfaRoutes(
       });
     }
 
-    const { token } = await request.db((tx) => createSession(tx, result.userId, 'portal'));
+    // The scope comes off the attempt, which recorded what its issuer meant.
+    // Never from whether this request happened to carry a cookie — the web
+    // client sends one on every call, so that inference hands an
+    // administrative session to any portal user completing a step-up.
+    const { token } = await request.db((tx) =>
+      createSession(tx, result.userId, result.scope, result.satisfiedFactor),
+    );
     reply.setCookie(SESSION_COOKIE, token, cookieOptions);
-    return sessionBody(request, result.userId);
+    return sessionBody(request, result.userId, result.scope);
   });
 
   /**
@@ -6662,11 +7581,8 @@ export async function registerMfaRoutes(
       throw new ProblemError(401, 'invalid-credentials', 'Invalid credentials');
     }
 
-    return beginWebAuthnAuthentication(
-      request.tenantId,
-      attempt.userId,
-      relyingPartyFor(request, options.publicUrl),
-    );
+    const { rp } = await webauthnContext(request, options.publicUrl);
+    return beginWebAuthnAuthentication(request.tenantId, attempt.userId, rp);
   });
 
   // ---- Enrolment by a user who is already signed in. Everything below needs
@@ -6681,9 +7597,25 @@ export async function registerMfaRoutes(
       const totp = await request.db((tx) => hasTotp(tx, userId));
       const credentials = await request.db((tx) => listWebAuthnCredentials(tx, userId));
       const remaining = await request.db((tx) => countUnusedRecoveryCodes(tx, userId));
+
+      // Whether a security key can be registered here at all, so the screen can
+      // say why the button is disabled instead of offering an action that
+      // always fails.
+      let webauthnAvailable = true;
+      let webauthnUnavailableReason: string | null = null;
+      try {
+        await webauthnContext(request, options.publicUrl);
+      } catch (cause) {
+        webauthnAvailable = false;
+        webauthnUnavailableReason =
+          cause instanceof ProblemError ? (cause.detail ?? cause.title) : null;
+      }
+
       return {
         totp: { enrolled: totp },
         webauthn: {
+          available: webauthnAvailable,
+          unavailableReason: webauthnUnavailableReason,
           credentials: credentials.map((c) => ({
             id: c.id,
             label: c.label,
@@ -6696,9 +7628,21 @@ export async function registerMfaRoutes(
     });
 
     secured.post('/totp/begin', { config: LIMIT }, async (request) => {
-      const enrolment = await request.db((tx) =>
-        beginTotpEnrolment(tx, provider, request.session.userId),
-      );
+      // beginTotpEnrolment throws when a *confirmed* credential already
+      // exists. That is a conflict the caller can act on — remove the old one
+      // first — not a server fault, and a 500 here would also print a stack
+      // trace into the log for an ordinary double-click.
+      const enrolment = await request.db(async (tx) => {
+        if (await hasTotp(tx, request.session.userId)) {
+          throw new ProblemError(
+            409,
+            'already-enrolled',
+            'An authenticator app is already set up',
+            'Remove the existing one before setting up another.',
+          );
+        }
+        return beginTotpEnrolment(tx, provider, request.session.userId);
+      });
       // QR encoding happens outside the transaction above: it is pure CPU work
       // and has no business inside Prisma's 5000 ms transaction budget.
       return { ...enrolment, qr: qrDataUrl(enrolment.uri) };
@@ -6726,29 +7670,29 @@ export async function registerMfaRoutes(
           payload: { factor: 'totp', underForcedEnrolment: false },
         }),
       );
+      // Outside every transaction above, and awaited so a mail failure is
+      // logged rather than becoming an unhandled rejection.
+      await tellOwnerAFactorWasAdded(
+        request,
+        options.transport,
+        request.session.userId,
+        'authenticator app',
+      );
       return reply.status(204).send();
     });
 
     secured.post('/webauthn/begin', { config: LIMIT }, async (request) => {
-      const tenant = await request.db((tx) =>
-        tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
-      );
-      return beginWebAuthnRegistration(
-        request.tenantId,
-        request.session.userId,
-        relyingPartyIdentityFor(request, options.publicUrl, tenant.name),
-      );
+      const { rp } = await webauthnContext(request, options.publicUrl);
+      return beginWebAuthnRegistration(request.tenantId, request.session.userId, rp);
     });
 
     secured.post('/webauthn/finish', { config: LIMIT }, async (request, reply) => {
       const body = webauthnRegisterRequest.parse(request.body);
-      const tenant = await request.db((tx) =>
-        tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
-      );
+      const { rp } = await webauthnContext(request, options.publicUrl);
       const outcome = await finishWebAuthnRegistration(
         request.tenantId,
         request.session.userId,
-        relyingPartyIdentityFor(request, options.publicUrl, tenant.name),
+        rp,
         body.label,
         body.response as never,
       );
@@ -6783,6 +7727,12 @@ export async function registerMfaRoutes(
           },
         }),
       );
+      await tellOwnerAFactorWasAdded(
+        request,
+        options.transport,
+        request.session.userId,
+        'security key',
+      );
       return reply.status(204).send();
     });
 
@@ -6806,6 +7756,24 @@ export async function registerMfaRoutes(
     });
 
     secured.post('/recovery-codes', { config: LIMIT }, async (request) => {
+      // Recovery codes are the fallback for a factor you already hold, not a
+      // factor in themselves. Without this gate a user with nothing can mint
+      // ten codes today, and a require_mfa rule saved next month is satisfied
+      // by a printed code forever — the forced-enrolment path is never
+      // reached, and the rule buys the tenant nothing. This is the check the
+      // endpoint's own comment already claimed it made.
+      const held = await request.db((tx) =>
+        enrolledFactorTypes(tx, request.session.userId),
+      );
+      if (held.length === 0) {
+        throw new ProblemError(
+          409,
+          'no-factor-to-recover',
+          'Set up a second factor first',
+          'Recovery codes are a way back in when you lose your authenticator app or security key, so there has to be one to lose.',
+        );
+      }
+
       const codes = await request.db((tx) =>
         generateRecoveryCodes(tx, request.session.userId),
       );
@@ -6828,7 +7796,7 @@ export async function registerMfaRoutes(
 }
 ```
 
-- [ ] **Step 6: Mount the routes and install the verifiers**
+- [ ] **Step 7: Mount the routes and install the verifiers**
 
 In `apps/api/src/app.ts`, add the imports and, after `registerAuthRoutes`:
 
@@ -6850,10 +7818,13 @@ In `apps/api/src/app.ts`, add the imports and, after `registerAuthRoutes`:
     masterKey: config.masterKey,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
+    // The factor-added mail. `transport` is the same one the password-reset
+    // routes get; Task 10 threads it through `buildApp`.
+    transport,
   });
 ```
 
-- [ ] **Step 7: Add the administrative factor removal**
+- [ ] **Step 8: Add the administrative factor removal**
 
 In `apps/api/src/routes/admin/users.ts`, add:
 
@@ -6885,7 +7856,7 @@ In `apps/api/src/routes/admin/users.ts`, add:
   );
 ```
 
-- [ ] **Step 8: Fix the login test that assumed nothing was enrollable**
+- [ ] **Step 9: Fix the login test that assumed nothing was enrollable**
 
 Installing the verifiers changes an answer Task 4 asserted. With TOTP and
 WebAuthn registered, a `require_mfa` rule no longer refuses a user who holds
@@ -6911,12 +7882,12 @@ the case added in Task 4:
 
 Task 9 asserts the rest of that flow, in `apps/api/src/routes/enrol.test.ts`.
 
-- [ ] **Step 9: Run the suite**
+- [ ] **Step 10: Run the suite**
 
 Run: `pnpm vitest run apps/api/src/routes/mfa.test.ts apps/api/src/routes/auth.test.ts`
-Expected: PASS, 13 tests in `mfa.test.ts`.
+Expected: PASS, 15 tests in `mfa.test.ts`.
 
-- [ ] **Step 10: Typecheck and commit**
+- [ ] **Step 11: Typecheck and commit**
 
 ```bash
 pnpm exec tsc -b
@@ -6940,10 +7911,11 @@ git commit -m "feat: expose MFA enrolment and step-up over HTTP"
 - Test: `packages/core/src/policy/impact.test.ts`
 
 **Interfaces:**
-- Consumes: from Task 4 — `authorize`, `findAttempt`, `relyingPartyFor`, `enrolledFactorTypes`, `ruleMatches` (Task 2), `buildAuthContext` (Task 3). From Tasks 5–7 — `beginTotpEnrolment`, `confirmTotpEnrolment`, `beginWebAuthnRegistration`, `finishWebAuthnRegistration`. From Task 8 — `relyingPartyIdentityFor`, `qrDataUrl` (export it from `mfa.ts`).
+- Consumes: from Task 4 — `authorize`, `findAttempt`, `tenantRelyingParty`, `enrolledFactorTypes`, `ruleMatches` (Task 2), `buildAuthContext` (Task 3). From Tasks 5–7 — `beginTotpEnrolment`, `confirmTotpEnrolment`, `beginWebAuthnRegistration`, `finishWebAuthnRegistration`. From Task 8 — `qrDataUrl`, `webauthnContext` and `tellOwnerAFactorWasAdded` (export all three from `mfa.ts`).
 - Produces:
   - `interface RuleImpact { totalActiveUsers: number; matchedUsers: number; usersNeedingEnrolment: number; unevaluatedConditions: string[] }`
-  - `function previewRuleImpact(tx: TenantClient, rule: RuleInput, now?: Date): Promise<RuleImpact>`
+  - `const IMPACT_USER_CAP = 25_000`, `const IMPACT_MEMBERSHIP_CAP = 100_000`
+  - `function previewRuleImpact(tx: TenantClient, rule: RuleInput, now?: Date, caps?: ImpactCaps): Promise<RuleImpact>`
   - Zod schemas `enrolBeginRequest`, `enrolTotpConfirmRequest`, `enrolWebauthnFinishRequest`
   - Routes under `/api/auth/enrol`
 
@@ -7132,6 +8104,33 @@ describe('previewRuleImpact', () => {
     expect(impact.matchedUsers).toBe(1);
   });
 
+  it('answers from counts, and says so, when the directory is too large to walk', async () => {
+    // Not a real 25,000-user fixture: the cap is lowered for the test, which is
+    // what makes the partial-answer branch reachable at all. Without this the
+    // branch would first run on a customer's directory.
+    await user('a');
+    await user('b');
+    const impact = await withTenant(tenantId, (tx) =>
+      previewRuleImpact(
+        tx,
+        {
+          name: 'Finance',
+          outcome: 'require_mfa',
+          contractField: 'department',
+          contractValues: ['Finance'],
+        },
+        NOW,
+        { userCap: 1, membershipCap: 1 },
+      ),
+    );
+
+    expect(impact.totalActiveUsers).toBe(2);
+    // No group condition, so SQL matches everyone; the contract condition it
+    // could not apply is named rather than silently ignored.
+    expect(impact.matchedUsers).toBe(2);
+    expect(impact.unevaluatedConditions).toContain('contract attributes');
+  });
+
   it('assumes the user is entering the application a rule names', async () => {
     await user('a');
     const appId = await withTenant(tenantId, async (tx) => {
@@ -7178,6 +8177,17 @@ export interface RuleImpact {
 }
 
 /**
+ * Above these, the preview stops loading rows and answers from counts alone.
+ *
+ * A directory of a hundred thousand people would otherwise pull every user and
+ * every membership into the API process to answer a question an administrator
+ * asked out of curiosity. The partial answer is still useful and, crucially,
+ * still honest: it says which dimensions it could not apply.
+ */
+export const IMPACT_USER_CAP = 25_000;
+export const IMPACT_MEMBERSHIP_CAP = 100_000;
+
+/**
  * How many people a rule would touch, answered before it is saved.
  *
  * Directory Sync learned this the expensive way: a change that silently
@@ -7197,11 +8207,80 @@ export interface RuleImpact {
  * thousands of round trips on a real directory, and a preview that times out
  * teaches nobody anything.
  */
+export interface ImpactCaps {
+  userCap?: number;
+  membershipCap?: number;
+}
+
 export async function previewRuleImpact(
   tx: TenantClient,
   rule: RuleInput,
   now: Date = new Date(),
+  caps: ImpactCaps = {},
 ): Promise<RuleImpact> {
+  const userCap = caps.userCap ?? IMPACT_USER_CAP;
+  const membershipCap = caps.membershipCap ?? IMPACT_MEMBERSHIP_CAP;
+  const unevaluatedConditions: string[] = [];
+  if ((rule.ipRanges ?? []).length > 0) unevaluatedConditions.push('source address');
+  if (
+    (rule.daysOfWeek ?? []).length > 0 ||
+    (rule.startMinute ?? null) !== null ||
+    (rule.endMinute ?? null) !== null
+  ) {
+    unevaluatedConditions.push('time window');
+  }
+
+  const demandsFactor =
+    rule.outcome === 'require_mfa' || rule.outcome === 'require_factor';
+  const groupIds = rule.groupIds ?? [];
+
+  // Count before materialising. Two cheap aggregates decide whether the honest
+  // answer is the whole one or the partial one.
+  const totalActiveUsers = await tx.user.count({ where: { status: 'active' } });
+  const membershipCount = await tx.groupMembership.count();
+
+  if (totalActiveUsers > userCap || membershipCount > membershipCap) {
+    // Too large to reason about in memory. Answer the dimensions SQL can
+    // express — group membership, and which users hold which factor — and name
+    // contract conditions alongside the two a preview never evaluates, so the
+    // number is understood as an upper bound rather than a count.
+    if (rule.contractField && (rule.contractValues ?? []).length > 0) {
+      unevaluatedConditions.push('contract attributes');
+    }
+
+    const scope =
+      groupIds.length > 0
+        ? { status: 'active', memberships: { some: { groupId: { in: groupIds } } } }
+        : { status: 'active' };
+
+    const matchedUsers = await tx.user.count({ where: scope });
+
+    let usersNeedingEnrolment = 0;
+    if (demandsFactor) {
+      const covered =
+        rule.outcome === 'require_factor' && rule.factorType === 'totp'
+          ? { totpCredential: { confirmedAt: { not: null } } }
+          : rule.outcome === 'require_factor'
+            ? { webAuthnCredentials: { some: {} } }
+            : {
+                OR: [
+                  { totpCredential: { confirmedAt: { not: null } } },
+                  { webAuthnCredentials: { some: {} } },
+                  { recoveryCodes: { some: { usedAt: null } } },
+                ],
+              };
+      const already = await tx.user.count({ where: { ...scope, ...covered } });
+      usersNeedingEnrolment = matchedUsers - already;
+    }
+
+    return {
+      totalActiveUsers,
+      matchedUsers,
+      usersNeedingEnrolment,
+      unevaluatedConditions,
+    };
+  }
+
   const users = await tx.user.findMany({
     where: { status: 'active' },
     select: { id: true, personId: true, orgUnitId: true },
@@ -7209,6 +8288,9 @@ export async function previewRuleImpact(
   const memberships = await tx.groupMembership.findMany({
     select: { userId: true, groupId: true },
   });
+  // Only the field the rule actually names. Selecting all four would carry
+  // three columns of employment data across the wire for every person in the
+  // tenant to answer a question about one of them.
   const contracts = await tx.contract.findMany({
     where: {
       startDate: { lte: now },
@@ -7216,10 +8298,10 @@ export async function previewRuleImpact(
     },
     select: {
       personId: true,
-      department: true,
-      jobTitle: true,
-      employer: true,
-      location: true,
+      department: rule.contractField === 'department',
+      jobTitle: rule.contractField === 'jobTitle',
+      employer: rule.contractField === 'employer',
+      location: rule.contractField === 'location',
     },
   });
 
@@ -7243,11 +8325,12 @@ export async function previewRuleImpact(
   const contractsByPerson = new Map<string, ContractFacts[]>();
   for (const row of contracts) {
     const list = contractsByPerson.get(row.personId) ?? [];
+    // Unselected columns come back undefined; the engine expects null.
     list.push({
-      department: row.department,
-      jobTitle: row.jobTitle,
-      employer: row.employer,
-      location: row.location,
+      department: row.department ?? null,
+      jobTitle: row.jobTitle ?? null,
+      employer: row.employer ?? null,
+      location: row.location ?? null,
     });
     contractsByPerson.set(row.personId, list);
   }
@@ -7255,16 +8338,6 @@ export async function previewRuleImpact(
   const withTotp = new Set(totp.map((r) => r.userId));
   const withWebauthn = new Set(webauthn.map((r) => r.userId));
   const withRecovery = new Set(recovery.map((r) => r.userId));
-
-  const unevaluatedConditions: string[] = [];
-  if ((rule.ipRanges ?? []).length > 0) unevaluatedConditions.push('source address');
-  if (
-    (rule.daysOfWeek ?? []).length > 0 ||
-    (rule.startMinute ?? null) !== null ||
-    (rule.endMinute ?? null) !== null
-  ) {
-    unevaluatedConditions.push('time window');
-  }
 
   // The rule as the engine would see it, minus the two dimensions a preview
   // cannot supply. The id and position are placeholders: ruleMatches reads
@@ -7302,9 +8375,6 @@ export async function previewRuleImpact(
     );
   };
 
-  const demandsFactor =
-    rule.outcome === 'require_mfa' || rule.outcome === 'require_factor';
-
   let matchedUsers = 0;
   let usersNeedingEnrolment = 0;
 
@@ -7324,7 +8394,7 @@ export async function previewRuleImpact(
   }
 
   return {
-    totalActiveUsers: users.length,
+    totalActiveUsers,
     matchedUsers,
     usersNeedingEnrolment,
     unevaluatedConditions,
@@ -7332,13 +8402,18 @@ export async function previewRuleImpact(
 }
 ```
 
-`FactorType` is imported for the `covers` narrowing; if your editor reports it
-unused, drop it from the import rather than leaving a dangling name.
+The import line is exactly:
+
+```ts
+import type { AuthContext, ContractFacts, PolicyRule } from './types.js';
+```
+
+`FactorType` is not among them — nothing in this module names the type.
 
 - [ ] **Step 5: Run it to make sure it passes**
 
 Run: `pnpm vitest run packages/core/src/policy/impact.test.ts`
-Expected: PASS, 9 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 6: Write the failing enrolment-route test**
 
@@ -7553,12 +8628,31 @@ Expected: FAIL — 404 on every `/api/auth/enrol` route.
 
 - [ ] **Step 8: Implement the enrolment routes**
 
-Export the QR helper from `apps/api/src/routes/mfa.ts` so there is one encoder:
+Export three helpers from `apps/api/src/routes/mfa.ts`, so this router shares
+them rather than growing a second copy of each — a second QR encoder is
+harmless, but a second relying-party derivation or a second "did we tell the
+owner" rule is not:
 
 ```ts
 export const qrDataUrl = (text: string) =>
   new Encoder({ level: 'M' }).encode(new Byte(text)).toDataURL(4, { margin: 8 });
+
+export async function webauthnContext(
+  request: FastifyRequest,
+  publicUrl: string,
+): Promise<{ rp: RelyingPartyIdentity }> { /* …as written in Task 8… */ }
+
+export async function tellOwnerAFactorWasAdded(
+  request: FastifyRequest,
+  transport: Transport,
+  userId: string,
+  factor: string,
+): Promise<void> { /* …as written in Task 8… */ }
 ```
+
+`tellOwnerAFactorWasAdded` takes the transport as a parameter rather than
+closing over `options`, because both routers call it and they are registered
+separately.
 
 `apps/api/src/routes/enrol.ts`:
 
@@ -7585,13 +8679,14 @@ import {
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { SESSION_COOKIE } from '../plugins/require-session.js';
-import { relyingPartyFor } from './auth.js';
-import { qrDataUrl, relyingPartyIdentityFor } from './mfa.js';
+import { tenantRelyingParty } from './relying-party.js';
+import { qrDataUrl, tellOwnerAFactorWasAdded, webauthnContext } from './mfa.js';
 
 export interface EnrolRouteOptions {
   masterKey: Buffer;
   publicUrl: string;
   authRateLimitMax: number;
+  transport: Transport;
 }
 
 const SECURE = process.env.NODE_ENV === 'production';
@@ -7668,12 +8763,16 @@ export async function registerEnrolRoutes(
     token: string,
     factor: FactorType,
   ) {
+    const tenant = await request.db((tx) =>
+      tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+    );
+
     const result = await authorize(request.tenantId, {
       kind: 'enrolled',
       attemptToken: token,
       enrolledFactor: factor,
       sourceIp: request.ip,
-      relyingParty: relyingPartyFor(request, options.publicUrl),
+      relyingParty: tenantRelyingParty(tenant, options.publicUrl),
     });
 
     if (result.status === 'deny') {
@@ -7696,8 +8795,11 @@ export async function registerEnrolRoutes(
       });
     }
 
+    // The scope comes off the attempt through authorize(), which is where the
+    // issuer recorded it. An elevation that ended in forced enrolment must come
+    // back as an administrative session, and a portal sign-in must not.
     const { token: sessionToken } = await request.db((tx) =>
-      createSession(tx, attempt.userId, 'portal'),
+      createSession(tx, attempt.userId, result.scope, result.satisfiedFactor),
     );
     reply.setCookie(SESSION_COOKIE, sessionToken, cookieOptions);
 
@@ -7711,7 +8813,7 @@ export async function registerEnrolRoutes(
       status: 'authenticated' as const,
       userId: attempt.userId,
       displayName: user?.displayName ?? '',
-      scope: 'portal' as const,
+      scope: result.scope,
       mayElevate: permissions.size > 0,
       permissions: [...permissions],
     };
@@ -7756,6 +8858,16 @@ export async function registerEnrolRoutes(
         payload: { factor: 'totp', underForcedEnrolment: true, ruleId: attempt.ruleId },
       }),
     );
+    // Outside every transaction, and unconditional. This is the mail that
+    // reaches the one person who can tell a legitimate enrolment from one made
+    // by whoever held the password — and it matters most here, because this
+    // path is the one a stolen password can reach.
+    await tellOwnerAFactorWasAdded(
+      request,
+      options.transport,
+      attempt.userId,
+      'authenticator app',
+    );
 
     return finish(request, reply, attempt, body.attemptToken, 'totp');
   });
@@ -7763,27 +8875,22 @@ export async function registerEnrolRoutes(
   app.post('/webauthn/begin', { config: LIMIT }, async (request) => {
     const body = enrolBeginRequest.parse(request.body);
     const attempt = await attemptFor(request, body.attemptToken, 'webauthn');
-    const tenant = await request.db((tx) =>
-      tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
-    );
-    return beginWebAuthnRegistration(
-      request.tenantId,
-      attempt.userId,
-      relyingPartyIdentityFor(request, options.publicUrl, tenant.name),
-    );
+    // Refuses with a 409 naming the fix when this tenant has no primary domain
+    // set, rather than registering a credential against an origin taken from
+    // the request. The enrolment screen renders that message.
+    const { rp } = await webauthnContext(request, options.publicUrl);
+    return beginWebAuthnRegistration(request.tenantId, attempt.userId, rp);
   });
 
   app.post('/webauthn/finish', { config: LIMIT }, async (request, reply) => {
     const body = enrolWebauthnFinishRequest.parse(request.body);
     const attempt = await attemptFor(request, body.attemptToken, 'webauthn');
-    const tenant = await request.db((tx) =>
-      tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
-    );
+    const { rp } = await webauthnContext(request, options.publicUrl);
 
     const outcome = await finishWebAuthnRegistration(
       request.tenantId,
       attempt.userId,
-      relyingPartyIdentityFor(request, options.publicUrl, tenant.name),
+      rp,
       body.label,
       body.response as never,
     );
@@ -7826,6 +8933,12 @@ export async function registerEnrolRoutes(
         },
       }),
     );
+    await tellOwnerAFactorWasAdded(
+      request,
+      options.transport,
+      attempt.userId,
+      'security key',
+    );
 
     return finish(request, reply, attempt, body.attemptToken, 'webauthn');
   });
@@ -7840,6 +8953,7 @@ Register it in `apps/api/src/app.ts`, beside the MFA routes:
     masterKey: config.masterKey,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
+    transport,
   });
 ```
 
@@ -7887,7 +9001,7 @@ git commit -m "feat: let a user enrol a required factor instead of being locked 
 - Test: `apps/api/src/routes/password-reset.test.ts`
 
 **Interfaces:**
-- Consumes: from Task 4 — `verifyFactor`, `enrolledFactorTypes`, `hasRecoveryCodes`, `RelyingParty`, and `relyingPartyFor` from `apps/api/src/routes/auth.ts`. From Tasks 5–7 — the three registered verifiers. From the existing codebase — `Transport`, `memoryTransport`, `notify`, `TEMPLATES`, `setPassword`, `revokeAllForUser`, `recordEvent`.
+- Consumes: from Task 4 — `verifyFactor`, `enrolledFactorTypes`, `hasRecoveryCodes`, `RelyingParty`, and `tenantRelyingParty` from `apps/api/src/routes/relying-party.ts`. From Task 8 — `renderMessage` and `sendMessage`. From Tasks 5–7 — the three registered verifiers. From the existing codebase — `Transport`, `memoryTransport`, `TEMPLATES`, `hashPassword`, `revokeAllForUser`, `recordEvent`.
 - Produces:
   - `type PasswordCheck = { ok: true } | { ok: false; reason: 'too_short' | 'too_long' | 'too_obvious' }`
   - `function validateNewPassword(password: string, opts: { minLength: number; login: string; email: string }): PasswordCheck`
@@ -8411,9 +9525,13 @@ Expected: FAIL — cannot resolve `./password-reset.js`.
 import { createHash, randomBytes } from 'node:crypto';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
-import { notify, type Transport } from '../notify/notification-service.js';
+import {
+  renderMessage,
+  sendMessage,
+  type Transport,
+} from '../notify/notification-service.js';
 import { currentTenant } from '../tenant-context.js';
-import { setPassword } from './password.js';
+import { hashPassword, setPasswordHash } from './password.js';
 import { validateNewPassword } from './password-policy.js';
 import { revokeAllForUser } from './session-service.js';
 import { revokeAllRefreshTokensForUser } from './refresh-token.js';
@@ -8455,11 +9573,17 @@ export async function requestPasswordReset(
   const now = input.now ?? new Date();
   const needle = input.login.trim();
 
-  const user = await withTenant(tenantId, (tx) =>
-    tx.user.findFirst({
+  // One read, two facts. The tenant name is needed to render either message,
+  // and pulling it out here is what lets every send below happen outside a
+  // transaction — `withTenant` is `prisma.$transaction`, and an SMTP server
+  // that takes six seconds to answer would abort it and roll back the token
+  // that was just written, leaving the user with a link that does not work.
+  const { user, tenantName } = await withTenant(tenantId, async (tx) => ({
+    user: await tx.user.findFirst({
       where: { OR: [{ login: needle }, { email: needle }] },
     }),
-  );
+    tenantName: (await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } })).name,
+  }));
 
   if (!user || user.status !== 'active') {
     await withTenant(tenantId, (tx) =>
@@ -8488,9 +9612,11 @@ export async function requestPasswordReset(
         payload: { login: needle, reason: 'password_is_upstream' },
       }),
     );
-    // Outside the transaction, same as the token mail below.
-    await withTenant(tenantId, (tx) =>
-      notify(tx, transport, 'password-reset-upstream', user.email, {
+    // Rendered and sent with no transaction open. `sendMessage` takes no
+    // `TenantClient` precisely so this cannot regress.
+    await sendMessage(
+      transport,
+      renderMessage(tenantName, 'password-reset-upstream', user.email, {
         displayName: user.displayName,
         provider: user.passwordSourceHint ?? 'your organization identity provider',
       }),
@@ -8500,35 +9626,47 @@ export async function requestPasswordReset(
 
   const token = randomBytes(32).toString('base64url');
 
-  await withTenant(tenantId, async (tx) => {
-    // A partial unique index allows one live token per user, so the previous
-    // one is consumed rather than left valid alongside the new one.
-    await tx.passwordResetToken.updateMany({
-      where: { userId: user.id, consumedAt: null },
-      data: { consumedAt: now },
+  try {
+    await withTenant(tenantId, async (tx) => {
+      // A partial unique index allows one live token per user, so the previous
+      // one is consumed rather than left valid alongside the new one.
+      await tx.passwordResetToken.updateMany({
+        where: { userId: user.id, consumedAt: null },
+        data: { consumedAt: now },
+      });
+      await tx.passwordResetToken.create({
+        data: {
+          tenantId: await currentTenant(tx),
+          userId: user.id,
+          tokenHash: hashToken(token),
+          expiresAt: new Date(now.getTime() + RESET_TOKEN_LIFETIME_MS),
+        },
+      });
+      await recordEvent(tx, {
+        actorUserId: user.id,
+        action: 'auth.password_reset_requested',
+        targetType: 'User',
+        targetId: user.id,
+        outcome: 'success',
+        sourceIp: input.sourceIp,
+        payload: { login: needle },
+      });
     });
-    await tx.passwordResetToken.create({
-      data: {
-        tenantId: await currentTenant(tx),
-        userId: user.id,
-        tokenHash: hashToken(token),
-        expiresAt: new Date(now.getTime() + RESET_TOKEN_LIFETIME_MS),
-      },
-    });
-    await recordEvent(tx, {
-      actorUserId: user.id,
-      action: 'auth.password_reset_requested',
-      targetType: 'User',
-      targetId: user.id,
-      outcome: 'success',
-      sourceIp: input.sourceIp,
-      payload: { login: needle },
-    });
-  });
+  } catch (cause) {
+    // Two requests for the same account at once: one wins the partial unique
+    // index and the other violates it. Letting that escape would turn into a
+    // 500 where an unknown login gets a 202, which is an account-existence
+    // oracle built out of an error page. The loser sends nothing; the winner's
+    // mail is already on its way.
+    const code = (cause as { code?: string }).code;
+    if (code === 'P2002') return;
+    throw cause;
+  }
 
   const resetUrl = `${publicUrl.replace(/\/$/, '')}/reset-password?token=${token}`;
-  await withTenant(tenantId, (tx) =>
-    notify(tx, transport, 'password-reset', user.email, {
+  await sendMessage(
+    transport,
+    renderMessage(tenantName, 'password-reset', user.email, {
       displayName: user.displayName,
       resetUrl,
     }),
@@ -8637,7 +9775,15 @@ export async function completePasswordReset(
     const acceptable: FactorPresentation['type'][] = [...factors];
     if (await hasRecoveryCodes(tx, row.userId)) acceptable.push('recovery_code');
 
-    return { tokenId: row.id, user, minLength: tenant.passwordMinLength, acceptable };
+    return {
+      tokenId: row.id,
+      user,
+      minLength: tenant.passwordMinLength,
+      // Carried out of the transaction so the confirmation mail can be
+      // rendered and sent without opening another one.
+      tenantName: tenant.name,
+      acceptable,
+    };
   });
 
   if (!context) return { ok: false, reason: 'invalid_token' };
@@ -8677,8 +9823,10 @@ export async function completePasswordReset(
     }
   }
 
-  // Argon2 hashing is deliberately expensive, so it happens before the
-  // transaction opens rather than inside it.
+  // Argon2 hashing is deliberately expensive, so it happens here, before any
+  // transaction opens, rather than inside one.
+  const hash = await hashPassword(input.newPassword);
+
   const consumed = await withTenant(tenantId, (tx) =>
     tx.passwordResetToken.updateMany({
       where: { id: context.tokenId, consumedAt: null },
@@ -8688,7 +9836,7 @@ export async function completePasswordReset(
   if (consumed.count !== 1) return { ok: false, reason: 'invalid_token' };
 
   await withTenant(tenantId, async (tx) => {
-    await setPassword(tx, context.user.id, input.newPassword);
+    await setPasswordHash(tx, context.user.id, hash);
     await revokeAllForUser(tx, context.user.id);
     await revokeAllRefreshTokensForUser(tx, context.user.id);
     await recordEvent(tx, {
@@ -8702,8 +9850,9 @@ export async function completePasswordReset(
     });
   });
 
-  await withTenant(tenantId, (tx) =>
-    notify(tx, transport, 'password-changed', context.user.email, {
+  await sendMessage(
+    transport,
+    renderMessage(context.tenantName, 'password-changed', context.user.email, {
       displayName: context.user.displayName,
     }),
   );
@@ -8712,13 +9861,15 @@ export async function completePasswordReset(
 }
 ```
 
-`setPassword` calls `hashPassword` internally, which is Argon2 inside the
-transaction. Change `packages/core/src/auth/password.ts` so the expensive part
-can be hoisted: add
+`setPassword` calls `hashPassword` internally, which would put Argon2 inside
+the transaction. Add to `packages/core/src/auth/password.ts`:
 
 ```ts
-/** Writes an already-computed hash. The hashing itself is the caller's job,
- *  so it can happen outside a transaction. */
+/**
+ * Writes an already-computed hash. The hashing itself is the caller's job, so
+ * it can happen outside a transaction — Argon2id is deliberately expensive and
+ * has no business inside Prisma's 5000 ms transaction budget.
+ */
 export async function setPasswordHash(
   tx: TenantClient,
   userId: string,
@@ -8732,10 +9883,6 @@ export async function setPasswordHash(
   });
 }
 ```
-
-and in `password-reset.ts` replace `await setPassword(tx, ...)` with a
-`const hash = await hashPassword(input.newPassword);` computed before the
-transaction and `await setPasswordHash(tx, context.user.id, hash);` inside it.
 
 - [ ] **Step 9: Run it to make sure it passes**
 
@@ -8938,7 +10085,7 @@ import {
   type Transport,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
-import { relyingPartyFor } from './auth.js';
+import { tenantRelyingParty } from './relying-party.js';
 
 export interface PasswordResetRouteOptions {
   transport: Transport;
@@ -8978,6 +10125,9 @@ export async function registerPasswordResetRoutes(
 
   app.post('/complete', { config: LIMIT }, async (request, reply) => {
     const body = resetCompleteRequest.parse(request.body);
+    const tenant = await request.db((tx) =>
+      tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+    );
 
     const factor =
       body.factor === undefined
@@ -8990,7 +10140,11 @@ export async function registerPasswordResetRoutes(
       token: body.token,
       newPassword: body.newPassword,
       ...(factor === undefined ? {} : { factor }),
-      relyingParty: relyingPartyFor(request, options.publicUrl),
+      // From the tenant, not the request. A WebAuthn assertion presented to
+      // complete a reset is verified against the tenant's own origin, the same
+      // as everywhere else — this endpoint is unauthenticated, so it is the
+      // last place that should trust a header.
+      relyingParty: tenantRelyingParty(tenant, options.publicUrl),
       sourceIp: request.ip,
     });
 
@@ -9082,11 +10236,23 @@ In `apps/api/src/routes/admin/users.ts`:
   );
 ```
 
-- [ ] **Step 15: Run and commit**
+- [ ] **Step 15: Export and commit**
+
+The three modules this task adds are exported here, not in Task 11 — the route
+written in Step 13 imports `requestPasswordReset` and friends from
+`@syntra/core`, and a task whose own code does not compile is not a task.
+
+Add to `packages/core/src/index.ts`:
+
+```ts
+export * from './auth/password-policy.js';
+export * from './auth/refresh-token.js';
+export * from './auth/password-reset.js';
+```
 
 ```bash
 pnpm exec tsc -b
-pnpm vitest run packages/core/src/auth apps/api/src/routes
+pnpm vitest run packages/core/src/auth packages/core/src/notify apps/api/src/routes
 git add -A
 git commit -m "feat: add enumeration-safe self-service password reset"
 ```
@@ -9599,9 +10765,6 @@ Add to `packages/core/src/index.ts`:
 export * from './access/application-service.js';
 export * from './access/assignment-service.js';
 export * from './access/resolve.js';
-export * from './auth/password-policy.js';
-export * from './auth/refresh-token.js';
-export * from './auth/password-reset.js';
 ```
 
 ```bash
@@ -10030,6 +11193,53 @@ describe('the policy', () => {
     expect(res.json().unevaluatedConditions).toEqual(['source address']);
   });
 
+  it('rate-limits the preview and requires the stronger permission', async () => {
+    // Storing nothing is not the same as costing nothing: this endpoint can
+    // count every user and every membership in the tenant, and it answers "how
+    // many of your people have no second factor".
+    const res = await call('POST', '/api/admin/policy/rules/impact', {
+      name: 'Everyone',
+      outcome: 'require_mfa',
+    });
+    expect(res.statusCode).toBe(200);
+
+    const reader = await withTenant(ctx.tenantId, async (tx) => {
+      const u = await createUser(tx, {
+        login: 'reader',
+        email: 'reader@acme.test',
+        displayName: 'Reader',
+      });
+      await setPassword(tx, u.id, PASSWORD);
+      const role = await createRole(tx, 'Policy reader', [PERMISSIONS.POLICY_READ]);
+      await assignRole(tx, u.id, role.id);
+      return u;
+    });
+
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { host: ctx.host },
+      payload: { login: 'reader', password: PASSWORD },
+    });
+    const portal = login.cookies.find((c) => c.name === 'syntra_session')!.value;
+    const elevated = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${portal}` },
+      payload: { password: PASSWORD },
+    });
+    const readerCookie = elevated.cookies.find((c) => c.name === 'syntra_session')!.value;
+
+    expect(reader.id).toBeTruthy();
+    const refused = await call(
+      'POST',
+      '/api/admin/policy/rules/impact',
+      { name: 'Everyone', outcome: 'require_mfa' },
+      readerCookie,
+    );
+    expect(refused.statusCode).toBe(403);
+  });
+
   it('previews without storing anything', async () => {
     await call('POST', '/api/admin/policy/rules/impact', {
       name: 'Everyone',
@@ -10266,7 +11476,14 @@ async function domainError<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export async function registerAdminPolicyRoutes(app: FastifyInstance): Promise<void> {
+export interface PolicyRouteOptions {
+  authRateLimitMax: number;
+}
+
+export async function registerAdminPolicyRoutes(
+  app: FastifyInstance,
+  options: PolicyRouteOptions,
+): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
   app.get(
@@ -10301,10 +11518,20 @@ export async function registerAdminPolicyRoutes(app: FastifyInstance): Promise<v
    * without storing anything. A rule requiring a second factor now sends
    * everyone it matches through forced enrolment on their next sign-in, and an
    * administrator is entitled to know how many people that is first.
+   *
+   * Rate-limited like a write and gated on POLICY_MANAGE rather than
+   * POLICY_READ, despite storing nothing. It is the most expensive endpoint in
+   * the console — it can count every user and every membership in the tenant —
+   * and it answers "how many of your people have no second factor", which is
+   * reconnaissance if it leaks. The permission to see that is the permission
+   * to change the rule that acts on it.
    */
   app.post(
     '/policy/rules/impact',
-    { preHandler: requirePermission(PERMISSIONS.POLICY_READ) },
+    {
+      preHandler: requirePermission(PERMISSIONS.POLICY_MANAGE),
+      config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
+    },
     async (request) => {
       const body = policyRuleRequest.parse(request.body);
       return request.db((tx) =>
@@ -10401,12 +11628,20 @@ export async function registerAdminPolicyRoutes(app: FastifyInstance): Promise<v
 }
 ```
 
-Register both in `apps/api/src/app.ts` with `{ prefix: '/api/admin' }`.
+Register both in `apps/api/src/app.ts`:
+
+```ts
+  await app.register(registerAdminApplicationRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminPolicyRoutes, {
+    prefix: '/api/admin',
+    authRateLimitMax: config.authRateLimitMax,
+  });
+```
 
 - [ ] **Step 6: Run and commit**
 
 Run: `pnpm vitest run apps/api/src/routes/admin/access.test.ts`
-Expected: PASS, 22 tests.
+Expected: PASS, 23 tests.
 
 ```bash
 pnpm exec tsc -b
@@ -10441,8 +11676,11 @@ import { withTenant } from '@syntra/db';
 import {
   addRule,
   assignApplication,
+  beginTotpEnrolment,
+  confirmTotpEnrolment,
   createApplication,
   createUser,
+  localMasterKeyProvider,
   setPassword,
 } from '@syntra/core';
 import { buildTestApp } from '../test-support.js';
@@ -10485,6 +11723,39 @@ const call = (method: 'GET' | 'POST', url: string, withCookie = true) =>
       ...(withCookie ? { cookie: `syntra_session=${cookie}` } : {}),
     },
   });
+
+const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
+
+/**
+ * Enrols TOTP at a timestamp two minutes in the past.
+ *
+ * `confirmTotpEnrolment` sets the replay watermark to the step that confirmed
+ * the enrolment, so a code generated at wall time immediately afterwards falls
+ * in the same step and is correctly refused as a replay. Backdating puts the
+ * watermark four steps behind and makes every test below deterministic instead
+ * of dependent on where in the half-minute it ran.
+ */
+async function enrolTotpFor(id: string): Promise<string> {
+  const past = new Date(Date.now() - 120_000);
+  const enrolment = await withTenant(ctx.tenantId, (tx) =>
+    beginTotpEnrolment(tx, provider, id),
+  );
+  const ok = await confirmTotpEnrolment(
+    ctx.tenantId,
+    provider,
+    id,
+    OTPAuth.TOTP.generate({
+      secret: OTPAuth.Secret.fromBase32(enrolment.secret),
+      period: 30,
+      digits: 6,
+      algorithm: 'SHA1',
+      timestamp: past.getTime(),
+    }),
+    past,
+  );
+  expect(ok).toBe(true);
+  return enrolment.secret;
+}
 
 async function assignedApp(slug = 'crm') {
   return withTenant(ctx.tenantId, async (tx) => {
@@ -10565,27 +11836,7 @@ describe('POST /api/portal/applications/:id/launch', () => {
 
   it('honours a policy rule scoped to that application', async () => {
     const application = await assignedApp();
-
-    // Enrol TOTP first, so the rule can be satisfied rather than refused.
-    const begin = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/auth/mfa/totp/begin',
-      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
-    });
-    const secret = begin.json().secret;
-    await ctx.app.inject({
-      method: 'POST',
-      url: '/api/auth/mfa/totp/confirm',
-      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
-      payload: {
-        code: OTPAuth.TOTP.generate({
-          secret: OTPAuth.Secret.fromBase32(secret),
-          period: 30,
-          digits: 6,
-          algorithm: 'SHA1',
-        }),
-      },
-    });
+    await enrolTotpFor(userId);
 
     await withTenant(ctx.tenantId, (tx) =>
       addRule(tx, {
@@ -10654,6 +11905,84 @@ describe('POST /api/portal/applications/:id/launch', () => {
     expect(res.body).not.toContain('crm.acme.test');
   });
 
+  it('completes the challenge round trip and then launches', async () => {
+    // The case whose absence let an application with a require_mfa rule be
+    // permanently unlaunchable: launch issues a challenge, the challenge is
+    // answered, and the relaunch is a fresh decision with nothing recorded as
+    // satisfied — so it issues the same challenge again, and again.
+    const application = await assignedApp();
+    const secret = await enrolTotpFor(userId);
+    await withTenant(ctx.tenantId, (tx) =>
+      addRule(tx, {
+        name: 'CRM needs a factor',
+        outcome: 'require_mfa',
+        applicationIds: [application.id],
+      }),
+    );
+
+    const challenged = await call('POST', `/api/portal/applications/${application.id}/launch`);
+    expect(challenged.json()).toMatchObject({ status: 'challenge' });
+
+    const verified = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/mfa/verify',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: {
+        type: 'totp',
+        attemptToken: challenged.json().attemptToken,
+        code: OTPAuth.TOTP.generate({
+          secret: OTPAuth.Secret.fromBase32(secret),
+          period: 30,
+          digits: 6,
+          algorithm: 'SHA1',
+        }),
+      },
+    });
+    expect(verified.statusCode).toBe(200);
+
+    // The step-up replaced the session cookie; the relaunch uses the new one.
+    cookie = verified.cookies.find((c) => c.name === 'syntra_session')!.value;
+    const launched = await call('POST', `/api/portal/applications/${application.id}/launch`);
+    expect(launched.json()).toEqual({ status: 'launch', url: 'https://crm.acme.test/' });
+  });
+
+  it('gives a portal session to a portal user who completes a launch step-up', async () => {
+    // The browser sends its cookie on every request, so "a session cookie was
+    // present" is true for every launch step-up ever performed. Inferring
+    // scope from it would hand an administrative session to any portal user
+    // who clicked a tile.
+    const application = await assignedApp();
+    const secret = await enrolTotpFor(userId);
+    await withTenant(ctx.tenantId, (tx) =>
+      addRule(tx, {
+        name: 'CRM needs a factor',
+        outcome: 'require_mfa',
+        applicationIds: [application.id],
+      }),
+    );
+
+    const challenged = await call('POST', `/api/portal/applications/${application.id}/launch`);
+    const verified = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/mfa/verify',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: {
+        type: 'totp',
+        attemptToken: challenged.json().attemptToken,
+        code: OTPAuth.TOTP.generate({
+          secret: OTPAuth.Secret.fromBase32(secret),
+          period: 30,
+          digits: 6,
+          algorithm: 'SHA1',
+        }),
+      },
+    });
+
+    expect(verified.json().scope).toBe('portal');
+    const attempt = await withTenant(ctx.tenantId, (tx) => tx.authAttempt.findFirst());
+    expect(attempt!.scope).toBe('portal');
+  });
+
   it('audits a successful launch', async () => {
     const application = await assignedApp();
     await call('POST', `/api/portal/applications/${application.id}/launch`);
@@ -10687,7 +12016,7 @@ import {
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession } from '../plugins/require-session.js';
-import { relyingPartyFor } from './auth.js';
+import { tenantRelyingParty } from './relying-party.js';
 
 export interface PortalRouteOptions {
   authRateLimitMax: number;
@@ -10722,7 +12051,7 @@ export async function registerPortalRoutes(
     { config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } } },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      const { userId, sessionId } = request.session;
+      const { userId, sessionId, satisfiedFactor } = request.session;
 
       const assigned = await request.db((tx) => isApplicationAssigned(tx, userId, id));
       if (!assigned) {
@@ -10735,12 +12064,30 @@ export async function registerPortalRoutes(
       // separate decision: a rule may name this application and demand a
       // stronger factor than the session was established with. Access II's
       // protocol adapters mount on exactly this call.
+      const tenant = await request.db((tx) =>
+        tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+      );
+
       const decision = await authorize(request.tenantId, {
         kind: 'primary',
-        principal: { kind: 'session', userId, sessionId },
+        principal: {
+          kind: 'session',
+          userId,
+          sessionId,
+          // What this session was established with. Without it the decision
+          // below cannot know the user has already answered this rule, and a
+          // launch → challenge → verify → launch cycle never terminates: the
+          // relaunch is a fresh decision with nothing satisfied, so it issues
+          // the same challenge again, forever.
+          satisfiedFactor,
+        },
         applicationId: id,
         sourceIp: request.ip,
-        relyingParty: relyingPartyFor(request, options.publicUrl),
+        relyingParty: tenantRelyingParty(tenant, options.publicUrl),
+        // A launch never elevates. Recorded on any attempt this opens, so the
+        // session issued at the far end of the step-up is a portal one even
+        // though the caller arrived holding a cookie.
+        scope: 'portal',
       });
 
       if (decision.status === 'deny') {
@@ -10813,7 +12160,12 @@ verification endpoint would be a second place for a factor check to be wrong.
 - [ ] **Step 4: Run it to make sure it passes**
 
 Run: `pnpm vitest run apps/api/src/routes/portal.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 14 tests.
+
+If "completes the challenge round trip and then launches" hangs on a second
+challenge, `Session.satisfiedFactor` is not being written by `createSession` or
+not being read by `resolveSession`. Do not proceed — without it every
+application covered by a `require_mfa` rule is unreachable.
 
 - [ ] **Step 5: Move the resource hook out of the console chunk**
 
@@ -10835,7 +12187,7 @@ lazy-loaded console chunk into the main bundle for every portal-only session.
 Replace the body of `apps/web/src/pages/Portal.tsx`:
 
 ```tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Empty, SkeletonRows } from '@syntra/ui';
 import { AppShell } from '../components/AppShell.js';
 import { useSession } from '../session/SessionProvider.js';
@@ -10891,6 +12243,22 @@ export function Portal() {
 
   const [busy, setBusy] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
+
+  /**
+   * Finishes a launch that was interrupted by a step-up.
+   *
+   * The tile the user clicked is carried through the challenge in the query
+   * string, and retried once the new session exists. Guarded so a reload does
+   * not open the application again.
+   */
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('launch');
+    if (!wanted || !data) return;
+    const tile = data.applications.find((row) => row.id === wanted);
+    window.history.replaceState({}, '', '/');
+    if (tile) void launch(tile);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   async function launch(tile: Tile) {
     setBusy(tile.id);
@@ -11324,7 +12692,13 @@ export function MfaChallenge() {
       // Put it back: the token is spent on a successful verify, not on
       // rendering the screen, and a wrong code must not cost the user the flow.
       storeChallenge(pending);
-      setMode(pending.factors.includes('totp') ? 'totp' : 'webauthn');
+      // First offered, not "totp unless webauthn". A user whose only remaining
+      // factor is a printed recovery code would otherwise land on a screen
+      // that opens a WebAuthn prompt for a key they do not have.
+      const first = pending.factors[0];
+      if (first === 'totp' || first === 'webauthn' || first === 'recovery_code') {
+        setMode(first);
+      }
     }
     setReady(true);
   }, []);
@@ -11356,7 +12730,17 @@ export function MfaChallenge() {
         replace: true,
       });
     } catch (cause) {
-      if (cause instanceof ApiError && cause.problem.status === 429) {
+      if (cause instanceof ApiError && cause.kind === 'code-already-used-for-setup') {
+        // The one refusal a user is guaranteed to meet while looking at a
+        // correct code. Enrol a factor, get challenged twenty seconds later,
+        // and the replay watermark refuses the code that completed setup —
+        // which is the point, but only if it is explained. Unexplained it is a
+        // support ticket; explained it is a sentence.
+        setError(
+          cause.problem.detail ??
+            'That code completed your setup. Wait for your app to show the next one.',
+        );
+      } else if (cause instanceof ApiError && cause.problem.status === 429) {
         setError('Too many attempts. Wait a minute and try again.');
       } else if (cause instanceof DOMException) {
         setError('Your security key was not used. Try again, or use a code.');
@@ -11591,10 +12975,15 @@ export function EnrolFactor() {
       await enrolWebAuthnForAttempt(challenge.attemptToken, label.trim() || 'Security key');
       done();
     } catch (cause) {
+      // A tenant with no primary domain set cannot register a security key at
+      // all, and the server says so with a message naming the fix. Showing it
+      // is better than a generic failure the user cannot act on.
       setError(
-        cause instanceof DOMException
-          ? 'That security key was not registered. Try again.'
-          : 'That security key was not accepted.',
+        cause instanceof ApiError && cause.kind === 'webauthn-unavailable'
+          ? (cause.problem.detail ?? 'Security keys are not available here.')
+          : cause instanceof DOMException
+            ? 'That security key was not registered. Try again.'
+            : 'That security key was not accepted.',
       );
     } finally {
       setBusy(false);
@@ -11765,7 +13154,11 @@ type LaunchResponse =
             result.status === 'enrol'
               ? result.enrollableFactors
               : result.acceptableFactors,
-          returnTo: '/',
+          // Come back and finish what the user was doing. Landing them on an
+          // empty portal after a step-up they only entered because they
+          // clicked a tile leaves them to guess that they should click it
+          // again.
+          returnTo: `/?launch=${tile.id}`,
         });
         window.location.assign(routeFor(kind));
       }
@@ -11818,9 +13211,11 @@ import { AppShell } from '../components/AppShell.js';
 import { ApiError, api } from '../session/api.js';
 import { startWebAuthnRegistration } from '../mfa/webauthn.js';
 
-interface Status {
+interface MfaStatus {
   totp: { enrolled: boolean };
   webauthn: {
+    available: boolean;
+    unavailableReason: string | null;
     credentials: { id: string; label: string; createdAt: string; lastUsedAt: string | null }[];
   };
   recoveryCodes: { remaining: number };
@@ -11833,7 +13228,7 @@ interface Enrolment {
 }
 
 export function Security() {
-  const [status, setStatus] = useState<Status | null>(null);
+  const [status, setStatus] = useState<MfaStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [enrolment, setEnrolment] = useState<Enrolment | null>(null);
   const [code, setCode] = useState('');
@@ -11844,7 +13239,7 @@ export function Security() {
 
   const load = useCallback(async () => {
     try {
-      setStatus(await api<Status>('/api/auth/mfa'));
+      setStatus(await api<MfaStatus>('/api/auth/mfa'));
     } catch {
       setError('Your security settings could not be loaded.');
     }
@@ -11918,6 +13313,13 @@ export function Security() {
       });
       setCodes(result.codes);
       await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError && cause.kind === 'no-factor-to-recover'
+          ? (cause.problem.detail ??
+            'Set up an authenticator app or a security key first.')
+          : 'Recovery codes could not be generated.',
+      );
     } finally {
       setBusy(false);
     }
@@ -12006,17 +13408,24 @@ export function Security() {
                 ))}
               </ul>
             )}
-            <div className="flex flex-wrap items-end gap-3">
-              <Field
-                label="Name this key"
-                value={keyLabel}
-                onChange={setKeyLabel}
-                className="min-w-56 flex-1"
-              />
-              <Button variant="primary" loading={busy} onClick={addKey}>
-                Add a key
-              </Button>
-            </div>
+            {status && !status.webauthn.available ? (
+              <Alert tone="info" title="Security keys are not available here">
+                {status.webauthn.unavailableReason ??
+                  'An administrator must configure this tenant before security keys can be used.'}
+              </Alert>
+            ) : (
+              <div className="flex flex-wrap items-end gap-3">
+                <Field
+                  label="Name this key"
+                  value={keyLabel}
+                  onChange={setKeyLabel}
+                  className="min-w-56 flex-1"
+                />
+                <Button variant="primary" loading={busy} onClick={addKey}>
+                  Add a key
+                </Button>
+              </div>
+            )}
           </div>
         </Panel>
 
@@ -12057,8 +13466,9 @@ export function Security() {
 }
 ```
 
-Rename the local `interface Status` to `MfaStatus` — `Status` is already the
-imported badge component and the shadowing is a compile error.
+The response type is named `MfaStatus`, not `Status`: `Status` is already the
+badge component imported from `@syntra/ui`, and the shadowing is a compile
+error.
 
 - [ ] **Step 10: Write the password-reset screens**
 
@@ -13072,47 +14482,388 @@ export function PoliciesPage() {
 }
 ```
 
-- [ ] **Step 3: Write the applications screens**
+- [ ] **Step 3: Write the applications list**
 
-`apps/web/src/pages/admin/ApplicationsPage.tsx` lists the catalog and adds one.
-Follow `SourcesPage.tsx` exactly for the table markup, the skeleton and the
-empty state; the differences are:
+`apps/web/src/pages/admin/ApplicationsPage.tsx`:
 
-- `useApiResource<{ applications: Row[] }>('/api/admin/applications')` where
-  `Row` is `{ id, name, slug, type, visibility, status, launchUrl }`.
-- Header: title **Applications**, description "What your people can reach from
-  the portal, and who each one is assigned to."
-- Columns: Name (with the slug in muted text beside it), Type, Visibility,
-  Status. The name cell is a `<Link to={`/admin/applications/${row.id}`}>`.
-- Empty state title "No applications yet", body "Add one to give people a tile
-  in their portal.", with an action Button that opens the create form.
-- The create form is a `Panel` with `Field`s for Name, Slug, Description and
-  Launch URL, posting to `/api/admin/applications`. A 409 renders as "That slug
-  is already used." beside the slug field; any other `ApiError` renders its
-  `detail` in an `Alert tone="danger"`.
-- Status column uses `<Status tone={row.status === 'active' ? 'active' : 'inactive'}>`,
-  and an inactive application stays in the list — hiding it would make the
-  catalog unauditable, same rule as an inactive user.
+```tsx
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Alert, Button, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { ApiError, api } from '../../session/api.js';
+import { PageHeader } from './PageHeader.js';
 
-`apps/web/src/pages/admin/ApplicationDetailPage.tsx` shows one application and
-its assignments:
+interface Row {
+  id: string;
+  name: string;
+  slug: string;
+  type: string;
+  visibility: 'assigned' | 'hidden';
+  status: string;
+}
 
-- `useParams<{ id: string }>()`, then
-  `useApiResource<{ assignments: Assignment[] }>(`/api/admin/applications/${id}/assignments`)`
-  alongside `useApiResource<{ users: … }>('/api/admin/users')`,
-  `'/api/admin/groups'` and `'/api/admin/org-units'` for the pickers.
-- One `Panel` titled "Assigned to", listing each assignment as
-  "`{subjectType}` · `{name}`" with a Remove button calling
-  `DELETE /api/admin/applications/:id/assignments/:assignmentId`.
-- Below it, three `select` pickers — user, group, org unit — each with an Assign
-  button posting `{ type, id }`.
-- A one-line note under the panel title: "Assignments are a union. A person
-  reaches this application if any of these matches them, and an assignment on a
-  parent organizational unit reaches everyone below it." This is the rule
-  Task 11 implements, and stating it is what stops an administrator assigning
-  the same thing three times.
+export function ApplicationsPage() {
+  const [rows, setRows] = useState<Row[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-- [ ] **Step 4: Add the navigation**
+  const [name, setName] = useState('');
+  const [slug, setSlug] = useState('');
+  const [description, setDescription] = useState('');
+  const [launchUrl, setLaunchUrl] = useState('');
+  const [slugError, setSlugError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const result = await api<{ applications: Row[] }>('/api/admin/applications');
+      setRows(result.applications);
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError && cause.problem.status === 403
+          ? 'You do not have permission to view this.'
+          : 'The application catalog could not be loaded.',
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function create() {
+    setBusy(true);
+    setSlugError(null);
+    setFormError(null);
+    try {
+      await api('/api/admin/applications', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          slug,
+          launchUrl,
+          ...(description ? { description } : {}),
+        }),
+      });
+      setAdding(false);
+      setName('');
+      setSlug('');
+      setDescription('');
+      setLaunchUrl('');
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.problem.status === 409) {
+        setSlugError('That slug is already used.');
+      } else {
+        setFormError(
+          cause instanceof ApiError
+            ? (cause.problem.detail ?? cause.problem.title)
+            : 'That application could not be saved.',
+        );
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Applications"
+        description="What your people can reach from the portal, and who each one is assigned to."
+        actions={
+          <Button variant="primary" size="sm" onClick={() => setAdding((v) => !v)}>
+            Add an application
+          </Button>
+        }
+      />
+
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      {adding && (
+        <Panel title="New application">
+          <div className="space-y-4 p-4">
+            <Field label="Name" value={name} onChange={setName} required />
+            <Field
+              label="Slug"
+              value={slug}
+              onChange={setSlug}
+              required
+              hint="Lower-case letters, digits and hyphens. It appears in URLs and cannot be changed later."
+              error={slugError ?? undefined}
+            />
+            <Field label="Description" value={description} onChange={setDescription} />
+            <Field
+              label="Launch URL"
+              value={launchUrl}
+              onChange={setLaunchUrl}
+              required
+              hint="Where the tile opens. https:// only."
+            />
+            {formError && (
+              <Alert tone="danger">
+                <span>{formError}</span>
+              </Alert>
+            )}
+            <Button variant="primary" loading={busy} onClick={create}>
+              Save application
+            </Button>
+          </div>
+        </Panel>
+      )}
+
+      <div className="mt-6">
+        {!rows && !error && <SkeletonRows rows={4} cols={4} />}
+
+        {rows && rows.length === 0 && (
+          <Empty
+            title="No applications yet"
+            action={
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                Add an application
+              </Button>
+            }
+          >
+            Add one to give people a tile in their portal.
+          </Empty>
+        )}
+
+        {rows && rows.length > 0 && (
+          <Panel>
+            <table className="w-full text-left">
+              <thead className="border-b border-border-subtle bg-surface-2">
+                <tr className="text-sm text-muted">
+                  <th scope="col" className="px-4 py-2.5 font-medium">Name</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium max-sm:hidden">Type</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">Visibility</th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id} className="border-b border-border-subtle last:border-0">
+                    <td className="px-4 py-2.5">
+                      <Link
+                        to={`/admin/applications/${row.id}`}
+                        className="font-medium text-ink underline-offset-2 hover:underline"
+                      >
+                        {row.name}
+                      </Link>
+                      <span className="ml-2 text-sm text-muted">{row.slug}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-muted max-sm:hidden">{row.type}</td>
+                    <td className="px-4 py-2.5">
+                      {row.visibility === 'hidden' ? (
+                        <Status tone="neutral">Hidden</Status>
+                      ) : (
+                        <Status tone="primary">Assigned</Status>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {/*
+                        A retired application stays in the list and stays
+                        labelled. Hiding it to keep the table tidy would make
+                        the catalog unauditable — the same rule as an inactive
+                        user in the directory.
+                      */}
+                      <Status tone={row.status === 'active' ? 'active' : 'inactive'}>
+                        {row.status === 'active' ? 'Active' : 'Retired'}
+                      </Status>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Panel>
+        )}
+      </div>
+    </>
+  );
+}
+```
+
+- [ ] **Step 4: Write the application detail screen**
+
+`apps/web/src/pages/admin/ApplicationDetailPage.tsx`:
+
+```tsx
+import { useCallback, useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { Alert, Button, Empty, Panel, SkeletonRows } from '@syntra/ui';
+import { ApiError, api } from '../../session/api.js';
+import { PageHeader } from './PageHeader.js';
+
+type SubjectType = 'user' | 'group' | 'orgUnit';
+
+interface Assignment {
+  id: string;
+  subjectType: SubjectType;
+  userId: string | null;
+  groupId: string | null;
+  orgUnitId: string | null;
+}
+
+interface Named {
+  id: string;
+  name: string;
+}
+
+const LABELS: Record<SubjectType, string> = {
+  user: 'User',
+  group: 'Group',
+  orgUnit: 'Org unit',
+};
+
+export function ApplicationDetailPage() {
+  const { id } = useParams<{ id: string }>();
+
+  const [assignments, setAssignments] = useState<Assignment[] | null>(null);
+  const [users, setUsers] = useState<Named[]>([]);
+  const [groups, setGroups] = useState<Named[]>([]);
+  const [orgUnits, setOrgUnits] = useState<Named[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<Record<SubjectType, string>>({
+    user: '',
+    group: '',
+    orgUnit: '',
+  });
+
+  const load = useCallback(async () => {
+    try {
+      const [a, u, g, o] = await Promise.all([
+        api<{ assignments: Assignment[] }>(`/api/admin/applications/${id}/assignments`),
+        api<{ users: { id: string; displayName: string }[] }>('/api/admin/users'),
+        api<{ groups: Named[] }>('/api/admin/groups'),
+        api<{ orgUnits: Named[] }>('/api/admin/org-units'),
+      ]);
+      setAssignments(a.assignments);
+      setUsers(u.users.map((row) => ({ id: row.id, name: row.displayName })));
+      setGroups(g.groups);
+      setOrgUnits(o.orgUnits);
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError && cause.problem.status === 403
+          ? 'You do not have permission to view this.'
+          : 'This application could not be loaded.',
+      );
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const nameOf = (assignment: Assignment): string => {
+    if (assignment.subjectType === 'user') {
+      return users.find((row) => row.id === assignment.userId)?.name ?? 'Unknown user';
+    }
+    if (assignment.subjectType === 'group') {
+      return groups.find((row) => row.id === assignment.groupId)?.name ?? 'Unknown group';
+    }
+    return orgUnits.find((row) => row.id === assignment.orgUnitId)?.name ?? 'Unknown org unit';
+  };
+
+  async function assign(type: SubjectType) {
+    const subjectId = chosen[type];
+    if (!subjectId) return;
+    await api(`/api/admin/applications/${id}/assignments`, {
+      method: 'POST',
+      body: JSON.stringify({ type, id: subjectId }),
+    });
+    setChosen((current) => ({ ...current, [type]: '' }));
+    await load();
+  }
+
+  async function unassign(assignmentId: string) {
+    await api(`/api/admin/applications/${id}/assignments/${assignmentId}`, {
+      method: 'DELETE',
+    });
+    await load();
+  }
+
+  const picker = (type: SubjectType, options: Named[]) => (
+    <div className="flex flex-wrap items-end gap-2">
+      <div className="min-w-56 flex-1">
+        <label htmlFor={`pick-${type}`} className="mb-1.5 block font-medium text-ink">
+          {LABELS[type]}
+        </label>
+        <select
+          id={`pick-${type}`}
+          value={chosen[type]}
+          onChange={(e) => setChosen((c) => ({ ...c, [type]: e.target.value }))}
+          className="h-9 w-full rounded-control border border-border-subtle bg-bg px-3 text-ink"
+        >
+          <option value="">Choose one…</option>
+          {options.map((row) => (
+            <option key={row.id} value={row.id}>
+              {row.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <Button onClick={() => assign(type)} disabled={!chosen[type]}>
+        Assign
+      </Button>
+    </div>
+  );
+
+  return (
+    <>
+      <PageHeader
+        title="Assignments"
+        description="Who can reach this application, and how."
+      />
+
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      {!assignments && !error && <SkeletonRows rows={3} cols={2} />}
+
+      {assignments && (
+        <Panel
+          title="Assigned to"
+          description="Assignments are a union: a person reaches this application if any one of them matches, and an assignment on a parent organizational unit reaches everyone below it."
+        >
+          <div className="space-y-4 p-4">
+            {assignments.length === 0 && (
+              <Empty title="Not assigned to anyone yet">
+                Assign a group or an organizational unit rather than a list of
+                people — it stays correct as people join and leave.
+              </Empty>
+            )}
+
+            {assignments.length > 0 && (
+              <ul className="divide-y divide-border-subtle">
+                {assignments.map((assignment) => (
+                  <li key={assignment.id} className="flex items-center justify-between py-2">
+                    <span>
+                      <span className="text-sm text-muted">
+                        {LABELS[assignment.subjectType]}
+                      </span>
+                      <span className="ml-2 font-medium text-ink">{nameOf(assignment)}</span>
+                    </span>
+                    <Button size="sm" variant="ghost" onClick={() => unassign(assignment.id)}>
+                      Remove
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="space-y-3 border-t border-border-subtle pt-4">
+              {picker('user', users)}
+              {picker('group', groups)}
+              {picker('orgUnit', orgUnits)}
+            </div>
+          </div>
+        </Panel>
+      )}
+    </>
+  );
+}
+```
+
+- [ ] **Step 5: Add the navigation**
 
 In `apps/web/src/pages/admin/AdminApp.tsx`, add to `NAV`, after the org-units
 entry:
@@ -13130,7 +14881,7 @@ and to the `<Routes>`:
             <Route path="policy" element={<PoliciesPage />} />
 ```
 
-- [ ] **Step 5: Run and commit**
+- [ ] **Step 6: Run and commit**
 
 ```bash
 pnpm exec tsc -b
@@ -13319,146 +15070,64 @@ describe('POST /api/auth/elevate and admin MFA', () => {
 });
 ```
 
-- [ ] **Step 2: Route elevation through the chokepoint**
+- [ ] **Step 2: Add the MFA floor to elevation**
 
-Replace the `/elevate` handler in `apps/api/src/routes/auth.ts`:
+Task 4 already routed `/elevate` through `authorize()` with `scope: 'admin'`.
+The only thing this task adds is the floor, so that a tenant which requires a
+second factor for the console actually gets one. In
+`apps/api/src/routes/auth.ts`, read the tenant alongside the relying party and
+pass the floor:
 
 ```ts
-  app.post(
-    '/elevate',
-    { preHandler: requireSession('portal'), config: PASSWORD_RATE_LIMIT },
-    async (request, reply) => {
-      const body = elevateRequest.parse(request.body);
-      const { userId } = request.session;
+      const { tenant, rp } = await relyingPartyFor(request);
 
-      const admin = await request.db((tx) => isAdministrator(tx, userId));
-      if (!admin) {
-        throw new ProblemError(403, 'not-an-administrator', 'Not an administrator');
-      }
-
-      const user = await request.db((tx) => tx.user.findUnique({ where: { id: userId } }));
-      if (!user) throw new ProblemError(401, 'unauthenticated', 'Unauthenticated');
-
-      const tenant = await request.db((tx) =>
-        tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
-      );
-
-      // The password is re-entered rather than trusted from the existing
-      // session: elevation is a fresh authentication, not a flag flip. And it
-      // goes through authorize(), so the tenant policy applies to reaching the
-      // console exactly as it applies to signing in.
       const decision = await authorize(request.tenantId, {
         kind: 'primary',
         principal: { kind: 'password', login: user.login, password: body.password },
         applicationId: null,
         sourceIp: request.ip,
-        relyingParty: relyingPartyFor(request, options.publicUrl),
+        relyingParty: rp,
+        scope: 'admin',
         // A floor the caller imposes. It can only strengthen the policy
-        // outcome — a tenant rule that denies is still a denial.
+        // outcome — a tenant rule that denies is still a denial, and a floor
+        // never turns one into an allow.
         ...(tenant.adminMfaRequired ? { floor: 'require_mfa' as const } : {}),
       });
-
-      if (decision.status === 'deny') {
-        throw new ProblemError(401, 'invalid-credentials', 'Invalid credentials');
-      }
-
-      if (decision.status === 'challenge') {
-        return reply.status(200).send({
-          status: 'challenge',
-          attemptToken: decision.attemptToken,
-          expiresAt: decision.expiresAt.toISOString(),
-          acceptableFactors: decision.acceptableFactors,
-        });
-      }
-
-      // An administrator who has never enrolled a factor, in a tenant that now
-      // requires one for the console. They enrol here and come back with an
-      // administrative session, rather than being told to ask another
-      // administrator who may not exist yet.
-      if (decision.status === 'enrol') {
-        return reply.status(200).send({
-          status: 'enrol',
-          attemptToken: decision.attemptToken,
-          expiresAt: decision.expiresAt.toISOString(),
-          enrollableFactors: decision.enrollableFactors,
-        });
-      }
-
-      const { token } = await request.db((tx) => createSession(tx, userId, 'admin'));
-      await request.db((tx) =>
-        recordEvent(tx, {
-          actorUserId: userId,
-          action: 'auth.elevate',
-          targetType: 'Session',
-          targetId: null,
-          outcome: 'success',
-          sourceIp: request.ip,
-          payload: { factorRequired: tenant.adminMfaRequired },
-        }),
-      );
-
-      reply.setCookie(SESSION_COOKIE, token, cookieOptions);
-      return { status: 'authenticated', ...(await sessionBody(request, userId, 'admin')) };
-    },
-  );
 ```
 
-Delete the temporary `authenticate` import and its comment. Nothing outside
-`packages/core/src/auth/` imports it any more; confirm with:
+Nothing else in the handler changes. The three non-allow branches, the session
+creation and the audit event were all written in Task 4.
+
+There is no `scopeForStepUp` and no scope inference anywhere. `AuthAttempt.scope`
+records `'admin'` at the moment this handler opens the attempt, and
+`/api/auth/mfa/verify` and `/api/auth/enrol/*` read it back through
+`AuthorizeResult.scope`. Deriving it instead from whether a session cookie was
+present would give an administrative session to any portal user completing a
+launch step-up, because the browser sends its cookie on every request — which is
+exactly the mitigation spec section 5 names for shipping one React application
+to two audiences.
+
+- [ ] **Step 3: Verify nothing bypasses the chokepoint**
 
 ```bash
-grep -rn "authenticate" apps packages --include=*.ts --include=*.tsx | grep -v "packages/core/src/auth/"
+grep -rn "from '@syntra/core/src/auth/login-service" apps packages --include=*.ts --include=*.tsx
+grep -rn "\bauthenticate(" apps packages --include=*.ts --include=*.tsx | grep -v 'packages/core/src/auth/'
 ```
 
-Expected: no results other than the word inside comments.
+Expected: no output from either.
 
-An elevation challenge answered at `/api/auth/mfa/verify`, or an elevation
-enrolment completed at `/api/auth/enrol/*`, must produce an **admin** session,
-not a portal one. Both handlers currently hard-code `'portal'`.
+Two greps rather than one for `authenticate`, because the plan introduces a
+`status: 'authenticated'` literal in five response bodies and a bare
+`grep authenticate` matches every one of them. The first finds a deep import of
+the module; the second finds a call, anchored on the opening parenthesis and
+excluding the one directory entitled to make it.
 
-Create `apps/api/src/routes/session-scope.ts` so the rule is written once:
-
-```ts
-import type { FastifyRequest } from 'fastify';
-import { resolveSession, type SessionScope } from '@syntra/core';
-import { SESSION_COOKIE } from '../plugins/require-session.js';
-
-/**
- * Which scope a session issued at the end of a step-up should carry.
- *
- * An elevation challenge is answered by someone who already holds a live
- * portal session; a sign-in challenge is not. Deriving the scope from that
- * keeps one verification endpoint and one enrolment endpoint rather than two
- * of each — and a second copy of a factor check is a second place for it to be
- * wrong.
- */
-export async function scopeForStepUp(
-  request: FastifyRequest,
-): Promise<SessionScope> {
-  const existing = request.cookies[SESSION_COOKIE];
-  if (!existing) return 'portal';
-  const live = await request.db((tx) => resolveSession(tx, existing));
-  return live ? 'admin' : 'portal';
-}
-```
-
-In `apps/api/src/routes/mfa.ts` and `apps/api/src/routes/enrol.ts`, replace
-`createSession(tx, ..., 'portal')` with:
-
-```ts
-    const scope = await scopeForStepUp(request);
-    const { token } = await request.db((tx) => createSession(tx, result.userId, scope));
-```
-
-and return that `scope` in the body instead of the literal `'portal'`. In
-`enrol.ts` the user id is `attempt.userId`.
-
-- [ ] **Step 3: Run the elevation tests**
+- [ ] **Step 4: Run the elevation tests**
 
 Run: `pnpm vitest run apps/api/src/routes/auth.test.ts apps/api/src/routes/mfa.test.ts`
 Expected: PASS.
 
-- [ ] **Step 4: Extend the seed**
+- [ ] **Step 5: Extend the seed**
 
 In `packages/db/src/seed.ts`, inside the `withTenant` block after the groups and
 people are created, add:
@@ -13510,7 +15179,7 @@ the existing seed uses — read the file rather than assuming.
 The rule ships **disabled**. A seed that locked a developer out of their own
 instance on first run would be the last thing they see of Syntra.
 
-- [ ] **Step 5: Typecheck the workspace**
+- [ ] **Step 6: Typecheck the workspace**
 
 Run: `pnpm exec tsc -b`
 Expected: 0 errors.
@@ -13518,7 +15187,7 @@ Expected: 0 errors.
 Vitest transpiles without type-checking, so this is the only thing that catches
 a signature drift between `authorize()`, the verifiers and the routes.
 
-- [ ] **Step 6: Run every suite in order**
+- [ ] **Step 7: Run every suite in order**
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d
@@ -13535,12 +15204,17 @@ truncate the database, so the seed runs after them, and the browser suite needs
 a raised rate limit because it signs in far more often in a minute than a person
 would.
 
-- [ ] **Step 7: Write the end-to-end test**
+- [ ] **Step 8: Write the end-to-end test**
 
 `e2e/access-mfa.spec.ts`, following the helpers already in `e2e/access.spec.ts`.
-Playwright's virtual authenticator makes the WebAuthn path drivable without
-hardware; TOTP codes are computed in the test with `otpauth`, which is already
-a workspace dependency.
+
+Two properties this file has to have, both learned the hard way. It runs
+`describe.serial`, because the tests share one seeded database and a rule saved
+by one is in force for the next. And the test that saves a `require_mfa` rule
+removes it again before it finishes, because a leftover rule turns every
+subsequent sign-in in the file — including the administrator's — into a
+forced-enrolment screen, and the failure surfaces three tests away from its
+cause.
 
 ```ts
 import { expect, test, type Page } from '@playwright/test';
@@ -13564,111 +15238,134 @@ async function signIn(page: Page, login: string, password: string) {
   await page.getByRole('button', { name: 'Sign in' }).click();
 }
 
-const codeFor = (secret: string) =>
+async function signOut(page: Page) {
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+}
+
+/** Elevates into the console on the way to `path`. */
+async function elevateTo(page: Page, path: string) {
+  await page.goto(path);
+  await expect(
+    page.getByRole('heading', { name: /confirm your password/i }),
+  ).toBeVisible();
+  await page.getByLabel('Password').fill(ADMIN!);
+  await page.getByRole('button', { name: 'Continue' }).click();
+}
+
+const codeFor = (secret: string, at = Date.now()) =>
   OTPAuth.TOTP.generate({
     secret: OTPAuth.Secret.fromBase32(secret),
     period: 30,
     digits: 6,
     algorithm: 'SHA1',
+    timestamp: at,
   });
 
-test('a user sees the tiles their organization assigned them', async ({ page }) => {
-  await signIn(page, 'jdoe', USER!);
-  await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /rota planner/i })).toBeVisible();
-  // Assigned to the owner only, so it must not appear here.
-  await expect(page.getByRole('button', { name: /expenses/i })).toHaveCount(0);
-});
+/**
+ * Waits until the next thirty-second TOTP step begins.
+ *
+ * Confirming an enrolment sets the replay watermark to the step it happened
+ * in, so the very next code the user is asked for is refused if it is still
+ * that same step — deliberately, since that is what stops the enrolment code
+ * being replayed as a login. The integration tests backdate the enrolment to
+ * sidestep this; a browser cannot, so it waits. Up to thirty-one seconds, once,
+ * in one test.
+ */
+async function waitForNextTotpStep() {
+  await new Promise((resolve) => setTimeout(resolve, 30_000 - (Date.now() % 30_000) + 1_000));
+}
 
-test('a user with no factor is walked through enrolment rather than refused', async ({
-  page,
-}) => {
-  // Turn on a rule that demands a factor, as an administrator.
-  await signIn(page, 'admin', ADMIN!);
-  await page.goto('/admin/policy');
-  await page.getByLabel('Password').fill(ADMIN!);
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByRole('button', { name: 'Add a rule' }).click();
-  await page.getByLabel('Name').fill('Everyone needs a factor');
-  await page.getByLabel('Outcome').selectOption('require_mfa');
+test.describe.serial('access', () => {
+  test('a user sees the tiles their organization assigned them', async ({ page }) => {
+    await signIn(page, 'jdoe', USER!);
+    await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /rota planner/i })).toBeVisible();
+    // Assigned to the owner only, so it must not appear here.
+    await expect(page.getByRole('button', { name: /expenses/i })).toHaveCount(0);
+  });
 
-  // The count is shown before the rule is saved, not discovered afterwards.
-  await page.getByRole('button', { name: /check who this affects/i }).click();
-  await expect(page.getByText(/active users/i)).toBeVisible();
+  test('a user with no factor is enrolled rather than refused, and challenged next time', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000); // one wait for the next TOTP step
 
-  await page.getByRole('button', { name: 'Save rule' }).click();
-  await expect(page.getByText('Everyone needs a factor')).toBeVisible();
-  await page.getByRole('button', { name: 'Sign out' }).click();
+    // Turn on a rule that demands a factor, as an administrator.
+    await signIn(page, 'admin', ADMIN!);
+    await elevateTo(page, '/admin/policy');
+    await page.getByRole('button', { name: 'Add a rule' }).click();
+    await page.getByLabel('Name').fill('Everyone needs a factor');
+    await page.getByLabel('Outcome').selectOption('require_mfa');
 
-  // A user who has never enrolled is offered enrolment, not a dead end.
-  await signIn(page, 'jdoe', USER!);
-  await expect(
-    page.getByRole('heading', { name: /set up a second factor/i }),
-  ).toBeVisible();
-  await page.getByRole('button', { name: 'Start' }).click();
+    // The count is shown before the rule is saved, not discovered afterwards.
+    await page.getByRole('button', { name: /check who this affects/i }).click();
+    await expect(page.getByText(/active users/i)).toBeVisible();
 
-  const secret = await page.getByText(/^[A-Z2-7]{32}$/).innerText();
-  await page.getByLabel('Six-digit code').fill(codeFor(secret));
-  await page.getByRole('button', { name: 'Confirm' }).click();
+    await page.getByRole('button', { name: 'Save rule' }).click();
+    await expect(page.getByText('Everyone needs a factor')).toBeVisible();
+    await signOut(page);
 
-  // Enrolling is proof of possession, so the sign-in completes straight away
-  // rather than immediately asking for the same code again.
-  await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
-});
+    // A user who has never enrolled is offered enrolment, not a dead end.
+    await signIn(page, 'jdoe', USER!);
+    await expect(
+      page.getByRole('heading', { name: /set up a second factor/i }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Start' }).click();
 
-test('a user enrols TOTP and is then challenged at the next sign-in', async ({ page }) => {
-  await signIn(page, 'jdoe', USER!);
-  await page.getByRole('link', { name: 'Security' }).click();
-  await page.getByRole('button', { name: 'Set up' }).click();
+    const secret = await page.getByText(/^[A-Z2-7]{32}$/).innerText();
+    await page.getByLabel('Six-digit code').fill(codeFor(secret));
+    await page.getByRole('button', { name: 'Confirm' }).click();
 
-  const secret = await page.getByText(/^[A-Z2-7]{32}$/).innerText();
-  await page.getByLabel('Code from your app').fill(codeFor(secret));
-  await page.getByRole('button', { name: 'Confirm' }).click();
-  await expect(page.getByText('Set up')).toBeVisible();
+    // Enrolling is proof of possession, so the sign-in completes rather than
+    // immediately asking for the same code again.
+    await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
 
-  // Turn on a rule that demands a factor, then sign in again.
-  await page.getByRole('button', { name: 'Sign out' }).click();
-  await signIn(page, 'admin', ADMIN!);
-  await page.goto('/admin/policy');
-  await page.getByLabel('Password').fill(ADMIN!);
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByRole('button', { name: 'Add a rule' }).click();
-  await page.getByLabel('Name').fill('Everyone needs a factor');
-  await page.getByLabel('Outcome').selectOption('require_mfa');
-  await page.getByRole('button', { name: 'Save rule' }).click();
-  await expect(page.getByText('Everyone needs a factor')).toBeVisible();
+    // Signing in again now takes the step-up path instead.
+    await signOut(page);
+    await waitForNextTotpStep();
+    await signIn(page, 'jdoe', USER!);
+    await expect(page.getByRole('heading', { name: /one more step/i })).toBeVisible();
+    await page.getByLabel('Six-digit code').fill(codeFor(secret));
+    await page.getByRole('button', { name: 'Verify' }).click();
+    await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
+    await signOut(page);
 
-  await page.getByRole('button', { name: 'Sign out' }).click();
-  await signIn(page, 'jdoe', USER!);
-  await expect(page.getByRole('heading', { name: /one more step/i })).toBeVisible();
-  await page.getByLabel('Six-digit code').fill(codeFor(secret));
-  await page.getByRole('button', { name: 'Verify' }).click();
-  await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
-});
+    // Put the tenant back. A leftover require_mfa rule sends every later
+    // sign-in in this file to the enrolment screen, and the failure would
+    // surface in a test that has nothing to do with it.
+    await signIn(page, 'admin', ADMIN!);
+    await elevateTo(page, '/admin/policy');
+    await page
+      .getByRole('listitem')
+      .filter({ hasText: 'Everyone needs a factor' })
+      .getByRole('button', { name: 'Remove' })
+      .click();
+    await expect(page.getByText('Everyone needs a factor')).toHaveCount(0);
+    await signOut(page);
+  });
 
-test('a forgotten password answers the same for a real and an invented account', async ({
-  page,
-}) => {
-  await page.goto('/forgot-password');
-  await page.getByLabel('Login or email').fill('jdoe');
-  await page.getByRole('button', { name: /send the link/i }).click();
-  const real = await page.getByRole('alert').textContent();
+  test('a forgotten password answers the same for a real and an invented account', async ({
+    page,
+  }) => {
+    await page.goto('/forgot-password');
+    await page.getByLabel('Login or email').fill('jdoe');
+    await page.getByRole('button', { name: /send the link/i }).click();
+    const real = await page.getByRole('alert').textContent();
 
-  await page.goto('/forgot-password');
-  await page.getByLabel('Login or email').fill('definitely-not-a-user');
-  await page.getByRole('button', { name: /send the link/i }).click();
-  const invented = await page.getByRole('alert').textContent();
+    await page.goto('/forgot-password');
+    await page.getByLabel('Login or email').fill('definitely-not-a-user');
+    await page.getByRole('button', { name: /send the link/i }).click();
+    const invented = await page.getByRole('alert').textContent();
 
-  expect(invented).toBe(real);
-});
+    expect(invented).toBe(real);
+  });
 
-test('an administrator assigns an application and the user sees it', async ({ page }) => {
-  await signIn(page, 'admin', ADMIN!);
-  await page.goto('/admin/applications');
-  await page.getByLabel('Password').fill(ADMIN!);
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByRole('heading', { name: 'Applications' })).toBeVisible();
-  await expect(page.getByRole('link', { name: /staff handbook/i })).toBeVisible();
+  test('an administrator sees the application catalog', async ({ page }) => {
+    await signIn(page, 'admin', ADMIN!);
+    await elevateTo(page, '/admin/applications');
+    await expect(page.getByRole('heading', { name: 'Applications' })).toBeVisible();
+    await expect(page.getByRole('link', { name: /staff handbook/i })).toBeVisible();
+  });
 });
 ```
 
@@ -13677,7 +15374,14 @@ development. The end-to-end test asserts the enumeration-safe response rather
 than the mail, because the mail assertion belongs to the integration test in
 Task 10 where the transport is in memory.
 
-- [ ] **Step 8: Update the documentation**
+The WebAuthn path is not driven here. Playwright's virtual authenticator can do
+it, but the relying party now comes from `Tenant.primaryDomain`, and the seeded
+tenant's is `acme.localhost` while the browser suite runs against
+`acme.localhost:5173` — the origin matches, so it would work, but the setup is
+worth its own spec rather than being smuggled into this one. The server-side
+behaviour is covered exhaustively in Task 6 against a software authenticator.
+
+- [ ] **Step 9: Update the documentation**
 
 In `README.md`, mark Access I built in the module table and add a short section:
 
@@ -13704,7 +15408,23 @@ In `README.md`, mark Access I built in the module table and add a short section:
   a missing factor really is a refusal.
 - Before a policy rule is saved, the console reports how many users it matches
   and how many of them would be asked to enrol — the same courtesy Directory
-  Sync's deactivation threshold provides, for the same shape of mistake.
+  Sync's deactivation threshold provides, for the same shape of mistake. Above
+  25,000 active users it answers from counts instead of walking the directory,
+  and names the conditions it could not apply.
+- **Whenever a second factor is added to an account, its owner is mailed.**
+  Not only under forced enrolment: a factor added with a stolen password is the
+  worse case precisely because it survives the password reset that would
+  otherwise fix things, and the owner is the only person who can tell a
+  legitimate enrolment from an attacker's. The audit event
+  (`mfa.enrolled`, with `underForcedEnrolment`) is there too — **wire it into
+  your alerting.** An audit row nobody reads does not discharge the obligation.
+- **Security keys need `Tenant.primaryDomain` set.** WebAuthn pins the relying
+  party server-side; Syntra derives it from the tenant's own domain and refuses
+  a request that arrives on any other host. Taking it from the `Host` header
+  instead would let anyone who proxies Syntra under their own name choose what
+  their assertion is checked against, which is the entire property a security
+  key exists to provide. A tenant with no primary domain gets a message saying
+  so, and authenticator apps still work.
 - Self-service password reset answers identically whether or not the account
   exists. A user with a second factor must present it, completion revokes every
   session and refresh token, and an account whose password lives upstream is
@@ -13715,13 +15435,23 @@ In `README.md`, mark Access I built in the module table and add a short section:
 
 In `e2e/README.md`, add a third bullet under the two that are already there:
 
-> **The MFA test writes a policy rule.** It signs in as the administrator and
-> adds a rule that requires a second factor for everyone, then relies on the
-> seeded user having enrolled TOTP earlier in the same run. Run
-> `pnpm db:reset && pnpm seed` before re-running the suite, or the leftover rule
-> will challenge every subsequent sign-in.
+> **The MFA spec runs `describe.serial` and cleans up after itself.** It signs
+> in as the administrator, saves a rule requiring a second factor for everyone,
+> drives a user through forced enrolment and a step-up, and then removes the
+> rule again. The removal is not tidiness: a rule left in force sends every
+> later sign-in in the file — the administrator's included — to the enrolment
+> screen, and the failure surfaces in a test that has nothing to do with it.
+>
+> It is still worth running `pnpm db:reset && pnpm seed` between runs, because
+> the enrolled factor is not cleaned up, and a second run would find `jdoe`
+> already holding one.
+>
+> **One test waits up to 31 seconds.** Confirming a TOTP enrolment sets the
+> replay watermark to the step it happened in, so the next code is refused
+> until that step ends. The integration tests backdate the enrolment; a browser
+> cannot, so it waits. That test raises its own timeout to 120 seconds.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add -A
@@ -13756,10 +15486,11 @@ git commit -m "feat: require a second factor for the console, seed the catalog, 
 | §9 reset step 3 — password policy, second factor required | 10 |
 | §9 reset step 4 — revoke sessions and refresh tokens, audit | 10 |
 | §9 upstream password → told where to go | 1, 10 |
-| §9 notifications through the existing service | 10 |
+| §9 notifications through the existing service | 8, 10 |
 | §5 administrative sessions require step-up MFA | 16 |
+| §5 scope separation between the two audiences | 1, 4, 13, 16 |
 | §11 typed results, RFC 9457, uniform auth responses | 4, 8, 9, 10, 12, 13 |
-| §12 rate limiting on authentication endpoints | 8, 9, 10, 13 |
+| §12 rate limiting on authentication endpoints | 8, 9, 10, 12, 13 |
 | §12 every privileged action audited | 4, 8, 9, 10, 12, 13 |
 | §12 RLS as the tenant isolation control | 1 |
 | §13 exhaustive policy tests, multi-contract cases | 2, 3 |
@@ -13767,90 +15498,113 @@ git commit -m "feat: require a second factor for the console, seed the catalog, 
 | Ruling A — forced enrolment instead of deny | 1, 4, 5, 9, 14, 16 |
 | Ruling A — audit naming the forced-enrolment challenge | 4, 9 |
 | Ruling A — affected-user count before a rule is saved | 9, 12, 15 |
-| Ruling B — attempt and its audit event in one transaction | 4 |
-| Ruling C — explicit `relyingParty` on `AuthorizeRequest` | 4, 6, 8, 9, 10, 13, 16 |
+| Ruling B — attempt and its audit event in one transaction | 4, 5 |
+| Ruling C — explicit `relyingParty` on `AuthorizeRequest` | 4, 6, 8, 9, 10, 13 |
+| Ruling D — TOTP watermark kept, tests moved, refusal explained | 4, 5, 8, 13, 14, 16 |
+| Ruling E — `AuthAttempt.scope`, never inferred | 1, 4, 8, 9, 13, 16 |
+| Ruling F — relying party from `Tenant.primaryDomain` | 1, 4, 6, 8, 9, 14 |
+| Ruling G — recovery codes require an existing factor | 8 |
+| Ruling H — mail the owner when a factor is added | 8, 9 |
+| Ruling I — `previewRuleImpact` capped, rate-limited, stronger permission | 9, 12 |
+| Ruling J — an unevaluable condition matches a `deny` rule | 2 |
 | Access II (SAML, OIDC, federation, claim mappings, metadata) | **not built**; `Principal.external` and `AuthorizeRequest.applicationId` in Task 4 are the mount points |
 
 **Placeholder scan.** No "TBD", no "add appropriate validation", no "similar to
-Task N". Two screens are described in prose rather than given in full —
-`ApplicationsPage` and `ApplicationDetailPage` in Task 15 — and in both cases
-the prose names the exact hook, endpoint, columns, empty-state copy and error
-handling, and points at `SourcesPage.tsx` as the template to copy. Every novel
-screen (the policy list with its impact panel, the step-up, the forced
-enrolment, the reset) is given in full.
+Task N". The four prose-instead-of-code steps the pre-flight review named are
+gone: `ApplicationsPage` and `ApplicationDetailPage` are written out in Task 15
+Steps 3 and 4; the `setPasswordHash` hoist in Task 10 is a code block whose
+call site now matches it; Task 3's "check its return type before running" is
+replaced by the verified answer (`listGroupsForUser` returns `Group` rows); and
+Task 9's "drop it if your editor says it is unused" is replaced by the exact
+import line, which does not contain the unused name.
 
-**Type consistency across the revision.** Re-checked every name the three
-rulings introduced or moved:
+**Type consistency across this revision.** Re-checked every name the nine
+findings and six rulings moved:
 
-- `RelyingParty { id, origin }` and `RelyingPartyIdentity extends RelyingParty
-  { name }` are declared once in Task 4's
-  `packages/core/src/auth/mfa/relying-party.ts`. Verification takes
-  `RelyingParty` (Task 6's `webauthnVerifier`, via `FactorVerifyContext`);
-  registration takes `RelyingPartyIdentity` (`beginWebAuthnRegistration`,
-  `finishWebAuthnRegistration`). `relyingPartyFor(request, publicUrl)` in Task
-  4's `routes/auth.ts` is the single derivation; Task 8's
-  `relyingPartyIdentityFor` adds only the name. Callers that pass it:
-  `/api/auth/login` and `/api/auth/elevate` (4, 16), `/api/auth/mfa/verify` and
-  `/webauthn/challenge` (8), all four `/api/auth/enrol/*` routes (9),
-  `/api/auth/password-reset/complete` (10), and
-  `/api/portal/applications/:id/launch` (13). No ambient store remains — a grep
-  for `AsyncLocalStorage` finds only the Global Constraint forbidding it.
-- `FactorVerifier.verify(tenantId, userId, presentation, context)` with
-  `FactorVerifyContext { now, relyingParty }` is implemented identically by
-  `totpVerifier` (5), `webauthnVerifier` (6) and `recoveryCodeVerifier` (7),
-  and called through `verifyFactor` from `authorize()` (4) and
-  `completePasswordReset` (10). `FactorVerifier.enrollable` is `true` for TOTP
-  and WebAuthn, `false` for recovery codes, and is what
-  `enrollableFactorTypes()` reads.
-- `AuthAttempt.purpose` (`'verify' | 'enrol'`, Task 1) is set by `issueAttempt`
-  (4), returned on `ResolvedAttempt` by `findAttempt` (4), checked by
-  `liveAttempt` inside `authorize()` (4) and by `attemptFor` in the enrolment
-  routes (9). Both directions are tested: an enrolment attempt refused at
-  `/verify`, and a verification attempt refused at `/enrol`.
-- `AuthorizeResult`'s new `status: 'enrol'` arm carries `enrollableFactors`,
-  distinct from `'challenge'`'s `acceptableFactors`. Every caller handles all
-  four arms: `/login` (4), `/api/auth/mfa/verify` (8), `/api/auth/enrol/*`'s
-  `finish` (9), `/launch` (13), `/elevate` (16). The web types mirror it —
-  `LoginOutcome` (4) and `LaunchResponse` (13, widened in 14).
-- `PendingChallenge { kind, attemptToken, expiresAt, factors, returnTo }` (14)
-  is written by `Login.tsx` (14), `Portal.tsx` (13 inline, replaced in 14) and
-  re-stored by `MfaChallenge` and `EnrolFactor` (14), and `routeFor(kind)`
-  decides between `/mfa` and `/enrol`. The inline write in Task 13 uses the
-  same five field names, so Task 14's swap to `storeChallenge` is a
-  substitution and not a migration.
-- `ruleMatches(rule, context)` (2) is the one matcher, used by
-  `evaluatePolicy` (2) and by `previewRuleImpact` (9). The preview cannot
-  invent a source address or a moment, so it clears those two conditions and
-  names them in `unevaluatedConditions` — the console prints that caveat (15)
-  rather than presenting an unqualified number.
-- `RuleImpact` (9) is what `POST /api/admin/policy/rules/impact` returns (12)
-  and what `PoliciesPage` renders (15); the field names match in all three.
+- `ConditionResult` (Task 2, `ip-match.ts`) is what `evaluateIpRanges` and
+  `evaluateTimeWindow` return and what `ruleMatches` resolves against
+  `rule.outcome`. `matchesIpRanges` and `matchesTimeWindow` survive as
+  one-line boolean wrappers, so the existing tests and `isValidTimeZone`
+  callers are untouched. `isIpRangeUsable` is what `validate()` in Task 3 now
+  calls — a parse in a try/catch, not a matcher pressed into service as a
+  syntax check.
+- `AuthAttempt.scope` (Task 1) is set by `issueAttempt` from
+  `IssueAttemptInput.scope` (Task 4), which `decide()` fills from
+  `AuthorizeRequest.scope`, which `/login` sets to `'portal'` (Task 4),
+  `/elevate` to `'admin'` (Task 4) and `/launch` to `'portal'` (Task 13). It
+  comes back on `ResolvedAttempt.scope`, then on `AuthorizeResult.scope`, and
+  is what `/api/auth/mfa/verify` (Task 8) and `/api/auth/enrol/*` (Task 9) pass
+  to `createSession`. There is no `scopeForStepUp` and no other reader.
+- `Session.satisfiedFactor` (Task 1) is written by `createSession` (Task 4
+  Step 11), returned on `ResolvedSession` (same step), read by `/launch` into
+  `Principal.session.satisfiedFactor` (Task 13), and consumed by `decide()` via
+  `DecideInput.satisfied` (Task 4). The round trip is tested in Task 13.
+- `RelyingParty { id, origin }` is produced only by `tenantRelyingParty` (Task
+  4, `routes/relying-party.ts`). Callers: `/login` and `/elevate` (4),
+  `/api/auth/mfa/*` through `webauthnContext` (8), `/api/auth/enrol/*` (9),
+  `/password-reset/complete` (10), `/launch` (13). `RelyingPartyIdentity` adds
+  `name` and is used only by the two registration functions. Nothing derives
+  either from `request.headers.host` any more except `assertWebAuthnUsable`,
+  whose entire job is to compare the two and refuse.
+- `DenyReason` gained `factor_used_for_enrolment`, produced by `continueAttempt`
+  (4) from the verifier reason `totp_used_for_enrolment` (5), mapped to the
+  problem type `code-already-used-for-setup` by `/api/auth/mfa/verify` (8), and
+  rendered by `MfaChallenge` (14). Four hops, one string each, all four checked.
+- `acceptableFactors` is `FactorPresentationType[]` on `AuthorizeResult` (4) and
+  includes `'recovery_code'`, which `PendingChallenge.factors` carries (14) and
+  the step-up screen selects its initial mode from.
+- `renderMessage` / `sendMessage` (Task 8) replace `notify`. Callers:
+  `tellOwnerAFactorWasAdded` (8, module scope, transport as a parameter so
+  Task 9's separately-registered router can call it), and the three sends in
+  `password-reset.ts` (10). `notify` appears nowhere except in the prose
+  explaining its removal.
+- `previewRuleImpact(tx, rule, now?, caps?)` (9) is called by
+  `/api/admin/policy/rules/impact` (12) and rendered as `RuleImpact` by
+  `PoliciesPage` (15); the four field names match across all three.
 
-**Four issues found and fixed during this revision.**
+**Findings from the pre-flight review, and where each is now.**
 
-1. Installing the factor verifiers in `app.ts` (Task 8) silently changed an
-   answer Task 4 had asserted: with nothing enrollable a `require_mfa` rule
-   refused, and with TOTP registered it offers enrolment. Task 8 now carries an
-   explicit step that rewrites that assertion, so the change is made
-   deliberately rather than discovered as a red test three tasks later.
+| Finding | Fixed in |
+|---|---|
+| C1 SMTP inside three transactions | 8 (the split), 10 (the three sends) |
+| C2 scope inferred from a cookie | 1 (`AuthAttempt.scope`), 4, 8, 9, 13, 16 |
+| C3 relying party from the `Host` header | 4 (`relying-party.ts`), 6, 8, 9, 10, 13, 14 |
+| H1 `validate()` rejecting real networks | 2 (`isIpRangeUsable`), 3 (validator + a test that stores valid ranges) |
+| H3 Task 10 cannot compile | 10 (exports moved out of 11) |
+| H4 the TOTP watermark | 5 (distinct reason), 8 and 13 (backdated enrolment), 14 (screen copy), 16 (e2e waits a step) |
+| H5 the launch challenge loop | 1, 4, 13 (and the round-trip test) |
+| H6 recovery codes defeat forced enrolment | 8 |
+| M12 the fail-open on `deny` | 2 |
+| M1 e2e ordering and the `authenticate` grep | 16 |
+| M9 `/elevate` importing `authenticate` | 4 (routed through `authorize()` immediately) |
+| M2 empty `acceptableFactors` | 4, 14 |
+| M3 counter classified by message text | 6 (a test that fails if the wording changes) |
+| M4 `counter` int4 vs uint32 | 1 (BigInt), 6 (conversion at the library boundary) |
+| M6 concurrent reset requests | 10 (`P2002` treated as "someone else just did it") |
+| M7 the generated migration's `DROP INDEX` | 1 (a step that reads it before appending) |
+| M8 a recovery code spent before the attempt is consumed | 4 (activity checked first, residual window documented) |
+| M10 `/totp/begin` 500 | 8 |
+| four prose-instead-of-code steps | 3, 9, 10, 15 |
+| Task 5 test arithmetic | 5 (31, not 32) |
 
-2. The factor registry is module state and the whole suite runs in one fork, so
-   one file's `install*` call leaked into another file's `enrollableFactorTypes()`
-   and made "the user has no factor" mean "unless something else ran first".
-   Task 4 adds `resetFactorVerifiers()`, the chokepoint test calls it in
-   `beforeEach`, and each `describe` installs exactly what it exercises.
+**Three things this revision found that the review did not.**
 
-3. An elevation that ends in forced enrolment would have issued a *portal*
-   session from `/api/auth/enrol/*`, quietly downgrading the administrator who
-   had just satisfied the console's own requirement. Task 16 now extracts
-   `scopeForStepUp(request)` and both the verify and the enrol handlers use it,
-   so there is one rule about what scope a step-up produces instead of two
-   copies that can drift.
+1. `tellOwnerAFactorWasAdded` was first written inside `registerMfaRoutes` and
+   exported from there, which does not compile — Task 9's router imports it. It
+   is at module scope, with the transport as a parameter rather than a closure
+   over `options`, because the two routers are registered separately.
 
-4. `PasswordResetToken` still carried a `webauthnChallenge` column from the
-   pre-review draft, which would have been a second challenge store with a
-   second consumption rule for the verifier to choose between. Task 1 drops it
-   and Task 10 reuses `WebAuthnChallenge` with purpose `authenticate`.
+2. Task 10's password-reset route still imported `relyingPartyFor` from
+   `./auth.js` after that helper stopped existing in its old form. It reads the
+   tenant and calls `tenantRelyingParty` like every other caller. This is the
+   unauthenticated endpoint, so it is the last place that should have been
+   trusting a header.
+
+3. `previewRuleImpact` selected all four contract columns unconditionally while
+   a rule can only name one. It now selects the named field, which also means
+   the unselected columns arrive as `undefined` and are normalised to `null`
+   before the engine sees them — the engine distinguishes "no value" from "not
+   asked for", and `undefined` would have matched neither branch cleanly.
 
 ---
 
