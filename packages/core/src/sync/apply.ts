@@ -13,44 +13,58 @@ interface ChangeRow {
   status: string;
 }
 
+/**
+ * What a single case in `performChange` decided actually happened. The
+ * outcome is data a branch hands back, not something inferred from which
+ * line execution happens to reach: a branch that returns nothing is a
+ * compile error (see `performChange`'s return type), not a silent success.
+ */
+interface ApplyResult {
+  outcome: 'success' | 'failure';
+  extra?: Record<string, unknown>;
+}
+
 const fields = (value: unknown) => (value ?? {}) as Record<string, string>;
 
 /**
- * Writes the one audit event for a change. Centralised so that "what
- * actually happened" (success or failure) is always the value the calling
- * branch decided, never a value the bottom of the function assumes on its
- * behalf.
+ * Writes the one audit event for a change, from the outcome `performChange`
+ * decided. There is exactly one call site, so there is exactly one place
+ * that can get the outcome wrong.
  */
 async function audit(
   tx: TenantClient,
   change: ChangeRow,
   runId: string,
-  outcome: 'success' | 'failure',
-  extra?: Record<string, unknown>,
+  result: ApplyResult,
 ): Promise<void> {
   await recordEvent(tx, {
     actorUserId: null,
     action: `sync.${change.changeType}`,
     targetType: change.targetType,
     targetId: change.targetId,
-    outcome,
+    outcome: result.outcome,
     sourceIp: null,
-    payload: { runId, anchor: change.sourceAnchor, ...extra },
+    payload: { runId, anchor: change.sourceAnchor, ...result.extra },
   });
 }
 
 /**
- * Applies one proposed change and records it. The caller runs this inside a
- * transaction, so the change and its audit entry commit together or not at
- * all: a directory change without a record of it is worse than no change.
+ * Performs the mutation for one change and reports what happened.
+ *
+ * Every case must return an `ApplyResult`; there is no shared "fell out of
+ * the switch, so it must have succeeded" path for `applyChange` to trust.
+ * TypeScript enforces this: with an explicit `Promise<ApplyResult>` return
+ * type, a case that reaches the end of its block without returning is a
+ * compile error, not a change that quietly gets audited as a success it
+ * never earned.
  */
-export async function applyChange(
+async function performChange(
   tx: TenantClient,
   change: ChangeRow,
   sourceId: string,
   runId: string,
-): Promise<void> {
-  const tenantId = await currentTenant(tx);
+  tenantId: string,
+): Promise<ApplyResult> {
   const after = fields(change.after);
 
   switch (change.changeType) {
@@ -69,7 +83,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied', targetId: created.id },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'update_user': {
@@ -81,7 +95,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied' },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'deactivate_user': {
@@ -96,7 +110,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied' },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'reactivate_user': {
@@ -108,7 +122,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied' },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'create_group': {
@@ -125,7 +139,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied', targetId: created.id },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'update_group': {
@@ -134,7 +148,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied' },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'deactivate_group': {
@@ -151,7 +165,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied' },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'create_org_unit': {
@@ -167,7 +181,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied', targetId: created.id },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'update_org_unit': {
@@ -176,7 +190,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied' },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'add_member': {
@@ -195,10 +209,7 @@ export async function applyChange(
             message: 'group or member not found after applying earlier changes',
           },
         });
-        // Explicit return, not break: the change is failed, so the event
-        // must say `failure`, not fall through to the success event below.
-        await audit(tx, change, runId, 'failure', { missing });
-        return;
+        return { outcome: 'failure', extra: { missing } };
       }
       await tx.groupMembership.upsert({
         where: { groupId_userId: { groupId: group.id, userId: user.id } },
@@ -209,7 +220,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied' },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     case 'remove_member': {
@@ -229,8 +240,7 @@ export async function applyChange(
             message: 'group or member not found; cannot confirm the membership was removed',
           },
         });
-        await audit(tx, change, runId, 'failure', { missing });
-        return;
+        return { outcome: 'failure', extra: { missing } };
       }
       // Both resolved: removing a membership that is already gone is
       // genuinely idempotent, so this is a success regardless of whether
@@ -242,7 +252,7 @@ export async function applyChange(
         where: { id: change.id },
         data: { status: 'applied' },
       });
-      break;
+      return { outcome: 'success' };
     }
 
     default:
@@ -253,8 +263,22 @@ export async function applyChange(
           message: `unknown change type: ${change.changeType}`,
         },
       });
-      return;
+      return { outcome: 'failure', extra: { changeType: change.changeType } };
   }
+}
 
-  await audit(tx, change, runId, 'success');
+/**
+ * Applies one proposed change and records it. The caller runs this inside a
+ * transaction, so the change and its audit entry commit together or not at
+ * all: a directory change without a record of it is worse than no change.
+ */
+export async function applyChange(
+  tx: TenantClient,
+  change: ChangeRow,
+  sourceId: string,
+  runId: string,
+): Promise<void> {
+  const tenantId = await currentTenant(tx);
+  const result = await performChange(tx, change, sourceId, runId, tenantId);
+  await audit(tx, change, runId, result);
 }

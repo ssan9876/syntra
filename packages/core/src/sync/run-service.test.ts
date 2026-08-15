@@ -234,23 +234,74 @@ describe('applyChange membership failure paths', () => {
     expect(events[0]!.outcome).toBe('failure');
   });
 
-  it('applies remove_member and audits outcome success when the group and member both resolve', async () => {
+  it('applies remove_member and audits outcome success when the group and member resolve but the membership was already absent', async () => {
     const run = await previewRun(tenantId, provider, sourceId);
     await applyRun(tenantId, run.id);
 
+    const { updated, events, membershipsBefore, membershipsAfter } = await withTenant(
+      tenantId,
+      async (tx) => {
+        const group = await tx.group.findFirstOrThrow({ where: { sourceId } });
+        // sroe is deliberately not a member of Nurses (only jdoe is): this
+        // exercises the "resolved, but nothing to remove" idempotent path,
+        // not an accidental removal of a real membership.
+        const user = await tx.user.findFirstOrThrow({ where: { sourceId, login: 'sroe' } });
+
+        const membershipsBefore = await tx.groupMembership.count({
+          where: { groupId: group.id, userId: user.id },
+        });
+
+        const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });
+        const change = await tx.syncChange.create({
+          data: {
+            tenantId,
+            runId: newRun.id,
+            changeType: 'remove_member',
+            targetType: 'GroupMembership',
+            targetId: null,
+            sourceAnchor: group.sourceAnchor,
+            before: { groupAnchor: group.sourceAnchor, memberAnchor: user.sourceAnchor },
+            status: 'proposed',
+          },
+        });
+
+        await applyChange(tx, change, sourceId, newRun.id);
+
+        const membershipsAfter = await tx.groupMembership.count({
+          where: { groupId: group.id, userId: user.id },
+        });
+
+        return {
+          updated: await tx.syncChange.findUnique({ where: { id: change.id } }),
+          events: await tx.auditEvent.findMany({
+            where: { action: 'sync.remove_member' },
+          }),
+          membershipsBefore,
+          membershipsAfter,
+        };
+      },
+    );
+
+    // Discriminates "removed a real row" from "was already absent": both
+    // counts are zero throughout, so this run genuinely had nothing to do.
+    expect(membershipsBefore).toBe(0);
+    expect(membershipsAfter).toBe(0);
+    expect(updated!.status).toBe('applied');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('success');
+  });
+
+  it('audits outcome failure for an unrecognized change type', async () => {
     const { updated, events } = await withTenant(tenantId, async (tx) => {
-      const group = await tx.group.findFirstOrThrow({ where: { sourceId } });
-      const user = await tx.user.findFirstOrThrow({ where: { sourceId } });
       const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });
       const change = await tx.syncChange.create({
         data: {
           tenantId,
           runId: newRun.id,
-          changeType: 'remove_member',
-          targetType: 'GroupMembership',
+          changeType: 'rename_planet',
+          targetType: 'User',
           targetId: null,
-          sourceAnchor: group.sourceAnchor,
-          before: { groupAnchor: group.sourceAnchor, memberAnchor: user.sourceAnchor },
+          sourceAnchor: null,
           status: 'proposed',
         },
       });
@@ -260,13 +311,14 @@ describe('applyChange membership failure paths', () => {
       return {
         updated: await tx.syncChange.findUnique({ where: { id: change.id } }),
         events: await tx.auditEvent.findMany({
-          where: { action: 'sync.remove_member' },
+          where: { action: 'sync.rename_planet' },
         }),
       };
     });
 
-    expect(updated!.status).toBe('applied');
+    expect(updated!.status).toBe('failed');
+    expect(updated!.message).toMatch(/unknown change type/i);
     expect(events).toHaveLength(1);
-    expect(events[0]!.outcome).toBe('success');
+    expect(events[0]!.outcome).toBe('failure');
   });
 });
