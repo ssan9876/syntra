@@ -9,11 +9,9 @@ import {
   beginTotpEnrolment,
   beginWebAuthnRegistration,
   confirmTotpEnrolment,
-  createSession,
   finishWebAuthnRegistration,
   findAttempt,
   localMasterKeyProvider,
-  permissionsForUser,
   recordEvent,
   type FactorType,
   type ResolvedAttempt,
@@ -21,8 +19,8 @@ import {
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
-import { SESSION_COOKIE } from '../plugins/require-session.js';
 import { tenantRelyingParty } from './relying-party.js';
+import { issueSession } from './session-reply.js';
 import { qrDataUrl, tellOwnerAFactorWasAdded, webauthnContext } from './mfa.js';
 
 export interface EnrolRouteOptions {
@@ -34,15 +32,6 @@ export interface EnrolRouteOptions {
   authRateLimitTenantMax: number;
   transport: Transport;
 }
-
-const SECURE = process.env.NODE_ENV === 'production';
-
-const cookieOptions = {
-  httpOnly: true,
-  sameSite: 'lax' as const,
-  path: '/',
-  secure: SECURE,
-};
 
 /**
  * Enrolment during a forced-enrolment challenge.
@@ -108,7 +97,6 @@ export async function registerEnrolRoutes(
   async function finish(
     request: FastifyRequest,
     reply: FastifyReply,
-    attempt: ResolvedAttempt,
     token: string,
     factor: FactorType,
   ) {
@@ -147,25 +135,7 @@ export async function registerEnrolRoutes(
     // The scope comes off the attempt through authorize(), which is where the
     // issuer recorded it. An elevation that ended in forced enrolment must come
     // back as an administrative session, and a portal sign-in must not.
-    const { token: sessionToken } = await request.db((tx) =>
-      createSession(tx, attempt.userId, result.scope, result.satisfiedFactor),
-    );
-    reply.setCookie(SESSION_COOKIE, sessionToken, cookieOptions);
-
-    const user = await request.db((tx) =>
-      tx.user.findUnique({ where: { id: attempt.userId } }),
-    );
-    const permissions = await request.db((tx) =>
-      permissionsForUser(tx, attempt.userId),
-    );
-    return {
-      status: 'authenticated' as const,
-      userId: attempt.userId,
-      displayName: user?.displayName ?? '',
-      scope: result.scope,
-      mayElevate: permissions.size > 0,
-      permissions: [...permissions],
-    };
+    return issueSession(request, reply, result);
   }
 
   app.post('/totp/begin', { ...LIMIT }, async (request) => {
@@ -218,7 +188,7 @@ export async function registerEnrolRoutes(
       'authenticator app',
     );
 
-    return finish(request, reply, attempt, body.attemptToken, 'totp');
+    return finish(request, reply, body.attemptToken, 'totp');
   });
 
   app.post('/webauthn/begin', { ...LIMIT }, async (request) => {
@@ -289,6 +259,6 @@ export async function registerEnrolRoutes(
       'security key',
     );
 
-    return finish(request, reply, attempt, body.attemptToken, 'webauthn');
+    return finish(request, reply, body.attemptToken, 'webauthn');
   });
 }

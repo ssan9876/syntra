@@ -10,7 +10,30 @@ import {
 } from '../policy/policy-service.js';
 import type { FactorType } from '../policy/types.js';
 import { setPassword } from './password.js';
-import { createSession, resolveSession } from './session-service.js';
+import {
+  createSession,
+  resolveSession,
+  type SessionAllowance,
+  type SessionScope,
+} from './session-service.js';
+
+/**
+ * The decision a session is minted from, for the cases below that need a live
+ * session to re-enter authorize() with. Outside a test the only way to hold one
+ * is to have come back from authorize() itself, which is the point.
+ */
+const allowed = (
+  forUserId: string,
+  scope: SessionScope,
+  satisfiedFactor: SessionAllowance['satisfiedFactor'] = null,
+): SessionAllowance => ({
+  status: 'allow',
+  userId: forUserId,
+  mayElevate: false,
+  applicationId: null,
+  scope,
+  satisfiedFactor,
+});
 import {
   registerFactorVerifier,
   resetFactorVerifiers,
@@ -403,9 +426,9 @@ describe('authorize — the step-up round trip', () => {
     });
 
     // The session records what established it...
-    const allow = verified as { scope: 'portal'; satisfiedFactor: string };
+    const allow = verified as Extract<typeof verified, { status: 'allow' }>;
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, allow.scope, allow.satisfiedFactor),
+      createSession(tx, allowed(userId, allow.scope, allow.satisfiedFactor)),
     );
     const session = await withTenant(tenantId, (tx) =>
       resolveSession(tx, token),
@@ -433,9 +456,11 @@ describe('authorize — the step-up round trip', () => {
   });
 
   /** A live session for this user, established with the given factor. */
-  const sessionFor = async (factor: string | null) => {
+  const sessionFor = async (
+    factor: SessionAllowance['satisfiedFactor'],
+  ) => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, userId, 'portal', factor),
+      createSession(tx, allowed(userId, 'portal', factor)),
     );
     const session = await withTenant(tenantId, (tx) => resolveSession(tx, token));
     return session!;
@@ -493,7 +518,7 @@ describe('authorize — the step-up round trip', () => {
         email: 'a@acme.test',
         displayName: 'A Smith',
       });
-      return createSession(tx, u.id, 'portal', 'totp');
+      return createSession(tx, allowed(u.id, 'portal', 'totp'));
     });
     const theirs = await withTenant(tenantId, (tx) =>
       resolveSession(tx, other.token),
@@ -508,8 +533,19 @@ describe('authorize — the step-up round trip', () => {
     // Only three values mean anything to the policy layer. Under require_mfa
     // any non-null string would otherwise satisfy the rule, which would make a
     // stray value a way straight past it.
+    //
+    // Written straight onto the row, because that is the only way such a value
+    // can arise now: `createSession` takes an allow from authorize(), whose
+    // `satisfiedFactor` is one of the three or null. A restore, an older
+    // migration or a future writer is what this is defending against.
     await requireMfa();
-    const session = await sessionFor('nonsense');
+    const session = await sessionFor('totp');
+    await withTenant(tenantId, (tx) =>
+      tx.session.update({
+        where: { id: session.sessionId },
+        data: { satisfiedFactor: 'nonsense' },
+      }),
+    );
     expect((await relaunch(session.sessionId)).status).toBe('challenge');
   });
 

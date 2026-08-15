@@ -284,7 +284,16 @@ describe('completePasswordReset', () => {
   });
 
   it('revokes every session', async () => {
-    const token = await withTenant(tenantId, (tx) => createSession(tx, userId, 'portal'));
+    const token = await withTenant(tenantId, (tx) =>
+      createSession(tx, {
+        status: 'allow',
+        userId,
+        mayElevate: false,
+        applicationId: null,
+        scope: 'portal',
+        satisfiedFactor: null,
+      }),
+    );
     await request('jdoe');
     await complete();
     expect(await withTenant(tenantId, (tx) => resolveSession(tx, token.token))).toBeNull();

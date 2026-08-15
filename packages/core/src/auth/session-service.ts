@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { TenantClient } from '@syntra/db';
+import type { AuthorizeResult } from './authorize.js';
 import { currentTenant } from '../tenant-context.js';
 
 export type SessionScope = 'portal' | 'admin';
@@ -42,14 +43,40 @@ export interface ResolvedSession {
   satisfiedFactor: string | null;
 }
 
+/**
+ * An allow from the chokepoint. The only thing a session can be minted from.
+ *
+ * A type alias rather than four loose parameters, and that is the whole point.
+ * `createSession(tx, userId, 'admin', 'webauthn')` was one call away from an
+ * administrative session with no authentication behind it at all — strictly
+ * more powerful than the `issueAttempt` and `authorize({ kind: 'continue' })`
+ * pair that was withdrawn from the package's exports for exactly that reason,
+ * because it needs no attempt and no factor either. The routes genuinely need
+ * this function, so it stays exported; what changes is that the caller must be
+ * holding a decision, and a caller who has not been past `authorize()` cannot
+ * produce one. The wrong thing does not compile.
+ *
+ * `import type` on the way in, so the runtime import graph stays acyclic:
+ * authorize.ts imports this module for real, and this one takes only its
+ * shape.
+ */
+export type SessionAllowance = Extract<AuthorizeResult, { status: 'allow' }>;
+
+/**
+ * Mints a session for a decision that has already been made.
+ *
+ * Everything the session records — who it belongs to, its scope, the factor
+ * that established it — is read off the decision, never taken from ambient
+ * request state. A route that thought it knew the user id is how an elevation
+ * came to pass one value while its decision carried another.
+ */
 export async function createSession(
   tx: TenantClient,
-  userId: string,
-  scope: SessionScope,
-  satisfiedFactor: string | null = null,
+  decision: SessionAllowance,
 ): Promise<{ token: string; expiresAt: Date }> {
   const tenantId = await currentTenant(tx);
   const token = randomBytes(32).toString('base64url');
+  const { userId, scope, satisfiedFactor } = decision;
   const absoluteExpiresAt = new Date(Date.now() + ABSOLUTE_LIFETIME_MS[scope]);
 
   await tx.session.create({

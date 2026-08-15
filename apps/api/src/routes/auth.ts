@@ -1,27 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { elevateRequest, loginRequest } from '@syntra/contracts';
-import {
-  authorize,
-  createSession,
-  isAdministrator,
-  permissionsForUser,
-  recordEvent,
-  revokeSession,
-  type SessionScope,
-} from '@syntra/core';
+import { authorize, isAdministrator, recordEvent, revokeSession } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
-
-const SECURE = process.env.NODE_ENV === 'production';
-
-const cookieOptions = {
-  httpOnly: true,
-  sameSite: 'lax' as const,
-  path: '/',
-  secure: SECURE,
-};
+import { issueSession, sessionBody } from './session-reply.js';
 
 /**
  * Password endpoints are limited far more tightly than ordinary reads, and in
@@ -38,25 +22,6 @@ function passwordRateLimit(app: FastifyInstance, options: AuthRouteOptions) {
       },
     },
     onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
-  };
-}
-
-async function sessionBody(
-  request: FastifyRequest,
-  userId: string,
-  scope: SessionScope,
-) {
-  const user = await request.db((tx) =>
-    tx.user.findUnique({ where: { id: userId } }),
-  );
-  const permissions = await request.db((tx) => permissionsForUser(tx, userId));
-
-  return {
-    userId,
-    displayName: user?.displayName ?? '',
-    scope,
-    mayElevate: permissions.size > 0,
-    permissions: [...permissions],
   };
 }
 
@@ -129,15 +94,7 @@ export async function registerAuthRoutes(
       });
     }
 
-    const { token } = await request.db((tx) =>
-      createSession(tx, result.userId, result.scope, result.satisfiedFactor),
-    );
-    reply.setCookie(SESSION_COOKIE, token, cookieOptions);
-
-    return {
-      status: 'authenticated',
-      ...(await sessionBody(request, result.userId, result.scope)),
-    };
+    return issueSession(request, reply, result);
   });
 
   app.post(
@@ -210,12 +167,13 @@ export async function registerAuthRoutes(
         });
       }
 
-      const { token } = await request.db((tx) =>
-        createSession(tx, userId, decision.scope, decision.satisfiedFactor),
-      );
+      // The decision's user id, not the ambient one. They agree today — the
+      // password checked was this session's own login — but "they agree" is a
+      // fact about today's code, and the decision is the thing that was
+      // actually authenticated.
       await request.db((tx) =>
         recordEvent(tx, {
-          actorUserId: userId,
+          actorUserId: decision.userId,
           action: 'auth.elevate',
           targetType: 'Session',
           targetId: null,
@@ -225,11 +183,7 @@ export async function registerAuthRoutes(
         }),
       );
 
-      reply.setCookie(SESSION_COOKIE, token, cookieOptions);
-      return {
-        status: 'authenticated',
-        ...(await sessionBody(request, userId, 'admin')),
-      };
+      return issueSession(request, reply, decision);
     },
   );
 

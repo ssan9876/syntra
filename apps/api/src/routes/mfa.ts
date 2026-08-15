@@ -14,7 +14,6 @@ import {
   beginWebAuthnRegistration,
   confirmTotpEnrolment,
   countUnusedRecoveryCodes,
-  createSession,
   deliverMessage,
   enrolledFactorTypes,
   finishWebAuthnRegistration,
@@ -23,19 +22,18 @@ import {
   hasTotp,
   listWebAuthnCredentials,
   localMasterKeyProvider,
-  permissionsForUser,
   recordEvent,
   removeWebAuthnCredential,
   renderMessage,
   revokeOrphanedRecoveryCodes,
   type RelyingPartyIdentity,
-  type SessionScope,
   type Transport,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
-import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
+import { requireSession } from '../plugins/require-session.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { assertWebAuthnUsable, tenantRelyingParty } from './relying-party.js';
+import { issueSession } from './session-reply.js';
 
 export interface MfaRouteOptions {
   masterKey: Buffer;
@@ -46,15 +44,6 @@ export interface MfaRouteOptions {
   authRateLimitTenantMax: number;
   transport: Transport;
 }
-
-const SECURE = process.env.NODE_ENV === 'production';
-
-const cookieOptions = {
-  httpOnly: true,
-  sameSite: 'lax' as const,
-  path: '/',
-  secure: SECURE,
-};
 
 /**
  * Reads the tenant, derives its relying party, and refuses if this request did
@@ -156,25 +145,6 @@ export async function registerMfaRoutes(
     onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
   };
 
-  async function sessionBody(
-    request: FastifyRequest,
-    userId: string,
-    scope: SessionScope,
-  ) {
-    const user = await request.db((tx) =>
-      tx.user.findUnique({ where: { id: userId } }),
-    );
-    const permissions = await request.db((tx) => permissionsForUser(tx, userId));
-    return {
-      status: 'authenticated' as const,
-      userId,
-      displayName: user?.displayName ?? '',
-      scope,
-      mayElevate: permissions.size > 0,
-      permissions: [...permissions],
-    };
-  }
-
   // ---- The step-up half of a sign-in. No session yet, so no session guard.
 
   app.post('/verify', { ...LIMIT }, async (request, reply) => {
@@ -237,15 +207,12 @@ export async function registerMfaRoutes(
       });
     }
 
-    // The scope comes off the attempt, which recorded what its issuer meant.
+    // Everything the session records comes off the decision, and the decision
+    // took its scope from the attempt, which recorded what its issuer meant.
     // Never from whether this request happened to carry a cookie — the web
     // client sends one on every call, so that inference hands an
     // administrative session to any portal user completing a step-up.
-    const { token } = await request.db((tx) =>
-      createSession(tx, result.userId, result.scope, result.satisfiedFactor),
-    );
-    reply.setCookie(SESSION_COOKIE, token, cookieOptions);
-    return sessionBody(request, result.userId, result.scope);
+    return issueSession(request, reply, result);
   });
 
   /**
