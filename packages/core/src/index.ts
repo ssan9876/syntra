@@ -13,7 +13,15 @@ export * from './rbac/permissions.js';
 export * from './rbac/rbac-service.js';
 export * from './auth/password.js';
 export * from './auth/session-service.js';
-export * from './auth/login-service.js';
+// authenticate() is deliberately NOT exported. It is the password half of
+// authorize(), and a caller that reached it directly would skip policy
+// evaluation, second factors and the audit event. authorize() is the door.
+export type { AuthFailure, AuthResult } from './auth/login-service.js';
+export * from './auth/authorize.js';
+export * from './auth/attempt-service.js';
+export * from './auth/mfa/relying-party.js';
+export * from './auth/mfa/types.js';
+export * from './auth/mfa/registry.js';
 export * from './policy/types.js';
 export * from './policy/ip-match.js';
 export * from './policy/time-window.js';

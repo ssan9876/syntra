@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { elevateRequest, loginRequest } from '@syntra/contracts';
 import {
-  authenticate,
+  authorize,
   createSession,
   isAdministrator,
   permissionsForUser,
@@ -11,6 +11,7 @@ import {
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
+import { tenantRelyingParty } from './relying-party.js';
 
 const SECURE = process.env.NODE_ENV === 'production';
 
@@ -47,6 +48,13 @@ async function sessionBody(
 
 export interface AuthRouteOptions {
   authRateLimitMax: number;
+  /**
+   * The deployment's own base URL. The relying party's scheme and port come
+   * from here rather than from the request, because behind a TLS-terminating
+   * proxy the request reports `http` and a wrong expected origin fails every
+   * WebAuthn assertion.
+   */
+  publicUrl: string;
 }
 
 export async function registerAuthRoutes(
@@ -55,26 +63,64 @@ export async function registerAuthRoutes(
 ): Promise<void> {
   const PASSWORD_RATE_LIMIT = passwordRateLimit(options.authRateLimitMax);
 
+  const relyingPartyFor = async (request: FastifyRequest) => {
+    const tenant = await request.db((tx) =>
+      tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+    );
+    return { tenant, rp: tenantRelyingParty(tenant, options.publicUrl) };
+  };
+
   app.post('/login', { config: PASSWORD_RATE_LIMIT }, async (request, reply) => {
     const body = loginRequest.parse(request.body);
+    const { rp } = await relyingPartyFor(request);
 
-    const result = await request.db((tx) =>
-      authenticate(tx, { ...body, sourceIp: request.ip }),
-    );
+    const result = await authorize(request.tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: body.login, password: body.password },
+      applicationId: null,
+      sourceIp: request.ip,
+      relyingParty: rp,
+      scope: 'portal',
+    });
 
     // Every failure reason collapses into one response. Which of them applied
     // is recorded in the audit log, where an administrator can see it and an
-    // attacker cannot.
-    if (!result.ok) {
+    // attacker cannot — a policy denial must not be distinguishable from a
+    // wrong password, or the policy itself becomes an oracle.
+    if (result.status === 'deny') {
       throw new ProblemError(401, 'invalid-credentials', 'Invalid credentials');
     }
 
+    if (result.status === 'challenge') {
+      return reply.status(200).send({
+        status: 'challenge',
+        attemptToken: result.attemptToken,
+        expiresAt: result.expiresAt.toISOString(),
+        acceptableFactors: result.acceptableFactors,
+      });
+    }
+
+    // The password was right and the policy wants a factor this user does not
+    // have. They are not signed in — no cookie is set — and the token they get
+    // back buys exactly one thing: enrolling a factor of the required kind.
+    if (result.status === 'enrol') {
+      return reply.status(200).send({
+        status: 'enrol',
+        attemptToken: result.attemptToken,
+        expiresAt: result.expiresAt.toISOString(),
+        enrollableFactors: result.enrollableFactors,
+      });
+    }
+
     const { token } = await request.db((tx) =>
-      createSession(tx, result.userId, 'portal'),
+      createSession(tx, result.userId, result.scope, result.satisfiedFactor),
     );
     reply.setCookie(SESSION_COOKIE, token, cookieOptions);
 
-    return sessionBody(request, result.userId, 'portal');
+    return {
+      status: 'authenticated',
+      ...(await sessionBody(request, result.userId, result.scope)),
+    };
   });
 
   app.post(
@@ -100,25 +146,51 @@ export async function registerAuthRoutes(
         throw new ProblemError(401, 'unauthenticated', 'Unauthenticated');
       }
 
+      const { rp } = await relyingPartyFor(request);
+
       // The password is re-entered rather than trusted from the existing
       // session: elevation is a fresh authentication, not a flag flip.
-      const recheck = await request.db((tx) =>
-        authenticate(tx, {
+      const decision = await authorize(request.tenantId, {
+        kind: 'primary',
+        principal: {
+          kind: 'password',
           login: user.login,
           password: body.password,
-          sourceIp: request.ip,
-        }),
-      );
-      if (!recheck.ok) {
+        },
+        applicationId: null,
+        sourceIp: request.ip,
+        relyingParty: rp,
+        // The scope stamped on any attempt opened here, and the scope of the
+        // session issued at the end of it. Recorded, never inferred.
+        scope: 'admin',
+      });
+
+      if (decision.status === 'deny') {
         throw new ProblemError(
           401,
           'invalid-credentials',
           'Invalid credentials',
         );
       }
+      if (decision.status === 'challenge') {
+        return reply.status(200).send({
+          status: 'challenge',
+          attemptToken: decision.attemptToken,
+          expiresAt: decision.expiresAt.toISOString(),
+          acceptableFactors: decision.acceptableFactors,
+        });
+      }
+      if (decision.status === 'enrol') {
+        return reply.status(200).send({
+          status: 'enrol',
+          attemptToken: decision.attemptToken,
+          expiresAt: decision.expiresAt.toISOString(),
+          enrollableFactors: decision.enrollableFactors,
+        });
+      }
 
       const { token } = await request.db((tx) =>
-        createSession(tx, userId, 'admin'),
+        createSession(tx, userId, decision.scope, decision.satisfiedFactor),
       );
       await request.db((tx) =>
         recordEvent(tx, {
@@ -133,7 +205,10 @@ export async function registerAuthRoutes(
       );
 
       reply.setCookie(SESSION_COOKIE, token, cookieOptions);
-      return sessionBody(request, userId, 'admin');
+      return {
+        status: 'authenticated',
+        ...(await sessionBody(request, userId, 'admin')),
+      };
     },
   );
 

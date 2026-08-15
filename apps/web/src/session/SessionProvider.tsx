@@ -10,10 +10,36 @@ import {
 import type { SessionResponse } from '@syntra/contracts';
 import { api } from './api.js';
 
+export type FactorKind = 'totp' | 'webauthn';
+
+/**
+ * What /api/auth/login can now answer. Two of the three are not a session: the
+ * password was right and the policy wants a second factor first, either one
+ * the user already holds or one they must enrol. Returning the whole outcome
+ * rather than assigning it into the session is what lets the caller tell the
+ * difference.
+ */
+export type LoginOutcome =
+  | ({ status: 'authenticated' } & SessionResponse)
+  | {
+      /** Present a factor you already hold. */
+      status: 'challenge';
+      attemptToken: string;
+      expiresAt: string;
+      acceptableFactors: FactorKind[];
+    }
+  | {
+      /** Enrol a factor of the required kind. Still no session. */
+      status: 'enrol';
+      attemptToken: string;
+      expiresAt: string;
+      enrollableFactors: FactorKind[];
+    };
+
 interface SessionContextValue {
   session: SessionResponse | null;
   loading: boolean;
-  login(login: string, password: string): Promise<void>;
+  login(login: string, password: string): Promise<LoginOutcome>;
   elevate(password: string): Promise<void>;
   logout(): Promise<void>;
   can(permission: string): boolean;
@@ -42,14 +68,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const login = useCallback(async (loginName: string, password: string) => {
-    setSession(
-      await api<SessionResponse>('/api/auth/login', {
+  const login = useCallback(
+    async (loginName: string, password: string): Promise<LoginOutcome> => {
+      const result = await api<LoginOutcome>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ login: loginName, password }),
-      }),
-    );
-  }, []);
+      });
+      if (result.status === 'authenticated') setSession(result);
+      return result;
+    },
+    [],
+  );
 
   const elevate = useCallback(async (password: string) => {
     setSession(

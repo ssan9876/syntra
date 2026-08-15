@@ -18,6 +18,9 @@ const problem = (type: string, status: number) =>
   ) as never;
 
 const SESSION = {
+  // The login response now says which of the three outcomes it is; only this
+  // one carries a session.
+  status: 'authenticated',
   userId: '11111111-1111-4111-8111-111111111111',
   displayName: 'J Doe',
   scope: 'portal',

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
   PERMISSIONS,
+  addRule,
   assignRole,
   createRole,
   createUser,
@@ -119,6 +120,48 @@ describe('POST /api/auth/login', () => {
       payload: { login: 'jdoe' },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('POST /api/auth/login and policy', () => {
+  it('reports a policy denial exactly as it reports a wrong password', async () => {
+    await seedUser();
+    await withTenant(ctx.tenantId, (tx) =>
+      addRule(tx, { name: 'No', outcome: 'deny' }),
+    );
+
+    const denied = await login(PASSWORD);
+    const wrong = await login('definitely-not-the-password');
+
+    expect(denied.statusCode).toBe(401);
+    expect(denied.json()).toEqual(wrong.json());
+    expect(
+      denied.cookies.find((c) => c.name === 'syntra_session'),
+    ).toBeUndefined();
+  });
+
+  it('marks a plain success as authenticated', async () => {
+    await seedUser();
+    const res = await login(PASSWORD);
+    expect(res.json()).toMatchObject({
+      status: 'authenticated',
+      scope: 'portal',
+    });
+  });
+
+  it('refuses when nothing can be enrolled and the user holds no factor', async () => {
+    // No factor verifier is installed by app.ts until Task 8, so there is
+    // nothing to offer and the honest answer is a refusal. Task 9 asserts the
+    // enrolment response once the verifiers are installed.
+    await seedUser();
+    await withTenant(ctx.tenantId, (tx) =>
+      addRule(tx, { name: 'MFA everywhere', outcome: 'require_mfa' }),
+    );
+    const res = await login(PASSWORD);
+    expect(res.statusCode).toBe(401);
+    expect(
+      res.cookies.find((c) => c.name === 'syntra_session'),
+    ).toBeUndefined();
   });
 });
 

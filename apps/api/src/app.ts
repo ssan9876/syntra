@@ -49,6 +49,7 @@ export async function buildApp(
   await app.register(registerAuthRoutes, {
     prefix: '/api/auth',
     authRateLimitMax: config.authRateLimitMax,
+    publicUrl: config.publicUrl,
   });
 
   // Every route below requires an administrative session; the guard is

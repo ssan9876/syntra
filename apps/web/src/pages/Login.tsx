@@ -20,8 +20,20 @@ export function Login() {
     setError(null);
 
     try {
-      await login(loginName, password);
-      navigate('/', { replace: true });
+      const outcome = await login(loginName, password);
+      if (outcome.status === 'authenticated') {
+        navigate('/', { replace: true });
+      } else if (outcome.status === 'challenge') {
+        // Task 14 replaces this with the step-up screen.
+        setError(
+          'This account requires a second factor. That screen is not built yet.',
+        );
+      } else {
+        // Task 14 replaces this with the forced-enrolment screen.
+        setError(
+          'This account must register a second factor. That screen is not built yet.',
+        );
+      }
     } catch (cause) {
       // The API answers a wrong password, an unknown login and a disabled
       // account identically. Inventing a distinction here would undo that.

@@ -30,12 +30,23 @@ export interface ResolvedSession {
   sessionId: string;
   userId: string;
   scope: SessionScope;
+  /**
+   * The second factor this session was established with, if any.
+   *
+   * Read by anything that re-enters authorize() holding a session. Launching
+   * an application is a fresh decision, but it is not a fresh sign-in, and the
+   * factor the user already presented still counts. Without this, every launch
+   * of an application covered by a require_mfa rule issues the same challenge
+   * the user has just answered, and the application is unreachable forever.
+   */
+  satisfiedFactor: string | null;
 }
 
 export async function createSession(
   tx: TenantClient,
   userId: string,
   scope: SessionScope,
+  satisfiedFactor: string | null = null,
 ): Promise<{ token: string; expiresAt: Date }> {
   const tenantId = await currentTenant(tx);
   const token = randomBytes(32).toString('base64url');
@@ -47,6 +58,7 @@ export async function createSession(
       userId,
       tokenHash: hashToken(token),
       scope,
+      satisfiedFactor,
       absoluteExpiresAt,
     },
   });
@@ -79,7 +91,12 @@ export async function resolveSession(
     data: { lastSeenAt: new Date() },
   });
 
-  return { sessionId: row.id, userId: row.userId, scope };
+  return {
+    sessionId: row.id,
+    userId: row.userId,
+    scope,
+    satisfiedFactor: row.satisfiedFactor,
+  };
 }
 
 export async function revokeSession(
