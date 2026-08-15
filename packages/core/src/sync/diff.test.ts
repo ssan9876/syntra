@@ -19,9 +19,10 @@ const object = (
 const existing = (
   id: string,
   status = 'active',
+  objectType: ExistingObject['objectType'] = 'user',
 ): ExistingObject => ({
   id,
-  objectType: 'user',
+  objectType,
   sourceId: 'src-1',
   sourceAnchor: 'a1',
   correlationValue: 'jdoe',
@@ -129,6 +130,55 @@ describe('diffObjects', () => {
     );
     expect(changes[0]!.changeType).toBe('create_group');
     expect(changes[0]!.targetType).toBe('Group');
+  });
+
+  it('proposes deactivation for an absent group', () => {
+    const changes = diffObjects([], [existing('g1', 'active', 'group')], new Map());
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      changeType: 'deactivate_group',
+      targetType: 'Group',
+      targetId: 'g1',
+    });
+  });
+
+  it('proposes no change for an absent org unit', () => {
+    // Org units carry scoped role assignments; their removal is a human decision.
+    const changes = diffObjects([], [existing('ou1', 'active', 'orgUnit')], new Map());
+    expect(changes).toEqual([]);
+  });
+
+  it('proposes update_group for a matched but inactive group', () => {
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: object('g1', { name: 'Nurses' }, 'group'),
+          existing: existing('g1', 'inactive', 'group'),
+        },
+      ],
+      [],
+      new Map([['g1', { name: 'Nurses' }]]),
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0]!.changeType).toBe('update_group');
+    expect(changes[0]!.after).toEqual({ status: 'active' });
+  });
+
+  it('proposes no status change for a matched but inactive org unit', () => {
+    // Org units have no status column, so no reactivation change.
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: object('ou1', { name: 'Division' }, 'orgUnit'),
+          existing: existing('ou1', 'inactive', 'orgUnit'),
+        },
+      ],
+      [],
+      new Map([['ou1', { name: 'Division' }]]),
+    );
+    expect(changes).toEqual([]);
   });
 });
 

@@ -91,7 +91,8 @@ export function diffObjects(
 
     // A matched object that is inactive has reappeared in the source. Propose
     // restoring it; nothing is applied without an explicit apply step.
-    if (existing.status !== 'active') {
+    // Org units have no status column, so only users and groups can be reactivated.
+    if (existing.status !== 'active' && object.objectType !== 'orgUnit') {
       changes.push({
         changeType:
           object.objectType === 'user' ? 'reactivate_user' : VERB[object.objectType].update,
@@ -130,6 +131,13 @@ export function diffObjects(
   }
 
   for (const row of absent) {
+    // Org units carry scoped administrative role assignments. Removing one would
+    // silently narrow or widen someone's authority, which is consequential enough
+    // to be a human decision, not a sync outcome.
+    if (row.objectType === 'orgUnit') {
+      continue;
+    }
+
     changes.push({
       changeType:
         row.objectType === 'group' ? 'deactivate_group' : 'deactivate_user',
