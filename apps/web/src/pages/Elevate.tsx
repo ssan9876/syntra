@@ -29,8 +29,23 @@ export function Elevate() {
     setError(null);
 
     try {
-      await elevate(password);
-      navigate(intended, { replace: true });
+      const outcome = await elevate(password);
+      if (outcome.status === 'authenticated') {
+        navigate(intended, { replace: true });
+      } else if (outcome.status === 'challenge') {
+        // Elevation re-authenticates from scratch, so any require_mfa rule
+        // lands here every time — a factor presented at sign-in does not carry
+        // over. Task 14 replaces this with the step-up screen; until then, say
+        // so and leave the portal session exactly as it was.
+        setError(
+          'Administration requires a second factor. That screen is not built yet.',
+        );
+      } else {
+        // Task 14 replaces this with the forced-enrolment screen.
+        setError(
+          'Administration requires a second factor you have not registered. That screen is not built yet.',
+        );
+      }
     } catch (cause) {
       if (cause instanceof ApiError && cause.kind === 'not-an-administrator') {
         setError(

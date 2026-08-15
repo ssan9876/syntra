@@ -13,13 +13,19 @@ import { api } from './api.js';
 export type FactorKind = 'totp' | 'webauthn';
 
 /**
- * What /api/auth/login can now answer. Two of the three are not a session: the
- * password was right and the policy wants a second factor first, either one
- * the user already holds or one they must enrol. Returning the whole outcome
- * rather than assigning it into the session is what lets the caller tell the
- * difference.
+ * What /api/auth/login and /api/auth/elevate can both answer. Two of the three
+ * are not a session: the password was right and the policy wants a second
+ * factor first, either one the user already holds or one they must enrol.
+ * Returning the whole outcome rather than assigning it into the session is
+ * what lets the caller tell the difference.
+ *
+ * Elevation reaches these two arms far more readily than sign-in does. It
+ * always re-authenticates from scratch, with no factor carried over, so a
+ * tenant holding any require_mfa rule answers `challenge` on every elevation —
+ * including for a user who satisfied that same rule at sign-in minutes
+ * earlier.
  */
-export type LoginOutcome =
+export type AuthOutcome =
   | ({ status: 'authenticated' } & SessionResponse)
   | {
       /** Present a factor you already hold. */
@@ -39,8 +45,8 @@ export type LoginOutcome =
 interface SessionContextValue {
   session: SessionResponse | null;
   loading: boolean;
-  login(login: string, password: string): Promise<LoginOutcome>;
-  elevate(password: string): Promise<void>;
+  login(login: string, password: string): Promise<AuthOutcome>;
+  elevate(password: string): Promise<AuthOutcome>;
   logout(): Promise<void>;
   can(permission: string): boolean;
 }
@@ -69,8 +75,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (loginName: string, password: string): Promise<LoginOutcome> => {
-      const result = await api<LoginOutcome>('/api/auth/login', {
+    async (loginName: string, password: string): Promise<AuthOutcome> => {
+      const result = await api<AuthOutcome>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ login: loginName, password }),
       });
@@ -80,13 +86,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const elevate = useCallback(async (password: string) => {
-    setSession(
-      await api<SessionResponse>('/api/auth/elevate', {
-        method: 'POST',
-        body: JSON.stringify({ password }),
-      }),
-    );
+  const elevate = useCallback(async (password: string): Promise<AuthOutcome> => {
+    const result = await api<AuthOutcome>('/api/auth/elevate', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    });
+    // Only the authenticated arm carries a session, and only it comes with a
+    // cookie. Storing either of the other two would leave `scope`,
+    // `permissions` and `mayElevate` undefined — the guard would bounce the
+    // user straight back out of the console, and the portal identity would
+    // disappear from the header until the page was reloaded.
+    if (result.status === 'authenticated') setSession(result);
+    return result;
   }, []);
 
   const logout = useCallback(async () => {
