@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
+  ASSIGNABLE_FIELDS,
+  DEFAULT_MAPPINGS,
   PERMISSIONS,
   assignRole,
   createRole,
@@ -154,6 +156,371 @@ describe('source administration', () => {
     const res = await post(`/api/admin/sources/${created.json().id}/test`, cookie);
     expect(res.statusCode).toBe(200);
     expect(res.json().ok).toBe(false);
+  });
+
+  it('creates a source disabled when asked, so a schedule cannot fire before its mappings exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+
+    const res = await post('/api/admin/sources', cookie, {
+      name: 'Not yet',
+      config,
+      bindPassword: 'adminpassword',
+      schedule: '0 3 * * *',
+      enabled: false,
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().enabled).toBe(false);
+    // A create is scheduled the moment it commits, so a source saved disabled
+    // with a cron expression must not be on the scheduler at all.
+    expect(scheduler.scheduled).toHaveLength(0);
+  });
+});
+
+describe('reading one source', () => {
+  it('carries the counts of what it owns, so a delete can be described before it is offered', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    const sourceId = created.json().id as string;
+
+    await withTenant(ctx.tenantId, async (tx) => {
+      const user = await createUser(tx, {
+        login: 'synced',
+        email: 'synced@acme.test',
+        displayName: 'Synced',
+      });
+      await tx.user.update({
+        where: { id: user.id },
+        data: { sourceId, sourceAnchor: 'anchor-1' },
+      });
+    });
+
+    const res = await get(`/api/admin/sources/${sourceId}`, cookie);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().owned).toEqual({ users: 1, groups: 0, orgUnits: 0 });
+    // The row carries the secret's name, never the secret.
+    expect(res.body).not.toContain('adminpassword');
+  });
+
+  it('returns a 404, not a 500, for a source that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
+    const res = await get(
+      '/api/admin/sources/00000000-0000-4000-8000-000000000000',
+      cookie,
+    );
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('answers the mappings that were set for it', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    const sourceId = created.json().id as string;
+
+    await ctx.app.inject({
+      method: 'PUT',
+      url: `/api/admin/sources/${sourceId}/mappings`,
+      headers: { host: ctx.host, cookie },
+      payload: { rules: DEFAULT_MAPPINGS.openLdap },
+    });
+
+    const res = await get(`/api/admin/sources/${sourceId}/mappings`, cookie);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().rules).toHaveLength(DEFAULT_MAPPINGS.openLdap.length);
+  });
+});
+
+describe('what the mapping editor starts from', () => {
+  it('serves both flavours and the fields a mapping may write', async () => {
+    // Served rather than duplicated in the browser bundle: a default the
+    // console disagreed with would seed a mapping the server then refuses.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
+    const res = await get('/api/admin/sources/mapping-defaults', cookie);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().flavours.openLdap).toEqual(DEFAULT_MAPPINGS.openLdap);
+    expect(res.json().flavours.activeDirectory).toEqual(
+      DEFAULT_MAPPINGS.activeDirectory,
+    );
+    expect(res.json().assignableFields.user).toEqual(ASSIGNABLE_FIELDS.user);
+  });
+
+  it('is reachable without shadowing a source id', async () => {
+    // "mapping-defaults" is not a uuid, so a router preferring the parametric
+    // route would answer this with a validation failure instead.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
+    expect(
+      (await get('/api/admin/sources/mapping-defaults', cookie)).statusCode,
+    ).toBe(200);
+  });
+});
+
+describe('testing a connection that was never saved', () => {
+  it('reports the counts and the object classes and attributes it found', async () => {
+    // Spec success criterion 1. discoverSchema had no caller outside its own
+    // test before this endpoint existed.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+
+    const res = await post('/api/admin/sources/test', cookie, {
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+    expect(res.json().sampleCounts.user).toBeGreaterThan(0);
+    expect(res.json().schema.objectClasses).toContain('inetOrgPerson');
+    expect(res.json().schema.attributes).toContain('cn');
+  });
+
+  it('uses the saved credential when the editor did not retype one', async () => {
+    // The browser is never handed the stored password, so an edit that
+    // changes a search base and re-tests has to name the source instead.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    const res = await post('/api/admin/sources/test', cookie, {
+      config: { ...config, userSearchBase: 'ou=Care,dc=acme,dc=test' },
+      sourceId: created.json().id,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+  });
+
+  it('reports a refused bind as a result rather than a 500', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const res = await post('/api/admin/sources/test', cookie, {
+      config,
+      bindPassword: 'wrong-password',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(false);
+    expect(res.json().schema).toBeNull();
+  });
+
+  it('names the field when the configuration itself is wrong', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const res = await post('/api/admin/sources/test', cookie, {
+      config: { ...config, url: 'ldaps://localhost:1636', tlsMode: 'starttls' },
+      bindPassword: 'adminpassword',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().errors.map((e: { path: string }) => e.path)).toContain(
+      'tlsMode',
+    );
+  });
+
+  it('refuses a test with only sync.read', async () => {
+    // This opens a connection to any host the caller names.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
+    const res = await post('/api/admin/sources/test', cookie, {
+      config,
+      bindPassword: 'adminpassword',
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('returns a 404 for a saved source it was told to borrow a password from', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const res = await post('/api/admin/sources/test', cookie, {
+      config,
+      sourceId: '00000000-0000-4000-8000-000000000000',
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a request carrying neither a password nor a source', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE]);
+    const res = await post('/api/admin/sources/test', cookie, { config });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('records every test in the audit log, with where it connected', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.AUDIT_READ]);
+    await post('/api/admin/sources/test', cookie, {
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'source.test' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('success');
+    expect(events[0]!.payload).toMatchObject({
+      url: config.url,
+      usedStoredCredential: false,
+    });
+    // The credential is not in the log, and neither is anything that would
+    // let a reader reconstruct it.
+    expect(JSON.stringify(events[0]!.payload)).not.toContain('adminpassword');
+  });
+});
+
+describe('borrowing a saved source’s bind password', () => {
+  /**
+   * A socket that records everything it is sent and answers nothing.
+   *
+   * This is the attacker's end of the hole being closed here: point a test at
+   * it, name a saved source instead of a password, and whatever crosses the
+   * wire is the vault's contents in the clear.
+   */
+  async function sink(): Promise<{
+    port: number;
+    received(): string;
+    close(): void;
+  }> {
+    const { createServer } = await import('node:net');
+    const sockets: import('node:net').Socket[] = [];
+    let seen = '';
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      socket.on('data', (chunk) => {
+        seen += chunk.toString('binary');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return {
+      port: (server.address() as { port: number }).port,
+      received: () => seen,
+      close: () => {
+        for (const socket of sockets) socket.destroy();
+        server.close();
+      },
+    };
+  }
+
+  const savedSource = async (cookie: string) => {
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    return created.json().id as string;
+  };
+
+  it('refuses to send it to a URL other than the one the source is saved with', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const sourceId = await savedSource(cookie);
+    const listener = await sink();
+
+    try {
+      const res = await post('/api/admin/sources/test', cookie, {
+        config: { ...config, url: `ldap://127.0.0.1:${listener.port}` },
+        sourceId,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().type).toContain('transport-changed');
+      expect(res.json().errors[0].path).toBe('url');
+      // Nothing was sent at all, let alone the credential.
+      expect(listener.received()).toBe('');
+      expect(listener.received()).not.toContain('adminpassword');
+    } finally {
+      listener.close();
+    }
+  }, 20_000);
+
+  it('refuses to downgrade the transport it would cross on', async () => {
+    // The same hole with the destination left alone: an `ldaps` source
+    // re-tested as `plain` puts the stored password on the wire in cleartext.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Secure',
+      config: {
+        ...config,
+        url: process.env.LDAPS_URL ?? 'ldaps://localhost:1636',
+        tlsMode: 'ldaps',
+        rejectUnauthorized: false,
+      },
+      bindPassword: 'adminpassword',
+    });
+
+    const res = await post('/api/admin/sources/test', cookie, {
+      config: {
+        ...config,
+        url: process.env.LDAPS_URL ?? 'ldaps://localhost:1636',
+        tlsMode: 'ldaps',
+        rejectUnauthorized: true,
+      },
+      sourceId: created.json().id,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().errors[0].path).toBe('rejectUnauthorized');
+  });
+
+  it('records the refusal, so the attempt is not invisible', async () => {
+    // The point of the old hole was that it changed nothing and therefore
+    // left nothing behind. A refusal that is also silent would keep half of
+    // that property.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const sourceId = await savedSource(cookie);
+
+    await post('/api/admin/sources/test', cookie, {
+      config: { ...config, url: 'ldap://198.51.100.9:389' },
+      sourceId,
+    });
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'source.test' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('failure');
+    expect(events[0]!.payload).toMatchObject({
+      url: 'ldap://198.51.100.9:389',
+      refused: 'transport-changed',
+      usedStoredCredential: true,
+    });
+  });
+
+  it('still allows a different destination when the password is typed', async () => {
+    // Refusing the borrow is not refusing the test. Proof of possession is
+    // what was missing, and typing the password supplies it.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const sourceId = await savedSource(cookie);
+
+    const res = await post('/api/admin/sources/test', cookie, {
+      config: { ...config, userSearchBase: 'ou=Care,dc=acme,dc=test' },
+      sourceId,
+      bindPassword: 'adminpassword',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+  });
+
+  it('lets everything that is not the transport change freely', async () => {
+    // Editing a search base and re-testing is the case this borrow exists
+    // for, and it must not have become collateral damage.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const sourceId = await savedSource(cookie);
+
+    const res = await post('/api/admin/sources/test', cookie, {
+      config: {
+        ...config,
+        userSearchBase: 'ou=Care,dc=acme,dc=test',
+        userFilter: '(objectClass=person)',
+      },
+      sourceId,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
   });
 });
 
@@ -726,6 +1093,52 @@ describe('deleting a source', () => {
     expect(
       users.json().users.every((u: { status: string }) => u.status === 'active'),
     ).toBe(true);
+  });
+
+  it('refuses when the numbers moved under the confirmation', async () => {
+    // A confirmation is worth only the figures it was given, and those are
+    // read when a screen opens. A run in between can turn two accounts into
+    // two thousand, and deleting anyway carries out a decision nobody made.
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.DIRECTORY_READ,
+    ]);
+    const id = await synced(cookie);
+
+    const res = await del(
+      `/api/admin/sources/${id}?confirm=true&ackUsers=1&ackGroups=0&ackOrgUnits=0`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toContain('source-counts-changed');
+    expect(res.json().owned.users).toBe(2);
+    // And nothing was deactivated on the way to saying so.
+    const users = await get('/api/admin/users', cookie);
+    expect(
+      users.json().users.every((u: { status: string }) => u.status === 'active'),
+    ).toBe(true);
+  });
+
+  it('goes ahead when the acknowledged numbers are the real ones', async () => {
+    const cookie = await adminCookie([
+      PERMISSIONS.SYNC_MANAGE,
+      PERMISSIONS.SYNC_READ,
+      PERMISSIONS.DIRECTORY_READ,
+    ]);
+    const id = await synced(cookie);
+
+    // Read the way the console reads them, rather than assumed.
+    const owned = (await get(`/api/admin/sources/${id}`, cookie)).json().owned;
+    const res = await del(
+      `/api/admin/sources/${id}?confirm=true&ackUsers=${owned.users}` +
+        `&ackGroups=${owned.groups}&ackOrgUnits=${owned.orgUnits}`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(204);
+    expect((await get('/api/admin/sources', cookie)).json().sources).toHaveLength(0);
   });
 
   it('deactivates and detaches the accounts it owned when the caller confirms', async () => {

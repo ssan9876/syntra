@@ -41,6 +41,22 @@ const ldapConfigObject = z.object({
   tlsMode: ldapTlsModeSchema.optional(),
   /** Off is a deliberate, per-source decision the interface labels plainly. */
   rejectUnauthorized: z.boolean().default(true),
+  /**
+   * How long to wait for the TCP connection, and for any single LDAP
+   * operation on it.
+   *
+   * Both have to be set. `ldapts` defaults each to zero, which it reads as
+   * "wait forever": a host that drops packets rather than refusing them, or a
+   * port that accepts a connection and then never answers, holds the caller
+   * open indefinitely. That is a hung request handler per attempt — a
+   * resource the caller of a connection test should not be able to pin.
+   *
+   * The operation budget is the larger of the two because a page of a large
+   * directory legitimately takes seconds; the connect budget is short because
+   * a reachable directory answers a TCP handshake immediately or is not there.
+   */
+  connectTimeoutMs: z.number().int().positive().max(120_000).default(10_000),
+  timeoutMs: z.number().int().positive().max(600_000).default(60_000),
 });
 
 /**

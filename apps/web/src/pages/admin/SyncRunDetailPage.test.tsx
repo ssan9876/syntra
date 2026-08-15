@@ -137,19 +137,24 @@ describe('SyncRunDetailPage', () => {
     mockFetch({ run: overThreshold() });
     renderPage();
 
-    const apply = await screen.findByRole('button', { name: /apply/i });
+    const apply = await screen.findByRole('button', { name: 'Apply' });
     expect(apply).toBeDisabled();
 
-    await userEvent.click(screen.getByRole('checkbox'));
-    expect(screen.getByRole('button', { name: /apply/i })).toBeEnabled();
+    // Named, not "the only checkbox on the page": every proposed change now
+    // carries one of its own for a partial apply. The confirmation is the one
+    // that gates the button.
+    await userEvent.click(screen.getByRole('checkbox', { name: /read these numbers/i }));
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
 
   it('sends the confirmation with the apply, once it is ticked', async () => {
     mockFetch({ run: overThreshold() });
     renderPage();
 
-    await userEvent.click(await screen.findByRole('checkbox'));
-    await userEvent.click(screen.getByRole('button', { name: /apply/i }));
+    await userEvent.click(
+      await screen.findByRole('checkbox', { name: /read these numbers/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
 
     const applyCall = vi
       .mocked(globalThis.fetch)
@@ -177,8 +182,10 @@ describe('SyncRunDetailPage', () => {
     expect(
       await screen.findByText(/blocked and will not apply/i),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    expect(
+      screen.queryByRole('checkbox', { name: /read these numbers/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
   });
 
   it('reports unresolved members rather than hiding them', async () => {
@@ -227,6 +234,165 @@ describe('SyncRunDetailPage', () => {
     renderPage();
 
     expect(await screen.findByText(/s1/)).toBeInTheDocument();
+  });
+
+  it('skips one proposed change without touching the rest', async () => {
+    mockFetch();
+    renderPage();
+
+    const skips = await screen.findAllByRole('button', { name: 'Skip' });
+    // Two proposed changes; the conflict is not skippable, because only a
+    // proposed change may be.
+    expect(skips).toHaveLength(2);
+
+    await userEvent.click(skips[0]!);
+
+    const call = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([url]) => String(url).includes('/sync-changes/'));
+    expect(call).toBeDefined();
+    expect(String(call![0])).toBe('/api/admin/sync-changes/c1/skip');
+    expect((call![1] as RequestInit).method).toBe('POST');
+  });
+
+  it('applies only what is still ticked, and says how many that is', async () => {
+    mockFetch();
+    renderPage();
+
+    const included = await screen.findAllByRole('checkbox', {
+      name: /apply this .* change/i,
+    });
+    expect(included).toHaveLength(2);
+    expect(included[0]).toBeChecked();
+
+    await userEvent.click(included[0]!);
+    expect(screen.getByText('1 of 2 changes selected')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    const apply = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([url]) => String(url).includes('/apply'));
+    expect(JSON.parse(String((apply![1] as RequestInit).body))).toEqual({
+      only: ['c2'],
+    });
+  });
+
+  it('sends no list at all when the whole run is applied as reviewed', async () => {
+    mockFetch();
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Apply' }),
+    );
+
+    const apply = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([url]) => String(url).includes('/apply'));
+    expect(JSON.parse(String((apply![1] as RequestInit).body))).toEqual({});
+  });
+
+  it('refuses to offer an apply with nothing ticked', async () => {
+    mockFetch();
+    renderPage();
+
+    const included = await screen.findAllByRole('checkbox', {
+      name: /apply this .* change/i,
+    });
+    await userEvent.click(included[0]!);
+    await userEvent.click(included[1]!);
+
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+  });
+
+  it('offers neither control on a run that has already been applied', async () => {
+    mockFetch({
+      run: run({
+        status: 'applied',
+        changes: [
+          {
+            id: 'c1',
+            changeType: 'create_user',
+            targetType: 'User',
+            targetId: 'u1',
+            sourceAnchor: 'a1',
+            before: null,
+            after: { login: 'nhaddad' },
+            status: 'applied',
+            message: null,
+          },
+        ],
+      }),
+    });
+    renderPage();
+
+    await screen.findByText(/nhaddad/);
+    expect(screen.queryByRole('button', { name: 'Skip' })).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('lets a partially applied run apply the rest', async () => {
+    // A partial apply is a pause, not a discard: applyRun leaves what was left
+    // out still proposed, and the run comes back partially_applied. Reading
+    // "finished" off the run's status rather than off its changes is what made
+    // this button dead on exactly the run that needed it.
+    mockFetch({
+      run: run({
+        status: 'partially_applied',
+        changes: [
+          {
+            id: 'c1',
+            changeType: 'create_user',
+            targetType: 'User',
+            targetId: 'u1',
+            sourceAnchor: 'a1',
+            before: null,
+            after: { login: 'nhaddad' },
+            status: 'applied',
+            message: null,
+          },
+          {
+            id: 'c2',
+            changeType: 'create_group',
+            targetType: 'Group',
+            targetId: null,
+            sourceAnchor: 'g1',
+            before: null,
+            after: { name: 'Nurses' },
+            status: 'proposed',
+            message: null,
+          },
+        ],
+      }),
+    });
+    renderPage();
+
+    await screen.findByText(/Nurses/);
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: 'Skip' })).toHaveLength(1);
+  });
+
+  it('shows a skipped change as skipped rather than as a raw status', async () => {
+    mockFetch({
+      run: run({
+        changes: [
+          {
+            id: 'c1',
+            changeType: 'deactivate_user',
+            targetType: 'User',
+            targetId: 'u9',
+            sourceAnchor: 'a9',
+            before: { status: 'active' },
+            after: { status: 'inactive' },
+            status: 'skipped',
+            message: null,
+          },
+        ],
+      }),
+    });
+    renderPage();
+
+    expect(await screen.findByText('Skipped')).toBeInTheDocument();
   });
 
   it('links back to the sync runs list', async () => {

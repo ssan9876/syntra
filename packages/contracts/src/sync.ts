@@ -43,6 +43,14 @@ export const createSourceRequest = z.object({
   schedule: cronExpression.optional(),
   autoApply: z.boolean().optional(),
   deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
+  /**
+   * Absent means enabled, which is what a source created before this field
+   * existed got. Sending `false` creates a source that is configured but does
+   * not run — the only way to give a source a cron expression and its
+   * attribute mappings without the schedule firing in between, since a create
+   * is scheduled the moment it commits.
+   */
+  enabled: z.boolean().optional(),
 });
 
 /**
@@ -79,6 +87,22 @@ export const deleteSourceQuery = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value === 'true'),
+  /**
+   * The counts the caller was shown when they confirmed.
+   *
+   * Confirmation is worth only as much as the numbers it was given, and those
+   * numbers are read when a page opens. A sync run between the reading and the
+   * clicking can turn "12 users will be deactivated" into twelve hundred, and
+   * the caller would have confirmed something they were never told. Sent back,
+   * they are checked against the counts inside the deleting transaction, and a
+   * disagreement is refused with the real ones rather than acted on.
+   *
+   * Optional, because an API caller who never saw a screen has nothing to
+   * acknowledge and `confirm=true` alone still means what it always meant.
+   */
+  ackUsers: z.coerce.number().int().min(0).optional(),
+  ackGroups: z.coerce.number().int().min(0).optional(),
+  ackOrgUnits: z.coerce.number().int().min(0).optional(),
 });
 
 export const mappingRule = z.object({
@@ -126,3 +150,28 @@ export const syncRunSummary = z.object({
   error: z.string().nullable(),
 });
 export type SyncRunSummary = z.infer<typeof syncRunSummary>;
+
+/**
+ * A connection test for a configuration that may never have been saved.
+ *
+ * The spec's administration surface tests *before* anything is written, so
+ * this carries the connection settings as typed rather than the id of a
+ * stored row. The credential is the exception: an editor changing a search
+ * base should not have to re-type the bind password, and the browser must
+ * never be handed the stored one to send back. So a request either carries a
+ * new password, or names the saved source whose vault entry should be used --
+ * and the password itself stays server-side either way.
+ */
+export const testConnectionRequest = z
+  .object({
+    config: z.record(z.unknown()),
+    bindPassword: z.string().min(1).max(1024).optional(),
+    sourceId: z.string().uuid().optional(),
+  })
+  .refine(
+    (body) => body.bindPassword !== undefined || body.sourceId !== undefined,
+    {
+      message:
+        'send a bind password, or the id of a saved source whose stored password should be used',
+    },
+  );

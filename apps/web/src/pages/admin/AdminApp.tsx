@@ -9,6 +9,7 @@ import { PersonDetailPage } from './PersonDetailPage.js';
 import { ImportPage } from './ImportPage.js';
 import { AuditPage } from './AuditPage.js';
 import { SourcesPage } from './SourcesPage.js';
+import { SourceDetailPage } from './SourceDetailPage.js';
 import { SyncRunsPage } from './SyncRunsPage.js';
 import { SyncRunDetailPage } from './SyncRunDetailPage.js';
 
@@ -70,6 +71,10 @@ export function AdminApp() {
             <Route path="people/:id" element={<PersonDetailPage />} />
             <Route path="import" element={<ImportPage />} />
             <Route path="sources" element={<SourcesPage />} />
+            {/* Before the parametric route, so "new" is a page rather than an
+                id that will 404 on its way to the editor. */}
+            <Route path="sources/new" element={<SourceDetailPage />} />
+            <Route path="sources/:id" element={<SourceDetailPage />} />
             <Route path="sync-runs" element={<SyncRunsPage />} />
             <Route path="sync-runs/:id" element={<SyncRunDetailPage />} />
             <Route path="audit" element={<AuditPage />} />

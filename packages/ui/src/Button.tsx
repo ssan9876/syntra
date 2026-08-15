@@ -28,6 +28,31 @@ const SIZES: Record<Size, string> = {
   md: 'h-9 px-4 text-base gap-2',
 };
 
+/**
+ * The button's appearance, without the button.
+ *
+ * For the case where the control is genuinely a link — "New source" navigates,
+ * it does not act — and rendering a `<button>` would cost middle-click, open in
+ * a new tab, and the status bar showing where it goes. Exported so that case
+ * shares this definition rather than a hand-copied class list, which is how the
+ * two on the sources page had already drifted from each other and from here.
+ */
+export function buttonClasses(
+  variant: Variant = 'secondary',
+  size: Size = 'md',
+  className = '',
+): string {
+  return [
+    'inline-flex items-center justify-center rounded-control',
+    'border font-medium whitespace-nowrap',
+    'transition-colors duration-150 ease-out-quart',
+    'disabled:opacity-55 disabled:pointer-events-none',
+    VARIANTS[variant],
+    SIZES[size],
+    className,
+  ].join(' ');
+}
+
 export function Button({
   variant = 'secondary',
   size = 'md',
@@ -42,15 +67,7 @@ export function Button({
       {...props}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
-      className={[
-        'inline-flex items-center justify-center rounded-control',
-        'border font-medium whitespace-nowrap',
-        'transition-colors duration-150 ease-out-quart',
-        'disabled:opacity-55 disabled:pointer-events-none',
-        VARIANTS[variant],
-        SIZES[size],
-        className,
-      ].join(' ')}
+      className={buttonClasses(variant, size, className)}
     >
       {loading && <Spinner />}
       {children}

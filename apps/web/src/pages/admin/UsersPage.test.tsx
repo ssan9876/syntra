@@ -11,6 +11,7 @@ const users = [
     email: 'j@acme.test',
     status: 'active',
     statusReason: null,
+    sourceId: null,
   },
   {
     id: 'u2',
@@ -19,8 +20,33 @@ const users = [
     email: 's@acme.test',
     status: 'inactive',
     statusReason: 'left the company',
+    sourceId: null,
   },
 ];
+
+const synced = {
+  id: 'u3',
+  login: 'nhaddad',
+  displayName: 'N Haddad',
+  email: 'n@acme.test',
+  status: 'active',
+  statusReason: null,
+  sourceId: 's1',
+};
+
+/** The users list and the source list are separate reads, as on the run pages. */
+function mockBoth(
+  rows: Record<string, unknown>[],
+  sources: { id: string; name: string }[] = [{ id: 's1', name: 'Corporate LDAP' }],
+) {
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
+    Promise.resolve(
+      String(input).includes('/sources')
+        ? json({ sources })
+        : json({ users: rows }),
+    ),
+  );
+}
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -67,6 +93,52 @@ describe('UsersPage', () => {
     renderPage();
 
     expect(await screen.findByText(/no users yet/i)).toBeInTheDocument();
+  });
+
+  it('names the directory that owns a synced account, and says it is read-only', async () => {
+    mockBoth([...users, synced]);
+    renderPage();
+
+    const row = (await screen.findByText('N Haddad')).closest('tr')!;
+    expect(row).toHaveTextContent('Corporate LDAP');
+    expect(row).toHaveTextContent(/read-only/i);
+  });
+
+  it('says a locally managed account is Syntra’s own', async () => {
+    mockBoth([...users, synced]);
+    renderPage();
+
+    const row = (await screen.findByText('J Doe')).closest('tr')!;
+    expect(row).toHaveTextContent('Syntra');
+    expect(row).not.toHaveTextContent(/read-only/i);
+  });
+
+  it('falls back to naming it a directory source when the source list is unreadable', async () => {
+    // sync.read and directory.read are separate permissions. Losing the source
+    // name must not cost the reader the fact that the account is managed
+    // elsewhere.
+    mockBoth([synced], []);
+    renderPage();
+
+    const row = (await screen.findByText('N Haddad')).closest('tr')!;
+    expect(row).toHaveTextContent('Directory source');
+  });
+
+  it('says nothing about directories when every account is local', async () => {
+    mockBoth(users);
+    renderPage();
+
+    await screen.findByText('J Doe');
+    expect(screen.queryByText(/managed elsewhere/i)).toBeNull();
+  });
+
+  it('explains once, above the table, where a synced field is changed', async () => {
+    mockBoth([...users, synced]);
+    renderPage();
+
+    expect(
+      await screen.findByText(/some of these accounts are managed elsewhere/i),
+    ).toBeInTheDocument();
   });
 
   it('surfaces a permission failure as a message, not a blank page', async () => {

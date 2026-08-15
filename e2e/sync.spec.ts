@@ -221,7 +221,20 @@ test.afterAll(async () => {
   await removeDatabaseFixture();
 });
 
-test('a directory source is connected, previewed, applied, and its users land in the directory', async ({
+// The second test reads the source the first one created, so a failure in the
+// first should skip the second rather than report a second, derived failure.
+test.describe.configure({ mode: 'serial' });
+
+/**
+ * The whole path, through the console, with no API call standing in for a
+ * control that does not exist.
+ *
+ * This test used to drive four of these steps over HTTP -- create, map, test,
+ * run -- because the console had no form for any of them. That is the gap this
+ * suite exists to prove closed, so anything it reaches for here has to be a
+ * real control on a real page.
+ */
+test('a directory source is created, tested, mapped, run, partly applied and skipped, entirely from the console', async ({
   page,
 }) => {
   await signInAndLand(page, 'admin', ADMIN!);
@@ -230,119 +243,159 @@ test('a directory source is connected, previewed, applied, and its users land in
     page.getByRole('heading', { name: 'Directory sources' }),
   ).toBeVisible();
 
-  // SourcesPage is a read-only list -- there is no form yet to create,
-  // test, or run a source from the console, so this drives the same API
-  // those controls would call, over the browser's own session cookie
-  // (page.request shares cookie storage with the page's browser context).
-  // See task-15-report.md for why this wasn't built as a new UI form.
-  const created = await page.request.post('/api/admin/sources', {
-    data: {
-      name: SOURCE_NAME,
-      config: {
-        url: LDAP_URL,
-        bindDn: BIND_DN,
-        userSearchBase: OU_DN,
-        groupSearchBase: OU_DN,
-        userFilter: '(objectClass=inetOrgPerson)',
-        groupFilter: '(objectClass=groupOfNames)',
-        anchorAttribute: 'entryUUID',
-      },
-      bindPassword: BIND_PASSWORD,
-    },
+  await page.getByRole('link', { name: 'New source' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'New directory source' }),
+  ).toBeVisible();
+
+  // One click seeds the attribute mappings, the anchor attribute and the
+  // per-flavour filters, which is what "the common case needs no typing"
+  // means: everything below this line is the part that is genuinely specific
+  // to this directory.
+  await page.getByRole('button', { name: 'OpenLDAP' }).click();
+  await expect(page.getByLabel('Anchor attribute')).toHaveValue('entryUUID');
+
+  await page.getByLabel('Name').fill(SOURCE_NAME);
+  await page.getByLabel('Server URL').fill(LDAP_URL);
+  await page.getByLabel('Transport').selectOption('plain');
+  await page.getByLabel('Bind DN').fill(BIND_DN);
+  await page.getByLabel('Bind password').fill(BIND_PASSWORD);
+  await page.getByLabel('User search base').fill(OU_DN);
+  await page.getByLabel('Group search base').fill(OU_DN);
+
+  // Tested before anything is saved, and reporting what it found: the counts
+  // and the object classes and attributes the directory returned. Spec
+  // success criterion 1, which was unreachable from the console until now.
+  await page.getByRole('button', { name: 'Test connection' }).click();
+  const report = page.locator('section', {
+    has: page.getByRole('heading', { name: 'Connection test' }),
   });
-  expect(created.ok(), await created.text()).toBe(true);
-  const source = await created.json();
+  await expect(report).toBeVisible();
+  await expect(report).toContainText('Found 2 users, 1 groups');
+  await expect(report).toContainText('inetOrgPerson');
+  // The anchor attribute among them. It is operational on OpenLDAP and is not
+  // returned by an ordinary search, so a report that lists uid and mail but
+  // not this one omits the field the administrator came here to fill in.
+  await expect(report).toContainText('entryUUID');
 
-  const mapped = await page.request.put(
-    `/api/admin/sources/${source.id}/mappings`,
-    {
-      data: {
-        rules: [
-          {
-            objectType: 'user',
-            sourceAttribute: 'uid',
-            targetField: 'login',
-            transform: 'lowercase',
-            isCorrelation: true,
-          },
-          {
-            objectType: 'user',
-            sourceAttribute: 'mail',
-            targetField: 'email',
-            transform: 'lowercase',
-            isCorrelation: false,
-          },
-          {
-            objectType: 'user',
-            sourceAttribute: 'cn',
-            targetField: 'displayName',
-            transform: 'trim',
-            isCorrelation: false,
-          },
-          {
-            objectType: 'group',
-            sourceAttribute: 'cn',
-            targetField: 'name',
-            transform: 'trim',
-            isCorrelation: true,
-          },
-        ],
-      },
-    },
-  );
-  expect(mapped.ok(), await mapped.text()).toBe(true);
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText(/attribute mappings were saved/i)).toBeVisible();
+  // The editor moved to the saved source rather than staying on /new.
+  await expect(page).toHaveURL(/\/admin\/sources\/[0-9a-f-]{36}$/);
+  // Saved and read back, not merely echoed: this is a fresh GET of the source.
+  await expect(page.getByLabel('Server URL')).toHaveValue(LDAP_URL);
+  await expect(page.getByLabel('Users directory attribute 1')).toHaveValue('uid');
 
-  // The new source shows up in the list the console does have.
-  await page.reload();
-  await expect(page.getByRole('table')).toContainText(SOURCE_NAME);
-
-  // Test the connection and see the counts.
-  const tested = await page.request.post(
-    `/api/admin/sources/${source.id}/test`,
-  );
-  expect(tested.ok(), await tested.text()).toBe(true);
-  const testResult = await tested.json();
-  expect(testResult.ok).toBe(true);
-  expect(testResult.sampleCounts).toMatchObject({ user: 2, group: 1 });
-
-  // Run a preview.
-  const run = await page.request.post(`/api/admin/sources/${source.id}/run`);
-  expect(run.ok(), await run.text()).toBe(true);
-  const runBody = await run.json();
-  expect(runBody.status).toBe('previewed');
-  // Everything the source returned was understood: a run with mapping
-  // failures is not a clean run, whatever recordsRead says.
-  expect(runBody.mappingFailures).toBe(0);
-
-  // See the proposed creates grouped by type, on the review page the
-  // console actually renders.
-  await page.goto(`/admin/sync-runs/${runBody.id}`);
+  // Run it by hand. The console lands on the run it started.
+  await page.getByRole('button', { name: 'Run now' }).click();
   await expect(page.getByRole('heading', { name: 'Sync run' })).toBeVisible();
+  await expect(page).toHaveURL(/\/admin\/sync-runs\/[0-9a-f-]{36}$/);
+
   await expect(
     page.getByRole('heading', { name: 'Create user (2)' }),
   ).toBeVisible();
   await expect(
     page.getByRole('heading', { name: 'Create group (1)' }),
   ).toBeVisible();
-  // Panels are grouped and ordered by changeType, so "Add group member"
-  // sorts before "Create user" -- scope to the create-user panel by its
-  // heading rather than assuming table order.
-  const createUserPanel = page.locator('section', {
-    has: page.getByRole('heading', { name: 'Create user (2)' }),
-  });
-  await expect(createUserPanel.getByRole('table')).toContainText(NURSE_UID);
 
-  // Apply.
+  // Everything the source returned was understood. A run with mapping
+  // failures is not a clean run whatever recordsRead says, and the review
+  // screen is the only place those records are visible at all -- so their
+  // absence is what says nothing was silently dropped.
+  await expect(page.getByText(/could not be mapped/i)).toHaveCount(0);
+  await expect(page.getByText(/could not be resolved/i)).toHaveCount(0);
+
+  // Skip one proposed change outright. It is recorded as skipped on the run
+  // and never applied.
+  const clerkRow = page.getByRole('row').filter({ hasText: CLERK_UID });
+  await clerkRow.getByRole('button', { name: 'Skip' }).click();
+  await expect(clerkRow).toContainText('Skipped');
+  await expect(clerkRow.getByRole('button', { name: 'Skip' })).toHaveCount(0);
+
+  // Apply part of the run: everything except the group and its membership.
+  // Spec success criterion 4, which had server support and no control.
+  await page
+    .getByRole('checkbox', { name: 'Apply this create group change' })
+    .uncheck();
+  await page
+    .getByRole('checkbox', { name: 'Apply this add group member change' })
+    .uncheck();
+  await expect(page.getByText('1 of 3 changes selected')).toBeVisible();
+
   await page.getByRole('button', { name: 'Apply' }).click();
-  await expect(page.getByRole('button', { name: 'Apply' })).toBeDisabled();
   await expect(page.getByText('Applied', { exact: true }).first()).toBeVisible();
 
-  // Find the LDAP users listed under Users.
+  // The nurse landed; the clerk was skipped and did not; the group was left
+  // out of this apply and did not.
   await page.goto('/admin/users');
   await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible();
   const users = page.getByRole('table');
   await expect(users).toContainText(NURSE_UID);
   await expect(users).toContainText('E2E Nurse');
-  await expect(users).toContainText(CLERK_UID);
-  await expect(users).toContainText('E2E Clerk');
+  await expect(users).not.toContainText(CLERK_UID);
+
+  // A synced account names the directory that owns it and says it is
+  // read-only, wherever it appears.
+  const nurseRow = page.getByRole('row').filter({ hasText: NURSE_UID });
+  await expect(nurseRow).toContainText(SOURCE_NAME);
+  await expect(nurseRow).toContainText('read-only');
+
+  await page.goto('/admin/groups');
+  await expect(page.getByRole('heading', { name: 'Groups' })).toBeVisible();
+  await expect(page.getByText(GROUP_CN)).toHaveCount(0);
+
+  // What was left out is still proposed, so the rest of the run can be
+  // applied afterwards. A partial apply is a pause, not a discard.
+  await page.goBack();
+  await page.goBack();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Sync run' })).toBeVisible();
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(
+    page.getByRole('checkbox', { name: /apply this/i }),
+  ).toHaveCount(0);
+
+  await page.goto('/admin/groups');
+  await expect(page.getByText(GROUP_CN)).toBeVisible();
+});
+
+/**
+ * The editor's destructive path, which is the one worth a browser test: the
+ * counts have to be on the page before the button does anything.
+ */
+test('deleting a source states what it will deactivate before it will do it', async ({
+  page,
+}) => {
+  await signInAndLand(page, 'admin', ADMIN!);
+  await elevateTo(page, '/admin/sources', ADMIN!);
+
+  await page.getByRole('link', { name: SOURCE_NAME }).click();
+  await expect(page.getByRole('heading', { name: SOURCE_NAME })).toBeVisible();
+
+  const panel = page.locator('section', {
+    has: page.getByRole('heading', { name: 'Delete this source' }),
+  });
+  // The previous test applied one user and one group from this source.
+  await expect(panel).toContainText('1 user');
+  await expect(panel).toContainText('1 group');
+  await expect(panel).toContainText(/deactivates every one of those/i);
+
+  const remove = panel.getByRole('button', { name: 'Delete source' });
+  await expect(remove).toBeDisabled();
+  await panel.getByRole('checkbox').check();
+  await expect(remove).toBeEnabled();
+
+  // Driven to completion, because the half of this that matters is what the
+  // button actually does. The source goes; the accounts it owned stay, and
+  // are deactivated with a reason naming it.
+  await remove.click();
+  await expect(page).toHaveURL(/\/admin\/sources$/);
+  await expect(page.getByText(SOURCE_NAME)).toHaveCount(0);
+
+  await page.goto('/admin/users');
+  const nurse = page.getByRole('row').filter({ hasText: NURSE_UID });
+  await expect(nurse).toContainText('Inactive');
+  await expect(nurse).toContainText(SOURCE_NAME);
+  // Detached, so the row no longer claims a source that no longer exists.
+  await expect(nurse).toContainText('Syntra');
 });

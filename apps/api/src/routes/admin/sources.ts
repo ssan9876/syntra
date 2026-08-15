@@ -5,18 +5,28 @@ import {
   deleteSourceQuery,
   idParam,
   setMappingsRequest,
+  testConnectionRequest,
   updateSourceRequest,
 } from '@syntra/contracts';
-import { ldapConnector } from '@syntra/connectors';
 import {
+  ldapConfigSchema,
+  ldapConnector,
+  type SchemaDescriptor,
+} from '@syntra/connectors';
+import {
+  ASSIGNABLE_FIELDS,
+  DEFAULT_MAPPINGS,
   PERMISSIONS,
+  SourceCountsChangedError,
   SourceOwnsObjectsError,
   applySourceSchedule,
   createSource,
   deleteSource,
+  findSource,
   listSources,
   localMasterKeyProvider,
   mappingsFor,
+  ownedObjectCounts,
   previewRun,
   recordEvent,
   removeSourceSchedule,
@@ -84,6 +94,222 @@ export async function registerAdminSourceRoutes(
     '/sources',
     { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
     async (request) => ({ sources: await request.db((tx) => listSources(tx)) }),
+  );
+
+  /**
+   * What the mapping editor starts from, and what it is allowed to write.
+   *
+   * Served rather than duplicated in the browser bundle so there is exactly
+   * one definition of both: a default the console disagreed with would seed a
+   * mapping the server then refuses, and a target field the console offered
+   * but `setMappings` rejects is a 400 an administrator cannot act on.
+   *
+   * Static path, and registered before `/sources/:id` — find-my-way prefers a
+   * static segment over a parametric one regardless of order, but the reading
+   * order should not depend on knowing that.
+   */
+  app.get(
+    '/sources/mapping-defaults',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async () => ({
+      flavours: DEFAULT_MAPPINGS,
+      assignableFields: ASSIGNABLE_FIELDS,
+    }),
+  );
+
+  app.get(
+    '/sources/:id',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      return request.db(async (tx) => {
+        const source = await findSource(tx, id);
+        if (!source) throw new ProblemError(404, 'not-found', 'Source not found');
+
+        // Counted here rather than left for the delete to discover, because
+        // the console has to say how many accounts a deletion would
+        // deactivate *before* it offers the button. `DELETE` refuses without
+        // `?confirm=true` and returns the same numbers on the 409, but a
+        // refusal an administrator has to trigger to read is a worse way to
+        // learn the size of what they are about to do.
+        return { ...source, owned: await ownedObjectCounts(tx, id) };
+      });
+    },
+  );
+
+  app.get(
+    '/sources/:id/mappings',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      return request.db(async (tx) => {
+        const source = await findSource(tx, id);
+        if (!source) throw new ProblemError(404, 'not-found', 'Source not found');
+        return { rules: await mappingsFor(tx, id) };
+      });
+    },
+  );
+
+  /**
+   * Tests a connection that has not been saved, and reports what it found.
+   *
+   * Spec section 11 asks for the test to happen *before* anything is written,
+   * and success criterion 1 asks the product to "report what object classes
+   * and attributes it found" — so this answers the counts from `test()` and
+   * the descriptor from `discoverSchema()`, which until now had no caller
+   * outside its own test.
+   *
+   * Both calls are made **outside** `request.db`. `withTenant` is
+   * `prisma.$transaction(fn)` on a five-second budget, and an LDAP connection
+   * to a host that is not answering will sit there far longer than that: an
+   * open transaction waiting on a third party is how a connection pool is
+   * exhausted by one slow directory. The vault read is its own short
+   * transaction, closed before the socket is opened.
+   *
+   * A failed connection is a result, not a server error. A malformed
+   * configuration is the caller's mistake and comes back as a 400 from
+   * `ldapConfigSchema` with the offending field named, which is what lets the
+   * editor mark the field rather than shrug.
+   *
+   * ## Borrowing the stored credential does not mean borrowing it for anywhere
+   *
+   * A request naming `sourceId` without a password is asking Syntra to fetch
+   * the bind password out of the vault and send it somewhere. Where, is the
+   * whole question. Splicing the vault entry into the caller's configuration
+   * verbatim would let anyone holding `sync.manage` read the credential back
+   * out of the vault by pointing `url` at a socket they control — in cleartext
+   * with `tlsMode: "plain"` — in one request that changes nothing and would
+   * therefore leave nothing behind to notice.
+   *
+   * So the transport is taken from the **saved source**, not from the request,
+   * and a request that contradicts it is refused rather than quietly
+   * corrected: silently testing an address other than the one on screen is its
+   * own kind of lie. Testing a different destination is still allowed — it
+   * just costs the password, which is exactly the proof of possession that was
+   * missing.
+   */
+  app.post(
+    '/sources/test',
+    // SYNC_MANAGE, not SYNC_READ: this opens a connection to any host the
+    // caller names, which is a capability worth restricting to the people who
+    // are allowed to configure sources anyway.
+    { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
+    async (request) => {
+      const body = testConnectionRequest.parse(request.body);
+
+      // Parsed here rather than left to the connector, because the guard below
+      // has to compare resolved values: `tlsMode` left out is derived from the
+      // URL scheme, and `rejectUnauthorized` left out is true.
+      const requested = ldapConfigSchema.parse(body.config);
+
+      /** Recorded whatever happens, including when the request is refused. */
+      const audit = async (
+        outcome: 'success' | 'failure',
+        detail: Record<string, unknown>,
+      ) => {
+        await request.db((tx) =>
+          recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: 'source.test',
+            targetType: 'DirectorySource',
+            targetId: body.sourceId ?? null,
+            outcome,
+            sourceIp: request.ip,
+            // Where a connection was attempted and how it was protected. The
+            // bind DN is left out as the rest of this file leaves it out, and
+            // the password never appears anywhere near here.
+            payload: {
+              url: requested.url,
+              tlsMode: requested.tlsMode,
+              rejectUnauthorized: requested.rejectUnauthorized,
+              usedStoredCredential: body.bindPassword === undefined,
+              ...detail,
+            },
+          }),
+        );
+      };
+
+      let bindPassword = body.bindPassword;
+      if (bindPassword === undefined && body.sourceId !== undefined) {
+        // An editor changing a search base must not have to re-type the
+        // credential, and the browser is never handed it to send back. So the
+        // saved source's vault entry stands in, named by id.
+        const saved = await request.db((tx) =>
+          sourceWithPassword(tx, provider, body.sourceId!),
+        );
+        if (!saved) throw new ProblemError(404, 'not-found', 'Source not found');
+
+        const changed = (
+          [
+            ['url', saved.url.trim(), requested.url.trim()],
+            ['tlsMode', saved.tlsMode, requested.tlsMode],
+            [
+              'rejectUnauthorized',
+              String(saved.rejectUnauthorized),
+              String(requested.rejectUnauthorized),
+            ],
+          ] as const
+        ).find(([, was, now]) => was !== now);
+
+        if (changed) {
+          await audit('failure', { refused: 'transport-changed', field: changed[0] });
+          throw new ProblemError(
+            400,
+            'transport-changed',
+            'Retype the bind password to test this',
+            `this request would send the stored bind password somewhere other ` +
+              `than where it is saved (${changed[0]} is "${changed[2]}", not ` +
+              `"${changed[1]}"); type the password to test a different ` +
+              `destination`,
+            {
+              errors: [
+                {
+                  path: changed[0],
+                  message:
+                    'changing this means the stored password cannot be reused; type it again to test',
+                },
+              ],
+            },
+          );
+        }
+
+        bindPassword = saved.bindPassword;
+      }
+      if (bindPassword === undefined) {
+        throw new ProblemError(
+          400,
+          'bad-request',
+          'Bad Request',
+          'no bind password was sent and no saved source was named',
+        );
+      }
+
+      const config = { ...requested, bindPassword };
+      const result = await ldapConnector.test(config);
+      if (!result.ok) {
+        await audit('failure', { reason: 'connection-failed' });
+        return { ...result, schema: null };
+      }
+
+      // Only after a successful bind, and never fatal: the counts are the
+      // answer to "can Syntra reach this directory", and failing the whole
+      // test because a schema sample came back badly would answer a narrower
+      // question than the one that was asked.
+      let schema: SchemaDescriptor | null = null;
+      try {
+        schema = await ldapConnector.discoverSchema(config);
+      } catch (cause) {
+        request.log.warn(
+          { err: cause },
+          'the connection succeeded but the schema could not be sampled',
+        );
+      }
+
+      await audit('success', {});
+      return { ...result, schema };
+    },
   );
 
   app.post(
@@ -177,6 +403,17 @@ export async function registerAdminSourceRoutes(
               'invalid-config',
               'Invalid source configuration',
               cause.issues.map((i) => i.message).join('; '),
+              // The same `errors[]` shape the validation handler produces for
+              // a body rejected at the contract boundary, so an editor marks
+              // the offending field the same way whichever check caught it.
+              // Without this a rejected TLS mode is a paragraph at the top of
+              // a form with fourteen fields in it.
+              {
+                errors: cause.issues.map((i) => ({
+                  path: i.path.join('.'),
+                  message: i.message,
+                })),
+              },
             );
           }
           throw cause;
@@ -209,13 +446,34 @@ export async function registerAdminSourceRoutes(
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      const { confirm } = deleteSourceQuery.parse(request.query);
+      const { confirm, ackUsers, ackGroups, ackOrgUnits } =
+        deleteSourceQuery.parse(request.query);
+
+      // All three or none: a partial acknowledgement would check some of the
+      // numbers the caller was shown and quietly ignore the rest.
+      const acknowledged =
+        ackUsers !== undefined &&
+        ackGroups !== undefined &&
+        ackOrgUnits !== undefined
+          ? { users: ackUsers, groups: ackGroups, orgUnits: ackOrgUnits }
+          : undefined;
 
       await request.db(async (tx) => {
         let released;
         try {
-          released = await deleteSource(tx, id, { confirm });
+          released = await deleteSource(tx, id, { confirm, acknowledged });
         } catch (cause) {
+          if (cause instanceof SourceCountsChangedError) {
+            // The same 409 shape as the unconfirmed case, because it is the
+            // same conversation: here are the numbers, ask me again.
+            throw new ProblemError(
+              409,
+              'source-counts-changed',
+              'The numbers changed',
+              cause.message,
+              { owned: cause.counts },
+            );
+          }
           if (cause instanceof SourceOwnsObjectsError) {
             // 409, and the counts, because this is not a refusal to act — it
             // is the same act awaiting a decision, and the decision needs the
