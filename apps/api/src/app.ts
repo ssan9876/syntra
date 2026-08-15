@@ -1,8 +1,18 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
-import type { Config, Scheduler } from '@syntra/core';
+import {
+  installRecoveryCodeVerifier,
+  installTotpVerifier,
+  installWebAuthnVerifier,
+  localMasterKeyProvider,
+  smtpTransport,
+  type Config,
+  type Scheduler,
+  type Transport,
+} from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
+import { registerMfaRoutes } from './routes/mfa.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
@@ -26,6 +36,15 @@ export interface AppOptions {
    * not touch any scheduler, which is what the tests that do not care want.
    */
   scheduler?: () => Scheduler | null;
+  /**
+   * How outbound mail leaves the process. Defaults to SMTP from `SMTP_URL`.
+   *
+   * A seam rather than a hard-wired `smtpTransport` call so the test suite can
+   * hand in `memoryTransport()` — no test run may put mail on the wire, and a
+   * transport that is a parameter is the only way to guarantee that without
+   * relying on MailDev happening to be the thing listening on port 1025.
+   */
+  transport?: Transport;
 }
 
 export async function buildApp(
@@ -50,6 +69,27 @@ export async function buildApp(
     prefix: '/api/auth',
     authRateLimitMax: config.authRateLimitMax,
     publicUrl: config.publicUrl,
+  });
+
+  // Factor verifiers are installed once per process, before any route can ask
+  // the chokepoint what is enrolled or what could be enrolled. A verifier that
+  // is not installed is not a factor: authorize() would report the user as
+  // having none AND nothing to enrol, and refuse rather than offer.
+  //
+  // None of them takes a relying party. It arrives per request on
+  // AuthorizeRequest, which is why there is no ambient store here and why a
+  // background job that has no relying party cannot compile.
+  installTotpVerifier(localMasterKeyProvider(config.masterKey));
+  installWebAuthnVerifier();
+  installRecoveryCodeVerifier();
+
+  await app.register(registerMfaRoutes, {
+    prefix: '/api/auth/mfa',
+    masterKey: config.masterKey,
+    publicUrl: config.publicUrl,
+    authRateLimitMax: config.authRateLimitMax,
+    // The factor-added mail. The same transport the password routes will get.
+    transport: options.transport ?? smtpTransport(config.smtpUrl),
   });
 
   // Every route below requires an administrative session; the guard is

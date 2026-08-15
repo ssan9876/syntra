@@ -8,13 +8,17 @@
     "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/rate-limit": "^10.2.1",
+    "@nuintun/qrcode": "5.0.3",
     "@syntra/connectors": "workspace:*",
     "@syntra/contracts": "workspace:*",
     "@syntra/core": "workspace:*",
     "@syntra/db": "workspace:*",
-    "@fastify/cookie": "^11.0.2",
-    "@fastify/rate-limit": "^10.2.1",
     "fastify": "^5.2.0",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "otpauth": "9.5.1"
   }
 }

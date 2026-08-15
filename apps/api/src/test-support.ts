@@ -1,6 +1,6 @@
 import { prisma } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { loadConfig, type Scheduler } from '@syntra/core';
+import { loadConfig, memoryTransport, type Scheduler } from '@syntra/core';
 import { buildApp } from './app.js';
 
 export const TEST_HOST = 'acme.syntra.test';
@@ -63,6 +63,10 @@ export function createFakeScheduler(
  * `scheduler` is how a test watches what the source routes schedule. Left out,
  * they schedule nothing, which is what every test that is not about scheduling
  * wants.
+ *
+ * `mail` is the transport the app was built with, so a test can assert what
+ * was sent. It is a memory transport rather than SMTP, which is what makes it
+ * impossible for a test run to reach MailDev — or anything else — by accident.
  */
 export async function buildTestApp(
   options: { scheduler?: () => Scheduler | null } = {},
@@ -83,9 +87,11 @@ export async function buildTestApp(
     SMTP_URL: 'smtp://localhost:1025',
   });
 
+  const mail = memoryTransport();
   const app = await buildApp(config, {
     logger: false,
+    transport: mail,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
-  return { app, tenantId: tenant.id, host: TEST_HOST };
+  return { app, tenantId: tenant.id, host: TEST_HOST, mail };
 }

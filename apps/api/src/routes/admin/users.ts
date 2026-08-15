@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
+  adminFactorParams,
   createUserRequest,
   deactivateUserRequest,
   idParam,
@@ -11,6 +12,8 @@ import {
   deactivateUser,
   listUsers,
   recordEvent,
+  removeRecoveryCodes,
+  removeTotp,
   type UserStatus,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -98,6 +101,41 @@ export async function registerAdminUserRoutes(
         });
         return updated;
       });
+    },
+  );
+
+  /**
+   * Takes a factor off a user.
+   *
+   * The way back in for someone who lost their phone, and the way an
+   * administrator revokes a factor an attacker enrolled. It writes its own
+   * audit event in the same transaction as the removal, naming the
+   * administrator: a factor that disappears with nothing to show who removed
+   * it is indistinguishable from one the attacker removed.
+   */
+  app.delete(
+    '/users/:id/factors/:type',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request, reply) => {
+      const { id, type } = adminFactorParams.parse(request.params);
+
+      await request.db(async (tx) => {
+        if (type === 'totp') await removeTotp(tx, id);
+        else if (type === 'recovery_code') await removeRecoveryCodes(tx, id);
+        else await tx.webAuthnCredential.deleteMany({ where: { userId: id } });
+
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'mfa.removed',
+          targetType: 'User',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { factor: type, by: 'administrator' },
+        });
+      });
+
+      return reply.status(204).send();
     },
   );
 }

@@ -149,19 +149,19 @@ describe('POST /api/auth/login and policy', () => {
     });
   });
 
-  it('refuses when nothing can be enrolled and the user holds no factor', async () => {
-    // No factor verifier is installed by app.ts until Task 8, so there is
-    // nothing to offer and the honest answer is a refusal. Task 9 asserts the
-    // enrolment response once the verifiers are installed.
+  it('offers enrolment when the user holds no factor', async () => {
+    // Task 4 asserted a refusal here, because no verifier was installed and
+    // there was nothing to offer. Now there is, and refusing would lock out
+    // everyone the first time a tenant turns MFA on.
     await seedUser();
     await withTenant(ctx.tenantId, (tx) =>
       addRule(tx, { name: 'MFA everywhere', outcome: 'require_mfa' }),
     );
     const res = await login(PASSWORD);
-    expect(res.statusCode).toBe(401);
-    expect(
-      res.cookies.find((c) => c.name === 'syntra_session'),
-    ).toBeUndefined();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'enrol' });
+    // The password was accepted; nothing else was granted.
+    expect(res.cookies.find((c) => c.name === 'syntra_session')).toBeUndefined();
   });
 });
 
