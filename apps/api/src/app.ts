@@ -33,7 +33,10 @@ export async function buildApp(
 
   app.get('/health', async () => ({ status: 'ok' }));
 
-  await app.register(registerAuthRoutes, { prefix: '/api/auth' });
+  await app.register(registerAuthRoutes, {
+    prefix: '/api/auth',
+    authRateLimitMax: config.authRateLimitMax,
+  });
 
   // Every route below requires an administrative session; the guard is
   // applied inside each plugin so a new admin route cannot forget it.

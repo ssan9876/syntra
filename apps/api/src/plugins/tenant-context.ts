@@ -36,7 +36,11 @@ async function resolveTenantId(host: string | undefined): Promise<string | null>
 
 export function registerTenantContext(app: FastifyInstance): void {
   app.decorateRequest('tenantId', '');
-  app.decorateRequest('db', null);
+  // Declared here so the property exists on every request; the real
+  // implementation is bound per request in the hook below.
+  app.decorateRequest('db', function () {
+    throw new Error('request.db used before the tenant hook ran');
+  } as FastifyRequest['db']);
 
   app.addHook('onRequest', async (request: FastifyRequest) => {
     if (UNSCOPED_PATHS.has(request.url.split('?')[0]!)) return;

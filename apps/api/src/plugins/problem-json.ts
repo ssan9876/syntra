@@ -46,11 +46,12 @@ export function registerProblemJson(app: FastifyInstance): void {
     }
 
     // Fastify's own errors (rate limit, malformed body) carry a usable status.
-    const status = error.statusCode ?? 500;
+    const fastifyError = error as { statusCode?: number; message?: string };
+    const status = fastifyError.statusCode ?? 500;
     if (status < 500) {
       return reply.status(status).type('application/problem+json').send({
         type: `${BASE}bad-request`,
-        title: error.message,
+        title: fastifyError.message ?? 'Bad Request',
         status,
       });
     }

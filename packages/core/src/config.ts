@@ -12,6 +12,10 @@ const schema = z.object({
       'MASTER_KEY must be 32 bytes, base64 encoded',
     ),
   SMTP_URL: z.string().url(),
+  // Password attempts per minute per IP. Deployment-tuned rather than fixed:
+  // a busy shared-NAT site needs headroom, and an end-to-end suite signs in
+  // far more often than a person does. The default is the strict value.
+  AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
 });
 
 export interface Config {
@@ -21,6 +25,7 @@ export interface Config {
   sessionSecret: string;
   masterKey: Buffer;
   smtpUrl: string;
+  authRateLimitMax: number;
 }
 
 /**
@@ -47,5 +52,6 @@ export function loadConfig(
     sessionSecret: v.SESSION_SECRET,
     masterKey: Buffer.from(v.MASTER_KEY, 'base64'),
     smtpUrl: v.SMTP_URL,
+    authRateLimitMax: v.AUTH_RATE_LIMIT_MAX,
   };
 }

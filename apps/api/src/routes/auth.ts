@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { elevateRequest, loginRequest } from '@syntra/contracts';
 import {
   authenticate,
@@ -22,12 +22,12 @@ const cookieOptions = {
 };
 
 /** Password endpoints are limited far more tightly than ordinary reads. */
-const PASSWORD_RATE_LIMIT = {
-  rateLimit: { max: 10, timeWindow: '1 minute' },
-};
+function passwordRateLimit(max: number) {
+  return { rateLimit: { max, timeWindow: '1 minute' } };
+}
 
 async function sessionBody(
-  request: Parameters<Parameters<FastifyInstance['get']>[1]>[0],
+  request: FastifyRequest,
   userId: string,
   scope: SessionScope,
 ) {
@@ -45,7 +45,16 @@ async function sessionBody(
   };
 }
 
-export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
+export interface AuthRouteOptions {
+  authRateLimitMax: number;
+}
+
+export async function registerAuthRoutes(
+  app: FastifyInstance,
+  options: AuthRouteOptions,
+): Promise<void> {
+  const PASSWORD_RATE_LIMIT = passwordRateLimit(options.authRateLimitMax);
+
   app.post('/login', { config: PASSWORD_RATE_LIMIT }, async (request, reply) => {
     const body = loginRequest.parse(request.body);
 

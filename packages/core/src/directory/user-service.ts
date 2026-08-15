@@ -7,7 +7,7 @@ export interface CreateUserInput {
   login: string;
   email: string;
   displayName: string;
-  orgUnitId?: string;
+  orgUnitId?: string | undefined;
 }
 
 export async function createUser(tx: TenantClient, input: CreateUserInput) {

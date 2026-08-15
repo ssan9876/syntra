@@ -89,6 +89,13 @@ The integration tests run against a real PostgreSQL in Docker. They are not
 mocked, because the properties worth testing here — row-level security, a
 partial unique index, an append-only rule — only exist in the database.
 
+Two ordering notes for the browser tests. Run `pnpm db:reset && pnpm seed`
+*after* `pnpm test`: the integration tests truncate between cases and leave
+fixtures behind that fool the seed into thinking the tenant is already
+populated. And start the stack with `AUTH_RATE_LIMIT_MAX` raised, since the
+suite signs in far more often in a minute than a person would and the default
+limit is right to refuse it.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

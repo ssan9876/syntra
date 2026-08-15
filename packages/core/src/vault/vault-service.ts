@@ -29,25 +29,29 @@ export async function putSecret(
   const wrapped = await provider.wrap(dek);
   dek.fill(0);
 
+  // Prisma types Bytes as Uint8Array<ArrayBuffer>; Node's Buffer is backed by
+  // ArrayBufferLike, so copy into a plain view rather than casting.
+  const bytes = (b: Buffer) => new Uint8Array(b);
+
   return tx.secret.upsert({
     where: { tenantId_name: { tenantId, name } },
     create: {
       tenantId,
       name,
-      ciphertext,
-      iv,
-      tag,
-      wrappedDek: wrapped.ciphertext,
-      dekIv: wrapped.iv,
-      dekTag: wrapped.tag,
+      ciphertext: bytes(ciphertext),
+      iv: bytes(iv),
+      tag: bytes(tag),
+      wrappedDek: bytes(wrapped.ciphertext),
+      dekIv: bytes(wrapped.iv),
+      dekTag: bytes(wrapped.tag),
     },
     update: {
-      ciphertext,
-      iv,
-      tag,
-      wrappedDek: wrapped.ciphertext,
-      dekIv: wrapped.iv,
-      dekTag: wrapped.tag,
+      ciphertext: bytes(ciphertext),
+      iv: bytes(iv),
+      tag: bytes(tag),
+      wrappedDek: bytes(wrapped.ciphertext),
+      dekIv: bytes(wrapped.iv),
+      dekTag: bytes(wrapped.tag),
     },
     select: { id: true, name: true },
   });
@@ -66,16 +70,16 @@ export async function getSecret(
   if (!row) return null;
 
   const dek = await provider.unwrap({
-    ciphertext: row.wrappedDek,
-    iv: row.dekIv,
-    tag: row.dekTag,
+    ciphertext: Buffer.from(row.wrappedDek),
+    iv: Buffer.from(row.dekIv),
+    tag: Buffer.from(row.dekTag),
   });
 
   try {
-    const decipher = createDecipheriv('aes-256-gcm', dek, row.iv);
-    decipher.setAuthTag(row.tag);
+    const decipher = createDecipheriv('aes-256-gcm', dek, Buffer.from(row.iv));
+    decipher.setAuthTag(Buffer.from(row.tag));
     return Buffer.concat([
-      decipher.update(row.ciphertext),
+      decipher.update(Buffer.from(row.ciphertext)),
       decipher.final(),
     ]).toString('utf8');
   } finally {

@@ -4,9 +4,9 @@ import { currentTenant } from '../tenant-context.js';
 export interface CreatePersonInput {
   givenName: string;
   familyName: string;
-  businessEmail?: string;
-  personalEmail?: string;
-  externalId?: string;
+  businessEmail?: string | undefined;
+  personalEmail?: string | undefined;
+  externalId?: string | undefined;
 }
 
 export async function createPerson(

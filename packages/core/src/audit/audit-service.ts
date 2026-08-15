@@ -147,7 +147,7 @@ export async function verifyChain(tx: TenantClient): Promise<ChainResult> {
 
 export async function listEvents(
   tx: TenantClient,
-  opts: { limit?: number; before?: number } = {},
+  opts: { limit?: number | undefined; before?: number | undefined } = {},
 ) {
   return tx.auditEvent.findMany({
     where: opts.before ? { sequence: { lt: opts.before } } : {},

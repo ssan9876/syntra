@@ -3,16 +3,16 @@ import { currentTenant } from '../tenant-context.js';
 
 export interface CreateContractInput {
   sequence: number;
-  isPrimary?: boolean;
+  isPrimary?: boolean | undefined;
   startDate: Date;
-  endDate?: Date;
-  jobTitle?: string;
-  department?: string;
-  costCentre?: string;
-  employer?: string;
-  location?: string;
-  managerPersonId?: string;
-  fte?: number;
+  endDate?: Date | undefined;
+  jobTitle?: string | undefined;
+  department?: string | undefined;
+  costCentre?: string | undefined;
+  employer?: string | undefined;
+  location?: string | undefined;
+  managerPersonId?: string | undefined;
+  fte?: number | undefined;
 }
 
 export type ContractStrategy = 'primary' | 'lowestSequence';

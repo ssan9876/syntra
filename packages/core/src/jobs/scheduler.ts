@@ -20,11 +20,7 @@ export interface Scheduler {
  * it was given; there is deliberately no ambient tenant to inherit.
  */
 export function createScheduler(databaseUrl: string): Scheduler {
-  const boss = new PgBoss({
-    connectionString: databaseUrl,
-    retryLimit: 3,
-    retryBackoff: true,
-  });
+  const boss = new PgBoss({ connectionString: databaseUrl });
 
   const handlers = new Map<string, JobHandler<unknown>>();
   let started = false;
@@ -45,7 +41,13 @@ export function createScheduler(databaseUrl: string): Scheduler {
       await boss.start();
 
       for (const [name, handler] of handlers) {
-        await boss.createQueue(name);
+        // Retry policy belongs to the queue in pg-boss 12, not to the
+        // client, so it is declared where the queue is created.
+        await boss.createQueue(name, {
+          name,
+          retryLimit: 3,
+          retryBackoff: true,
+        } as Parameters<typeof boss.createQueue>[1]);
         await boss.work(name, async (jobs) => {
           for (const job of jobs) {
             // A throw is what tells pg-boss to retry. Never swallow it.
