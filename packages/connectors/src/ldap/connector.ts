@@ -77,6 +77,12 @@ async function connect(config: ResolvedConfig): Promise<Client> {
   // and the socket would drop.
   const client = new Client({
     url: config.url,
+    // Without these ldapts waits forever, and "forever" is reachable from
+    // outside: a host that black-holes packets, or one that accepts the
+    // connection and never answers the bind, holds this call — and the
+    // request handler that made it — open until something else gives up.
+    connectTimeout: config.connectTimeoutMs,
+    timeout: config.timeoutMs,
     ...(config.tlsMode === 'ldaps' ? { tlsOptions } : {}),
   });
   try {

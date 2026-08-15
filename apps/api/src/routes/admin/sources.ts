@@ -8,7 +8,11 @@ import {
   testConnectionRequest,
   updateSourceRequest,
 } from '@syntra/contracts';
-import { ldapConnector, type SchemaDescriptor } from '@syntra/connectors';
+import {
+  ldapConfigSchema,
+  ldapConnector,
+  type SchemaDescriptor,
+} from '@syntra/connectors';
 import {
   ASSIGNABLE_FIELDS,
   DEFAULT_MAPPINGS,
@@ -167,6 +171,23 @@ export async function registerAdminSourceRoutes(
    * configuration is the caller's mistake and comes back as a 400 from
    * `ldapConfigSchema` with the offending field named, which is what lets the
    * editor mark the field rather than shrug.
+   *
+   * ## Borrowing the stored credential does not mean borrowing it for anywhere
+   *
+   * A request naming `sourceId` without a password is asking Syntra to fetch
+   * the bind password out of the vault and send it somewhere. Where, is the
+   * whole question. Splicing the vault entry into the caller's configuration
+   * verbatim would let anyone holding `sync.manage` read the credential back
+   * out of the vault by pointing `url` at a socket they control — in cleartext
+   * with `tlsMode: "plain"` — in one request that changes nothing and would
+   * therefore leave nothing behind to notice.
+   *
+   * So the transport is taken from the **saved source**, not from the request,
+   * and a request that contradicts it is refused rather than quietly
+   * corrected: silently testing an address other than the one on screen is its
+   * own kind of lie. Testing a different destination is still allowed — it
+   * just costs the password, which is exactly the proof of possession that was
+   * missing.
    */
   app.post(
     '/sources/test',
@@ -177,6 +198,38 @@ export async function registerAdminSourceRoutes(
     async (request) => {
       const body = testConnectionRequest.parse(request.body);
 
+      // Parsed here rather than left to the connector, because the guard below
+      // has to compare resolved values: `tlsMode` left out is derived from the
+      // URL scheme, and `rejectUnauthorized` left out is true.
+      const requested = ldapConfigSchema.parse(body.config);
+
+      /** Recorded whatever happens, including when the request is refused. */
+      const audit = async (
+        outcome: 'success' | 'failure',
+        detail: Record<string, unknown>,
+      ) => {
+        await request.db((tx) =>
+          recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: 'source.test',
+            targetType: 'DirectorySource',
+            targetId: body.sourceId ?? null,
+            outcome,
+            sourceIp: request.ip,
+            // Where a connection was attempted and how it was protected. The
+            // bind DN is left out as the rest of this file leaves it out, and
+            // the password never appears anywhere near here.
+            payload: {
+              url: requested.url,
+              tlsMode: requested.tlsMode,
+              rejectUnauthorized: requested.rejectUnauthorized,
+              usedStoredCredential: body.bindPassword === undefined,
+              ...detail,
+            },
+          }),
+        );
+      };
+
       let bindPassword = body.bindPassword;
       if (bindPassword === undefined && body.sourceId !== undefined) {
         // An editor changing a search base must not have to re-type the
@@ -186,6 +239,41 @@ export async function registerAdminSourceRoutes(
           sourceWithPassword(tx, provider, body.sourceId!),
         );
         if (!saved) throw new ProblemError(404, 'not-found', 'Source not found');
+
+        const changed = (
+          [
+            ['url', saved.url.trim(), requested.url.trim()],
+            ['tlsMode', saved.tlsMode, requested.tlsMode],
+            [
+              'rejectUnauthorized',
+              String(saved.rejectUnauthorized),
+              String(requested.rejectUnauthorized),
+            ],
+          ] as const
+        ).find(([, was, now]) => was !== now);
+
+        if (changed) {
+          await audit('failure', { refused: 'transport-changed', field: changed[0] });
+          throw new ProblemError(
+            400,
+            'transport-changed',
+            'Retype the bind password to test this',
+            `this request would send the stored bind password somewhere other ` +
+              `than where it is saved (${changed[0]} is "${changed[2]}", not ` +
+              `"${changed[1]}"); type the password to test a different ` +
+              `destination`,
+            {
+              errors: [
+                {
+                  path: changed[0],
+                  message:
+                    'changing this means the stored password cannot be reused; type it again to test',
+                },
+              ],
+            },
+          );
+        }
+
         bindPassword = saved.bindPassword;
       }
       if (bindPassword === undefined) {
@@ -197,9 +285,12 @@ export async function registerAdminSourceRoutes(
         );
       }
 
-      const config = { ...(body.config as object), bindPassword } as never;
+      const config = { ...requested, bindPassword };
       const result = await ldapConnector.test(config);
-      if (!result.ok) return { ...result, schema: null };
+      if (!result.ok) {
+        await audit('failure', { reason: 'connection-failed' });
+        return { ...result, schema: null };
+      }
 
       // Only after a successful bind, and never fatal: the counts are the
       // answer to "can Syntra reach this directory", and failing the whole
@@ -215,6 +306,7 @@ export async function registerAdminSourceRoutes(
         );
       }
 
+      await audit('success', {});
       return { ...result, schema };
     },
   );

@@ -348,6 +348,180 @@ describe('testing a connection that was never saved', () => {
     const res = await post('/api/admin/sources/test', cookie, { config });
     expect(res.statusCode).toBe(400);
   });
+
+  it('records every test in the audit log, with where it connected', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.AUDIT_READ]);
+    await post('/api/admin/sources/test', cookie, {
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'source.test' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('success');
+    expect(events[0]!.payload).toMatchObject({
+      url: config.url,
+      usedStoredCredential: false,
+    });
+    // The credential is not in the log, and neither is anything that would
+    // let a reader reconstruct it.
+    expect(JSON.stringify(events[0]!.payload)).not.toContain('adminpassword');
+  });
+});
+
+describe('borrowing a saved source’s bind password', () => {
+  /**
+   * A socket that records everything it is sent and answers nothing.
+   *
+   * This is the attacker's end of the hole being closed here: point a test at
+   * it, name a saved source instead of a password, and whatever crosses the
+   * wire is the vault's contents in the clear.
+   */
+  async function sink(): Promise<{
+    port: number;
+    received(): string;
+    close(): void;
+  }> {
+    const { createServer } = await import('node:net');
+    const sockets: import('node:net').Socket[] = [];
+    let seen = '';
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      socket.on('data', (chunk) => {
+        seen += chunk.toString('binary');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return {
+      port: (server.address() as { port: number }).port,
+      received: () => seen,
+      close: () => {
+        for (const socket of sockets) socket.destroy();
+        server.close();
+      },
+    };
+  }
+
+  const savedSource = async (cookie: string) => {
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    return created.json().id as string;
+  };
+
+  it('refuses to send it to a URL other than the one the source is saved with', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const sourceId = await savedSource(cookie);
+    const listener = await sink();
+
+    try {
+      const res = await post('/api/admin/sources/test', cookie, {
+        config: { ...config, url: `ldap://127.0.0.1:${listener.port}` },
+        sourceId,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().type).toContain('transport-changed');
+      expect(res.json().errors[0].path).toBe('url');
+      // Nothing was sent at all, let alone the credential.
+      expect(listener.received()).toBe('');
+      expect(listener.received()).not.toContain('adminpassword');
+    } finally {
+      listener.close();
+    }
+  }, 20_000);
+
+  it('refuses to downgrade the transport it would cross on', async () => {
+    // The same hole with the destination left alone: an `ldaps` source
+    // re-tested as `plain` puts the stored password on the wire in cleartext.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Secure',
+      config: {
+        ...config,
+        url: process.env.LDAPS_URL ?? 'ldaps://localhost:1636',
+        tlsMode: 'ldaps',
+        rejectUnauthorized: false,
+      },
+      bindPassword: 'adminpassword',
+    });
+
+    const res = await post('/api/admin/sources/test', cookie, {
+      config: {
+        ...config,
+        url: process.env.LDAPS_URL ?? 'ldaps://localhost:1636',
+        tlsMode: 'ldaps',
+        rejectUnauthorized: true,
+      },
+      sourceId: created.json().id,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().errors[0].path).toBe('rejectUnauthorized');
+  });
+
+  it('records the refusal, so the attempt is not invisible', async () => {
+    // The point of the old hole was that it changed nothing and therefore
+    // left nothing behind. A refusal that is also silent would keep half of
+    // that property.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const sourceId = await savedSource(cookie);
+
+    await post('/api/admin/sources/test', cookie, {
+      config: { ...config, url: 'ldap://198.51.100.9:389' },
+      sourceId,
+    });
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'source.test' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('failure');
+    expect(events[0]!.payload).toMatchObject({
+      url: 'ldap://198.51.100.9:389',
+      refused: 'transport-changed',
+      usedStoredCredential: true,
+    });
+  });
+
+  it('still allows a different destination when the password is typed', async () => {
+    // Refusing the borrow is not refusing the test. Proof of possession is
+    // what was missing, and typing the password supplies it.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const sourceId = await savedSource(cookie);
+
+    const res = await post('/api/admin/sources/test', cookie, {
+      config: { ...config, userSearchBase: 'ou=Care,dc=acme,dc=test' },
+      sourceId,
+      bindPassword: 'adminpassword',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+  });
+
+  it('lets everything that is not the transport change freely', async () => {
+    // Editing a search base and re-testing is the case this borrow exists
+    // for, and it must not have become collateral damage.
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const sourceId = await savedSource(cookie);
+
+    const res = await post('/api/admin/sources/test', cookie, {
+      config: {
+        ...config,
+        userSearchBase: 'ou=Care,dc=acme,dc=test',
+        userFilter: '(objectClass=person)',
+      },
+      sourceId,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+  });
 });
 
 describe('runs', () => {

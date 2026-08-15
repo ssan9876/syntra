@@ -238,6 +238,51 @@ describe('ldapConnector.discoverSchema', () => {
   });
 });
 
+describe('a peer that never answers', () => {
+  /**
+   * A socket that accepts the connection and then says nothing at all —
+   * the shape a black-holed port has from the client's side, and the one that
+   * a connect timeout alone does not cover, since the connection itself
+   * succeeds.
+   */
+  async function silentServer(): Promise<{ port: number; close(): void }> {
+    const { createServer } = await import('node:net');
+    const sockets: import('node:net').Socket[] = [];
+    const server = createServer((socket) => {
+      sockets.push(socket);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    return {
+      port,
+      close: () => {
+        for (const socket of sockets) socket.destroy();
+        server.close();
+      },
+    };
+  }
+
+  it('gives up on the bind rather than waiting forever', async () => {
+    // Left to itself ldapts waits indefinitely: the caller of a connection
+    // test would pin a request handler for as long as the peer stays silent.
+    const server = await silentServer();
+    try {
+      const started = Date.now();
+      const result = await ldapConnector.test({
+        ...config,
+        url: `ldap://127.0.0.1:${server.port}`,
+        timeoutMs: 300,
+        connectTimeoutMs: 300,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      server.close();
+    }
+  }, 10_000);
+});
+
 describe('ldapConnector.write', () => {
   it('refuses, since writing back is not in this slice', async () => {
     const result = await ldapConnector.write(config, {
