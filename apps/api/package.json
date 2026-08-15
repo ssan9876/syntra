@@ -8,6 +8,7 @@
     "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
+    "@syntra/connectors": "workspace:*",
     "@syntra/contracts": "workspace:*",
     "@syntra/core": "workspace:*",
     "@syntra/db": "workspace:*",
