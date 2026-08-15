@@ -6,8 +6,10 @@ import {
   assignRole,
   createRole,
   createUser,
+  generateRecoveryCodes,
   setPassword,
 } from '@syntra/core';
+import * as OTPAuth from 'otpauth';
 import { buildTestApp } from '../test-support.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
@@ -401,5 +403,160 @@ describe('the source address', () => {
     ctx = await buildTestApp({ env: { TRUST_PROXY: '1' } });
     await ctx.app.ready();
     expect(await attemptWithForwardedFor()).toBe('203.0.113.9');
+  });
+});
+
+describe('POST /api/auth/elevate and admin MFA', () => {
+  it('elevates on the password alone when the tenant does not require a factor', async () => {
+    await seedUser({ admin: true });
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    expect(res.json()).toMatchObject({ status: 'authenticated', scope: 'admin' });
+  });
+
+  it('challenges instead when the tenant requires a factor for the console', async () => {
+    const user = await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true },
+    });
+    await withTenant(ctx.tenantId, (tx) => generateRecoveryCodes(tx, user.id));
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    expect(res.json()).toMatchObject({ status: 'challenge' });
+    expect(res.cookies.find((c) => c.name === 'syntra_session')).toBeUndefined();
+  });
+
+  it('offers enrolment to an administrator who has no factor yet', async () => {
+    await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true },
+    });
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    // Turning the requirement on must not strand the only administrator
+    // outside the console with nobody able to let them back in.
+    expect(res.json()).toMatchObject({ status: 'enrol' });
+    expect(res.cookies.find((c) => c.name === 'syntra_session')).toBeUndefined();
+  });
+
+  it('refuses outright when the tenant has also turned self-enrolment off', async () => {
+    await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true, selfEnrolmentEnabled: false },
+    });
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    // Two deliberate decisions stacked: factors are issued by hand, and the
+    // console needs one. There is genuinely no path forward from here.
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('issues an admin session when an elevation enrolment completes', async () => {
+    await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true },
+    });
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+    const offer = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+    const attemptToken = offer.json().attemptToken as string;
+
+    const begin = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/enrol/totp/begin',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { attemptToken },
+    });
+    const code = OTPAuth.TOTP.generate({
+      secret: OTPAuth.Secret.fromBase32(begin.json().secret),
+      period: 30,
+      digits: 6,
+      algorithm: 'SHA1',
+    });
+
+    const done = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/enrol/totp/confirm',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { attemptToken, code },
+    });
+    // The caller already held a portal session, so the step-up ends in an
+    // administrative one rather than a second portal session.
+    expect(done.statusCode).toBe(200);
+    expect(done.json().scope).toBe('admin');
+  });
+
+  it('issues an admin session when the challenge is answered', async () => {
+    const user = await seedUser({ admin: true });
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { adminMfaRequired: true },
+    });
+    const codes = await withTenant(ctx.tenantId, (tx) =>
+      generateRecoveryCodes(tx, user.id),
+    );
+
+    const portal = await login(PASSWORD);
+    const cookie = cookieOf(portal)!.value;
+    const challenge = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { password: PASSWORD },
+    });
+
+    const verified = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/mfa/verify',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: {
+        type: 'recovery_code',
+        attemptToken: challenge.json().attemptToken,
+        code: codes[0],
+      },
+    });
+    expect(verified.statusCode).toBe(200);
+    expect(verified.json().scope).toBe('admin');
   });
 });

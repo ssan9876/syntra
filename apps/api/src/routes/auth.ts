@@ -163,7 +163,7 @@ export async function registerAuthRoutes(
         throw new ProblemError(401, 'unauthenticated', 'Unauthenticated');
       }
 
-      const { rp } = await relyingPartyFor(request);
+      const { tenant, rp } = await relyingPartyFor(request);
 
       // The password is re-entered rather than trusted from the existing
       // session: elevation is a fresh authentication, not a flag flip.
@@ -180,6 +180,10 @@ export async function registerAuthRoutes(
         // The scope stamped on any attempt opened here, and the scope of the
         // session issued at the end of it. Recorded, never inferred.
         scope: 'admin',
+        // A floor the caller imposes. It can only strengthen the policy
+        // outcome — a tenant rule that denies is still a denial, and a floor
+        // never turns one into an allow.
+        ...(tenant.adminMfaRequired ? { floor: 'require_mfa' as const } : {}),
       });
 
       if (decision.status === 'deny') {

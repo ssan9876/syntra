@@ -11,7 +11,10 @@ import { prisma } from './client.js';
 import { withTenant } from './with-tenant.js';
 import {
   ALL_PERMISSIONS,
+  addRule,
+  assignApplication,
   assignRole,
+  createApplication,
   createContract,
   createGroup,
   createOrgUnit,
@@ -154,6 +157,44 @@ await withTenant(tenant.id, async (tx) => {
     startDate: day('2026-10-01'),
     jobTitle: 'Ward Manager',
     department: 'Care',
+  });
+
+  // Three tiles, so the portal has something in it on a fresh install and the
+  // three assignment kinds are each exercised by the seed rather than only by
+  // tests.
+  const wiki = await createApplication(tx, {
+    name: 'Staff handbook',
+    slug: 'handbook',
+    description: 'Policies, rotas and induction material.',
+    launchUrl: 'https://example.com/handbook',
+  });
+  const rota = await createApplication(tx, {
+    name: 'Rota planner',
+    slug: 'rota',
+    description: 'Shift patterns for the coming month.',
+    launchUrl: 'https://example.com/rota',
+  });
+  const finance = await createApplication(tx, {
+    name: 'Expenses',
+    slug: 'expenses',
+    description: 'Submit and approve claims.',
+    launchUrl: 'https://example.com/expenses',
+  });
+
+  await assignApplication(tx, wiki.id, { type: 'orgUnit', id: headOffice.id });
+  await assignApplication(tx, rota.id, { type: 'group', id: nurses.id });
+  await assignApplication(tx, finance.id, { type: 'user', id: owner.id });
+
+  // One rule, shipped disabled. Nobody is locked out by it — a user with no
+  // factor is offered enrolment rather than refused — but a fresh install
+  // should not push a developer through enrolment on their first sign-in
+  // before they have seen anything. Turning it on is one click in the console.
+  await addRule(tx, {
+    name: 'Finance, offsite, needs a second factor',
+    outcome: 'require_mfa',
+    enabled: false,
+    contractField: 'department',
+    contractValues: ['Finance'],
   });
 
   console.log(`Seeded tenant ${tenant.slug} (${tenant.primaryDomain}).`);
