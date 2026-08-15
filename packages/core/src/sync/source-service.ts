@@ -16,6 +16,13 @@ export interface CreateSourceInput {
   schedule?: string | undefined;
   autoApply?: boolean | undefined;
   deactivationThresholdPercent?: number | undefined;
+  /**
+   * Defaults to enabled, as every source did before this was settable. A
+   * source created disabled is configured but not scheduled, which is the
+   * only way to save a cron expression and its attribute mappings without the
+   * schedule firing between the two.
+   */
+  enabled?: boolean | undefined;
 }
 
 export async function createSource(
@@ -37,6 +44,7 @@ export async function createSource(
       schedule: input.schedule ?? null,
       autoApply: input.autoApply ?? false,
       deactivationThresholdPercent: input.deactivationThresholdPercent ?? 10,
+      enabled: input.enabled ?? true,
     },
   });
 

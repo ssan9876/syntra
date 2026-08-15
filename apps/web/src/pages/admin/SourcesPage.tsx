@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -59,6 +60,14 @@ export function SourcesPage() {
       <PageHeader
         title="Directory sources"
         description="Where users, groups, and org units are read from before a sync run proposes changes."
+        actions={
+          <Link
+            to="/admin/sources/new"
+            className="inline-flex h-9 items-center justify-center rounded-control border border-transparent bg-primary px-4 font-medium whitespace-nowrap text-bg transition-colors duration-150 hover:bg-primary-hover"
+          >
+            New source
+          </Link>
+        }
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
@@ -69,7 +78,17 @@ export function SourcesPage() {
 
           {!loading && data?.sources.length === 0 && (
             <div className="p-6">
-              <Empty title="No directory sources yet">
+              <Empty
+                title="No directory sources yet"
+                action={
+                  <Link
+                    to="/admin/sources/new"
+                    className="inline-flex h-9 items-center justify-center rounded-control border border-transparent bg-primary px-4 font-medium text-bg transition-colors duration-150 hover:bg-primary-hover"
+                  >
+                    Connect a directory
+                  </Link>
+                }
+              >
                 Connect one to bring users and groups in automatically.
               </Empty>
             </div>
@@ -109,9 +128,12 @@ export function SourcesPage() {
                     className="border-b border-border-subtle last:border-0"
                   >
                     <td className="px-4 py-2.5">
-                      <span className="font-medium text-ink">
+                      <Link
+                        to={`/admin/sources/${source.id}`}
+                        className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+                      >
                         {source.name}
-                      </span>
+                      </Link>
                       <span className="ml-2 text-sm text-muted">
                         {source.type}
                       </span>

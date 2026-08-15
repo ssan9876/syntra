@@ -5,18 +5,23 @@ import {
   deleteSourceQuery,
   idParam,
   setMappingsRequest,
+  testConnectionRequest,
   updateSourceRequest,
 } from '@syntra/contracts';
-import { ldapConnector } from '@syntra/connectors';
+import { ldapConnector, type SchemaDescriptor } from '@syntra/connectors';
 import {
+  ASSIGNABLE_FIELDS,
+  DEFAULT_MAPPINGS,
   PERMISSIONS,
   SourceOwnsObjectsError,
   applySourceSchedule,
   createSource,
   deleteSource,
+  findSource,
   listSources,
   localMasterKeyProvider,
   mappingsFor,
+  ownedObjectCounts,
   previewRun,
   recordEvent,
   removeSourceSchedule,
@@ -84,6 +89,134 @@ export async function registerAdminSourceRoutes(
     '/sources',
     { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
     async (request) => ({ sources: await request.db((tx) => listSources(tx)) }),
+  );
+
+  /**
+   * What the mapping editor starts from, and what it is allowed to write.
+   *
+   * Served rather than duplicated in the browser bundle so there is exactly
+   * one definition of both: a default the console disagreed with would seed a
+   * mapping the server then refuses, and a target field the console offered
+   * but `setMappings` rejects is a 400 an administrator cannot act on.
+   *
+   * Static path, and registered before `/sources/:id` — find-my-way prefers a
+   * static segment over a parametric one regardless of order, but the reading
+   * order should not depend on knowing that.
+   */
+  app.get(
+    '/sources/mapping-defaults',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async () => ({
+      flavours: DEFAULT_MAPPINGS,
+      assignableFields: ASSIGNABLE_FIELDS,
+    }),
+  );
+
+  app.get(
+    '/sources/:id',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      return request.db(async (tx) => {
+        const source = await findSource(tx, id);
+        if (!source) throw new ProblemError(404, 'not-found', 'Source not found');
+
+        // Counted here rather than left for the delete to discover, because
+        // the console has to say how many accounts a deletion would
+        // deactivate *before* it offers the button. `DELETE` refuses without
+        // `?confirm=true` and returns the same numbers on the 409, but a
+        // refusal an administrator has to trigger to read is a worse way to
+        // learn the size of what they are about to do.
+        return { ...source, owned: await ownedObjectCounts(tx, id) };
+      });
+    },
+  );
+
+  app.get(
+    '/sources/:id/mappings',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      return request.db(async (tx) => {
+        const source = await findSource(tx, id);
+        if (!source) throw new ProblemError(404, 'not-found', 'Source not found');
+        return { rules: await mappingsFor(tx, id) };
+      });
+    },
+  );
+
+  /**
+   * Tests a connection that has not been saved, and reports what it found.
+   *
+   * Spec section 11 asks for the test to happen *before* anything is written,
+   * and success criterion 1 asks the product to "report what object classes
+   * and attributes it found" — so this answers the counts from `test()` and
+   * the descriptor from `discoverSchema()`, which until now had no caller
+   * outside its own test.
+   *
+   * Both calls are made **outside** `request.db`. `withTenant` is
+   * `prisma.$transaction(fn)` on a five-second budget, and an LDAP connection
+   * to a host that is not answering will sit there far longer than that: an
+   * open transaction waiting on a third party is how a connection pool is
+   * exhausted by one slow directory. The vault read is its own short
+   * transaction, closed before the socket is opened.
+   *
+   * A failed connection is a result, not a server error. A malformed
+   * configuration is the caller's mistake and comes back as a 400 from
+   * `ldapConfigSchema` with the offending field named, which is what lets the
+   * editor mark the field rather than shrug.
+   */
+  app.post(
+    '/sources/test',
+    // SYNC_MANAGE, not SYNC_READ: this opens a connection to any host the
+    // caller names, which is a capability worth restricting to the people who
+    // are allowed to configure sources anyway.
+    { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
+    async (request) => {
+      const body = testConnectionRequest.parse(request.body);
+
+      let bindPassword = body.bindPassword;
+      if (bindPassword === undefined && body.sourceId !== undefined) {
+        // An editor changing a search base must not have to re-type the
+        // credential, and the browser is never handed it to send back. So the
+        // saved source's vault entry stands in, named by id.
+        const saved = await request.db((tx) =>
+          sourceWithPassword(tx, provider, body.sourceId!),
+        );
+        if (!saved) throw new ProblemError(404, 'not-found', 'Source not found');
+        bindPassword = saved.bindPassword;
+      }
+      if (bindPassword === undefined) {
+        throw new ProblemError(
+          400,
+          'bad-request',
+          'Bad Request',
+          'no bind password was sent and no saved source was named',
+        );
+      }
+
+      const config = { ...(body.config as object), bindPassword } as never;
+      const result = await ldapConnector.test(config);
+      if (!result.ok) return { ...result, schema: null };
+
+      // Only after a successful bind, and never fatal: the counts are the
+      // answer to "can Syntra reach this directory", and failing the whole
+      // test because a schema sample came back badly would answer a narrower
+      // question than the one that was asked.
+      let schema: SchemaDescriptor | null = null;
+      try {
+        schema = await ldapConnector.discoverSchema(config);
+      } catch (cause) {
+        request.log.warn(
+          { err: cause },
+          'the connection succeeded but the schema could not be sampled',
+        );
+      }
+
+      return { ...result, schema };
+    },
   );
 
   app.post(
@@ -177,6 +310,17 @@ export async function registerAdminSourceRoutes(
               'invalid-config',
               'Invalid source configuration',
               cause.issues.map((i) => i.message).join('; '),
+              // The same `errors[]` shape the validation handler produces for
+              // a body rejected at the contract boundary, so an editor marks
+              // the offending field the same way whichever check caught it.
+              // Without this a rejected TLS mode is a paragraph at the top of
+              // a form with fourteen fields in it.
+              {
+                errors: cause.issues.map((i) => ({
+                  path: i.path.join('.'),
+                  message: i.message,
+                })),
+              },
             );
           }
           throw cause;

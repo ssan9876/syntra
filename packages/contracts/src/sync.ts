@@ -43,6 +43,14 @@ export const createSourceRequest = z.object({
   schedule: cronExpression.optional(),
   autoApply: z.boolean().optional(),
   deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
+  /**
+   * Absent means enabled, which is what a source created before this field
+   * existed got. Sending `false` creates a source that is configured but does
+   * not run — the only way to give a source a cron expression and its
+   * attribute mappings without the schedule firing in between, since a create
+   * is scheduled the moment it commits.
+   */
+  enabled: z.boolean().optional(),
 });
 
 /**
@@ -126,3 +134,28 @@ export const syncRunSummary = z.object({
   error: z.string().nullable(),
 });
 export type SyncRunSummary = z.infer<typeof syncRunSummary>;
+
+/**
+ * A connection test for a configuration that may never have been saved.
+ *
+ * The spec's administration surface tests *before* anything is written, so
+ * this carries the connection settings as typed rather than the id of a
+ * stored row. The credential is the exception: an editor changing a search
+ * base should not have to re-type the bind password, and the browser must
+ * never be handed the stored one to send back. So a request either carries a
+ * new password, or names the saved source whose vault entry should be used --
+ * and the password itself stays server-side either way.
+ */
+export const testConnectionRequest = z
+  .object({
+    config: z.record(z.unknown()),
+    bindPassword: z.string().min(1).max(1024).optional(),
+    sourceId: z.string().uuid().optional(),
+  })
+  .refine(
+    (body) => body.bindPassword !== undefined || body.sourceId !== undefined,
+    {
+      message:
+        'send a bind password, or the id of a saved source whose stored password should be used',
+    },
+  );
