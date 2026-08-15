@@ -24,6 +24,7 @@ export * from './auth/mfa/types.js';
 export * from './auth/mfa/registry.js';
 export * from './auth/mfa/totp.js';
 export * from './auth/mfa/webauthn.js';
+export * from './auth/mfa/recovery-codes.js';
 export * from './policy/types.js';
 export * from './policy/ip-match.js';
 export * from './policy/time-window.js';

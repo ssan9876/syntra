@@ -29,6 +29,7 @@ import {
   confirmTotpEnrolment,
   installTotpVerifier,
 } from './mfa/totp.js';
+import { generateRecoveryCodes, installRecoveryCodeVerifier } from './mfa/recovery-codes.js';
 
 let tenantId: string;
 let userId: string;
@@ -1247,5 +1248,81 @@ describe('authorize — real TOTP forced enrolment', () => {
       now: NOW,
     });
     expect(result).toMatchObject({ status: 'enrol', enrollableFactors: ['totp'] });
+  });
+});
+
+describe('authorize — recovery codes', () => {
+  // Only recovery codes are installed here, so nothing is enrollable and the
+  // fallback branch is exercised rather than forced enrolment.
+  beforeEach(() => installRecoveryCodeVerifier());
+
+  it('satisfies require_mfa', async () => {
+    const codes = await withTenant(tenantId, (tx) => generateRecoveryCodes(tx, userId));
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+
+    const challenge = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    expect(challenge.status).toBe('challenge');
+    if (challenge.status !== 'challenge') throw new Error('expected a challenge');
+
+    const allowed = await authorize(tenantId, {
+      kind: 'continue',
+      attemptToken: challenge.attemptToken,
+      factor: { type: 'recovery_code', code: codes[0]! },
+      sourceIp: null,
+      relyingParty: RP,
+      now: NOW,
+    });
+    expect(allowed).toMatchObject({ status: 'allow', satisfiedFactor: 'recovery_code' });
+  });
+
+  it('does not satisfy a rule that names WebAuthn', async () => {
+    // A require_factor: webauthn rule needs a primary domain set first
+    // (assertFactorUsable, added in Task 3) — otherwise addRule itself throws.
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { primaryDomain: 'acme.syntra.test' },
+    });
+    await withTenant(tenantId, (tx) => generateRecoveryCodes(tx, userId));
+    await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'Keys only', outcome: 'require_factor', factorType: 'webauthn' }),
+    );
+    const result = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    // A printed code is not a hardware key, and a rule that asks for one is not
+    // satisfied by the other. Recovery codes are not enrollable either, so
+    // there is nothing to offer and the answer is an honest refusal.
+    expect(result).toEqual({ status: 'deny', reason: 'factor_not_enrolled' });
+  });
+
+  it('is never offered as the way to satisfy a forced enrolment', async () => {
+    // The user holds no recovery codes and no factor. A require_mfa rule must
+    // not answer "generate yourself some codes" — that would let a user prove
+    // possession of a second factor by printing one.
+    await withTenant(tenantId, (tx) => addRule(tx, { name: 'MFA', outcome: 'require_mfa' }));
+    const result = await authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: null,
+      relyingParty: RP,
+      scope: 'portal',
+      now: NOW,
+    });
+    expect(result).toEqual({ status: 'deny', reason: 'factor_not_enrolled' });
   });
 });
