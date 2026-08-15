@@ -15,6 +15,7 @@ import { SyncRunDetailPage } from './SyncRunDetailPage.js';
 import { ApplicationsPage } from './ApplicationsPage.js';
 import { ApplicationDetailPage } from './ApplicationDetailPage.js';
 import { PoliciesPage } from './PoliciesPage.js';
+import { TenantSettingsPage } from './TenantSettingsPage.js';
 
 interface NavItem {
   to: string;
@@ -33,6 +34,7 @@ const NAV: NavItem[] = [
   { to: '/admin/sources', label: 'Directory sources', permission: 'sync.read' },
   { to: '/admin/sync-runs', label: 'Sync runs', permission: 'sync.read' },
   { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
+  { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
 ];
 
 export function AdminApp() {
@@ -86,6 +88,7 @@ export function AdminApp() {
             <Route path="applications/:id" element={<ApplicationDetailPage />} />
             <Route path="policy" element={<PoliciesPage />} />
             <Route path="audit" element={<AuditPage />} />
+            <Route path="settings" element={<TenantSettingsPage />} />
             <Route path="*" element={<Navigate to="/admin/users" replace />} />
           </Routes>
         </div>

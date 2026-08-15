@@ -307,9 +307,14 @@ by mail where to go instead.
 
 **`Tenant.adminMfaRequired` makes a second factor mandatory for reaching the
 administration console.** It is off by default so an existing tenant's owner is
-not locked out by the migration; turn it on once the owner has enrolled. It is
-a floor the elevation endpoint imposes on top of the policy, so it can only
-strengthen the outcome — a rule that denies is still a denial.
+not locked out by the migration; turn it on from **Administration → Tenant
+settings**, which is also where self-enrolment is switched off for an
+organization that issues factors by hand. It is a floor the elevation endpoint
+imposes on top of the policy, so it can only strengthen the outcome — a rule
+that denies is still a denial. Requiring a factor *and* turning self-enrolment
+off refuses every administrator who does not already hold one, so the screen
+refuses to save that pair until the administrator making the change holds a
+factor themselves.
 
 ### What this slice does not do
 
@@ -322,13 +327,41 @@ policy on every request, and it is why an administrator who turns a rule on can
 still take it away again from the same session. If you need a rule to bite
 immediately, revoke the sessions as well.
 
-**Nothing watches the audit events this slice emits.** `auth.mfa_challenged`,
-`mfa.enrolled` (carrying `underForcedEnrolment`),
-`auth.forced_enrolment_completed`, `auth.policy_denied`, `auth.elevate` and
-`mfa.removed` are written to the tamper-evident log and nothing reads them.
-The forced-enrolment trade above is defensible *because* the enrolment is
-visible after the fact — so **wire these into your alerting.** An audit row
-nobody reads does not discharge the obligation.
+**Deactivation is the exception, and it is immediate.** A user's status *is*
+re-read on every request, so deactivating an account — from the console or from
+a directory sync — ends every session it holds at once rather than at the next
+expiry. Offboarding is the one thing a policy delay is not acceptable for.
+
+**Nothing watches the audit events this slice emits.** They are written to the
+tamper-evident log and nothing reads them. The forced-enrolment trade above is
+defensible *because* the enrolment is visible after the fact — so **wire these
+into your alerting.** An audit row nobody reads does not discharge the
+obligation.
+
+The names are `<area>.<past-tense event>`; the source of truth is every
+`recordEvent` call under `apps/api/src/routes` and `packages/core/src`, and
+`grep -rn "action: '"` over those two trees will always be more current than a
+list. What this slice adds:
+
+| Event | What it means |
+| --- | --- |
+| `auth.login` | Primary authentication, success or failure, with the reason on a failure |
+| `auth.policy_denied` | A rule refused the sign-in, naming the rule |
+| `auth.mfa_challenged` | A factor was demanded, naming what and why |
+| `auth.mfa_verified` / `auth.mfa_failed` | The factor was presented, and taken or not |
+| `auth.enrolment_required` | No acceptable factor held; enrolment was offered instead |
+| `auth.forced_enrolment_completed` | A factor was enrolled *during* a sign-in — see the trade above |
+| `auth.mfa_unavailable` | A factor was required and there was no way to obtain one. A dead end somebody has to fix |
+| `auth.elevate` | An administrative session was issued |
+| `mfa.enrolled` | A factor was added, carrying `underForcedEnrolment` |
+| `mfa.enrol_failed` | An authenticator or key was rejected during enrolment |
+| `mfa.removed` | A factor was removed, carrying how many recovery codes went with it |
+| `mfa.recovery_codes_issued` | A fresh set was minted; the old set stopped working |
+| `notify.delivery_failed` | **A notification could not be sent.** The factor-added mail is one of only two things making "a stolen password can enrol a factor" an acceptable trade, so this is the event that says a control has stopped working. Alert on it |
+| `application.launch` | Somebody entered an application through the portal |
+| `policy.rule_added` / `policy.rule_updated` / `policy.rule_deleted` / `policy.rules_reordered` / `policy.default_set` | The policy changed, and who changed it |
+| `tenant.settings_updated` | Admin MFA, self-enrolment or the password floor changed |
+| `auth.password_reset_requested` / `auth.password_reset_factor_failed` / `auth.password_reset_completed` | A self-service reset was asked for, refused at the factor, or applied |
 
 **The federation half of Access is not built.** There is no SAML IdP, no OIDC
 provider and no upstream identity provider yet. `Principal.external` and
