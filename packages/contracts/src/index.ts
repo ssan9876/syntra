@@ -5,3 +5,5 @@ export * from './sync.js';
 export * from './mfa.js';
 export * from './enrol.js';
 export * from './reset.js';
+export * from './access.js';
+export * from './policy.js';

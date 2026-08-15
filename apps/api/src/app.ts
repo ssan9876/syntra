@@ -25,6 +25,8 @@ import { registerAdminPersonRoutes } from './routes/admin/persons.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
 import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
+import { registerAdminApplicationRoutes } from './routes/admin/applications.js';
+import { registerAdminPolicyRoutes } from './routes/admin/policies.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -152,6 +154,11 @@ export async function buildApp(
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminSyncRunRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminApplicationRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminPolicyRoutes, {
+    prefix: '/api/admin',
+    authRateLimitMax: config.authRateLimitMax,
+  });
 
   return app;
 }
