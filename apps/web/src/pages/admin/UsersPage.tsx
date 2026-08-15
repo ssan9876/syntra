@@ -34,7 +34,7 @@ export function UsersPage() {
   const sourceNames = new Map(
     (sourcesData?.sources ?? []).map((source) => [source.id, source.name]),
   );
-  const anySynced = (data?.users ?? []).some((user) => user.sourceId !== null);
+  const anySynced = (data?.users ?? []).some((user) => Boolean(user.sourceId));
 
   return (
     <>
@@ -102,7 +102,7 @@ export function UsersPage() {
                       {user.email}
                     </td>
                     <td className="px-4 py-2.5">
-                      {user.sourceId === null ? (
+                      {!user.sourceId ? (
                         <span className="text-muted">Syntra</span>
                       ) : (
                         <span className="flex flex-wrap items-center gap-2">
