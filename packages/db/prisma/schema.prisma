@@ -22,15 +22,18 @@ model Tenant {
 }
 
 model OrgUnit {
-  id       String @id @default(uuid()) @db.Uuid
-  tenantId String @db.Uuid
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name     String
-  parentId String? @db.Uuid
-  parent   OrgUnit?  @relation("OrgUnitTree", fields: [parentId], references: [id])
-  children OrgUnit[] @relation("OrgUnitTree")
-  users    User[]
+  id           String @id @default(uuid()) @db.Uuid
+  tenantId     String @db.Uuid
+  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String
+  parentId     String? @db.Uuid
+  parent       OrgUnit?  @relation("OrgUnitTree", fields: [parentId], references: [id])
+  children     OrgUnit[] @relation("OrgUnitTree")
+  users        User[]
+  sourceId     String? @db.Uuid
+  sourceAnchor String?
 
+  @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
 }
 
@@ -47,6 +50,8 @@ model User {
   orgUnitId    String?  @db.Uuid
   orgUnit      OrgUnit? @relation(fields: [orgUnitId], references: [id])
   personId     String?  @db.Uuid
+  sourceId     String?  @db.Uuid
+  sourceAnchor String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -54,18 +59,24 @@ model User {
   attributes  UserAttribute[]
 
   @@unique([tenantId, login])
+  @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
 }
 
 model Group {
-  id          String  @id @default(uuid()) @db.Uuid
-  tenantId    String  @db.Uuid
-  name        String
-  description String?
+  id           String  @id @default(uuid()) @db.Uuid
+  tenantId     String  @db.Uuid
+  name         String
+  description  String?
+  sourceId     String? @db.Uuid
+  sourceAnchor String?
+  status       String  @default("active")
+  statusReason String?
 
   memberships GroupMembership[]
 
   @@unique([tenantId, name])
+  @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
 }
 
@@ -232,4 +243,79 @@ model Session {
 
   @@index([tenantId])
   @@index([userId])
+}
+
+model DirectorySource {
+  id                           String    @id @default(uuid()) @db.Uuid
+  tenantId                     String    @db.Uuid
+  name                         String
+  type                         String    @default("ldap")
+  config                       Json
+  secretName                   String
+  schedule                     String?
+  autoApply                    Boolean   @default(false)
+  deactivationThresholdPercent Int       @default(10)
+  enabled                      Boolean   @default(true)
+  lastRunAt                    DateTime?
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
+
+  mappings AttributeMapping[]
+  runs     SyncRun[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model AttributeMapping {
+  id              String  @id @default(uuid()) @db.Uuid
+  tenantId        String  @db.Uuid
+  sourceId        String  @db.Uuid
+  source          DirectorySource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  objectType      String
+  sourceAttribute String
+  targetField     String
+  transform       String  @default("none")
+  isCorrelation   Boolean @default(false)
+
+  @@unique([sourceId, objectType, targetField])
+  @@index([tenantId])
+}
+
+model SyncRun {
+  id                   String    @id @default(uuid()) @db.Uuid
+  tenantId             String    @db.Uuid
+  sourceId             String    @db.Uuid
+  source               DirectorySource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status               String    @default("running")
+  startedAt            DateTime  @default(now())
+  finishedAt           DateTime?
+  recordsRead          Int       @default(0)
+  requiresConfirmation Boolean   @default(false)
+  blockedReason        String?
+  error                String?
+  unresolvedMembers    Int       @default(0)
+
+  changes SyncChange[]
+
+  @@index([tenantId, startedAt])
+  @@index([sourceId])
+}
+
+model SyncChange {
+  id           String  @id @default(uuid()) @db.Uuid
+  tenantId     String  @db.Uuid
+  runId        String  @db.Uuid
+  run          SyncRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  changeType   String
+  targetType   String
+  targetId     String? @db.Uuid
+  sourceAnchor String?
+  before       Json?
+  after        Json?
+  status       String  @default("proposed")
+  message      String?
+
+  @@index([tenantId])
+  @@index([runId, changeType])
 }
