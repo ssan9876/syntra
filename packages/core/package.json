@@ -8,6 +8,7 @@
     "@syntra/db": "workspace:*",
     "argon2": "^0.45.1",
     "nodemailer": "^9.0.5",
+    "pg-boss": "^12.27.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
