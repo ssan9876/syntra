@@ -10,3 +10,6 @@ export * from './identity/person-service.js';
 export * from './identity/contract-service.js';
 export * from './rbac/permissions.js';
 export * from './rbac/rbac-service.js';
+export * from './auth/password.js';
+export * from './auth/session-service.js';
+export * from './auth/login-service.js';

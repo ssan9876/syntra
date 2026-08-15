@@ -11,11 +11,12 @@ datasource db {
 }
 
 model Tenant {
-  id        String   @id @default(uuid()) @db.Uuid
-  name      String
-  slug      String   @unique
-  status    String   @default("active")
-  createdAt DateTime @default(now())
+  id            String   @id @default(uuid()) @db.Uuid
+  name          String
+  slug          String   @unique
+  primaryDomain String?  @unique
+  status        String   @default("active")
+  createdAt     DateTime @default(now())
 
   orgUnits OrgUnit[]
 }
@@ -204,6 +205,31 @@ model RoleAssignment {
   scopeOrgUnitId String? @db.Uuid
 
   @@unique([roleId, userId, scopeOrgUnitId])
+  @@index([tenantId])
+  @@index([userId])
+}
+
+model PasswordCredential {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  userId    String   @unique @db.Uuid
+  hash      String
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+model Session {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  userId            String    @db.Uuid
+  tokenHash         String    @unique
+  scope             String
+  createdAt         DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+
   @@index([tenantId])
   @@index([userId])
 }
