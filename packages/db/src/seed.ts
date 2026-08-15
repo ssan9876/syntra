@@ -22,8 +22,9 @@ import {
   createRole,
   createUser,
   addMember,
+  hashPassword,
   linkUserToPerson,
-  setPassword,
+  setPasswordHash,
 } from '@syntra/core';
 
 const adminPassword = process.env.SEED_ADMIN_PASSWORD;
@@ -37,6 +38,13 @@ if (!adminPassword || adminPassword.length < 12) {
 }
 
 const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
+
+// Hashed before the transaction opens. Argon2id is deliberately expensive and
+// has no business inside Prisma's 5000 ms interactive-transaction budget --
+// which is why `setPasswordHash` takes a hash and there is no longer a helper
+// that takes a plaintext and a transaction together.
+const adminHash = await hashPassword(adminPassword);
+const userHash = await hashPassword(userPassword!);
 
 const tenant = await prisma.tenant.upsert({
   where: { slug: 'acme' },
@@ -65,7 +73,7 @@ await withTenant(tenant.id, async (tx) => {
     displayName: 'Ada Okonkwo',
     orgUnitId: headOffice.id,
   });
-  await setPassword(tx, owner.id, adminPassword);
+  await setPasswordHash(tx, owner.id, adminHash);
 
   const ownerRole = await createRole(tx, 'Owner', ALL_PERMISSIONS, {
     builtIn: true,
@@ -79,7 +87,7 @@ await withTenant(tenant.id, async (tx) => {
     displayName: 'Jo Doe',
     orgUnitId: care.id,
   });
-  await setPassword(tx, nurse.id, userPassword!);
+  await setPasswordHash(tx, nurse.id, userHash);
 
   const leaver = await createUser(tx, {
     login: 'sroe',

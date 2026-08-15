@@ -9,7 +9,7 @@ import {
   updateRule,
 } from '../policy/policy-service.js';
 import type { FactorType } from '../policy/types.js';
-import { setPassword } from './password.js';
+import { hashPassword, setPasswordHash } from './password.js';
 import {
   createSession,
   resolveSession,
@@ -65,6 +65,18 @@ let tenantId: string;
 let userId: string;
 
 const PASSWORD = 'correct horse battery staple';
+
+/**
+ * Hashed once for the whole file, outside every transaction.
+ *
+ * There is no helper that takes a plaintext and a transaction any more:
+ * Argon2id is deliberately expensive and has no business inside Prisma's
+ * 5000 ms budget, so `setPasswordHash` takes a hash and the hashing is the
+ * caller's to place. Hashing once per file rather than once per test is the
+ * same decision made cheaply.
+ */
+const PASSWORD_HASH = await hashPassword(PASSWORD);
+
 const NOW = new Date('2026-08-12T09:00:00Z');
 
 /**
@@ -91,7 +103,7 @@ beforeEach(async () => {
       email: 'j@acme.test',
       displayName: 'J Doe',
     });
-    await setPassword(tx, u.id, PASSWORD);
+    await setPasswordHash(tx, u.id, PASSWORD_HASH);
     return u.id;
   });
 });

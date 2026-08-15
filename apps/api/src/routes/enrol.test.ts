@@ -1,13 +1,25 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import * as OTPAuth from 'otpauth';
 import { prisma, withTenant } from '@syntra/db';
-import { addRule, createUser, generateRecoveryCodes, setPassword } from '@syntra/core';
+import { addRule, createUser, generateRecoveryCodes, hashPassword, setPasswordHash } from '@syntra/core';
 import { TEST_HOST, buildTestApp } from '../test-support.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 let userId: string;
 
 const PASSWORD = 'correct horse battery staple';
+
+/**
+ * Hashed once for the whole file, outside every transaction.
+ *
+ * There is no helper that takes a plaintext and a transaction any more:
+ * Argon2id is deliberately expensive and has no business inside Prisma's
+ * 5000 ms budget, so `setPasswordHash` takes a hash and the hashing is the
+ * caller's to place. Hashing once per file rather than once per test is the
+ * same decision made cheaply.
+ */
+const PASSWORD_HASH = await hashPassword(PASSWORD);
+
 
 beforeEach(async () => {
   ctx = await buildTestApp();
@@ -18,7 +30,7 @@ beforeEach(async () => {
       email: 'j@acme.test',
       displayName: 'J Doe',
     });
-    await setPassword(tx, u.id, PASSWORD);
+    await setPasswordHash(tx, u.id, PASSWORD_HASH);
     return u.id;
   });
 });

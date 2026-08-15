@@ -4,7 +4,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser, deactivateUser } from '../directory/user-service.js';
 import { assignRole, createRole } from '../rbac/rbac-service.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
-import { setPassword } from './password.js';
+import { hashPassword, setPasswordHash } from './password.js';
 import { authenticate } from './login-service.js';
 
 /**
@@ -50,6 +50,18 @@ let userId: string;
 
 const PASSWORD = 'correct horse battery staple';
 
+/**
+ * Hashed once for the whole file, outside every transaction.
+ *
+ * There is no helper that takes a plaintext and a transaction any more:
+ * Argon2id is deliberately expensive and has no business inside Prisma's
+ * 5000 ms budget, so `setPasswordHash` takes a hash and the hashing is the
+ * caller's to place. Hashing once per file rather than once per test is the
+ * same decision made cheaply.
+ */
+const PASSWORD_HASH = await hashPassword(PASSWORD);
+
+
 beforeEach(async () => {
   probe.depths.length = 0;
   await resetDatabase();
@@ -63,7 +75,7 @@ beforeEach(async () => {
       displayName: 'J Doe',
     });
     userId = user.id;
-    await setPassword(tx, user.id, PASSWORD);
+    await setPasswordHash(tx, user.id, PASSWORD_HASH);
   });
 });
 

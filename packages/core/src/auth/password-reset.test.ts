@@ -8,7 +8,7 @@ import { notificationsSettled } from '../notify/delivery.js';
 import { memoryTransport } from '../notify/notification-service.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createSession, resolveSession } from './session-service.js';
-import { setPassword, verifyPassword } from './password.js';
+import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import {
   beginTotpEnrolment,
   confirmTotpEnrolment,
@@ -31,6 +31,18 @@ let userId: string;
 let transport: ReturnType<typeof memoryTransport>;
 
 const PASSWORD = 'correct horse battery staple';
+
+/**
+ * Hashed once for the whole file, outside every transaction.
+ *
+ * There is no helper that takes a plaintext and a transaction any more:
+ * Argon2id is deliberately expensive and has no business inside Prisma's
+ * 5000 ms budget, so `setPasswordHash` takes a hash and the hashing is the
+ * caller's to place. Hashing once per file rather than once per test is the
+ * same decision made cheaply.
+ */
+const PASSWORD_HASH = await hashPassword(PASSWORD);
+
 const NEW_PASSWORD = 'a completely different passphrase';
 const PUBLIC_URL = 'http://acme.syntra.test';
 const NOW = new Date('2026-08-12T09:00:00Z');
@@ -54,7 +66,7 @@ beforeEach(async () => {
       email: 'jo.doe@acme.test',
       displayName: 'J Doe',
     });
-    await setPassword(tx, u.id, PASSWORD);
+    await setPasswordHash(tx, u.id, PASSWORD_HASH);
     return u.id;
   });
 });

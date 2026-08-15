@@ -5,7 +5,8 @@ import {
   assignRole,
   createRole,
   createUser,
-  setPassword,
+  hashPassword,
+  setPasswordHash,
   type Permission,
 } from '@syntra/core';
 import { buildTestApp } from '../../test-support.js';
@@ -13,6 +14,18 @@ import { buildTestApp } from '../../test-support.js';
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 
 const PASSWORD = 'a-long-enough-password';
+
+/**
+ * Hashed once for the whole file, outside every transaction.
+ *
+ * There is no helper that takes a plaintext and a transaction any more:
+ * Argon2id is deliberately expensive and has no business inside Prisma's
+ * 5000 ms budget, so `setPasswordHash` takes a hash and the hashing is the
+ * caller's to place. Hashing once per file rather than once per test is the
+ * same decision made cheaply.
+ */
+const PASSWORD_HASH = await hashPassword(PASSWORD);
+
 const HEADER =
   'externalId,givenName,familyName,businessEmail,sequence,isPrimary,startDate,endDate,jobTitle,department';
 
@@ -23,7 +36,7 @@ async function seedAdmin(permissions: Permission[]) {
       email: 'admin@acme.test',
       displayName: 'Admin',
     });
-    await setPassword(tx, user.id, PASSWORD);
+    await setPasswordHash(tx, user.id, PASSWORD_HASH);
     const role = await createRole(tx, 'Custom', permissions);
     await assignRole(tx, user.id, role.id);
     return user;

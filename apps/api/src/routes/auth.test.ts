@@ -7,7 +7,8 @@ import {
   createRole,
   createUser,
   generateRecoveryCodes,
-  setPassword,
+  hashPassword,
+  setPasswordHash,
 } from '@syntra/core';
 import * as OTPAuth from 'otpauth';
 import { buildTestApp } from '../test-support.js';
@@ -16,6 +17,18 @@ let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 
 const PASSWORD = 'correct horse battery staple';
 
+/**
+ * Hashed once for the whole file, outside every transaction.
+ *
+ * There is no helper that takes a plaintext and a transaction any more:
+ * Argon2id is deliberately expensive and has no business inside Prisma's
+ * 5000 ms budget, so `setPasswordHash` takes a hash and the hashing is the
+ * caller's to place. Hashing once per file rather than once per test is the
+ * same decision made cheaply.
+ */
+const PASSWORD_HASH = await hashPassword(PASSWORD);
+
+
 async function seedUser(opts: { admin?: boolean } = {}) {
   return withTenant(ctx.tenantId, async (tx) => {
     const user = await createUser(tx, {
@@ -23,7 +36,7 @@ async function seedUser(opts: { admin?: boolean } = {}) {
       email: 'j@acme.test',
       displayName: 'J Doe',
     });
-    await setPassword(tx, user.id, PASSWORD);
+    await setPasswordHash(tx, user.id, PASSWORD_HASH);
     if (opts.admin) {
       const role = await createRole(tx, 'Directory Admin', [
         PERMISSIONS.DIRECTORY_READ,
