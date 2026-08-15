@@ -8,7 +8,7 @@ import type {
   WriteResult,
 } from '../types.js';
 import { normaliseAnchor } from './anchor.js';
-import type { LdapConfig } from './config.js';
+import { ldapConfigSchema, type LdapConfig } from './config.js';
 
 type Config = LdapConfig & { bindPassword: string };
 
@@ -16,6 +16,23 @@ interface Search {
   base: string;
   filter: string;
   objectType: ObjectType;
+}
+
+/**
+ * Re-applies the config schema's defaults (filters, page size, anchor
+ * attribute, TLS posture) to whatever the caller passed in.
+ *
+ * `LdapConfig` is the schema's *output* type, which makes fields like
+ * `orgUnitFilter` look mandatory to the type checker even though the schema
+ * declares a `.default(...)` for them. A config assembled by hand — as in a
+ * saved connection record, or a literal built for a test — can still omit
+ * such fields at runtime. Without this, an unset `orgUnitFilter` reaches
+ * ldapts as `undefined`, which it silently treats as `(objectClass=*)`: an
+ * unfiltered subtree scan standing in for what looked like a scoped search.
+ */
+function normalise(config: Config): Config {
+  const { bindPassword, ...rest } = config;
+  return { ...ldapConfigSchema.parse(rest), bindPassword };
 }
 
 function searches(config: Config): Search[] {
@@ -86,20 +103,46 @@ function toRecord(
   return record;
 }
 
+async function runSearch<T>(
+  client: Client,
+  search: Search,
+  options: Parameters<Client['search']>[1],
+  handler: (searchEntries: Record<string, unknown>[]) => T,
+): Promise<T> {
+  const { searchEntries } = await client.search(search.base, {
+    filter: search.filter,
+    scope: 'sub',
+    ...options,
+  });
+  return handler(searchEntries as unknown as Record<string, unknown>[]);
+}
+
+/** ldapts's ResultCodeError can carry an empty message when the server sends
+ * no diagnostic text (OpenLDAP does this for a bad bind); the error's name
+ * (e.g. "InvalidCredentialsError") is where the real signal lives then. */
+function describeError(cause: unknown): string {
+  if (!(cause instanceof Error)) return 'Connection failed';
+  if (cause.name && cause.name !== 'Error' && !cause.message.includes(cause.name)) {
+    return `${cause.name}: ${cause.message}`.trim();
+  }
+  return cause.message;
+}
+
 export const ldapConnector: Connector<Config> = {
-  async test(config): Promise<ConnectionResult> {
+  async test(rawConfig): Promise<ConnectionResult> {
+    const config = normalise(rawConfig);
     let client: Client | undefined;
     try {
       client = await connect(config);
       const counts = { user: 0, group: 0, orgUnit: 0 } as Record<ObjectType, number>;
 
       for (const search of searches(config)) {
-        const { searchEntries } = await client.search(search.base, {
-          filter: search.filter,
-          scope: 'sub',
-          attributes: ['dn'],
-        });
-        counts[search.objectType] = searchEntries.length;
+        counts[search.objectType] = await runSearch(
+          client,
+          search,
+          { attributes: ['dn'] },
+          (searchEntries) => searchEntries.length,
+        );
       }
 
       return {
@@ -110,31 +153,29 @@ export const ldapConnector: Connector<Config> = {
     } catch (cause) {
       return {
         ok: false,
-        message: cause instanceof Error ? cause.message : 'Connection failed',
+        message: describeError(cause),
       };
     } finally {
       await client?.unbind().catch(() => undefined);
     }
   },
 
-  async discoverSchema(config): Promise<SchemaDescriptor> {
+  async discoverSchema(rawConfig): Promise<SchemaDescriptor> {
+    const config = normalise(rawConfig);
     const client = await connect(config);
     try {
       const objectClasses = new Set<string>();
       const attributes = new Set<string>();
 
       for (const search of searches(config)) {
-        const { searchEntries } = await client.search(search.base, {
-          filter: search.filter,
-          scope: 'sub',
-          sizeLimit: 20,
-        });
-        for (const entry of searchEntries) {
-          for (const cls of toArray(entry.objectClass)) objectClasses.add(cls);
-          for (const key of Object.keys(entry)) {
-            if (key !== 'dn') attributes.add(key);
+        await runSearch(client, search, { sizeLimit: 20 }, (searchEntries) => {
+          for (const entry of searchEntries) {
+            for (const cls of toArray(entry.objectClass)) objectClasses.add(cls);
+            for (const key of Object.keys(entry)) {
+              if (key !== 'dn') attributes.add(key);
+            }
           }
-        }
+        });
       }
 
       return {
@@ -146,27 +187,29 @@ export const ldapConnector: Connector<Config> = {
     }
   },
 
-  async *read(config): AsyncIterable<SourceRecord> {
+  async *read(rawConfig): AsyncIterable<SourceRecord> {
+    const config = normalise(rawConfig);
     const client = await connect(config);
     try {
       for (const search of searches(config)) {
         // Paged, and yielded as they arrive: a large directory must not
         // become a large heap.
-        const { searchEntries } = await client.search(search.base, {
-          filter: search.filter,
-          scope: 'sub',
-          paged: { pageSize: config.pageSize, pagePause: false },
-          attributes: ['*', config.anchorAttribute],
-        });
-
-        console.error('DEBUG search', search.objectType, searchEntries.length, searchEntries.map((e: any) => e.dn));
-        for (const entry of searchEntries) {
-          yield toRecord(
-            entry as unknown as Record<string, unknown>,
-            search.objectType,
-            config.anchorAttribute,
-          );
-        }
+        const records = await runSearch(
+          client,
+          search,
+          {
+            // `search()` always drains every page itself (unlike the separate
+            // `searchPaginated()` generator); no extra option is needed to
+            // make it continue past the first page.
+            paged: { pageSize: config.pageSize },
+            attributes: ['*', config.anchorAttribute],
+          },
+          (searchEntries) =>
+            searchEntries.map((entry) =>
+              toRecord(entry, search.objectType, config.anchorAttribute),
+            ),
+        );
+        yield* records;
       }
     } finally {
       await client.unbind().catch(() => undefined);
