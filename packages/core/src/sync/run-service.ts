@@ -260,6 +260,12 @@ function computeDiff(input: DiffInput) {
   // half-broken.
   const usableGroups = new Set<string>();
 
+  // The same thing on the member axis. A user that correlates to a locally
+  // managed account is a conflict and is never created with this source's
+  // anchor, so an `add_member` naming it fails its user lookup at apply time
+  // and drags the whole run to `partially_applied`.
+  const usableMembers = new Set<string>();
+
   for (const type of ['user', 'group', 'orgUnit'] as const) {
     const ofType = objects.filter((o) => o.objectType === type);
     const rows = input.existing.objects.filter((e) => e.objectType === type);
@@ -271,6 +277,14 @@ function computeDiff(input: DiffInput) {
       for (const correlation of correlations) {
         if (correlation.kind !== 'conflict') {
           usableGroups.add(correlation.object.anchor);
+        }
+      }
+    }
+
+    if (type === 'user') {
+      for (const correlation of correlations) {
+        if (correlation.kind !== 'conflict') {
+          usableMembers.add(correlation.object.anchor);
         }
       }
     }
@@ -297,6 +311,15 @@ function computeDiff(input: DiffInput) {
         // Revoking someone's access because one of their attributes went
         // missing is the same mistake as deactivating them for it.
         if (unmappableAnchors.has(anchor) && !now.has(anchor)) continue;
+
+        // The same rule for a member this run cannot resolve to a user of
+        // this source: a conflicting account, or a DN that names something
+        // that is not a user at all (a nested group). Dropping it outright
+        // would be worse than proposing it — `desired` is differenced against
+        // what Syntra holds, so an omitted anchor reads as "remove this
+        // member" and revokes a real person's real access on the strength of
+        // a name collision. Kept if held, not proposed if not.
+        if (!usableMembers.has(anchor) && !now.has(anchor)) continue;
         memberAnchors.push(anchor);
       }
 

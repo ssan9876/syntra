@@ -251,7 +251,7 @@ describe('applyRun', () => {
       }),
     );
     const run = await previewRun(tenantId, provider, sourceId);
-    await applyRun(tenantId, run.id);
+    const applied = await applyRun(tenantId, run.id);
 
     const local = await withTenant(tenantId, (tx) =>
       tx.user.findFirst({ where: { login: 'jdoe' } }),
@@ -259,6 +259,92 @@ describe('applyRun', () => {
     // The hand-made account is untouched: still local, still its own email.
     expect(local!.sourceId).toBeNull();
     expect(local!.email).toBe('local@acme.test');
+
+    // And the run says so honestly. The conflict is reported as a conflict;
+    // everything appliable applied, so the run is `applied` and not
+    // `partially_applied` — the report has to distinguish "one object needs a
+    // decision" from "part of this run did not land".
+    expect(applied.status).toBe('applied');
+    const failedChanges = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: run.id, status: 'failed' } }),
+    );
+    expect(failedChanges).toEqual([]);
+  });
+
+  it('does not propose a membership for a conflicting user', async () => {
+    // The fixture's jdoe is a member of Nurses. With a locally managed jdoe
+    // already in Syntra, the source's jdoe is a conflict and is never created
+    // with this source's anchor, so an `add_member` naming that anchor could
+    // only ever fail its user lookup at apply time.
+    await withTenant(tenantId, (tx) =>
+      createUser(tx, {
+        login: 'jdoe',
+        email: 'local@acme.test',
+        displayName: 'Local Jo',
+      }),
+    );
+
+    const run = await previewRun(tenantId, provider, sourceId);
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: run.id } }),
+    );
+
+    expect(changes.filter((c) => c.changeType === 'add_member')).toEqual([]);
+    // Not proposed is not the same as removed: Syntra holds no membership for
+    // this person, so there is nothing to revoke either.
+    expect(changes.filter((c) => c.changeType === 'remove_member')).toEqual([]);
+    expect(
+      changes.filter((c) => c.status === 'conflict').map((c) => c.changeType),
+    ).toEqual(['create_user']);
+  });
+
+  it('keeps a membership Syntra already holds when the member turns into a conflict', async () => {
+    // The dangerous half of the same fix. Skipping a conflicting member
+    // outright would drop their anchor from the desired membership, and
+    // `desired` is differenced against what Syntra holds — so the omission
+    // reads as `remove_member` and revokes a real person's real access.
+    const first = await previewRun(tenantId, provider, sourceId);
+    await applyRun(tenantId, first.id);
+
+    const jdoe = await withTenant(tenantId, (tx) =>
+      tx.user.findFirstOrThrow({ where: { login: 'jdoe' } }),
+    );
+
+    // A second directory starts claiming jdoe. The anchor lookup no longer
+    // finds the row for this source, the correlation key does, and it is
+    // owned by someone else: a conflict, exactly as the spec requires. The
+    // row keeps its anchor, so Syntra still holds the Nurses membership under
+    // it.
+    await withTenant(tenantId, async (tx) => {
+      const other = await createSource(tx, provider, {
+        name: 'Second directory',
+        config,
+        bindPassword: 'adminpassword',
+      });
+      await tx.user.update({
+        where: { id: jdoe.id },
+        data: { sourceId: other.id },
+      });
+    });
+
+    const second = await previewRun(tenantId, provider, sourceId);
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: second.id } }),
+    );
+
+    expect(changes.filter((c) => c.changeType === 'remove_member')).toEqual([]);
+    expect(
+      changes.filter((c) => c.status === 'conflict').map((c) => c.changeType),
+    ).toEqual(['create_user']);
+
+    const applied = await applyRun(tenantId, second.id);
+    expect(applied.status).toBe('applied');
+
+    const memberships = await withTenant(tenantId, (tx) =>
+      tx.groupMembership.findMany(),
+    );
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0]!.userId).toBe(jdoe.id);
   });
 
   it('writes an audit event for every applied change', async () => {
