@@ -145,6 +145,70 @@ describe('mappings', () => {
       ),
     ).rejects.toThrow(/correlation/i);
   });
+
+  it('refuses a mapping that would let the source write a user status', async () => {
+    // update_user is not a change type the guard counts, so a mapping onto
+    // `status` deactivates accounts straight past the mass-deactivation
+    // protection.
+    const source = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, input),
+    );
+    await expect(
+      withTenant(tenantId, (tx) =>
+        setMappings(tx, source.id, [
+          ...DEFAULT_MAPPINGS.openLdap,
+          {
+            objectType: 'user',
+            sourceAttribute: 'employeeType',
+            targetField: 'status',
+            transform: 'lowercase',
+            isCorrelation: false,
+          },
+        ]),
+      ),
+    ).rejects.toThrow(/status/);
+  });
+
+  it('refuses a mapping onto the ownership and link columns', async () => {
+    const source = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, input),
+    );
+
+    for (const targetField of [
+      'sourceId',
+      'sourceAnchor',
+      'personId',
+      'orgUnitId',
+      'id',
+      'tenantId',
+    ]) {
+      await expect(
+        withTenant(tenantId, (tx) =>
+          setMappings(tx, source.id, [
+            ...DEFAULT_MAPPINGS.openLdap,
+            {
+              objectType: 'user',
+              sourceAttribute: 'description',
+              targetField,
+              transform: 'none',
+              isCorrelation: false,
+            },
+          ]),
+        ),
+      ).rejects.toThrow(new RegExp(targetField));
+    }
+  });
+
+  it('accepts the shipped defaults, which write only mapped fields', async () => {
+    const source = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, input),
+    );
+    await expect(
+      withTenant(tenantId, (tx) =>
+        setMappings(tx, source.id, DEFAULT_MAPPINGS.activeDirectory),
+      ),
+    ).resolves.toBeUndefined();
+  });
 });
 
 describe('DEFAULT_MAPPINGS', () => {

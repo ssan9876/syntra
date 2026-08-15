@@ -450,6 +450,50 @@ describe('applyChange membership failure paths', () => {
     expect(events[0]!.outcome).toBe('success');
   });
 
+  it('refuses an update carrying a field no mapping may write', async () => {
+    // A mapping stored before setMappings started rejecting these. update_user
+    // passes the mapped blob straight into update({ data }), so without this
+    // second gate the directory could set a user inactive through a change
+    // type the guard does not count.
+    const run = await previewRun(tenantId, provider, sourceId);
+    await applyRun(tenantId, run.id);
+
+    const { updated, user, events } = await withTenant(tenantId, async (tx) => {
+      const target = await tx.user.findFirstOrThrow({ where: { login: 'jdoe' } });
+      const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });
+      const change = await tx.syncChange.create({
+        data: {
+          tenantId,
+          runId: newRun.id,
+          changeType: 'update_user',
+          targetType: 'User',
+          targetId: target.id,
+          sourceAnchor: target.sourceAnchor,
+          after: { status: 'inactive', sourceId: 'somebody-elses-source' },
+          status: 'proposed',
+        },
+      });
+
+      await applyChange(tx, change, sourceId, newRun.id);
+
+      return {
+        updated: await tx.syncChange.findUnique({ where: { id: change.id } }),
+        user: await tx.user.findUnique({ where: { id: target.id } }),
+        events: await tx.auditEvent.findMany({
+          where: { action: 'sync.update_user' },
+        }),
+      };
+    });
+
+    expect(updated!.status).toBe('failed');
+    expect(updated!.message).toMatch(/status/);
+    expect(updated!.message).toMatch(/sourceId/);
+    expect(user!.status).toBe('active');
+    expect(user!.sourceId).toBe(sourceId);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('failure');
+  });
+
   it('audits outcome failure for an unrecognized change type', async () => {
     const { updated, events } = await withTenant(tenantId, async (tx) => {
       const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });

@@ -1,6 +1,8 @@
 import type { TenantClient } from '@syntra/db';
+import type { ObjectType } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
+import { unassignableFields } from './mapping.js';
 
 interface ChangeRow {
   id: string;
@@ -25,6 +27,50 @@ interface ApplyResult {
 }
 
 const fields = (value: unknown) => (value ?? {}) as Record<string, string>;
+
+/**
+ * The object type an `update_*` change writes to. Only these three pass a
+ * mapped blob straight into an `update`, so only these three need checking.
+ */
+const UPDATES: Record<string, ObjectType> = {
+  update_user: 'user',
+  update_group: 'group',
+  update_org_unit: 'orgUnit',
+};
+
+/**
+ * Refuses an update carrying a field a mapping was never allowed to write.
+ *
+ * `setMappings` rejects these at configuration time, which is where an
+ * administrator can see the message. This is the second gate, for a mapping
+ * stored before that check existed: `update_*` passes the mapped blob
+ * straight to `update({ data })`, so a single row naming `status` would let
+ * directory content deactivate an account through a change type the guard
+ * does not count. Refusing the change is deliberate — silently dropping the
+ * offending field would apply something other than what was reviewed.
+ */
+async function rejectUnassignable(
+  tx: TenantClient,
+  change: ChangeRow,
+  after: Record<string, string>,
+): Promise<ApplyResult | undefined> {
+  const objectType = UPDATES[change.changeType];
+  if (!objectType) return undefined;
+
+  const rejected = unassignableFields(objectType, Object.keys(after));
+  if (rejected.length === 0) return undefined;
+
+  await tx.syncChange.update({
+    where: { id: change.id },
+    data: {
+      status: 'failed',
+      message:
+        `refusing to write ${rejected.join(', ')}: a mapping may not set ` +
+        `these fields on a ${objectType}`,
+    },
+  });
+  return { outcome: 'failure', extra: { rejectedFields: rejected } };
+}
 
 /**
  * Writes the one audit event for a change, from the outcome `performChange`
@@ -66,6 +112,9 @@ async function performChange(
   tenantId: string,
 ): Promise<ApplyResult> {
   const after = fields(change.after);
+
+  const rejected = await rejectUnassignable(tx, change, after);
+  if (rejected) return rejected;
 
   switch (change.changeType) {
     case 'create_user': {

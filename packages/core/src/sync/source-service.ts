@@ -3,7 +3,11 @@ import { ldapConfigSchema, type LdapConfig } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { getSecret, putSecret } from '../vault/vault-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
-import type { MappingRule } from './mapping.js';
+import {
+  ASSIGNABLE_FIELDS,
+  unassignableFields,
+  type MappingRule,
+} from './mapping.js';
 
 export interface CreateSourceInput {
   name: string;
@@ -83,6 +87,26 @@ export async function setMappings(
     throw new Error(
       'exactly one user mapping must be marked as the correlation key',
     );
+  }
+
+  // Rejected at configuration time, which is the only point at which anyone
+  // is looking. A mapping onto `status` would let directory content
+  // deactivate accounts through `update_user` — a change type the guard does
+  // not count — and one onto `sourceId` or `sourceAnchor` would let this
+  // source adopt rows it does not own. apply.ts refuses the same fields
+  // again, so a mapping stored before this check cannot slip through.
+  for (const objectType of ['user', 'group', 'orgUnit'] as const) {
+    const rejected = unassignableFields(
+      objectType,
+      rules.filter((r) => r.objectType === objectType).map((r) => r.targetField),
+    );
+    if (rejected.length > 0) {
+      throw new Error(
+        `a ${objectType} mapping may not write ${rejected.join(', ')}; ` +
+          `assignable ${objectType} fields are ` +
+          `${ASSIGNABLE_FIELDS[objectType].join(', ')}`,
+      );
+    }
   }
 
   const tenantId = await currentTenant(tx);
