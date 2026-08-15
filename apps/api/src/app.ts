@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
-import type { Config } from '@syntra/core';
+import type { Config, Scheduler } from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
@@ -15,6 +15,17 @@ import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
 
 export interface AppOptions {
   logger?: boolean;
+  /**
+   * How the source routes reach the job scheduler, so a source created,
+   * changed or deleted is rescheduled there and then rather than at the next
+   * restart.
+   *
+   * A function, not a `Scheduler`, because the scheduler is started after the
+   * app is built — it needs the app's logger, and it is allowed to fail to
+   * start without keeping the API down. Omitted, source mutations simply do
+   * not touch any scheduler, which is what the tests that do not care want.
+   */
+  scheduler?: () => Scheduler | null;
 }
 
 export async function buildApp(
@@ -50,6 +61,7 @@ export async function buildApp(
   await app.register(registerAdminSourceRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminSyncRunRoutes, { prefix: '/api/admin' });
 

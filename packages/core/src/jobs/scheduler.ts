@@ -7,7 +7,15 @@ export interface Scheduler {
   stop(): Promise<void>;
   register<T>(name: string, handler: JobHandler<T>): void;
   enqueue<T>(name: string, data: T): Promise<string | null>;
-  schedule(name: string, cron: string, data?: unknown): Promise<void>;
+  /**
+   * `key` distinguishes several schedules on one queue, and is not optional
+   * in practice. pg-boss keys its schedule table on `(name, key)` with `key`
+   * defaulting to the empty string, so two schedules on the same queue
+   * without one are the same row: the second silently replaces the first, and
+   * every directory source but the last one scheduled stops running.
+   */
+  schedule(name: string, cron: string, data?: unknown, key?: string): Promise<void>;
+  unschedule(name: string, key?: string): Promise<void>;
 }
 
 /**
@@ -69,9 +77,16 @@ export function createScheduler(databaseUrl: string): Scheduler {
       return boss.send(name, data as object);
     },
 
-    async schedule(name: string, cron: string, data: unknown = {}) {
+    async schedule(name: string, cron: string, data: unknown = {}, key = '') {
       assertRegistered(name);
-      await boss.schedule(name, cron, data as object);
+      await boss.schedule(name, cron, data as object, { key });
+    },
+
+    async unschedule(name: string, key = '') {
+      // Deliberately not gated on `assertRegistered`: removing a schedule has
+      // to work for a queue this process never registered a handler for, or a
+      // source deleted before the handler is wired up keeps firing forever.
+      await boss.unschedule(name, key);
     },
   };
 }

@@ -20,7 +20,7 @@ implemented.
 | Module | Status | Contents |
 |---|---|---|
 | **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications, web console |
-| **Directory Sync** | built | LDAP/OpenLDAP connector, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, source and run administration screens |
+| **Directory Sync** | built | LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, source lifecycle over the API and a run review screen in the console |
 | **Access** | planned | SAML 2.0 IdP, OpenID Connect provider, upstream federation, application catalog, MFA, authentication policies, self-service password reset |
 | **Provision** | planned | Source systems, business rules, evaluation and enforcement, target systems, entitlements |
 | **Automate** | planned | Product catalog, self-service requests, approval workflows, delegated forms |
@@ -124,12 +124,27 @@ which the same page flags. The mode and the scheme have to agree: an
 `ldaps://` URL with any other mode is refused rather than quietly
 reinterpreted.
 
-A source is created with `POST /api/admin/sources`, with its attribute
-mappings set through `PUT /api/admin/sources/:id/mappings`; the console's
-**Directory sources** page lists sources and their last run today, and
-creating one from the console is a later piece of work. Either way, the bind
-password goes into the secrets vault, not into the source's stored `config`
-— the API only ever accepts it, never returns it.
+A source is created with `POST /api/admin/sources`, edited with `PATCH
+/api/admin/sources/:id`, and removed with `DELETE /api/admin/sources/:id`;
+its attribute mappings are set through `PUT /api/admin/sources/:id/mappings`.
+The console's **Directory sources** page lists sources and their last run
+today, and editing one from the console is a later piece of work. Either way,
+the bind password goes into the secrets vault, not into the source's stored
+`config` — the API only ever accepts it, never returns it, and a `PATCH`
+carrying a new one replaces the vault entry rather than adding beside it.
+
+A `PATCH` mentioning a schedule takes effect immediately, not at the next
+restart; so does a create, and so does a delete. Each source has a schedule of
+its own on the shared job queue, so rescheduling one leaves the rest alone.
+
+**Deleting a source deactivates every account and group it owned**, gives them
+a status reason naming the source, and detaches them — it never deletes a
+directory object, in keeping with the rest of this subsystem. Because that
+revokes real access it is refused with a 409 and the counts unless the request
+says `?confirm=true`, the same shape as the run guard. A foreign key from
+`User`, `Group` and `OrgUnit` to the source makes that the only way a source
+can go: the database refuses to leave a row pointing at a source that no
+longer exists.
 
 A run always previews before it applies. `POST /api/admin/sources/:id/run`
 reads the directory, correlates it against what Syntra already holds, and

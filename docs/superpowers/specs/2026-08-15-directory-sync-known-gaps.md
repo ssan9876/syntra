@@ -4,30 +4,19 @@ What the approved spec promises that the branch does not yet deliver. Recorded
 deliberately rather than absorbed silently, so the gap is a decision rather than a
 surprise. Each item names the spec section that binds it.
 
-## A conflicting user makes a clean run report as half-broken
+## ~~A conflicting user makes a clean run report as half-broken~~ — fixed
 
-The highest-priority item on this page, because it is half of a fix that was made.
+`computeDiff` now builds a `usableMembers` set from user correlations that are
+`matched` or `new`, alongside the `usableGroups` set that already existed, and an
+anchor outside it is **kept if Syntra already holds the membership and skipped if
+not** — the same rule the unmappable-member case uses.
 
-A source user that correlates to a locally managed account is a conflict, so it is
-never created with that source anchor. An `add_member` referencing it then fails its
-user lookup, and the run ends `partially_applied` even though everything appliable
-applied cleanly. This was fixed for conflicting *groups* and not for conflicting
-*users* — the brief that drove the fix diagnosed only the group side.
-
-Pre-existing, not a regression, and it fails safe: nothing wrong is written, the run
-merely reports worse than it performed. Reproduced against the current branch with a
-locally managed `jdoe` and an LDAP `jdoe` in a group.
-
-The remedy, from the reviewer who found it: mirror the unmappable-member handling in
-`run-service.ts` — build a `usableMembers` set from user correlations that are
-`matched` or `new`, and for an anchor outside it, keep the membership if Syntra
-already holds it and skip it otherwise. **A plain `continue` is wrong**: it turns the
-conflict into a spurious `remove_member`, which revokes real access. That hazard is
-why this was left for a reviewed change rather than applied unreviewed at the end of
-a long session.
-
-Not covered by existing tests — the "never applies a conflict" test applies the run
-but asserts only on the local user, never on the run's status.
+Keeping it is the load-bearing half. A plain `continue` drops the anchor from the
+desired membership, and desired is differenced against what Syntra holds, so the
+omission reads as `remove_member` and revokes real access over a name collision. The
+"keeps a membership Syntra already holds when the member turns into a conflict" test
+fails against exactly that mistake; the "never applies a conflict" test now asserts
+on the run's status as well as on the local account.
 
 ## The administration surface is roughly a third built (spec section 11)
 
@@ -54,29 +43,44 @@ Two spec success criteria are unreachable from the UI as a result:
   `skipChange` works; neither has a control.
 
 The README is honest about this. Its module table row claiming "source and run
-administration screens" overstates it and should be softened.
+administration screens" overstated it and now says what is actually there: source
+lifecycle over the API, a run review screen in the console.
 
-## Transport security is weaker than promised (spec section 8)
+## ~~Transport security is weaker than promised~~ (spec section 8) — fixed
 
-Section 8 says "Transport — LDAPS or StartTLS" and section 5 lists a TLS mode in the
-source config. Neither exists. `ldapConfigSchema` has no TLS field and the connector
-derives TLS solely from an `ldaps://` URL prefix. There is no `startTLS()` call
-anywhere on the branch. An `ldap://` source binds in plaintext, bind password on the
-wire, with no way to configure otherwise.
+`ldapConfigSchema` carries a `tlsMode` of `plain`, `starttls` or `ldaps`, and the
+connector calls `startTLS()` **before** the bind, with a test on that ordering for
+both `test()` and `read()`. Certificate verification stays on by default and the
+sources page names both the transport and a source with verification turned off.
 
-This is the item I would fix first of everything on this page.
+Left out, the mode is derived from the URL scheme, so a source saved before the field
+keeps the transport it had. A mode contradicting the scheme is refused rather than
+reconciled. The dev OpenLDAP container needed `LDAP_TLS_VERIFY_CLIENT: try` before it
+would serve StartTLS to a client with no certificate of its own; 636 is mapped too, so
+LDAPS is tested against the real server as well.
 
-## A source is write-once (spec section 5)
+Still open on this axis: the interface labels the settings but cannot yet *edit* them,
+because there is no source editor — see the administration-surface item above.
 
-There is no update or delete on `/sources`. Schedule, `enabled`, `autoApply`,
-`deactivationThresholdPercent` and the bind password are all fixed at creation. The
-plan's file structure says "source CRUD"; only C and R were built.
+## ~~A source is write-once~~ (spec section 5) — fixed
 
-Related: `scheduleAllSyncSources` runs once at API boot, and the create route does not
-touch the scheduler — so **a source created with a cron expression is not scheduled
-until the process restarts.** Also `User.sourceId` has no foreign key to
-`DirectorySource`, so a source removed by any means would strand its users permanently
-unsynced.
+`PATCH /sources/:id` and `DELETE /sources/:id` exist, with an audit event in the same
+transaction as the mutation. Every field is optional and only what was sent is
+written; `config` is replaced whole, since it is validated as a whole. A new bind
+password replaces the vault entry the source already names.
+
+Create, update and delete each reconcile the scheduler immediately, so a source with a
+cron expression no longer waits for a restart. Each source has a schedule *key* of its
+own — pg-boss keys its schedule table on `(queue, key)` with `key` defaulting to `''`,
+so before this every source on the `sync.run` queue wrote the same row and only the
+last one scheduled ever ran. That was a second, unrecorded bug in the same area.
+
+`User`, `Group` and `OrgUnit` now have a real foreign key to `DirectorySource`, `ON
+DELETE RESTRICT`. Deleting a source deactivates and detaches what it owned, in one
+transaction, and is refused with a 409 and the counts unless the caller confirms —
+deactivating rather than orphaning, because an account no directory keeps current is
+a leaver waiting to happen, and because this subsystem deletes no directory object
+anywhere else.
 
 ## Reads accumulate rather than stream (spec section 8)
 

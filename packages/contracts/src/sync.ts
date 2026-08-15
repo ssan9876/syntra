@@ -9,6 +9,42 @@ export const createSourceRequest = z.object({
   deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
 });
 
+/**
+ * Every field optional, and only what was sent is written: changing a
+ * schedule must not mean resending the whole connection configuration.
+ *
+ * `schedule` is nullable as well as optional, and the two mean different
+ * things — absent leaves the cron expression alone, `null` clears it and
+ * makes the source manual-only. `bindPassword` is write-only here as it is
+ * on create; the API accepts it and never returns it.
+ */
+export const updateSourceRequest = z
+  .object({
+    name: z.string().min(1).max(256).optional(),
+    config: z.record(z.unknown()).optional(),
+    bindPassword: z.string().min(1).max(1024).optional(),
+    schedule: z.string().max(128).nullable().optional(),
+    autoApply: z.boolean().optional(),
+    deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .refine((body) => Object.keys(body).length > 0, {
+    message: 'nothing to update',
+  });
+
+/**
+ * Deleting a source deactivates every account and group it owns. That
+ * revokes real access, so it is refused unless the caller says so — the same
+ * shape as the run guard, which will not apply an outsized deactivation
+ * without confirmation either.
+ */
+export const deleteSourceQuery = z.object({
+  confirm: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
+});
+
 export const mappingRule = z.object({
   objectType: z.enum(['user', 'group', 'orgUnit']),
   sourceAttribute: z.string().min(1).max(128),

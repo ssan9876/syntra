@@ -97,11 +97,18 @@ async function removeLdapFixture(): Promise<void> {
 /**
  * Removes the rows this suite's run created.
  *
- * Direct SQL because there is no delete endpoint for a directory source, and
- * there is deliberately not going to be one in this slice. It connects as
+ * Direct SQL rather than `DELETE /sources/:id`, even though that endpoint now
+ * exists: the endpoint deactivates and detaches the accounts a source owned
+ * rather than removing them, which is right for an administrator and wrong
+ * for a fixture that has to leave the database as it found it. It connects as
  * `syntra_app` like the application does -- never as a superuser -- so it
  * binds the tenant first and row-level security applies to every statement
  * exactly as it would in a request.
+ *
+ * Order matters. `User`, `Group` and `OrgUnit` reference `DirectorySource`
+ * with ON DELETE RESTRICT, so the rows this source owns have to be gone
+ * before the source can be, and anything else still pointing at it has to be
+ * detached first.
  *
  * `AuditEvent` is untouched on purpose: the log is append-only, and a test
  * that deleted from it would be rehearsing the attack the hash chain exists
@@ -122,19 +129,6 @@ async function removeDatabaseFixture(): Promise<void> {
       tenantId,
     ]);
 
-    const sources = await client.query<{ id: string }>(
-      'DELETE FROM "DirectorySource" WHERE name = $1 RETURNING id',
-      [SOURCE_NAME],
-    );
-    // AttributeMapping, SyncRun and SyncChange all cascade from the source.
-    // The bind password does not: it lives in the vault under a name derived
-    // from the source id.
-    for (const source of sources.rows) {
-      await client.query('DELETE FROM "Secret" WHERE name = $1', [
-        `source.${source.id}.bindPassword`,
-      ]);
-    }
-
     const logins = [NURSE_UID, CLERK_UID];
     await client.query(
       'DELETE FROM "GroupMembership" WHERE "userId" IN (SELECT id FROM "User" WHERE login = ANY($1))',
@@ -142,6 +136,33 @@ async function removeDatabaseFixture(): Promise<void> {
     );
     await client.query('DELETE FROM "User" WHERE login = ANY($1)', [logins]);
     await client.query('DELETE FROM "Group" WHERE name = $1', [GROUP_CN]);
+
+    const sources = await client.query<{ id: string }>(
+      'SELECT id FROM "DirectorySource" WHERE name = $1',
+      [SOURCE_NAME],
+    );
+
+    for (const source of sources.rows) {
+      // Anything the run created and this fixture does not name by hand -- an
+      // organizational unit, an account a previous run left behind. Detached
+      // rather than deleted, since deleting an org unit would take scoped role
+      // assignments with it.
+      for (const table of ['User', 'Group', 'OrgUnit']) {
+        await client.query(
+          `UPDATE "${table}" SET "sourceId" = NULL, "sourceAnchor" = NULL WHERE "sourceId" = $1`,
+          [source.id],
+        );
+      }
+      // AttributeMapping, SyncRun and SyncChange all cascade from the source.
+      // The bind password does not: it lives in the vault under a name derived
+      // from the source id.
+      await client.query('DELETE FROM "DirectorySource" WHERE id = $1', [
+        source.id,
+      ]);
+      await client.query('DELETE FROM "Secret" WHERE name = $1', [
+        `source.${source.id}.bindPassword`,
+      ]);
+    }
   } finally {
     await client.end();
   }

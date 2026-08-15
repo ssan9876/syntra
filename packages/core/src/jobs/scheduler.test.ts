@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { prisma } from '@syntra/db';
 import { createScheduler, type Scheduler } from './scheduler.js';
 
 let scheduler: Scheduler;
@@ -81,4 +82,47 @@ describe('scheduler', () => {
   it('is safe to stop without ever starting', async () => {
     await expect(scheduler.stop()).resolves.toBeUndefined();
   });
+
+  it('keeps one schedule per key on a shared queue, and removes only the key it is asked to', async () => {
+    // Directory sources all share the `sync.run` queue, and pg-boss keys its
+    // schedule table on (name, key) with key defaulting to ''. Without a key
+    // per source the second schedule silently overwrites the first, and only
+    // the last source scheduled ever runs. That is why `schedule()` takes a
+    // key at all, so this asserts it against the real table rather than a
+    // stub.
+    const queue = 'test.keyed';
+    const schedules = () =>
+      prisma.$queryRaw<{ key: string; cron: string }[]>`
+        SELECT key, cron FROM pgboss.schedule WHERE name = ${queue} ORDER BY key
+      `;
+
+    scheduler.register(queue, async () => {});
+    await scheduler.start();
+
+    try {
+      await scheduler.schedule(queue, '0 1 * * *', { n: 1 }, 'source-a');
+      await scheduler.schedule(queue, '0 2 * * *', { n: 2 }, 'source-b');
+
+      expect(await schedules()).toEqual([
+        { key: 'source-a', cron: '0 1 * * *' },
+        { key: 'source-b', cron: '0 2 * * *' },
+      ]);
+
+      // Rescheduling one leaves the other alone, and replaces rather than
+      // duplicates: this is the path an edited source takes.
+      await scheduler.schedule(queue, '0 3 * * *', { n: 1 }, 'source-a');
+      expect(await schedules()).toEqual([
+        { key: 'source-a', cron: '0 3 * * *' },
+        { key: 'source-b', cron: '0 2 * * *' },
+      ]);
+
+      await scheduler.unschedule(queue, 'source-a');
+      expect((await schedules()).map((r) => r.key)).toEqual(['source-b']);
+    } finally {
+      // pg-boss keeps its schema outside `public`, so resetDatabase() does not
+      // truncate any of this.
+      await scheduler.unschedule(queue, 'source-a');
+      await scheduler.unschedule(queue, 'source-b');
+    }
+  }, 60_000);
 });

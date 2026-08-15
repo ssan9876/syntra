@@ -4,11 +4,14 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { DEFAULT_MAPPINGS } from './defaults.js';
 import {
+  SourceOwnsObjectsError,
   createSource,
+  deleteSource,
   listSources,
   mappingsFor,
   setMappings,
   sourceWithPassword,
+  updateSource,
 } from './source-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 3));
@@ -208,6 +211,110 @@ describe('mappings', () => {
         setMappings(tx, source.id, DEFAULT_MAPPINGS.activeDirectory),
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('updateSource', () => {
+  it('reports a source that does not exist rather than throwing', async () => {
+    const missing = await withTenant(tenantId, (tx) =>
+      updateSource(tx, provider, '00000000-0000-0000-0000-000000000000', {
+        autoApply: true,
+      }),
+    );
+    expect(missing).toBeNull();
+  });
+
+  it('replaces the config whole rather than merging a fragment over it', async () => {
+    // A merge would let a half-configuration through with the schema's checks
+    // having passed on the fragment alone.
+    const source = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, input),
+    );
+
+    await expect(
+      withTenant(tenantId, (tx) =>
+        updateSource(tx, provider, source.id, {
+          config: { url: 'ldap://elsewhere:389' },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('keeps the same vault entry, so a rotation replaces the credential', async () => {
+    const source = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, input),
+    );
+
+    await withTenant(tenantId, (tx) =>
+      updateSource(tx, provider, source.id, { bindPassword: 'rotated' }),
+    );
+
+    const resolved = await withTenant(tenantId, (tx) =>
+      sourceWithPassword(tx, provider, source.id),
+    );
+    expect(resolved?.bindPassword).toBe('rotated');
+
+    const secrets = await withTenant(tenantId, (tx) => tx.secret.findMany());
+    expect(secrets).toHaveLength(1);
+  });
+});
+
+describe('deleteSource', () => {
+  /** A user this source owns, as a run would have created it. */
+  const withOwnedUser = async (sourceId: string) =>
+    withTenant(tenantId, (tx) =>
+      tx.user.create({
+        data: {
+          tenantId,
+          login: 'jdoe',
+          email: 'jo@acme.test',
+          displayName: 'Jo Doe',
+          sourceId,
+          sourceAnchor: 'anchor-1',
+        },
+      }),
+    );
+
+  it('refuses a source that still owns directory rows, and names how many', async () => {
+    const source = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, input),
+    );
+    await withOwnedUser(source.id);
+
+    await expect(
+      withTenant(tenantId, (tx) => deleteSource(tx, source.id)),
+    ).rejects.toBeInstanceOf(SourceOwnsObjectsError);
+
+    // And nothing was half-done on the way to refusing.
+    const still = await withTenant(tenantId, (tx) => tx.user.findMany());
+    expect(still[0]!.status).toBe('active');
+    expect(still[0]!.sourceId).toBe(source.id);
+  });
+
+  it('deactivates and detaches what it owned, and takes the credential with it', async () => {
+    const source = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, input),
+    );
+    await withOwnedUser(source.id);
+
+    const released = await withTenant(tenantId, (tx) =>
+      deleteSource(tx, source.id, { confirm: true }),
+    );
+
+    expect(released).toEqual({ users: 1, groups: 0, orgUnits: 0 });
+    const user = await withTenant(tenantId, (tx) => tx.user.findFirstOrThrow());
+    expect(user.status).toBe('inactive');
+    expect(user.sourceId).toBeNull();
+    expect(user.sourceAnchor).toBeNull();
+    // A credential nothing can reach is a credential nobody is watching.
+    expect(await withTenant(tenantId, (tx) => tx.secret.count())).toBe(0);
+  });
+
+  it('reports a source that does not exist rather than throwing', async () => {
+    const missing = await withTenant(tenantId, (tx) =>
+      deleteSource(tx, '00000000-0000-0000-0000-000000000000'),
+    );
+    expect(missing).toBeNull();
   });
 });
 
