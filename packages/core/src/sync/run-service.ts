@@ -146,7 +146,12 @@ export async function previewRun(
         data: {
           status: computed.verdict.blocked ? 'blocked' : 'previewed',
           blockedReason: computed.verdict.blocked ? computed.verdict.reason : null,
-          requiresConfirmation: computed.verdict.blocked,
+          // Only the threshold refusal is confirmable. A run that read nothing
+          // is refused outright, so it is written `false` rather than left to
+          // read as "an administrator could wave this through".
+          requiresConfirmation: computed.verdict.blocked
+            ? computed.verdict.requiresConfirmation
+            : false,
           recordsRead: records.length,
           unresolvedMembers: computed.unresolvedMembers,
           mappingFailures: computed.mappingFailures,
@@ -285,19 +290,25 @@ function computeDiff(input: DiffInput) {
   changes.push(...diffMemberships(desired, input.currentMemberships));
 
   // Derived from the same snapshot the diff was computed against rather than
-  // from a separate count query: the numerator and the denominator have to
+  // from separate count queries: the numerator and the denominator have to
   // describe one moment for the share between them to mean anything.
-  const activeUsersFromSource = input.existing.objects.filter(
-    (e) =>
-      e.objectType === 'user' &&
-      e.sourceId === input.sourceId &&
-      e.status === 'active',
-  ).length;
+  const activeFromSource = (type: ObjectType) =>
+    input.existing.objects.filter(
+      (e) =>
+        e.objectType === type &&
+        e.sourceId === input.sourceId &&
+        e.status === 'active',
+    ).length;
 
   const verdict = evaluateGuard({
     changes,
     recordsRead: input.records.length,
-    activeUsersFromSource,
+    activeUsersFromSource: activeFromSource('user'),
+    activeGroupsFromSource: activeFromSource('group'),
+    currentMembershipsFromSource: input.currentMemberships.reduce(
+      (n, m) => n + m.memberAnchors.length,
+      0,
+    ),
     thresholdPercent: input.thresholdPercent,
   });
 
