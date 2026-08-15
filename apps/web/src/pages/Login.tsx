@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { ApiError } from '../session/api.js';
 import { useSession } from '../session/SessionProvider.js';
 import { Wordmark } from '../components/Wordmark.js';
+import { routeFor, storeChallenge } from '../mfa/challenge-store.js';
 
 export function Login() {
   const { login } = useSession();
@@ -23,17 +24,21 @@ export function Login() {
       const outcome = await login(loginName, password);
       if (outcome.status === 'authenticated') {
         navigate('/', { replace: true });
-      } else if (outcome.status === 'challenge') {
-        // Task 14 replaces this with the step-up screen.
-        setError(
-          'This account requires a second factor. That screen is not built yet.',
-        );
-      } else {
-        // Task 14 replaces this with the forced-enrolment screen.
-        setError(
-          'This account must register a second factor. That screen is not built yet.',
-        );
+        return;
       }
+
+      const kind = outcome.status === 'enrol' ? 'enrol' : 'verify';
+      storeChallenge({
+        kind,
+        attemptToken: outcome.attemptToken,
+        expiresAt: outcome.expiresAt,
+        factors:
+          outcome.status === 'enrol'
+            ? outcome.enrollableFactors
+            : outcome.acceptableFactors,
+        returnTo: '/',
+      });
+      navigate(routeFor(kind), { replace: true });
     } catch (cause) {
       // The API answers a wrong password, an unknown login and a disabled
       // account identically. Inventing a distinction here would undo that.
@@ -96,6 +101,12 @@ export function Login() {
         </div>
 
         <p className="mt-6 text-center text-sm text-muted">
+          <Link to="/forgot-password" className="text-accent underline-offset-2 hover:underline">
+            Forgot your password?
+          </Link>
+        </p>
+
+        <p className="mt-2 text-center text-sm text-muted">
           Trouble signing in? Contact your IT administrator.
         </p>
       </div>

@@ -4,6 +4,7 @@ import { AppShell } from '../components/AppShell.js';
 import { useSession } from '../session/SessionProvider.js';
 import { ApiError, api } from '../session/api.js';
 import { useApiResource } from '../session/use-api-resource.js';
+import { routeFor, storeChallenge } from '../mfa/challenge-store.js';
 
 interface Tile {
   id: string;
@@ -83,25 +84,22 @@ export function Portal() {
         // noopener so the opened application cannot reach back into this tab.
         window.open(result.url, '_blank', 'noopener,noreferrer');
       } else {
-        // The step-up screen owns the attempt token from here. Task 14 replaces
-        // this inline write with storeChallenge() from
-        // apps/web/src/mfa/challenge-store.ts, which writes exactly this key
-        // and exactly these five fields.
         const kind = result.status === 'enrol' ? 'enrol' : 'verify';
-        sessionStorage.setItem(
-          'syntra.challenge',
-          JSON.stringify({
-            kind,
-            attemptToken: result.attemptToken,
-            expiresAt: result.expiresAt,
-            factors:
-              result.status === 'enrol'
-                ? result.enrollableFactors
-                : result.acceptableFactors,
-            returnTo: '/',
-          }),
-        );
-        window.location.assign(kind === 'enrol' ? '/enrol' : '/mfa');
+        storeChallenge({
+          kind,
+          attemptToken: result.attemptToken,
+          expiresAt: result.expiresAt,
+          factors:
+            result.status === 'enrol'
+              ? result.enrollableFactors
+              : result.acceptableFactors,
+          // Come back and finish what the user was doing. Landing them on an
+          // empty portal after a step-up they only entered because they
+          // clicked a tile leaves them to guess that they should click it
+          // again.
+          returnTo: `/?launch=${tile.id}`,
+        });
+        window.location.assign(routeFor(kind));
       }
     } catch (cause) {
       setLaunchError(

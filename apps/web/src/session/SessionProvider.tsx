@@ -48,6 +48,7 @@ interface SessionContextValue {
   login(login: string, password: string): Promise<AuthOutcome>;
   elevate(password: string): Promise<AuthOutcome>;
   logout(): Promise<void>;
+  refresh(): Promise<void>;
   can(permission: string): boolean;
 }
 
@@ -105,6 +106,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setSession(null);
   }, []);
 
+  const refresh = useCallback(async () => {
+    try {
+      setSession(await api<SessionResponse>('/api/auth/session'));
+    } catch {
+      setSession(null);
+    }
+  }, []);
+
   /**
    * Presentation only. The server decides every request independently; this
    * exists to avoid showing a control that would be refused, never to grant
@@ -116,8 +125,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ session, loading, login, elevate, logout, can }),
-    [session, loading, login, elevate, logout, can],
+    () => ({ session, loading, login, elevate, logout, refresh, can }),
+    [session, loading, login, elevate, logout, refresh, can],
   );
 
   return (

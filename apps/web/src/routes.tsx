@@ -4,6 +4,11 @@ import { useSession } from './session/SessionProvider.js';
 import { Login } from './pages/Login.js';
 import { Portal } from './pages/Portal.js';
 import { Elevate } from './pages/Elevate.js';
+import { MfaChallenge } from './pages/MfaChallenge.js';
+import { EnrolFactor } from './pages/EnrolFactor.js';
+import { Security } from './pages/Security.js';
+import { ForgotPassword } from './pages/ForgotPassword.js';
+import { ResetPassword } from './pages/ResetPassword.js';
 
 /**
  * The console is a separate chunk behind a guard, so a portal-only session
@@ -61,6 +66,23 @@ export function AppRoutes() {
         element={
           <RequireSession scope="portal">
             <Elevate />
+          </RequireSession>
+        }
+      />
+      <Route path="/mfa" element={<MfaChallenge />} />
+      {/*
+        Outside RequireSession on purpose. A user reaching /enrol has passed
+        primary authentication and holds no session — that is the whole point
+        of the screen.
+      */}
+      <Route path="/enrol" element={<EnrolFactor />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
+      <Route
+        path="/security"
+        element={
+          <RequireSession scope="portal">
+            <Security />
           </RequireSession>
         }
       />
