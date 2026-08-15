@@ -12,6 +12,11 @@ interface RunRow {
   recordsRead: number;
 }
 
+interface SourceRow {
+  id: string;
+  name: string;
+}
+
 type Tone = 'neutral' | 'active' | 'inactive' | 'warning' | 'danger' | 'primary';
 
 // `blocked` gets the danger tone so it is unmissable in a list — it is the
@@ -41,6 +46,15 @@ export function SyncRunsPage() {
   const { data, error, loading } = useApiResource<{ runs: RunRow[] }>(
     '/api/admin/sync-runs',
   );
+  // Fetched alongside the runs rather than joined server-side: `listRuns`
+  // does not embed the source, and a run row with no indication of which
+  // directory it came from is unreadable once more than one source exists.
+  const { data: sourcesData } = useApiResource<{ sources: SourceRow[] }>(
+    '/api/admin/sources',
+  );
+  const sourceNames = new Map(
+    (sourcesData?.sources ?? []).map((source) => [source.id, source.name]),
+  );
 
   return (
     <>
@@ -53,7 +67,7 @@ export function SyncRunsPage() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={6} cols={4} />}
+          {loading && <SkeletonRows rows={6} cols={5} />}
 
           {!loading && data?.runs.length === 0 && (
             <div className="p-6">
@@ -70,6 +84,9 @@ export function SyncRunsPage() {
                 <tr className="text-sm text-muted">
                   <th scope="col" className="px-4 py-2.5 font-medium">
                     Started
+                  </th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">
+                    Source
                   </th>
                   <th
                     scope="col"
@@ -95,6 +112,11 @@ export function SyncRunsPage() {
                       >
                         {when(run.startedAt)}
                       </Link>
+                    </td>
+                    <td className="px-4 py-2.5 text-muted">
+                      {/* A source that no longer exists still leaves its runs
+                          behind; showing the id is better than a blank cell. */}
+                      {sourceNames.get(run.sourceId) ?? run.sourceId}
                     </td>
                     <td className="px-4 py-2.5 text-muted tabular-nums max-sm:hidden">
                       {run.recordsRead}

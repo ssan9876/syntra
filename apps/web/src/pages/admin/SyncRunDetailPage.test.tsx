@@ -5,6 +5,7 @@ import { SyncRunDetailPage } from './SyncRunDetailPage.js';
 
 const run = (overrides: Record<string, unknown> = {}) => ({
   id: 'r1',
+  sourceId: 's1',
   status: 'previewed',
   startedAt: '2026-08-15T09:00:00.000Z',
   finishedAt: '2026-08-15T09:00:04.000Z',
@@ -51,11 +52,30 @@ const run = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const defaultSources = [{ id: 's1', name: 'Corporate LDAP' }];
+
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), {
     status: 200,
     headers: { 'content-type': 'application/json' },
   }) as never;
+
+// The page fetches the run and the source list separately (no server-side
+// join), so the mock has to route on the URL rather than answer every call
+// the same way.
+function mockFetch(overrides: {
+  run?: Record<string, unknown>;
+  sources?: { id: string; name: string }[];
+} = {}) {
+  const runBody = overrides.run ?? run();
+  const sources = overrides.sources ?? defaultSources;
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const url = String(input);
+    if (url.includes('/sync-runs/')) return Promise.resolve(json(runBody));
+    if (url.includes('/sources')) return Promise.resolve(json({ sources }));
+    return Promise.resolve(json({}));
+  });
+}
 
 const renderPage = () =>
   render(
@@ -70,7 +90,7 @@ beforeEach(() => vi.restoreAllMocks());
 
 describe('SyncRunDetailPage', () => {
   it('groups changes by type with counts', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(run()));
+    mockFetch();
     renderPage();
 
     expect(await screen.findByText(/create user/i)).toBeInTheDocument();
@@ -78,14 +98,14 @@ describe('SyncRunDetailPage', () => {
   });
 
   it('shows what a change would set', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(run()));
+    mockFetch();
     renderPage();
 
     expect(await screen.findByText(/nhaddad/)).toBeInTheDocument();
   });
 
   it('marks a conflict and explains it', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(run()));
+    mockFetch();
     renderPage();
 
     expect(
@@ -94,16 +114,14 @@ describe('SyncRunDetailPage', () => {
   });
 
   it('leads with why a run was blocked, and disables apply', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      json(
-        run({
-          status: 'blocked',
-          blockedReason:
-            'would deactivate 380 of 400 objects from this source (95.0%), above the 10% threshold',
-          requiresConfirmation: true,
-        }),
-      ),
-    );
+    mockFetch({
+      run: run({
+        status: 'blocked',
+        blockedReason:
+          'would deactivate 380 of 400 objects from this source (95.0%), above the 10% threshold',
+        requiresConfirmation: true,
+      }),
+    });
     renderPage();
 
     const alert = await screen.findByRole('alert');
@@ -113,18 +131,39 @@ describe('SyncRunDetailPage', () => {
   });
 
   it('reports unresolved members rather than hiding them', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      json(run({ unresolvedMembers: 3 })),
-    );
+    mockFetch({ run: run({ unresolvedMembers: 3 }) });
     renderPage();
 
     expect(await screen.findByText(/3 group members/i)).toBeInTheDocument();
   });
 
   it('says plainly when a run proposed nothing', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(run({ changes: [] })));
+    mockFetch({ run: run({ changes: [] }) });
     renderPage();
 
     expect(await screen.findByText(/already matches/i)).toBeInTheDocument();
+  });
+
+  it('names the source the run belongs to', async () => {
+    mockFetch();
+    renderPage();
+
+    expect(await screen.findByText(/corporate ldap/i)).toBeInTheDocument();
+  });
+
+  it('falls back to the raw source id when the source is missing', async () => {
+    mockFetch({ sources: [] });
+    renderPage();
+
+    expect(await screen.findByText(/s1/)).toBeInTheDocument();
+  });
+
+  it('links back to the sync runs list', async () => {
+    mockFetch();
+    renderPage();
+
+    expect(
+      await screen.findByRole('link', { name: /back to sync runs/i }),
+    ).toHaveAttribute('href', '/admin/sync-runs');
   });
 });

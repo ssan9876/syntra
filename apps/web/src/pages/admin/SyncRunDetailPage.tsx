@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
@@ -19,6 +19,7 @@ interface Change {
 
 interface RunDetail {
   id: string;
+  sourceId: string;
   status: string;
   startedAt: string;
   finishedAt: string | null;
@@ -28,6 +29,11 @@ interface RunDetail {
   error: string | null;
   unresolvedMembers: number;
   changes: Change[];
+}
+
+interface SourceRow {
+  id: string;
+  name: string;
 }
 
 const LABELS: Record<string, string> = {
@@ -55,6 +61,12 @@ export function SyncRunDetailPage() {
   const { id } = useParams();
   const { data, error, loading, reload } = useApiResource<RunDetail>(
     `/api/admin/sync-runs/${id}`,
+  );
+  // Fetched alongside the run rather than joined server-side: the source is
+  // exactly what an administrator needs to identify while staring at a
+  // blocked or conflicted run, and it costs no backend change to show it.
+  const { data: sourcesData } = useApiResource<{ sources: SourceRow[] }>(
+    '/api/admin/sources',
   );
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -84,6 +96,9 @@ export function SyncRunDetailPage() {
     );
   }
 
+  const sourceName =
+    sourcesData?.sources.find((source) => source.id === data.sourceId)
+      ?.name ?? data.sourceId;
   const blocked = data.status === 'blocked';
   const applied = data.status === 'applied' || data.status === 'partially_applied';
   const grouped = new Map<string, Change[]>();
@@ -98,7 +113,7 @@ export function SyncRunDetailPage() {
     <>
       <PageHeader
         title="Sync run"
-        description={`${data.recordsRead} records read, ${data.changes.length} proposed changes`}
+        description={`${sourceName} — ${data.recordsRead} records read, ${data.changes.length} proposed changes`}
         actions={
           <Button
             variant="primary"
@@ -200,6 +215,13 @@ export function SyncRunDetailPage() {
             </Panel>
           ))
         )}
+
+        <Link
+          to="/admin/sync-runs"
+          className="inline-block text-muted underline-offset-2 hover:text-ink hover:underline"
+        >
+          Back to sync runs
+        </Link>
       </div>
     </>
   );
