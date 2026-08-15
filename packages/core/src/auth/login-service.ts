@@ -1,4 +1,4 @@
-import type { TenantClient } from '@syntra/db';
+import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { isAdministrator } from '../rbac/rbac-service.js';
 import { hashPassword, verifyPassword } from './password.js';
@@ -33,41 +33,75 @@ const DUMMY_HASH_PROMISE = hashPassword(
  * outcome is audited from one place. The Access module extends this function
  * with policy evaluation and second factors; it does not add a parallel route,
  * because a second entry point is where a policy bypass would hide.
+ *
+ * It takes a tenantId rather than a caller's transaction, and opens one per
+ * phase, for the same reason `authorize()` does: Argon2id is deliberately
+ * expensive — tens of milliseconds by design, and far more on a loaded box —
+ * and Prisma's interactive transactions abort at 5000 ms. Hashing inside one
+ * turns a slow moment into a rolled-back transaction rather than a slow login,
+ * and it holds a connection from the pool for the whole of it on the hottest
+ * path there is. The dummy verification below costs exactly as much, so an
+ * unknown login would hold one just as long.
  */
 export async function authenticate(
-  tx: TenantClient,
+  tenantId: string,
   input: AuthenticateInput,
 ): Promise<AuthResult> {
-  const user = await tx.user.findFirst({ where: { login: input.login } });
+  // Phase 1 — read the user and their stored hash. A transaction, and a short
+  // one: two indexed reads and nothing else.
+  const found = await withTenant(tenantId, async (tx) => {
+    const user = await tx.user.findFirst({ where: { login: input.login } });
+    if (!user) return null;
+    const credential = await tx.passwordCredential.findUnique({
+      where: { userId: user.id },
+    });
+    return { user, hash: credential?.hash ?? null };
+  });
 
-  if (!user) {
-    await verifyPassword(await DUMMY_HASH_PROMISE, input.password);
-    await audit(tx, null, input, 'failure', 'invalid_credentials');
+  // Phase 2 — Argon2id, outside every transaction.
+  //
+  // An unknown login and a user with no credential both verify against the
+  // dummy hash, so all three paths cost the same. `verified` is deliberately
+  // not trusted on its own: a dummy verification that somehow returned true
+  // must not authenticate anybody, so the presence of a real stored hash is a
+  // separate condition rather than an assumption about what Argon2 returns.
+  const verified = await verifyPassword(
+    found?.hash ?? (await DUMMY_HASH_PROMISE),
+    input.password,
+  );
+  const passwordOk = Boolean(found?.hash) && verified;
+
+  // Phase 3 — record the outcome, and for a success read the administrator
+  // flag alongside it.
+  if (!found) {
+    await withTenant(tenantId, (tx) =>
+      audit(tx, null, input, 'failure', 'invalid_credentials'),
+    );
     return { ok: false, reason: 'invalid_credentials' };
   }
 
-  const credential = await tx.passwordCredential.findUnique({
-    where: { userId: user.id },
-  });
-  const passwordOk = credential
-    ? await verifyPassword(credential.hash, input.password)
-    : await verifyPassword(await DUMMY_HASH_PROMISE, input.password);
-
   if (!passwordOk) {
-    await audit(tx, user.id, input, 'failure', 'invalid_credentials');
+    await withTenant(tenantId, (tx) =>
+      audit(tx, found.user.id, input, 'failure', 'invalid_credentials'),
+    );
     return { ok: false, reason: 'invalid_credentials' };
   }
 
   // Checked after the password, so a disabled account cannot be probed
   // without also knowing its password.
-  if (user.status !== 'active') {
-    await audit(tx, user.id, input, 'failure', 'user_inactive');
+  if (found.user.status !== 'active') {
+    await withTenant(tenantId, (tx) =>
+      audit(tx, found.user.id, input, 'failure', 'user_inactive'),
+    );
     return { ok: false, reason: 'user_inactive' };
   }
 
-  const mayElevate = await isAdministrator(tx, user.id);
-  await audit(tx, user.id, input, 'success', null);
-  return { ok: true, userId: user.id, mayElevate };
+  const mayElevate = await withTenant(tenantId, async (tx) => {
+    const admin = await isAdministrator(tx, found.user.id);
+    await audit(tx, found.user.id, input, 'success', null);
+    return admin;
+  });
+  return { ok: true, userId: found.user.id, mayElevate };
 }
 
 async function audit(

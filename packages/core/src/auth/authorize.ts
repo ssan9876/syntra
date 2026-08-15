@@ -241,61 +241,11 @@ async function primary(
   now: Date,
 ): Promise<AuthorizeResult> {
   // Phase 1 — establish the principal. authenticate() audits its own outcome.
-  const identified = await withTenant(tenantId, async (tx) => {
-    if (request.principal.kind === 'password') {
-      const result = await authenticate(tx, {
-        login: request.principal.login,
-        password: request.principal.password,
-        sourceIp: request.sourceIp,
-      });
-      return result.ok
-        ? { ok: true as const, userId: result.userId }
-        : {
-            ok: false as const,
-            reason:
-              result.reason === 'user_inactive'
-                ? ('user_inactive' as const)
-                : ('invalid_credentials' as const),
-          };
-    }
-
-    const userId = request.principal.userId;
-    const user = await tx.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      await audit(tx, {
-        userId: null,
-        action: 'auth.login',
-        outcome: 'failure',
-        sourceIp: request.sourceIp,
-        payload: {
-          reason: 'invalid_credentials',
-          principal: request.principal.kind,
-        },
-      });
-      return { ok: false as const, reason: 'invalid_credentials' as const };
-    }
-    if (user.status !== 'active') {
-      await audit(tx, {
-        userId,
-        action: 'auth.login',
-        outcome: 'failure',
-        sourceIp: request.sourceIp,
-        payload: { reason: 'user_inactive', principal: request.principal.kind },
-      });
-      return { ok: false as const, reason: 'user_inactive' as const };
-    }
-    await audit(tx, {
-      userId,
-      action: 'auth.login',
-      outcome: 'success',
-      sourceIp: request.sourceIp,
-      payload:
-        request.principal.kind === 'external'
-          ? { principal: 'external', issuer: request.principal.issuer }
-          : { principal: 'session' },
-    });
-    return { ok: true as const, userId };
-  });
+  //
+  // Deliberately not inside a transaction. It hashes with Argon2id, which is
+  // expensive by design, and it opens its own transactions around that work
+  // for exactly the reason given in this function's docstring.
+  const identified = await identify(tenantId, request);
 
   if (!identified.ok) return { status: 'deny', reason: identified.reason };
 
@@ -308,11 +258,80 @@ async function primary(
     // A session principal brings whatever factor established it. Launching an
     // application is a fresh decision, but it is not a fresh sign-in, and the
     // factor the user already presented still counts.
-    satisfied:
-      request.principal.kind === 'session'
-        ? request.principal.satisfiedFactor
-        : null,
+    satisfied: identified.satisfied,
     now,
+  });
+}
+
+type Identified =
+  | { ok: true; userId: string; satisfied: FactorPresentationType | null }
+  | { ok: false; reason: 'invalid_credentials' | 'user_inactive' };
+
+async function identify(
+  tenantId: string,
+  request: Extract<AuthorizeRequest, { kind: 'primary' }>,
+): Promise<Identified> {
+  if (request.principal.kind === 'password') {
+    const result = await authenticate(tenantId, {
+      login: request.principal.login,
+      password: request.principal.password,
+      sourceIp: request.sourceIp,
+    });
+    return result.ok
+      ? { ok: true, userId: result.userId, satisfied: null }
+      : {
+          ok: false,
+          reason:
+            result.reason === 'user_inactive'
+              ? 'user_inactive'
+              : 'invalid_credentials',
+        };
+  }
+
+  const principal = request.principal;
+
+  return withTenant(tenantId, async (tx): Promise<Identified> => {
+    const userId = principal.userId;
+    const user = await tx.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      await audit(tx, {
+        userId: null,
+        action: 'auth.login',
+        outcome: 'failure',
+        sourceIp: request.sourceIp,
+        payload: {
+          reason: 'invalid_credentials',
+          principal: principal.kind,
+        },
+      });
+      return { ok: false, reason: 'invalid_credentials' };
+    }
+    if (user.status !== 'active') {
+      await audit(tx, {
+        userId,
+        action: 'auth.login',
+        outcome: 'failure',
+        sourceIp: request.sourceIp,
+        payload: { reason: 'user_inactive', principal: principal.kind },
+      });
+      return { ok: false, reason: 'user_inactive' };
+    }
+    await audit(tx, {
+      userId,
+      action: 'auth.login',
+      outcome: 'success',
+      sourceIp: request.sourceIp,
+      payload:
+        principal.kind === 'external'
+          ? { principal: 'external', issuer: principal.issuer }
+          : { principal: 'session' },
+    });
+    return {
+      ok: true,
+      userId,
+      satisfied:
+        principal.kind === 'session' ? principal.satisfiedFactor : null,
+    };
   });
 }
 
