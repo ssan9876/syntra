@@ -416,12 +416,9 @@ describe('authorize — the step-up round trip', () => {
     // the beginning of an identical challenge that never terminates.
     const relaunch = await authorize(tenantId, {
       kind: 'primary',
-      principal: {
-        kind: 'session',
-        userId,
-        sessionId: session!.sessionId,
-        satisfiedFactor: session!.satisfiedFactor as FactorPresentationType,
-      },
+      // No satisfiedFactor here: authorize() reads it off the Session row
+      // itself, so a caller cannot assert one it never presented.
+      principal: { kind: 'session', userId, sessionId: session!.sessionId },
       applicationId: null,
       sourceIp: '10.1.2.3',
       relyingParty: RP,
@@ -435,23 +432,85 @@ describe('authorize — the step-up round trip', () => {
     });
   });
 
-  it('re-challenges a session that was established with no factor at all', async () => {
-    await requireMfa();
-    const relaunch = await authorize(tenantId, {
+  /** A live session for this user, established with the given factor. */
+  const sessionFor = async (factor: string | null) => {
+    const { token } = await withTenant(tenantId, (tx) =>
+      createSession(tx, userId, 'portal', factor),
+    );
+    const session = await withTenant(tenantId, (tx) => resolveSession(tx, token));
+    return session!;
+  };
+
+  const relaunch = (sessionId: string) =>
+    authorize(tenantId, {
       kind: 'primary',
-      principal: {
-        kind: 'session',
-        userId,
-        sessionId: '00000000-0000-4000-8000-000000000000',
-        satisfiedFactor: null,
-      },
+      principal: { kind: 'session', userId, sessionId },
       applicationId: null,
       sourceIp: null,
       relyingParty: RP,
       scope: 'portal',
       now: NOW,
     });
-    expect(relaunch.status).toBe('challenge');
+
+  it('re-challenges a session that was established with no factor at all', async () => {
+    await requireMfa();
+    const session = await sessionFor(null);
+    expect((await relaunch(session.sessionId)).status).toBe('challenge');
+  });
+
+  it('takes the factor from the session row, not from the caller', async () => {
+    // The whole of the fix: the caller names a session, and what that session
+    // was established with is read here. A caller that could assert it would
+    // be asserting the one thing the rule exists to check.
+    await requireMfa();
+    const withFactor = await sessionFor('totp');
+    expect(await relaunch(withFactor.sessionId)).toMatchObject({
+      status: 'allow',
+      satisfiedFactor: 'totp',
+    });
+  });
+
+  it('refuses a session that has been revoked since the cookie was checked', async () => {
+    await requireMfa();
+    const session = await sessionFor('totp');
+    await withTenant(tenantId, (tx) =>
+      tx.session.update({
+        where: { id: session.sessionId },
+        data: { revokedAt: new Date() },
+      }),
+    );
+    expect(await relaunch(session.sessionId)).toEqual({
+      status: 'deny',
+      reason: 'invalid_credentials',
+    });
+  });
+
+  it('refuses a session belonging to somebody else', async () => {
+    await requireMfa();
+    const other = await withTenant(tenantId, async (tx) => {
+      const u = await createUser(tx, {
+        login: 'asmith',
+        email: 'a@acme.test',
+        displayName: 'A Smith',
+      });
+      return createSession(tx, u.id, 'portal', 'totp');
+    });
+    const theirs = await withTenant(tenantId, (tx) =>
+      resolveSession(tx, other.token),
+    );
+    expect(await relaunch(theirs!.sessionId)).toEqual({
+      status: 'deny',
+      reason: 'invalid_credentials',
+    });
+  });
+
+  it('counts a corrupt factor on the row as no factor at all', async () => {
+    // Only three values mean anything to the policy layer. Under require_mfa
+    // any non-null string would otherwise satisfy the rule, which would make a
+    // stray value a way straight past it.
+    await requireMfa();
+    const session = await sessionFor('nonsense');
+    expect((await relaunch(session.sessionId)).status).toBe('challenge');
   });
 
   it('refuses a wrong code and leaves the attempt usable for a retry', async () => {

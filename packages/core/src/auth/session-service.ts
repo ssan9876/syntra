@@ -99,6 +99,37 @@ export async function resolveSession(
   };
 }
 
+/**
+ * Reads a live session by its id, without touching it.
+ *
+ * For a caller that already holds a session and is re-entering authorize() —
+ * launching an application. The liveness rules are resolveSession's, because
+ * two answers to "is this session still good" is one answer too many. It does
+ * not update `lastSeenAt`: the request that carried the cookie has already
+ * done that, and a second write here would extend the idle window for free
+ * every time a decision is re-evaluated.
+ */
+export async function readSession(
+  tx: TenantClient,
+  sessionId: string,
+): Promise<ResolvedSession | null> {
+  const row = await tx.session.findUnique({ where: { id: sessionId } });
+  if (!row || row.revokedAt) return null;
+
+  const now = Date.now();
+  if (row.absoluteExpiresAt.getTime() <= now) return null;
+
+  const scope = row.scope as SessionScope;
+  if (now - row.lastSeenAt.getTime() > IDLE_TIMEOUT_MS[scope]) return null;
+
+  return {
+    sessionId: row.id,
+    userId: row.userId,
+    scope,
+    satisfiedFactor: row.satisfiedFactor,
+  };
+}
+
 export async function revokeSession(
   tx: TenantClient,
   token: string,

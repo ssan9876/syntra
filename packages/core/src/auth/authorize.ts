@@ -16,7 +16,7 @@ import {
   type ResolvedAttempt,
 } from './attempt-service.js';
 import { authenticate } from './login-service.js';
-import type { SessionScope } from './session-service.js';
+import { readSession, type SessionScope } from './session-service.js';
 import {
   enrolledFactorTypes,
   enrollableFactorTypes,
@@ -31,17 +31,16 @@ export type Principal =
   /**
    * An existing Syntra session re-entering — used when launching an app.
    *
-   * `satisfiedFactor` is what that session was established with, read off the
-   * Session row. Without it every launch of an application covered by a
-   * `require_mfa` rule re-issues the same challenge the user just answered,
-   * and the application becomes permanently unreachable.
+   * The factor that established the session is read off the Session row here,
+   * not supplied by the caller. Without it every launch of an application
+   * covered by a `require_mfa` rule re-issues the same challenge the user just
+   * answered, and the application becomes permanently unreachable — and with
+   * it as a caller-supplied field, any caller could claim to have presented
+   * one. The session's liveness is re-checked at the same time, so a session
+   * revoked between the cookie check and this decision does not launch
+   * anything.
    */
-  | {
-      kind: 'session';
-      userId: string;
-      sessionId: string;
-      satisfiedFactor: FactorPresentationType | null;
-    }
+  | { kind: 'session'; userId: string; sessionId: string }
   /**
    * Primary authentication happened somewhere else. Access II's upstream
    * federation adapter constructs this after the upstream provider has
@@ -316,6 +315,26 @@ async function identify(
       });
       return { ok: false, reason: 'user_inactive' };
     }
+    // A session principal brings whatever factor established it — read from
+    // the row, never from the caller. Launching an application is a fresh
+    // decision, but it is not a fresh sign-in, and the factor the user already
+    // presented still counts.
+    let satisfied: FactorPresentationType | null = null;
+    if (principal.kind === 'session') {
+      const session = await readSession(tx, principal.sessionId);
+      if (!session || session.userId !== userId) {
+        await audit(tx, {
+          userId,
+          action: 'auth.login',
+          outcome: 'failure',
+          sourceIp: request.sourceIp,
+          payload: { reason: 'session_not_live', principal: 'session' },
+        });
+        return { ok: false, reason: 'invalid_credentials' };
+      }
+      satisfied = asPresentedFactor(session.satisfiedFactor);
+    }
+
     await audit(tx, {
       userId,
       action: 'auth.login',
@@ -324,15 +343,22 @@ async function identify(
       payload:
         principal.kind === 'external'
           ? { principal: 'external', issuer: principal.issuer }
-          : { principal: 'session' },
+          : { principal: 'session', satisfiedFactor: satisfied },
     });
-    return {
-      ok: true,
-      userId,
-      satisfied:
-        principal.kind === 'session' ? principal.satisfiedFactor : null,
-    };
+    return { ok: true, userId, satisfied };
   });
+}
+
+/**
+ * The column is a string, and only three values mean anything to the policy
+ * layer. Anything else counts as no factor rather than as some factor: under a
+ * `require_mfa` rule any non-null value would otherwise satisfy the
+ * requirement, so a stray string would be a way past it.
+ */
+function asPresentedFactor(value: string | null): FactorPresentationType | null {
+  return value === 'totp' || value === 'webauthn' || value === 'recovery_code'
+    ? value
+    : null;
 }
 
 interface DecideInput {
