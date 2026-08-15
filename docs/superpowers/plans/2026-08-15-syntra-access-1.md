@@ -19,6 +19,10 @@ Everything in the Core and Directory Sync plans' Global Constraints still applie
 - **An `AuthAttempt` and the audit event that explains it commit in the same transaction.** Both the issuing of an attempt and its consumption pair with their audit event inside one `withTenant`, the way every admin mutation on the previous slice does. A crash must not be able to leave an attempt with no record of why it exists.
 - **Request-derived authentication context travels as an explicit field on `AuthorizeRequest`.** `sourceIp` and `relyingParty` are both request-derived and both required by the type; there is no ambient store, no `AsyncLocalStorage`, and no module-level mutable holding either. A background job that has no relying party fails to compile rather than failing confusingly at run time.
 - **Never put network or long-running I/O inside a Prisma interactive transaction.** `withTenant` is `prisma.$transaction(fn)` and the client in `packages/db/src/client.ts` is constructed with no `transactionOptions`, so Prisma's default 5000 ms timeout applies. WebAuthn verification, Argon2 hashing, QR encoding and every SMTP send happen **between** transactions, never inside one. This is why `authorize()` takes a `tenantId` and opens its own transaction per phase, exactly as `previewRun` and `applyRun` do in `packages/core/src/sync/run-service.ts`.
+- **`notify(tx, transport, …)` is deleted in Task 10, not called.** Its body reads the tenant row and then awaits `transport.send()`, so every call from inside `withTenant` puts an SMTP round trip inside a transaction — the exact Critical the previous slice shipped. It is replaced by `renderMessage(tenantName, …)`, which is pure, and `sendMessage(transport, message)`, which takes no transaction and therefore cannot be put inside one by accident. Read the tenant name in a transaction, render and send outside it.
+- **Session scope is carried, never inferred.** `AuthAttempt.scope` records what the issuer intended, and the session created at the end of a step-up reads it. Deriving scope from ambient request state — "a session cookie is present, so this must be an elevation" — hands an administrative session to any portal user who completes a step-up, because the web client sends `credentials: 'include'` on every call.
+- **The WebAuthn relying party comes from the tenant, never from the request.** `Tenant.primaryDomain` first, `PUBLIC_URL` as the fallback, and a request whose `Host` does not match is refused at the WebAuthn endpoints. `tenant-context.ts` resolves a tenant from the leftmost label of the `Host` header, so `acme.attacker.example` resolves tenant `acme`; taking the RP ID or the expected origin from that header lets a phisher choose what their own assertion is checked against, which is the entire property a security key exists to provide.
+- **An unevaluable condition fails closed on a `deny` rule and open on every other outcome.** A malformed CIDR, an absent source address or an unresolvable timezone means the condition cannot be decided. On `allow`, `require_mfa` and `require_factor` the rule does not match; on `deny` it does. A rule written to refuse people must not stop refusing them because one of its own fields is broken. The asymmetry is deliberate and is documented in `evaluate.ts` where the matcher lives.
 - **Never silently drop a record that failed to process.** Every rejected factor, expired attempt, replayed code and denied policy decision produces an audit event carrying a reason. A `catch {}` that returns `false` and records nothing is a plan violation.
 - **Every tenant-scoped table gets `ENABLE` + `FORCE ROW LEVEL SECURITY`** and a `tenant_isolation` policy using `NULLIF(current_setting('app.current_tenant', true), '')::uuid`. The GUC reverts to the empty string, not NULL, at transaction end; the `NULLIF` is not optional. Copy the `DO $$` block from `packages/db/prisma/migrations/20260815000500_auth/migration.sql`.
 - **Every database access runs inside `withTenant`, including test fixtures.** The app connects as `syntra_app`, which is NOSUPERUSER NOBYPASSRLS deliberately, so a bare `prisma.*.create` on a tenant-scoped table is rejected by the policy's `WITH CHECK`. The only exceptions are `prisma.tenant.*` (Tenant is deliberately outside RLS) and `asDatabaseSuperuser` in tamper tests.
@@ -45,18 +49,26 @@ packages/db/prisma/
                                            AuthAttempt, RefreshToken;
                                            Tenant.adminMfaRequired, passwordMinLength,
                                            selfEnrolmentEnabled;
-                                           User.passwordSource, User.passwordSourceHint
+                                           User.passwordSource, User.passwordSourceHint;
+                                           Session.satisfiedFactor;
+                                           AuthAttempt.scope
   migrations/20260816000000_access_1/migration.sql
 
 packages/core/src/policy/
   types.ts               PolicyRule, PolicyFallback, AuthContext, ContractFacts,
                          PolicyOutcome, FactorType, PolicyDecision
-  ip-match.ts            matchesIpRanges              (pure)
-  time-window.ts         matchesTimeWindow, isValidTimeZone  (pure)
+  ip-match.ts            evaluateIpRanges, isIpRangeUsable   (pure)
+  time-window.ts         evaluateTimeWindow, isValidTimeZone  (pure)
   evaluate.ts            evaluatePolicy, ruleMatches  (pure, no I/O, no ambient clock)
   policy-service.ts      AuthPolicy + AuthPolicyRule storage; loadPolicy
   context.ts             buildAuthContext — groups, active contracts, org unit
   impact.ts              previewRuleImpact — who a rule would force to enrol
+
+packages/core/src/notify/
+  notification-service.ts  MODIFIED — notify() split into renderMessage +
+                           sendMessage, so a send cannot sit in a transaction
+  templates/index.ts       + password-reset, password-reset-upstream,
+                           factor-added
 
 packages/core/src/auth/
   authorize.ts           THE CHOKEPOINT
@@ -84,6 +96,7 @@ packages/contracts/src/
   reset.ts               password-reset schemas
 
 apps/api/src/routes/
+  relying-party.ts       tenantRelyingParty, assertWebAuthnUsable
   auth.ts                MODIFIED — login and elevate go through authorize()
   mfa.ts                 /api/auth/mfa/*  enrolment, listing, step-up verify
   enrol.ts               /api/auth/enrol/* enrolment under a forced-enrolment
@@ -103,9 +116,9 @@ apps/web/src/pages/
   Security.tsx           self-service MFA enrolment
   ForgotPassword.tsx     request a reset
   ResetPassword.tsx      complete a reset
-  admin/ApplicationsPage.tsx
-  admin/ApplicationDetailPage.tsx
-  admin/PoliciesPage.tsx
+  admin/ApplicationsPage.tsx    the catalog
+  admin/ApplicationDetailPage.tsx  one application and its assignments
+  admin/PoliciesPage.tsx        ordered rules, with the impact preview
 apps/web/src/routes.tsx  MODIFIED — the new routes
 
 e2e/access-mfa.spec.ts   the whole slice through a browser
@@ -124,9 +137,19 @@ e2e/access-mfa.spec.ts   the whole slice through a browser
 
 **Interfaces:**
 - Consumes: `withTenant`, `prisma`, `TenantClient` from `@syntra/db`; `resetDatabase` from `@syntra/db/src/test-support.js`.
-- Produces: every Prisma model the rest of the plan reads and writes — `AuthPolicy`, `AuthPolicyRule`, `Application`, `AppAssignment`, `TotpCredential`, `WebAuthnCredential`, `WebAuthnChallenge`, `RecoveryCode`, `PasswordResetToken`, `AuthAttempt`, `RefreshToken` — plus `Tenant.adminMfaRequired`, `Tenant.passwordMinLength`, `Tenant.selfEnrolmentEnabled`, `User.passwordSource`, `User.passwordSourceHint`.
+- Produces: every Prisma model the rest of the plan reads and writes — `AuthPolicy`, `AuthPolicyRule`, `Application`, `AppAssignment`, `TotpCredential`, `WebAuthnCredential`, `WebAuthnChallenge`, `RecoveryCode`, `PasswordResetToken`, `AuthAttempt`, `RefreshToken` — plus `Tenant.adminMfaRequired`, `Tenant.passwordMinLength`, `Tenant.selfEnrolmentEnabled`, `User.passwordSource`, `User.passwordSourceHint`, `Session.satisfiedFactor` and `AuthAttempt.scope`.
 
 - [ ] **Step 1: Add the tenant and user columns**
+
+In `packages/db/prisma/schema.prisma`, inside `model Session`, after `scope`:
+
+```prisma
+  /// Which second factor, if any, was presented to establish this session.
+  /// Read back when the session is used as a principal — launching an
+  /// application re-enters authorize(), and without this the requirement it
+  /// already satisfied would be demanded again on every launch, forever.
+  satisfiedFactor String?
+```
 
 In `packages/db/prisma/schema.prisma`, inside `model Tenant`, after `status`:
 
@@ -281,7 +304,11 @@ model WebAuthnCredential {
   /// base64url, as returned by @simplewebauthn/server.
   credentialId    String    @unique
   publicKey       Bytes
-  counter         Int       @default(0)
+  /// BigInt, not Int. WebAuthn signature counters are uint32 and Prisma's Int
+  /// is a signed int4, so a counter past 2^31 would fail to store on the one
+  /// write that matters for cloned-key detection. Converted with Number() at
+  /// the library boundary, which is exact well past uint32.
+  counter         BigInt    @default(0)
   transports      String[]  @default([])
   attestationType String    @default("none")
   /// The relying-party ID this credential was registered against. An
@@ -358,6 +385,13 @@ model AuthAttempt {
   /// a verification, or a user could be walked into enrolling one factor and
   /// signing in with another.
   purpose         String    @default("verify")
+  /// The scope of the session to issue when this attempt is satisfied.
+  ///
+  /// Recorded by whoever issued the attempt, because they are the only party
+  /// that knows. Inferring it at the end from "was a session cookie present"
+  /// gives an administrative session to any portal user who completes a
+  /// step-up, since the browser sends its cookie on every request.
+  scope           String    @default("portal")
   /// 'require_mfa' | 'require_factor'
   requiredOutcome String
   requiredFactor  String?
@@ -424,7 +458,31 @@ Expected output, in this order:
 
 If the new directory is not last, rename it before going further.
 
-- [ ] **Step 5: Append row-level security and the hand-written indexes**
+- [ ] **Step 5: Read the generated SQL before appending to it**
+
+```bash
+cd packages/db && grep -n -i 'DROP INDEX\|DROP CONSTRAINT\|DROP TABLE\|DROP COLUMN' \
+  prisma/migrations/20260816000000_access_1/migration.sql
+```
+
+Expected: no output.
+
+`migrate diff --from-migrations` compares the *schema file* against a shadow
+database built from the existing migrations, and `schema.prisma` cannot express
+a partial index. Every partial index the previous slices created by hand —
+`role_assignment_unscoped_unique`, `contract_one_primary_per_person`, and the
+sync ones — is therefore invisible to the schema file and looks to the diff
+like something the database has that the model does not. If any `DROP` appears,
+delete those lines from the generated file before going further: applying them
+would silently remove the constraint that stops one user holding the same
+unscoped role twice, and nothing in the test suite would notice, because
+`resetDatabase()` truncates rather than re-migrating.
+
+The same is true of the five partial indexes this migration adds in the next
+step. They live only in the hand-written tail, and a future `migrate diff` will
+propose dropping them for exactly the same reason.
+
+- [ ] **Step 6: Append row-level security and the hand-written indexes**
 
 Append to `packages/db/prisma/migrations/20260816000000_access_1/migration.sql`:
 
@@ -478,13 +536,13 @@ CREATE UNIQUE INDEX password_reset_token_one_live
   ON "PasswordResetToken" ("userId") WHERE "consumedAt" IS NULL;
 ```
 
-- [ ] **Step 6: Apply and regenerate**
+- [ ] **Step 7: Apply and regenerate**
 
 ```bash
 cd packages/db && pnpm prisma migrate deploy && pnpm prisma generate
 ```
 
-- [ ] **Step 7: Write the failing test**
+- [ ] **Step 8: Write the failing test**
 
 `packages/db/src/access-schema.test.ts`:
 
@@ -527,7 +585,7 @@ describe('access schema', () => {
     expect(t.selfEnrolmentEnabled).toBe(true);
   });
 
-  it('defaults an auth attempt to the verify purpose', async () => {
+  it('defaults an auth attempt to the verify purpose and the portal scope', async () => {
     const attempt = await withTenant(tenantId, (tx) =>
       tx.authAttempt.create({
         data: {
@@ -540,6 +598,56 @@ describe('access schema', () => {
       }),
     );
     expect(attempt.purpose).toBe('verify');
+    // Never inferred later from whether a cookie happened to be present.
+    expect(attempt.scope).toBe('portal');
+  });
+
+  it('records which factor established a session, if any', async () => {
+    const plain = await withTenant(tenantId, (tx) =>
+      tx.session.create({
+        data: {
+          tenantId,
+          userId,
+          tokenHash: 'a',
+          scope: 'portal',
+          absoluteExpiresAt: new Date(Date.now() + 60_000),
+        },
+      }),
+    );
+    expect(plain.satisfiedFactor).toBeNull();
+
+    const stepped = await withTenant(tenantId, (tx) =>
+      tx.session.create({
+        data: {
+          tenantId,
+          userId,
+          tokenHash: 'b',
+          scope: 'admin',
+          satisfiedFactor: 'totp',
+          absoluteExpiresAt: new Date(Date.now() + 60_000),
+        },
+      }),
+    );
+    expect(stepped.satisfiedFactor).toBe('totp');
+  });
+
+  it('stores a WebAuthn counter past the signed 32-bit limit', async () => {
+    // Counters are uint32. An Int column would fail on this write, and it is
+    // the write that cloned-key detection depends on.
+    const row = await withTenant(tenantId, (tx) =>
+      tx.webAuthnCredential.create({
+        data: {
+          tenantId,
+          userId,
+          credentialId: 'cred-1',
+          publicKey: new Uint8Array([1, 2, 3]),
+          counter: BigInt(4_000_000_000),
+          rpId: 'acme.syntra.test',
+          label: 'Key',
+        },
+      }),
+    );
+    expect(row.counter).toBe(BigInt(4_000_000_000));
   });
 
   it('defaults a user password to local', async () => {
@@ -695,17 +803,17 @@ describe('access schema', () => {
 });
 ```
 
-- [ ] **Step 8: Run the test**
+- [ ] **Step 9: Run the test**
 
 Run: `pnpm vitest run packages/db/src/access-schema.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 14 tests.
 
 If "one live WebAuthn challenge" does not reject, the partial unique index was
 not created. A plain `@@unique` would silently allow it, and every later
 challenge-consumption test would pass while the real property was absent. Do not
 proceed.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add -A
