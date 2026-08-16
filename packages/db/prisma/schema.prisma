@@ -633,9 +633,27 @@ model SamlConfig {
   /// Which mapped claim supplies the NameID. Null means the user's email.
   nameIdClaim             String?
   /// PEM certificates that may have signed an incoming AuthnRequest or
-  /// LogoutRequest. Empty means unsigned requests are accepted.
+  /// LogoutRequest. Empty means there is nothing to verify against, which is
+  /// a refusal rather than an acceptance once signing is required.
   spCertificates          String[]    @default([])
-  wantAuthnRequestsSigned Boolean     @default(false)
+  /// Whether an incoming AuthnRequest or LogoutRequest must carry a signature
+  /// from one of `spCertificates`.
+  ///
+  /// Defaults to TRUE (ruling A2-10). An unsigned AuthnRequest is something
+  /// anyone can send: hand a logged-in victim a link to `/saml/sso` carrying
+  /// one, and Syntra mints an assertion for that victim and auto-posts it to
+  /// the service provider's real assertion consumer service. Parking is bound
+  /// to the browser, but that path never parks anything the browser has to
+  /// come back for -- it completes inside the one request -- so the only
+  /// control left is the service provider validating `InResponseTo`, which
+  /// Syntra cannot rely on. Requiring a signature makes the attacker need the
+  /// service provider's signing key.
+  ///
+  /// False is a posture an administrator may still choose per application. It
+  /// is now something they chose rather than something they inherited, and a
+  /// service provider that does not sign fails loudly at the first sign-in
+  /// with a message naming this setting.
+  wantAuthnRequestsSigned Boolean     @default(true)
   encryptAssertions       Boolean     @default(false)
   /// PEM certificate whose public key wraps the assertion's data key.
   encryptionCertificate   String?
@@ -911,14 +929,17 @@ model SamlAuthnRequest {
   forceAuthn    Boolean   @default(false)
   /// SHA-256 of the high-entropy nonce written to the browser as a cookie
   /// when this request was parked, and required to match when it is
-  /// continued. `handle` alone is a bearer credential: anyone who can make an
-  /// unsigned AuthnRequest — which is anyone at all, since
-  /// `wantAuthnRequestsSigned` defaults to false — reads it out of the 302 and
-  /// can hand the continue URL to a logged-in victim, minting an assertion for
-  /// the victim and auto-posting it to the service provider's real ACS. This
-  /// column is what makes the handle usable only in the browser that created
-  /// it. The digest rather than the nonce, so a row leak is not a usable
-  /// credential.
+  /// continued. `handle` alone is a bearer credential: whoever can make Syntra
+  /// park a request reads it out of the 302 and can hand the continue URL to a
+  /// logged-in victim, minting an assertion for the victim and auto-posting it
+  /// to the service provider's real ACS. This column is what makes the handle
+  /// usable only in the browser that created it. The digest rather than the
+  /// nonce, so a row leak is not a usable credential.
+  ///
+  /// Independent of `SamlConfig.wantAuthnRequestsSigned`, which since ruling
+  /// A2-10 raises the bar on who can park a request in the first place. This
+  /// binding still holds for an application whose administrator turned that
+  /// requirement off.
   browserBinding String
   createdAt     DateTime  @default(now())
   expiresAt     DateTime

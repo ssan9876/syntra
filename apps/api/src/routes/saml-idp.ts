@@ -66,13 +66,17 @@ const DEFAULT_AUTHN_CONTEXT =
  * it.
  *
  * Without it, the handle in `/saml/continue?handle=...` is an unbound bearer
- * credential. `wantAuthnRequestsSigned` defaults to false, so anyone at all
- * can POST an unsigned AuthnRequest for a registered service provider's entity
- * ID, read the handle out of the 302 `Location`, and hand that URL to a
- * logged-in victim — which mints an assertion *for the victim* and auto-posts
- * it to the service provider's real ACS. That is login CSRF reached around
- * `allowIdpInitiated: false`, the very setting whose purpose is to suppress
- * it, and nothing else on the parked row identifies a browser.
+ * credential: whoever can make Syntra park a request can read the handle out
+ * of the 302 `Location` and hand that URL to a logged-in victim, which mints
+ * an assertion *for the victim* and auto-posts it to the service provider's
+ * real ACS. That is login CSRF reached around `allowIdpInitiated: false`, the
+ * very setting whose purpose is to suppress it, and nothing else on the parked
+ * row identifies a browser.
+ *
+ * `wantAuthnRequestsSigned` now defaults to true (ruling A2-10), which raises
+ * the bar to "whoever holds the service provider's signing key" — but this
+ * binding is the control that does not depend on that setting, and an
+ * application whose administrator deliberately turned it off still has it.
  *
  * The value is a nonce, not a session: the sign-in it eventually authenticates
  * need not exist yet, and forcing a session first would break the ordinary
@@ -231,6 +235,69 @@ function singleValued(
   );
 }
 
+/**
+ * The refusal an operator has to be able to act on without reading a Prisma
+ * model.
+ *
+ * `wantAuthnRequestsSigned` defaults to true (ruling A2-10), which means the
+ * commonest first-run failure for a newly registered service provider is a
+ * signature check the administrator did not know was on. The setting is named
+ * literally, the application is named by the name they see in the console, and
+ * both ways out are spelled out — register the certificate, or turn the
+ * requirement off for that application deliberately. They are also carried as
+ * RFC 9457 extension members so a client can branch on them rather than
+ * parsing the prose.
+ *
+ * The application's name is disclosed to a caller who has already presented a
+ * registered service provider entity ID, which is a value published in that
+ * service provider's own metadata. The exposure is a display name to somebody
+ * who already knows the integration exists; the alternative — an error that
+ * makes the administrator go and read `schema.prisma` — costs more.
+ */
+async function signedRequestRefusal(
+  request: FastifyRequest,
+  config: SamlConfigRecord,
+  refusal:
+    | { kind: 'no-certificate'; message: 'AuthnRequest' | 'LogoutRequest' }
+    | { kind: 'bad-signature'; message: 'AuthnRequest' | 'LogoutRequest' },
+): Promise<ProblemError> {
+  const application = await request.db((tx) =>
+    findApplication(tx, config.applicationId),
+  );
+  const name = application?.name ?? config.applicationId;
+  const shared =
+    `The application "${name}" requires signed ${refusal.message}s. That is the ` +
+    `default for a newly registered service provider: an unsigned request is ` +
+    `something anyone can send, and Syntra would issue an assertion for whoever ` +
+    `happened to be signed in.`;
+  const extensions = {
+    application: name,
+    applicationId: config.applicationId,
+    spEntityId: config.spEntityId,
+    setting: 'wantAuthnRequestsSigned',
+  };
+
+  return refusal.kind === 'no-certificate'
+    ? new ProblemError(
+        409,
+        'saml-no-certificate',
+        'This service provider requires signed requests but has no certificate registered',
+        `${shared} No signing certificate is registered for it, so there is nothing to ` +
+          `verify against. Register the service provider's signing certificate, or set ` +
+          `"wantAuthnRequestsSigned" to false for this application to accept unsigned requests.`,
+        extensions,
+      )
+    : new ProblemError(
+        400,
+        'saml-bad-signature',
+        `Invalid ${refusal.message === 'LogoutRequest' ? 'logout' : 'request'} signature`,
+        `${shared} This request carried no signature that any registered certificate ` +
+          `verifies. Have the service provider sign its requests, or set ` +
+          `"wantAuthnRequestsSigned" to false for this application to accept unsigned requests.`,
+        extensions,
+      );
+}
+
 /** Reads the tenant row every SAML route needs, once. */
 export async function samlContext(
   request: FastifyRequest,
@@ -366,14 +433,15 @@ export async function registerSamlIdpRoutes(
     let trusted = unverified;
     if (config.wantAuthnRequestsSigned) {
       if (config.spCertificates.length === 0) {
-        throw new ProblemError(
-          409, 'saml-no-certificate',
-          'This service provider requires signed requests but has no certificate registered',
-        );
+        throw await signedRequestRefusal(request, config, {
+          kind: 'no-certificate', message: 'AuthnRequest',
+        });
       }
       const verified = input.verify(config);
       if (verified === null) {
-        throw new ProblemError(400, 'saml-bad-signature', 'Invalid request signature');
+        throw await signedRequestRefusal(request, config, {
+          kind: 'bad-signature', message: 'AuthnRequest',
+        });
       }
       // Re-parsed from the VERIFIED bytes, never from the document that
       // arrived. That document may carry a second, forged AuthnRequest beside
@@ -773,12 +841,24 @@ export async function registerSamlIdpRoutes(
     // could do by other means anyway.
     let trusted = unverified;
     if (config.wantAuthnRequestsSigned) {
+      // The same explicit no-certificate refusal the sign-on path gives.
+      // Without it an empty trusted set falls through to the verifiers, which
+      // correctly return "no" — and the administrator reads "invalid logout
+      // signature" about a request that was never going to be checked against
+      // anything.
+      if (config.spCertificates.length === 0) {
+        throw await signedRequestRefusal(request, config, {
+          kind: 'no-certificate', message: 'LogoutRequest',
+        });
+      }
       if (binding === 'HTTP-POST') {
         const signed = readSamlInput('LogoutRequest', () =>
           verifyPostSignature(xml, config.spCertificates),
         );
         if (signed === null) {
-          throw new ProblemError(400, 'saml-bad-signature', 'Invalid logout signature');
+          throw await signedRequestRefusal(request, config, {
+            kind: 'bad-signature', message: 'LogoutRequest',
+          });
         }
         trusted = readSamlInput('LogoutRequest', () => parseLogoutRequest(signed));
       } else {
@@ -793,7 +873,9 @@ export async function registerSamlIdpRoutes(
             certificates: config.spCertificates,
           })
         ) {
-          throw new ProblemError(400, 'saml-bad-signature', 'Invalid logout signature');
+          throw await signedRequestRefusal(request, config, {
+            kind: 'bad-signature', message: 'LogoutRequest',
+          });
         }
       }
     }

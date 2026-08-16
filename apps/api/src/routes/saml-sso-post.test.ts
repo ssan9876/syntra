@@ -43,7 +43,15 @@ const spKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
 export const spPrivatePem = spKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 export const spPublicPem = spKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
-/** The default configuration, so each test overrides only what it means. */
+/**
+ * The default configuration, so each test overrides only what it means.
+ *
+ * `wantAuthnRequestsSigned: false` is stated deliberately and is no longer the
+ * product default (ruling A2-10). It stands for an application whose
+ * administrator turned the requirement off on purpose, which is exactly the
+ * posture the unsigned-request tests below are about. `samlConfigAsRegistered`
+ * is the one that says nothing and inherits.
+ */
 export const samlConfig = (over: Record<string, unknown> = {}) => ({
   spEntityId: SP,
   acsUrls: [ACS],
@@ -61,6 +69,19 @@ export const samlConfig = (over: Record<string, unknown> = {}) => ({
   assertionLifetimeMs: 300_000,
   ...over,
 });
+
+/**
+ * A configuration written the way a newly registered service provider's is:
+ * nothing said about signing, so the default applies.
+ *
+ * The field is stripped rather than set, because "the caller said false" and
+ * "the caller said nothing" are the two cases that have to be told apart, and
+ * a fixture that set it explicitly could not test the second.
+ */
+export const samlConfigAsRegistered = (over: Record<string, unknown> = {}) => {
+  const { wantAuthnRequestsSigned: _inherited, ...rest } = samlConfig(over);
+  return rest;
+};
 
 export const authnRequest = (over: { id?: string; acs?: string | null } = {}) =>
   `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${over.id ?? '_req1'}" Version="2.0" IssueInstant="${new Date().toISOString()}" Destination="http://${TEST_HOST}/saml/sso"${

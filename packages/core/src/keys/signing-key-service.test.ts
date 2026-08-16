@@ -15,13 +15,21 @@ import {
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 let tenantId: string;
 
-beforeEach(async () => {
-  await resetDatabase();
-  const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
-  tenantId = t.id;
-});
-
 describe('signing keys', () => {
+  // Scoped to this describe, not the module's top level. A top-level
+  // `beforeEach` becomes a root-level hook for whatever file imports this one,
+  // running before every test in *that* file and racing its database reset
+  // against this one's — the shape Task 8 warned about. Nothing imports this
+  // file today, which is the only reason it was latent, and "nothing imports
+  // it" is not a property a file keeps by accident: the SAML suites import
+  // each other for fixtures precisely because that is convenient, and this
+  // file has a tenant fixture and a `provider` somebody will want.
+  beforeEach(async () => {
+    await resetDatabase();
+    const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
+    tenantId = t.id;
+  });
+
   it('creates one on demand and returns the same one next time', async () => {
     const a = await ensureActiveKey(tenantId, provider, 'oidc');
     const b = await ensureActiveKey(tenantId, provider, 'oidc');

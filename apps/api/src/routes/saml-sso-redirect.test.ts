@@ -15,8 +15,8 @@ import {
 } from '@syntra/core';
 import { buildTestApp, TEST_HOST } from '../test-support.js';
 import {
-  ACS, SP, authnRequest, extractResponse, samlConfig, samlKeyOptions,
-  spPrivatePem, spPublicPem,
+  ACS, SP, authnRequest, extractResponse, samlConfig, samlConfigAsRegistered,
+  samlKeyOptions, spPrivatePem, spPublicPem,
 } from './saml-sso-post.test.js';
 
 const { SAML } = pkg;
@@ -236,6 +236,76 @@ describe('SAML single sign-on over HTTP-Redirect', () => {
     const res = await get(redirectUrl(authnRequest()));
     expect(res.statusCode).toBe(400);
     expect(res.body).not.toContain('SAMLResponse');
+  });
+
+  it('refuses an attacker-crafted unsigned request that a logged-in victim follows', async () => {
+    // The one-request path. There is no handle and no second visit, so the
+    // browser binding on the parked row cannot reach it: an attacker composes
+    // an AuthnRequest of their own, sends a logged-in victim a plain link to
+    // `/saml/sso?SAMLRequest=…`, and parking and completion both happen inside
+    // that single navigation — with the victim's own session and the victim's
+    // own binding cookie. Before ruling A2-10 this issued an assertion for the
+    // victim and auto-posted it to the service provider's real ACS, bounded
+    // only by whether that service provider validates `InResponseTo`.
+    //
+    // Registered the way a new service provider is: nothing said about
+    // signing.
+    await saveSamlConfig(
+      ctx.tenantId, applicationId, samlConfigAsRegistered(), samlKeyOptions,
+    );
+
+    const victim = await get(redirectUrl(authnRequest()));
+    expect(victim.statusCode).toBe(409);
+    expect(victim.body).not.toContain('SAMLResponse');
+
+    // And the refusal is actionable without reading a Prisma model.
+    const problem = JSON.parse(victim.body);
+    expect(problem.setting).toBe('wantAuthnRequestsSigned');
+    expect(problem.application).toBe('CRM');
+    expect(problem.detail).toContain('wantAuthnRequestsSigned');
+    expect(problem.detail).toContain('CRM');
+  });
+
+  it('still refuses the one-request path once a certificate is registered but the request is unsigned', async () => {
+    // The properly configured case: the service provider's certificate is on
+    // file, so there *is* something to verify against, and the attacker does
+    // not hold the key. This is the state a working integration is in, and it
+    // is the state the ruling actually protects.
+    await saveSamlConfig(
+      ctx.tenantId, applicationId,
+      samlConfigAsRegistered({ spCertificates: [spPublicPem] }),
+      samlKeyOptions,
+    );
+
+    const victim = await get(redirectUrl(authnRequest()));
+    expect(victim.statusCode).toBe(400);
+    expect(victim.body).not.toContain('SAMLResponse');
+    expect(JSON.parse(victim.body).setting).toBe('wantAuthnRequestsSigned');
+
+    // Positive control: the service provider's own signed request, over the
+    // same one-request path, still completes. Without this the test above
+    // would pass against an implementation that had simply broken /saml/sso.
+    const signedQuery = `SAMLRequest=${encodeURIComponent(encode(authnRequest()))}&SigAlg=${encodeURIComponent(SIG_ALG)}`;
+    const genuine = await get(
+      `/saml/sso?${signedQuery}&Signature=${encodeURIComponent(sign(signedQuery))}`,
+    );
+    expect(genuine.statusCode).toBe(200);
+    expect(genuine.body).toContain('SAMLResponse');
+  });
+
+  it('lets an administrator opt an application out deliberately', async () => {
+    // False is still a posture a tenant may choose per application — it is now
+    // something they chose rather than something they inherited. If this
+    // failed, the ruling would have become "signed requests always", which is
+    // not what was decided.
+    await saveSamlConfig(
+      ctx.tenantId, applicationId,
+      samlConfig({ wantAuthnRequestsSigned: false }),
+      samlKeyOptions,
+    );
+    const res = await get(redirectUrl(authnRequest()));
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('SAMLResponse');
   });
 
   it('challenges rather than issuing when policy demands a second factor', async () => {

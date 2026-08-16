@@ -25,6 +25,40 @@ export interface SamlConfigRecord {
   assertionLifetimeMs: number;
 }
 
+/**
+ * What a caller writes. Everything on the record except the identifiers, and
+ * `wantAuthnRequestsSigned` is optional.
+ *
+ * It is the one field where saying nothing has to mean the safe answer rather
+ * than a compile error, because "say nothing" is what a newly registered
+ * service provider does — a metadata import describes what the SP *is*, not
+ * what Syntra should demand of it, and `AuthnRequestsSigned` in an SP's own
+ * metadata is the SP's claim about itself, not the tenant's policy.
+ *
+ * Note the write semantics this inherits: `upsertSamlConfig` replaces every
+ * column, so omitting the field on an *update* also resets it to the default.
+ * That is consistent — this seam has always been a whole-record write, not a
+ * patch — but it means an administrator who deliberately turned the
+ * requirement off has to keep sending `false`. A future partial-update route
+ * must read the row first rather than reusing this function.
+ */
+export type SamlConfigInput = Omit<
+  SamlConfigRecord,
+  'id' | 'applicationId' | 'wantAuthnRequestsSigned'
+> & { wantAuthnRequestsSigned?: boolean };
+
+/**
+ * Ruling A2-10. A service provider that registers without saying anything
+ * about signing gets the posture that does not depend on the service provider
+ * validating `InResponseTo`.
+ *
+ * The Prisma column carries the same default, which is the backstop for any
+ * insert that never comes through here. This constant is what makes it real
+ * for the seam that does: `upsertSamlConfig` writes every column explicitly,
+ * so the column default alone would never once be consulted.
+ */
+export const REQUIRE_SIGNED_AUTHN_REQUESTS_BY_DEFAULT = true;
+
 const asBinding = (value: string): SamlBinding =>
   value === 'HTTP-Redirect' ? 'HTTP-Redirect' : 'HTTP-POST';
 
@@ -50,14 +84,21 @@ const toRecord = (row: Record<string, unknown>): SamlConfigRecord => ({
 export async function upsertSamlConfig(
   tx: TenantClient,
   applicationId: string,
-  input: Omit<SamlConfigRecord, 'id' | 'applicationId'>,
+  input: SamlConfigInput,
 ): Promise<SamlConfigRecord> {
   const tenantId = await currentTenant(tx);
-  const data = { tenantId, applicationId, ...input };
+  // Resolved once and used for both halves of the upsert, so create and update
+  // cannot drift — an omitted flag that defaulted to true on insert and to
+  // whatever Prisma felt like on update would be the worst of both.
+  const resolved = {
+    ...input,
+    wantAuthnRequestsSigned:
+      input.wantAuthnRequestsSigned ?? REQUIRE_SIGNED_AUTHN_REQUESTS_BY_DEFAULT,
+  };
   const row = await tx.samlConfig.upsert({
     where: { applicationId },
-    create: data,
-    update: input,
+    create: { tenantId, applicationId, ...resolved },
+    update: resolved,
   });
   return toRecord(row as unknown as Record<string, unknown>);
 }
@@ -87,7 +128,7 @@ export async function upsertSamlConfig(
 export async function saveSamlConfig(
   tenantId: string,
   applicationId: string,
-  input: Omit<SamlConfigRecord, 'id' | 'applicationId'>,
+  input: SamlConfigInput,
   key: { provider: MasterKeyProvider; commonName: string },
 ): Promise<SamlConfigRecord> {
   await ensureActiveKey(tenantId, key.provider, 'saml', {
