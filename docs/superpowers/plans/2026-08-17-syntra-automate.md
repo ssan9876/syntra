@@ -18,7 +18,12 @@ Everything in the Core, Directory Sync, Access and Provision plans' Global Const
 
 1. **Automate never writes to a target system.** It has no connector, no target credential, no write path and no retry loop against anything remote. A `targetEntitlement` product is fulfilled by writing an `AccessGrant` that enters `desiredState` and enqueuing a Provision run. There is no code path in this slice that opens a socket to a directory. (Spec §5, §16, §18.)
 
-2. **No network I/O, no LDAP call, no Argon2, no signing and no SMTP send inside a Prisma interactive transaction.** `withTenant` is `prisma.$transaction(fn)` and `packages/db/src/client.ts` constructs the client with no `transactionOptions`, so Prisma's **5000 ms** default applies. This has produced a Critical finding four times on this programme. Automate sends more mail than every other subsystem combined, which is why nothing in this slice calls `sendMessage` or `queueMessage` from a request path at all: the transaction writes a `NotificationOutbox` row and `runOutboxJob` sends it afterwards. Task 16 makes this a test rather than a convention.
+2. **No network I/O, no LDAP call, no Argon2, no signing and no SMTP send inside a Prisma interactive transaction.** `withTenant` is `prisma.$transaction(fn)` and `packages/db/src/client.ts` constructs the client with no `transactionOptions`, so Prisma's **5000 ms** default applies. This has produced a Critical finding four times on this programme. Automate sends more mail than every other subsystem combined, which is why nothing in this slice calls `sendMessage` or `queueMessage` from a request path at all: the transaction writes a `NotificationOutbox` row and `runOutboxJob` sends it afterwards. Task 15 makes this a test rather than a convention.
+
+   **And no unbounded loop inside one either — the 5000 ms is a *duration*, not only a prohibition on sockets.** A per-person read in a loop over the tenant is a P2028 at any real size, and it fails on the console preview and on the nightly job rather than in a test. Three rules follow, and every one of them has a site in this plan:
+   - **Split loads from writes.** `previewAudience` (Task 6) and `previewExpirySweep` (Task 13) load through one short transaction that returns plain data, evaluate outside it, and open a second transaction only for the write. Spec §16 requires the sweep's *plan write* to be atomic; it does not require its loads to be.
+   - **Never call a per-subject helper in a loop over the tenant.** `subjectAudienceFacts` is ~7 round trips; `allSubjectAudienceFacts` (Task 6) answers for everybody in **seven** set-based queries — `person`, `contract`, `user`, `groupMembership`, `orgUnit`, `accountEntitlement`, `accessGrant` — and is what both callers use. The property is that the count is fixed and independent of the population; the number is seven.
+   - **Batch what must be written.** `applyExpirySweep` (Task 13) takes 100 actions per transaction, `runTickJob` (Task 15) 50 rows, `reflectProvisionOutcomes` (Task 12) 100 items and one request. Every one of those passes is idempotent, so a batch that fails is redone on the next run rather than lost — which an all-or-nothing transaction that always times out is not.
 
 3. **Every tenant-scoped table gets `ENABLE` + `FORCE ROW LEVEL SECURITY`** and a `tenant_isolation` policy whose USING **and** WITH CHECK are `"tenantId" = NULLIF(current_setting('app.current_tenant', true), '')::uuid`. The `NULLIF` is not optional: `set_config(..., true)` reverts the GUC to the **empty string, not NULL**, at transaction end, and `''::uuid` raises. Copy the `DO $$` block from `packages/db/prisma/migrations/20260820000000_provision_targets/migration.sql`.
 
@@ -30,9 +35,11 @@ Everything in the Core, Directory Sync, Access and Provision plans' Global Const
 
 7. **Vitest does not type-check.** `pnpm vitest run` will happily execute a file full of type errors. **Every task's verification runs `pnpm typecheck` as its own step**, separately from the tests, or type errors ship invisibly.
 
-8. **pg-boss schedules need a distinct `key` per tenant and per purpose.** `Scheduler.schedule(name, cron, data, key)` in `packages/core/src/jobs/scheduler.ts` defaults `key` to `''`, and pg-boss keys its schedule table on `(queue, key)`. All directory sources once shared `key: ''` and only the last one in the last tenant ever ran. `automateScheduleKey(tenantId, purpose)` is mandatory on every `schedule` and `unschedule` call this slice makes, and this slice has three purposes on three queues.
+8. **pg-boss schedules need a distinct `key` per tenant and per purpose.** `Scheduler.schedule(name, cron, data, key)` in `packages/core/src/jobs/scheduler.ts` defaults `key` to `''`, and pg-boss keys its schedule table on `(queue, key)`. All directory sources once shared `key: ''` and only the last one in the last tenant ever ran. `automateScheduleKey(tenantId, purpose)` is mandatory on every `schedule` and `unschedule` call this slice makes, and this slice has **four** purposes on four queues — `outbox`, `tick`, `sweep` and `digest`. (The fourth is the daily-digest sender: `NotificationPreference.digest` had a writer and a holder and no sender, so every notification for a person who chose a daily summary was written and never delivered. Task 15 adds it.)
 
-9. **A fake reproduces the real system's identifier semantics** (Ruling P8). Where the real system returns an opaque identifier, the fake returns something equally opaque; where it returns a DN, the fake returns a DN. A fake written from the consumer's side of the interface is not a test double, it is a second implementation of the bug. This slice's integration tests reuse `FakeTarget` from `@syntra/connectors` unchanged rather than introducing a second fake target.
+9. **A fake reproduces the real system's identifier semantics** (Ruling P8). Where the real system returns an opaque identifier, the fake returns something equally opaque; where it returns a DN, the fake returns a DN. A fake written from the consumer's side of the interface is not a test double, it is a second implementation of the bug. This slice's integration tests reuse `FakeTarget` unchanged rather than introducing a second fake target.
+
+   **Import it from `@syntra/connectors/testing`, never from `@syntra/connectors`.** Provision's Task 2 fix wave (commit `00b7631`) gave `packages/connectors/package.json` an `exports` map with exactly two entries, `"."` and `"./testing"`, and `src/index.ts` deliberately does not re-export `FakeTarget` — "a fake reachable from production code is a fake that will eventually be reached". An `exports` map also denies every unlisted subpath, so `@syntra/connectors/src/...` is `TS2307` and the root import is `TS2305: Module '"@syntra/connectors"' has no exported member 'FakeTarget'`. Provision's own plan still names the root import at its line 12243; that line predates the fix wave and copying it will not compile. Recorded in `.superpowers/sdd/2026-08-16-syntra-provision/progress.md` under Tasks 2 and 4.
 
 10. **Approval authority comes from resolution, never from a permission.** There is no `automate.approve`. `automate.read` and `automate.manage` administer Automate; they do not confer the right to decide anything, and requesting for yourself needs no permission at all. (Spec §15, §19.)
 
@@ -40,7 +47,7 @@ Everything in the Core, Directory Sync, Access and Provision plans' Global Const
 
 12. **No person may record a decision on a request in which they are the subject or the submitter.** Enforced in the domain service, at the moment of decision as well as at resolution, and as a single subtraction from the resolved set so every selector inherits it. Never in the console — router-level gating in React is cosmetic. (Spec §9.)
 
-13. **There is no timeout that approves.** Not configurable, not per product, not for low-risk items. `onTimeout` is `remind` (default), `escalate` or `expire`. Task 11 carries a structural test over the request state machine asserting that no transition into `approved` exists that is not caused by an `ApprovalDecision` row, so adding a timeout-approval later fails a test rather than passing review.
+13. **There is no timeout that approves.** Not configurable, not per product, not for low-risk items. `onTimeout` is `remind` (default), `escalate` or `expire`. Task 11 carries a structural test over the request state machine asserting that `status = 'approved'` is written in exactly **three** files and no others — `request-service.ts` (a zero-stage workflow, where the empty stage list IS the grant), `decision-service.ts` (the last stage decided in favour by a person) and `delegation-service.ts` (a delegated administrative act, which spec §14 defines as a request with no approval stages). Adding a timeout-approval later fails a test rather than passing review. The list lives in `APPROVED_ENTRY_POINTS` in the service, so widening it is a deliberate edit to the module that owns the rule.
 
 14. **A delegation adds an approver; it never replaces one.** Depth 1, end date required, capped at `maxDelegationDays`. Replacement is the cleanest self-approval path anybody would find in this system and it is refused structurally, not by policy. (Spec §8, §9.)
 
@@ -55,6 +62,10 @@ Everything in the Core, Directory Sync, Access and Provision plans' Global Const
 19. **Tests run in a single fork against one PostgreSQL** (`vitest.config.ts`, `poolOptions.forks.singleFork`), and `resetDatabase()` truncates between tests. Never assume parallel isolation.
 
 20. **Commits:** conventional commits, one per task. **Tests:** TDD — a failing test precedes the code that satisfies it.
+
+21. **A Prisma `Json` column takes `as never` at the write.** TypeScript gives an implicit index signature to object *type literals* and type aliases and **never to an `interface`**, so an interface-typed value is not assignable to `Prisma.InputJsonValue` / `InputJsonObject = { readonly [k: string]: InputJsonValue | null }`. Neither is a bare `object`. This slice writes interface-typed values to `Product.formSchema`, `ApprovalStage.selectorConfig` / `fallbackConfig` / `escalationConfig`, `ApprovalStep.stageSnapshot` and `NotificationOutbox.vars`. Follow the repository's existing convention, `packages/core/src/sync/source-service.ts:41` — `config: config as never` — at every such write. Vitest will not catch this; `pnpm typecheck` will.
+
+22. **Clearing a nullable `Json` column needs `Prisma.DbNull`, not `null` and not `undefined`.** Prisma reads `undefined` as "do not touch this column", so `x ?? undefined` on an update path makes *clearing* the field impossible while looking like it works. This slice has two such columns and both are security controls — `Product.audienceCondition` and `ResourceDelegation.audienceCondition`, where NULL means **nobody**. Write `(input.x ?? Prisma.DbNull) as never` with `import { Prisma } from '@prisma/client';`. A field whose default *is* the access control and which the update path cannot reset is a security default made inert by a later layer, which is a defect class this programme has now hit four times.
 
 ### Defaults, copied verbatim from the spec
 
@@ -95,6 +106,7 @@ Provision — Targets is being built from `docs/superpowers/plans/2026-08-16-syn
 | `type Condition`, `type ConditionOperator`, `type ConditionFacts`, `evaluateCondition`, `conditionSchema` | Task 5, `packages/core/src/provision/condition.ts` |
 | `type ContractFacts`, `type PersonFacts`, `type Attribution`, `type DesiredState`, `type DesiredStateInput`, `type KnownHolding`, `type ActualState` | Tasks 7 and 8, `packages/core/src/provision/types.ts` |
 | `desiredState`, `activeOn`, `latestContractEnd`, `resolveMappingContract`, `personDisplayName` | Task 7, `packages/core/src/provision/desired.ts` |
+| `DesiredStateInput.entitlementStatus` — `ReadonlyMap<string, 'present' \| 'missing' \| 'unreadable'>` | Task 7, declared **on `DesiredStateInput` in `packages/core/src/provision/desired.ts`** as shipped, not in `types.ts`. Provision's rule pre-check reads it; **Task 8 Step 4 reads it too**, for M6's catalog check on a granted entitlement, and this plan adds no field for it. It is the one Provision symbol Task 8 depends on that nothing else in this plan names, and Task 8 is the task most exposed to Provision drift, so it is named here rather than assumed. |
 | `type PlannedAction`, `planActions`, `addDays` | Task 9, `packages/core/src/provision/plan.ts` |
 | `remitFor`, `refreshEntitlements` | Task 12, `packages/core/src/provision/entitlement-service.ts` |
 | `previewProvisionRun`, `ProvisionRunInFlightError` | Task 13, `packages/core/src/provision/run-service.ts` |
@@ -193,7 +205,8 @@ Nineteen new tables and three columns added to tables other subsystems own. Spec
 **Interfaces:**
 - Consumes: `prisma`, `withTenant`, `TenantClient` from `@syntra/db`; `resetDatabase`, `asDatabaseSuperuser` from `@syntra/db/src/test-support.js`. The existing `Entitlement`, `AccountEntitlement` and `ProvisionAction` models from `20260820000000_provision_targets`.
 - Produces: every Prisma model the rest of the plan reads and writes — `AutomateSettings`, `Product`, `ProductGrant`, `ApprovalWorkflow`, `ApprovalStage`, `AccessRequest`, `RequestItem`, `ApprovalStep`, `ApprovalStepApprover`, `ApprovalDecision`, `ApprovalDelegation`, `AccessGrant`, `ResourceOwner`, `ResourceDelegation`, `ExpirySweep`, `SweepAction`, `SweepException`, `NotificationOutbox`, `NotificationPreference` — plus three added columns: `Entitlement.requestable`, `AccountEntitlement.grantedByRequestId` and `ProvisionAction.grantId`.
-- Three fields exist here only because a later task needs them and nothing else would supply them: `SweepAction.provisionActionId` (Task 12 reflects a Provision outcome back onto a sweep's removal), `AccessGrant.supersededByGrantId` (Task 14 must not expire a grant an approved extension already replaced) and `AccessRequest.replacesGrantId` (Task 10 pre-fills an extension and Task 9 links the two).
+- Four fields exist here only because a later task needs them and nothing else would supply them: `SweepAction.provisionActionId` (Task 12 reflects a Provision outcome back onto a sweep's removal), `AccessGrant.supersededByGrantId` (**written by Task 9's `fulfilRequest`** when an extension lands, read by Task 13's classifier so it does not expire a grant an approved extension already replaced), `AccessRequest.replacesGrantId` (**written by Task 10's `submitRequest`, read by Task 10's `already_held` test and by Task 9's `fulfilRequest`**, which is what links the two) and `AccessGrant.writtenRowIds` (Task 9 populates it with the `AppAssignment`/`GroupMembership` ids it wrote; Task 9's `endGrant` and Task 13's `applyExpirySweep` delete by those ids and nothing else).
+- `ExpirySweep.status` carries a **terminal `superseded`**. Task 13's `previewExpirySweep` supersedes a stale non-terminal sweep at the head of the same transaction that creates the new one. The index and its escape hatch are one design: a "one non-terminal row per X" constraint with no adoption path is how a crashed process permanently bricks a tenant, and this programme has already shipped that shape once (`provision_run_one_non_terminal`).
 
 - [ ] **Step 1: Add the settings, catalog and workflow models**
 
@@ -588,7 +601,17 @@ model AccessGrant {
   supersededByGrantId String? @db.Uuid
   /// The person who approved the request this grant came from, so the expiry
   /// warning and the lapse notice can reach them without walking the steps.
+  /// Populated by `fulfilRequest` from the last `approve` decision on the
+  /// request; null for a delegated administrative grant, which has no stages.
   approvedByPersonId  String? @db.Uuid
+  /// The ids of the `AppAssignment` / `GroupMembership` rows THIS grant wrote.
+  /// Ending a grant deletes these rows and no others. Spec section 5's safety
+  /// argument for Automate writing those two tables at all is that each has
+  /// exactly one other writer; deleting by (applicationId, userId) breaks it
+  /// in the other direction, removing a membership an administrator added by
+  /// hand and reporting it as a grant that lapsed. Empty for an
+  /// `entitlement` grant, which writes nothing directly.
+  writtenRowIds       String[] @default([])
 
   createdAt DateTime  @default(now())
   endedAt   DateTime?
@@ -660,7 +683,15 @@ model ExpirySweep {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
   /// 'running' | 'previewed' | 'blocked' | 'applying' | 'applied'
-  /// | 'partially_applied' | 'failed'
+  /// | 'partially_applied' | 'failed' | 'superseded'
+  ///
+  /// `superseded` is TERMINAL, and it exists so that the partial unique index
+  /// below cannot brick a tenant. A sweep left `blocked`, `previewed` and
+  /// unconfirmed, or `running`/`applying` by a crashed process would otherwise
+  /// occupy the one-non-terminal slot forever and every future
+  /// `previewExpirySweep` would raise P2002 — a system that silently stops
+  /// removing access while continuing to grant it. Task 13 supersedes a stale
+  /// row at the head of the preview, in the same transaction as the create.
   status   String @default("running")
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
@@ -721,7 +752,10 @@ model SweepException {
   sweepId  String      @db.Uuid
   sweep    ExpirySweep @relation(fields: [sweepId], references: [id], onDelete: Cascade)
   personId String      @db.Uuid
-  /// 'no_contracts' | 'not_yet_started' | 'no_user_account'
+  /// 'no_contracts' | 'not_yet_started'
+  ///
+  /// Exactly the two `classifySweep` emits. A third value nothing produces
+  /// reads to a later maintainer as a case somebody forgot to handle.
   kind     String
   message  String
 
@@ -768,6 +802,12 @@ model NotificationPreference {
 
   updatedAt DateTime @updatedAt
 
+  /// `userId` alone, deliberately, and inconsistently with every other table
+  /// here. `User` is tenant-scoped, so a user id already determines a tenant
+  /// and `[tenantId, userId]` would constrain nothing extra — and
+  /// `enqueueOutbox` reads this table by `userId: { in: [...] }`, which is
+  /// the only access path there is. Noted rather than made uniform, because
+  /// changing it would change that read for no behaviour.
   @@unique([userId])
   @@index([tenantId])
 }
@@ -1370,6 +1410,12 @@ describe('access grant', () => {
     expect(row.needsReview).toBe(false);
     expect(row.reviewReason).toBeNull();
     expect(row.supersededByGrantId).toBeNull();
+    expect(row.approvedByPersonId).toBeNull();
+    // Nothing was written on this grant's behalf, so ending it must delete
+    // nothing. An empty list is the honest default; the hazard the column
+    // exists for is a delete keyed on (applicationId, userId) taking out a
+    // row somebody else created.
+    expect(row.writtenRowIds).toEqual([]);
   });
 });
 
@@ -1429,6 +1475,25 @@ describe('expiry sweep', () => {
     const next = await withTenant(tenantId, (tx) =>
       tx.expirySweep.create({ data: { tenantId, status: 'running' } }),
     );
+    expect(next.status).toBe('running');
+  });
+
+  it('treats superseded as terminal, so a blocked sweep can be got out of the way', async () => {
+    // The escape hatch for the index above. Without a terminal status a
+    // blocked sweep -- or one left running by a crashed process -- occupies
+    // the slot forever, every later preview raises P2002, and no grant in
+    // the tenant ever expires again. Task 13 performs this transition; this
+    // case proves the database permits it.
+    const stale = await withTenant(tenantId, (tx) =>
+      tx.expirySweep.create({ data: { tenantId, status: 'blocked' } }),
+    );
+    const next = await withTenant(tenantId, async (tx) => {
+      await tx.expirySweep.update({
+        where: { id: stale.id },
+        data: { status: 'superseded', finishedAt: day('2026-06-02') },
+      });
+      return tx.expirySweep.create({ data: { tenantId, status: 'running' } });
+    });
     expect(next.status).toBe('running');
   });
 
@@ -1636,8 +1701,8 @@ Spec §6. Visibility is an access decision and its default is closed.
   - `type AudienceField = 'contract.department' | 'contract.jobTitle' | 'contract.costCentre' | 'contract.employer' | 'contract.location' | 'contract.fte' | 'person.status' | 'user.memberOfGroup' | 'user.orgUnit' | 'person.hasEntitlement'`
   - `const CONTRACT_AUDIENCE_FIELDS: readonly AudienceField[]` — the seven Provision already evaluates
   - `const SET_AUDIENCE_FIELDS: readonly AudienceField[]` — the three this slice adds
-  - `type AudienceCondition = { all: AudienceCondition[] } | { any: AudienceCondition[] } | { not: AudienceCondition } | { field: AudienceField; op: ConditionOperator; value?: string | number | string[] }`
-  - `const audienceConditionSchema: z.ZodType<AudienceCondition>`
+  - `type AudienceCondition = { all: AudienceCondition[] } | { any: AudienceCondition[] } | { not: AudienceCondition } | { field: AudienceField; op: ConditionOperator; value?: string | number | string[] | undefined }` — the `| undefined` is load-bearing under `exactOptionalPropertyTypes`, which is on repo-wide; see the guard below
+  - `const audienceConditionSchema: z.ZodType<AudienceCondition>` — annotated, **not** cast. The annotation checks nothing on a `z.lazy` schema (Provision's Ruling P21 measured it), so the module carries two `MutuallyAssignable` guards instead — one tying the non-lazy `leafSchema` to the leaf arm of the type, one proving `CONTRACT_AUDIENCE_FIELDS` and `SET_AUDIENCE_FIELDS` partition `AudienceField` — matching what `provision/condition.ts` ships.
   - `interface SubjectSetFacts { groupIds: readonly string[]; orgUnitChainIds: readonly string[]; entitlementIds: readonly string[] }`
   - `interface AudienceFacts extends SubjectSetFacts { contract: ConditionFacts }`
   - `function evaluateAudience(condition: AudienceCondition, facts: AudienceFacts): boolean`
@@ -2094,7 +2159,16 @@ export type AudienceCondition =
   | { all: AudienceCondition[] }
   | { any: AudienceCondition[] }
   | { not: AudienceCondition }
-  | { field: AudienceField; op: ConditionOperator; value?: string | number | string[] };
+  // `| undefined` is not noise. `exactOptionalPropertyTypes` is on in
+  // `tsconfig.base.json`, and zod infers `value?: ... | undefined` for a
+  // `.optional()` property; without it the two are NOT mutually assignable and
+  // the guard below cannot be written -- which is exactly why the first draft
+  // reached for a cast instead.
+  | {
+      field: AudienceField;
+      op: ConditionOperator;
+      value?: string | number | string[] | undefined;
+    };
 
 const isSetField = (field: AudienceField): boolean =>
   (SET_AUDIENCE_FIELDS as readonly string[]).includes(field);
@@ -2157,9 +2231,65 @@ const leafSchema = z
   });
 
 /**
- * Recursive, so the schema is declared lazily and typed explicitly. The cast
- * is the one zod requires for a self-referential union; it is the same shape
- * `conditionSchema` uses in `provision/condition.ts`.
+ * The schema and the type, checked against each other at compile time.
+ *
+ * `audienceConditionSchema` below is annotated `z.ZodType<AudienceCondition>`,
+ * and **that annotation checks nothing**. Provision measured it (Ruling P21):
+ * `z.lazy`'s callback refers to the constant it is initialising, so TypeScript
+ * falls back to the declared type rather than inferring one to compare against
+ * it, and deleting an entire arm of the union still compiles cleanly. The
+ * `as z.ZodType<AudienceCondition>` an earlier draft carried was a second
+ * suppression on top of an annotation that was already inert -- the same
+ * disease as `as never` on `client.modify`: a construct that reads as
+ * enforcement and enforces nothing.
+ *
+ * `leafSchema` is not lazy, so its type IS inferred, and the guard below is
+ * the check the annotation cannot be. If the two ever drift -- an operator
+ * added to one and not the other, a field enum widened on one side -- it fails
+ * here rather than at the far end of a product that quietly became visible to
+ * nobody. This is the shape `packages/core/src/provision/condition.ts` carries
+ * as shipped (`_leafSchemaMatchesLeafCondition` and
+ * `_operatorListMatchesSchema`); the plan previously cited that file for the
+ * pre-fix version of itself, which no longer exists.
+ */
+type AudienceLeaf = Extract<AudienceCondition, { field: AudienceField }>;
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const _leafSchemaMatchesAudienceLeaf: MutuallyAssignable<
+  z.infer<typeof leafSchema>,
+  AudienceLeaf
+> = true;
+void _leafSchemaMatchesAudienceLeaf;
+
+/**
+ * And the field partition, which the guard above does NOT cover.
+ *
+ * `as const satisfies readonly AudienceField[]` on the two exported lists
+ * checks only that everything in them is a field; it does not check that the
+ * two together are ALL the fields. Add an eleventh `AudienceField` and the
+ * schema enum, and both compile: `isSetField` answers `false` for it, so it is
+ * handed to Provision's `evaluateCondition`, which has never heard of it and
+ * answers `false` for every person alive -- a product visible to nobody, for no
+ * stated reason. The two lists are also what the console builds its pickers
+ * from. This is the line that fails instead.
+ *
+ * Note that an operator guard here would be decoration and is deliberately
+ * absent: `AudienceCondition`'s leaf declares `op: ConditionOperator`
+ * directly, so `AudienceLeaf['op'] extends ConditionOperator` is true by
+ * construction, and the guard above already ties the schema's hard-coded
+ * operator list to it. `provision/condition.ts` needs its second guard
+ * because its `Condition` type spells the operators out per arm; this module
+ * does not.
+ */
+const _everyAudienceFieldIsClassified: MutuallyAssignable<
+  (typeof CONTRACT_AUDIENCE_FIELDS)[number] | (typeof SET_AUDIENCE_FIELDS)[number],
+  AudienceField
+> = true;
+void _everyAudienceFieldIsClassified;
+
+/**
+ * Recursive, so the schema is declared lazily and annotated. No cast: with the
+ * guard above in place the union's own inferred type lines up, and a cast here
+ * would only re-hide whatever moved.
  */
 export const audienceConditionSchema: z.ZodType<AudienceCondition> = z.lazy(() =>
   z.union([
@@ -2168,7 +2298,7 @@ export const audienceConditionSchema: z.ZodType<AudienceCondition> = z.lazy(() =
     z.object({ not: audienceConditionSchema }).strict(),
     leafSchema,
   ]),
-) as z.ZodType<AudienceCondition>;
+);
 
 export interface SubjectSetFacts {
   /** Every group the subject's user accounts belong to. */
@@ -2307,9 +2437,9 @@ Spec §6's form schema and §12's durations. Both pure, both full of boundaries,
 - Consumes: `z` from `zod`; `addDays` from `../provision/plan.js` (Provision Task 9). **`addDays` is imported, not redefined.** `packages/core/src/index.ts` re-exports both modules with `export *`, and two modules exporting `addDays` is an ambiguous re-export that fails the build.
 - Produces (in `./form.js`):
   - `type FormFieldType = 'text' | 'textarea' | 'select' | 'multiselect' | 'date' | 'number' | 'checkbox' | 'resourcePicker'`
-  - `interface FormField { key: string; type: FormFieldType; label: string; help?: string; required: boolean; options?: { value: string; label: string }[]; min?: number; max?: number; maxLength?: number }`
+  - `interface FormField { key: string; type: FormFieldType; label: string; help?: string | undefined; required: boolean; options?: { value: string; label: string }[] | undefined; min?: number | undefined; max?: number | undefined; maxLength?: number | undefined }` — every optional carries `| undefined` because `exactOptionalPropertyTypes` is on and the module carries a `MutuallyAssignable` guard against `z.infer<typeof fieldSchema>`
   - `type FormSchema = FormField[]`
-  - `const formSchemaSchema: z.ZodType<FormSchema>`
+  - `const formSchemaSchema: z.ZodType<FormSchema>` — annotated, **not** cast; the schema is not recursive, so its type is inferrable and the guard above is what checks it
   - `type FormValidation = { ok: true; values: Record<string, string | number | boolean | string[]> } | { ok: false; errors: { path: string; message: string }[] }`
   - `function validateFormValues(schema: FormSchema, values: unknown, selectableResourceIds: readonly string[]): FormValidation`
 - Produces (in `./duration.js`):
@@ -2689,16 +2819,24 @@ export type FormFieldType =
   /** Choose among the product's own ProductGrant rows. */
   | 'resourcePicker';
 
+/**
+ * `| undefined` on every optional property is load-bearing, not noise.
+ * `exactOptionalPropertyTypes` is on repo-wide, and zod infers
+ * `help?: string | undefined` for `z.string().optional()`; without it this
+ * interface and `z.infer<typeof fieldSchema>` are not mutually assignable and
+ * the guard below cannot be written -- which is why the first draft reached
+ * for `as z.ZodType<FormSchema>` instead.
+ */
 export interface FormField {
   key: string;
   type: FormFieldType;
   label: string;
-  help?: string;
+  help?: string | undefined;
   required: boolean;
-  options?: { value: string; label: string }[];
-  min?: number;
-  max?: number;
-  maxLength?: number;
+  options?: { value: string; label: string }[] | undefined;
+  min?: number | undefined;
+  max?: number | undefined;
+  maxLength?: number | undefined;
 }
 
 export type FormSchema = FormField[];
@@ -2756,6 +2894,27 @@ const fieldSchema = z
     }
   });
 
+/**
+ * The schema and the type, checked against each other at compile time.
+ *
+ * `formSchemaSchema` is **not** recursive -- it is
+ * `z.array(fieldSchema).max(40).superRefine(...)` -- so unlike Provision's
+ * `conditionSchema` its type is fully inferrable, and the
+ * `as z.ZodType<FormSchema>` an earlier draft carried threw away a check that
+ * happens for free. Ruling P21's lesson generalises: treat `z.ZodType<T>` on a
+ * schema as decoration until proven otherwise, and never add a cast on top of
+ * it. The line below is the proof. If `fieldSchema` and `FormField` drift --
+ * a field type added to the enum and not the union, a bound made required --
+ * it fails here rather than at the far end of a product form that renders a
+ * control nothing validates.
+ */
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const _fieldSchemaMatchesFormField: MutuallyAssignable<
+  z.infer<typeof fieldSchema>,
+  FormField
+> = true;
+void _fieldSchemaMatchesFormField;
+
 export const formSchemaSchema: z.ZodType<FormSchema> = z
   .array(fieldSchema)
   .max(40)
@@ -2771,7 +2930,7 @@ export const formSchemaSchema: z.ZodType<FormSchema> = z
       }
       seen.add(field.key);
     }
-  }) as z.ZodType<FormSchema>;
+  });
 
 export type FormValidation =
   | { ok: true; values: Record<string, string | number | boolean | string[]> }
@@ -3643,6 +3802,63 @@ describe('the self-approval invariant', () => {
         reason: 'submitter',
       });
     });
+
+    it(`never routes a delegate of the subject through ${selector}`, async () => {
+      // The mirror image of the delegation case below, and the open one:
+      // there, the SUBJECT holds a delegation from the approver and is
+      // dropped as themselves. Here the subject IS the resolved approver, and
+      // their delegate inherits authority derived entirely from a person the
+      // resolver has just refused. One `ApprovalDelegation` row turns owning
+      // a product into approving your own request.
+      await seedPerson('bo');
+      const { config, subjectOver } = await arrange(selector, person.anna!);
+      await withTenant(tenantId, (tx) =>
+        tx.approvalDelegation.create({
+          data: {
+            tenantId,
+            delegatorPersonId: person.anna!,
+            delegatePersonId: person.bo!,
+            startsAt: day('2026-06-01'),
+            endsAt: day('2026-07-01'),
+          },
+        }),
+      );
+      const result = await withTenant(tenantId, (tx) =>
+        resolveStageApprovers(
+          tx,
+          stage({ selector, selectorConfig: config, fallbackSelector: 'person', fallbackConfig: { personId: person.jan! } }),
+          subject(subjectOver),
+          NOW,
+        ),
+      );
+      expect(result.approvers.map((a) => a.personId)).not.toContain(person.bo);
+    });
+
+    it(`never routes a delegate of the on-behalf submitter through ${selector}`, async () => {
+      await seedPerson('helpdesk');
+      await seedPerson('bo');
+      const { config, subjectOver } = await arrange(selector, person.helpdesk!);
+      await withTenant(tenantId, (tx) =>
+        tx.approvalDelegation.create({
+          data: {
+            tenantId,
+            delegatorPersonId: person.helpdesk!,
+            delegatePersonId: person.bo!,
+            startsAt: day('2026-06-01'),
+            endsAt: day('2026-07-01'),
+          },
+        }),
+      );
+      const result = await withTenant(tenantId, (tx) =>
+        resolveStageApprovers(
+          tx,
+          stage({ selector, selectorConfig: config, fallbackSelector: 'person', fallbackConfig: { personId: person.jan! } }),
+          subject({ ...subjectOver, submitterPersonId: person.helpdesk! }),
+          NOW,
+        ),
+      );
+      expect(result.approvers.map((a) => a.personId)).not.toContain(person.bo);
+    });
   }
 
   it('drops the subject when they hold a delegation from the resolved approver', async () => {
@@ -4025,12 +4241,27 @@ export async function resolveSelector(
 }
 
 /**
- * One selector's worth of resolution: expand delegations, subtract the subject
- * and the submitter, then drop whoever cannot act.
+ * One selector's worth of resolution: subtract the subject and the submitter,
+ * expand delegations of whoever is left, subtract again, then drop whoever
+ * cannot act.
  *
  * The subtraction happens HERE, once, rather than inside each `case` above. A
  * rule applied per selector is a rule the next selector forgets, and the next
  * selector is the one somebody adds in a year.
+ *
+ * It happens at BOTH ends of the expansion, and that is the whole design.
+ * **Every exclusion in an approver resolver must be applied at every
+ * expansion step, because any expansion step can reintroduce what an earlier
+ * one removed.** Delegation is such a step: a delegate's authority is
+ * *entirely derived* from their delegator, so subtracting the delegator and
+ * keeping their delegate is self-approval laundered through one hop, and it
+ * reads in the audit log as a legitimate approval by a third party. The
+ * exploit is one row: own the product (or the resource, or be the named
+ * `person` on the stage), create an `ApprovalDelegation` to a colleague --
+ * spec section 8 explicitly permits a delegator to create their own -- and
+ * submit. Task 11's decision-time invariant does not catch it, because the
+ * decider is neither the subject nor the submitter and
+ * `ApprovalStepApprover` genuinely has the row.
  */
 async function resolveOne(
   tx: TenantClient,
@@ -4042,10 +4273,27 @@ async function resolveOne(
   dropped: { personId: string; reason: DropReason }[],
 ): Promise<ResolvedApprover[]> {
   const named = await resolveSelector(tx, selector, config, subject, on);
-  const delegates = await activeDelegatesFor(tx, named, subject.productCategory, on);
+
+  // Subtract BEFORE expanding, so no delegation of an ineligible delegator is
+  // ever constructed. Dropping them afterwards is not equivalent: the
+  // delegate is a different person and survives a per-person filter.
+  const eligible: string[] = [];
+  for (const personId of named) {
+    if (personId === subject.subjectPersonId) {
+      dropped.push({ personId, reason: 'subject' });
+      continue;
+    }
+    if (subject.submitterPersonId !== null && personId === subject.submitterPersonId) {
+      dropped.push({ personId, reason: 'submitter' });
+      continue;
+    }
+    eligible.push(personId);
+  }
+
+  const delegates = await activeDelegatesFor(tx, eligible, subject.productCategory, on);
 
   const candidates: ResolvedApprover[] = [];
-  for (const personId of named) {
+  for (const personId of eligible) {
     candidates.push({ personId, via, onBehalfOfPersonId: null });
     for (const delegate of delegates.get(personId) ?? []) {
       candidates.push({ personId: delegate, via: 'delegate', onBehalfOfPersonId: personId });
@@ -4058,8 +4306,11 @@ async function resolveOne(
     if (seen.has(candidate.personId)) continue;
     seen.add(candidate.personId);
 
-    // The invariant. Both halves, in one place, before anything else is asked
-    // about this person -- so no future branch can reach past it.
+    // The invariant, applied a SECOND time, now after delegation expansion.
+    // The first pass could not see a delegate; this one can, and a delegate
+    // may themselves be the subject or the submitter. Neither pass is
+    // redundant: drop the first and a delegate of an ineligible delegator
+    // survives; drop this one and an ineligible delegate survives.
     if (candidate.personId === subject.subjectPersonId) {
       dropped.push({ personId: candidate.personId, reason: 'subject' });
       continue;
@@ -4210,6 +4461,10 @@ Spec §13. Render inside the transaction, send after it commits, record everythi
   - `interface Recipient { userId: string; personId: string | null; email: string; displayName: string }`
   - `async function recipientsForPersons(tx: TenantClient, personIds: readonly string[]): Promise<Recipient[]>`
   - `async function usersWithPermission(tx: TenantClient, permission: Permission): Promise<Recipient[]>`
+  - `async function displayNames(tx: TenantClient, input: { personIds?: readonly string[]; productIds?: readonly string[]; resources?: readonly { resourceType: ResourceType; resourceId: string }[] }): Promise<Map<string, string>>` — keyed `person:<id>`, `product:<id>`, `<resourceType>:<resourceId>`
+  - `function nameList(names: Map<string, string>, resources: readonly { resourceType: ResourceType; resourceId: string }[]): string`
+- Also consumes `type ResourceType` from `./types.js` (Task 2).
+- **Every task that enqueues an outbox row (9, 10, 11, 12, 13, 14, 15) resolves its `vars` through `displayNames` first.** No `var` a template renders may be an id. Task 5's test carries the assertion that makes that structural.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4224,8 +4479,10 @@ import { renderMessage } from '../notify/notification-service.js';
 import { TEMPLATES } from '../notify/templates/index.js';
 import {
   NEVER_DIGESTED,
+  displayNames,
   enqueueOutbox,
   isDigestible,
+  nameList,
   recipientsForPersons,
   usersWithPermission,
   type AutomateTemplate,
@@ -4429,6 +4686,105 @@ describe('usersWithPermission', () => {
   });
 });
 
+describe('displayNames', () => {
+  it('names people, products and all three resource types', async () => {
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const workflow = await tx.approvalWorkflow.create({
+        data: { tenantId, name: 'W' },
+      });
+      const product = await tx.product.create({
+        data: {
+          tenantId,
+          name: 'Statistics licence',
+          slug: 'statistics-licence',
+          kind: 'application',
+          workflowId: workflow.id,
+        },
+      });
+      const application = await tx.application.create({
+        data: { tenantId, name: 'Stats', slug: 'stats' },
+      });
+      const group = await tx.group.create({ data: { tenantId, name: 'Finance Reporting' } });
+      const target = await tx.targetSystem.create({
+        data: { tenantId, name: 'AD', secretName: 's/ad', config: { tlsMode: 'ldaps' } },
+      });
+      const entitlement = await tx.entitlement.create({
+        data: {
+          tenantId,
+          targetSystemId: target.id,
+          externalId: 'guid-finance',
+          type: 'group',
+          displayName: 'Finance',
+        },
+      });
+      return {
+        productId: product.id,
+        applicationId: application.id,
+        groupId: group.id,
+        entitlementId: entitlement.id,
+      };
+    });
+
+    const names = await withTenant(tenantId, (tx) =>
+      displayNames(tx, {
+        personIds: [annaPersonId],
+        productIds: [seeded.productId],
+        resources: [
+          { resourceType: 'application', resourceId: seeded.applicationId },
+          { resourceType: 'group', resourceId: seeded.groupId },
+          { resourceType: 'entitlement', resourceId: seeded.entitlementId },
+        ],
+      }),
+    );
+
+    expect(names.get(`person:${annaPersonId}`)).toBe('Anna Novak');
+    expect(names.get(`product:${seeded.productId}`)).toBe('Statistics licence');
+    expect(names.get(`application:${seeded.applicationId}`)).toBe('Stats');
+    expect(names.get(`group:${seeded.groupId}`)).toBe('Finance Reporting');
+    expect(names.get(`entitlement:${seeded.entitlementId}`)).toBe('Finance');
+    expect(
+      nameList(names, [
+        { resourceType: 'group', resourceId: seeded.groupId },
+        { resourceType: 'application', resourceId: seeded.applicationId },
+      ]),
+    ).toBe('Finance Reporting, Stats');
+  });
+
+  it('omits an unknown id rather than returning it, so no caller renders one', async () => {
+    const names = await withTenant(tenantId, (tx) =>
+      displayNames(tx, { personIds: ['00000000-0000-4000-8000-000000000000'] }),
+    );
+    expect(names.size).toBe(0);
+    expect(
+      nameList(names, [
+        { resourceType: 'group', resourceId: '00000000-0000-4000-8000-000000000000' },
+      ]),
+    ).toBe('an unnamed group');
+  });
+});
+
+describe('no rendered message contains an identifier', () => {
+  const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+  it('exports the guard every service task asserts with', async () => {
+    // The shape of the assertion each of Tasks 9, 10, 11, 12, 13 and 15
+    // carries against its own outbox rows. A mail reading "guid-4f2a... holds
+    // guid-91be... until Mon Jun 15 2026" satisfies none of spec section 13,
+    // and Automate sends more mail than the rest of the platform combined.
+    const rendered = renderMessage('Acme', 'automate-fulfilled', 'anna@acme.test', {
+      displayName: 'Anna Novak',
+      subjectName: 'Anna Novak',
+      productName: 'Statistics licence',
+      resourceList: 'Stats',
+      endsAt: '30 June 2026',
+      skippedNote: '',
+      requestUrl: 'https://syntra.test/requests/x',
+    });
+    expect(rendered.text).not.toMatch(UUID);
+    expect(rendered.html).not.toMatch(UUID);
+  });
+});
+
 describe('the templates themselves', () => {
   it('leaves an unknown placeholder visible rather than rendering undefined', () => {
     // The existing rule, and it matters more here than anywhere: a request
@@ -4570,6 +4926,15 @@ In `packages/core/src/notify/templates/index.ts`, inside the `TEMPLATES` object,
     text: 'Hello {{displayName}},\n\nTonight’s sweep proposed {{actionCount}} removals and stopped without applying any of them.\n\nWhy: {{blockedReason}}\n\n{{sweepUrl}}',
     html: '<p>Hello {{displayName}},</p><p>Tonight’s sweep proposed {{actionCount}} removals and stopped without applying any of them.</p><p>Why: {{blockedReason}}</p><p><a href="{{sweepUrl}}">{{sweepUrl}}</a></p>',
   },
+  // The daily summary. Without it, `digest: true` is a row nothing ever
+  // sends, and a person who chose a daily summary receives NOTHING at all --
+  // including every stage-opened notification, which means approvals sit in a
+  // queue nobody has been told about. Task 15's `runDigestJob` renders it.
+  'automate-digest': {
+    subject: 'Your daily summary from {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThere are {{count}} things waiting for you:\n\n{{lines}}\n\nAnything urgent — a failure, a block, or a sweep needing confirmation — is sent to you immediately and is never in this summary.',
+    html: '<p>Hello {{displayName}},</p><p>There are {{count}} things waiting for you:</p><pre>{{lines}}</pre><p>Anything urgent — a failure, a block, or a sweep needing confirmation — is sent to you immediately and is never in this summary.</p>',
+  },
 ```
 
 - [ ] **Step 4: Write the outbox module**
@@ -4581,6 +4946,7 @@ import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
 import type { TemplateName } from '../notify/templates/index.js';
 import type { Permission } from '../rbac/permissions.js';
+import type { ResourceType } from './types.js';
 
 /**
  * The templates this slice adds. A narrowing of `TemplateName` rather than a
@@ -4712,6 +5078,18 @@ export async function recipientsForPersons(
  * same, and this is its inverse. Inactive accounts are excluded, because
  * telling a deactivated account that a request is stuck reaches nobody and
  * makes the queue look attended.
+ *
+ * **`RoleAssignment.scopeOrgUnitId` is deliberately ignored, and every caller
+ * is tenant-wide.** The three things this function addresses -- a request no
+ * approver resolves to, a fulfilment that failed, a sweep that will not apply
+ * -- are not attributable to an org unit: the sweep is tenant-wide by
+ * construction, and a blocked request's subject may sit in a unit whose
+ * scoped administrator is precisely the person who cannot help. The failure
+ * mode of filtering is that nobody is told; the failure mode of not filtering
+ * is that a scoped administrator is told about something outside their scope.
+ * Between a silence and an over-notification on the queue that exists to
+ * surface stuck work, the over-notification is the right side to err on. If
+ * that changes, it changes here, once, and not per caller.
  */
 export async function usersWithPermission(
   tx: TenantClient,
@@ -4738,6 +5116,110 @@ export async function usersWithPermission(
     email: u.email,
     displayName: u.displayName,
   }));
+}
+
+/**
+ * Display names for the people, products and resources a template renders.
+ *
+ * Keyed `person:<id>`, `product:<id>` and `<resourceType>:<resourceId>`, so a
+ * caller that already holds a `resourceType:resourceId` key -- which every
+ * fulfilment and sweep path does -- looks up with the key it has.
+ *
+ * This exists because the alternative is what the first draft of this plan
+ * did: pass `subjectName: request.subjectPersonId` and
+ * `resourceList: granted.join(', ')` where each entry is
+ * `"application:0f3e..."`. Spec section 13 requires each of these to NAME
+ * things -- "names what they now hold and until when", "names what did not
+ * land, and why", "the requester is told, by name, with the reason" -- and
+ * section 7 makes naming the approver a design decision, because "anonymous
+ * approval is worse than visible approval: it makes chasing impossible". A
+ * mail reading "guid-4f2a... holds guid-91be... until Mon Jun 15 2026"
+ * satisfies none of that, and Automate sends more mail than the rest of the
+ * platform combined.
+ *
+ * Unknown ids are simply absent from the map, so a caller's `?? 'the
+ * requested access'` fallback is what renders -- never a raw UUID.
+ */
+export async function displayNames(
+  tx: TenantClient,
+  input: {
+    personIds?: readonly string[];
+    productIds?: readonly string[];
+    resources?: readonly { resourceType: ResourceType; resourceId: string }[];
+  },
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+
+  const personIds = [...new Set(input.personIds ?? [])];
+  if (personIds.length > 0) {
+    const persons = await tx.person.findMany({
+      where: { id: { in: personIds } },
+      select: { id: true, givenName: true, familyName: true },
+    });
+    for (const person of persons) {
+      out.set(`person:${person.id}`, `${person.givenName} ${person.familyName}`.trim());
+    }
+  }
+
+  const productIds = [...new Set(input.productIds ?? [])];
+  if (productIds.length > 0) {
+    const products = await tx.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, name: true },
+    });
+    for (const product of products) out.set(`product:${product.id}`, product.name);
+  }
+
+  const resources = input.resources ?? [];
+  const byType = (type: ResourceType) => [
+    ...new Set(resources.filter((r) => r.resourceType === type).map((r) => r.resourceId)),
+  ];
+
+  const entitlementIds = byType('entitlement');
+  if (entitlementIds.length > 0) {
+    const rows = await tx.entitlement.findMany({
+      where: { id: { in: entitlementIds } },
+      select: { id: true, displayName: true },
+    });
+    for (const row of rows) out.set(`entitlement:${row.id}`, row.displayName);
+  }
+
+  const applicationIds = byType('application');
+  if (applicationIds.length > 0) {
+    const rows = await tx.application.findMany({
+      where: { id: { in: applicationIds } },
+      select: { id: true, name: true },
+    });
+    for (const row of rows) out.set(`application:${row.id}`, row.name);
+  }
+
+  const groupIds = byType('group');
+  if (groupIds.length > 0) {
+    const rows = await tx.group.findMany({
+      where: { id: { in: groupIds } },
+      select: { id: true, name: true },
+    });
+    for (const row of rows) out.set(`group:${row.id}`, row.name);
+  }
+
+  return out;
+}
+
+/**
+ * The names of a list of resources, in order, as a sentence fragment a
+ * template can drop into "You now hold {{resourceList}}".
+ *
+ * Falls back to the resource type rather than to the id: "an application" is
+ * unhelpful, "application:0f3e-..." is worse, because it looks like a
+ * reference the reader is supposed to be able to use.
+ */
+export function nameList(
+  names: Map<string, string>,
+  resources: readonly { resourceType: ResourceType; resourceId: string }[],
+): string {
+  return resources
+    .map((r) => names.get(`${r.resourceType}:${r.resourceId}`) ?? `an unnamed ${r.resourceType}`)
+    .join(', ');
 }
 ```
 
@@ -4801,7 +5283,7 @@ Spec §6 and §15. **Every read path in this slice goes through `visibleProducts
 - Test: `packages/core/src/automate/catalog-service.test.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `currentTenant` from `../tenant-context.js`; `recordEvent` from `../audit/audit-service.js`; `activeContracts` from `../identity/contract-service.js`; `type ConditionFacts` from `../provision/condition.js`; `audienceAdmits`, `audienceConditionSchema`, `type AudienceCondition`, `type SubjectSetFacts` from `./audience.js`; `formSchemaSchema`, `type FormSchema` from `./form.js`; `type DurationMode` from `./duration.js`; `type ProductKind`, `type ResourceType`, `RESOURCE_TYPE_FOR_KIND`, `LIVE_GRANT_STATUSES` from `./types.js`.
+- Consumes: `Prisma` from `@prisma/client` (for `Prisma.DbNull` — Global Constraint 22); `withTenant`, `type TenantClient` from `@syntra/db`; `currentTenant` from `../tenant-context.js`; `recordEvent` from `../audit/audit-service.js`; `activeContracts` from `../identity/contract-service.js`; `type ConditionFacts` from `../provision/condition.js`; `audienceAdmits`, `audienceConditionSchema`, `type AudienceCondition`, `type SubjectSetFacts` from `./audience.js`; `formSchemaSchema`, `type FormSchema` from `./form.js`; `type DurationMode` from `./duration.js`; `type ProductKind`, `type ResourceType`, `RESOURCE_TYPE_FOR_KIND`, `LIVE_GRANT_STATUSES` from `./types.js`.
 - Produces:
   - `class ProductConfigurationError extends Error { constructor(readonly code: string, message: string) }`
   - `interface ProductGrantInput { resourceType: ResourceType; resourceId: string; targetSystemId?: string | null; optional?: boolean }`
@@ -4816,7 +5298,8 @@ Spec §6 and §15. **Every read path in this slice goes through `visibleProducts
   - `async function findVisibleProduct(tx: TenantClient, personId: string, productId: string, on?: Date): Promise<Product | null>`
   - `async function searchVisibleProducts(tx: TenantClient, personId: string, query: string, on?: Date): Promise<Product[]>`
   - `interface AudiencePreview { matched: number; total: number; sample: { personId: string; displayName: string }[] }`
-  - `async function previewAudience(tenantId: string, condition: AudienceCondition | null, limit?: number, on?: Date): Promise<AudiencePreview>`
+  - `async function allSubjectAudienceFacts(tx: TenantClient, on: Date): Promise<Map<string, SubjectAudienceFacts>>` — the set-based, fixed-query-count form of `subjectAudienceFacts`, consumed by `previewAudience` here and by Task 13's `previewExpirySweep`. **The per-person form must never be called in a loop over the tenant**: seven round trips × 1,180 persons inside a 5000 ms `prisma.$transaction` is a P2028, on the console preview and on the one nightly job that must not fail.
+  - `async function previewAudience(tenantId: string, condition: AudienceCondition | null, limit?: number, on?: Date): Promise<AudiencePreview>` — `limit` is now optional and **uncapped by default**; the screen's promise is "show me who".
   - `async function automateSettings(tx: TenantClient)` — get-or-create the single row
   - `async function updateAutomateSettings(tenantId: string, actorUserId: string | null, input: Record<string, unknown>): Promise<void>`
   - `async function upsertResourceOwner(tenantId: string, actorUserId: string | null, input: { resourceType: ResourceType; resourceId: string; ownerPersonId: string | null; ownerGroupId: string | null }): Promise<void>`
@@ -4839,6 +5322,7 @@ import {
   searchVisibleProducts,
   subjectAudienceFacts,
   updateAutomateSettings,
+  updateProduct,
   visibleProducts,
   type ProductInput,
 } from './catalog-service.js';
@@ -4963,6 +5447,31 @@ describe('visibility', () => {
       visibleProducts(tx, annaPersonId, NOW),
     );
     expect(forAnna).toEqual([]);
+  });
+
+  it('lets an update CLEAR the audience, so the product becomes visible to nobody', async () => {
+    // The case `createProduct` cannot cover, and the reason the write uses
+    // `Prisma.DbNull` rather than `?? undefined`: Prisma reads `undefined` as
+    // "do not touch this column", so an administrator editing a product to be
+    // visible to nobody would get a product whose previous audience is still
+    // in force. A security default made inert by a later layer.
+    const { id } = await createProduct(tenantId, null, product());
+    expect(
+      (await withTenant(tenantId, (tx) => visibleProducts(tx, annaPersonId, NOW))).map(
+        (p) => p.slug,
+      ),
+    ).toEqual(['statistics-licence']);
+
+    await updateProduct(tenantId, null, id, product({ audienceCondition: null }));
+
+    const after = await withTenant(tenantId, (tx) =>
+      visibleProducts(tx, annaPersonId, NOW),
+    );
+    expect(after).toEqual([]);
+    const row = await withTenant(tenantId, (tx) =>
+      tx.product.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(row.audienceCondition).toBeNull();
   });
 
   it('shows a product with an empty all to anybody with an active contract', async () => {
@@ -5263,6 +5772,48 @@ describe('previewAudience', () => {
     const preview = await previewAudience(tenantId, null, 10, NOW);
     expect(preview.matched).toBe(0);
   });
+
+  it('names everybody it matched when no limit is given', async () => {
+    // The screen's promise is "412 of 1,180 -- show me who", and capping the
+    // sample at 25 while leaving `matched` uncapped answers a different
+    // question from the one the copy asks.
+    const preview = await previewAudience(tenantId, { all: [] }, undefined, NOW);
+    expect(preview.matched).toBe(2);
+    expect(preview.sample).toHaveLength(2);
+  });
+
+  it('stays inside one transaction budget at a population the loop would not survive', async () => {
+    // 300 persons at roughly seven round trips each is over two thousand
+    // statements inside a `prisma.$transaction` whose default timeout is
+    // 5000 ms. The set-based form issues seven queries whatever the population.
+    // This case is here so that reverting to the per-person loop fails rather
+    // than merely getting slower.
+    await withTenant(tenantId, async (tx) => {
+      for (let i = 0; i < 300; i += 1) {
+        const person = await tx.person.create({
+          data: { tenantId, givenName: `P${i}`, familyName: 'Bulk' },
+        });
+        await tx.contract.create({
+          data: {
+            tenantId,
+            personId: person.id,
+            sequence: 1,
+            isPrimary: true,
+            startDate: day('2020-01-01'),
+            department: 'Finance',
+          },
+        });
+      }
+    });
+    const preview = await previewAudience(
+      tenantId,
+      { field: 'contract.department', op: 'equals', value: 'Finance' },
+      undefined,
+      NOW,
+    );
+    expect(preview.total).toBe(302);
+    expect(preview.matched).toBe(301);
+  });
 });
 
 describe('automateSettings', () => {
@@ -5285,6 +5836,44 @@ describe('automateSettings', () => {
       changed: { sweepThresholdPercent: { from: 10, to: 90 } },
     });
   });
+
+  it('records no change when the array setting is saved unchanged', async () => {
+    // `expiryWarningDays` is `Int[]`, and `next === before[key]` is never true
+    // for two arrays -- so a reference comparison writes the column and audits
+    // a change on every save of a form nobody edited.
+    await updateAutomateSettings(tenantId, null, { expiryWarningDays: [7, 1] });
+    const events = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'automate.settings.update' } }),
+    );
+    expect(events).toEqual([]);
+  });
+
+  it('records the change when the array setting actually moves', async () => {
+    await updateAutomateSettings(tenantId, null, { expiryWarningDays: [14, 7, 1] });
+    const settings = await withTenant(tenantId, (tx) => automateSettings(tx));
+    expect(settings.expiryWarningDays).toEqual([14, 7, 1]);
+  });
+
+  it('refuses a percentage outside the bounds with a message, not a 500', async () => {
+    const failure = await updateAutomateSettings(tenantId, null, {
+      sweepThresholdPercent: 900,
+    }).catch((e: unknown) => e);
+    expect((failure as ProductConfigurationError).code).toBe('setting-out-of-range');
+    const settings = await withTenant(tenantId, (tx) => automateSettings(tx));
+    expect(settings.sweepThresholdPercent).toBe(10);
+  });
+
+  it('does not race two concurrent first reads into a P2002', async () => {
+    // Reachable: runOutboxJob (every minute), runTickJob (every five) and
+    // runSweepJob all call this, and two of them finding nothing and both
+    // creating is a unique-constraint violation out of a job whose log
+    // explains nothing.
+    const [a, b] = await Promise.all([
+      withTenant(tenantId, (tx) => automateSettings(tx)),
+      withTenant(tenantId, (tx) => automateSettings(tx)),
+    ]);
+    expect(a.id).toBe(b.id);
+  });
 });
 ```
 
@@ -5298,7 +5887,7 @@ Expected: FAIL, "Failed to resolve import ./catalog-service.js".
 `packages/core/src/automate/catalog-service.ts`:
 
 ```ts
-import type { Product } from '@prisma/client';
+import { Prisma, type Product } from '@prisma/client';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
@@ -5471,9 +6060,21 @@ function productData(input: ProductInput, tenantId: string) {
     iconUrl: input.iconUrl ?? null,
     requestInstructions: input.requestInstructions ?? null,
     kind: input.kind,
-    audienceCondition: input.audienceCondition ?? undefined,
+    // `Prisma.DbNull`, NOT `undefined`. Prisma reads `undefined` as "do not
+    // touch this column", so `?? undefined` is harmless on create -- the
+    // column defaults to NULL -- and on UPDATE it makes clearing the audience
+    // impossible: an administrator editing a product to be visible to nobody
+    // gets a product whose previous audience is still in force. This is the
+    // one field in the slice whose default IS the access control (Global
+    // Constraint 11: NULL means NOBODY), and a control that cannot be reset is
+    // a control that is not there.
+    audienceCondition: (input.audienceCondition ?? Prisma.DbNull) as never,
     workflowId: input.workflowId,
-    formSchema: input.formSchema,
+    // `as never` because `FormSchema = FormField[]` and `FormField` is an
+    // `interface`, which TypeScript never gives an implicit index signature,
+    // so it is not assignable to `Prisma.InputJsonValue` (Global Constraint
+    // 21). The repository's convention, per `sync/source-service.ts:41`.
+    formSchema: input.formSchema as never,
     durationMode: input.durationMode,
     defaultDurationDays: input.defaultDurationDays,
     maxDurationDays: input.maxDurationDays,
@@ -5767,7 +6368,146 @@ export async function searchVisibleProducts(
 export interface AudiencePreview {
   matched: number;
   total: number;
+  /** Every matched person, not a page of them. The screen's promise is "show me who". */
   sample: { personId: string; displayName: string }[];
+}
+
+/**
+ * Everything the audience evaluator needs about EVERY person, in a fixed
+ * number of queries.
+ *
+ * The per-person `subjectAudienceFacts` is roughly seven round trips. Calling
+ * it in a loop over the tenant -- which both `previewAudience` and
+ * `previewExpirySweep` did in the first draft of this plan -- issues over
+ * eight thousand statements at spec section 17's own worked example of 1,180
+ * persons, inside `withTenant`, which is `prisma.$transaction` with Prisma's
+ * **5000 ms** default and no `transactionOptions` on the client. It raises
+ * P2028, and it does so on the console preview and on the one nightly job
+ * that must not fail.
+ *
+ * SEVEN queries, whatever the population -- `person`, `contract`, `user`,
+ * `groupMembership`, `orgUnit`, `accountEntitlement`, `accessGrant`. The
+ * property that matters is that the count is FIXED and independent of the
+ * population, not the number itself; the number is stated so that adding an
+ * eighth is a visible edit rather than a drift. The org-unit chain is walked
+ * in memory from one `orgUnit` read; the depth cap and the seen-set are the same
+ * as `orgUnitChainFor`'s, and for the same reason: `parentId` is a
+ * self-relation with no database-level acyclicity check.
+ *
+ * Persons with no contract in force on `on` are present in the map with
+ * `hasActiveContract: false`, so a caller can tell "not admitted" from
+ * "not employed" -- a distinction spec section 12 and Global Constraint 16
+ * both turn on.
+ */
+export async function allSubjectAudienceFacts(
+  tx: TenantClient,
+  on: Date,
+): Promise<Map<string, SubjectAudienceFacts>> {
+  const persons = await tx.person.findMany({
+    select: { id: true, givenName: true, familyName: true, status: true },
+    orderBy: [{ familyName: 'asc' }, { givenName: 'asc' }],
+  });
+  const contracts = await tx.contract.findMany({
+    where: { startDate: { lte: on }, OR: [{ endDate: null }, { endDate: { gte: on } }] },
+    orderBy: { sequence: 'asc' },
+  });
+  const users = await tx.user.findMany({
+    select: { id: true, personId: true, orgUnitId: true },
+  });
+  const memberships = await tx.groupMembership.findMany({
+    select: { userId: true, groupId: true },
+  });
+  const orgUnits = await tx.orgUnit.findMany({ select: { id: true, parentId: true } });
+  const holdings = await tx.accountEntitlement.findMany({
+    where: { state: 'held' },
+    select: { entitlementId: true, account: { select: { personId: true } } },
+  });
+  const grants = await tx.accessGrant.findMany({
+    where: { resourceType: 'entitlement', status: { in: [...LIVE_GRANT_STATUSES] } },
+    select: { subjectPersonId: true, resourceId: true },
+  });
+
+  const parentOf = new Map(orgUnits.map((u) => [u.id, u.parentId]));
+  const chainOf = (orgUnitId: string | null): string[] => {
+    const chain: string[] = [];
+    const seen = new Set<string>();
+    let current = orgUnitId;
+    for (let depth = 0; current !== null && depth < 64; depth += 1) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      chain.push(current);
+      current = parentOf.get(current) ?? null;
+    }
+    return chain;
+  };
+
+  const usersByPerson = new Map<string, typeof users>();
+  for (const user of users) {
+    if (user.personId === null) continue;
+    const list = usersByPerson.get(user.personId) ?? [];
+    list.push(user);
+    usersByPerson.set(user.personId, list);
+  }
+  const groupsByUser = new Map<string, string[]>();
+  for (const membership of memberships) {
+    const list = groupsByUser.get(membership.userId) ?? [];
+    list.push(membership.groupId);
+    groupsByUser.set(membership.userId, list);
+  }
+  const contractsByPerson = new Map<string, typeof contracts>();
+  for (const contract of contracts) {
+    const list = contractsByPerson.get(contract.personId) ?? [];
+    list.push(contract);
+    contractsByPerson.set(contract.personId, list);
+  }
+  const entitlementsByPerson = new Map<string, Set<string>>();
+  const addEntitlement = (personId: string | null | undefined, id: string) => {
+    if (personId === null || personId === undefined) return;
+    const set = entitlementsByPerson.get(personId) ?? new Set<string>();
+    set.add(id);
+    entitlementsByPerson.set(personId, set);
+  };
+  for (const holding of holdings) addEntitlement(holding.account?.personId, holding.entitlementId);
+  for (const grant of grants) addEntitlement(grant.subjectPersonId, grant.resourceId);
+
+  const out = new Map<string, SubjectAudienceFacts>();
+  for (const person of persons) {
+    const own = contractsByPerson.get(person.id) ?? [];
+    const groupIds = new Set<string>();
+    const orgUnitChainIds = new Set<string>();
+    for (const user of usersByPerson.get(person.id) ?? []) {
+      for (const groupId of groupsByUser.get(user.id) ?? []) groupIds.add(groupId);
+      for (const unit of chainOf(user.orgUnitId)) orgUnitChainIds.add(unit);
+    }
+    out.set(person.id, {
+      personStatus: person.status,
+      hasActiveContract: own.length > 0,
+      groupIds: [...groupIds],
+      orgUnitChainIds: [...orgUnitChainIds],
+      entitlementIds: [...(entitlementsByPerson.get(person.id) ?? [])],
+      contracts: own.map((contract) => ({
+        'contract.department': contract.department,
+        'contract.jobTitle': contract.jobTitle,
+        'contract.costCentre': contract.costCentre,
+        'contract.employer': contract.employer,
+        'contract.location': contract.location,
+        // Prisma returns Decimal. The evaluator compares numerically and a
+        // Decimal object compared with `>` is a string comparison in disguise.
+        'contract.fte': contract.fte === null ? null : Number(contract.fte),
+        'person.status': person.status,
+      })),
+    });
+  }
+  return out;
+}
+
+/** The display names the preview shows, read alongside the facts. */
+async function personNamesFor(tx: TenantClient): Promise<Map<string, string>> {
+  const persons = await tx.person.findMany({
+    select: { id: true, givenName: true, familyName: true },
+    orderBy: [{ familyName: 'asc' }, { givenName: 'asc' }],
+  });
+  return new Map(persons.map((p) => [p.id, `${p.givenName} ${p.familyName}`]));
 }
 
 /**
@@ -5780,35 +6520,34 @@ export interface AudiencePreview {
 export async function previewAudience(
   tenantId: string,
   condition: AudienceCondition | null,
-  limit = 25,
+  limit?: number,
   on: Date = new Date(),
 ): Promise<AudiencePreview> {
-  return withTenant(tenantId, async (tx) => {
-    const persons = await tx.person.findMany({
-      select: { id: true, givenName: true, familyName: true },
-      orderBy: [{ familyName: 'asc' }, { givenName: 'asc' }],
-    });
+  // One short transaction that returns plain data; the evaluation, which is
+  // pure, happens after it has committed.
+  const loaded = await withTenant(tenantId, async (tx) => ({
+    facts: await allSubjectAudienceFacts(tx, on),
+    names: await personNamesFor(tx),
+  }));
 
-    let total = 0;
-    let matched = 0;
-    const sample: { personId: string; displayName: string }[] = [];
+  let total = 0;
+  let matched = 0;
+  const sample: { personId: string; displayName: string }[] = [];
 
-    for (const person of persons) {
-      const facts = await subjectAudienceFacts(tx, person.id, on);
-      if (!facts.hasActiveContract) continue;
-      total += 1;
-      if (!audienceAdmits(condition, facts.contracts, facts)) continue;
-      matched += 1;
-      if (sample.length < limit) {
-        sample.push({
-          personId: person.id,
-          displayName: `${person.givenName} ${person.familyName}`,
-        });
-      }
+  for (const [personId, facts] of loaded.facts) {
+    if (!facts.hasActiveContract) continue;
+    total += 1;
+    if (!audienceAdmits(condition, facts.contracts, facts)) continue;
+    matched += 1;
+    // Uncapped by default. The console's copy is "412 of 1,180 -- show me
+    // who", and answering it with 25 names is not that. `limit` stays
+    // available for a caller that genuinely wants a page.
+    if (limit === undefined || sample.length < limit) {
+      sample.push({ personId, displayName: loaded.names.get(personId) ?? personId });
     }
+  }
 
-    return { matched, total, sample };
-  });
+  return { matched, total, sample };
 }
 
 /**
@@ -5817,12 +6556,21 @@ export async function previewAudience(
  * Get-or-create rather than seeded at tenant creation, because Automate lands
  * after tenants already exist and a nullable settings read scattered through
  * six services is six places to forget the defaults.
+ *
+ * `upsert`, not find-then-create: `runOutboxJob` (every minute), `runTickJob`
+ * (every five) and `runSweepJob` all call this, so two callers finding nothing
+ * and both creating is reachable, and the loser gets a P2002 on
+ * `AutomateSettings.tenantId` out of a job that then fails for no reason a log
+ * explains. An empty `update` makes the row's existence the whole point of the
+ * statement.
  */
 export async function automateSettings(tx: TenantClient) {
   const tenantId = await currentTenant(tx);
-  const existing = await tx.automateSettings.findUnique({ where: { tenantId } });
-  if (existing !== null) return existing;
-  return tx.automateSettings.create({ data: { tenantId } });
+  return tx.automateSettings.upsert({
+    where: { tenantId },
+    update: {},
+    create: { tenantId },
+  });
 }
 
 const SETTING_KEYS = [
@@ -5837,6 +6585,44 @@ const SETTING_KEYS = [
   'maxApprovers',
   'delegatedBulkLimit',
 ] as const;
+
+/**
+ * Bounds checked here so that an out-of-range value is a message against a
+ * field rather than a 500 out of a constraint violation. Kept next to
+ * `SETTING_KEYS` so adding a setting without a bound is visible.
+ *
+ * **These are NOT simply the CHECK constraints restated.** The migration
+ * enforces `BETWEEN 0 AND 100` on the three percentages and nothing but
+ * `> 0` / `>= 0` on the four day/hour/count settings -- it has no upper bound
+ * on any of them. The maxima below are this service's own judgement, and the
+ * only place they exist besides `settingsBody` in `@syntra/contracts`, which
+ * carries the same numbers so the route refuses what the service would refuse
+ * rather than accepting a value that fails one layer in. If these two lists
+ * disagree, the route is a lie about what the product accepts.
+ */
+const SETTING_BOUNDS: Record<string, { min: number; max: number }> = {
+  sweepThresholdPercent: { min: 0, max: 100 },
+  perProductSweepThresholdPercent: { min: 0, max: 100 },
+  personPopulationDropPercent: { min: 0, max: 100 },
+  fulfilmentSlaHours: { min: 1, max: 8760 },
+  preHireHorizonDays: { min: 0, max: 365 },
+  maxDelegationDays: { min: 1, max: 365 },
+  maxApprovers: { min: 1, max: 100 },
+  delegatedBulkLimit: { min: 1, max: 1000 },
+};
+
+/** Structural equality, because two of these settings are arrays. */
+function sameSetting(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, index) => value === b[index])
+    );
+  }
+  return a === b;
+}
 
 /**
  * Changing a threshold is a privileged action for the reason Provision treats
@@ -5857,7 +6643,40 @@ export async function updateAutomateSettings(
     for (const key of SETTING_KEYS) {
       if (!(key in input)) continue;
       const next = input[key];
-      if (next === before[key]) continue;
+
+      // Validated here, against the same numbers the CHECK constraints
+      // enforce. Without this a percentage of 900 reaches PostgreSQL and
+      // comes back as an opaque 500; the constraint is the backstop, not the
+      // interface.
+      const bound = SETTING_BOUNDS[key];
+      if (bound !== undefined) {
+        if (typeof next !== 'number' || !Number.isInteger(next)) {
+          throw new ProductConfigurationError(
+            'setting-invalid',
+            `${key} must be a whole number.`,
+          );
+        }
+        if (next < bound.min || next > bound.max) {
+          throw new ProductConfigurationError(
+            'setting-out-of-range',
+            `${key} must be between ${bound.min} and ${bound.max}.`,
+          );
+        }
+      }
+      if (key === 'expiryWarningDays') {
+        if (!Array.isArray(next) || next.some((d) => !Number.isInteger(d) || d < 0)) {
+          throw new ProductConfigurationError(
+            'setting-invalid',
+            'expiryWarningDays must be a list of whole numbers of days.',
+          );
+        }
+      }
+
+      // Structural, not `===`. `expiryWarningDays` is `Int[]`, and two arrays
+      // are never `===`, so a reference comparison records it as changed and
+      // rewrites it on every save -- and the audit log fills with a field
+      // nobody touched.
+      if (sameSetting(next, before[key])) continue;
       data[key] = next;
       changed[key] = { from: before[key], to: next };
     }
@@ -6522,14 +7341,19 @@ export async function upsertWorkflow(
           sequence: stage.sequence,
           name: stage.name,
           selector: stage.selector,
-          selectorConfig: stage.selectorConfig,
+          // `as never` on all three: `SelectorConfig` is an `interface`, and
+          // TypeScript gives an implicit index signature to object type
+          // literals and type aliases but NEVER to an interface, so it is not
+          // assignable to `Prisma.InputJsonValue`. Global Constraint 21; the
+          // repository's convention is `sync/source-service.ts:41`.
+          selectorConfig: stage.selectorConfig as never,
           quorum: stage.quorum,
           fallbackSelector: stage.fallbackSelector,
-          fallbackConfig: stage.fallbackConfig,
+          fallbackConfig: stage.fallbackConfig as never,
           slaHours: stage.slaHours,
           onTimeout: stage.onTimeout,
           escalationSelector: stage.escalationSelector,
-          escalationConfig: stage.escalationConfig,
+          escalationConfig: stage.escalationConfig as never,
           expiryHours: stage.expiryHours,
         })),
       });
@@ -6736,15 +7560,18 @@ Spec §5 and §10. **This is the task that makes Automate work without a second 
 - Test: `packages/core/src/automate/desired-union.test.ts`
 
 **Interfaces:**
-- Consumes: `desiredState`, `type DesiredState`, `type DesiredStateInput`, `type KnownHolding`, `planActions`, `type PlannedAction`, `remitFor`, `previewProvisionRun`, `applyProvisionRun`, `explainPersonAccess`, `type PersonAccess` — all from Provision. `FakeTarget` from `@syntra/connectors`. `localMasterKeyProvider` from `../vault/master-key.js`. `IN_FORCE_GRANT_STATUSES` from `./types.js`.
+- Consumes: `desiredState`, `type DesiredState`, `type DesiredStateInput` (including its **existing** `entitlementStatus` map, which Step 4 reads and this plan does not add — see the hard-dependency table), `type KnownHolding`, `planActions`, `type PlannedAction`, `remitFor`, `previewProvisionRun`, `applyProvisionRun`, `explainPersonAccess`, `type PersonAccess` — all from Provision. `FakeTarget` from **`@syntra/connectors/testing`** (NOT the package root — see Global Constraint 9). `localMasterKeyProvider` from `../vault/master-key.js`. `IN_FORCE_GRANT_STATUSES` from `./types.js`.
 - Produces (all in `packages/core/src/provision/types.ts` unless noted):
   - `interface GrantFacts { grantId: string; requestId: string | null; entitlementId: string; startsAt: Date; endsAt: Date | null }`
   - `interface GrantAttribution { grantId: string; requestId: string | null; endsAt: Date | null }`
+  - `interface GrantException { grantId: string; entitlementId: string; message: string }`
+  - `UnprocessableKind` gains `'unresolvable_grant'`
+  - `DesiredState` gains `grantExceptions: GrantException[]`
   - `DesiredState` gains `grantAttribution: Map<string, GrantAttribution[]>`
   - `DesiredStateInput` gains `grants: GrantFacts[]`
   - `KnownHolding.origin` gains `'request'`; `KnownHolding` gains `grantedByRequestId: string | null`
   - `PlannedAction` gains `attributedGrantIds: string[]`
-  - `remitFor` keeps its signature and widens what it returns
+  - `remitFor` is **unchanged**; a new `async function grantedEntitlementsFor(tx: TenantClient, targetId: string): Promise<Set<string>>` sits beside it in `entitlement-service.ts` and is consumed only by `apply.ts`'s archive strip and `run-service.ts`'s membership probe (H3 — the reconciler's tenant-wide remit is deliberately not altered)
   - `PersonAccess`'s entitlement rows gain `grantId: string | null`, `requestId: string | null`, `grantEndsAt: Date | null`
 
 - [ ] **Step 1: Write the failing test**
@@ -6755,7 +7582,7 @@ Spec §5 and §10. **This is the task that makes Automate work without a second 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { FakeTarget } from '@syntra/connectors';
+import { FakeTarget } from '@syntra/connectors/testing';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import {
   createTarget,
@@ -6765,7 +7592,7 @@ import {
 import { previewProvisionRun } from '../provision/run-service.js';
 import { applyProvisionRun } from '../provision/apply.js';
 import { explainPersonAccess } from '../provision/explain.js';
-import { remitFor } from '../provision/entitlement-service.js';
+import { grantedEntitlementsFor, remitFor } from '../provision/entitlement-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 const NOW = new Date('2026-06-15T00:00:00Z');
@@ -7083,24 +7910,226 @@ describe('collision 2 — a contract change removes what a rule granted', () => 
   });
 });
 
-describe('remitFor', () => {
-  it('includes an entitlement named only by a live grant', async () => {
-    // Without this, archiving an account would leave a requested membership
-    // in place, and the unreadable-membership probe would never look at the
-    // groups requests put people into.
-    const before = await withTenant(tenantId, (tx) => remitFor(tx, targetId));
-    expect(before.has(statsEntitlementId)).toBe(false);
-
+describe('the remit is NOT widened by a grant', () => {
+  it('leaves remitFor rule-only when a live grant names an entitlement', async () => {
+    // The remit is TENANT-WIDE: reconcile classifies every account's holding
+    // of every entitlement against it. If one person's approved request added
+    // "Stats" to it, every other holding of Stats in the tenant would change
+    // classification at once -- a drift finding marked proposedForRevocation
+    // in authoritative mode. A run that wants to revoke five hundred holdings
+    // because one person asked for something is not a review a human can do.
     await grant(statsEntitlementId);
-    const after = await withTenant(tenantId, (tx) => remitFor(tx, targetId));
-    expect(after.has(statsEntitlementId)).toBe(true);
-    expect(after.has(financeEntitlementId)).toBe(true);
+    const remit = await withTenant(tenantId, (tx) => remitFor(tx, targetId));
+    expect(remit.has(financeEntitlementId)).toBe(true);
+    expect(remit.has(statsEntitlementId)).toBe(false);
   });
 
-  it('drops an entitlement once its grant is no longer live', async () => {
-    await grant(statsEntitlementId, { status: 'expired' });
-    const remit = await withTenant(tenantId, (tx) => remitFor(tx, targetId));
-    expect(remit.has(statsEntitlementId)).toBe(false);
+  it('reports the grant-derived set separately, and drops it when the grant ends', async () => {
+    const created = await grant(statsEntitlementId);
+    const during = await withTenant(tenantId, (tx) =>
+      grantedEntitlementsFor(tx, targetId),
+    );
+    expect(during.has(statsEntitlementId)).toBe(true);
+
+    await withTenant(tenantId, (tx) =>
+      tx.accessGrant.update({ where: { id: created.id }, data: { status: 'expired' } }),
+    );
+    const after = await withTenant(tenantId, (tx) =>
+      grantedEntitlementsFor(tx, targetId),
+    );
+    expect(after.has(statsEntitlementId)).toBe(false);
+  });
+
+  it('does not reclassify a second person who holds the same entitlement by hand', async () => {
+    // The blast-radius case. Two accounts hold Stats: Anna by an approved
+    // request, Bo by somebody adding them at the target years ago. In
+    // authoritative mode, Bo's holding must stay out of remit and must NOT be
+    // proposed for revocation because Anna asked for something.
+    const boId = await withTenant(tenantId, async (tx) => {
+      const bo = await tx.person.create({
+        data: { tenantId, givenName: 'Bo', familyName: 'Larsen' },
+      });
+      await tx.contract.create({
+        data: {
+          tenantId,
+          personId: bo.id,
+          sequence: 1,
+          isPrimary: true,
+          startDate: day('2020-01-01'),
+          department: 'Finance',
+        },
+      });
+      return bo.id;
+    });
+    await withTenant(tenantId, (tx) =>
+      tx.targetSystem.update({
+        where: { id: targetId },
+        data: { enforcementMode: 'authoritative' },
+      }),
+    );
+
+    // Bo gets an account through the Finance rule, then acquires Stats at the
+    // target with nothing in Syntra recording it.
+    await runAndApply();
+    const boAccount = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findFirstOrThrow({
+        where: { personId: boId, targetSystemId: targetId },
+      }),
+    );
+    const boHeld = target.holdings.get(boAccount.anchor!) ?? new Set<string>();
+    boHeld.add(STATS_DN);
+    target.holdings.set(boAccount.anchor!, boHeld);
+
+    await grant(statsEntitlementId);
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+
+    const revocations = await withTenant(tenantId, (tx) =>
+      tx.provisionAction.findMany({
+        where: { runId: run.id, actionType: 'revoke_entitlement' },
+      }),
+    );
+    expect(
+      revocations.filter(
+        (a) => a.entitlementId === statsEntitlementId && a.accountId === boAccount.id,
+      ),
+    ).toEqual([]);
+
+    const findings = await withTenant(tenantId, (tx) =>
+      tx.driftFinding.findMany({
+        where: { entitlementId: statsEntitlementId, accountId: boAccount.id },
+      }),
+    );
+    // Reported in both modes -- additive must mean "I saw this and left it" --
+    // but never proposed for revocation, because Bo's holding is outside the
+    // remit and Anna's request must not drag it in.
+    expect(findings.length).toBeGreaterThan(0);
+    for (const finding of findings) {
+      expect(
+        (finding.detail as { proposedForRevocation?: boolean }).proposedForRevocation,
+      ).not.toBe(true);
+    }
+  });
+});
+
+describe('a grant is never evidence that somebody is still employed', () => {
+  it('still disables and revokes for a leaver holding a permanent grant', async () => {
+    // NAMED for what it asserts. `deactivate_syntra_user` is deliberately NOT
+    // asserted and the name no longer claims it: this fixture creates a
+    // `Person` and a `Contract` and no `User` row, so that action is never
+    // planned and asserting it would fail against the correct fix. The two
+    // that bite are here.
+    //
+    // The most serious defect this plan was reviewed for. `planActions` gates
+    // the whole leaver ladder on `!state.account?.required`, and a permanent
+    // grant has `endsAt: null`, so its window covers `now` forever. Union the
+    // grant into `accountRequired` without gating it on employment and a
+    // departed person is never disabled, never deactivated and never
+    // archived -- and the entitlement is kept too, because the revoke loop
+    // skips anything still desired. A feature added to grant access silently
+    // disables the mechanism that removes it, and it looks like it works.
+    //
+    // None of the other cases in this file ends a contract, which is why none
+    // of them can catch it.
+    await grant(statsEntitlementId);
+    await runAndApply();
+
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({
+        where: { personId },
+        data: { endDate: day('2026-05-31') },
+      }),
+    );
+
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const actions = await withTenant(tenantId, (tx) =>
+      tx.provisionAction.findMany({ where: { runId: run.id } }),
+    );
+    const types = actions.map((a) => a.actionType);
+
+    expect(types).toContain('disable_account');
+    // The requested entitlement goes with it. Provision granted it, so it is
+    // in `heldWithinRemit` whatever the tenant-wide remit says, and desired
+    // state no longer names it.
+    expect(
+      actions
+        .filter((a) => a.actionType === 'revoke_entitlement')
+        .map((a) => a.entitlementId),
+    ).toContain(statsEntitlementId);
+    // And nothing proposes granting it again on the next pass.
+    expect(types).not.toContain('grant_entitlement');
+  });
+
+  it('keeps a scheduled leaver out of desired state entirely rather than half in it', async () => {
+    // The same gate, seen from the account side: with every contract ended,
+    // the account is not required, so the early return fires and the person
+    // carries no grant attribution at all.
+    await grant(statsEntitlementId);
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({
+        where: { personId },
+        data: { endDate: day('2026-05-31') },
+      }),
+    );
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const actions = await withTenant(tenantId, (tx) =>
+      tx.provisionAction.findMany({
+        where: { runId: run.id, actionType: 'create_account' },
+      }),
+    );
+    expect(actions).toEqual([]);
+  });
+});
+
+describe('a grant naming an entitlement the catalog does not hold', () => {
+  it('is skipped and reported as an exception rather than planned', async () => {
+    // Proposing it produces a grant_entitlement against a group that is not
+    // there, which fails `not_found` every night forever with nothing
+    // recording why. Making the PERSON unprocessable -- the answer a rule
+    // gets -- would revoke everything else they hold over one request.
+    // `entitlementStatus` is built from the STORED catalog status in phase 6;
+    // the run does not refresh the catalog itself, so writing the status here
+    // is what a previous `refreshEntitlements` would have written.
+    await withTenant(tenantId, (tx) =>
+      tx.entitlement.update({
+        where: { id: statsEntitlementId },
+        data: { status: 'missing' },
+      }),
+    );
+    await grant(statsEntitlementId);
+
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const actions = await withTenant(tenantId, (tx) =>
+      tx.provisionAction.findMany({
+        where: { runId: run.id, entitlementId: statsEntitlementId },
+      }),
+    );
+    expect(actions).toEqual([]);
+
+    const exceptions = await withTenant(tenantId, (tx) =>
+      tx.provisionException.findMany({ where: { runId: run.id } }),
+    );
+    expect(exceptions.map((e) => e.kind)).toContain('unresolvable_grant');
+    expect(exceptions.find((e) => e.kind === 'unresolvable_grant')?.personId).toBe(personId);
+
+    // And the rest of the person's access is untouched: Finance still lands.
+    const finance = await withTenant(tenantId, (tx) =>
+      tx.provisionAction.findMany({
+        where: { runId: run.id, entitlementId: financeEntitlementId },
+      }),
+    );
+    expect(finance.length).toBeGreaterThan(0);
   });
 });
 
@@ -7137,9 +8166,12 @@ Append to `packages/core/src/provision/types.ts`:
 /**
  * An AccessGrant, flattened to what desired state needs.
  *
- * Only grants whose window covers `now` are handed in -- Automate filters
- * before calling, so this carries no status. `endsAt` travels only so the
- * attribution can say "until 30 June" without a second read.
+ * The caller hands in every `pending`/`active` grant for the target; the
+ * WINDOW filter and the employment gate are applied inside `desiredState`,
+ * deliberately, because both are properties of this function's answer and not
+ * of the caller's query. `endsAt` travels so the attribution can say "until
+ * 30 June" without a second read, and so the window filter has something to
+ * compare.
  */
 export interface GrantFacts {
   grantId: string;
@@ -7147,6 +8179,24 @@ export interface GrantFacts {
   entitlementId: string;
   startsAt: Date;
   endsAt: Date | null;
+}
+
+/**
+ * A grant that could not be put into desired state, and why.
+ *
+ * NOT an `unprocessable` person. A rule is authored by an administrator for a
+ * population, so a rule naming a missing entitlement means the administrator's
+ * intent cannot be evaluated at all and the safe answer is "this person gets
+ * no actions". A grant is one person's approved request, and dropping their
+ * whole desired state because of it would revoke everything else they hold.
+ * So the grant is skipped and named, and the run carries a
+ * `ProvisionException` for it — visible, per-person, working-list shaped,
+ * exactly as Provision already does for the rule case.
+ */
+export interface GrantException {
+  grantId: string;
+  entitlementId: string;
+  message: string;
 }
 
 /**
@@ -7175,7 +8225,31 @@ In the same file, add one field to `DesiredState`, after `attribution`:
    * redundant -- they end independently.
    */
   grantAttribution: Map<string, GrantAttribution[]>;
+
+  /**
+   * Grants left OUT of the set because the entitlement they name is not
+   * `present` in the target catalog. Never empty silently: phase 7 turns each
+   * of these into a `ProvisionException`.
+   */
+  grantExceptions: GrantException[];
 ```
+
+and add `'unresolvable_grant'` to `UnprocessableKind`:
+
+```ts
+export type UnprocessableKind =
+  | 'no_contracts'
+  | 'unresolvable_rule'
+  /** A grant named an entitlement the target catalog does not hold. */
+  | 'unresolvable_grant'
+  | 'template_unresolvable'
+  | 'container_missing'
+  | 'name_generation_exhausted'
+  | 'target_read_incomplete'
+  | 'account_conflict';
+```
+
+and add the same value to the `/// 'no_contracts' | 'unresolvable_rule' | ...` doc comment on `ProvisionException.kind` in `packages/db/prisma/schema.prisma`. That column has no check constraint and a `///` comment produces no DDL, so this is a comment-only edit and **no migration follows from it** — but leaving the comment naming six of the seven kinds is how the next reader concludes the seventh is a bug.
 
 and one field to `DesiredStateInput`, after `rules`:
 
@@ -7205,24 +8279,91 @@ export interface KnownHolding {
 
 - [ ] **Step 4: Union the grants into desired state**
 
-In `packages/core/src/provision/desired.ts`, inside `desiredState`:
+**Read `packages/core/src/provision/desired.ts` before making any of these edits, and map each one onto what is actually there.** The names quoted below — `accountRequired` as a `let`, the horizon loop that assigns it, `activeAtHorizon` — are taken from **Provision's plan**, not from Provision's code, and Provision has deviated from its plan repeatedly by its own ledger's count: it renamed a constraint in Task 1, restructured a fixture boundary in Task 3 and corrected three brief instructions in Task 4. At the time this step was last revised the file on disk already differed: it declares `const accountRequired = accountGrantedBy(rules, person, activeInWindow)` rather than a `let` assigned in a loop, and it has **no local called `activeAtHorizon`** at all — it has `activeNow`, `activeInWindow` and `notYetStarted`. Locate each thing below **by its role**, not by its name:
 
-1. Where the function currently decides whether an account is required from the matching rules, replace that decision with the union of the rule answer and the grant answer:
+- *the rule-only account flag* — whatever `desiredState` computes to decide that the rules alone require an account, before any grant is considered;
+- *the set of contracts the account decision is taken over* — the same set, so a person the account decision treats as gone is a person the grant gate treats as gone;
+- *the point after which that set exists and before the entitlement/attribution loop runs* — where the grant gate and `grantsInForce` are inserted;
+- *every `return` out of `desiredState`* — for edit 5.
+
+**The properties are what must hold, and they are not negotiable:**
+
+1. The grant term is gated on the person still being employed at the horizon: if the account decision's contract set is empty, `grantsInForce` is empty. A grant is never evidence that somebody is still employed.
+2. The union for `account.required` is taken **after** that gate, so the gate cannot be bypassed by the union.
+3. The grant-derived entitlements are unioned into `entitlements` after the rule loop, with their attribution kept in a separate map.
+
+If the file's shape has moved far enough that an edit below cannot be applied as written, apply the property and say so in the task's notes — do not force the literal text onto a file that no longer has that shape. **Six literal edits, in this order**, on the shape Provision's plan describes. An earlier draft of this step said "rename it to that if it is currently called something else"; the rename is not conditional *where the `let` exists*, and the exact lines are named below, because getting it wrong produces a shadowing bug rather than a compile error.
+
+1. **Rename the rule-only local.** `desired.ts` declares `let accountRequired = false;` immediately after `const attribution = new Map<string, Attribution[]>();`, and assigns it in exactly one place, inside the horizon loop. Two edits, and no others:
+
+   - at its declaration: `let accountRequired = false;` becomes `let accountRequiredFromRules = false;`
+   - at its one assignment: `if (rule.grantsAccount) accountRequired = true;` becomes `if (rule.grantsAccount) accountRequiredFromRules = true;`
+
+   Leave every **read** of `accountRequired` alone — `if (!accountRequired)` and the `account: { required: accountRequired, ... }` construction both keep working, because edit 3 re-introduces `accountRequired` as a `const` in the same scope. Do not delete the `let` and reuse the name in an inner block: a surviving `let` plus a `const` of the same name in the same block is a redeclaration error, and a `const` in an inner block is a silent shadow that reads the wrong value.
+
+2. **Compute the grants in force, gated on the person still being employed.** Insert immediately after the `const notYetStarted = ...` block, which is the first point at which `activeAtHorizon` exists:
+
+```ts
+  // A grant says what an ACTIVE person may ADDITIONALLY have. It must never
+  // be evidence that somebody is still employed.
+  //
+  // `activeAtHorizon.length === 0` is the whole of this gate and it is not
+  // defensive. `planActions` gates `disable_account`, `deactivate_syntra_user`
+  // and `archive_account` on `!state.account?.required`, and a `permanent`
+  // grant has `endsAt: null`, so its window covers `now` forever. Ungated, a
+  // departed person holding any live grant is never disabled, never
+  // deactivated and never archived -- and the requested entitlement is kept
+  // too, because it goes back into `entitlements` and the revoke loop skips
+  // anything still desired. A feature added to GRANT access would have
+  // silently disabled the mechanism that REMOVES it, and it would have looked
+  // like it worked, because the grants apply correctly and nobody watches for
+  // an absence.
+  //
+  // Automate's sweep lapsing these grants on the contract end date is not a
+  // substitute: the sweep and the run are independent jobs with no ordering,
+  // a sweep that trips either guard axis sits unapplied, and a sweep can sit
+  // `blocked` waiting for a human. None of those may keep a leaver's account
+  // alive in the meantime.
+  const grantsInWindow =
+    activeAtHorizon.length === 0
+      ? []
+      : input.grants.filter(
+          (grant) =>
+            grant.startsAt <= input.now &&
+            (grant.endsAt === null || input.now < grant.endsAt),
+        );
+
+  // A grant naming an entitlement the catalog does not hold is skipped and
+  // named, not proposed. Proposing it produces a `grant_entitlement` against
+  // a group that is not there, which fails `not_found` every night forever
+  // with nothing recording why; making the PERSON unprocessable for it -- the
+  // answer the rule pre-check above gives -- would revoke everything else
+  // they hold over one request.
+  const grantExceptions: GrantException[] = [];
+  const grantsInForce = grantsInWindow.filter((grant) => {
+    const status = input.entitlementStatus.get(grant.entitlementId) ?? 'missing';
+    if (status === 'present') return true;
+    grantExceptions.push({
+      grantId: grant.grantId,
+      entitlementId: grant.entitlementId,
+      message: `grant ${grant.grantId} names entitlement ${grant.entitlementId}, which is ${status} in the target catalog; it is left out of desired state rather than planned against a group that is not there`,
+    });
+    return false;
+  });
+```
+
+3. **Take the union for the account decision.** Immediately after the horizon loop that now sets `accountRequiredFromRules`, add:
 
 ```ts
   // A group membership without an account is not a thing a directory can
   // hold. Somebody whose only claim on this target is a request grant still
   // needs an account to hold it, or the grant action is planned against an
-  // account nothing created and fails `not_found` every night.
-  const grantsInForce = input.grants.filter(
-    (grant) => grant.startsAt <= input.now && (grant.endsAt === null || input.now < grant.endsAt),
-  );
+  // account nothing created and fails `not_found` every night. The employment
+  // gate above is what stops this reading as "still employed".
   const accountRequired = accountRequiredFromRules || grantsInForce.length > 0;
 ```
 
-   `accountRequiredFromRules` is whatever local the function already computes from `rules.some((rule) => rule.grantsAccount && matches)`; rename it to that if it is currently called something else, and use `accountRequired` from there on.
-
-2. After the loop that fills `entitlements` and `attribution` from the rules, add:
+4. After the loop that fills `entitlements` and `attribution` from the rules, add:
 
 ```ts
   // The union. The entitlement set is what the rules produce PLUS what the
@@ -7241,12 +8382,12 @@ In `packages/core/src/provision/desired.ts`, inside `desiredState`:
   }
 ```
 
-3. Add `grantAttribution` to every `DesiredState` the function returns. The unprocessable and not-yet-started early returns get `grantAttribution: new Map()` — an unprocessable person is excluded from the plan entirely, and a future joiner's grants are `scheduled` and confer nothing.
+5. Add `grantAttribution` and `grantExceptions` to every `DesiredState` the function returns. The unprocessable early returns get `grantAttribution: new Map()` and `grantExceptions: []` — they sit above the point where either local exists, and an unprocessable person is excluded from the plan entirely. The `if (!accountRequired)` return carries the real `grantAttribution` and `grantExceptions`: a leaver reaches it with both empty by construction, because the gate emptied `grantsInWindow`, while an active person with no rule-granted account and one unresolvable grant reaches it carrying an exception that must not be dropped.
 
-4. Import the two new types at the top of the file:
+6. Import the new types at the top of the file:
 
 ```ts
-import type { GrantAttribution, GrantFacts } from './types.js';
+import type { GrantAttribution, GrantException, GrantFacts } from './types.js';
 ```
 
 - [ ] **Step 5: Carry the attribution onto the planned action**
@@ -7272,25 +8413,45 @@ Every construction of a `PlannedAction` in this file gains `attributedGrantIds: 
 
 `revoke_entitlement` keeps `attributedGrantIds: []`: by the time a revocation is proposed the grant has already left the union, so there is no live grant to attribute it to. Reflection finds the removal by its `SweepAction` instead (Task 14).
 
-- [ ] **Step 6: Widen the remit**
+- [ ] **Step 6: Add the grant-derived entitlement set — WITHOUT widening the reconciler's remit**
 
-In `packages/core/src/provision/entitlement-service.ts`, replace the body of `remitFor`:
+`remitFor` is **tenant-wide**: it answers "which entitlements does Provision consider itself responsible for on this target", and `reconcile` uses it to classify *every account's* holding of every entitlement. Widening it so that one person's approved request adds an entitlement to it changes the classification of every other holding of that entitlement in the tenant:
 
 ```ts
-export async function remitFor(
+      const inRemit = input.remit.has(entitlementId);
+      ...
+      const proposedForRevocation = input.enforcementMode === 'authoritative' && inRemit;
+      record('unmanaged_entitlement', ..., { proposedForRevocation });
+      if (inRemit && input.enforcementMode === 'additive') heldWithinRemit.add(entitlementId);
+```
+
+Nobody has ever requested "Stats", no rule names it, five hundred people hold it by hand. Anna requests it and it is approved. On the next run all five hundred holdings change classification at once. Provision's per-entitlement guard axis will make that run confirmable rather than auto-applying, so it is not a silent mass revocation — but a run that suddenly wants to revoke five hundred holdings because one person asked for something is not a review a human can do usefully. **Ruling A-1's finding 5 said the widening had to be called out at the call site; the honest answer is that it should not happen at the tenant-wide call site at all.**
+
+**The revocation path does not need it.** `reconcile` puts an entitlement into `heldWithinRemit` unconditionally when Provision granted it — `if (granted) { heldWithinRemit.add(entitlementId); continue; }`, before the remit is consulted — so a requested entitlement that leaves desired state is differenced out and revoked by `planActions` whether or not it is in the remit. Only two consumers genuinely need the grant-derived set, and both are **per account**:
+
+- `apply.ts`'s `archive_account`, which filters the strip list through the remit and would otherwise leave a requested membership on an archived account;
+- `run-service.ts` phase 4's unreadable-membership probe, which only probes in-remit groups and would otherwise never look at the groups requests put people into.
+
+So: **leave `remitFor` exactly as Provision wrote it**, and add a second, separately named function beside it in `packages/core/src/provision/entitlement-service.ts`:
+
+```ts
+/**
+ * Entitlements on this target that a LIVE AccessGrant names.
+ *
+ * Deliberately NOT unioned into `remitFor`. The remit is the tenant-wide set
+ * `reconcile` classifies every account's holdings against, and one person's
+ * approved request must not change what five hundred other people's holdings
+ * mean. This set is for the two consumers that are per-account and where the
+ * omission is a real defect: the `archive_account` strip list and the
+ * unreadable-membership probe.
+ *
+ * `expired`, `lapsed` and `revoked` are excluded, so the set narrows again
+ * when the last grant ends.
+ */
+export async function grantedEntitlementsFor(
   tx: TenantClient,
   targetId: string,
 ): Promise<Set<string>> {
-  const joins = await tx.ruleEntitlement.findMany({
-    where: { rule: { targetSystemId: targetId } },
-    select: { entitlementId: true },
-  });
-  // An entitlement named by a LIVE AccessGrant is equally something Provision
-  // has been asked to manage on this target. Without it, `archive_account`
-  // leaves a requested membership behind -- the strip list is filtered through
-  // the remit -- and the unreadable-membership probe never looks at the groups
-  // requests put people into. `expired`, `lapsed` and `revoked` grants are
-  // excluded, so the remit narrows again when the last grant ends.
   const granted = await tx.accessGrant.findMany({
     where: {
       targetSystemId: targetId,
@@ -7299,12 +8460,55 @@ export async function remitFor(
     },
     select: { resourceId: true },
   });
-  return new Set([
-    ...joins.map((j) => j.entitlementId),
-    ...granted.map((g) => g.resourceId),
-  ]);
+  return new Set(granted.map((g) => g.resourceId));
 }
 ```
+
+Then thread it through the two call sites, and nowhere else.
+
+1. In `packages/core/src/provision/run-service.ts`, in the phase that reads `const remit = await remitFor(tx, targetSystemId);`, add beside it `const grantedEntitlements = await grantedEntitlementsFor(tx, targetSystemId);` and return `grantedEntitlements` from that `prepared` object alongside `remit`. In phase 4's probe loop, replace
+
+```ts
+      if (id === undefined || !prepared.remit.has(id)) continue;
+```
+
+   with
+
+```ts
+      // A group nothing manages cannot be probed usefully; a group a live
+      // grant names is managed, per account, even though it is outside the
+      // tenant-wide remit. `prepared.remit` is passed to `reconcile`
+      // UNCHANGED -- see the docstring on grantedEntitlementsFor.
+      if (
+        id === undefined ||
+        !(prepared.remit.has(id) || prepared.grantedEntitlements.has(id))
+      ) {
+        continue;
+      }
+```
+
+   Leave `remit: prepared.remit` on the `reconcile` call exactly as it is.
+
+2. In `packages/core/src/provision/apply.ts`, in the phase that reads `const remit = await remitFor(tx, run.targetSystemId);`, add `const grantedEntitlements = await grantedEntitlementsFor(tx, run.targetSystemId);` and return it from `prepared`. Then replace the `archive_account` strip filter
+
+```ts
+          .filter((h) => prepared.remit.has(h.entitlement.id))
+```
+
+   with
+
+```ts
+          // Archive strips what Provision manages for THIS account, which
+          // includes anything a live grant put there. Per-account, so widening
+          // it here reclassifies nobody else's holdings.
+          .filter(
+            (h) =>
+              prepared.remit.has(h.entitlement.id) ||
+              prepared.grantedEntitlements.has(h.entitlement.id),
+          )
+```
+
+3. Import `grantedEntitlementsFor` beside the existing `remitFor` import in both files.
 
 - [ ] **Step 7: Load the grants and write the grant id onto the action**
 
@@ -7368,7 +8572,32 @@ In `packages/core/src/provision/run-service.ts`:
         grantId: action.attributedGrantIds.length === 1 ? action.attributedGrantIds[0]! : null,
 ```
 
-5. Import `type GrantFacts` from `./types.js`.
+5. In phase 7, where the `exceptions` array is assembled from `desired`, add the grant exceptions to it so a skipped grant is a working-list row and not a silence:
+
+```ts
+    const exceptions = [
+      ...desired
+        .filter((d) => d.unprocessable !== null)
+        .map((d) => ({ personId: d.personId, ...d.unprocessable! })),
+      // A grant that named an entitlement the catalog does not hold. Skipped
+      // by `desiredState` rather than made unprocessable, and surfaced here
+      // so somebody works it down -- the alternative is a request that was
+      // approved, produced no action, and said nothing.
+      ...desired.flatMap((d) =>
+        d.grantExceptions.map((g) => ({
+          personId: d.personId,
+          kind: 'unresolvable_grant' as const,
+          message: g.message,
+        })),
+      ),
+      ...[...reconciled.extraUnprocessable].map(([personId, value]) => ({
+        personId,
+        ...value,
+      })),
+    ];
+```
+
+6. Import `type GrantFacts` from `./types.js`.
 
 - [ ] **Step 8: Record the origin the holding actually has**
 
@@ -7437,7 +8666,7 @@ then `grantId: grant?.id ?? null`, `requestId: holding.grantedByRequestId`, `gra
 
 Run: `pnpm typecheck`
 
-Expect errors in `desired.test.ts`, `plan.test.ts`, `reconcile.test.ts` and `run-service.test.ts`: every fixture that builds a `DesiredStateInput`, a `DesiredState`, a `KnownHolding` or a `PlannedAction` by hand is now missing a field. Add `grants: []`, `grantAttribution: new Map()`, `grantedByRequestId: null` and `attributedGrantIds: []` to those fixtures. **Do not weaken the types to make the fixtures compile** — `grants` optional with a default is exactly the shape that would let `run-service.ts` forget to pass it and produce a plan that silently revokes every requested entitlement in the tenant.
+Expect errors in `desired.test.ts`, `plan.test.ts`, `reconcile.test.ts` and `run-service.test.ts`: every fixture that builds a `DesiredStateInput`, a `DesiredState`, a `KnownHolding` or a `PlannedAction` by hand is now missing a field. Add `grants: []`, `grantAttribution: new Map()`, `grantExceptions: []`, `grantedByRequestId: null` and `attributedGrantIds: []` to those fixtures. **Do not weaken the types to make the fixtures compile** — `grants` optional with a default is exactly the shape that would let `run-service.ts` forget to pass it and produce a plan that silently revokes every requested entitlement in the tenant.
 
 - [ ] **Step 11: Run the Provision suite, then the new test**
 
@@ -7468,13 +8697,18 @@ Spec §5 and §16. `application` and `localGroup` land in one short transaction 
 **Why the enqueue is outside the transaction.** Spec §16 says the enqueue "commits or rolls back with the transaction". It does not: `Scheduler.enqueue` calls `boss.send` on pg-boss's own pool. So the transaction commits first and the enqueue follows, and Task 12's reflection pass re-enqueues for any target holding a `pending` grant whose request is still `awaiting_fulfilment` — which also covers a crash between the two, something a transactional enqueue would not have covered.
 
 **Files:**
+- Create: `packages/core/src/automate/eligibility.ts`
 - Create: `packages/core/src/automate/fulfil.ts`
 - Modify: `packages/core/src/index.ts`
 - Test: `packages/core/src/automate/fulfil.test.ts`
 
+**`eligibility.ts` is a separate module, and it is created HERE rather than in Task 10.** Spec §4's decisions table requires eligibility to be "re-evaluated at each stage and **again at fulfilment**", so `fulfilRequest` needs `checkEligibility` — and `request-service.ts` (Task 10) imports `fulfilRequest`, so defining it there is an import cycle. It has no dependency on either service: `activeContracts`, `findVisibleProduct` and `RefusalReason` all precede this task. Tasks 9, 10 and 11 all consume it from here.
+
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `assignApplication` from `../access/assignment-service.js`; `addMember`, `removeMember` from `../directory/group-service.js`; `type Scheduler` from `../jobs/scheduler.js`; `PROVISION_JOB`, `provisionJobPayload` from `../provision/jobs.js`; `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission` from `./notify.js`; `automateSettings` from `./catalog-service.js`; `grantWindow` from `./duration.js`; `type GrantStatus`, `type RequestStatus`, `LIVE_GRANT_STATUSES` from `./types.js`; `PERMISSIONS` from `../rbac/permissions.js`.
+- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `assignApplication` from `../access/assignment-service.js`; `resolveApplicationIdsForUser` from `../access/resolve.js` (exported; `orgUnitChain` in that module is private, `resolveApplicationIdsForUser` is not); `addMember` from `../directory/group-service.js`; `activeContracts` from `../identity/contract-service.js`; `type Scheduler` from `../jobs/scheduler.js`; `PROVISION_JOB`, `provisionJobPayload` from `../provision/jobs.js`; `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission`, `displayNames`, `nameList` from `./notify.js`; `automateSettings`, `findVisibleProduct` from `./catalog-service.js`; `grantWindow` from `./duration.js`; `type GrantStatus`, `type RequestStatus`, `type RefusalReason`, `type ResourceType`, `LIVE_GRANT_STATUSES` from `./types.js`; `PERMISSIONS` from `../rbac/permissions.js`.
+  - `removeMember` is **no longer consumed**: it deletes by `(groupId, userId)` and H13's rule is that a grant deletes only the rows it wrote.
 - Produces:
+  - `async function checkEligibility(tx: TenantClient, productId: string, subjectPersonId: string, on: Date): Promise<{ ok: true } | { ok: false; reason: RefusalReason; message: string }>` (in `eligibility.ts`; **moved out of Task 10's `request-service.ts`, which now imports it**)
   - `interface FulfilOptions { now?: Date; scheduler?: Scheduler | null; publicUrl?: string }`
   - `interface FulfilOutcome { status: RequestStatus; grantIds: string[]; targetSystemIds: string[] }`
   - `async function fulfilRequest(tenantId: string, requestId: string, options?: FulfilOptions): Promise<FulfilOutcome>`
@@ -7519,6 +8753,7 @@ beforeEach(async () => {
   await resetDatabase();
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
   tenantId = t.id;
+  seedCounter = 0;
 
   const seeded = await withTenant(tenantId, async (tx) => {
     const person = await tx.person.create({
@@ -7576,11 +8811,25 @@ beforeEach(async () => {
     seeded);
 });
 
-/** An approved request with one item, ready to fulfil. */
+/**
+ * An approved request with one item, ready to fulfil.
+ *
+ * The product carries `audienceCondition: { all: [] }` -- "everybody with an
+ * active contract" -- because `fulfilRequest` re-checks eligibility, and the
+ * schema default of NULL means NOBODY. A fixture whose product is visible to
+ * nobody would make every case in this file refuse for the wrong reason.
+ *
+ * The slug is made unique per call: `@@unique([tenantId, slug])` means two
+ * calls with the same `kind` would otherwise raise P2002, and several cases
+ * below deliberately seed two requests for the same resource.
+ */
+let seedCounter = 0;
 async function seedRequest(
   kind: 'application' | 'localGroup' | 'targetEntitlement',
   over: { durationDays?: number | null } = {},
 ) {
+  seedCounter += 1;
+  const slug = `p-${kind}-${seedCounter}`;
   return withTenant(tenantId, async (tx) => {
     const resource =
       kind === 'application'
@@ -7593,10 +8842,11 @@ async function seedRequest(
       data: {
         tenantId,
         name: 'Product',
-        slug: `p-${kind}`,
+        slug,
         kind,
         workflowId,
         status: 'active',
+        audienceCondition: { all: [] },
         durationMode: over.durationDays === undefined ? 'permanent' : 'fixed',
         defaultDurationDays: over.durationDays ?? null,
         maxDurationDays: null,
@@ -7712,6 +8962,42 @@ describe('the target entitlement path', () => {
 });
 
 describe('duration and what is already held', () => {
+  it('carries the person who approved it onto the grant', async () => {
+    // Read by the expiry warning, the lapse notice and the review flag. Left
+    // null, every one of those reaches only the holder -- and the whole point
+    // of the column is that the person who allowed this hears about it.
+    const requestId = await seedRequest('application');
+    const approverPersonId = await withTenant(tenantId, async (tx) => {
+      const jan = await tx.person.create({
+        data: { tenantId, givenName: 'Jan', familyName: 'Petersen' },
+      });
+      const step = await tx.approvalStep.create({
+        data: { tenantId, requestId, sequence: 1, stageSnapshot: {}, status: 'approved' },
+      });
+      await tx.approvalDecision.create({
+        data: {
+          tenantId,
+          stepId: step.id,
+          personId: jan.id,
+          decision: 'approve',
+          via: 'selector',
+        },
+      });
+      return jan.id;
+    });
+
+    await fulfilRequest(tenantId, requestId, { now: NOW });
+    const grant = await withTenant(tenantId, (tx) => tx.accessGrant.findFirstOrThrow());
+    expect(grant.approvedByPersonId).toBe(approverPersonId);
+  });
+
+  it('leaves the approver null on an auto-granted product, because nobody approved it', async () => {
+    const requestId = await seedRequest('application');
+    await fulfilRequest(tenantId, requestId, { now: NOW });
+    const grant = await withTenant(tenantId, (tx) => tx.accessGrant.findFirstOrThrow());
+    expect(grant.approvedByPersonId).toBeNull();
+  });
+
   it('gives a fixed-duration product an end date measured from the start', async () => {
     const requestId = await seedRequest('application', { durationDays: 30 });
     await fulfilRequest(tenantId, requestId, { now: NOW });
@@ -7765,6 +9051,170 @@ describe('duration and what is already held', () => {
   });
 });
 
+describe('fulfilment is the last place approval is enforceable', () => {
+  it('refuses to fulfil a request that was never approved', async () => {
+    // The item filter is `status === 'pending'`, which is exactly what a
+    // never-approved request looks like. Without this guard, any caller
+    // holding a request id bypasses the entire approval control -- and the
+    // resulting grant is indistinguishable in the inventory from one somebody
+    // approved.
+    const requestId = await seedRequest('application');
+    await withTenant(tenantId, (tx) =>
+      tx.accessRequest.update({
+        where: { id: requestId },
+        data: { status: 'pending_approval' },
+      }),
+    );
+    await expect(fulfilRequest(tenantId, requestId, { now: NOW })).rejects.toThrow(
+      /not approved/,
+    );
+    const grants = await withTenant(tenantId, (tx) => tx.accessGrant.findMany());
+    expect(grants).toEqual([]);
+  });
+
+  it('refuses to fulfil a rejected request', async () => {
+    const requestId = await seedRequest('application');
+    await withTenant(tenantId, (tx) =>
+      tx.accessRequest.update({ where: { id: requestId }, data: { status: 'rejected' } }),
+    );
+    await expect(fulfilRequest(tenantId, requestId, { now: NOW })).rejects.toThrow();
+    expect(await withTenant(tenantId, (tx) => tx.accessGrant.findMany())).toEqual([]);
+  });
+
+  it('re-checks eligibility and refuses when the subject left between approval and fulfilment', async () => {
+    // Spec section 4: "An approval given on Monday for a finance product must
+    // not fulfil on Friday after the subject left finance." The auto-grant
+    // path is the one with no human on it -- it checks at the top of
+    // submitRequest and fulfils in a SEPARATE transaction afterwards.
+    const requestId = await seedRequest('application');
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({ where: { personId }, data: { endDate: day('2026-06-01') } }),
+    );
+
+    const outcome = await fulfilRequest(tenantId, requestId, { now: NOW });
+    expect(outcome.status).toBe('rejected');
+    expect(await withTenant(tenantId, (tx) => tx.accessGrant.findMany())).toEqual([]);
+    expect(
+      await withTenant(tenantId, (tx) => tx.appAssignment.findMany({ where: { applicationId } })),
+    ).toEqual([]);
+    const outbox = await withTenant(tenantId, (tx) => tx.notificationOutbox.findMany());
+    expect(outbox.map((o) => o.template)).toContain('automate-refused');
+  });
+});
+
+describe('extending a grant in place', () => {
+  it('supersedes the grant it replaces in one transaction, with no outage', async () => {
+    // Spec section 12's "the case worth testing, because a naive
+    // implementation expires the old grant, revokes at the target, and
+    // re-grants an hour later, producing an outage and two audit events that
+    // say the opposite of what happened". Without `replacesGrantId` being
+    // read, this is WORSE than naive: the item is skipped as already held,
+    // the request reports `fulfilled`, and the access simply goes away.
+    const first = await seedRequest('localGroup');
+    await fulfilRequest(tenantId, first, { now: NOW });
+    const original = await withTenant(tenantId, (tx) => tx.accessGrant.findFirstOrThrow());
+
+    const extension = await seedRequest('localGroup');
+    await withTenant(tenantId, (tx) =>
+      tx.accessRequest.update({
+        where: { id: extension },
+        data: { replacesGrantId: original.id },
+      }),
+    );
+    const outcome = await fulfilRequest(tenantId, extension, { now: NOW });
+    expect(outcome.grantIds).toHaveLength(1);
+
+    const state = await withTenant(tenantId, async (tx) => ({
+      old: await tx.accessGrant.findUniqueOrThrow({ where: { id: original.id } }),
+      live: await tx.accessGrant.findMany({ where: { status: { in: ['pending', 'active'] } } }),
+      memberships: await tx.groupMembership.findMany({ where: { groupId } }),
+    }));
+    expect(state.old.status).toBe('revoked');
+    expect(state.old.supersededByGrantId).toBe(outcome.grantIds[0]);
+    expect(state.live).toHaveLength(1);
+    // The membership survived. The original is retired BEFORE the replacement
+    // is created -- `access_grant_one_live` is an immediate unique index over
+    // the four columns both rows share, so the other order raises P2002 -- but
+    // both statements are in the one transaction, so no other transaction ever
+    // observes an instant in which the person holds neither.
+    expect(state.memberships).toHaveLength(1);
+    // And the replacement OWNS that surviving row. The "look first" guard
+    // writes nothing here, because the row is already there, so without the
+    // inheritance the replacement records nothing and Task 13's sweep can
+    // never remove it. Task 13 carries the end-to-end case.
+    expect(state.live[0]?.writtenRowIds).toEqual(state.old.writtenRowIds);
+    expect(state.live[0]?.writtenRowIds).toHaveLength(1);
+  });
+
+  it('leaves the request already_held when the grant it names is no longer live', async () => {
+    const first = await seedRequest('localGroup');
+    await fulfilRequest(tenantId, first, { now: NOW });
+    const original = await withTenant(tenantId, (tx) => tx.accessGrant.findFirstOrThrow());
+    await handBackGrant(tenantId, userId, original.id, { now: NOW });
+
+    const extension = await seedRequest('localGroup');
+    await withTenant(tenantId, (tx) =>
+      tx.accessRequest.update({
+        where: { id: extension },
+        data: { replacesGrantId: original.id },
+      }),
+    );
+    // Nothing to supersede, and nothing held either, so it is an ordinary
+    // grant rather than a supersession.
+    const outcome = await fulfilRequest(tenantId, extension, { now: NOW });
+    expect(outcome.status).toBe('fulfilled');
+    const after = await withTenant(tenantId, (tx) =>
+      tx.accessGrant.findUniqueOrThrow({ where: { id: original.id } }),
+    );
+    expect(after.supersededByGrantId).toBeNull();
+  });
+});
+
+describe('the grant owns only the rows it wrote', () => {
+  it('does not delete a membership an administrator added by hand', async () => {
+    // Spec section 5's safety argument for Automate writing GroupMembership
+    // at all is that Core's directory surface is its only other writer.
+    // Deleting by (groupId, userId) breaks that in the other direction: a
+    // membership added by hand after the grant was made disappears when the
+    // grant expires, with an audit event saying the grant lapsed.
+    const secondUserId = await withTenant(tenantId, async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          tenantId,
+          login: 'anna.admin',
+          email: 'anna.admin@acme.test',
+          displayName: 'Anna Novak (admin)',
+          personId,
+        },
+      });
+      return user.id;
+    });
+    // Added BEFORE the grant, by somebody else, for their own reason.
+    await withTenant(tenantId, (tx) =>
+      tx.groupMembership.create({ data: { tenantId, groupId, userId: secondUserId } }),
+    );
+
+    const requestId = await seedRequest('localGroup');
+    await fulfilRequest(tenantId, requestId, { now: NOW });
+    const grant = await withTenant(tenantId, (tx) => tx.accessGrant.findFirstOrThrow());
+    // One row written by this grant: the one for the account that did not
+    // already have it.
+    expect(grant.writtenRowIds).toHaveLength(1);
+
+    await handBackGrant(tenantId, userId, grant.id, { now: NOW });
+
+    const memberships = await withTenant(tenantId, (tx) =>
+      tx.groupMembership.findMany({ where: { groupId } }),
+    );
+    expect(memberships.map((m) => m.userId)).toEqual([secondUserId]);
+
+    const audit = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'automate.grant.hand_back' } }),
+    );
+    expect(audit.payload).toMatchObject({ rowsThisGrantWrote: 1, rowsRemoved: 1 });
+  });
+});
+
 describe('notifications', () => {
   it('writes outbox rows and sends nothing', async () => {
     const requestId = await seedRequest('application');
@@ -7774,6 +9224,43 @@ describe('notifications', () => {
     // Nothing has been sent: `sentAt` is null on every row, and this module
     // imports no transport at all.
     for (const row of outbox) expect(row.sentAt).toBeNull();
+  });
+
+  it('names the person, the product and the resource — never an identifier', async () => {
+    // Spec section 13: "names what they now hold and until when". A mail
+    // reading "guid-4f2a... holds guid-91be... until Mon Jun 15 2026"
+    // satisfies none of it, and Automate sends more mail than the rest of the
+    // platform combined. If this assertion is deleted, the ids come back.
+    const requestId = await seedRequest('application');
+    await fulfilRequest(tenantId, requestId, { now: NOW });
+    const outbox = await withTenant(tenantId, (tx) => tx.notificationOutbox.findMany());
+    const row = outbox.find((o) => o.template === 'automate-fulfilled');
+    const vars = row?.vars as Record<string, string>;
+    expect(vars.subjectName).toBe('Anna Novak');
+    expect(vars.resourceList).toBe('Stats');
+    for (const value of Object.values(vars)) {
+      expect(value).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    }
+  });
+
+  it('records what was already held on a request where nothing new landed', async () => {
+    // `submitRequest` refuses "every resource already held" up front, but a
+    // request approved between the two checks reaches here. Reporting it
+    // `fulfilled` with an empty resource list tells somebody they were given
+    // something when nothing happened.
+    const requestId = await seedRequest('application');
+    await withTenant(tenantId, (tx) =>
+      tx.appAssignment.create({
+        data: { tenantId, applicationId, subjectType: 'user', userId },
+      }),
+    );
+    const outcome = await fulfilRequest(tenantId, requestId, { now: NOW });
+    expect(outcome.status).toBe('fulfilled');
+    const request = await withTenant(tenantId, (tx) =>
+      tx.accessRequest.findUniqueOrThrow({ where: { id: requestId } }),
+    );
+    expect(request.statusReason).toContain('already held');
+    expect(request.statusReason).toContain('Stats');
   });
 });
 
@@ -7838,21 +9325,100 @@ describe('handBackGrant', () => {
 Run: `pnpm vitest run packages/core/src/automate/fulfil.test.ts`
 Expected: FAIL, "Failed to resolve import ./fulfil.js".
 
-- [ ] **Step 3: Write the fulfilment module**
+- [ ] **Step 3: Write the eligibility module, then the fulfilment module**
 
-`packages/core/src/automate/fulfil.ts`:
+First, `packages/core/src/automate/eligibility.ts`. This is `checkEligibility` **moved verbatim out of Task 10's draft of `request-service.ts`** — Task 10 imports it from here and does not define it.
+
+```ts
+import type { TenantClient } from '@syntra/db';
+import { activeContracts } from '../identity/contract-service.js';
+import { findVisibleProduct } from './catalog-service.js';
+import type { RefusalReason } from './types.js';
+
+/**
+ * Everything that makes a subject ineligible, checked in one place.
+ *
+ * Called at submission, at each stage opening, and again immediately before
+ * fulfilment. The evaluation is the audience condition plus the subject's
+ * employment state, both cheap and both pure -- which is what makes running it
+ * three times affordable, and what stops an approval given on Monday for a
+ * finance product from fulfilling on Friday after the subject left finance.
+ *
+ * Its own module, and not `request-service.ts`, because `fulfilRequest` needs
+ * it and `request-service.ts` imports `fulfilRequest`. A cycle here would be
+ * resolved by somebody dropping the fulfilment-time check, which is the one
+ * spec section 4 names.
+ */
+export async function checkEligibility(
+  tx: TenantClient,
+  productId: string,
+  subjectPersonId: string,
+  on: Date,
+): Promise<{ ok: true } | { ok: false; reason: RefusalReason; message: string }> {
+  const person = await tx.person.findUnique({
+    where: { id: subjectPersonId },
+    select: { status: true, givenName: true, familyName: true },
+  });
+  if (person === null || person.status !== 'active') {
+    return {
+      ok: false,
+      reason: 'subject_inactive',
+      message: 'The person this was for is no longer active.',
+    };
+  }
+
+  const contracts = await activeContracts(tx, subjectPersonId, on);
+  if (contracts.length === 0) {
+    return {
+      ok: false,
+      reason: 'subject_departed',
+      message: `${person.givenName} ${person.familyName} holds no contract in force.`,
+    };
+  }
+
+  const product = await tx.product.findUnique({ where: { id: productId } });
+  if (product === null || product.status !== 'active') {
+    return {
+      ok: false,
+      reason: 'product_withdrawn',
+      message: 'That catalog entry has been withdrawn.',
+    };
+  }
+
+  const visible = await findVisibleProduct(tx, subjectPersonId, productId, on);
+  if (visible === null) {
+    return {
+      ok: false,
+      reason: 'no_longer_eligible',
+      message: `${person.givenName} ${person.familyName} no longer matches the audience for ${product.name}.`,
+    };
+  }
+
+  return { ok: true };
+}
+```
+
+Then `packages/core/src/automate/fulfil.ts`:
 
 ```ts
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { assignApplication } from '../access/assignment-service.js';
-import { addMember, removeMember } from '../directory/group-service.js';
+import { resolveApplicationIdsForUser } from '../access/resolve.js';
+import { addMember } from '../directory/group-service.js';
 import type { Scheduler } from '../jobs/scheduler.js';
 import { PROVISION_JOB, provisionJobPayload } from '../provision/jobs.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
-import { enqueueOutbox, recipientsForPersons, usersWithPermission } from './notify.js';
+import {
+  displayNames,
+  enqueueOutbox,
+  nameList,
+  recipientsForPersons,
+  usersWithPermission,
+} from './notify.js';
+import { checkEligibility } from './eligibility.js';
 import { grantWindow } from './duration.js';
-import { LIVE_GRANT_STATUSES, type RequestStatus } from './types.js';
+import { LIVE_GRANT_STATUSES, type RequestStatus, type ResourceType } from './types.js';
 
 export interface FulfilOptions {
   now?: Date;
@@ -7902,12 +9468,24 @@ export async function subjectHoldings(
   const users = await tx.user.findMany({ where: { personId }, select: { id: true } });
   const userIds = users.map((u) => u.id);
   if (userIds.length > 0) {
-    const assignments = await tx.appAssignment.findMany({
-      where: { userId: { in: userIds } },
-      select: { applicationId: true },
-    });
-    for (const assignment of assignments) {
-      out.set(`application:${assignment.applicationId}`, {
+    // EFFECTIVE assignments, resolved the way Access's portal tile resolver
+    // resolves them: `resolveApplicationIdsForUser` unions assignments naming
+    // the user, assignments naming a group they belong to, and assignments
+    // naming their org unit or one above it.
+    //
+    // Reading only `userId` misses a person who already has the application
+    // through their group: the request is granted a second time, a
+    // user-scoped assignment is created beside the group one, and on hand-back
+    // only the user-scoped row is deleted -- so the person keeps the app and
+    // it reads as a failed revocation.
+    const applicationIds = new Set<string>();
+    for (const userId of userIds) {
+      for (const id of await resolveApplicationIdsForUser(tx, userId)) {
+        applicationIds.add(id);
+      }
+    }
+    for (const applicationId of applicationIds) {
+      out.set(`application:${applicationId}`, {
         source: 'manual',
         detail: 'an existing assignment',
       });
@@ -7962,10 +9540,135 @@ export async function fulfilRequest(
       include: { items: true, product: true },
     });
 
+    // The only statuses from which fulfilment is legitimate.
+    //
+    // Not a defensive check: this is the LAST place the approval control is
+    // enforceable, and a grant produced from a rejected request is
+    // indistinguishable in the inventory from one somebody approved. The item
+    // filter below is `status === 'pending'`, which is exactly what a
+    // never-approved request and a rejected one both look like, so without
+    // this guard any caller holding a request id bypasses approval entirely.
+    // "There is no path to a grant that does not pass approval" is the claim
+    // this slice exists to make; it must not rest on nobody adding a caller.
+    if (request.status !== 'approved' && request.status !== 'awaiting_fulfilment') {
+      throw new Error(`request ${requestId} is ${request.status}, not approved`);
+    }
+
+    // Re-checked HERE as well as at each stage (spec section 4: "re-evaluated
+    // at each stage and again at fulfilment"). The decision path happens to
+    // check it in its own transaction just before writing `approved`, so the
+    // common case is covered by accident -- but the auto-grant path checks at
+    // the top of `submitRequest` and then fulfils in a separate transaction
+    // after it commits, and that is the one path with no human on it.
+    if (request.productId !== null) {
+      const eligibility = await checkEligibility(
+        tx,
+        request.productId,
+        request.subjectPersonId,
+        now,
+      );
+      if (!eligibility.ok) {
+        await tx.accessRequest.update({
+          where: { id: requestId },
+          data: {
+            status: 'rejected',
+            statusReason: `${eligibility.reason}: ${eligibility.message}`,
+            decidedAt: now,
+          },
+        });
+        await tx.requestItem.updateMany({
+          where: { requestId, status: 'pending' },
+          data: { status: 'skipped', message: eligibility.message },
+        });
+        await recordEvent(tx, {
+          actorUserId: null,
+          action: 'automate.request.auto_refuse',
+          targetType: 'AccessRequest',
+          targetId: requestId,
+          outcome: 'success',
+          sourceIp: null,
+          payload: { reason: eligibility.reason, at: 'fulfilment' },
+        });
+        const told = await recipientsForPersons(tx, [
+          request.subjectPersonId,
+          ...(request.requestedByPersonId === null ? [] : [request.requestedByPersonId]),
+        ]);
+        const refusedNames = await displayNames(tx, {
+          personIds: [request.subjectPersonId],
+        });
+        await enqueueOutbox(
+          tx,
+          told.map((r) => ({
+            template: 'automate-refused' as const,
+            to: r.email,
+            vars: {
+              displayName: r.displayName,
+              productName: request.product?.name ?? 'the requested access',
+              subjectName:
+                refusedNames.get(`person:${request.subjectPersonId}`) ?? 'the subject',
+              reason: eligibility.message,
+              requestUrl: requestUrl(publicUrl, request.id),
+            },
+            requestId: request.id,
+            userId: r.userId,
+          })),
+        );
+        return { status: 'rejected', grantIds: [], targetSystemIds: [] };
+      }
+    }
+
     const held = await subjectHoldings(tx, request.subjectPersonId);
+
+    // An extension is a new request against the same product, and the grant
+    // it replaces is NOT "already held" for the purpose of skipping it --
+    // that is the whole point of extending. Without this the item is marked
+    // `skipped`, the request is reported `fulfilled`, the requester is
+    // emailed that they hold it, no new grant exists, and the access goes
+    // away on the original date. Spec section 12 calls the naive
+    // implementation "an outage and two audit events that say the opposite of
+    // what happened"; silently losing it is worse.
+    const replacedGrant =
+      request.replacesGrantId === null
+        ? null
+        : await tx.accessGrant.findFirst({
+            where: {
+              id: request.replacesGrantId,
+              subjectPersonId: request.subjectPersonId,
+              status: { in: [...LIVE_GRANT_STATUSES] },
+            },
+          });
+    if (replacedGrant !== null) {
+      held.delete(`${replacedGrant.resourceType}:${replacedGrant.resourceId}`);
+    }
+
     const users = await tx.user.findMany({
       where: { personId: request.subjectPersonId, status: 'active' },
       select: { id: true },
+    });
+
+    // Read once, for the vars every template below renders. Spec section 13
+    // requires each of these to NAME things; an id in a mail is a support
+    // ticket nobody can answer.
+    const names = await displayNames(tx, {
+      personIds: [
+        request.subjectPersonId,
+        ...(request.requestedByPersonId === null ? [] : [request.requestedByPersonId]),
+      ],
+      productIds: request.productId === null ? [] : [request.productId],
+      resources: request.items.map((item) => ({
+        resourceType: item.resourceType as ResourceType,
+        resourceId: item.resourceId,
+      })),
+    });
+
+    // The last approving decision, so the expiry warning and the lapse notice
+    // can reach the person who allowed this without walking the steps. Null
+    // for an auto-granted product and for a delegated act, which is correct:
+    // nobody approved either.
+    const lastApproval = await tx.approvalDecision.findFirst({
+      where: { step: { requestId: request.id }, decision: 'approve' },
+      orderBy: { decidedAt: 'desc' },
+      select: { personId: true },
     });
 
     // The duration was resolved at submission and possibly shortened at the
@@ -7989,14 +9692,20 @@ export async function fulfilRequest(
 
     const grantIds: string[] = [];
     const targetSystemIds = new Set<string>();
-    const granted: string[] = [];
-    const skipped: string[] = [];
-    const failed: string[] = [];
+    // Resource descriptors, not `"application:0f3e-..."` strings. These are
+    // what the templates render, and `nameList` turns them into names.
+    const granted: { resourceType: ResourceType; resourceId: string }[] = [];
+    const skipped: { resourceType: ResourceType; resourceId: string }[] = [];
+    const failed: { resourceType: ResourceType; resourceId: string }[] = [];
 
     for (const item of request.items) {
       if (item.status !== 'pending') continue;
 
       const key = `${item.resourceType}:${item.resourceId}`;
+      const resource = {
+        resourceType: item.resourceType as ResourceType,
+        resourceId: item.resourceId,
+      };
       const existing = held.get(key);
       if (existing !== undefined) {
         await tx.requestItem.update({
@@ -8006,7 +9715,7 @@ export async function fulfilRequest(
             message: `already held, from ${existing.detail}`,
           },
         });
-        skipped.push(key);
+        skipped.push(resource);
         continue;
       }
 
@@ -8017,8 +9726,41 @@ export async function fulfilRequest(
           where: { id: item.id },
           data: { status: 'failed', message: 'the subject holds no active Syntra account' },
         });
-        failed.push(key);
+        failed.push(resource);
         continue;
+      }
+
+      const superseded =
+        replacedGrant !== null &&
+        replacedGrant.resourceType === item.resourceType &&
+        replacedGrant.resourceId === item.resourceId
+          ? replacedGrant
+          : null;
+
+      // THE ORDER OF THESE THREE STATEMENTS IS FORCED BY THE DATABASE, NOT BY
+      // STYLE. `access_grant_one_live` is an immediate, non-deferrable partial
+      // unique index on (tenantId, subjectPersonId, resourceType, resourceId)
+      // WHERE status IN ('scheduled','pending','active') -- exactly the four
+      // columns the old row and the new row share. Create the replacement
+      // while the old row is still `active` and the create raises P2002. So:
+      // retire the old row first, so it leaves the index predicate; create the
+      // replacement; then a SECOND update back-fills `supersededByGrantId`,
+      // which cannot be set in the first update because the id it needs does
+      // not exist yet. All three are in the one transaction, so there is no
+      // instant visible to any other transaction in which the person holds
+      // neither -- that is spec section 12's "no outage". `endedAt` and
+      // `supersededByGrantId` together are also what stop tonight's sweep
+      // proposing a removal for a grant an approved extension already
+      // replaced: Task 13's classifier skips any grant carrying it.
+      if (superseded !== null) {
+        await tx.accessGrant.update({
+          where: { id: superseded.id },
+          data: {
+            status: 'revoked',
+            statusReason: 'superseded by an approved extension',
+            endedAt: now,
+          },
+        });
       }
 
       const grant = await tx.accessGrant.create({
@@ -8040,9 +9782,17 @@ export async function fulfilRequest(
             : item.resourceType === 'entitlement'
               ? 'pending'
               : 'active',
+          approvedByPersonId: lastApproval?.personId ?? null,
         },
       });
       grantIds.push(grant.id);
+
+      if (superseded !== null) {
+        await tx.accessGrant.update({
+          where: { id: superseded.id },
+          data: { supersededByGrantId: grant.id },
+        });
+      }
 
       if (item.resourceType === 'entitlement') {
         if (item.targetSystemId !== null) targetSystemIds.add(item.targetSystemId);
@@ -8050,22 +9800,76 @@ export async function fulfilRequest(
           where: { id: item.id },
           data: { status: 'dispatched', grantId: grant.id },
         });
-        granted.push(key);
+        granted.push(resource);
       } else {
+        // Only the rows THIS grant creates are recorded, and only those are
+        // deleted when it ends. Spec section 5's safety argument for Automate
+        // writing `AppAssignment` and `GroupMembership` at all is that each
+        // has exactly one other writer; deleting by (applicationId, userId)
+        // breaks it in the other direction, taking out a membership an
+        // administrator added by hand and reporting it as a grant that
+        // lapsed. `assignApplication` and `addMember` are both idempotent and
+        // return void, so the row is looked for first: if it was already
+        // there, it is somebody else's and this grant does not own it.
+        // An extension INHERITS the rows the grant it replaces wrote. Without
+        // this line the replacement records nothing: the "look first" guard
+        // below finds the `AppAssignment` or `GroupMembership` already present
+        // -- because the superseded grant created it, and superseding
+        // deliberately does not delete it, which is the no-outage property --
+        // and `continue`s. The row would then belong to a `revoked` grant, and
+        // when the replacement itself expires Task 13's `applyExpirySweep`
+        // deletes by `writtenRowIds`, finds none, and removes nothing: the
+        // person keeps the application or the local group PERMANENTLY, under
+        // an audit event saying the grant lapsed and a `SweepAction` marked
+        // applied. The replacement is now the only live reason those rows
+        // exist, so it owns them.
+        const writtenRowIds: string[] =
+          superseded === null ? [] : [...superseded.writtenRowIds];
         if (!window.scheduled) {
           for (const user of users) {
             if (item.resourceType === 'application') {
+              const where = {
+                applicationId: item.resourceId,
+                userId: user.id,
+                groupId: null,
+                orgUnitId: null,
+              };
+              const before = await tx.appAssignment.findFirst({ where, select: { id: true } });
+              if (before !== null) continue;
               await assignApplication(tx, item.resourceId, { type: 'user', id: user.id });
+              const created = await tx.appAssignment.findFirst({ where, select: { id: true } });
+              if (created !== null) writtenRowIds.push(created.id);
             } else {
+              const membershipKey = { groupId: item.resourceId, userId: user.id };
+              const before = await tx.groupMembership.findUnique({
+                where: { groupId_userId: membershipKey },
+                select: { id: true },
+              });
+              if (before !== null) continue;
               await addMember(tx, item.resourceId, user.id);
+              const created = await tx.groupMembership.findUnique({
+                where: { groupId_userId: membershipKey },
+                select: { id: true },
+              });
+              if (created !== null) writtenRowIds.push(created.id);
             }
           }
+        }
+        // Outside the `window.scheduled` guard: a scheduled extension writes
+        // no rows of its own yet but must still carry the inherited ones, and
+        // Task 15's promotion pass appends to `grant.writtenRowIds` rather
+        // than replacing it, so nothing is lost when it later goes active.
+        if (writtenRowIds.length > 0) {
+          await tx.accessGrant.update({
+            where: { id: grant.id },
+            data: { writtenRowIds },
+          });
         }
         await tx.requestItem.update({
           where: { id: item.id },
           data: { status: 'fulfilled', grantId: grant.id },
         });
-        granted.push(key);
+        granted.push(resource);
       }
 
       await recordEvent(tx, {
@@ -8091,6 +9895,13 @@ export async function fulfilRequest(
     const anyInFlight = items.some((i) => i.status === 'dispatched' || i.status === 'pending');
     const anyLanded = items.some((i) => i.status === 'fulfilled');
     const anyFailed = items.some((i) => i.status === 'failed');
+    // Every item already held. `submitRequest` refuses that case up front, but
+    // a request approved between the two checks reaches here, and reporting it
+    // `fulfilled` with an empty resource list tells somebody they were given
+    // something when nothing happened. Same status -- there is nothing wrong
+    // -- with a reason that says what was already held.
+    const allSkipped =
+      items.length > 0 && items.every((i) => i.status === 'skipped');
 
     const status: RequestStatus = anyInFlight
       ? 'awaiting_fulfilment'
@@ -8104,6 +9915,11 @@ export async function fulfilRequest(
       where: { id: requestId },
       data: {
         status,
+        ...(allSkipped
+          ? {
+              statusReason: `already held: ${nameList(names, skipped)}`,
+            }
+          : {}),
         ...(anyInFlight ? { dispatchedAt: request.dispatchedAt ?? now } : {}),
         ...(status === 'fulfilled' || status === 'partially_fulfilled'
           ? { fulfilledAt: now }
@@ -8117,17 +9933,25 @@ export async function fulfilRequest(
       request.subjectPersonId,
       ...(request.requestedByPersonId === null ? [] : [request.requestedByPersonId]),
     ]);
+    // Every var is a NAME. Spec section 13 requires each of these to name
+    // things -- "names what they now hold and until when", "names what did
+    // not land, and why" -- and a mail reading "guid-4f2a... holds
+    // guid-91be... until Mon Jun 15 2026" satisfies none of it.
     const vars = {
-      productName: request.product?.name ?? 'the requested access',
-      subjectName: request.subjectPersonId,
-      resourceList: granted.join(', '),
-      grantedList: granted.join(', '),
-      failedList: failed.join(', '),
+      productName:
+        request.productId === null
+          ? 'the requested access'
+          : (names.get(`product:${request.productId}`) ?? 'the requested access'),
+      subjectName:
+        names.get(`person:${request.subjectPersonId}`) ?? 'the person this was for',
+      resourceList: nameList(names, granted),
+      grantedList: nameList(names, granted),
+      failedList: nameList(names, failed),
       endsAt: window.endsAt?.toDateString() ?? 'until it is taken away',
       skippedNote:
         skipped.length === 0
           ? ''
-          : `Already held, so nothing changed for: ${skipped.join(', ')}.`,
+          : `Already held, so nothing changed for: ${nameList(names, skipped)}.`,
       requestUrl: requestUrl(publicUrl, request.id),
     };
 
@@ -8152,7 +9976,7 @@ export async function fulfilRequest(
               ? ('automate-partially-fulfilled' as const)
               : ('automate-fulfilment-failed' as const),
           to: r.email,
-          vars: { ...vars, displayName: r.displayName, message: failed.join(', ') },
+          vars: { ...vars, displayName: r.displayName, message: nameList(names, failed) },
           requestId: request.id,
           userId: r.userId,
         })),
@@ -8199,23 +10023,27 @@ async function endGrant(
       data: { status, statusReason: reason, endedAt: now },
     });
 
-    if (grant.resourceType !== 'entitlement') {
-      const users = await tx.user.findMany({
-        where: { personId: grant.subjectPersonId },
-        select: { id: true },
-      });
-      for (const user of users) {
-        if (grant.resourceType === 'application') {
-          const assignments = await tx.appAssignment.findMany({
-            where: { applicationId: grant.resourceId, userId: user.id },
-          });
-          for (const assignment of assignments) {
-            await tx.appAssignment.deleteMany({ where: { id: assignment.id } });
-          }
-        } else {
-          await removeMember(tx, grant.resourceId, user.id);
-        }
-      }
+    // Deletes ONLY the rows this grant wrote.
+    //
+    // Spec section 5's safety argument for Automate writing `AppAssignment`
+    // and `GroupMembership` at all is that each has exactly one other writer.
+    // A delete keyed on (applicationId, userId) -- or `removeMember`, which is
+    // keyed on (groupId, userId) -- breaks that argument in the other
+    // direction: a membership an administrator added by hand after the grant
+    // was made is removed when the grant ends, with an audit event saying the
+    // grant lapsed. Anything not in `writtenRowIds` is somebody else's row and
+    // is left alone, and the audit payload records that it was.
+    let removed = 0;
+    if (grant.resourceType !== 'entitlement' && grant.writtenRowIds.length > 0) {
+      const deleted =
+        grant.resourceType === 'application'
+          ? await tx.appAssignment.deleteMany({
+              where: { id: { in: grant.writtenRowIds } },
+            })
+          : await tx.groupMembership.deleteMany({
+              where: { id: { in: grant.writtenRowIds } },
+            });
+      removed = deleted.count;
     }
 
     await recordEvent(tx, {
@@ -8230,6 +10058,11 @@ async function endGrant(
         resourceType: grant.resourceType,
         resourceId: grant.resourceId,
         reason,
+        // Both numbers, so "the grant ended and nothing was removed" is
+        // readable rather than inferred. They differ when an administrator
+        // removed the row by hand first.
+        rowsThisGrantWrote: grant.writtenRowIds.length,
+        rowsRemoved: removed,
       },
     });
 
@@ -8327,13 +10160,13 @@ Spec §7 and §16's submission transaction. Five things in one short transaction
 - Test: `packages/core/src/automate/request-service.test.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `hasPermission` and `PERMISSIONS` from `../rbac/`; `activeContracts` from `../identity/contract-service.js`; `resolveStageApprovers`, `type StageSnapshot`, `type ResolutionSubject` from `./approvers.js`; `loadWorkflowStages` from `./workflow-service.js`; `findVisibleProduct`, `subjectAudienceFacts` from `./catalog-service.js`; `audienceAdmits`, `type AudienceCondition` from `./audience.js`; `validateFormValues`, `type FormSchema` from `./form.js`; `resolveRequestedDuration`, `type DurationPolicy` from `./duration.js`; `fulfilRequest`, `subjectHoldings`, `requestUrl`, `type FulfilOptions` from `./fulfil.js`; `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission` from `./notify.js`; `type RefusalReason`, `type RequestStatus` from `./types.js`.
+- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `hasPermission` and `PERMISSIONS` from `../rbac/`; `activeContracts` from `../identity/contract-service.js`; `resolveStageApprovers`, `type StageSnapshot`, `type ResolutionSubject` from `./approvers.js`; `loadWorkflowStages` from `./workflow-service.js`; `checkEligibility` from `./eligibility.js` (Task 9); `audienceAdmits`, `type AudienceCondition` from `./audience.js`; `validateFormValues`, `type FormSchema` from `./form.js`; `resolveRequestedDuration`, `type DurationPolicy` from `./duration.js`; `fulfilRequest`, `subjectHoldings`, `requestUrl`, `type FulfilOptions` from `./fulfil.js`; `displayNames`, `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission` from `./notify.js`; `LIVE_GRANT_STATUSES`, `type RefusalReason`, `type RequestStatus`, `type ResourceType` from `./types.js`.
 - Produces:
   - `type SubmitOutcome = { ok: true; requestId: string; status: RequestStatus } | { ok: false; reason: RefusalReason; message: string }`
   - `interface SubmitRequestInput { productId: string; subjectPersonId: string; requestedByUserId: string; justification: string | null; formValues: Record<string, unknown>; requestedDurationDays: number | null; replacesGrantId?: string | null }`
   - `interface SubmitOptions extends FulfilOptions {}`
   - `async function submitRequest(tenantId: string, input: SubmitRequestInput, options?: SubmitOptions): Promise<SubmitOutcome>`
-  - `async function checkEligibility(tx: TenantClient, productId: string, subjectPersonId: string, on: Date): Promise<{ ok: true } | { ok: false; reason: RefusalReason; message: string }>`
+  - `checkEligibility` is **NOT produced here**. It is produced by Task 9's `eligibility.ts` and imported; `fulfilRequest` re-checks eligibility too, and this module imports `fulfilRequest`, so a definition here is a cycle. Task 11 imports it from `./eligibility.js` as well.
   - `async function openStage(tx: TenantClient, requestId: string, sequence: number, on: Date): Promise<'opened' | 'blocked'>` — **also used by Task 11**, which is why it lives here rather than in the decision service
   - `async function subjectFor(tx: TenantClient, requestId: string): Promise<ResolutionSubject>`
 
@@ -8684,6 +10517,125 @@ describe('submitRequest — the refusals', () => {
   });
 });
 
+describe('a resourcePicker names which of the product grants this request is for', () => {
+  it('creates one item per required grant plus only the optional ones the picker named', async () => {
+    // Spec section 6: `resourcePicker` is "choose among the product's own
+    // ProductGrant rows, for a product whose bundle is 'pick one of these
+    // four shared mailboxes'". Building the snapshot from every grant makes
+    // both `resourcePicker` and `ProductGrant.optional` decorative, and a
+    // tenant who configures "pick one of four" grants all four to everybody
+    // who asks for one.
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const a = await tx.application.create({ data: { tenantId, name: 'Mailbox A', slug: 'mb-a' } });
+      const b = await tx.application.create({ data: { tenantId, name: 'Mailbox B', slug: 'mb-b' } });
+      const c = await tx.application.create({ data: { tenantId, name: 'Mailbox C', slug: 'mb-c' } });
+      return { a: a.id, b: b.id, c: c.id };
+    });
+
+    const bundleId = (
+      await createProduct(tenantId, null, {
+        name: 'Shared mailbox',
+        slug: 'shared-mailbox',
+        kind: 'application',
+        grants: [
+          { resourceType: 'application', resourceId: applicationId },
+          { resourceType: 'application', resourceId: seeded.a, optional: true },
+          { resourceType: 'application', resourceId: seeded.b, optional: true },
+          { resourceType: 'application', resourceId: seeded.c, optional: true },
+        ],
+        audienceCondition: { all: [] },
+        workflowId: (
+          await withTenant(tenantId, (tx) =>
+            tx.approvalWorkflow.findFirstOrThrow({ where: { name: 'Granted immediately' } }),
+          )
+        ).id,
+        formSchema: [
+          { key: 'mailbox', type: 'resourcePicker', label: 'Which mailbox', required: true },
+        ],
+        durationMode: 'permanent',
+        defaultDurationDays: null,
+        maxDurationDays: null,
+        ownerPersonId: null,
+        ownerGroupId: null,
+        status: 'active',
+      })
+    ).id;
+
+    const grants = await withTenant(tenantId, (tx) =>
+      tx.productGrant.findMany({ where: { productId: bundleId }, orderBy: { resourceId: 'asc' } }),
+    );
+    const chosen = grants.find((g) => g.resourceId === seeded.b)!;
+
+    const outcome = await submitRequest(
+      tenantId,
+      {
+        productId: bundleId,
+        subjectPersonId: annaPersonId,
+        requestedByUserId: annaUserId,
+        justification: null,
+        formValues: { mailbox: chosen.id },
+        requestedDurationDays: null,
+      },
+      { now: NOW },
+    );
+    if (!outcome.ok) throw new Error(outcome.message);
+
+    const items = await withTenant(tenantId, (tx) =>
+      tx.requestItem.findMany({ where: { requestId: outcome.requestId } }),
+    );
+    // Two: the required grant, and the one optional grant the picker named.
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.resourceId).sort()).toEqual(
+      [applicationId, seeded.b].sort(),
+    );
+  });
+});
+
+describe('extending a grant that is about to expire', () => {
+  it('is not refused already_held for the grant it replaces', async () => {
+    // The action the expiry-warning template renders at /access/:id/extend.
+    // For a single-resource product every wanted key is held, so without the
+    // subtraction the extension cannot even be submitted -- and spec section
+    // 12's "extended in place with no outage" is unbuildable.
+    const first = await submit({ productId: immediateProductId, formValues: {} });
+    if (!first.ok) throw new Error(first.message);
+    const grant = await withTenant(tenantId, (tx) => tx.accessGrant.findFirstOrThrow());
+
+    const plain = await submit({ productId: immediateProductId, formValues: {} });
+    expect(plain).toMatchObject({ ok: false, reason: 'already_held' });
+
+    const extension = await submit({
+      productId: immediateProductId,
+      formValues: {},
+      replacesGrantId: grant.id,
+    });
+    expect(extension.ok).toBe(true);
+  });
+
+  it('refuses when the grant it names is no longer live, and says to ask again', async () => {
+    const dead = await withTenant(tenantId, (tx) =>
+      tx.accessGrant.create({
+        data: {
+          tenantId,
+          subjectPersonId: annaPersonId,
+          resourceType: 'application',
+          resourceId: applicationId,
+          startsAt: day('2026-01-01'),
+          status: 'expired',
+        },
+      }),
+    );
+    const outcome = await submit({
+      productId: immediateProductId,
+      formValues: {},
+      replacesGrantId: dead.id,
+    });
+    expect(outcome).toMatchObject({ ok: false, reason: 'already_held' });
+    if (outcome.ok) throw new Error('unreachable');
+    expect(outcome.message).toContain('no longer live');
+  });
+});
+
 describe('requesting on behalf of somebody', () => {
   it('lets the subject own manager submit with no permission at all', async () => {
     const janUserId = await withTenant(tenantId, async (tx) =>
@@ -8808,17 +10760,30 @@ import {
   type StageSnapshot,
 } from './approvers.js';
 import { loadWorkflowStages } from './workflow-service.js';
-import { findVisibleProduct, subjectAudienceFacts } from './catalog-service.js';
 import { validateFormValues, type FormSchema } from './form.js';
 import { resolveRequestedDuration, type DurationMode } from './duration.js';
+// `checkEligibility` lives in its own module (Task 9) and is imported here
+// rather than defined here: `fulfilRequest` needs it too, and this module
+// imports `fulfilRequest`, so defining it here is an import cycle.
+import { checkEligibility } from './eligibility.js';
 import {
   fulfilRequest,
   requestUrl,
   subjectHoldings,
   type FulfilOptions,
 } from './fulfil.js';
-import { enqueueOutbox, recipientsForPersons, usersWithPermission } from './notify.js';
-import type { RefusalReason, RequestStatus, ResourceType } from './types.js';
+import {
+  displayNames,
+  enqueueOutbox,
+  recipientsForPersons,
+  usersWithPermission,
+} from './notify.js';
+import {
+  LIVE_GRANT_STATUSES,
+  type RefusalReason,
+  type RequestStatus,
+  type ResourceType,
+} from './types.js';
 
 export type SubmitOutcome =
   | { ok: true; requestId: string; status: RequestStatus }
@@ -8843,62 +10808,9 @@ const refuse = (reason: RefusalReason, message: string): SubmitOutcome => ({
   message,
 });
 
-/**
- * Everything that makes a subject ineligible, checked in one place.
- *
- * Called at submission, at each stage opening, and again immediately before
- * fulfilment. The evaluation is the audience condition plus the subject's
- * employment state, both cheap and both pure -- which is what makes running it
- * three times affordable, and what stops an approval given on Monday for a
- * finance product from fulfilling on Friday after the subject left finance.
- */
-export async function checkEligibility(
-  tx: TenantClient,
-  productId: string,
-  subjectPersonId: string,
-  on: Date,
-): Promise<{ ok: true } | { ok: false; reason: RefusalReason; message: string }> {
-  const person = await tx.person.findUnique({
-    where: { id: subjectPersonId },
-    select: { status: true, givenName: true, familyName: true },
-  });
-  if (person === null || person.status !== 'active') {
-    return {
-      ok: false,
-      reason: 'subject_inactive',
-      message: 'The person this was for is no longer active.',
-    };
-  }
-
-  const contracts = await activeContracts(tx, subjectPersonId, on);
-  if (contracts.length === 0) {
-    return {
-      ok: false,
-      reason: 'subject_departed',
-      message: `${person.givenName} ${person.familyName} holds no contract in force.`,
-    };
-  }
-
-  const product = await tx.product.findUnique({ where: { id: productId } });
-  if (product === null || product.status !== 'active') {
-    return {
-      ok: false,
-      reason: 'product_withdrawn',
-      message: 'That catalog entry has been withdrawn.',
-    };
-  }
-
-  const visible = await findVisibleProduct(tx, subjectPersonId, productId, on);
-  if (visible === null) {
-    return {
-      ok: false,
-      reason: 'no_longer_eligible',
-      message: `${person.givenName} ${person.familyName} no longer matches the audience for ${product.name}.`,
-    };
-  }
-
-  return { ok: true };
-}
+// `checkEligibility` was here in the first draft of this plan and now lives in
+// `eligibility.ts` (Task 9). See the import above; it is re-exported from
+// `packages/core/src/index.ts` through that module, so no consumer changes.
 
 /** The facts approver resolution needs about a request that already exists. */
 export async function subjectFor(
@@ -9029,6 +10941,16 @@ export async function submitRequest(
       return refuse(eligibility.reason, eligibility.message);
     }
 
+    // Checked at submission and nowhere else, deliberately.
+    //
+    // `checkEligibility` does not look at the workflow, so a request already
+    // in flight under a workflow disabled afterwards keeps advancing. That is
+    // the right behaviour: disabling a workflow stops NEW requests entering
+    // it; retro-cancelling the ones already with an approver would discard
+    // decisions people have already signed. Recorded because
+    // `workflow_disabled` is a declared `RefusalReason` with exactly one
+    // producer, and the next reader will wonder whether the others are
+    // missing.
     if (!product.workflow.enabled) {
       return refuse(
         'workflow_disabled',
@@ -9045,8 +10967,12 @@ export async function submitRequest(
       );
     }
 
+    const formSchema = product.formSchema as unknown as FormSchema;
+    // `selectableResourceIds` are `ProductGrant` ROW ids, and `picked` below
+    // is keyed on the same thing, so the validator and the filter agree by
+    // construction.
     const form = validateFormValues(
-      product.formSchema as unknown as FormSchema,
+      formSchema,
       input.formValues,
       product.grants.map((g) => g.id),
     );
@@ -9054,6 +10980,32 @@ export async function submitRequest(
       return refuse(
         'invalid_form',
         form.errors.map((e) => `${e.path}: ${e.message}`).join('; '),
+      );
+    }
+
+    // Which of the product's grants this request is actually for.
+    //
+    // Spec section 6 defines `resourcePicker` as "choose among the product's
+    // own ProductGrant rows, for a product whose bundle is 'pick one of these
+    // four shared mailboxes'", and `ProductGrant.optional` as existing for
+    // those forms. Building the snapshot from EVERY grant regardless makes
+    // both fields decorative: a tenant who configures "pick one of four"
+    // grants all four to everybody who asks for one. Non-optional grants are
+    // always included; optional ones only when the picker named them.
+    const pickerKeys = formSchema
+      .filter((f) => f.type === 'resourcePicker' || f.type === 'multiselect')
+      .map((f) => f.key);
+    const picked = new Set(
+      pickerKeys.flatMap((key) => {
+        const value = form.values[key];
+        return value === undefined ? [] : Array.isArray(value) ? value.map(String) : [String(value)];
+      }),
+    );
+    const chosenGrants = product.grants.filter((g) => !g.optional || picked.has(g.id));
+    if (chosenGrants.length === 0) {
+      return refuse(
+        'invalid_form',
+        'Choose at least one of the resources this product offers.',
       );
     }
 
@@ -9081,9 +11033,67 @@ export async function submitRequest(
     }
 
     const held = await subjectHoldings(tx, input.subjectPersonId);
-    const wanted = product.grants.map((g) => `${g.resourceType}:${g.resourceId}`);
-    if (wanted.every((key) => held.has(key))) {
-      const sources = wanted.map((key) => `${key} (${held.get(key)!.detail})`);
+
+    // An extension is a new request against the same product, and the grant
+    // it replaces is NOT "already held" for the purpose of refusing it --
+    // that is the whole point of extending. Without this, the Extend action
+    // the expiry-warning template renders cannot even be submitted: for a
+    // single-resource product every wanted key is held, so the request is
+    // refused `already_held` and spec section 12's "extended in place with no
+    // outage" is unbuildable. Task 9's fulfilment does the same subtraction
+    // and supersedes the old grant inside one transaction.
+    const replaced =
+      input.replacesGrantId === undefined || input.replacesGrantId === null
+        ? null
+        : await tx.accessGrant.findFirst({
+            where: {
+              id: input.replacesGrantId,
+              subjectPersonId: input.subjectPersonId,
+              status: { in: [...LIVE_GRANT_STATUSES] },
+            },
+          });
+    if (input.replacesGrantId != null && replaced === null) {
+      return refuse(
+        'already_held',
+        'That grant is no longer live; ask for it again instead of extending it.',
+      );
+    }
+    const excluded =
+      replaced === null
+        ? new Set<string>()
+        : new Set([`${replaced.resourceType}:${replaced.resourceId}`]);
+
+    const wantedResources = chosenGrants.map((g) => ({
+      resourceType: g.resourceType as ResourceType,
+      resourceId: g.resourceId,
+    }));
+    const wanted = wantedResources.map((r) => `${r.resourceType}:${r.resourceId}`);
+    const names = await displayNames(tx, {
+      personIds: [
+        input.subjectPersonId,
+        ...(submitter.personId === null ? [] : [submitter.personId]),
+      ],
+      productIds: [product.id],
+      resources: wantedResources,
+    });
+    const subjectName =
+      names.get(`person:${input.subjectPersonId}`) ?? 'the person this is for';
+
+    // Subtract BEFORE testing, not alongside. Writing this as
+    // `wanted.every((key) => excluded.has(key) || held.has(key))` makes the
+    // excluded key *satisfy* the refusal instead of escaping it: for a
+    // single-resource product -- which is what every Extend link on a grant
+    // points at -- `wanted` is one key, `excluded` is that same key, `every`
+    // returns true, and the extension is refused with an empty list ("That is
+    // already held: ."). Take the difference first, then refuse only when
+    // something is still wanted and all of it is held. A plain re-request has
+    // an empty `excluded` and is still refused. Task 9's `fulfilRequest`
+    // reaches the same result by a different route -- `held.delete(...)`.
+    const outstanding = wanted.filter((key) => !excluded.has(key));
+    if (outstanding.length > 0 && outstanding.every((key) => held.has(key))) {
+      const sources = outstanding.map(
+        (key) => `${names.get(key) ?? key} (${held.get(key)!.detail})`,
+      );
       return refuse(
         'already_held',
         `That is already held: ${sources.join(', ')}.`,
@@ -9109,7 +11119,7 @@ export async function submitRequest(
     // The snapshot. Written at submission so editing the product afterwards
     // changes nothing about this request.
     await tx.requestItem.createMany({
-      data: product.grants.map((grant) => ({
+      data: chosenGrants.map((grant) => ({
         tenantId,
         requestId: request.id,
         resourceType: grant.resourceType,
@@ -9123,7 +11133,11 @@ export async function submitRequest(
           tenantId,
           requestId: request.id,
           sequence: stage.sequence,
-          stageSnapshot: stage as unknown as object,
+          // `as never`, not `as unknown as object`. `object` is not assignable
+          // to `Prisma.InputJsonValue` either, and `StageSnapshot` is an
+          // `interface`, which TypeScript never gives an implicit index
+          // signature (Global Constraint 21).
+          stageSnapshot: stage as never,
           status: 'waiting',
         })),
       });
@@ -9199,7 +11213,7 @@ export async function submitRequest(
               displayName: recipient.displayName,
               stageName: stages[0]!.name,
               productName: product.name,
-              subjectName: input.subjectPersonId,
+              subjectName,
               droppedNote:
                 'Everybody the stage resolved to was the subject, the submitter, or unable to sign in.',
               requestUrl: requestUrl(publicUrl, request.id),
@@ -9224,7 +11238,7 @@ export async function submitRequest(
               displayName: recipient.displayName,
               requesterName: submitter.displayName,
               productName: product.name,
-              subjectName: input.subjectPersonId,
+              subjectName,
               justification: input.justification ?? '',
               requestUrl: requestUrl(publicUrl, request.id),
             },
@@ -9289,14 +11303,15 @@ Spec §7, §9 and §16's decision transaction. The invariant is re-checked **at 
 - Test: `packages/core/src/automate/decision-service.test.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `hasPermission`, `PERMISSIONS`; `isValidApprover`, `type StageSnapshot` from `./approvers.js`; `openStage`, `checkEligibility`, `subjectFor` from `./request-service.js`; `applyShortening` from `./duration.js`; `fulfilRequest`, `requestUrl`, `type FulfilOptions` from `./fulfil.js`; `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission` from `./notify.js`; `type RequestStatus` from `./types.js`.
+- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `hasPermission`, `PERMISSIONS`; `isValidApprover`, `type StageSnapshot` from `./approvers.js`; `openStage`, `subjectFor` from `./request-service.js`; `checkEligibility` from `./eligibility.js` (Task 9); `applyShortening` from `./duration.js`; `fulfilRequest`, `requestUrl`, `type FulfilOptions` from `./fulfil.js`; `displayNames`, `enqueueOutbox`, `recipientsForPersons` from `./notify.js`; `type RequestStatus` from `./types.js`.
+  - **Not** `usersWithPermission`: it was listed and never used, and an unused name in an Interfaces block is how somebody adds the import.
 - Produces:
   - `class DecisionRefusedError extends Error { constructor(readonly code: string, message: string) }`
   - `interface DecisionInput { requestId: string; deciderPersonId: string; deciderUserId: string; decision: 'approve' | 'reject'; comment: string | null; shortenedToDays: number | null; sourceIp: string | null }`
   - `interface DecisionOptions extends FulfilOptions { asAdministrator?: boolean }`
   - `async function recordDecision(tenantId: string, input: DecisionInput, options?: DecisionOptions): Promise<{ status: RequestStatus }>`
   - `async function cancelRequest(tenantId: string, requestId: string, actorUserId: string, options?: FulfilOptions): Promise<void>`
-  - `const APPROVED_ENTRY_POINTS: readonly string[]` — the exhaustive list of code paths that may write `status: 'approved'`, asserted against by the structural test
+  - `const APPROVED_ENTRY_POINTS: readonly string[]` — the exhaustive list of **files** that may write `status = 'approved'`, in either spelling, asserted against by the structural test. Three, not two: `request-service.ts` (zero-stage workflow), `decision-service.ts` (last stage decided by a person) and `delegation-service.ts` (a delegated act, which spec §14 defines as a request with no approval stages). Global Constraint 13 said "exactly two places" and was wrong.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -9311,7 +11326,12 @@ import { PERMISSIONS } from '../rbac/permissions.js';
 import { createProduct } from './catalog-service.js';
 import { upsertWorkflow } from './workflow-service.js';
 import { submitRequest } from './request-service.js';
-import { DecisionRefusedError, cancelRequest, recordDecision } from './decision-service.js';
+import {
+  APPROVED_ENTRY_POINTS,
+  DecisionRefusedError,
+  cancelRequest,
+  recordDecision,
+} from './decision-service.js';
 
 const NOW = new Date('2026-06-15T00:00:00Z');
 const LATER = new Date('2026-06-18T00:00:00Z');
@@ -9840,29 +11860,73 @@ describe('no transition into approved exists that is not caused by a decision', 
     'packages/core/src/automate/reflect.ts',
     'packages/core/src/automate/delegation-service.ts',
     'packages/core/src/automate/fulfil.ts',
+    'packages/core/src/automate/eligibility.ts',
   ];
 
-  it('writes status approved in exactly two places, both of them decisions', () => {
+  /**
+   * The source with every comment blanked out, so a docstring that QUOTES the
+   * rule is not read as breaking it. `jobs.ts` says in its own comment that it
+   * never approves anything, and it says so by naming the literal; without
+   * this, that sentence puts `jobs.ts` in the offending set and the test fails
+   * on the module whose comment states the constraint. This is the same trap
+   * Task 15's transaction-rule test hit and the same remedy. Newlines are
+   * preserved inside blanked block comments so the reported line numbers still
+   * point at the real line.
+   */
+  const codeOf = (path: string): string =>
+    readFileSync(path, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .replace(/\/\/.*$/gm, '');
+
+  it('writes status approved only at the declared entry points', () => {
+    // Matches BOTH spellings. `request-service.ts` assigns to a local first
+    // -- `status = 'approved';` -- and then writes `data: { status, ... }`, so
+    // a regex anchored on `status:` finds it nowhere and finds
+    // `decision-service.ts`'s and `delegation-service.ts`'s literals instead.
+    // The first draft of this test asserted a length of two and passed for
+    // entirely the wrong reason while its named-file assertion failed. A
+    // structural test that certifies the wrong set is worse than no
+    // structural test.
     const hits: string[] = [];
     for (const file of FILES) {
       let source: string;
       try {
-        source = readFileSync(file, 'utf8');
+        source = codeOf(file);
       } catch {
         // A module this plan has not written yet cannot contain a violation.
         continue;
       }
       for (const [index, line] of source.split('\n').entries()) {
-        if (/status:\s*'approved'/.test(line)) hits.push(`${file}:${index + 1}`);
+        if (/status\s*[:=]\s*'approved'/.test(line)) hits.push(`${file}:${index + 1}`);
       }
     }
-    // request-service.ts: the zero-stage workflow, where the empty stage list
-    //   IS the grant and the catalog says "granted immediately".
-    // decision-service.ts: the last stage decided in favour by a person.
+
+    // Three entry points, and the list is `APPROVED_ENTRY_POINTS` in the
+    // service, not a literal here, so adding one is an edit somebody makes
+    // deliberately in the module that owns the rule:
+    //
+    //   request-service.ts    the zero-stage workflow, where the empty stage
+    //                         list IS the grant and the catalog says
+    //                         "granted immediately" before anybody asks.
+    //   decision-service.ts   the last stage decided in favour by a person.
+    //   delegation-service.ts a delegated administrative act, which spec
+    //                         section 14 defines as a request with no
+    //                         approval stages -- the same mechanism as the
+    //                         first, reached from the portal.
+    //
     // Nowhere else. Not a timeout, not a sweep, not a job, not a reflection.
-    expect(hits).toHaveLength(2);
-    expect(hits.some((h) => h.startsWith('packages/core/src/automate/request-service.ts'))).toBe(true);
-    expect(hits.some((h) => h.startsWith('packages/core/src/automate/decision-service.ts'))).toBe(true);
+    // The assertion is over the SET OF FILES, and there is deliberately no
+    // assertion on `hits.length`. `hits` is one entry per matching line, not
+    // per file: `decision-service.ts` alone matches three -- the ApprovalStep
+    // closing, the AccessRequest transition and the returned verdict -- and
+    // only one of those is "a transition of the request into approved". A
+    // count over lines certifies a number nobody will maintain and fails the
+    // next time somebody splits a statement across two lines. Global
+    // Constraint 13 is a statement about WHICH MODULES may write it, and that
+    // is exactly what this compares. Add a fourth file and the set gains a
+    // member; delete the write from one of the three and it loses one.
+    const files = new Set(hits.map((h) => h.slice(0, h.lastIndexOf(':'))));
+    expect([...files].sort()).toEqual([...APPROVED_ENTRY_POINTS].sort());
   });
 
   it('has no onTimeout value that could mean approve', () => {
@@ -9888,11 +11952,39 @@ import { recordEvent } from '../audit/audit-service.js';
 import { hasPermission } from '../rbac/rbac-service.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
 import { isValidApprover, type StageSnapshot } from './approvers.js';
-import { checkEligibility, openStage } from './request-service.js';
+import { openStage } from './request-service.js';
+import { checkEligibility } from './eligibility.js';
 import { applyShortening } from './duration.js';
 import { fulfilRequest, requestUrl, type FulfilOptions } from './fulfil.js';
-import { enqueueOutbox, recipientsForPersons } from './notify.js';
+import { displayNames, enqueueOutbox, recipientsForPersons } from './notify.js';
 import type { RequestStatus } from './types.js';
+
+/**
+ * Every file permitted to move a request into `approved`.
+ *
+ * The subject of Task 11 Step 1's structural test, and the reason it is a
+ * constant here rather than a literal in the test: widening the set has to be
+ * an edit somebody makes in the module that owns the rule, next to this
+ * comment, rather than a number somebody bumps in a test file to make it
+ * green.
+ *
+ *   request-service.ts     a zero-stage workflow. The empty stage list IS the
+ *                          grant mechanism, and the catalog says "granted
+ *                          immediately" before anybody asks.
+ *   decision-service.ts    the last stage decided in favour by a person.
+ *   delegation-service.ts  a delegated administrative act, which spec section
+ *                          14 defines as a request with no approval stages.
+ *
+ * There is no fourth. In particular there is no timeout that approves:
+ * `onTimeout` is `remind`, `escalate` or `expire`, enforced by a database
+ * check constraint as well as by a type, so adding a fourth value is a
+ * migration somebody has to write.
+ */
+export const APPROVED_ENTRY_POINTS: readonly string[] = [
+  'packages/core/src/automate/decision-service.ts',
+  'packages/core/src/automate/delegation-service.ts',
+  'packages/core/src/automate/request-service.ts',
+];
 
 export class DecisionRefusedError extends Error {
   constructor(
@@ -10007,22 +12099,23 @@ export async function recordDecision(
           where: { requestId: request.id, status: 'open' },
         });
 
-    if (!administrative) {
-      const onStep = await tx.approvalStepApprover.findFirst({
-        where: { stepId: step.id, personId: input.deciderPersonId },
-      });
-      if (onStep === null) {
-        throw new DecisionRefusedError(
-          'not-an-approver',
-          'This request is not with you.',
-        );
-      }
-      var via = onStep.via;
-      var onBehalfOfPersonId = onStep.onBehalfOfPersonId;
-    } else {
-      var via = 'administrator';
-      var onBehalfOfPersonId: string | null = null;
-    }
+    // How this decision is attributed. Two branches, one binding, no `var`:
+    // an administrative decision is recorded as `administrator` and is
+    // confined to `blocked_no_approver` by the guard above; every other
+    // decision carries the `via` the resolver materialized, so a delegate's
+    // signature says whose authority it was made under.
+    const routing = administrative
+      ? { via: 'administrator' as const, onBehalfOfPersonId: null as string | null }
+      : await (async () => {
+          const onStep = await tx.approvalStepApprover.findFirst({
+            where: { stepId: step.id, personId: input.deciderPersonId },
+          });
+          if (onStep === null) {
+            throw new DecisionRefusedError('not-an-approver', 'This request is not with you.');
+          }
+          return { via: onStep.via, onBehalfOfPersonId: onStep.onBehalfOfPersonId };
+        })();
+    const { via, onBehalfOfPersonId } = routing;
 
     const shortened = applyShortening(request.requestedDurationDays, input.shortenedToDays);
     if (!shortened.ok) throw new DecisionRefusedError('duration', shortened.message);
@@ -10080,10 +12173,26 @@ export async function recordDecision(
       tx,
       decidedBefore.map((d) => d.personId),
     );
+    // Names, not ids. Spec section 7 makes naming the approver a deliberate
+    // design decision -- "anonymous approval is worse than visible approval:
+    // it makes chasing impossible" -- so `approverName` in particular must be
+    // a person's name or the whole point of recording it is lost.
+    const names = await displayNames(tx, {
+      personIds: [
+        request.subjectPersonId,
+        input.deciderPersonId,
+        ...(request.requestedByPersonId === null ? [] : [request.requestedByPersonId]),
+      ],
+    });
+    const requesterName =
+      request.requestedByPersonId === null
+        ? 'somebody whose account is not linked to a person'
+        : (names.get(`person:${request.requestedByPersonId}`) ?? 'the requester');
     const vars = {
       productName: request.product?.name ?? 'the requested access',
-      subjectName: request.subjectPersonId,
-      approverName: input.deciderPersonId,
+      subjectName:
+        names.get(`person:${request.subjectPersonId}`) ?? 'the person this was for',
+      approverName: names.get(`person:${input.deciderPersonId}`) ?? 'an approver',
       comment: input.comment ?? '',
       shortenedNote:
         input.shortenedToDays === null ? '' : ` for ${input.shortenedToDays} days`,
@@ -10211,7 +12320,7 @@ export async function recordDecision(
           vars: {
             ...vars,
             displayName: r.displayName,
-            requesterName: request.requestedByUserId,
+            requesterName,
             justification: request.justification ?? '',
           },
           requestId: request.id,
@@ -10221,8 +12330,9 @@ export async function recordDecision(
       return { status: 'pending_approval' };
     }
 
-    // The last stage, decided in favour by a person. One of exactly two places
-    // in this slice that writes `approved`.
+    // The last stage, decided in favour by a person. One of the three places
+    // in this slice that writes `approved`, and the only one reached by
+    // somebody signing something -- see APPROVED_ENTRY_POINTS above.
     await tx.accessRequest.update({
       where: { id: request.id },
       data: { status: 'approved', decidedAt: now },
@@ -10305,7 +12415,12 @@ export async function cancelRequest(
       payload: { subjectPersonId: request.subjectPersonId },
     });
 
-    // So they stop looking at it.
+    // So they stop looking at it. Named, not `requestedByUserId` -- a user id
+    // in the body of a mail telling somebody to stop looking at a request is
+    // a support ticket rather than a notification.
+    const cancelNames = await displayNames(tx, {
+      personIds: request.requestedByPersonId === null ? [] : [request.requestedByPersonId],
+    });
     await enqueueOutbox(
       tx,
       (await recipientsForPersons(tx, openApprovers.map((a) => a.personId))).map((r) => ({
@@ -10313,7 +12428,7 @@ export async function cancelRequest(
         to: r.email,
         vars: {
           displayName: r.displayName,
-          requesterName: request.requestedByUserId,
+          requesterName: cancelNames.get(`person:${request.requestedByPersonId ?? ''}`) ?? 'the requester',
           productName: request.product?.name ?? 'the requested access',
           requestUrl: requestUrl(publicUrl, requestId),
         },
@@ -10325,26 +12440,12 @@ export async function cancelRequest(
 }
 ```
 
-- [ ] **Step 4: Replace the `var` declarations the draft above uses**
+- [ ] **Step 4: Check the file contains no `var`**
 
-The `via` / `onBehalfOfPersonId` branch is written with `var` so both branches share one binding. Rewrite it as a `const` pair to keep the file free of `var`:
+Run: `grep -n '\bvar\b' packages/core/src/automate/decision-service.ts`
+Expected: no output.
 
-```ts
-    const routing = administrative
-      ? { via: 'administrator' as const, onBehalfOfPersonId: null as string | null }
-      : await (async () => {
-          const onStep = await tx.approvalStepApprover.findFirst({
-            where: { stepId: step.id, personId: input.deciderPersonId },
-          });
-          if (onStep === null) {
-            throw new DecisionRefusedError('not-an-approver', 'This request is not with you.');
-          }
-          return { via: onStep.via, onBehalfOfPersonId: onStep.onBehalfOfPersonId };
-        })();
-    const { via, onBehalfOfPersonId } = routing;
-```
-
-Marked as a correction rather than quietly fixed, because `var` in an ESM module is the kind of thing a reviewer should see was noticed.
+An earlier draft of Step 3 wrote the `via` / `onBehalfOfPersonId` branch with `var` so both branches could share one binding, and corrected it here in Step 4 — which meant an implementer working the steps in order wrote code that does not pass review, then rewrote it. The corrected `const routing` form is now in Step 3 where it belongs; this step is the check, not the fix.
 
 - [ ] **Step 5: Export the module**
 
@@ -10387,7 +12488,8 @@ Spec §5 and §16. The state between approval and access is `awaiting_fulfilment
 - Test: `packages/core/src/automate/reflect.test.ts`
 
 **Interfaces:**
-- Consumes: `withTenant` from `@syntra/db`; `recordEvent`; `PERMISSIONS`; `type Scheduler`; `PROVISION_JOB`, `provisionJobPayload` from `../provision/jobs.js`; `automateSettings` from `./catalog-service.js`; `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission` from `./notify.js`; `requestUrl` from `./fulfil.js`; `type RequestStatus` from `./types.js`.
+- Consumes: `withTenant` from `@syntra/db`; `recordEvent`; `PERMISSIONS`; `type Scheduler`; `PROVISION_JOB`, `provisionJobPayload` from `../provision/jobs.js`; `automateSettings` from `./catalog-service.js`; `displayNames`, `nameList`, `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission` from `./notify.js`; `requestUrl` from `./fulfil.js`; `type RequestStatus`, `type ResourceType` from `./types.js`.
+- **Five phases, each in its own transaction, items batched at `REFLECT_BATCH = 100`** (Global Constraint 2). `ReflectOptions` gains `batchSize?: number` so a test can force the batch boundary.
 - Produces:
   - `interface ReflectOptions { now?: Date; scheduler?: Scheduler | null; publicUrl?: string }`
   - `interface ReflectResult { linked: number; fulfilled: number; failed: number; redispatched: number; slaAlerts: number }`
@@ -10678,14 +12780,42 @@ import { PERMISSIONS } from '../rbac/permissions.js';
 import type { Scheduler } from '../jobs/scheduler.js';
 import { PROVISION_JOB, provisionJobPayload } from '../provision/jobs.js';
 import { automateSettings } from './catalog-service.js';
-import { enqueueOutbox, recipientsForPersons, usersWithPermission } from './notify.js';
+import {
+  displayNames,
+  enqueueOutbox,
+  nameList,
+  recipientsForPersons,
+  usersWithPermission,
+} from './notify.js';
 import { requestUrl } from './fulfil.js';
-import type { RequestStatus } from './types.js';
+import type { RequestStatus, ResourceType } from './types.js';
 
 export interface ReflectOptions {
   now?: Date;
   scheduler?: Scheduler | null;
   publicUrl?: string;
+  /** Rows per transaction. See `REFLECT_BATCH`. */
+  batchSize?: number;
+}
+
+/**
+ * How many `RequestItem` rows one transaction reflects.
+ *
+ * `withTenant` is `prisma.$transaction` with Prisma's **5000 ms** default and
+ * no `transactionOptions` on the client. Each item is roughly five queries and
+ * each touched request writes an audit event, resolves display names and, on a
+ * failure, reads `usersWithPermission`. This pass runs on the five-minute
+ * tick, so a tenant-sized pass in one transaction is a P2028 every five
+ * minutes. Every phase derives its state from the rows rather than from what
+ * it did last time, so a batch that fails is redone on the next tick.
+ */
+const REFLECT_BATCH = 100;
+
+/** Splits a work list into transaction-sized batches. */
+function reflectChunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push([...items.slice(i, i + size)]);
+  return out;
 }
 
 export interface ReflectResult {
@@ -10725,36 +12855,71 @@ export async function reflectProvisionOutcomes(
 ): Promise<ReflectResult> {
   const now = options.now ?? new Date();
   const publicUrl = options.publicUrl ?? '';
+  const batchSize = options.batchSize ?? REFLECT_BATCH;
 
-  const { result, targetsToRun } = await withTenant(tenantId, async (tx) => {
-    const settings = await automateSettings(tx);
-    const result: ReflectResult = {
-      linked: 0,
-      fulfilled: 0,
-      failed: 0,
-      redispatched: 0,
-      slaAlerts: 0,
-    };
+  const result: ReflectResult = {
+    linked: 0,
+    fulfilled: 0,
+    failed: 0,
+    redispatched: 0,
+    slaAlerts: 0,
+  };
+  const touchedRequestIds = new Set<string>();
+  const targetsToRun = new Set<string>();
 
-    const items = await tx.requestItem.findMany({
-      where: { status: 'dispatched', resourceType: 'entitlement' },
-    });
+  // ---- Phase 1: settings, and the item work list. ------------------------
+  //
+  // Four passes, each in its own transaction and each batched. An earlier
+  // draft ran the lot inside one `withTenant`: every `dispatched` item at
+  // roughly five queries, then every touched request with a
+  // `usersWithPermission` apiece. `withTenant` is `prisma.$transaction` with
+  // Prisma's **5000 ms** default, and this pass runs on the five-minute tick.
+  // Every phase derives its state from the rows rather than from what it did
+  // last time, so a batch that fails is redone on the next tick.
+  const settings = await withTenant(tenantId, (tx) => automateSettings(tx));
 
-    const touchedRequestIds = new Set<string>();
-    const targetsToRun = new Set<string>();
+  // `failed` as well as `dispatched`.
+    //
+    // The comment on the failure branch below says "the grant is NOT moved to
+    // active, and it is NOT ended either: it is still in desired state, so a
+    // fixed target converges on the next run without anybody raising a second
+    // request." That is only true if this pass looks at the item again. Query
+    // `dispatched` alone and a failed item leaves the set permanently: the
+    // grant stays `pending` forever, the request stays `fulfilment_failed`,
+    // and the person's access becomes real on the next run with nothing
+    // saying so.
+    const itemIds = await withTenant(tenantId, async (tx) =>
+      (
+        await tx.requestItem.findMany({
+          where: { status: { in: ['dispatched', 'failed'] }, resourceType: 'entitlement' },
+          select: { id: true },
+        })
+      ).map((row) => row.id),
+    );
 
-    for (const item of items) {
-      touchedRequestIds.add(item.requestId);
+    // ---- Phase 2: reflect each item. ------------------------------------
+    for (const batch of reflectChunk(itemIds, batchSize)) {
+     await withTenant(tenantId, async (tx) => {
+      const items = await tx.requestItem.findMany({ where: { id: { in: batch } } });
+
+      for (const item of items) {
+        touchedRequestIds.add(item.requestId);
 
       // Link the action if it has not been linked. The action carries the
       // grant id Provision wrote at plan time, so the join needs no guessing.
       let actionId = item.provisionActionId;
-      if (actionId === null && item.grantId !== null) {
+      // A `failed` item re-links to the NEWEST action for its grant, not to
+      // the one that failed: a later run planned the same grant again, and
+      // that later action is what says whether the target converged. Without
+      // the re-link a failed item is pinned to its failure forever.
+      const wantsRelink =
+        actionId === null || (item.status === 'failed' && item.grantId !== null);
+      if (wantsRelink && item.grantId !== null) {
         const action = await tx.provisionAction.findFirst({
           where: { grantId: item.grantId, actionType: 'grant_entitlement' },
           orderBy: { createdAt: 'desc' },
         });
-        if (action !== null) {
+        if (action !== null && action.id !== item.provisionActionId) {
           actionId = action.id;
           await tx.requestItem.update({
             where: { id: item.id },
@@ -10810,12 +12975,18 @@ export async function reflectProvisionOutcomes(
         // without anybody raising a second request.
         result.failed += 1;
       }
-    }
+      }
+     });
+  }
 
-    // Requests whose items all reached a terminal state, recomputed from the
-    // items rather than accumulated -- which is what lets a request that
-    // failed once and succeeded later end up `fulfilled`.
-    for (const requestId of touchedRequestIds) {
+  // ---- Phase 3: the requests those items belong to. ----------------------
+  //
+  // Recomputed from the items rather than accumulated, which is what lets a
+  // request that failed once and succeeded later end up `fulfilled`. One
+  // request per transaction: each writes an audit event, resolves display
+  // names and, on a failure, reads `usersWithPermission`.
+  for (const requestId of touchedRequestIds) {
+    await withTenant(tenantId, async (tx) => {
       const request = await tx.accessRequest.findUniqueOrThrow({
         where: { id: requestId },
         include: { items: true, product: true },
@@ -10833,7 +13004,7 @@ export async function reflectProvisionOutcomes(
           : failed
             ? 'fulfilment_failed'
             : 'fulfilled';
-      if (status === request.status) continue;
+      if (status === request.status) return;
 
       await tx.accessRequest.update({
         where: { id: requestId },
@@ -10863,12 +13034,43 @@ export async function reflectProvisionOutcomes(
           : status === 'partially_fulfilled'
             ? ('automate-partially-fulfilled' as const)
             : ('automate-fulfilment-failed' as const);
-      if (status === 'awaiting_fulfilment') continue;
+      if (status === 'awaiting_fulfilment') return;
 
       const failedMessages = request.items
         .filter((i) => i.status === 'failed')
         .map((i) => i.message ?? 'no message')
         .join('; ');
+      // Names. `targetName: request.items[0]?.targetSystemId` and a
+      // `resourceList` of raw `resourceId`s put three UUIDs into a mail whose
+      // whole job (spec section 13) is to say "what did not land, and why".
+      const names = await displayNames(tx, {
+        personIds: [request.subjectPersonId],
+        productIds: request.productId === null ? [] : [request.productId],
+        resources: request.items.map((i) => ({
+          resourceType: i.resourceType as ResourceType,
+          resourceId: i.resourceId,
+        })),
+      });
+      const describe = (predicate: (status: string) => boolean) =>
+        nameList(
+          names,
+          request.items
+            .filter((i) => predicate(i.status))
+            .map((i) => ({
+              resourceType: i.resourceType as ResourceType,
+              resourceId: i.resourceId,
+            })),
+        );
+      const firstTargetId = request.items.find((i) => i.targetSystemId !== null)?.targetSystemId;
+      const targetName =
+        firstTargetId === undefined || firstTargetId === null
+          ? 'no target system'
+          : ((
+              await tx.targetSystem.findUnique({
+                where: { id: firstTargetId },
+                select: { name: true },
+              })
+            )?.name ?? 'a target system');
       await enqueueOutbox(
         tx,
         [...recipients, ...managers].map((r) => ({
@@ -10877,18 +13079,13 @@ export async function reflectProvisionOutcomes(
           vars: {
             displayName: r.displayName,
             productName: request.product?.name ?? 'the requested access',
-            subjectName: request.subjectPersonId,
-            targetName: request.items[0]?.targetSystemId ?? '',
+            subjectName:
+              names.get(`person:${request.subjectPersonId}`) ?? 'the person this was for',
+            targetName,
             message: failedMessages,
-            grantedList: request.items
-              .filter((i) => i.status === 'fulfilled')
-              .map((i) => i.resourceId)
-              .join(', '),
-            failedList: request.items
-              .filter((i) => i.status === 'failed')
-              .map((i) => i.resourceId)
-              .join(', '),
-            resourceList: request.items.map((i) => i.resourceId).join(', '),
+            grantedList: describe((status) => status === 'fulfilled'),
+            failedList: describe((status) => status === 'failed'),
+            resourceList: describe(() => true),
             endsAt: '',
             skippedNote: '',
             requestUrl: requestUrl(publicUrl, requestId),
@@ -10897,29 +13094,53 @@ export async function reflectProvisionOutcomes(
           userId: r.userId,
         })),
       );
-    }
-
-    // The fulfilment SLA. A request approved and not applied is not an error;
-    // it becomes one when nobody has looked at it for a day.
-    const slaCutoff = new Date(now.getTime() - settings.fulfilmentSlaHours * 3_600_000);
-    const stale = await tx.accessRequest.findMany({
-      where: {
-        status: 'awaiting_fulfilment',
-        dispatchedAt: { lt: slaCutoff },
-      },
-      include: { product: true, items: true },
     });
-    for (const request of stale) {
+  }
+
+  // ---- Phase 4: the fulfilment SLA. --------------------------------------
+  //
+  // A request approved and not applied is not an error; it becomes one when
+  // nobody has looked at it for a day. One transaction per stale request:
+  // each one reads `usersWithPermission`.
+  const slaCutoff = new Date(now.getTime() - settings.fulfilmentSlaHours * 3_600_000);
+  const staleIds = await withTenant(tenantId, async (tx) =>
+    (
+      await tx.accessRequest.findMany({
+        where: { status: 'awaiting_fulfilment', dispatchedAt: { lt: slaCutoff } },
+        select: { id: true },
+      })
+    ).map((row) => row.id),
+  );
+
+  for (const staleId of staleIds) {
+    await withTenant(tenantId, async (tx) => {
+      const request = await tx.accessRequest.findUniqueOrThrow({
+        where: { id: staleId },
+        include: { product: true, items: true },
+      });
       // Once per request, not once per tick. Deduped on the outbox itself,
       // which is also the row somebody reads when they ask whether they were
       // ever told.
       const alreadyWarned = await tx.notificationOutbox.count({
         where: { requestId: request.id, template: 'automate-awaiting-fulfilment-sla' },
       });
-      if (alreadyWarned > 0) continue;
+      if (alreadyWarned > 0) return;
 
       const managers = await usersWithPermission(tx, PERMISSIONS.AUTOMATE_MANAGE);
-      if (managers.length === 0) continue;
+      if (managers.length === 0) return;
+      const staleNames = await displayNames(tx, {
+        personIds: [request.subjectPersonId],
+      });
+      const staleTargetId = request.items.find((i) => i.targetSystemId !== null)?.targetSystemId;
+      const staleTargetName =
+        staleTargetId === undefined || staleTargetId === null
+          ? 'no target system'
+          : ((
+              await tx.targetSystem.findUnique({
+                where: { id: staleTargetId },
+                select: { name: true },
+              })
+            )?.name ?? 'a target system');
       await enqueueOutbox(
         tx,
         managers.map((r) => ({
@@ -10928,8 +13149,9 @@ export async function reflectProvisionOutcomes(
           vars: {
             displayName: r.displayName,
             productName: request.product?.name ?? 'the requested access',
-            subjectName: request.subjectPersonId,
-            targetName: request.items[0]?.targetSystemId ?? '',
+            subjectName:
+              staleNames.get(`person:${request.subjectPersonId}`) ?? 'the person this was for',
+            targetName: staleTargetName,
             waitingHours: String(settings.fulfilmentSlaHours),
             requestUrl: requestUrl(publicUrl, request.id),
           },
@@ -10938,24 +13160,29 @@ export async function reflectProvisionOutcomes(
         })),
       );
       result.slaAlerts += 1;
-    }
+    });
+  }
 
-    // Only where no run is already in flight for that target. Provision
-    // refuses a second concurrent run anyway, and an enqueue per tick would
-    // fill the queue with jobs that immediately skip.
-    const needsRun: string[] = [];
+  // ---- Phase 5: which targets actually need a run. -----------------------
+  //
+  // Only where no run is already in flight for that target. Provision refuses
+  // a second concurrent run anyway, and an enqueue per tick would fill the
+  // queue with jobs that immediately skip.
+  const needsRun = await withTenant(tenantId, async (tx) => {
+    const out: string[] = [];
     for (const targetSystemId of targetsToRun) {
       const inFlight = await tx.provisionRun.count({
         where: { targetSystemId, status: { in: NON_TERMINAL_RUN_STATUSES } },
       });
-      if (inFlight === 0) needsRun.push(targetSystemId);
+      if (inFlight === 0) out.push(targetSystemId);
     }
-    result.redispatched = needsRun.length;
-
-    return { result, targetsToRun: needsRun };
+    return out;
   });
+  result.redispatched = needsRun.length;
 
-  for (const targetSystemId of targetsToRun) {
+  // Outside every transaction: `Scheduler.enqueue` is `boss.send` on
+  // pg-boss's own pool and neither joins a transaction nor rolls back with one.
+  for (const targetSystemId of needsRun) {
     await options.scheduler?.enqueue(
       PROVISION_JOB,
       provisionJobPayload(tenantId, targetSystemId),
@@ -11008,7 +13235,11 @@ Spec §11 and §12. The one thing Automate does in bulk, so it gets the treatmen
 - Test: `packages/core/src/automate/sweep-guard.test.ts`, `packages/core/src/automate/sweep-service.test.ts`
 
 **Interfaces:**
-- Consumes: `withTenant` from `@syntra/db`; `recordEvent`; `PERMISSIONS`; `type Scheduler`; `PROVISION_JOB`, `provisionJobPayload`; `addDays` from `../provision/plan.js`; `type ConditionFacts`; `audienceAdmits`, `type AudienceCondition`, `type SubjectSetFacts` from `./audience.js`; `automateSettings`, `subjectAudienceFacts` from `./catalog-service.js`; `revokeGrant` from `./fulfil.js`; `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission` from `./notify.js`; `type SweepActionKind`, `IN_FORCE_GRANT_STATUSES`, `LIVE_GRANT_STATUSES` from `./types.js`.
+- Consumes: `withTenant` from `@syntra/db`; `recordEvent`; `PERMISSIONS`; `type Scheduler`; `PROVISION_JOB`, `provisionJobPayload`; `addDays` from `../provision/plan.js`; `type ConditionFacts`; `audienceAdmits`, `type AudienceCondition`, `type SubjectSetFacts` from `./audience.js`; `automateSettings`, **`allSubjectAudienceFacts`** from `./catalog-service.js`; `displayNames`, `nameList`, `enqueueOutbox`, `recipientsForPersons`, `usersWithPermission` from `./notify.js`; `type ResourceType`, `type SweepActionKind`, `IN_FORCE_GRANT_STATUSES` from `./types.js`.
+  - **Not** `revokeGrant` from `./fulfil.js`: an earlier draft listed it and the implementation neither imports nor uses it. The sweep ends grants inline so that the batch transaction is the unit of work; `revokeGrant` opens its own.
+  - `sweep-service.test.ts` — **not** `sweep-service.ts` — imports `fulfilRequest` from `./fulfil.js`, for the extend-then-expire case. That case is the only one in the slice that crosses Task 9's supersession and Task 13's sweep, and it cannot be written from either side alone.
+  - **Not** the per-subject `subjectAudienceFacts`. Calling it in a loop over everybody holding a grant is roughly seven round trips per subject inside a 5000 ms `prisma.$transaction`, on the one nightly job that must not fail.
+  - `LIVE_GRANT_STATUSES` is not consumed here either — `classifySweep` filters on `IN_FORCE_GRANT_STATUSES`.
 - Produces (in `./sweep-guard.js`):
   - `interface SweepGuardThresholds { sweepThresholdPercent: number; perProductSweepThresholdPercent: number; personPopulationDropPercent: number }`
   - `interface SweepGuardInput { internalRemovals: number; internalGrantsInTenant: number; removalsByProduct: ReadonlyMap<string, number>; activeGrantsByProduct: ReadonlyMap<string, number>; productNameById: ReadonlyMap<string, string>; thresholds: SweepGuardThresholds; personsWithActiveContract: number; previousPersonsWithActiveContract: number | null; hasEverApplied: boolean }`
@@ -11289,9 +13520,12 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
 import { PROVISION_JOB } from '../provision/jobs.js';
 import { applyExpirySweep, classifySweep, previewExpirySweep } from './sweep-service.js';
+import { fulfilRequest } from './fulfil.js';
 import type { ConditionFacts } from '../provision/condition.js';
 
 const NOW = new Date('2026-06-15T00:00:00Z');
+/** The next night, for the cases about one sweep superseding another. */
+const LATER = new Date('2026-06-16T00:00:00Z');
 const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
 
 const facts = (over: Partial<ConditionFacts> = {}): ConditionFacts => ({
@@ -11592,7 +13826,7 @@ describe('previewExpirySweep and applyExpirySweep', () => {
           displayName: 'Stats',
         },
       });
-      await tx.appAssignment.create({
+      const assignment = await tx.appAssignment.create({
         data: { tenantId, applicationId: application.id, subjectType: 'user', userId: user.id },
       });
       await tx.accessGrant.create({
@@ -11605,6 +13839,11 @@ describe('previewExpirySweep and applyExpirySweep', () => {
           startsAt: day('2026-01-01'),
           endsAt: day('2026-06-01'),
           status: 'active',
+          // The grant owns the assignment it was made for. Without this the
+          // fixture describes a grant that wrote nothing, `applyExpirySweep`
+          // deletes by `writtenRowIds` and finds none, and every case below
+          // that asserts the assignment is gone fails against correct code.
+          writtenRowIds: [assignment.id],
         },
       });
       return {
@@ -11620,6 +13859,10 @@ describe('previewExpirySweep and applyExpirySweep', () => {
   });
 
   it('writes the whole plan in one transaction and stops', async () => {
+    // "One transaction" is about the PLAN WRITE. The loads and the
+    // classification happen before it opens -- see the docstring on
+    // previewExpirySweep -- because per-subject reads inside a 5000 ms
+    // transaction raise P2028 at any real tenant size.
     const sweep = await previewExpirySweep(tenantId, { now: NOW });
     // The first sweep in a tenant always requires confirmation, whatever its
     // size: every denominator is zero.
@@ -11773,6 +14016,314 @@ describe('previewExpirySweep and applyExpirySweep', () => {
     expect(state.actions).toHaveLength(1);
   });
 
+  it('supersedes a blocked sweep rather than raising P2002 on the next night', async () => {
+    // The brick. `expiry_sweep_one_non_terminal` covers running, previewed,
+    // blocked and applying, and nothing else in this slice moves a sweep out
+    // of `blocked` -- `applyExpirySweep` returns without touching the row.
+    // Night 1 a truncated HR import blocks the sweep; night 2 the `create`
+    // raises P2002; pg-boss retries three times and gives up; and no grant in
+    // the tenant ever expires or lapses again, with nothing saying so.
+    await withTenant(tenantId, (tx) =>
+      tx.automateSettings.create({
+        data: {
+          tenantId,
+          lastAppliedSweepAt: day('2026-06-01'),
+          personsWithActiveContractAtLastSweep: 100,
+        },
+      }),
+    );
+    const first = await previewExpirySweep(tenantId, { now: NOW });
+    expect(first.status).toBe('blocked');
+
+    // Night 2. This is the call that used to throw.
+    const second = await previewExpirySweep(tenantId, { now: LATER });
+    expect(second.id).not.toBe(first.id);
+
+    const state = await withTenant(tenantId, async (tx) => ({
+      old: await tx.expirySweep.findUniqueOrThrow({ where: { id: first.id } }),
+      oldActions: await tx.sweepAction.findMany({ where: { sweepId: first.id } }),
+      sweeps: await tx.expirySweep.findMany(),
+    }));
+    expect(state.old.status).toBe('superseded');
+    expect(state.old.finishedAt).not.toBeNull();
+    expect(state.old.error).toContain('blocked');
+    // The old plan's proposals are skipped, so the review screen cannot offer
+    // a plan computed against last week's population.
+    for (const action of state.oldActions) expect(action.status).toBe('skipped');
+    expect(state.sweeps).toHaveLength(2);
+  });
+
+  it('produces two sweeps, not one exception, on two consecutive confirmable nights', async () => {
+    // The confirmation guard exists so a large sweep waits for a human. While
+    // it waits, the nightly sweep must not be dead.
+    const first = await previewExpirySweep(tenantId, { now: NOW });
+    expect(first.requiresConfirmation).toBe(true);
+    const second = await previewExpirySweep(tenantId, { now: LATER });
+    expect(second.id).not.toBe(first.id);
+    expect(second.status).toBe('previewed');
+    const old = await withTenant(tenantId, (tx) =>
+      tx.expirySweep.findUniqueOrThrow({ where: { id: first.id } }),
+    );
+    expect(old.status).toBe('superseded');
+  });
+
+  it('recovers a sweep a crashed process left running or applying', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.expirySweep.create({ data: { tenantId, status: 'applying' } }),
+    );
+    const sweep = await previewExpirySweep(tenantId, { now: NOW });
+    expect(sweep.status).toBe('previewed');
+    const nonTerminal = await withTenant(tenantId, (tx) =>
+      tx.expirySweep.findMany({
+        where: { status: { in: ['running', 'previewed', 'blocked', 'applying'] } },
+      }),
+    );
+    expect(nonTerminal.map((x) => x.id)).toEqual([sweep.id]);
+  });
+
+  it('deletes only the membership the grant itself wrote', async () => {
+    // Spec section 5's safety argument: AppAssignment has exactly one other
+    // writer. A row an administrator added by hand is not this grant's to
+    // remove, and removing it under an audit event saying the grant expired
+    // is Ruling P11's shape -- an operation that does too much and reports
+    // too little.
+    const otherUserId = await withTenant(tenantId, async (tx) => {
+      const other = await tx.user.create({
+        data: {
+          tenantId,
+          login: 'anna.admin',
+          email: 'anna.admin@acme.test',
+          displayName: 'Anna Novak (admin)',
+          personId,
+        },
+      });
+      await tx.appAssignment.create({
+        data: { tenantId, applicationId, subjectType: 'user', userId: other.id },
+      });
+      // The grant owns only the first assignment.
+      const grant = await tx.accessGrant.findFirstOrThrow();
+      const owned = await tx.appAssignment.findFirstOrThrow({ where: { userId } });
+      await tx.accessGrant.update({
+        where: { id: grant.id },
+        data: { writtenRowIds: [owned.id] },
+      });
+      return other.id;
+    });
+
+    const sweep = await previewExpirySweep(tenantId, { now: NOW });
+    await applyExpirySweep(tenantId, sweep.id, {
+      now: NOW,
+      confirm: true,
+      confirmedByUserId: userId,
+    });
+
+    const assignments = await withTenant(tenantId, (tx) => tx.appAssignment.findMany());
+    expect(assignments.map((a) => a.userId)).toEqual([otherUserId]);
+  });
+
+  it('removes the assignment when a grant that was EXTENDED later expires', async () => {
+    // Two correct fixes composing into a defect, and the only case in the
+    // slice that crosses both. Task 9 supersedes in place and deliberately
+    // does NOT delete the assignment (no outage), and the "look first" guard
+    // means the replacement writes no new row -- so unless the replacement
+    // INHERITS `writtenRowIds` from the grant it retires, the row belongs to
+    // a `revoked` grant and nothing will ever delete it. The sweep would then
+    // report an applied expiry, write an `automate-expired` mail, and leave
+    // the person holding the application permanently: access that never ends
+    // plus a log entry claiming it did, which is worse than either alone.
+    // Neither Task 9's no-outage case nor the "only the rows it wrote" case
+    // above can see this, because each was written against the world before
+    // the other fix existed.
+    const AFTER_EXTENSION = new Date('2026-08-01T00:00:00Z');
+    const original = await withTenant(tenantId, (tx) => tx.accessGrant.findFirstOrThrow());
+    expect(original.writtenRowIds).toHaveLength(1);
+
+    const extensionId = await withTenant(tenantId, async (tx) => {
+      const request = await tx.accessRequest.create({
+        data: {
+          tenantId,
+          productId,
+          subjectPersonId: personId,
+          requestedByUserId: userId,
+          requestedByPersonId: personId,
+          status: 'approved',
+          // 30 days from NOW, so the replacement ends 2026-07-15 and the
+          // sweep below genuinely runs past its end date.
+          requestedDurationDays: 30,
+          replacesGrantId: original.id,
+        },
+      });
+      await tx.requestItem.create({
+        data: { tenantId, requestId: request.id, resourceType: 'application', resourceId: applicationId },
+      });
+      return request.id;
+    });
+
+    const fulfilled = await fulfilRequest(tenantId, extensionId, { now: NOW });
+    expect(fulfilled.status).toBe('fulfilled');
+    const afterExtension = await withTenant(tenantId, async (tx) => ({
+      old: await tx.accessGrant.findUniqueOrThrow({ where: { id: original.id } }),
+      replacement: await tx.accessGrant.findUniqueOrThrow({
+        where: { id: fulfilled.grantIds[0]! },
+      }),
+      assignments: await tx.appAssignment.findMany(),
+    }));
+    expect(afterExtension.old.status).toBe('revoked');
+    // No outage: the row was never deleted, and it is now the replacement's.
+    expect(afterExtension.assignments).toHaveLength(1);
+    expect(afterExtension.replacement.writtenRowIds).toEqual(original.writtenRowIds);
+
+    const sweep = await previewExpirySweep(tenantId, { now: AFTER_EXTENSION });
+    const result = await applyExpirySweep(tenantId, sweep.id, {
+      now: AFTER_EXTENSION,
+      confirm: true,
+      confirmedByUserId: userId,
+    });
+    expect(result).toMatchObject({ status: 'applied', applied: 1 });
+
+    const after = await withTenant(tenantId, async (tx) => ({
+      assignments: await tx.appAssignment.findMany(),
+      replacement: await tx.accessGrant.findUniqueOrThrow({
+        where: { id: fulfilled.grantIds[0]! },
+      }),
+      action: await tx.sweepAction.findFirstOrThrow({ where: { sweepId: sweep.id } }),
+    }));
+    expect(after.replacement.status).toBe('expired');
+    expect(after.action.status).toBe('applied');
+    // The assertion this case exists for. Delete the inheritance line in
+    // `fulfilRequest` and this is the only assertion in the slice that fails.
+    expect(after.assignments).toEqual([]);
+  });
+
+  it('tells the resource owner as well as the holder, and the manager on a lapse', async () => {
+    // Spec section 13: expiry goes to the holder, the original approver and
+    // the resource owner; a lapse adds the person's most recent manager. The
+    // resource owner is precisely the person whose list of who holds their
+    // resource just changed.
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const owner = await tx.person.create({
+        data: { tenantId, givenName: 'Owner', familyName: 'Person' },
+      });
+      await tx.user.create({
+        data: {
+          tenantId,
+          login: 'owner',
+          email: 'owner@acme.test',
+          displayName: 'Owner Person',
+          personId: owner.id,
+        },
+      });
+      await tx.resourceOwner.create({
+        data: { tenantId, resourceType: 'application', resourceId: applicationId, ownerPersonId: owner.id },
+      });
+      return owner.id;
+    });
+
+    const sweep = await previewExpirySweep(tenantId, { now: NOW });
+    await applyExpirySweep(tenantId, sweep.id, {
+      now: NOW,
+      confirm: true,
+      confirmedByUserId: userId,
+    });
+
+    const outbox = await withTenant(tenantId, (tx) =>
+      tx.notificationOutbox.findMany({ where: { template: 'automate-expired' } }),
+    );
+    expect(outbox.map((o) => o.to).sort()).toEqual(
+      ['anna@acme.test', 'owner@acme.test'].sort(),
+    );
+    void seeded;
+  });
+
+  it('names the person, the product and the resource in the expiry notice', async () => {
+    const sweep = await previewExpirySweep(tenantId, { now: NOW });
+    await applyExpirySweep(tenantId, sweep.id, {
+      now: NOW,
+      confirm: true,
+      confirmedByUserId: userId,
+    });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.notificationOutbox.findFirstOrThrow({ where: { template: 'automate-expired' } }),
+    );
+    const vars = row.vars as Record<string, string>;
+    expect(vars.subjectName).toBe('Anna Novak');
+    expect(vars.productName).toBe('Statistics licence');
+    expect(vars.resourceList).toBe('Stats');
+    for (const value of Object.values(vars)) {
+      expect(value).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    }
+  });
+
+  it('previews AND applies a tenant-sized sweep: 301 grants across 301 persons', async () => {
+    // Nothing else in this plan has a test with more than a handful of rows,
+    // which is why the per-subject `subjectAudienceFacts` loop inside
+    // `withTenant` -- roughly seven round trips per subject, against a 5000 ms
+    // transaction timeout -- looked fine. This case is the one that fails if
+    // somebody puts the loop back.
+    await withTenant(tenantId, async (tx) => {
+      for (let i = 0; i < 300; i += 1) {
+        const p = await tx.person.create({
+          data: { tenantId, givenName: `P${i}`, familyName: 'Bulk' },
+        });
+        await tx.contract.create({
+          data: {
+            tenantId,
+            personId: p.id,
+            sequence: 1,
+            isPrimary: true,
+            startDate: day('2020-01-01'),
+            department: 'Finance',
+          },
+        });
+        await tx.accessGrant.create({
+          data: {
+            tenantId,
+            subjectPersonId: p.id,
+            resourceType: 'entitlement',
+            resourceId: entitlementId,
+            targetSystemId,
+            productId,
+            startsAt: day('2026-01-01'),
+            endsAt: day('2026-06-01'),
+            status: 'active',
+          },
+        });
+      }
+    });
+
+    const sweep = await previewExpirySweep(tenantId, { now: NOW });
+    const actions = await withTenant(tenantId, (tx) =>
+      tx.sweepAction.count({ where: { sweepId: sweep.id } }),
+    );
+    expect(actions).toBe(301);
+
+    // And APPLY it. The apply side has the same 5000 ms ceiling and a heavier
+    // per-action shape than the preview -- a `resourceOwner.findFirst`, a
+    // manager `contract.findFirst` on a lapse, an `accountEntitlement.count`,
+    // a `recipientsForPersons`, an `accessGrant.update`, a
+    // `sweepAction.update`, a `recordEvent` and an `enqueueOutbox`, plus the
+    // per-batch `displayNames` -- so at `BATCH = 100` one batch is roughly
+    // 700-800 statements inside one `prisma.$transaction`. H9's finding was
+    // about an unbounded loop; `BATCH` is the number that replaced it, and
+    // until this case applied the sweep it previews, nothing in the plan
+    // exercised the apply path above a handful of rows and the batch size was
+    // a guess. Four batches here. If this raises P2028, lower `BATCH` -- do
+    // not delete this case, which is the only thing that would say so before
+    // the nightly job does.
+    const applied = await applyExpirySweep(tenantId, sweep.id, {
+      now: NOW,
+      confirm: true,
+      confirmedByUserId: userId,
+      scheduler: schedulerStub(),
+    });
+    expect(applied).toMatchObject({ status: 'applied', applied: 301, failed: 0 });
+    const leftOver = await withTenant(tenantId, (tx) =>
+      tx.sweepAction.count({ where: { sweepId: sweep.id, status: 'proposed' } }),
+    );
+    // Nothing fell out of a batch boundary: 301 actions over four batches.
+    expect(leftOver).toBe(0);
+  });
+
   it('tells the holders of automate.manage when a sweep needs confirming', async () => {
     await withTenant(tenantId, async (tx) => {
       const role = await tx.role.create({
@@ -11813,10 +14364,20 @@ import {
   type AudienceCondition,
   type SubjectSetFacts,
 } from './audience.js';
-import { automateSettings, subjectAudienceFacts } from './catalog-service.js';
-import { enqueueOutbox, recipientsForPersons, usersWithPermission } from './notify.js';
+import { allSubjectAudienceFacts, automateSettings } from './catalog-service.js';
+import {
+  displayNames,
+  enqueueOutbox,
+  nameList,
+  recipientsForPersons,
+  usersWithPermission,
+} from './notify.js';
 import { evaluateSweepGuard } from './sweep-guard.js';
-import { IN_FORCE_GRANT_STATUSES, type SweepActionKind } from './types.js';
+import {
+  IN_FORCE_GRANT_STATUSES,
+  type ResourceType,
+  type SweepActionKind,
+} from './types.js';
 
 export interface SweepGrantFacts {
   grantId: string;
@@ -11993,10 +14554,22 @@ export function classifySweep(input: SweepInput): SweepClassification {
 /**
  * Computes the plan and writes it down. Applies nothing.
  *
- * The whole plan is written in ONE transaction, so a sweep that fails partway
- * writes no plan at all. There is no readable state in which a sweep is
- * `previewed` with no actions, or holds actions while still `running` --
- * which is what makes the review screen trustworthy.
+ * **Three phases, deliberately.** Spec section 16 requires the *plan write* to
+ * be one transaction, so a sweep that fails partway writes no plan at all and
+ * there is no readable state in which a sweep is `previewed` with no actions
+ * or holds actions while still `running` — which is what makes the review
+ * screen trustworthy. It does NOT require the loads to be in that
+ * transaction, and they must not be: an earlier draft called
+ * `subjectAudienceFacts` once per subject holding a grant, roughly seven
+ * round trips each, inside a `prisma.$transaction` whose default timeout is
+ * **5000 ms**. On the one nightly job that must not fail, that is a P2028 at
+ * any real tenant size.
+ *
+ *   1. Load — one short `withTenant` returning plain data, a fixed number of
+ *      set-based queries whatever the population.
+ *   2. Classify and guard — pure, no transaction, no I/O.
+ *   3. Write — one `withTenant`: supersede any stale sweep, create this one,
+ *      two `createMany`s, the review flags, the audit event, the outbox rows.
  */
 export async function previewExpirySweep(
   tenantId: string,
@@ -12004,119 +14577,167 @@ export async function previewExpirySweep(
 ): Promise<{ id: string; status: string; requiresConfirmation: boolean; blockedReason: string | null }> {
   const now = options.now ?? new Date();
 
-  return withTenant(tenantId, async (tx) => {
-    const settings = await automateSettings(tx);
-
-    const grants = await tx.accessGrant.findMany({
+  // ---- Phase 1: load ------------------------------------------------------
+  const loaded = await withTenant(tenantId, async (tx) => ({
+    settings: await automateSettings(tx),
+    grants: await tx.accessGrant.findMany({
       where: { status: { in: [...IN_FORCE_GRANT_STATUSES] } },
-    });
-    const persons = await tx.person.findMany({ select: { id: true } });
-    const contracts = await tx.contract.findMany({
+    }),
+    persons: await tx.person.findMany({ select: { id: true } }),
+    contracts: await tx.contract.findMany({
       select: { personId: true, startDate: true, endDate: true },
-    });
-    const products = await tx.product.findMany({
+    }),
+    products: await tx.product.findMany({
       select: { id: true, name: true, audienceCondition: true },
-    });
-    const targets = await tx.targetSystem.findMany({
+    }),
+    targets: await tx.targetSystem.findMany({
       select: { id: true, preHireDays: true },
-    });
+    }),
+    // Set-based. The per-person form must never be called in a loop over the
+    // tenant — see its docstring in catalog-service.ts.
+    factsByPerson: await allSubjectAudienceFacts(tx, now),
+  }));
 
-    const contractsByPerson = new Map<string, ContractWindow[]>();
-    for (const person of persons) contractsByPerson.set(person.id, []);
-    for (const contract of contracts) {
-      const list = contractsByPerson.get(contract.personId) ?? [];
-      list.push({ startDate: contract.startDate, endDate: contract.endDate });
-      contractsByPerson.set(contract.personId, list);
-    }
+  const { settings, grants, persons, contracts, products, targets, factsByPerson } = loaded;
 
-    const audienceByProduct = new Map<string, AudienceCondition | null>(
-      products.map((p) => [p.id, p.audienceCondition as AudienceCondition | null]),
+  // ---- Phase 2: classify and guard. Pure. --------------------------------
+  const contractsByPerson = new Map<string, ContractWindow[]>();
+  for (const person of persons) contractsByPerson.set(person.id, []);
+  for (const contract of contracts) {
+    const list = contractsByPerson.get(contract.personId) ?? [];
+    list.push({ startDate: contract.startDate, endDate: contract.endDate });
+    contractsByPerson.set(contract.personId, list);
+  }
+
+  const audienceByProduct = new Map<string, AudienceCondition | null>(
+    products.map((product) => [
+      product.id,
+      product.audienceCondition as AudienceCondition | null,
+    ]),
+  );
+  const productNameById = new Map(products.map((product) => [product.id, product.name]));
+  const preHireByTarget = new Map(targets.map((target) => [target.id, target.preHireDays]));
+
+  const horizonDaysByGrant = new Map(
+    grants.map((grant) => [
+      grant.id,
+      // Two horizons rather than one. A domain that needs an account three
+      // weeks early does not imply a portal tile three weeks early.
+      grant.targetSystemId === null
+        ? settings.preHireHorizonDays
+        : (preHireByTarget.get(grant.targetSystemId) ?? settings.preHireHorizonDays),
+    ]),
+  );
+
+  const classification = classifySweep({
+    grants: grants.map((grant) => ({
+      grantId: grant.id,
+      subjectPersonId: grant.subjectPersonId,
+      productId: grant.productId,
+      resourceType: grant.resourceType as 'entitlement' | 'application' | 'group',
+      resourceId: grant.resourceId,
+      targetSystemId: grant.targetSystemId,
+      startsAt: grant.startsAt,
+      endsAt: grant.endsAt,
+      status: grant.status,
+      needsReview: grant.needsReview,
+      supersededByGrantId: grant.supersededByGrantId,
+    })),
+    contractsByPerson,
+    audienceByProduct,
+    factsByPerson,
+    horizonDaysByGrant,
+    now,
+  });
+
+  const personsWithActiveContract = [...contractsByPerson.values()].filter((windows) =>
+    windows.some((c) => c.startDate <= now && (c.endDate === null || now <= c.endDate)),
+  ).length;
+
+  const internal = classification.actions.filter((a) => a.resourceType !== 'entitlement');
+  const internalGrantsInTenant = grants.filter(
+    (grant) => grant.resourceType !== 'entitlement',
+  ).length;
+  const removalsByProduct = new Map<string, number>();
+  for (const action of classification.actions) {
+    if (action.productId === null) continue;
+    removalsByProduct.set(
+      action.productId,
+      (removalsByProduct.get(action.productId) ?? 0) + 1,
     );
-    const productNameById = new Map(products.map((p) => [p.id, p.name]));
-    const preHireByTarget = new Map(targets.map((t) => [t.id, t.preHireDays]));
-
-    const subjectIds = [...new Set(grants.map((g) => g.subjectPersonId))];
-    const factsByPerson = new Map<
-      string,
-      { contracts: ConditionFacts[] } & SubjectSetFacts
-    >();
-    for (const subjectId of subjectIds) {
-      const facts = await subjectAudienceFacts(tx, subjectId, now);
-      factsByPerson.set(subjectId, facts);
-    }
-
-    const horizonDaysByGrant = new Map(
-      grants.map((g) => [
-        g.id,
-        // Two horizons rather than one. A domain that needs an account three
-        // weeks early does not imply a portal tile three weeks early.
-        g.targetSystemId === null
-          ? settings.preHireHorizonDays
-          : (preHireByTarget.get(g.targetSystemId) ?? settings.preHireHorizonDays),
-      ]),
+  }
+  const activeGrantsByProduct = new Map<string, number>();
+  for (const grant of grants) {
+    if (grant.productId === null) continue;
+    activeGrantsByProduct.set(
+      grant.productId,
+      (activeGrantsByProduct.get(grant.productId) ?? 0) + 1,
     );
+  }
 
-    const classification = classifySweep({
-      grants: grants.map((g) => ({
-        grantId: g.id,
-        subjectPersonId: g.subjectPersonId,
-        productId: g.productId,
-        resourceType: g.resourceType as 'entitlement' | 'application' | 'group',
-        resourceId: g.resourceId,
-        targetSystemId: g.targetSystemId,
-        startsAt: g.startsAt,
-        endsAt: g.endsAt,
-        status: g.status,
-        needsReview: g.needsReview,
-        supersededByGrantId: g.supersededByGrantId,
-      })),
-      contractsByPerson,
-      audienceByProduct,
-      factsByPerson,
-      horizonDaysByGrant,
-      now,
+  const verdict = evaluateSweepGuard({
+    internalRemovals: internal.length,
+    internalGrantsInTenant,
+    removalsByProduct,
+    activeGrantsByProduct,
+    productNameById,
+    thresholds: {
+      sweepThresholdPercent: settings.sweepThresholdPercent,
+      perProductSweepThresholdPercent: settings.perProductSweepThresholdPercent,
+      personPopulationDropPercent: settings.personPopulationDropPercent,
+    },
+    personsWithActiveContract,
+    previousPersonsWithActiveContract: settings.personsWithActiveContractAtLastSweep,
+    hasEverApplied: settings.lastAppliedSweepAt !== null,
+  });
+
+  // ---- Phase 3: write. One transaction. -----------------------------------
+  return withTenant(tenantId, async (tx) => {
+    // A stale non-terminal sweep must not stop tonight's.
+    //
+    // `expiry_sweep_one_non_terminal` covers `running`, `previewed`,
+    // `blocked` and `applying`, and NOTHING else in this slice moves a sweep
+    // out of `blocked` — `applyExpirySweep` returns from a blocked sweep
+    // without touching the row. So night 1 the person population drops 25% (a
+    // truncated HR import, the accident the refusal exists for), the sweep is
+    // written `blocked`; night 2 this `create` raises **P2002**; pg-boss
+    // retries three times and gives up; and every night after that the same.
+    // No grant in the tenant ever expires or lapses again, and nothing says
+    // so — a system that silently stops removing access while continuing to
+    // grant it. The same brick happens for a `previewed` sweep nobody
+    // confirms, and for one a crashed process left `running` or `applying`.
+    //
+    // The index and its escape hatch are ONE design. Superseding is loud
+    // rather than silent: the old plan stays readable, its status and reason
+    // are recorded, and its proposed actions are marked `skipped` so the
+    // review screen cannot offer a plan computed against last week's
+    // population.
+    const stale = await tx.expirySweep.findFirst({
+      where: { status: { in: ['running', 'previewed', 'blocked', 'applying'] } },
     });
-
-    const personsWithActiveContract = [...contractsByPerson.values()].filter((windows) =>
-      windows.some((c) => c.startDate <= now && (c.endDate === null || now <= c.endDate)),
-    ).length;
-
-    const internal = classification.actions.filter((a) => a.resourceType !== 'entitlement');
-    const internalGrantsInTenant = grants.filter(
-      (g) => g.resourceType !== 'entitlement',
-    ).length;
-    const removalsByProduct = new Map<string, number>();
-    for (const action of classification.actions) {
-      if (action.productId === null) continue;
-      removalsByProduct.set(
-        action.productId,
-        (removalsByProduct.get(action.productId) ?? 0) + 1,
-      );
+    if (stale !== null) {
+      await tx.expirySweep.update({
+        where: { id: stale.id },
+        data: {
+          status: 'superseded',
+          finishedAt: now,
+          error: `superseded by a newer sweep on ${now.toISOString().slice(0, 10)}; it was ${stale.status}${stale.blockedReason === null ? '' : `: ${stale.blockedReason}`}`,
+        },
+      });
+      await tx.sweepAction.updateMany({
+        where: { sweepId: stale.id, status: 'proposed' },
+        data: { status: 'skipped', message: 'superseded by a newer sweep' },
+      });
+      await recordEvent(tx, {
+        actorUserId: null,
+        action: 'automate.sweep.supersede',
+        targetType: 'ExpirySweep',
+        targetId: stale.id,
+        outcome: 'success',
+        sourceIp: null,
+        payload: { wasStatus: stale.status, blockedReason: stale.blockedReason },
+      });
     }
-    const activeGrantsByProduct = new Map<string, number>();
-    for (const grant of grants) {
-      if (grant.productId === null) continue;
-      activeGrantsByProduct.set(
-        grant.productId,
-        (activeGrantsByProduct.get(grant.productId) ?? 0) + 1,
-      );
-    }
-
-    const verdict = evaluateSweepGuard({
-      internalRemovals: internal.length,
-      internalGrantsInTenant,
-      removalsByProduct,
-      activeGrantsByProduct,
-      productNameById,
-      thresholds: {
-        sweepThresholdPercent: settings.sweepThresholdPercent,
-        perProductSweepThresholdPercent: settings.perProductSweepThresholdPercent,
-        personPopulationDropPercent: settings.personPopulationDropPercent,
-      },
-      personsWithActiveContract,
-      previousPersonsWithActiveContract: settings.personsWithActiveContractAtLastSweep,
-      hasEverApplied: settings.lastAppliedSweepAt !== null,
-    });
 
     const sweep = await tx.expirySweep.create({
       data: {
@@ -12165,33 +14786,70 @@ export async function previewExpirySweep(
 
     // The flag is applied at PREVIEW, not at apply: it removes nothing, so
     // there is nothing to confirm and nothing to skip.
-    for (const flag of classification.reviewFlags) {
-      await tx.accessGrant.update({
-        where: { id: flag.grantId },
-        data: { needsReview: true, reviewReason: flag.reason, reviewedAt: now },
+    if (classification.reviewFlags.length > 0) {
+      const flaggedIds = classification.reviewFlags.map((f) => f.grantId);
+      const flaggedGrants = await tx.accessGrant.findMany({
+        where: { id: { in: flaggedIds } },
       });
-      const grant = await tx.accessGrant.findUniqueOrThrow({ where: { id: flag.grantId } });
-      const recipients = await recipientsForPersons(tx, [
-        grant.subjectPersonId,
-        ...(grant.approvedByPersonId === null ? [] : [grant.approvedByPersonId]),
-      ]);
-      await enqueueOutbox(
-        tx,
-        recipients.map((r) => ({
-          template: 'automate-review-flagged' as const,
-          to: r.email,
-          vars: {
-            displayName: r.displayName,
-            subjectName: grant.subjectPersonId,
-            productName: productNameById.get(grant.productId ?? '') ?? 'requested access',
-            grantedAt: grant.createdAt.toDateString(),
-            reviewReason: flag.reason,
-            grantUrl: `${(options.publicUrl ?? '').replace(/\/$/, '')}/access`,
-          },
-          requestId: null,
-          userId: r.userId,
+      const byId = new Map(flaggedGrants.map((g) => [g.id, g]));
+      // Names for every person and resource the flags touch, read once.
+      const flagNames = await displayNames(tx, {
+        personIds: flaggedGrants.flatMap((g) => [
+          g.subjectPersonId,
+          ...(g.approvedByPersonId === null ? [] : [g.approvedByPersonId]),
+        ]),
+        productIds: flaggedGrants.flatMap((g) => (g.productId === null ? [] : [g.productId])),
+        resources: flaggedGrants.map((g) => ({
+          resourceType: g.resourceType as ResourceType,
+          resourceId: g.resourceId,
         })),
-      );
+      });
+
+      for (const flag of classification.reviewFlags) {
+        const grant = byId.get(flag.grantId);
+        if (grant === undefined) continue;
+        await tx.accessGrant.update({
+          where: { id: flag.grantId },
+          data: { needsReview: true, reviewReason: flag.reason, reviewedAt: now },
+        });
+        // Spec section 13: holder, original approver, AND resource owner.
+        const owner = await tx.resourceOwner.findFirst({
+          where: { resourceType: grant.resourceType, resourceId: grant.resourceId },
+          select: { ownerPersonId: true },
+        });
+        const recipients = await recipientsForPersons(tx, [
+          grant.subjectPersonId,
+          ...(grant.approvedByPersonId === null ? [] : [grant.approvedByPersonId]),
+          ...(owner?.ownerPersonId == null ? [] : [owner.ownerPersonId]),
+        ]);
+        await enqueueOutbox(
+          tx,
+          recipients.map((r) => ({
+            template: 'automate-review-flagged' as const,
+            to: r.email,
+            vars: {
+              displayName: r.displayName,
+              subjectName:
+                flagNames.get(`person:${grant.subjectPersonId}`) ?? 'the holder',
+              productName:
+                (grant.productId === null
+                  ? undefined
+                  : flagNames.get(`product:${grant.productId}`)) ??
+                nameList(flagNames, [
+                  {
+                    resourceType: grant.resourceType as ResourceType,
+                    resourceId: grant.resourceId,
+                  },
+                ]),
+              grantedAt: grant.createdAt.toDateString(),
+              reviewReason: flag.reason,
+              grantUrl: `${(options.publicUrl ?? '').replace(/\/$/, '')}/access`,
+            },
+            requestId: null,
+            userId: r.userId,
+          })),
+        );
+      }
     }
 
     await recordEvent(tx, {
@@ -12208,6 +14866,7 @@ export async function previewExpirySweep(
         exceptions: sweep.personsUnprocessable,
         requiresConfirmation: sweep.requiresConfirmation,
         blockedReason: sweep.blockedReason,
+        supersededSweepId: stale?.id ?? null,
       },
     });
 
@@ -12244,9 +14903,25 @@ export async function previewExpirySweep(
  *
  * `confirm` is a separate flag from `confirmedByUserId` so the gate cannot be
  * satisfied by accident: keying it on `confirmedByUserId === undefined` means
- * `confirmedByUserId: null` -- what an internal caller writes when it has no
- * user -- passes the gate and records "confirmed by nobody". The scheduler
+ * `confirmedByUserId: null` — what an internal caller writes when it has no
+ * user — passes the gate and records "confirmed by nobody". The scheduler
  * never confirms anything.
+ *
+ * **Batched, at 100 actions per transaction.** Each action is roughly eight
+ * statements — a `resourceOwner.findFirst`, a manager `contract.findFirst` on
+ * a lapse, an `accountEntitlement.count`, a `recipientsForPersons`, an
+ * `accessGrant.update`, a `sweepAction.update`, a `recordEvent` and an
+ * `enqueueOutbox` — plus one `displayNames` per batch, so a full batch is
+ * 700-800 statements and a tenant-sized sweep in ONE `prisma.$transaction`
+ * exceeds the 5000 ms default and raises P2028 — on the job whose whole
+ * purpose is removing access that should be gone. The number is not a guess
+ * left untested: the 301-action case in `sweep-service.test.ts` previews and
+ * then applies, so four batches of this size run on every test run. If it
+ * ever raises P2028, lower `BATCH`; there is nothing else in the sweep that
+ * has to change with it. A batch that fails leaves the batches before it applied,
+ * the sweep `partially_applied` and every action row carrying its own
+ * outcome, which is exactly what `SweepAction.status` is for; the alternative
+ * is an all-or-nothing transaction that in practice is always nothing.
  */
 export async function applyExpirySweep(
   tenantId: string,
@@ -12262,30 +14937,24 @@ export async function applyExpirySweep(
 ): Promise<{ status: string; applied: number; skipped: number; failed: number }> {
   const now = options.now ?? new Date();
   const confirmed = options.confirm === true;
+  const publicUrl = (options.publicUrl ?? '').replace(/\/$/, '');
+  const BATCH = 100;
 
-  const { outcome, targets } = await withTenant(tenantId, async (tx) => {
+  // ---- Phase 1: claim the sweep and decide what to do. Short. -------------
+  const claim = await withTenant(tenantId, async (tx) => {
     const sweep = await tx.expirySweep.findUniqueOrThrow({ where: { id: sweepId } });
 
     if (sweep.status === 'blocked') {
       // No confirmation available. A blocked sweep is one whose own inputs are
       // not trustworthy, and confirming it would be confirming a number
-      // rather than a decision.
-      return {
-        outcome: { status: sweep.status, applied: 0, skipped: 0, failed: 0 },
-        targets: [] as string[],
-      };
+      // rather than a decision. Tonight's preview supersedes it.
+      return { proceed: false as const, status: sweep.status };
     }
     if (sweep.requiresConfirmation && !confirmed) {
-      return {
-        outcome: { status: sweep.status, applied: 0, skipped: 0, failed: 0 },
-        targets: [] as string[],
-      };
+      return { proceed: false as const, status: sweep.status };
     }
     if (sweep.status !== 'previewed') {
-      return {
-        outcome: { status: sweep.status, applied: 0, skipped: 0, failed: 0 },
-        targets: [] as string[],
-      };
+      return { proceed: false as const, status: sweep.status };
     }
 
     await tx.expirySweep.update({
@@ -12298,132 +14967,228 @@ export async function applyExpirySweep(
 
     const actions = await tx.sweepAction.findMany({
       where: { sweepId, status: 'proposed' },
+      orderBy: { id: 'asc' },
     });
-    const chosen =
-      options.only === undefined ? actions : actions.filter((a) => options.only!.includes(a.id));
-    const skippedActions = actions.filter((a) => !chosen.includes(a));
+    const chosenIds =
+      options.only === undefined
+        ? actions.map((a) => a.id)
+        : actions.filter((a) => options.only!.includes(a.id)).map((a) => a.id);
+    const chosen = new Set(chosenIds);
+    const skippedIds = actions.filter((a) => !chosen.has(a.id)).map((a) => a.id);
 
-    for (const action of skippedActions) {
-      await tx.sweepAction.update({
-        where: { id: action.id },
+    if (skippedIds.length > 0) {
+      await tx.sweepAction.updateMany({
+        where: { id: { in: skippedIds } },
         data: { status: 'skipped', message: 'skipped by the reviewer' },
       });
     }
 
-    const targets = new Set<string>();
-    let applied = 0;
-    let failed = 0;
+    return {
+      proceed: true as const,
+      chosenIds,
+      skipped: skippedIds.length,
+      personsWithActiveContract: sweep.personsWithActiveContract,
+    };
+  });
 
-    for (const action of chosen) {
-      const grant = await tx.accessGrant.findUnique({ where: { id: action.grantId } });
-      if (grant === null) {
-        await tx.sweepAction.update({
-          where: { id: action.id },
-          data: { status: 'failed', message: 'the grant no longer exists' },
-        });
-        failed += 1;
-        continue;
-      }
+  if (!claim.proceed) {
+    return { status: claim.status, applied: 0, skipped: 0, failed: 0 };
+  }
 
-      await tx.accessGrant.update({
-        where: { id: grant.id },
-        data: {
-          status: action.kind === 'expire' ? 'expired' : 'lapsed',
-          statusReason: action.message,
-          endedAt: now,
-        },
+  // ---- Phase 2: apply, one transaction per batch. ------------------------
+  const targets = new Set<string>();
+  let applied = 0;
+  let failed = 0;
+
+  for (let offset = 0; offset < claim.chosenIds.length; offset += BATCH) {
+    const batchIds = claim.chosenIds.slice(offset, offset + BATCH);
+
+    const outcome = await withTenant(tenantId, async (tx) => {
+      const batchActions = await tx.sweepAction.findMany({
+        where: { id: { in: batchIds } },
       });
+      const grantIds = batchActions.map((a) => a.grantId);
+      const grants = await tx.accessGrant.findMany({ where: { id: { in: grantIds } } });
+      const grantById = new Map(grants.map((g) => [g.id, g]));
 
-      if (action.resourceType === 'entitlement') {
-        // The grant leaves desired state. Provision plans and applies the
-        // revocation under its own guard, its own per-entitlement axis and
-        // its own review -- Automate writes nothing to a target.
-        if (action.targetSystemId !== null) targets.add(action.targetSystemId);
-        await tx.sweepAction.update({
-          where: { id: action.id },
-          data: { status: 'dispatched' },
-        });
-      } else {
-        const users = await tx.user.findMany({
-          where: { personId: grant.subjectPersonId },
-          select: { id: true },
-        });
-        for (const user of users) {
-          if (action.resourceType === 'application') {
-            await tx.appAssignment.deleteMany({
-              where: { applicationId: action.resourceId, userId: user.id },
-            });
-          } else {
-            await tx.groupMembership.deleteMany({
-              where: { groupId: action.resourceId, userId: user.id },
-            });
-          }
-        }
-        await tx.sweepAction.update({ where: { id: action.id }, data: { status: 'applied' } });
-      }
-
-      await recordEvent(tx, {
-        actorUserId: options.confirmedByUserId ?? null,
-        action: action.kind === 'expire' ? 'automate.grant.expire' : 'automate.grant.lapse',
-        targetType: 'AccessGrant',
-        targetId: grant.id,
-        outcome: 'success',
-        sourceIp: null,
-        payload: {
-          sweepId,
-          subjectPersonId: grant.subjectPersonId,
-          resourceType: action.resourceType,
-          resourceId: action.resourceId,
-          reason: action.message,
-        },
-      });
-
-      const recipients = await recipientsForPersons(tx, [
-        grant.subjectPersonId,
-        ...(grant.approvedByPersonId === null ? [] : [grant.approvedByPersonId]),
-      ]);
-      // Where a business rule still grants the same entitlement, the holder is
-      // told they still hold it. Telling somebody they lost something they did
-      // not lose is its own kind of defect.
-      const stillHeld = await tx.accountEntitlement.count({
-        where: {
-          state: 'held',
-          entitlementId: action.resourceId,
-          origin: 'rule',
-          account: { personId: grant.subjectPersonId },
-        },
-      });
-      await enqueueOutbox(
-        tx,
-        recipients.map((r) => ({
-          template:
-            action.kind === 'expire'
-              ? ('automate-expired' as const)
-              : ('automate-lapsed' as const),
-          to: r.email,
-          vars: {
-            displayName: r.displayName,
-            subjectName: grant.subjectPersonId,
-            productName: action.productId ?? 'requested access',
-            resourceList: action.resourceId,
-            endsAt: grant.endsAt?.toDateString() ?? '',
-            lastContractEnd: action.message,
-            stillHeldNote:
-              stillHeld > 0
-                ? 'You still hold this through your role, so nothing has changed for you in practice.'
-                : '',
-            catalogUrl: `${(options.publicUrl ?? '').replace(/\/$/, '')}/catalog`,
-          },
-          requestId: null,
-          userId: r.userId,
+      // Names for everything this batch touches, read once rather than per
+      // action. Spec section 13 requires the expiry and lapse notices to name
+      // what went away and who held it; `productName: action.productId` and
+      // `resourceList: action.resourceId` put two UUIDs in a mail instead.
+      const names = await displayNames(tx, {
+        personIds: grants.flatMap((g) => [
+          g.subjectPersonId,
+          ...(g.approvedByPersonId === null ? [] : [g.approvedByPersonId]),
+        ]),
+        productIds: batchActions.flatMap((a) => (a.productId === null ? [] : [a.productId])),
+        resources: batchActions.map((a) => ({
+          resourceType: a.resourceType as ResourceType,
+          resourceId: a.resourceId,
         })),
-      );
+      });
 
-      applied += 1;
-    }
+      let batchApplied = 0;
+      let batchFailed = 0;
+      const batchTargets: string[] = [];
 
-    const status =
-      failed > 0 && applied > 0 ? 'partially_applied' : failed > 0 ? 'failed' : 'applied';
+      for (const action of batchActions) {
+        const grant = grantById.get(action.grantId);
+        if (grant === undefined) {
+          await tx.sweepAction.update({
+            where: { id: action.id },
+            data: { status: 'failed', message: 'the grant no longer exists' },
+          });
+          batchFailed += 1;
+          continue;
+        }
+
+        await tx.accessGrant.update({
+          where: { id: grant.id },
+          data: {
+            status: action.kind === 'expire' ? 'expired' : 'lapsed',
+            statusReason: action.message,
+            endedAt: now,
+          },
+        });
+
+        let rowsRemoved = 0;
+        if (action.resourceType === 'entitlement') {
+          // The grant leaves desired state. Provision plans and applies the
+          // revocation under its own guard, its own per-entitlement axis and
+          // its own review — Automate writes nothing to a target.
+          if (action.targetSystemId !== null) batchTargets.push(action.targetSystemId);
+          await tx.sweepAction.update({
+            where: { id: action.id },
+            data: { status: 'dispatched' },
+          });
+        } else {
+          // Only the rows THIS grant wrote. A membership an administrator
+          // added by hand after the grant was made is not this grant's to
+          // remove, and removing it with an audit event that says the grant
+          // lapsed is the failure Ruling P11 describes: an operation that
+          // does too much and reports too little.
+          if (grant.writtenRowIds.length > 0) {
+            const deleted =
+              action.resourceType === 'application'
+                ? await tx.appAssignment.deleteMany({
+                    where: { id: { in: grant.writtenRowIds } },
+                  })
+                : await tx.groupMembership.deleteMany({
+                    where: { id: { in: grant.writtenRowIds } },
+                  });
+            rowsRemoved = deleted.count;
+          }
+          await tx.sweepAction.update({ where: { id: action.id }, data: { status: 'applied' } });
+        }
+
+        await recordEvent(tx, {
+          actorUserId: options.confirmedByUserId ?? null,
+          action: action.kind === 'expire' ? 'automate.grant.expire' : 'automate.grant.lapse',
+          targetType: 'AccessGrant',
+          targetId: grant.id,
+          outcome: 'success',
+          sourceIp: null,
+          payload: {
+            sweepId,
+            subjectPersonId: grant.subjectPersonId,
+            resourceType: action.resourceType,
+            resourceId: action.resourceId,
+            reason: action.message,
+            rowsThisGrantWrote: grant.writtenRowIds.length,
+            rowsRemoved,
+          },
+        });
+
+        // Spec section 13's recipients, in full: the holder and the original
+        // approver for both, the RESOURCE OWNER for both — it is their list
+        // of who holds their resource that just changed — and for a lapse the
+        // person's most recent manager, who is the one who has to notice that
+        // somebody who left still had this.
+        const owner = await tx.resourceOwner.findFirst({
+          where: { resourceType: action.resourceType, resourceId: action.resourceId },
+          select: { ownerPersonId: true },
+        });
+        const managerPersonId =
+          action.kind !== 'lapse'
+            ? null
+            : ((
+                await tx.contract.findFirst({
+                  where: { personId: grant.subjectPersonId, managerPersonId: { not: null } },
+                  orderBy: [{ endDate: 'desc' }, { startDate: 'desc' }],
+                  select: { managerPersonId: true },
+                })
+              )?.managerPersonId ?? null);
+
+        const recipients = await recipientsForPersons(tx, [
+          grant.subjectPersonId,
+          ...(grant.approvedByPersonId === null ? [] : [grant.approvedByPersonId]),
+          ...(owner?.ownerPersonId == null ? [] : [owner.ownerPersonId]),
+          ...(managerPersonId === null ? [] : [managerPersonId]),
+        ]);
+
+        // Where a business rule still grants the same entitlement, the holder
+        // is told they still hold it. Telling somebody they lost something
+        // they did not lose is its own kind of defect.
+        const stillHeld = await tx.accountEntitlement.count({
+          where: {
+            state: 'held',
+            entitlementId: action.resourceId,
+            origin: 'rule',
+            account: { personId: grant.subjectPersonId },
+          },
+        });
+
+        const resourceName = nameList(names, [
+          {
+            resourceType: action.resourceType as ResourceType,
+            resourceId: action.resourceId,
+          },
+        ]);
+        await enqueueOutbox(
+          tx,
+          recipients.map((r) => ({
+            template:
+              action.kind === 'expire'
+                ? ('automate-expired' as const)
+                : ('automate-lapsed' as const),
+            to: r.email,
+            vars: {
+              displayName: r.displayName,
+              subjectName: names.get(`person:${grant.subjectPersonId}`) ?? 'the holder',
+              productName:
+                (action.productId === null
+                  ? undefined
+                  : names.get(`product:${action.productId}`)) ?? resourceName,
+              resourceList: resourceName,
+              endsAt: grant.endsAt?.toDateString() ?? '',
+              lastContractEnd: action.message,
+              stillHeldNote:
+                stillHeld > 0
+                  ? 'You still hold this through your role, so nothing has changed for you in practice.'
+                  : '',
+              catalogUrl: `${publicUrl}/catalog`,
+            },
+            requestId: null,
+            userId: r.userId,
+          })),
+        );
+
+        batchApplied += 1;
+      }
+
+      return { batchApplied, batchFailed, batchTargets };
+    });
+
+    applied += outcome.batchApplied;
+    failed += outcome.batchFailed;
+    for (const targetSystemId of outcome.batchTargets) targets.add(targetSystemId);
+  }
+
+  // ---- Phase 3: close the sweep. Short. ----------------------------------
+  const status =
+    failed > 0 && applied > 0 ? 'partially_applied' : failed > 0 ? 'failed' : 'applied';
+
+  await withTenant(tenantId, async (tx) => {
     await tx.expirySweep.update({
       where: { id: sweepId },
       data: { status, finishedAt: now },
@@ -12436,7 +15201,7 @@ export async function applyExpirySweep(
         where: { tenantId },
         data: {
           lastAppliedSweepAt: now,
-          personsWithActiveContractAtLastSweep: sweep.personsWithActiveContract,
+          personsWithActiveContractAtLastSweep: claim.personsWithActiveContract,
         },
       });
     }
@@ -12448,13 +15213,8 @@ export async function applyExpirySweep(
       targetId: sweepId,
       outcome: failed > 0 ? 'failure' : 'success',
       sourceIp: null,
-      payload: { applied, skipped: skippedActions.length, failed, confirmed },
+      payload: { applied, skipped: claim.skipped, failed, confirmed },
     });
-
-    return {
-      outcome: { status, applied, skipped: skippedActions.length, failed },
-      targets: [...targets],
-    };
   });
 
   for (const targetSystemId of targets) {
@@ -12464,7 +15224,7 @@ export async function applyExpirySweep(
     );
   }
 
-  return outcome;
+  return { status, applied, skipped: claim.skipped, failed };
 }
 ```
 
@@ -12510,7 +15270,8 @@ Spec §8's approval delegation and §14's resource delegation. **Every delegated
 - Test: `packages/core/src/automate/delegation-service.test.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `listMembers`; `type Scheduler`; `automateSettings`, `subjectAudienceFacts` from `./catalog-service.js`; `audienceAdmits`, `type AudienceCondition` from `./audience.js`; `fulfilRequest`, `type FulfilOptions` from `./fulfil.js`; `revokeGrant` from `./fulfil.js`; `enqueueOutbox`, `recipientsForPersons` from `./notify.js`; `LIVE_GRANT_STATUSES`, `type ResourceType` from `./types.js`.
+- Consumes: `Prisma` from `@prisma/client`; `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `hasPermission` from `../rbac/rbac-service.js`; `PERMISSIONS`; `type Scheduler`; `automateSettings`, `subjectAudienceFacts` from `./catalog-service.js`; `audienceAdmits`, `type AudienceCondition` from `./audience.js`; `fulfilRequest`, `revokeGrant`, `type FulfilOptions` from `./fulfil.js`; `displayNames`, `enqueueOutbox`, `recipientsForPersons` from `./notify.js`; `LIVE_GRANT_STATUSES`, `type ResourceType` from `./types.js`.
+- **`upsertResourceDelegation` and `delegatedGrant` both refuse `resourceType: 'entitlement'`** (H12), and `@syntra/contracts` exports `delegableResourceType` — `['application','group']` — which `resourceDelegationBody` and `resourceParam` use instead of `resourceType`.
 - Produces:
   - `class DelegationRefusedError extends Error { constructor(readonly code: string, message: string) }`
   - `type ResourceCapability = 'view_members' | 'approve' | 'grant' | 'revoke'`
@@ -12531,6 +15292,7 @@ Spec §8's approval delegation and §14's resource delegation. **Every delegated
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { PERMISSIONS } from '../rbac/permissions.js';
 import {
   DelegationRefusedError,
   createApprovalDelegation,
@@ -12547,6 +15309,7 @@ let tenantId: string;
 let leadPersonId: string;
 let leadUserId: string;
 let annaPersonId: string;
+let annaUserId: string;
 let boPersonId: string;
 let groupId: string;
 
@@ -12583,7 +15346,7 @@ beforeEach(async () => {
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
   tenantId = t.id;
   ({ personId: leadPersonId, userId: leadUserId } = await person('Lead'));
-  ({ personId: annaPersonId } = await person('Anna'));
+  ({ personId: annaPersonId, userId: annaUserId } = await person('Anna'));
   ({ personId: boPersonId } = await person('Bo', 'Facilities'));
   groupId = await withTenant(tenantId, async (tx) =>
     (await tx.group.create({ data: { tenantId, name: 'Finance Reporting' } })).id,
@@ -12648,7 +15411,9 @@ describe('approval delegation', () => {
     // rule rather than the only half.
     await createApprovalDelegation(
       tenantId,
-      leadUserId,
+      // Anna's own delegation, recorded by Anna. Spec section 8: by the
+      // delegator, or by an administrator holding automate.manage.
+      annaUserId,
       {
         delegatorPersonId: annaPersonId,
         delegatePersonId: boPersonId,
@@ -12673,6 +15438,80 @@ describe('approval delegation', () => {
     expect((failure as DelegationRefusedError).code).toBe('not-transitive');
   });
 
+  it('names both parties in the notification rather than their ids', async () => {
+    // Spec section 13 wants "Delegation started / ended — delegator and
+    // delegate, both ends, both times". A mail saying "guid-4f2a... has
+    // delegated approvals to guid-91be..." tells neither of them anything.
+    await createApprovalDelegation(
+      tenantId,
+      leadUserId,
+      {
+        delegatorPersonId: leadPersonId,
+        delegatePersonId: annaPersonId,
+        category: null,
+        startsAt: day('2026-06-16'),
+        endsAt: day('2026-06-30'),
+      },
+      { now: NOW },
+    );
+    const row = await withTenant(tenantId, (tx) =>
+      tx.notificationOutbox.findFirstOrThrow({
+        where: { template: 'automate-delegation-started' },
+      }),
+    );
+    const vars = row.vars as Record<string, string>;
+    expect(vars.delegatorName).toBe('Lead Test');
+    expect(vars.delegateName).toBe('Anna Test');
+    for (const value of Object.values(vars)) {
+      expect(value).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    }
+  });
+
+  it('refuses somebody recording an absence on another person behalf without automate.manage', async () => {
+    // Spec section 8's rule lived nowhere in code: the function took
+    // `delegatorPersonId` from its input and `actorUserId` separately and
+    // never compared them. Nothing was exposed while the only caller was an
+    // admin route already gated on automate.manage — but this function is
+    // exported from `@syntra/core` and the portal is about to call it.
+    const failure = await createApprovalDelegation(
+      tenantId,
+      leadUserId,
+      {
+        delegatorPersonId: annaPersonId,
+        delegatePersonId: boPersonId,
+        category: null,
+        startsAt: day('2026-06-16'),
+        endsAt: day('2026-06-30'),
+      },
+      { now: NOW },
+    ).catch((e: unknown) => e);
+    expect((failure as DelegationRefusedError).code).toBe('not-permitted');
+  });
+
+  it('allows an administrator holding automate.manage to record one on their behalf', async () => {
+    await withTenant(tenantId, async (tx) => {
+      const role = await tx.role.create({
+        data: { tenantId, name: 'Automate admin', permissions: [PERMISSIONS.AUTOMATE_MANAGE] },
+      });
+      await tx.roleAssignment.create({
+        data: { tenantId, roleId: role.id, userId: leadUserId },
+      });
+    });
+    const created = await createApprovalDelegation(
+      tenantId,
+      leadUserId,
+      {
+        delegatorPersonId: annaPersonId,
+        delegatePersonId: boPersonId,
+        category: null,
+        startsAt: day('2026-06-16'),
+        endsAt: day('2026-06-30'),
+      },
+      { now: NOW },
+    );
+    expect(created.id).toBeTruthy();
+  });
+
   it('refuses a delegation to oneself', async () => {
     const failure = await createApprovalDelegation(
       tenantId,
@@ -12687,6 +15526,73 @@ describe('approval delegation', () => {
       { now: NOW },
     ).catch((e: unknown) => e);
     expect((failure as DelegationRefusedError).code).toBe('self');
+  });
+});
+
+describe('a target entitlement is not delegable', () => {
+  it('refuses the configuration, rather than producing a grant the database rejects', async () => {
+    // `delegatedGrant` writes a RequestItem with `targetSystemId: null`,
+    // `fulfilRequest` copies it onto the AccessGrant, and
+    // `access_grant_target_matches_type` rejects ('entitlement', null) — a
+    // 500 out of the portal on a capability the console would otherwise let
+    // an administrator configure. Even satisfied, no Provision run would ever
+    // be enqueued and the grant would sit `pending` forever.
+    const failure = await upsertResourceDelegation(tenantId, null, {
+      resourceType: 'entitlement',
+      resourceId: groupId,
+      delegatePersonId: leadPersonId,
+      delegateGroupId: null,
+      capabilities: ['grant'],
+      audienceCondition: null,
+      startsAt: day('2026-01-01'),
+      endsAt: null,
+    }).catch((e: unknown) => e);
+    expect((failure as DelegationRefusedError).code).toBe('entitlement-not-delegable');
+  });
+
+  it('refuses the act as well, for a row written before that guard existed', async () => {
+    const failure = await delegatedGrant(
+      tenantId,
+      {
+        actingPersonId: leadPersonId,
+        actingUserId: leadUserId,
+        resourceType: 'entitlement',
+        resourceId: groupId,
+        subjectPersonIds: [annaPersonId],
+        justification: 'because',
+        durationDays: null,
+      },
+      { now: NOW },
+    ).catch((e: unknown) => e);
+    expect((failure as DelegationRefusedError).code).toBe('entitlement-not-delegable');
+    const grants = await withTenant(tenantId, (tx) => tx.accessGrant.findMany());
+    expect(grants).toEqual([]);
+  });
+});
+
+describe('clearing a delegation audience', () => {
+  it('actually clears it, so the delegation stops admitting anybody by audience', async () => {
+    // Same defect as `Product.audienceCondition`: `?? undefined` reads to
+    // Prisma as "do not touch this column", so an administrator removing the
+    // audience gets a delegation whose previous audience is still in force —
+    // and this audience is the control that stops a team lead putting
+    // anybody in the organization into their group.
+    const { id } = await delegateGroup();
+    await upsertResourceDelegation(tenantId, null, {
+      id,
+      resourceType: 'group',
+      resourceId: groupId,
+      delegatePersonId: leadPersonId,
+      delegateGroupId: null,
+      capabilities: ['view_members', 'grant', 'revoke'],
+      audienceCondition: null,
+      startsAt: day('2026-01-01'),
+      endsAt: null,
+    });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.resourceDelegation.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(row.audienceCondition).toBeNull();
   });
 });
 
@@ -12928,13 +15834,15 @@ Expected: FAIL, "Failed to resolve import ./delegation-service.js".
 `packages/core/src/automate/delegation-service.ts`:
 
 ```ts
+import { Prisma } from '@prisma/client';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
-import { listMembers } from '../directory/group-service.js';
+import { hasPermission } from '../rbac/rbac-service.js';
+import { PERMISSIONS } from '../rbac/permissions.js';
 import { automateSettings, subjectAudienceFacts } from './catalog-service.js';
 import { audienceAdmits, type AudienceCondition } from './audience.js';
 import { fulfilRequest, revokeGrant, type FulfilOptions } from './fulfil.js';
-import { enqueueOutbox, recipientsForPersons } from './notify.js';
+import { displayNames, enqueueOutbox, recipientsForPersons } from './notify.js';
 import { LIVE_GRANT_STATUSES, type ResourceType } from './types.js';
 
 export class DelegationRefusedError extends Error {
@@ -12980,6 +15888,28 @@ export async function createApprovalDelegation(
 ): Promise<{ id: string }> {
   return withTenant(tenantId, async (tx) => {
     const settings = await automateSettings(tx);
+
+    // Spec section 8: a delegation may be created "by the delegator, or by an
+    // administrator holding `automate.manage` on their behalf". That rule
+    // lived nowhere in code — the function took `delegatorPersonId` from its
+    // input and `actorUserId` separately and never compared them. Nothing was
+    // exposed while the only caller was an admin route already gated on
+    // `automate.manage`, but this function is exported from `@syntra/core`,
+    // the portal is about to call it (spec section 17's "record an absence"),
+    // and a rule that lives only in a route is a rule the next route forgets.
+    if (actorUserId !== null) {
+      const actor = await tx.user.findUnique({
+        where: { id: actorUserId },
+        select: { personId: true },
+      });
+      const isDelegator = actor?.personId === input.delegatorPersonId;
+      if (!isDelegator && !(await hasPermission(tx, actorUserId, PERMISSIONS.AUTOMATE_MANAGE))) {
+        throw new DelegationRefusedError(
+          'not-permitted',
+          'You can record an absence for yourself; delegating on somebody else’s behalf needs automate.manage.',
+        );
+      }
+    }
 
     if (input.delegatorPersonId === input.delegatePersonId) {
       throw new DelegationRefusedError('self', 'A person cannot delegate to themselves.');
@@ -13043,11 +15973,16 @@ export async function createApprovalDelegation(
     });
 
     // Both parties, at both ends. A delegation nobody was told about is a
-    // transfer of authority nobody agreed to.
+    // transfer of authority nobody agreed to — and a mail saying
+    // "guid-4f2a... has delegated approvals to guid-91be..." tells neither of
+    // them anything.
     const recipients = await recipientsForPersons(tx, [
       input.delegatorPersonId,
       input.delegatePersonId,
     ]);
+    const names = await displayNames(tx, {
+      personIds: [input.delegatorPersonId, input.delegatePersonId],
+    });
     await enqueueOutbox(
       tx,
       recipients.map((r) => ({
@@ -13055,8 +15990,8 @@ export async function createApprovalDelegation(
         to: r.email,
         vars: {
           displayName: r.displayName,
-          delegatorName: input.delegatorPersonId,
-          delegateName: input.delegatePersonId,
+          delegatorName: names.get(`person:${input.delegatorPersonId}`) ?? 'the delegator',
+          delegateName: names.get(`person:${input.delegatePersonId}`) ?? 'the delegate',
           endsAt: input.endsAt.toDateString(),
         },
         requestId: null,
@@ -13100,6 +16035,9 @@ export async function endApprovalDelegation(
       delegation.delegatorPersonId,
       delegation.delegatePersonId,
     ]);
+    const names = await displayNames(tx, {
+      personIds: [delegation.delegatorPersonId, delegation.delegatePersonId],
+    });
     await enqueueOutbox(
       tx,
       recipients.map((r) => ({
@@ -13107,8 +16045,10 @@ export async function endApprovalDelegation(
         to: r.email,
         vars: {
           displayName: r.displayName,
-          delegatorName: delegation.delegatorPersonId,
-          delegateName: delegation.delegatePersonId,
+          delegatorName:
+            names.get(`person:${delegation.delegatorPersonId}`) ?? 'the delegator',
+          delegateName:
+            names.get(`person:${delegation.delegatePersonId}`) ?? 'the delegate',
           endsAt: now.toDateString(),
         },
         requestId: null,
@@ -13140,6 +16080,27 @@ export async function upsertResourceDelegation(
         'A delegation with no capabilities does nothing; remove it instead.',
       );
     }
+    // Applications and local groups only.
+    //
+    // `delegatedGrant` writes a `RequestItem` with `targetSystemId: null`,
+    // and `fulfilRequest` copies that onto the `AccessGrant` — so an
+    // entitlement delegation produces `resourceType: 'entitlement',
+    // targetSystemId: null`, which fails the `access_grant_target_matches_type`
+    // check constraint as a 500 out of the portal, on a capability the console
+    // lets an administrator configure. Even with the constraint satisfied,
+    // `targetSystemIds` would be empty, no Provision run would ever be
+    // enqueued, and the grant would sit `pending` forever.
+    //
+    // Refusing is the honest fix rather than resolving the target here: spec
+    // section 14 is written entirely about groups a team lead owns, and a
+    // target entitlement is Provision's to grant, behind a product and an
+    // approval chain. `resourceParam` in the contracts is narrowed to match.
+    if (input.resourceType === 'entitlement') {
+      throw new DelegationRefusedError(
+        'entitlement-not-delegable',
+        'A target entitlement cannot be delegated. It is granted through a catalog product and a Provision run, so that the approval and the target write stay in one place; delegate the application or the local group instead.',
+      );
+    }
     // Scope is per resource, never per type. There is no "manage all groups"
     // delegation; that is a role, and roles live in the console.
     const data = {
@@ -13149,7 +16110,13 @@ export async function upsertResourceDelegation(
       delegatePersonId: input.delegatePersonId,
       delegateGroupId: input.delegateGroupId,
       capabilities: input.capabilities,
-      audienceCondition: input.audienceCondition ?? undefined,
+      // `Prisma.DbNull`, NOT `undefined`. Prisma reads `undefined` as "do not
+      // touch this column", so on the update path `?? undefined` makes
+      // CLEARING the audience impossible — and this audience is the control
+      // that stops a delegated manager putting anybody in the organization
+      // into their group (spec section 14). Same defect as
+      // `Product.audienceCondition`, same fix; see Global Constraint 22.
+      audienceCondition: (input.audienceCondition ?? Prisma.DbNull) as never,
       startsAt: input.startsAt,
       endsAt: input.endsAt,
       createdByUserId: actorUserId,
@@ -13199,15 +16166,15 @@ export async function resourcesManagedBy(
   });
   const groupIds = memberships.map((m) => m.groupId);
 
+  // Read the live delegations and filter in memory below. The delegation
+  // table is per tenant and small, and expressing "delegated to this person
+  // OR to any of these groups" alongside the window predicate needs a second
+  // `OR` key, which Prisma has no spelling for -- an earlier draft wrote
+  // `OR2: undefined`, which Prisma rejects outright.
   const rows = await tx.resourceDelegation.findMany({
     where: {
       startsAt: { lte: now },
       OR: [{ endsAt: null }, { endsAt: { gt: now } }],
-      ...(groupIds.length === 0
-        ? { delegatePersonId: personId }
-        : {
-            OR2: undefined,
-          }),
     },
   });
 
@@ -13280,6 +16247,17 @@ export async function delegatedGrant(
       throw new DelegationRefusedError(
         'too-many',
         `A delegated act may name at most ${settings.delegatedBulkLimit} people. For more than that, ask an administrator.`,
+      );
+    }
+
+    // The same refusal as `upsertResourceDelegation`, restated at the act
+    // rather than only at the configuration: a row written before that guard
+    // existed must not produce a grant that violates
+    // `access_grant_target_matches_type`.
+    if (input.resourceType === 'entitlement') {
+      throw new DelegationRefusedError(
+        'entitlement-not-delegable',
+        'A target entitlement cannot be granted by a delegated manager; it goes through a catalog product and a Provision run.',
       );
     }
 
@@ -13441,20 +16419,12 @@ export async function delegatedRevoke(
 }
 ```
 
-- [ ] **Step 4: Correct the `resourcesManagedBy` where clause**
+- [ ] **Step 4: Check `resourcesManagedBy` has no second `OR` key**
 
-The draft above contains a `OR2: undefined` key that Prisma will reject. Replace the query with an unconditional read and filter in memory, which is what the code below it already does:
+Run: `grep -n 'OR2' packages/core/src/automate/delegation-service.ts`
+Expected: no output.
 
-```ts
-  const rows = await tx.resourceDelegation.findMany({
-    where: {
-      startsAt: { lte: now },
-      OR: [{ endsAt: null }, { endsAt: { gt: now } }],
-    },
-  });
-```
-
-Marked as a correction rather than quietly fixed. The delegation table is per tenant and small — this is one of the few places where reading the set and filtering in memory is cheaper than expressing a two-way OR across a nullable group id.
+An earlier draft of Step 3 wrote `OR2: undefined` inside the `where`, which Prisma rejects, and corrected it here — so an implementer working the steps in order wrote a query that throws, then rewrote it. The unconditional read plus the in-memory filter is now in Step 3 where it belongs; this step is the check, not the fix. The delegation table is per tenant and small, which is why reading the set is cheaper than expressing a two-way OR across a nullable group id.
 
 - [ ] **Step 5: Export the module**
 
@@ -13496,18 +16466,22 @@ Spec §11, §12, §13 and §16. Three queues, three schedule keys per tenant, an
 - Test: `packages/core/src/automate/jobs.test.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `prisma` from `@syntra/db`; `recordEvent`; `type Scheduler`; `renderMessage`, `sendMessage`, `type Transport` from `../notify/notification-service.js`; `type TemplateName`; `automateSettings` from `./catalog-service.js`; `previewExpirySweep`, `applyExpirySweep` from `./sweep-service.js`; `reflectProvisionOutcomes` from `./reflect.js`; `resolveEscalationApprovers`, `type StageSnapshot` from `./approvers.js`; `subjectFor` from `./request-service.js`; `enqueueOutbox`, `recipientsForPersons` from `./notify.js`; `requestUrl` from `./fulfil.js`.
+- Consumes: `withTenant`, `prisma` from `@syntra/db`; `recordEvent`; `type Scheduler`; `renderMessage`, `sendMessage`, `type Transport` from `../notify/notification-service.js`; `type TemplateName`; `assignApplication` from `../access/assignment-service.js`; `addMember` from `../directory/group-service.js`; `PROVISION_JOB`, `provisionJobPayload` from `../provision/jobs.js`; `automateSettings` from `./catalog-service.js`; `previewExpirySweep`, `applyExpirySweep` from `./sweep-service.js`; `reflectProvisionOutcomes` from `./reflect.js`; `resolveEscalationApprovers`, `type StageSnapshot` from `./approvers.js`; `subjectFor` from `./request-service.js`; `displayNames`, `enqueueOutbox`, `recipientsForPersons` from `./notify.js`; `requestUrl` from `./fulfil.js`.
+- **This task edits `apps/api/src/scheduler.ts` only, and only by adding one `registerAutomateJobs(...)` line.** `startSyncScheduler`'s signature is Provision Task 16's; `apps/api/src/server.ts` is not touched.
+- **`runTickJob` runs four phases, each in its own transaction, batched at `TICK_BATCH = 50`** (Global Constraint 2), and `JobOptions.batchSize` overrides it so a test can force the batch boundary.
 - Produces:
   - `const AUTOMATE_OUTBOX_JOB = 'automate.outbox'`
   - `const AUTOMATE_TICK_JOB = 'automate.tick'`
   - `const AUTOMATE_SWEEP_JOB = 'automate.sweep'`
-  - `type AutomatePurpose = 'outbox' | 'tick' | 'sweep'`
+  - `const AUTOMATE_DIGEST_JOB = 'automate.digest'`
+  - `type AutomatePurpose = 'outbox' | 'tick' | 'sweep' | 'digest'` — **four** schedules per tenant, four distinct keys
   - `function automateScheduleKey(tenantId: string, purpose: AutomatePurpose): string`
   - `interface AutomateJobPayload { tenantId: string }`
   - `function automateJobPayload(tenantId: string): AutomateJobPayload`
   - `interface JobOptions { now?: Date; scheduler?: Scheduler | null; publicUrl?: string; batchSize?: number }`
   - `async function runOutboxJob(transport: Transport, payload: AutomateJobPayload, options?: JobOptions): Promise<{ sent: number; failed: number }>`
-  - `async function runTickJob(payload: AutomateJobPayload, options?: JobOptions): Promise<{ reminders: number; escalations: number; expired: number; warnings: number }>`
+  - `async function runDigestJob(transport: Transport, payload: AutomateJobPayload, options?: JobOptions): Promise<{ sent: number }>`
+  - `async function runTickJob(payload: AutomateJobPayload, options?: JobOptions): Promise<{ reminders: number; escalations: number; expired: number; warnings: number; promoted: number }>` — `promoted` is the `scheduled` grants whose day has arrived
   - `async function runSweepJob(payload: AutomateJobPayload, options?: JobOptions): Promise<{ sweepId: string; status: string }>`
   - `async function applyAutomateSchedules(scheduler: Scheduler, tenantId: string, sweepSchedule: string | null): Promise<void>`
   - `function registerAutomateJobs(scheduler: Scheduler, transport: Transport, options?: { publicUrl?: string }): void`
@@ -13524,13 +16498,16 @@ import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { memoryTransport } from '../notify/notification-service.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
+import { PROVISION_JOB } from '../provision/jobs.js';
 import {
+  AUTOMATE_DIGEST_JOB,
   AUTOMATE_OUTBOX_JOB,
   AUTOMATE_SWEEP_JOB,
   AUTOMATE_TICK_JOB,
   OUTBOX_MAX_ATTEMPTS,
   applyAutomateSchedules,
   automateScheduleKey,
+  runDigestJob,
   runOutboxJob,
   runSweepJob,
   runTickJob,
@@ -13563,20 +16540,91 @@ describe('automateScheduleKey', () => {
     const a = automateScheduleKey('t1', 'sweep');
     const b = automateScheduleKey('t2', 'sweep');
     const c = automateScheduleKey('t1', 'tick');
-    expect(new Set([a, b, c]).size).toBe(3);
+    const d = automateScheduleKey('t1', 'digest');
+    expect(new Set([a, b, c, d]).size).toBe(4);
+  });
+});
+
+describe('runDigestJob', () => {
+  it('sends one summary per recipient and marks every row in it sent', async () => {
+    // Without this job, `digest: true` is a row nothing ever sends: the
+    // person who asked for a daily summary receives NOTHING, including every
+    // stage-opened notification, so approvals sit in a queue nobody has been
+    // told about.
+    await withTenant(tenantId, (tx) =>
+      tx.notificationOutbox.createMany({
+        data: [
+          {
+            tenantId,
+            template: 'automate-stage-opened',
+            to: 'jan@acme.test',
+            vars: { displayName: 'Jan', productName: 'Statistics licence' },
+            digest: true,
+          },
+          {
+            tenantId,
+            template: 'automate-stage-opened',
+            to: 'jan@acme.test',
+            vars: { displayName: 'Jan', productName: 'Reading room' },
+            digest: true,
+          },
+          {
+            tenantId,
+            template: 'automate-stage-opened',
+            to: 'bo@acme.test',
+            vars: { displayName: 'Bo', productName: 'Statistics licence' },
+            digest: true,
+          },
+        ],
+      }),
+    );
+
+    const mail = memoryTransport();
+    const result = await runDigestJob(mail, { tenantId }, { now: NOW });
+    expect(result).toEqual({ sent: 2 });
+    expect(mail.sent.map((m) => m.to).sort()).toEqual(['bo@acme.test', 'jan@acme.test']);
+    const jan = mail.sent.find((m) => m.to === 'jan@acme.test');
+    expect(jan?.text).toContain('Statistics licence');
+    expect(jan?.text).toContain('Reading room');
+
+    const rows = await withTenant(tenantId, (tx) => tx.notificationOutbox.findMany());
+    for (const row of rows) expect(row.sentAt).not.toBeNull();
+  });
+
+  it('leaves the immediate rows alone', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.notificationOutbox.create({
+        data: {
+          tenantId,
+          template: 'automate-stage-opened',
+          to: 'jan@acme.test',
+          vars: { displayName: 'Jan', productName: 'Statistics licence' },
+          digest: false,
+        },
+      }),
+    );
+    const mail = memoryTransport();
+    expect(await runDigestJob(mail, { tenantId }, { now: NOW })).toEqual({ sent: 0 });
+    const row = await withTenant(tenantId, (tx) => tx.notificationOutbox.findFirstOrThrow());
+    expect(row.sentAt).toBeNull();
   });
 });
 
 describe('applyAutomateSchedules', () => {
-  it('schedules all three queues with their own keys', async () => {
+  it('schedules all four queues with their own keys', async () => {
     const scheduler = schedulerStub();
     await applyAutomateSchedules(scheduler, tenantId, '0 2 * * *');
     const names = scheduler.schedule.mock.calls.map((c) => c[0]);
     expect(names.sort()).toEqual(
-      [AUTOMATE_OUTBOX_JOB, AUTOMATE_SWEEP_JOB, AUTOMATE_TICK_JOB].sort(),
+      [
+        AUTOMATE_DIGEST_JOB,
+        AUTOMATE_OUTBOX_JOB,
+        AUTOMATE_SWEEP_JOB,
+        AUTOMATE_TICK_JOB,
+      ].sort(),
     );
     const keys = scheduler.schedule.mock.calls.map((c) => c[3]);
-    expect(new Set(keys).size).toBe(3);
+    expect(new Set(keys).size).toBe(4);
     for (const key of keys) expect(key).toContain(tenantId);
   });
 
@@ -13877,6 +16925,130 @@ describe('runTickJob — expiry warnings', () => {
   });
 });
 
+describe('runTickJob — promoting a scheduled grant', () => {
+  async function preHire(resourceType: 'application' | 'group' | 'entitlement') {
+    return withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Pre', familyName: 'Hire' },
+      });
+      const user = await tx.user.create({
+        data: {
+          tenantId,
+          login: `pre-${resourceType}`,
+          email: `pre-${resourceType}@acme.test`,
+          displayName: 'Pre Hire',
+          personId: person.id,
+        },
+      });
+      const application = await tx.application.create({
+        data: { tenantId, name: `App ${resourceType}`, slug: `app-${resourceType}` },
+      });
+      const group = await tx.group.create({ data: { tenantId, name: `G ${resourceType}` } });
+      const target = await tx.targetSystem.create({
+        data: {
+          tenantId,
+          name: `AD ${resourceType}`,
+          secretName: `s/${resourceType}`,
+          config: { tlsMode: 'ldaps' },
+        },
+      });
+      const entitlement = await tx.entitlement.create({
+        data: {
+          tenantId,
+          targetSystemId: target.id,
+          externalId: `guid-${resourceType}`,
+          type: 'group',
+          displayName: 'Finance',
+        },
+      });
+      const resourceId =
+        resourceType === 'application'
+          ? application.id
+          : resourceType === 'group'
+            ? group.id
+            : entitlement.id;
+      const grant = await tx.accessGrant.create({
+        data: {
+          tenantId,
+          subjectPersonId: person.id,
+          resourceType,
+          resourceId,
+          targetSystemId: resourceType === 'entitlement' ? target.id : null,
+          startsAt: day('2026-06-20'),
+          status: 'scheduled',
+        },
+      });
+      return {
+        grantId: grant.id,
+        userId: user.id,
+        applicationId: application.id,
+        groupId: group.id,
+        targetSystemId: target.id,
+      };
+    });
+  }
+
+  it('writes no assignment the day before the start date', async () => {
+    // A scheduled grant confers NOTHING until its day. That half already
+    // worked; the half that did not is the next case.
+    const seeded = await preHire('application');
+    const result = await runTickJob({ tenantId }, { now: day('2026-06-19') });
+    expect(result.promoted).toBe(0);
+    const state = await withTenant(tenantId, async (tx) => ({
+      assignments: await tx.appAssignment.findMany(),
+      grant: await tx.accessGrant.findUniqueOrThrow({ where: { id: seeded.grantId } }),
+    }));
+    expect(state.assignments).toEqual([]);
+    expect(state.grant.status).toBe('scheduled');
+  });
+
+  it('writes exactly one assignment on the day, and records it as the grant own row', async () => {
+    // Nothing in the plan moved a grant out of `scheduled` before this pass
+    // existed. The AppAssignment was written only `if (!window.scheduled)`
+    // and never afterwards, `classifySweep` skips anything outside
+    // IN_FORCE_GRANT_STATUSES, and the row occupied the one-live-grant slot
+    // forever -- so the person could never be granted that resource again by
+    // any route.
+    const seeded = await preHire('application');
+    const result = await runTickJob({ tenantId }, { now: day('2026-06-20') });
+    expect(result.promoted).toBe(1);
+    const state = await withTenant(tenantId, async (tx) => ({
+      assignments: await tx.appAssignment.findMany(),
+      grant: await tx.accessGrant.findUniqueOrThrow({ where: { id: seeded.grantId } }),
+    }));
+    expect(state.assignments).toHaveLength(1);
+    expect(state.assignments[0]).toMatchObject({ userId: seeded.userId });
+    expect(state.grant.status).toBe('active');
+    expect(state.grant.writtenRowIds).toEqual([state.assignments[0]!.id]);
+
+    // Idempotent: the second tick finds nothing scheduled and writes nothing.
+    const again = await runTickJob({ tenantId }, { now: day('2026-06-21') });
+    expect(again.promoted).toBe(0);
+    const assignments = await withTenant(tenantId, (tx) => tx.appAssignment.findMany());
+    expect(assignments).toHaveLength(1);
+  });
+
+  it('moves an entitlement grant to pending and asks for a Provision run', async () => {
+    const scheduler = schedulerStub();
+    const seeded = await preHire('entitlement');
+    const result = await runTickJob(
+      { tenantId },
+      { now: day('2026-06-20'), scheduler },
+    );
+    expect(result.promoted).toBe(1);
+    const grant = await withTenant(tenantId, (tx) =>
+      tx.accessGrant.findUniqueOrThrow({ where: { id: seeded.grantId } }),
+    );
+    // `pending`, not `active`: nothing has confirmed it at the target yet,
+    // and the console never claims somebody holds something they do not.
+    expect(grant.status).toBe('pending');
+    expect(scheduler.enqueue).toHaveBeenCalledWith(PROVISION_JOB, {
+      tenantId,
+      targetSystemId: seeded.targetSystemId,
+    });
+  });
+});
+
 describe('runSweepJob', () => {
   it('previews and stops when the sweep needs confirming; the scheduler confirms nothing', async () => {
     const result = await runSweepJob({ tenantId }, { now: NOW });
@@ -13900,30 +17072,74 @@ describe('runSweepJob', () => {
 describe('nothing in the request path can send anything', () => {
   const DIR = 'packages/core/src/automate';
 
+  /**
+   * Comments and docstrings stripped before matching.
+   *
+   * Not cosmetic. `notify.ts`'s own docstring for `enqueueOutbox` explains
+   * the rule by NAMING the forbidden symbols — "`sendMessage` takes a
+   * `Transport` and no `TenantClient`, which is what makes the ordering
+   * structural rather than remembered" — so a raw text match reports the one
+   * module that documents the rule as the module that breaks it, and the test
+   * fails on day one against correct code. A test that fails on its own
+   * docstring gets "fixed" by relaxing its assertions, and then it certifies
+   * nothing.
+   */
+  const codeOf = (path: string): string =>
+    readFileSync(path, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+
   it('imports a transport in exactly one module, and it is the job module', () => {
     const offenders: string[] = [];
     for (const file of readdirSync(DIR)) {
       if (!file.endsWith('.ts') || file.endsWith('.test.ts')) continue;
       if (file === 'jobs.ts') continue;
-      const source = readFileSync(`${DIR}/${file}`, 'utf8');
-      if (/\b(sendMessage|queueMessage|deliverMessage|smtpTransport|Transport)\b/.test(source)) {
+      if (
+        /\b(sendMessage|queueMessage|deliverMessage|smtpTransport|Transport)\b/.test(
+          codeOf(`${DIR}/${file}`),
+        )
+      ) {
         offenders.push(file);
       }
     }
     expect(offenders).toEqual([]);
   });
 
-  it('sends outside every transaction in the job module', () => {
-    const source = readFileSync(`${DIR}/jobs.ts`, 'utf8');
-    // Every `withTenant(` block in this file is closed before the send loop.
-    // Asserted by position rather than by parsing: the send call must not be
-    // inside the text of any withTenant callback.
-    const sendIndex = source.indexOf('await sendMessage(');
-    expect(sendIndex).toBeGreaterThan(0);
-    const before = source.slice(0, sendIndex);
-    const opened = (before.match(/withTenant\(/g) ?? []).length;
-    const closed = (before.match(/\}\);\n/g) ?? []).length;
-    expect(closed).toBeGreaterThanOrEqual(opened);
+  it('has no send inside the text of any withTenant callback', () => {
+    // Bracket-matched, not counted.
+    //
+    // The first draft compared occurrences of `withTenant(` against
+    // occurrences of `});\n` — which appears after every object literal,
+    // every `createMany` and every `map`, so `closed` exceeded `opened` by an
+    // order of magnitude whether or not the send was inside a transaction.
+    // The assertion could not fail. This walks each `withTenant(` call to its
+    // matching close paren and asserts the span contains no send, so moving
+    // one line into a callback fails it.
+    const source = codeOf(`${DIR}/jobs.ts`);
+    const SEND = /\b(sendMessage|queueMessage|deliverMessage)\s*\(/;
+
+    const spans: [number, number][] = [];
+    for (let i = source.indexOf('withTenant('); i !== -1; i = source.indexOf('withTenant(', i + 1)) {
+      let depth = 0;
+      let j = i + 'withTenant'.length;
+      for (; j < source.length; j += 1) {
+        if (source[j] === '(') depth += 1;
+        else if (source[j] === ')') {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+      spans.push([i, j]);
+    }
+    // The fixture has to be capable of finding something. A `jobs.ts` with no
+    // transactions at all would pass vacuously.
+    expect(spans.length).toBeGreaterThan(0);
+    expect(SEND.test(source)).toBe(true);
+
+    const violations = spans
+      .filter(([from, to]) => SEND.test(source.slice(from, to)))
+      .map(([from]) => source.slice(0, from).split('\n').length);
+    expect(violations).toEqual([]);
   });
 });
 ```
@@ -13947,20 +17163,34 @@ import {
   type Transport,
 } from '../notify/notification-service.js';
 import type { TemplateName } from '../notify/templates/index.js';
+import { assignApplication } from '../access/assignment-service.js';
+import { addMember } from '../directory/group-service.js';
+import { PROVISION_JOB, provisionJobPayload } from '../provision/jobs.js';
 import { automateSettings } from './catalog-service.js';
 import { applyExpirySweep, previewExpirySweep } from './sweep-service.js';
 import { reflectProvisionOutcomes } from './reflect.js';
 import { resolveEscalationApprovers, type StageSnapshot } from './approvers.js';
 import { subjectFor } from './request-service.js';
-import { enqueueOutbox, recipientsForPersons } from './notify.js';
+import { displayNames, enqueueOutbox, recipientsForPersons } from './notify.js';
 import { requestUrl } from './fulfil.js';
 import { IN_FORCE_GRANT_STATUSES } from './types.js';
 
 export const AUTOMATE_OUTBOX_JOB = 'automate.outbox';
 export const AUTOMATE_TICK_JOB = 'automate.tick';
 export const AUTOMATE_SWEEP_JOB = 'automate.sweep';
+/**
+ * The daily summary pass.
+ *
+ * Without it, `enqueueOutbox`'s `digest: true` is a row nothing ever sends:
+ * a person who chose a daily summary receives NOTHING, including every
+ * stage-opened notification, which means approvals sit in a queue nobody has
+ * been told about. A half-built preference that silences mail is worse than
+ * no preference, and this is the silent-drop class the spec's own constraint
+ * 3 calls "the defect class this project keeps rediscovering".
+ */
+export const AUTOMATE_DIGEST_JOB = 'automate.digest';
 
-export type AutomatePurpose = 'outbox' | 'tick' | 'sweep';
+export type AutomatePurpose = 'outbox' | 'tick' | 'sweep' | 'digest';
 
 /**
  * pg-boss keys its schedule table on (queue, key), and `key` defaults to the
@@ -13991,6 +17221,25 @@ export const OUTBOX_MAX_ATTEMPTS = 5;
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+
+/**
+ * How many rows one transaction in `runTickJob` handles.
+ *
+ * `withTenant` is `prisma.$transaction` with Prisma's **5000 ms** default and
+ * no `transactionOptions` on the client. Each open step is roughly four
+ * queries and each warning-window grant carries a JSON-path `count`, so a
+ * tenant-sized pass in one transaction is a P2028 every five minutes. Every
+ * pass here is idempotent, so a batch that fails is simply redone on the next
+ * tick rather than lost.
+ */
+const TICK_BATCH = 50;
+
+/** Splits a work list into transaction-sized batches. */
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push([...items.slice(i, i + size)]);
+  return out;
+}
 
 /**
  * Reads the outbox, renders each message, sends it, and records what happened.
@@ -14074,40 +17323,265 @@ export async function runOutboxJob(
 }
 
 /**
- * The five-minute pass: reminders, escalation, opt-in expiry, expiry warnings,
- * and reflection of whatever Provision has done since.
+ * The daily pass over the digest rows.
+ *
+ * One message per recipient listing what was held back, rather than one
+ * message per row -- which would be the immediate mode with a delay attached.
+ * Failures, blocks and confirmations never reach here at all: `enqueueOutbox`
+ * writes `digest: false` on every `NEVER_DIGESTED` template whatever the
+ * recipient's preference says.
+ *
+ * Same three-phase shape as `runOutboxJob`: read out, send with no
+ * transaction held, write the results back.
+ */
+export async function runDigestJob(
+  transport: Transport,
+  payload: AutomateJobPayload,
+  options: JobOptions = {},
+): Promise<{ sent: number }> {
+  const now = options.now ?? new Date();
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: payload.tenantId },
+    select: { name: true },
+  });
+  if (tenant === null) return { sent: 0 };
+
+  const rows = await withTenant(payload.tenantId, (tx) =>
+    tx.notificationOutbox.findMany({
+      where: { sentAt: null, digest: true, attempts: { lt: OUTBOX_MAX_ATTEMPTS } },
+      orderBy: { createdAt: 'asc' },
+    }),
+  );
+  if (rows.length === 0) return { sent: 0 };
+
+  const byRecipient = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const list = byRecipient.get(row.to) ?? [];
+    list.push(row);
+    byRecipient.set(row.to, list);
+  }
+
+  let sent = 0;
+  const delivered: string[] = [];
+  const failures: { id: string; error: string }[] = [];
+  for (const [to, group] of byRecipient) {
+    const message = renderMessage(tenant.name, 'automate-digest', to, {
+      displayName: (group[0]?.vars as Record<string, string>)?.displayName ?? 'there',
+      count: String(group.length),
+      lines: group
+        .map(
+          (row) =>
+            `- ${(row.vars as Record<string, string>)?.productName ?? row.template}`,
+        )
+        .join('\n'),
+    });
+    try {
+      await sendMessage(transport, message);
+      delivered.push(...group.map((row) => row.id));
+      sent += 1;
+    } catch (cause) {
+      // Left unsent. The attempts column is what makes a dead recipient
+      // visible rather than a row that quietly stops being tried.
+      const error = cause instanceof Error ? cause.message : String(cause);
+      for (const row of group) failures.push({ id: row.id, error });
+    }
+  }
+
+  await withTenant(payload.tenantId, async (tx) => {
+    if (delivered.length > 0) {
+      await tx.notificationOutbox.updateMany({
+        where: { id: { in: delivered } },
+        data: { sentAt: now },
+      });
+    }
+    for (const failure of failures) {
+      await tx.notificationOutbox.update({
+        where: { id: failure.id },
+        data: { attempts: { increment: 1 }, lastError: failure.error },
+      });
+    }
+  });
+
+  return { sent };
+}
+
+/**
+ * The five-minute pass: promotion of scheduled grants, reminders, escalation,
+ * opt-in expiry, expiry warnings, and reflection of whatever Provision has
+ * done since.
  *
  * There is NO branch in this function that approves anything. That is not a
- * convention here; `decision-service.ts` and `request-service.ts` are the only
- * two modules in the slice that write `status: 'approved'`, and Task 11's
- * structural test asserts it.
+ * convention here: `request-service.ts`, `decision-service.ts` and
+ * `delegation-service.ts` are the only three modules in the slice that write
+ * the approved status -- the list is `APPROVED_ENTRY_POINTS` -- and Task 11's
+ * structural test asserts it over the set of files.
  */
 export async function runTickJob(
   payload: AutomateJobPayload,
   options: JobOptions = {},
-): Promise<{ reminders: number; escalations: number; expired: number; warnings: number }> {
+): Promise<{
+  reminders: number;
+  escalations: number;
+  expired: number;
+  warnings: number;
+  promoted: number;
+}> {
   const now = options.now ?? new Date();
   const publicUrl = options.publicUrl ?? '';
-  const counts = { reminders: 0, escalations: 0, expired: 0, warnings: 0 };
+  const counts = { reminders: 0, escalations: 0, expired: 0, warnings: 0, promoted: 0 };
+  const targetsToRun = new Set<string>();
+  const batchSize = options.batchSize ?? TICK_BATCH;
 
-  await withTenant(payload.tenantId, async (tx) => {
-    const settings = await automateSettings(tx);
+  // ---- Phase 1: settings, and the three work lists. -----------------------
+  //
+  // Each pass below opens its OWN transaction, in batches. An earlier draft
+  // ran all three inside one `withTenant`: every open `ApprovalStep` at ~4
+  // queries each, then every warning-window grant with a JSON-path `count`
+  // apiece, then the promotion loop. `withTenant` is `prisma.$transaction`
+  // with Prisma's **5000 ms** default and no `transactionOptions` on the
+  // client, so at any real tenant size that is a P2028 every five minutes,
+  // on the pass that sends every reminder and every expiry warning in the
+  // product. Batching is what makes the failure a batch rather than the
+  // whole pass; the work is idempotent, so a batch that fails is redone on
+  // the next tick.
+  const settings = await withTenant(payload.tenantId, (tx) => automateSettings(tx));
 
+  // ---- Phase 2: scheduled grants whose start date has arrived. ------------
+    //
+    // `GrantStatus` has `scheduled`, `LIVE_GRANT_STATUSES` includes it,
+    // `fulfilRequest` writes it for a pre-hire, and until this pass existed
+    // NOTHING moved a grant out of it. The consequences were permanent and
+    // all silent: the run-service snapshot loads only `pending`/`active`, so
+    // the pre-hire's target entitlement was never in desired state -- not
+    // before the start date, correctly, and not after it either; the
+    // `AppAssignment`/`GroupMembership` was written only `if (!window.scheduled)`
+    // and never afterwards; and `classifySweep` skips anything outside
+    // `IN_FORCE_GRANT_STATUSES`, so the row occupied the
+    // `access_grant_one_live` slot forever and the person could never be
+    // granted that resource again by any route. Spec section 7 says a
+    // scheduled grant "becomes `pending` on the day", and on its day
+    // something has to make it confer.
+  const dueIds = await withTenant(payload.tenantId, async (tx) =>
+    (
+      await tx.accessGrant.findMany({
+        where: { status: 'scheduled', startsAt: { lte: now } },
+        select: { id: true },
+      })
+    ).map((row) => row.id),
+  );
+
+  for (const batch of chunk(dueIds, batchSize)) {
+    await withTenant(payload.tenantId, async (tx) => {
+      const due = await tx.accessGrant.findMany({ where: { id: { in: batch } } });
+      for (const grant of due) {
+        if (grant.resourceType === 'entitlement') {
+          // `pending` until Provision confirms it, exactly as fulfilment
+          // writes it for somebody who has already started.
+          await tx.accessGrant.update({
+            where: { id: grant.id },
+            data: { status: 'pending' },
+          });
+          if (grant.targetSystemId !== null) targetsToRun.add(grant.targetSystemId);
+          counts.promoted += 1;
+          continue;
+        }
+        const users = await tx.user.findMany({
+          where: { personId: grant.subjectPersonId, status: 'active' },
+          select: { id: true },
+        });
+        // Only the rows this promotion creates, recorded on the grant, so
+        // ending it later deletes those and nothing else (the same rule
+        // `fulfilRequest` follows).
+        const writtenRowIds: string[] = [...grant.writtenRowIds];
+        for (const user of users) {
+          if (grant.resourceType === 'application') {
+            const where = {
+              applicationId: grant.resourceId,
+              userId: user.id,
+              groupId: null,
+              orgUnitId: null,
+            };
+            const before = await tx.appAssignment.findFirst({ where, select: { id: true } });
+            if (before !== null) continue;
+            await assignApplication(tx, grant.resourceId, { type: 'user', id: user.id });
+            const created = await tx.appAssignment.findFirst({ where, select: { id: true } });
+            if (created !== null) writtenRowIds.push(created.id);
+          } else {
+            const membershipKey = { groupId: grant.resourceId, userId: user.id };
+            const before = await tx.groupMembership.findUnique({
+              where: { groupId_userId: membershipKey },
+              select: { id: true },
+            });
+            if (before !== null) continue;
+            await addMember(tx, grant.resourceId, user.id);
+            const created = await tx.groupMembership.findUnique({
+              where: { groupId_userId: membershipKey },
+              select: { id: true },
+            });
+            if (created !== null) writtenRowIds.push(created.id);
+          }
+        }
+        await tx.accessGrant.update({
+          where: { id: grant.id },
+          data: { status: 'active', writtenRowIds },
+        });
+        await recordEvent(tx, {
+          actorUserId: null,
+          action: 'automate.grant.promote',
+          targetType: 'AccessGrant',
+          targetId: grant.id,
+          outcome: 'success',
+          sourceIp: null,
+          payload: {
+            subjectPersonId: grant.subjectPersonId,
+            resourceType: grant.resourceType,
+            resourceId: grant.resourceId,
+            startsAt: grant.startsAt.toISOString(),
+          },
+        });
+        counts.promoted += 1;
+      }
+    });
+  }
+
+  // ---- Phase 3: the open approval steps. ---------------------------------
+  const openStepIds = await withTenant(payload.tenantId, async (tx) =>
+    (await tx.approvalStep.findMany({ where: { status: 'open' }, select: { id: true } })).map(
+      (row) => row.id,
+    ),
+  );
+
+  for (const stepBatch of chunk(openStepIds, batchSize)) {
+   await withTenant(payload.tenantId, async (tx) => {
     const openSteps = await tx.approvalStep.findMany({
-      where: { status: 'open' },
+      where: { id: { in: stepBatch } },
       include: { request: { include: { product: true } } },
+    });
+
+    // Names for every notification the loop below writes. One read per batch;
+    // an unknown id is simply absent, so nothing renders a UUID.
+    const stepNames = await displayNames(tx, {
+      personIds: openSteps.map((step) => step.request.subjectPersonId),
     });
 
     for (const step of openSteps) {
       const stage = step.stageSnapshot as unknown as StageSnapshot;
       if (step.slaDueAt === null || step.openedAt === null) continue;
 
-      const halfway = new Date(
-        step.openedAt.getTime() + (stage.slaHours / 2) * HOUR_MS,
-      );
+      // Spec section 8: "at 50% and 100% of the SLA, then daily". A single
+      // daily gate swallows the 100% reminder whenever the SLA is under 24
+      // hours -- which is the case where being reminded on time matters most.
+      // So the two milestones fire on their own, once each, and the daily
+      // cadence starts after 100%.
+      const halfway = new Date(step.openedAt.getTime() + (stage.slaHours / 2) * HOUR_MS);
+      const dueAt = new Date(step.openedAt.getTime() + stage.slaHours * HOUR_MS);
+      const remindedAt = step.lastRemindedAt;
       const dueForReminder =
-        now >= halfway &&
-        (step.lastRemindedAt === null || now.getTime() - step.lastRemindedAt.getTime() >= DAY_MS);
+        remindedAt === null
+          ? now >= halfway
+          : remindedAt < dueAt && now >= dueAt
+            ? true
+            : now >= dueAt && now.getTime() - remindedAt.getTime() >= DAY_MS;
 
       if (stage.onTimeout === 'expire' && stage.expiryHours !== null) {
         const expiresAt = new Date(step.openedAt.getTime() + stage.expiryHours * HOUR_MS);
@@ -14200,7 +17674,9 @@ export async function runTickJob(
               vars: {
                 displayName: r.displayName,
                 productName: step.request.product?.name ?? 'the requested access',
-                subjectName: step.request.subjectPersonId,
+                subjectName:
+                  stepNames.get(`person:${step.request.subjectPersonId}`) ??
+                  'the person this is for',
                 slaHours: String(stage.slaHours),
                 requestUrl: requestUrl(publicUrl, step.requestId),
               },
@@ -14213,7 +17689,9 @@ export async function runTickJob(
               vars: {
                 displayName: r.displayName,
                 productName: step.request.product?.name ?? 'the requested access',
-                subjectName: step.request.subjectPersonId,
+                subjectName:
+                  stepNames.get(`person:${step.request.subjectPersonId}`) ??
+                  'the person this is for',
                 slaHours: String(stage.slaHours),
                 escalatedTo: added.map((a) => a.displayName).join(', '),
                 requestUrl: requestUrl(publicUrl, step.requestId),
@@ -14244,7 +17722,9 @@ export async function runTickJob(
               vars: {
                 displayName: r.displayName,
                 productName: step.request.product?.name ?? 'the requested access',
-                subjectName: step.request.subjectPersonId,
+                subjectName:
+                  stepNames.get(`person:${step.request.subjectPersonId}`) ??
+                  'the person this is for',
                 openedAt: step.openedAt!.toDateString(),
                 requestUrl: requestUrl(publicUrl, step.requestId),
               },
@@ -14260,19 +17740,34 @@ export async function runTickJob(
         }
       }
     }
+   });
+  }
 
-    // Expiry warnings, one per grant per threshold. Deduped on the outbox
-    // itself, keyed on the number of days, so the 7-day and the 1-day warning
-    // are two messages and the 7-day one is not repeated for six days.
-    for (const days of settings.expiryWarningDays) {
-      const from = new Date(now.getTime() + (days - 1) * DAY_MS);
-      const to = new Date(now.getTime() + days * DAY_MS);
-      const grants = await tx.accessGrant.findMany({
-        where: {
-          status: { in: [...IN_FORCE_GRANT_STATUSES] },
-          endsAt: { gt: from, lte: to },
-        },
-      });
+  // ---- Phase 4: expiry warnings. -----------------------------------------
+  //
+  // One per grant per threshold, deduped on the outbox itself and keyed on
+  // the number of days, so the 7-day and the 1-day warning are two messages
+  // and the 7-day one is not repeated for six days. The dedupe is a
+  // JSON-path `count` per grant, which is why this pass in particular has to
+  // be batched rather than run whole.
+  for (const days of settings.expiryWarningDays) {
+    const from = new Date(now.getTime() + (days - 1) * DAY_MS);
+    const to = new Date(now.getTime() + days * DAY_MS);
+    const warnIds = await withTenant(payload.tenantId, async (tx) =>
+      (
+        await tx.accessGrant.findMany({
+          where: {
+            status: { in: [...IN_FORCE_GRANT_STATUSES] },
+            endsAt: { gt: from, lte: to },
+          },
+          select: { id: true },
+        })
+      ).map((row) => row.id),
+    );
+
+    for (const grantBatch of chunk(warnIds, batchSize)) {
+     await withTenant(payload.tenantId, async (tx) => {
+      const grants = await tx.accessGrant.findMany({ where: { id: { in: grantBatch } } });
       for (const grant of grants) {
         const alreadyWarned = await tx.notificationOutbox.count({
           where: {
@@ -14287,6 +17782,16 @@ export async function runTickJob(
           ...(grant.approvedByPersonId === null ? [] : [grant.approvedByPersonId]),
         ]);
         if (recipients.length === 0) continue;
+        const grantNames = await displayNames(tx, {
+          personIds: [grant.subjectPersonId],
+          productIds: grant.productId === null ? [] : [grant.productId],
+          resources: [
+            {
+              resourceType: grant.resourceType as 'entitlement' | 'application' | 'group',
+              resourceId: grant.resourceId,
+            },
+          ],
+        });
         await enqueueOutbox(
           tx,
           recipients.map((r) => ({
@@ -14294,8 +17799,13 @@ export async function runTickJob(
             to: r.email,
             vars: {
               displayName: r.displayName,
-              subjectName: grant.subjectPersonId,
-              productName: grant.productId ?? 'requested access',
+              subjectName: grantNames.get(`person:${grant.subjectPersonId}`) ?? 'the holder',
+              productName:
+                (grant.productId === null
+                  ? undefined
+                  : grantNames.get(`product:${grant.productId}`)) ??
+                grantNames.get(`${grant.resourceType}:${grant.resourceId}`) ??
+                'requested access',
               endsAt: grant.endsAt!.toDateString(),
               days: String(days),
               grantId: grant.id,
@@ -14310,10 +17820,21 @@ export async function runTickJob(
         );
         counts.warnings += 1;
       }
+     });
     }
-  });
+  }
 
-  // Outside the transaction: reflection opens its own, and enqueues.
+  // Outside every transaction, deliberately: `Scheduler.enqueue` is
+  // `boss.send` on pg-boss's own pool and neither joins this transaction nor
+  // rolls back with it.
+  for (const targetSystemId of targetsToRun) {
+    await options.scheduler?.enqueue(
+      PROVISION_JOB,
+      provisionJobPayload(payload.tenantId, targetSystemId),
+    );
+  }
+
+  // Reflection opens its own transaction, and enqueues.
   await reflectProvisionOutcomes(payload.tenantId, {
     now,
     ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
@@ -14375,6 +17896,14 @@ export async function applyAutomateSchedules(
     automateJobPayload(tenantId),
     automateScheduleKey(tenantId, 'tick'),
   );
+  // Daily, in the morning. Its own key: pg-boss keys the schedule table on
+  // (queue, key), and this slice now runs four schedules per tenant.
+  await scheduler.schedule(
+    AUTOMATE_DIGEST_JOB,
+    '0 7 * * *',
+    automateJobPayload(tenantId),
+    automateScheduleKey(tenantId, 'digest'),
+  );
   if (sweepSchedule === null) {
     await scheduler.unschedule(
       AUTOMATE_SWEEP_JOB,
@@ -14391,7 +17920,7 @@ export async function applyAutomateSchedules(
 }
 
 /**
- * Registers the three handlers.
+ * Registers the four handlers.
  *
  * `transport` is a parameter rather than constructed here for the reason
  * `buildApp` takes one: no test run may put mail on the wire, and a transport
@@ -14404,6 +17933,9 @@ export function registerAutomateJobs(
 ): void {
   scheduler.register<AutomateJobPayload>(AUTOMATE_OUTBOX_JOB, async (payload) => {
     await runOutboxJob(transport, payload, { publicUrl: options.publicUrl ?? '' });
+  });
+  scheduler.register<AutomateJobPayload>(AUTOMATE_DIGEST_JOB, async (payload) => {
+    await runDigestJob(transport, payload, { publicUrl: options.publicUrl ?? '' });
   });
   scheduler.register<AutomateJobPayload>(AUTOMATE_TICK_JOB, async (payload) => {
     await runTickJob(payload, { scheduler, publicUrl: options.publicUrl ?? '' });
@@ -14418,24 +17950,12 @@ export function registerAutomateJobs(
 
 In `apps/api/src/scheduler.ts`:
 
-1. Extend the import from `@syntra/core`:
+1. Extend the existing import from `@syntra/core` with exactly three names — `applyAutomateSchedules`, `automateSettings`, `registerAutomateJobs`. Do **not** rewrite the import block wholesale: Provision's Task 16 has already added `registerProvisionJobs`, `smtpTransport` and `type Transport` to it, and replacing it with the list below would drop whatever else has landed since.
 
 ```ts
-import {
   applyAutomateSchedules,
-  applySourceSchedule,
   automateSettings,
-  createScheduler,
-  localMasterKeyProvider,
   registerAutomateJobs,
-  registerKeyRotationJob,
-  registerProvisionJobs,
-  registerSyncJobs,
-  scheduleKeyRotation,
-  type Config,
-  type Scheduler,
-  type Transport,
-} from '@syntra/core';
 ```
 
 2. `scheduleBackgroundWork` gains one more per-tenant block, after the key-rotation loop and before the source loop:
@@ -14456,26 +17976,22 @@ import {
 
    Same failure policy as everything else here: logged, not raised. An API that comes up with the sweep unscheduled is strictly better than one that does not come up.
 
-3. `startSyncScheduler` takes the transport it must hand to the jobs, and registers them:
+3. **`startSyncScheduler` already has a transport. Reuse it; do not change the signature.**
+
+   Provision's Task 16 gives this same function one, the way `buildApp` does — `const transport = options.transport ?? smtpTransport(config.smtpUrl);`, with an optional `transport` on its options object so a test can hand in the memory transport. Automate is gated on Provision landing, so by the time this task runs that local exists and the options parameter is already there. An earlier draft of this step added a **third positional parameter** and edited `server.ts` to pass it; against the file Provision leaves behind that produces either a duplicated parameter or a broken call site.
+
+   So the whole edit is one line, inside the `try`, beside the existing registration:
 
 ```ts
-export async function startSyncScheduler(
-  config: Config,
-  logger: FastifyBaseLogger,
-  transport: Transport,
-  create: (databaseUrl: string) => Scheduler = createScheduler,
-): Promise<Scheduler | null> {
-```
-
-   and inside the `try`, after `registerKeyRotationJob(scheduler, provider);`:
-
-```ts
+    registerProvisionJobs(scheduler, provider, transport);
     registerAutomateJobs(scheduler, transport, { publicUrl: config.publicUrl });
 ```
 
+   **Read `apps/api/src/scheduler.ts` before editing it** and confirm the `transport` local is there. If Provision's Task 16 has not landed, this task is not ready to run — it is on the gating list at the head of this plan.
+
    **The transport is not optional.** Ruling P16 made exactly this point about Provision's initial passwords: without it, an unattended path produces something and delivers it to nobody. Here the whole notification system is that path — an outbox job registered with no transport sends nothing at all, and the failure is silent.
 
-4. `apps/api/src/server.ts` calls `startSyncScheduler`; add the transport argument at that call site, constructed the same way `buildApp` constructs its default: `smtpTransport(config.smtpUrl)`. Where `server.ts` already builds one for `buildApp`, pass the same instance rather than a second.
+4. **No `apps/api/src/server.ts` edit.** The signature does not change, so the call site does not either. If a diff to `server.ts` appears in this task, something has gone wrong with step 3.
 
 - [ ] **Step 5: Export the module**
 
@@ -14493,7 +18009,16 @@ Expected: PASS.
 - [ ] **Step 7: Run the API scheduler suite**
 
 Run: `pnpm vitest run apps/api/src/scheduler.test.ts`
-Expected: PASS. The signature of `startSyncScheduler` changed, so the existing tests need the transport argument; add `memoryTransport()` at each call site there.
+Expected: PASS, **unchanged**. `startSyncScheduler`'s signature is not touched, so no call site in that file needs editing — whatever Provision's Task 16 left there is already correct. Add one assertion that the outbox handler is registered:
+
+```ts
+    expect(scheduler.register).toHaveBeenCalledWith(
+      AUTOMATE_OUTBOX_JOB,
+      expect.any(Function),
+    );
+```
+
+If the existing calls in that file do need editing, stop: it means step 3 changed the signature after all.
 
 - [ ] **Step 8: Typecheck**
 
@@ -14506,7 +18031,7 @@ Expected: no errors.
 git add packages/core/src/automate/jobs.ts \
         packages/core/src/automate/jobs.test.ts \
         packages/core/src/index.ts \
-        apps/api/src/scheduler.ts apps/api/src/scheduler.test.ts apps/api/src/server.ts
+        apps/api/src/scheduler.ts apps/api/src/scheduler.test.ts
 git commit -m "feat(automate): the outbox, reminder, escalation and sweep jobs"
 ```
 
@@ -14535,8 +18060,10 @@ Spec §17. Two plugins, both registered in `apps/api/src/app.ts`.
 - Test: `apps/api/src/routes/automate-portal.test.ts`, `apps/api/src/routes/admin/automate.test.ts`
 
 **Interfaces:**
-- Consumes: from `@syntra/core` — `PERMISSIONS`, `createProduct`, `updateProduct`, `listAllProducts`, `visibleProducts`, `findVisibleProduct`, `searchVisibleProducts`, `previewAudience`, `automateSettings`, `updateAutomateSettings`, `upsertResourceOwner`, `upsertWorkflow`, `previewWorkflowResolution`, `submitRequest`, `recordDecision`, `cancelRequest`, `handBackGrant`, `revokeGrant`, `previewExpirySweep`, `applyExpirySweep`, `resourcesManagedBy`, `delegatedGrant`, `delegatedRevoke`, `createApprovalDelegation`, `endApprovalDelegation`, `upsertResourceDelegation`, `ProductConfigurationError`, `WorkflowConfigurationError`, `DecisionRefusedError`, `DelegationRefusedError`; from `apps/api` — `requireSession`, `requirePermission`, `ProblemError`, `buildTestApp`; from `@syntra/contracts` — `idParam`.
-- Produces: the zod schemas in `packages/contracts/src/automate.ts` (`submitRequestBody`, `decideRequestBody`, `productBody`, `workflowBody`, `audiencePreviewBody`, `resolutionPreviewBody`, `sweepApplyBody`, `delegatedGrantBody`, `approvalDelegationBody`, `resourceDelegationBody`, `settingsBody`, `resourceParam`), and the two route plugins `registerAutomatePortalRoutes` and `registerAdminAutomateRoutes`.
+- Consumes: from `@syntra/core` — `PERMISSIONS`, `createProduct`, `updateProduct`, `listAllProducts`, `visibleProducts`, `findVisibleProduct`, `searchVisibleProducts`, `previewAudience`, `automateSettings`, `updateAutomateSettings`, `upsertResourceOwner`, `upsertWorkflow`, `previewWorkflowResolution`, `submitRequest`, `recordDecision`, `cancelRequest`, `handBackGrant`, `revokeGrant`, `previewExpirySweep`, `applyExpirySweep`, `resourcesManagedBy`, `delegatedGrant`, `delegatedRevoke`, `createApprovalDelegation`, `endApprovalDelegation`, `upsertResourceDelegation`, `ProductConfigurationError`, `WorkflowConfigurationError`, `DecisionRefusedError`, `DelegationRefusedError`, `type Scheduler`; from `apps/api` — `requireSession`, `requirePermission`, `ProblemError`, `buildTestApp`; from `@syntra/contracts` — `idParam`.
+- **Both plugins take an optional `scheduler?: () => Scheduler | null`**, the shape `registerAdminSourceRoutes` already uses, and `app.ts` passes `options.scheduler` to both. Spec §5: an approval that produces target grants enqueues a run of the affected target system; `scheduler: null` on the path a real user takes turns that off and leaves the request waiting up to five minutes for the tick job's reflection pass.
+- Produces: the zod schemas in `packages/contracts/src/automate.ts` (`submitRequestBody`, `decideRequestBody`, `productBody`, `workflowBody`, `audiencePreviewBody`, `resolutionPreviewBody`, `sweepApplyBody`, `delegatedGrantBody`, `approvalDelegationBody`, `resourceDelegationBody`, `settingsBody`, `resourceType`, **`delegableResourceType`**, `resourceParam`), and the two route plugins `registerAutomatePortalRoutes` and `registerAdminAutomateRoutes`.
+- The portal plugin gains `POST /automate/delegations` and `POST /automate/delegations/:id/end` — spec §17 lists "record an absence" as an end-user surface, and with only the GET a manager going on leave has to ask an administrator. `delegatorPersonId` is forced to `personFor(request)` and never read from the body.
 
 - [ ] **Step 1: Write the contracts**
 
@@ -14546,6 +18073,20 @@ Spec §17. Two plugins, both registered in `apps/api/src/app.ts`.
 import { z } from 'zod';
 
 export const resourceType = z.enum(['entitlement', 'application', 'group']);
+
+/**
+ * The resource types a DELEGATION may name.
+ *
+ * `entitlement` is deliberately absent. `delegatedGrant` writes a
+ * `RequestItem` with `targetSystemId: null`, `fulfilRequest` copies that onto
+ * the `AccessGrant`, and `access_grant_target_matches_type` rejects
+ * `('entitlement', null)` — a 500 out of the portal on a capability the
+ * console would otherwise let an administrator configure. A target
+ * entitlement is granted through a catalog product and a Provision run, which
+ * is where its approval and its target write belong. Spec section 14 is
+ * written entirely about groups a team lead owns.
+ */
+export const delegableResourceType = z.enum(['application', 'group']);
 export const productKind = z.enum(['targetEntitlement', 'application', 'localGroup']);
 export const durationMode = z.enum(['permanent', 'fixed', 'requesterChoice']);
 export const approverSelector = z.enum([
@@ -14671,7 +18212,11 @@ export type DecideRequestBody = z.input<typeof decideRequestBody>;
 
 export const audiencePreviewBody = z.object({
   audienceCondition: opaqueJson.nullable(),
-  limit: z.number().int().min(1).max(200).default(25),
+  // Optional and UNBOUNDED by default. The console's copy is "412 of 1,180 —
+  // show me who", and a default of 25 answers a different question from the
+  // one it asks while `matched` goes on reporting 412. The cap is a page
+  // size for a caller that wants one, not a silent truncation of the answer.
+  limit: z.number().int().min(1).max(5000).optional(),
 });
 
 export const resolutionPreviewBody = z.object({
@@ -14701,7 +18246,7 @@ export const approvalDelegationBody = z.object({
 });
 
 export const resourceDelegationBody = z.object({
-  resourceType,
+  resourceType: delegableResourceType,
   resourceId: z.string().uuid(),
   delegatePersonId: z.string().uuid().nullable().default(null),
   delegateGroupId: z.string().uuid().nullable().default(null),
@@ -14726,13 +18271,19 @@ export const settingsBody = z.object({
   fulfilmentSlaHours: z.number().int().positive().max(8760).optional(),
   expiryWarningDays: z.array(z.number().int().positive().max(365)).max(6).optional(),
   preHireHorizonDays: z.number().int().min(0).max(365).optional(),
-  maxDelegationDays: z.number().int().positive().max(3650).optional(),
+  // 365, matching `SETTING_BOUNDS` in `catalog-service.ts`, NOT 3650. An
+  // earlier draft accepted ten years here and the service refused anything
+  // over one -- a route that accepts 400 and a service that rejects it.
+  // Global Constraint 14: an indefinite delegation is a permanent transfer of
+  // authority that nobody ever re-decides.
+  maxDelegationDays: z.number().int().positive().max(365).optional(),
   maxApprovers: z.number().int().positive().max(100).optional(),
   delegatedBulkLimit: z.number().int().positive().max(1000).optional(),
 });
 
+/** The path parameter on every delegated portal act. Delegable types only. */
 export const resourceParam = z.object({
-  type: resourceType,
+  type: delegableResourceType,
   id: z.string().uuid(),
 });
 
@@ -14851,6 +18402,10 @@ beforeEach(async () => {
       name: 'Statistics licence',
       slug: 'statistics-licence',
       kind: 'application',
+      // Set, and set to the value the category-browse row of the visibility
+      // table asks for. Without it that row filters the product out and the
+      // "shows the product on every path" case fails against correct code.
+      category: 'Finance',
       grants: [{ resourceType: 'application', resourceId: seeded.applicationId }],
       audienceCondition: { field: 'contract.department', op: 'equals', value: 'Finance' },
       workflowId: workflow.id,
@@ -14920,6 +18475,19 @@ describe('visibility, on every read path', () => {
         expect(response.statusCode, path.name).toBe(404);
       }
     }
+  });
+
+  it('applies the category filter, so the browse row is not the list row again', async () => {
+    // Without this the category-browse row of the table above asserts exactly
+    // what the plain list row asserts, and a route that dropped the filter
+    // would pass both.
+    const wrong = await call(
+      'GET',
+      '/api/portal/automate/catalog?category=Facilities',
+      annaCookie,
+    );
+    expect(wrong.statusCode).toBe(200);
+    expect(JSON.stringify(wrong.json())).not.toContain('Statistics licence');
   });
 
   it('shows the SUBJECT catalog to an on-behalf submitter, not the submitter own', async () => {
@@ -15050,6 +18618,7 @@ describe('my access', () => {
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { idParam } from '@syntra/contracts';
 import {
+  approvalDelegationBody,
   catalogSearchQuery,
   decideRequestBody,
   delegatedGrantBody,
@@ -15061,8 +18630,10 @@ import {
   DelegationRefusedError,
   PERMISSIONS,
   cancelRequest,
+  createApprovalDelegation,
   delegatedGrant,
   delegatedRevoke,
+  endApprovalDelegation,
   findVisibleProduct,
   handBackGrant,
   hasPermission,
@@ -15071,18 +18642,37 @@ import {
   searchVisibleProducts,
   submitRequest,
   visibleProducts,
+  type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession } from '../plugins/require-session.js';
 
 export interface AutomatePortalRouteOptions {
   publicUrl: string;
+  /**
+   * How a decision or a hand-back reaches the job scheduler.
+   *
+   * A function, not a `Scheduler`, because the scheduler is started after the
+   * app is built — the same shape `registerAdminSourceRoutes` already uses,
+   * and `buildApp` already carries it on its own options.
+   *
+   * Spec section 5's latency mitigation is that "an approval that produces
+   * target grants **enqueues a run of the affected target system**". Passing
+   * `scheduler: null` on the only path a real user takes turns that off: the
+   * request waits for the tick job's reflection pass to notice
+   * `actionId === null` and re-enqueue, up to five minutes later. Defensible
+   * as a fallback; not defensible as the primary path.
+   */
+  scheduler?: () => Scheduler | null;
 }
 
 export async function registerAutomatePortalRoutes(
   app: FastifyInstance,
   options: AutomatePortalRouteOptions,
 ): Promise<void> {
+  /** Resolved per request: the scheduler exists only after the app is built. */
+  const scheduler = (): Scheduler | null => options.scheduler?.() ?? null;
+
   // A portal session is enough for everything here. Delegated administration
   // is a PORTAL surface by design: no /api/admin, no administrative scope, no
   // step-up MFA. That is the entire point of the feature.
@@ -15148,6 +18738,14 @@ export async function registerAutomatePortalRoutes(
       query.category === undefined
         ? products
         : products.filter((p) => p.category === query.category);
+    // Whether the product's workflow has any stages at all. Task 17's
+    // CatalogPage renders `needsApproval` and nothing produced it: the
+    // catalog is supposed to say "granted immediately" BEFORE somebody asks,
+    // which is what spec section 8 requires of a zero-stage workflow.
+    const stageCounts = await request.db((tx) =>
+      tx.approvalStage.groupBy({ by: ['workflowId'], _count: { _all: true } }),
+    );
+    const hasStages = new Set(stageCounts.map((c) => c.workflowId));
     return {
       products: filtered.map((p) => ({
         id: p.id,
@@ -15159,6 +18757,7 @@ export async function registerAutomatePortalRoutes(
         kind: p.kind,
         durationMode: p.durationMode,
         maxDurationDays: p.maxDurationDays,
+        needsApproval: hasStages.has(p.workflowId),
       })),
     };
   });
@@ -15228,7 +18827,7 @@ export async function registerAutomatePortalRoutes(
         requestedDurationDays: body.requestedDurationDays,
         replacesGrantId: body.replacesGrantId,
       },
-      { scheduler: null, publicUrl: options.publicUrl },
+      { scheduler: scheduler(), publicUrl: options.publicUrl },
     );
     if (!outcome.ok) {
       // 422, not 400: the request was well-formed and was refused on its
@@ -15332,7 +18931,7 @@ export async function registerAutomatePortalRoutes(
           shortenedToDays: body.shortenedToDays,
           sourceIp: request.ip,
         },
-        { scheduler: null, publicUrl: options.publicUrl },
+        { scheduler: scheduler(), publicUrl: options.publicUrl },
       );
       return reply.status(200).send(result);
     } catch (cause) {
@@ -15365,7 +18964,7 @@ export async function registerAutomatePortalRoutes(
     );
     if (grant === null) throw new ProblemError(404, 'not-found', 'Not found');
     await handBackGrant(request.tenantId, request.session.userId, id, {
-      scheduler: null,
+      scheduler: scheduler(),
       publicUrl: options.publicUrl,
     });
     return reply.status(204).send();
@@ -15413,7 +19012,7 @@ export async function registerAutomatePortalRoutes(
           justification: body.justification,
           durationDays: body.durationDays,
         },
-        { scheduler: null, publicUrl: options.publicUrl },
+        { scheduler: scheduler(), publicUrl: options.publicUrl },
       );
       return reply.status(201).send(result);
     } catch (cause) {
@@ -15439,7 +19038,7 @@ export async function registerAutomatePortalRoutes(
           resourceId: id,
           subjectPersonIds: body.subjectPersonIds,
         },
-        { scheduler: null, publicUrl: options.publicUrl },
+        { scheduler: scheduler(), publicUrl: options.publicUrl },
       );
       return reply.status(200).send(result);
     } catch (cause) {
@@ -15463,6 +19062,63 @@ export async function registerAutomatePortalRoutes(
       }),
     );
     return { delegations };
+  });
+
+  /**
+   * Record an absence.
+   *
+   * Spec section 17 lists "My delegations — record an absence, see
+   * delegations made to me" as an END-USER surface. With only the GET, a
+   * manager going on leave has to ask an administrator, which is the opposite
+   * of what the feature is for.
+   *
+   * `delegatorPersonId` is FORCED to the signed-in person and never read from
+   * the body: this is a portal session with no administrative scope, and a
+   * body-supplied delegator would let anybody route somebody else's approvals
+   * to a person of their choosing. `createApprovalDelegation` enforces the
+   * same rule again in the service (spec section 8), so neither layer is the
+   * only one.
+   */
+  app.post('/automate/delegations', async (request, reply) => {
+    const personId = await personFor(request);
+    const body = approvalDelegationBody.parse(request.body);
+    try {
+      const created = await createApprovalDelegation(
+        request.tenantId,
+        request.session.userId,
+        {
+          delegatorPersonId: personId,
+          delegatePersonId: body.delegatePersonId,
+          category: body.category,
+          startsAt: body.startsAt,
+          endsAt: body.endsAt,
+        },
+        { publicUrl: options.publicUrl },
+      );
+      reply.code(201);
+      return created;
+    } catch (cause) {
+      if (cause instanceof DelegationRefusedError) {
+        throw new ProblemError(422, cause.code, 'Cannot be recorded', cause.message);
+      }
+      throw cause;
+    }
+  });
+
+  app.post('/automate/delegations/:id/end', async (request) => {
+    const { id } = idParam.parse(request.params);
+    const personId = await personFor(request);
+    const delegation = await request.db((tx) =>
+      tx.approvalDelegation.findUnique({ where: { id } }),
+    );
+    // 404, not 403: a delegation that is not yours is not yours to know about.
+    if (delegation === null || delegation.delegatorPersonId !== personId) {
+      throw new ProblemError(404, 'not-found', 'Not found', 'No such delegation.');
+    }
+    await endApprovalDelegation(request.tenantId, request.session.userId, id, {
+      publicUrl: options.publicUrl,
+    });
+    return { ended: true };
   });
 }
 ```
@@ -15838,6 +19494,7 @@ import {
   upsertResourceDelegation,
   upsertResourceOwner,
   upsertWorkflow,
+  type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -15845,6 +19502,14 @@ import { requirePermission } from '../../plugins/require-permission.js';
 
 export interface AdminAutomateRouteOptions {
   publicUrl: string;
+  /**
+   * How an administrative decision, a revocation and a sweep apply reach the
+   * scheduler. A function, not a `Scheduler`, because the scheduler starts
+   * after the app is built — the same shape `registerAdminSourceRoutes` uses.
+   * Spec section 5: an approval that produces target grants enqueues a run of
+   * the affected target system.
+   */
+  scheduler?: () => Scheduler | null;
 }
 
 /**
@@ -15870,6 +19535,9 @@ export async function registerAdminAutomateRoutes(
   options: AdminAutomateRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
+
+  /** Resolved per request: the scheduler exists only after the app is built. */
+  const scheduler = (): Scheduler | null => options.scheduler?.() ?? null;
 
   app.get(
     '/automate/products',
@@ -16059,7 +19727,7 @@ export async function registerAdminAutomateRoutes(
             shortenedToDays: null,
             sourceIp: request.ip,
           },
-          { asAdministrator: true, scheduler: null, publicUrl: options.publicUrl },
+          { asAdministrator: true, scheduler: scheduler(), publicUrl: options.publicUrl },
         );
         return reply.status(200).send(result);
       } catch (cause) {
@@ -16117,7 +19785,7 @@ export async function registerAdminAutomateRoutes(
         confirm: body.confirm,
         confirmedByUserId: request.session.userId,
         ...(body.only === undefined ? {} : { only: body.only }),
-        scheduler: null,
+        scheduler: scheduler(),
         publicUrl: options.publicUrl,
       });
     },
@@ -16209,7 +19877,7 @@ export async function registerAdminAutomateRoutes(
         request.session.userId,
         id,
         body.reason ?? 'withdrawn by an administrator',
-        { scheduler: null, publicUrl: options.publicUrl },
+        { scheduler: scheduler(), publicUrl: options.publicUrl },
       );
       return reply.status(204).send();
     },
@@ -16232,6 +19900,7 @@ After `registerAdminUpstreamRoutes`:
   await app.register(registerAdminAutomateRoutes, {
     prefix: '/api/admin',
     publicUrl: config.publicUrl,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
 ```
 
@@ -16241,6 +19910,10 @@ After `registerPortalRoutes`:
   await app.register(registerAutomatePortalRoutes, {
     prefix: '/api/portal',
     publicUrl: config.publicUrl,
+    // Spec section 5: an approval that produces target grants enqueues a run
+    // of the affected target system. Without this the portal's own decisions
+    // wait for the tick job, up to five minutes.
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
 ```
 
@@ -18847,7 +22520,7 @@ Run with fresh eyes against `docs/superpowers/specs/2026-08-16-syntra-automate-d
 |---|---|
 | §1 Purpose, success criteria 1–14 | 1–18; criterion 8 is Task 8, criterion 13 is Tasks 11, 12, 13 and 15 |
 | §2 Position, the two slices, the hard dependency | The header's "hard dependency" table; Task 8's gate |
-| §3 Platform constraints | Global Constraints 1–20 |
+| §3 Platform constraints | Global Constraints 1–22 |
 | §4 Decisions | Global Constraints, and the rationale comments in each task |
 | §5 What Automate writes, latency, `awaiting_fulfilment`, the `application`/`User` rule, the synced-group refusal | 8 (desired state, remit, origin), 9 (three paths, the `User` rule), 12 (`awaiting_fulfilment`, SLA, supersession), 6 (synced-group refusal) |
 | §6 The catalog, audience, `visibleProducts`, 404 not 403, the form | 2 (audience), 3 (form), 6 (catalog, visibility), 16 (404 on every read path, on-behalf picker) |
@@ -18869,159 +22542,23 @@ Run with fresh eyes against `docs/superpowers/specs/2026-08-16-syntra-automate-d
 
 **Gaps found and closed while reviewing:**
 
-- **The `NotificationPreference` daily digest has a writer and a holder but no sender.** Task 5 writes `digest: true`, Task 15's outbox job skips those rows, and nothing ever sends them — a message marked for a digest would sit forever, which is the silent-drop failure this platform keeps rediscovering. **Fix, applied to Task 15 Step 3:** `runOutboxJob` gains a `digest` mode. Add to the module, after `runOutboxJob`:
+- **The `NotificationPreference` daily digest had a writer and a holder but no sender.** Task 5 wrote `digest: true`, Task 15's outbox job skipped those rows, and nothing sent them — every notification for a person who chose a daily summary was written and never delivered, including every stage-opened notification, so approvals sat in a queue nobody had been told about. **Closed in the tasks themselves:** Task 5 adds the `automate-digest` template; Task 15 adds `AUTOMATE_DIGEST_JOB`, a fourth `AutomatePurpose`, `runDigestJob`, a `0 7 * * *` schedule with its own key, a fourth `scheduler.register`, and the cases asserting four distinct keys and one summary per recipient.
 
-  ```ts
-  /**
-   * The daily pass over the digest rows. One message per recipient, listing
-   * what was held back, rather than one message per row -- which would be the
-   * immediate mode with a delay attached.
-   */
-  export async function runDigestJob(
-    transport: Transport,
-    payload: AutomateJobPayload,
-    options: JobOptions = {},
-  ): Promise<{ sent: number }> {
-    const now = options.now ?? new Date();
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: payload.tenantId },
-      select: { name: true },
-    });
-    if (tenant === null) return { sent: 0 };
+- **`AccessGrant.approvedByPersonId` was read by four notification paths and written by nobody.** **Closed in Task 9 Step 3:** `fulfilRequest` reads the last `approve` decision on the request and carries it onto every grant it creates, with a case asserting it is null for an auto-granted product because nobody approved that one.
 
-    const rows = await withTenant(payload.tenantId, (tx) =>
-      tx.notificationOutbox.findMany({
-        where: { sentAt: null, digest: true, attempts: { lt: OUTBOX_MAX_ATTEMPTS } },
-        orderBy: { createdAt: 'asc' },
-      }),
-    );
-    const byRecipient = new Map<string, typeof rows>();
-    for (const row of rows) {
-      const list = byRecipient.get(row.to) ?? [];
-      list.push(row);
-      byRecipient.set(row.to, list);
-    }
+- **`AccessRequest.replacesGrantId` was written at submission and never acted on**, and `AccessGrant.supersededByGrantId` was read by the sweep classifier and never written — so the Extend action the expiry-warning template renders was refused `already_held` at submission and, for a bundle, reported `fulfilled` while the access silently went away. **Closed in Tasks 9 and 10:** `submitRequest` subtracts the replaced grant from the `already_held` test and refuses an extension naming a grant that is no longer live; `fulfilRequest` subtracts it from the skip check and, in the same transaction as the new grant, marks the old one `revoked` with `supersededByGrantId` and `endedAt`, so there is no instant in which the person holds neither and the sweep proposes no removal.
 
-    let sent = 0;
-    const delivered: string[] = [];
-    for (const [to, group] of byRecipient) {
-      const message = renderMessage(tenant.name, 'automate-digest', to, {
-        displayName: (group[0]?.vars as Record<string, string>)?.displayName ?? 'there',
-        count: String(group.length),
-        lines: group
-          .map((row) => `- ${(row.vars as Record<string, string>)?.productName ?? row.template}`)
-          .join('\n'),
-      });
-      try {
-        await sendMessage(transport, message);
-        delivered.push(...group.map((row) => row.id));
-        sent += 1;
-      } catch {
-        // Left unsent and unmarked; the next daily pass picks it up, and the
-        // attempts column is what makes a dead recipient visible.
-      }
-    }
-    if (delivered.length > 0) {
-      await withTenant(payload.tenantId, (tx) =>
-        tx.notificationOutbox.updateMany({
-          where: { id: { in: delivered } },
-          data: { sentAt: now },
-        }),
-      );
-    }
-    return { sent };
-  }
-  ```
+- **The `needsApproval` field the catalog page renders was never produced by the API.** **Closed in Task 16:** the `/automate/catalog` handler reads the per-workflow stage counts and returns `needsApproval` on each product, so the catalog says "granted immediately" before somebody asks — what spec §8 requires of a zero-stage workflow.
 
-  with one more template in Task 5 Step 3:
-
-  ```ts
-  'automate-digest': {
-    subject: 'Your daily summary from {{tenantName}}',
-    text: 'Hello {{displayName}},\n\nThere are {{count}} things waiting for you:\n\n{{lines}}\n\nAnything urgent — a failure, a block, or a sweep needing confirmation — is sent to you immediately and is never in this summary.',
-    html: '<p>Hello {{displayName}},</p><p>There are {{count}} things waiting for you:</p><pre>{{lines}}</pre><p>Anything urgent — a failure, a block, or a sweep needing confirmation — is sent to you immediately and is never in this summary.</p>',
-  },
-  ```
-
-  a fourth queue in Task 15 Step 3 (`export const AUTOMATE_DIGEST_JOB = 'automate.digest'`, `AutomatePurpose` gains `'digest'`), a fourth `schedule` call in `applyAutomateSchedules` on `0 7 * * *` with `automateScheduleKey(tenantId, 'digest')`, a fourth `scheduler.register` in `registerAutomateJobs`, and a case in Task 15 Step 1's `applyAutomateSchedules` test asserting four distinct keys rather than three.
-
-- **`AccessGrant.approvedByPersonId` is read by four notification paths and written by nobody.** Tasks 13 and 15 address the expiry warning and the lapse notice to "the original approver" through it. **Fix, applied to Task 9 Step 3:** in `fulfilRequest`, before creating each grant, read the last approving decision and carry it:
-
-  ```ts
-    const lastApproval = await tx.approvalDecision.findFirst({
-      where: { step: { requestId: request.id }, decision: 'approve' },
-      orderBy: { decidedAt: 'desc' },
-      select: { personId: true },
-    });
-  ```
-
-  and add `approvedByPersonId: lastApproval?.personId ?? null` to the `tx.accessGrant.create` data. Null for an auto-granted product, which is correct: nobody approved it.
-
-- **`AccessRequest.replacesGrantId` is written at submission and never acted on.** Spec §12 requires that an extension approved before the original expires supersedes it, so no removal is produced. **Fix, applied to Task 9 Step 3:** after the grant loop in `fulfilRequest`, add:
-
-  ```ts
-    // An extension approved before the original expired supersedes it, so the
-    // sweep produces no removal and there is no outage. A naive implementation
-    // expires the old grant, revokes at the target, and re-grants an hour
-    // later -- two audit events that say the opposite of what happened.
-    if (request.replacesGrantId !== null && grantIds.length > 0) {
-      await tx.accessGrant.updateMany({
-        where: { id: request.replacesGrantId },
-        data: { supersededByGrantId: grantIds[0]!, status: 'revoked', endedAt: now },
-      });
-    }
-  ```
-
-  and one case to Task 9 Step 1's test:
-
-  ```ts
-  it('supersedes the grant an extension replaces, so no removal is produced', async () => {
-    const first = await seedRequest('localGroup');
-    await fulfilRequest(tenantId, first, { now: NOW });
-    const original = await withTenant(tenantId, (tx) => tx.accessGrant.findFirstOrThrow());
-
-    const extension = await seedRequest('localGroup');
-    await withTenant(tenantId, (tx) =>
-      tx.accessRequest.update({
-        where: { id: extension },
-        data: { replacesGrantId: original.id },
-      }),
-    );
-    await fulfilRequest(tenantId, extension, { now: NOW });
-
-    const after = await withTenant(tenantId, (tx) =>
-      tx.accessGrant.findUniqueOrThrow({ where: { id: original.id } }),
-    );
-    expect(after.supersededByGrantId).not.toBeNull();
-    expect(after.status).toBe('revoked');
-    // And the membership survived: the replacement was written before the
-    // original was retired, so nothing was removed in between.
-    const memberships = await withTenant(tenantId, (tx) =>
-      tx.groupMembership.findMany({ where: { groupId } }),
-    );
-    expect(memberships).toHaveLength(1);
-  });
-  ```
-
-- **The `needsApproval` field the catalog page renders was never produced by the API.** Task 16's `/automate/catalog` returns `durationMode` and `maxDurationDays` but not whether the product's workflow has stages, and Task 17's `CatalogPage` reads `needsApproval`. **Fix, applied to Task 16 Step 3:** in the `/automate/catalog` handler, read the stage counts and include the flag:
-
-  ```ts
-    const stageCounts = await request.db((tx) =>
-      tx.approvalStage.groupBy({
-        by: ['workflowId'],
-        _count: { _all: true },
-      }),
-    );
-    const hasStages = new Set(stageCounts.map((c) => c.workflowId));
-  ```
-
-  and `needsApproval: hasStages.has(p.workflowId)` on each mapped product. The catalog says "granted immediately" before somebody asks, which is what spec §8 requires of a zero-stage workflow.
+**Each of the four was described here in an earlier draft as "fix, applied to Task N" and was NOT in fact applied to Task N; the code lived only in this section.** The pre-flight review found all four again from the other end. They are now in the task steps, and this section records them rather than carrying them.
 
 - **§17's "Sweep exceptions … on the dashboard" and §5's fulfilment-SLA dashboard have no dashboard.** There is no administration dashboard in this repository — `AdminApp.tsx` navigates straight to `/admin/users`. Rather than invent one, the plan surfaces each of these where somebody looks: `blocked_no_approver` and `fulfilment_failed` lead the request queue (Task 18), exceptions lead the sweep detail (Task 18), and every one of them also notifies the holders of `automate.manage` (Tasks 10, 12, 13). **Recorded as a deliberate narrowing rather than a gap**; a dashboard is a reasonable follow-up and nothing here depends on it.
 
 ### 2. Placeholder scan
 
-Searched for "TBD", "TODO", "implement later", "add appropriate", "handle edge cases", "similar to Task", "write tests for the above". None present. Every code step carries the code; every test step carries the test. Three steps are deliberate **corrections** rather than placeholders — Task 11 Step 4 (`var` to `const`), Task 14 Step 4 (the invalid Prisma `where`), and Task 8 Step 10 (fixing the fixtures the widened types break) — and each says what it is fixing and why it was left visible.
+Searched for "TBD", "TODO", "implement later", "add appropriate", "handle edge cases", "similar to Task", "write tests for the above". None present. Every code step carries the code; every test step carries the test.
+
+Task 8 Step 10 remains a deliberate **correction** rather than a placeholder — it fixes the Provision fixtures the widened types break, which cannot be avoided by writing Step 3 differently. The other two corrections are gone: Task 11 Step 3 shipped a `var` pair that Step 4 rewrote, and Task 14 Step 3 shipped an `OR2: undefined` key that Prisma rejects and that Step 4 rewrote. Both meant an implementer working the steps in order wrote broken code and then rewrote it. The corrected forms are now in Step 3 where they belong, and Step 4 in each task is a `grep` that checks the file rather than a fix that repairs it.
 
 ### 3. Type consistency
 
@@ -19036,7 +22573,8 @@ Walked every Interfaces block in order and checked that each task imports only w
 - `workflow-service.ts` (7) → 10 (`loadWorkflowStages`), 16.
 - Provision's widened types (8) → nothing later in this plan imports them; 8 is a leaf as far as Automate is concerned, which is why it can be scheduled at any point after Provision lands.
 - `fulfil.ts` (9) → 10, 11, 14. `FulfilOptions` is the base of `SubmitOptions` and `DecisionOptions`.
-- `request-service.ts` (10) → 11 (`openStage`, `checkEligibility`, `subjectFor`), 15 (`subjectFor`), 16.
+- `eligibility.ts` (9) → 9 (`fulfilRequest`), 10 (`submitRequest`), 11 (the between-stage re-check). Its own module precisely because 9 and 10 would otherwise be a cycle.
+- `request-service.ts` (10) → 11 (`openStage`, `subjectFor`), 15 (`subjectFor`), 16.
 - `decision-service.ts` (11) → 16.
 - `reflect.ts` (12) → 15.
 - `sweep-guard.ts` / `sweep-service.ts` (13) → 15, 16.
@@ -19051,7 +22589,16 @@ Walked every Interfaces block in order and checked that each task imports only w
 
 **One naming collision found and fixed:** `addDays` exists in Provision's `plan.ts` and was about to be redefined in `duration.ts`. Both are re-exported from `packages/core/src/index.ts` with `export *`, which makes a second definition an ambiguous re-export and a build error. Task 3 imports Provision's rather than defining one, and its typecheck step names the exact error to watch for.
 
-**One ordering hazard, stated rather than resolved by renumbering:** Task 8 must not be dispatched until Provision's Tasks 5, 7, 8, 9, 12, 13, 14 and 17 have landed. Tasks 1–7 need only Provision Task 5. Tasks 9 onwards need Task 8 to have landed for `remitFor` and the grant term to mean anything at runtime, but they **compile** without it — the only hard compile-time dependency on Provision outside Task 8 is `PROVISION_JOB` and `provisionJobPayload` from Provision's Task 16, used by Tasks 9, 12, 13 and 15.
+**One ordering hazard, stated rather than resolved by renumbering:** Task 8 must not be dispatched until Provision's Tasks 5, 7, 8, 9, 12, 13, 14 and 17 have landed. Tasks 1–7 need only Provision Task 5. Tasks 9 onwards need Task 8 to have landed for the grant term to mean anything at runtime, but they **compile** without it.
+
+The compile-time dependencies on Provision outside Task 8, in full — an earlier draft named only the first and was wrong:
+
+- `PROVISION_JOB`, `provisionJobPayload` from Provision Task 16 — Tasks 9, 12, 13, 15.
+- `condition.ts` (`type Condition`, `type ConditionFacts`, `evaluateCondition`, `conditionSchema`) from Provision Task 5 — Tasks 2, 3, 6, 13.
+- `addDays` from `plan.ts`, Provision Task 9 — Tasks 3 and 13. Imported rather than redefined; a second definition is an ambiguous re-export through `packages/core/src/index.ts`'s `export *` and a build error.
+- `apps/api/src/scheduler.ts`'s `transport` local, Provision Task 16 — Task 15 Step 4 reuses it and does not change the signature.
+
+The gating table at the head of this plan is correct as written; this paragraph is the detail behind it.
 
 ---
 
