@@ -479,6 +479,15 @@ Two Active Directory specifics constrain this:
   proposed in that run. **Range retrieval must be implemented before a domain
   with large groups can be provisioned**, and until it is, the failure is loud.
 
+  **Amended 2026-08-16 under Ruling P1: it is implemented.**
+  `readRangedAttribute` in `packages/connectors/src/ldap/range.ts` (Task 3, which
+  lands before this connector) walks the windows until the server marks the last
+  one with an asterisk. The `readFailure` treatment described above is unchanged
+  and still the fallback — it now applies to a walk that *cannot be completed*
+  rather than to every group above the limit. A partial membership is never
+  returned; that is the whole reason the walk throws instead of handing back
+  what it collected.
+
 ### Deprovisioning treatment
 
 - `disable_account` sets bit 2 of `userAccountControl` and writes the reason into
@@ -1584,7 +1593,13 @@ connectors; SCIM as an outbound protocol; password synchronization to targets;
 mailbox, home-directory and file-share operations beyond the archive move the
 Active Directory target performs; delegated approval of individual provisioning
 actions; simulating a rule change against historical data; reading
-`userAccountControl` into Syntra's user status, which is a Directory Sync change;
-and Active Directory range retrieval, which is inherited as a known gap from
-Directory Sync and must be closed before a domain with groups above 1500 members
-can be provisioned.
+`userAccountControl` into Syntra's user status, which is a Directory Sync change.
+
+**Amended 2026-08-16 under Ruling P1.** Active Directory range retrieval was
+listed above as out of scope. It is not: Ruling P1 makes it a prerequisite of
+this slice rather than a parallel gap, because Provision *writes*, and a
+truncated group read makes 2,500 people look like they need grants or like
+nothing at all -- and either reading drives writes to a real directory. It is
+implemented in `packages/connectors/src/ldap/range.ts` by Task 3 of the
+implementation plan, placed before the Active Directory connector and before
+enforcement. The ruling post-dates this section and is the later decision.

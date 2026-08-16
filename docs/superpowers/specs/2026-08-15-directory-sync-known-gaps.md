@@ -122,13 +122,21 @@ accumulates a third. The async-generator shape is decorative. `searchPaginated` 
 real fix. Note the fix wave corrects the comment that claims otherwise, but not the
 behaviour.
 
-## Active Directory range retrieval (spec section 8, by implication)
+## ~~Active Directory range retrieval~~ (spec section 8, by implication) — fixed
 
-AD returns `member` on groups above 1500 entries as `member;range=0-1499`, and ldapts
-does not implement range retrieval. The fix wave makes this fail loudly instead of
-proposing to empty the group — which is the safe interim behaviour, not the correct
-one. **Large AD groups cannot be synced until this is implemented.** If Active
-Directory is a launch target, this is the second thing to fix.
+`readRangedAttribute` in `packages/connectors/src/ldap/range.ts` walks AD's
+`member;range=low-high` windows until the server marks the last one with an
+asterisk, and `read()` calls it for any group whose first response came back
+truncated. Large AD groups now sync.
+
+It never returns a partial result: a window that fails throws, and the record
+is marked `readFailure` exactly as before. That path did not go away, it
+stopped being the only path.
+
+Closed under Ruling P1 in the Provision — Targets slice rather than as a
+Directory Sync follow-up, because Provision *writes*: a truncated group read
+makes 2,500 people look like they need grants, or like nothing at all, and
+either reading drives writes to a real directory.
 
 ## The manual run endpoint is synchronous, and the console now waits on it
 

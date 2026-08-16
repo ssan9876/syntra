@@ -9,6 +9,7 @@ import type {
   WriteResult,
 } from '../types.js';
 import { normaliseAnchor } from './anchor.js';
+import { RANGE_STEP, readRangedAttribute } from './range.js';
 import { ldapConfigSchema, type LdapConfig } from './config.js';
 
 // `LdapConfig` (see config.ts) is the schema's *input* type: defaulted
@@ -119,13 +120,15 @@ function toArray(value: unknown): string[] {
  * exactly the groups that matter most.
  *
  * Read naively that is a group with no members, and the diff proposes
- * removing every one of the five thousand people in it. So the range marker
- * is detected and turned into a read failure: the group is excluded from the
- * diff and reported, rather than silently emptied.
+ * removing every one of the five thousand people in it.
  *
- * Implementing range retrieval properly is real feature work and is tracked
- * separately. Failing loudly is the correct interim behaviour; failing
- * silently is the bug.
+ * Under Ruling P1 this is now the *trigger* for a ranged read rather than the
+ * end of the story: `toRecord` uses it to decide that `member` cannot be
+ * trusted as it stands, and `resolveMembership` then walks the windows via
+ * `readRangedAttribute`. A walk that cannot finish still produces a read
+ * failure, with a message describing the walk. The returned string is kept
+ * for callers that want to explain the truncation itself; it is no longer
+ * what a truncated group's `readFailure` says.
  */
 export function rangedMembershipFailure(
   entry: Record<string, unknown>,
@@ -137,8 +140,8 @@ export function rangedMembershipFailure(
 
   return (
     `the directory returned this group's membership as the ranged attribute ` +
-    `"${ranged}" because it exceeds the server's value-range limit; range ` +
-    `retrieval is not implemented, so its membership could not be read in full`
+    `"${ranged}" because it exceeds the server's value-range limit; it has to ` +
+    `be walked window by window before its membership can be read in full`
   );
 }
 
@@ -167,16 +170,50 @@ function toRecord(
   };
 
   if (objectType === 'group') {
-    const truncated = rangedMembershipFailure(entry);
-    if (truncated) {
-      // Deliberately no memberDns: an empty list here would read as "this
-      // group has no members" and propose removing all of them.
-      record.readFailure = truncated;
-    } else {
-      record.memberDns = toArray(entry.member ?? entry.uniqueMember);
-    }
+    // Membership is resolved by resolveMembership() after the search, because
+    // a ranged read needs further round trips and this function is sync.
+    // Deliberately leaves memberDns unset rather than empty: an empty list
+    // reads as "this group has no members" and proposes removing all of them.
+    record.memberDns = toArray(entry.member ?? entry.uniqueMember);
+    if (rangedMembershipFailure(entry)) delete record.memberDns;
   }
   return record;
+}
+
+/**
+ * Completes a group record's membership, walking Active Directory's range
+ * windows when the first response came back truncated.
+ *
+ * Ruling P1: until this existed, a group above the server's value-range limit
+ * was marked a read failure and excluded from the diff, which is the correct
+ * interim behaviour for a subsystem that only reads. Provision writes, and a
+ * target whose largest groups always fail is a target it cannot manage.
+ *
+ * A walk that cannot finish still produces a read failure. That path did not
+ * go away; it stopped being the only path.
+ */
+async function resolveMembership(
+  client: Client,
+  entry: Record<string, unknown>,
+  record: SourceRecord,
+): Promise<void> {
+  if (record.objectType !== 'group') return;
+  if (record.memberDns) return;
+
+  const attribute = Object.keys(entry).some((k) => /^uniqueMember;range=/i.test(k))
+    ? 'uniqueMember'
+    : 'member';
+
+  try {
+    record.memberDns = await readRangedAttribute(client, record.dn, attribute, {
+      pageStep: RANGE_STEP,
+    });
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    record.readFailure =
+      `this group's membership exceeds the server's value-range limit and the ` +
+      `ranged read could not be completed: ${detail}`;
+  }
 }
 
 async function runSearch<T>(
@@ -308,11 +345,18 @@ export const ldapConnector: Connector<Config> = {
             attributes: ['*', config.anchorAttribute],
           },
           (searchEntries) =>
-            searchEntries.map((entry) =>
-              toRecord(entry, search.objectType, config.anchorAttribute),
-            ),
+            searchEntries.map((entry) => ({
+              entry,
+              record: toRecord(entry, search.objectType, config.anchorAttribute),
+            })),
         );
-        yield* records;
+
+        for (const { entry, record } of records) {
+          // Sequential, not Promise.all: a domain with 300 oversized groups
+          // would otherwise open 300 concurrent range walks on one connection.
+          await resolveMembership(client, entry, record);
+          yield record;
+        }
       }
     } finally {
       await client.unbind().catch(() => undefined);

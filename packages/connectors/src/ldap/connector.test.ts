@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'ldapts';
 import { ldapConnector, rangedMembershipFailure } from './connector.js';
+import { RANGE_STEP } from './range.js';
 import type { LdapConfig } from './config.js';
 
 const config: LdapConfig & { bindPassword: string } = {
@@ -297,6 +298,104 @@ describe('ldapConnector.write', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/not implemented/i);
+  });
+});
+
+/**
+ * Serves an Active Directory-shaped ranged membership for one group.
+ *
+ * OpenLDAP never returns a ranged attribute, so the truncation is injected at
+ * the wire boundary rather than seeded into the container: the subtree
+ * search's entry for `groupDn` comes back carrying `windows[0]`'s ranged key
+ * instead of a plain `member`, which is exactly what a domain controller
+ * sends for a group above `MaxValRange`. The base-scope follow-ups the walk
+ * then issues are answered from `windows` in order -- starting again at
+ * `windows[0]`, because the walk re-asks for the plain attribute first and a
+ * real server answers that with the first window too.
+ *
+ * A `windows` entry of `undefined` is a server that stopped answering partway
+ * through: an entry with neither a plain `member` nor a ranged one.
+ *
+ * Returns the attribute specs actually requested, so a test can say the walk
+ * happened rather than only that the answer looked right.
+ */
+function serveRangedMembership(
+  groupDn: string,
+  windows: (Record<string, string[]> | undefined)[],
+): { specs: string[] } {
+  const realSearch = Client.prototype.search;
+  const specs: string[] = [];
+  let served = 0;
+
+  vi.spyOn(Client.prototype, 'search').mockImplementation(async function (
+    this: Client,
+    ...args: Parameters<Client['search']>
+  ) {
+    const [base, options] = args;
+
+    if (options?.scope === 'base' && base === groupDn) {
+      specs.push(String(options.attributes?.[0] ?? ''));
+      const window = windows[served];
+      served += 1;
+      return {
+        searchEntries: [{ dn: groupDn, ...(window ?? {}) }],
+        searchReferences: [],
+      } as unknown as Awaited<ReturnType<Client['search']>>;
+    }
+
+    const result = await realSearch.apply(this, args);
+    for (const entry of result.searchEntries as unknown as Record<string, unknown>[]) {
+      if (entry.dn === groupDn) {
+        delete entry.member;
+        delete entry.uniqueMember;
+        Object.assign(entry, windows[0] ?? {});
+      }
+    }
+    return result;
+  });
+
+  return { specs };
+}
+
+describe('ldapConnector.read: Active Directory range retrieval', () => {
+  const nursesDn = 'cn=Nurses,dc=acme,dc=test';
+  const jdoe = 'uid=jdoe,ou=Care,dc=acme,dc=test';
+  const sroe = 'uid=sroe,ou=Care,dc=acme,dc=test';
+
+  it('walks the windows and yields the whole membership, not the first window', async () => {
+    // The truncated first window holds one member. The group has three. A
+    // reader that stops at the window it was handed reports one, and the diff
+    // then proposes revoking the group from the other two.
+    const { specs } = serveRangedMembership(nursesDn, [
+      { 'member;range=0-0': [jdoe] },
+      { 'member;range=1-*': [sroe, 'uid=third,ou=Care,dc=acme,dc=test'] },
+    ]);
+
+    const records = await readAll();
+    const nurses = records.find((r) => r.dn === nursesDn);
+
+    expect(nurses?.memberDns).toEqual([jdoe, sroe, 'uid=third,ou=Care,dc=acme,dc=test']);
+    expect(nurses?.readFailure).toBeUndefined();
+    // Two round trips, and the second asks for the window after the one the
+    // server returned. Without this the assertion above would also pass on a
+    // reader that never walked and got the whole list in one response.
+    expect(specs).toEqual(['member', `member;range=1-${RANGE_STEP}`]);
+  });
+
+  it('marks the group a read failure rather than yielding what it collected', async () => {
+    // The walk starts -- the first response is ranged -- and then the server
+    // stops answering. One member of three is in hand. Handing that back as
+    // the membership is the failure this whole task exists to prevent, so the
+    // record carries a readFailure and no memberDns at all: the difference
+    // between "we could not read this group" and "this group has one member".
+    serveRangedMembership(nursesDn, [{ 'member;range=0-0': [jdoe] }, undefined]);
+
+    const records = await readAll();
+    const nurses = records.find((r) => r.dn === nursesDn);
+
+    expect(nurses).toBeDefined();
+    expect(nurses?.memberDns).toBeUndefined();
+    expect(nurses?.readFailure).toMatch(/partway through a ranged read/);
   });
 });
 
