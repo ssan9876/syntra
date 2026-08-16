@@ -48,20 +48,47 @@ const webUrl = z
   .max(2048)
   .refine(isLaunchableUrl, { message: 'Must be an http or https URL' });
 
-export const createApplicationRequest = z.object({
+/**
+ * The fields, separate from the refinement below.
+ *
+ * `.refine()` produces a `ZodEffects`, which has no `.partial()`, and
+ * `updateApplicationRequest` needs one. Keeping the shape addressable is the
+ * whole reason this is a named object rather than an inline literal.
+ */
+const applicationFields = z.object({
   name: z.string().min(1).max(128),
   slug: applicationSlug,
   description: z.string().max(1024).optional(),
   iconUrl: webUrl.optional(),
-  // Access I launches bookmarks. Access II widens this enum; the column is
-  // already a free string, so that is a code change and not a migration.
-  type: z.literal('bookmark').default('bookmark'),
-  launchUrl: webUrl,
+  // Access I launched bookmarks only. Access II widens this: the column has
+  // always been a free string, so it is a code change and not a migration.
+  type: z.enum(['bookmark', 'saml', 'oidc']).default('bookmark'),
+  /**
+   * Where the browser is sent.
+   *
+   * Required for a bookmark, and required for an OIDC application too — an
+   * OpenID Connect relying party has no identity-provider-initiated flow in
+   * the standard, because only the relying party knows its own `state`,
+   * `nonce` and PKCE verifier, so launching one means sending the browser to
+   * the application's own start address and letting it begin the code flow.
+   *
+   * Meaningless for a SAML application, whose launch address is derived from
+   * the tenant's own protocol identity and never stored.
+   */
+  launchUrl: webUrl.optional(),
   visibility: z.enum(['assigned', 'hidden']).default('assigned'),
 });
+
+export const createApplicationRequest = applicationFields.refine(
+  (value) => value.type === 'saml' || value.launchUrl !== undefined,
+  {
+    message: 'This application needs a launch URL',
+    path: ['launchUrl'],
+  },
+);
 export type CreateApplicationRequest = z.input<typeof createApplicationRequest>;
 
-export const updateApplicationRequest = createApplicationRequest
+export const updateApplicationRequest = applicationFields
   .partial()
   .omit({ slug: true })
   .extend({ status: z.enum(['active', 'inactive']).optional() });

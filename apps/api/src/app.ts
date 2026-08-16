@@ -28,6 +28,8 @@ import { registerAdminSourceRoutes } from './routes/admin/sources.js';
 import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
 import { registerAdminApplicationRoutes } from './routes/admin/applications.js';
 import { registerAdminPolicyRoutes } from './routes/admin/policies.js';
+import { registerAdminProtocolRoutes } from './routes/admin/protocol-apps.js';
+import { registerAdminUpstreamRoutes } from './routes/admin/upstreams.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerSamlIdpRoutes } from './routes/saml-idp.js';
 import { registerOidcRoutes } from './routes/oidc-op.js';
@@ -167,6 +169,20 @@ export async function buildApp(
   await app.register(registerAdminPolicyRoutes, {
     prefix: '/api/admin',
     authRateLimitMax: config.authRateLimitMax,
+  });
+  // Protocol configuration for an application, and the upstream providers a
+  // tenant federates to. Both are ACCESS_MANAGE behind an administrative
+  // session, and both are registered after the application routes so
+  // `/applications/:id/saml` cannot shadow `/applications/:id`.
+  await app.register(registerAdminProtocolRoutes, {
+    prefix: '/api/admin',
+    outboundAllowPrivate: config.outboundAllowPrivate,
+    masterKey: config.masterKey,
+    publicUrl: config.publicUrl,
+  });
+  await app.register(registerAdminUpstreamRoutes, {
+    prefix: '/api/admin',
+    masterKey: config.masterKey,
   });
 
   await app.register(registerPortalRoutes, {

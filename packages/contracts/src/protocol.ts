@@ -13,6 +13,7 @@
  *   `https://sp.test/acs` are different strings that many SP libraries
  *   normalize to the same request, which is exactly the kind of gap an exact
  *   allowlist exists to close.
+ * - Nothing in the host that is not a host. See `isHostLiteral`.
  */
 export function isProtocolEndpoint(value: string): boolean {
   let url: URL;
@@ -24,7 +25,38 @@ export function isProtocolEndpoint(value: string): boolean {
   if (!['http:', 'https:'].includes(url.protocol)) return false;
   if (url.hash !== '' || value.includes('#')) return false;
   if (url.username !== '' || url.password !== '') return false;
+  if (!isHostLiteral(url.hostname)) return false;
   return true;
+}
+
+/**
+ * Whether a parsed hostname is a name or an address and nothing else.
+ *
+ * The WHATWG URL parser forbids a specific list of code points in the host —
+ * space, `#`, `/`, `:`, `?`, `@`, `[`, `\`, `]`, `^`, `|` and a few controls —
+ * and `*` is not among them. So `new URL('https://*.example.test/cb')` parses
+ * happily, and every check upstream of this one accepted it: an administrator
+ * could register `https://*.example.test/cb` as a redirect URI or an assertion
+ * consumer service URL and be told nothing.
+ *
+ * It would never have *matched* anything — comparison is byte equality with no
+ * wildcard expansion anywhere, which is spec section 7's requirement — so this
+ * was not an open redirect. It was worse in the slow way: an administrator who
+ * writes a pattern, is not refused, and then cannot make a real sign-in work
+ * goes looking for something else to loosen. Refusing the pattern at the form
+ * says the one true thing about this product, which is that there are no
+ * patterns.
+ *
+ * IPv6 literals keep their brackets in `url.hostname`, and are allowed: a
+ * native application's loopback redirect is a legitimate registration.
+ */
+function isHostLiteral(hostname: string): boolean {
+  if (hostname === '') return false;
+  if (hostname.startsWith('[')) return /^\[[0-9A-Fa-f:.]+\]$/.test(hostname);
+  // Letters, digits, hyphens and dots. `url.hostname` has already lower-cased
+  // and punycoded an internationalized name, so anything else left in it is
+  // something that is not a host name.
+  return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(hostname);
 }
 
 /**

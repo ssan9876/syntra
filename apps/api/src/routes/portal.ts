@@ -10,6 +10,7 @@ import {
 import { ProblemError } from '../plugins/problem-json.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { requireSession } from '../plugins/require-session.js';
+import { tenantProtocolIdentity } from './protocol-identity.js';
 import { tenantRelyingParty } from './relying-party.js';
 
 export interface PortalRouteOptions {
@@ -121,13 +122,7 @@ export async function registerPortalRoutes(
       }
 
       const application = await request.db((tx) => findApplication(tx, id));
-      // The admin API only accepts http(s) launch URLs (see
-      // `isLaunchableUrl` in @syntra/contracts), but that check runs on
-      // write. A row created before it existed — an old migration, a seed
-      // script, a restore — would otherwise reach this response, and this is
-      // the URL the browser is sent to unconditionally. Re-checked here
-      // rather than trusted because it was validated somewhere once.
-      if (!application?.launchUrl || !isLaunchableUrl(application.launchUrl)) {
+      if (!application) {
         throw new ProblemError(
           409,
           'not-launchable',
@@ -143,11 +138,76 @@ export async function registerPortalRoutes(
           targetId: id,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { slug: application.slug },
+          payload: { slug: application.slug, type: application.type },
         }),
       );
+
+      // A protocol application's launch address is derived from the tenant's
+      // own identity, never stored and never taken from the request. The
+      // browser is sent to a Syntra path, which re-enters authorize() — the
+      // decision made here does not carry over, and that is deliberate: the
+      // protocol endpoint is reachable directly and has to stand on its own.
+      if (application.type === 'saml' || application.type === 'oidc') {
+        const identity = tenantProtocolIdentity(tenant, options.publicUrl);
+        return {
+          status: 'launch' as const,
+          url:
+            application.type === 'saml'
+              ? `${identity.base}/saml/start/${application.id}`
+              : `${identity.base}/api/portal/oidc-start/${application.id}`,
+        };
+      }
+
+      // A bookmark. The admin API only accepts http(s) launch URLs (see
+      // `isLaunchableUrl` in @syntra/contracts), but that check runs on
+      // write. A row created before it existed — an old migration, a seed
+      // script, a restore — would otherwise reach this response, and this is
+      // the URL the browser is sent to unconditionally. Re-checked here
+      // rather than trusted because it was validated somewhere once.
+      if (!application.launchUrl || !isLaunchableUrl(application.launchUrl)) {
+        throw new ProblemError(
+          409,
+          'not-launchable',
+          'That application has no launch address configured',
+        );
+      }
 
       return { status: 'launch' as const, url: application.launchUrl };
     },
   );
+
+  /**
+   * Where an OIDC tile sends the browser.
+   *
+   * OpenID Connect has no identity-provider-initiated flow: only the relying
+   * party knows its own `state`, `nonce` and PKCE verifier, so Syntra cannot
+   * start one on its behalf. This redirects to the application's own start
+   * address — the `launchUrl` an administrator recorded, validated by
+   * `webUrl` on the way in — and the application then begins the code flow
+   * against `/oidc/auth`, which makes its own `authorize()` decision.
+   *
+   * A GET rather than part of the launch response because the browser has to
+   * be *navigated*: `window.open` on a cross-origin address is what the tile
+   * does, and the redirect keeps the address out of the portal's own
+   * response body where it would be one XSS away from being a fetch target.
+   */
+  app.get('/oidc-start/:id', async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const assigned = await request.db((tx) =>
+      isApplicationAssigned(tx, request.session.userId, id),
+    );
+    if (!assigned) throw new ProblemError(403, 'not-assigned', 'Not available to you');
+
+    const application = await request.db((tx) => findApplication(tx, id));
+    // Re-checked on the way out rather than trusted because it was validated
+    // on the way in.
+    if (!application?.launchUrl || !isLaunchableUrl(application.launchUrl)) {
+      throw new ProblemError(
+        409,
+        'not-launchable',
+        'That application has no start address configured',
+      );
+    }
+    return reply.redirect(application.launchUrl, 302);
+  });
 }

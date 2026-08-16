@@ -72,16 +72,37 @@ export async function upsertOidcClient(
     !existing || input.rotateSecret ? randomBytes(32).toString('base64url') : null;
 
   const { rotateSecret: _ignored, ...fields } = input;
-  const data = {
-    ...fields,
-    ...(clientSecret ? { clientSecretHash: hashClientSecret(clientSecret) } : {}),
-  };
 
-  const row = await tx.oidcClient.upsert({
-    where: { applicationId },
-    create: { tenantId, applicationId, ...data, clientSecretHash: hashClientSecret(clientSecret!) },
-    update: data,
-  });
+  // Two statements rather than one `upsert`, because an upsert evaluates both
+  // of its branches before it decides which to run. The `create` branch here
+  // ended `hashClientSecret(clientSecret!)`, and `clientSecret` is null on
+  // every update that did not ask for rotation — so `createHash().update(null)`
+  // threw a TypeError, and *every* change to an existing client answered 500.
+  // Nothing caught it because nothing had ever updated one: this service's
+  // only callers were test fixtures that create, and Task 17 is the first
+  // route that edits a registered client.
+  //
+  // The branch is also the honest shape. A secret is minted exactly when there
+  // is no row yet, so "create" and "update" are genuinely different writes,
+  // and the impossible state — a create with no secret — cannot be expressed.
+  const row = existing
+    ? await tx.oidcClient.update({
+        where: { applicationId },
+        data: {
+          ...fields,
+          ...(clientSecret === null
+            ? {}
+            : { clientSecretHash: hashClientSecret(clientSecret) }),
+        },
+      })
+    : await tx.oidcClient.create({
+        data: {
+          tenantId,
+          applicationId,
+          ...fields,
+          clientSecretHash: hashClientSecret(clientSecret!),
+        },
+      });
 
   return { record: toRecord(row as unknown as Record<string, unknown>), clientSecret };
 }

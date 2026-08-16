@@ -9,3 +9,4 @@ export * from './access.js';
 export * from './policy.js';
 export * from './tenant.js';
 export * from './protocol.js';
+export * from './protocol-admin.js';
