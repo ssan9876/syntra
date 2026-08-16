@@ -266,6 +266,28 @@ async function signedRequestRefusal(
     findApplication(tx, config.applicationId),
   );
   const name = application?.name ?? config.applicationId;
+
+  // Recorded, not merely answered. A service provider whose signing has broken
+  // and an attacker probing signatures look identical from the log otherwise,
+  // because a 400 and a server log line are neither queryable nor
+  // tamper-evident. `saml.acs_refused` already exists for the sibling case --
+  // a request naming an address that is not on the allowlist -- and this is
+  // the same class of event.
+  await request.db((tx) =>
+    recordEvent(tx, {
+      actorUserId: null,
+      action: 'saml.signature_refused',
+      targetType: 'Application',
+      targetId: config.applicationId,
+      outcome: 'failure',
+      sourceIp: request.ip,
+      payload: {
+        spEntityId: config.spEntityId,
+        message: refusal.message,
+        reason: refusal.kind,
+      },
+    }),
+  );
   const shared =
     `The application "${name}" requires signed ${refusal.message}s. That is the ` +
     `default for a newly registered service provider: an unsigned request is ` +

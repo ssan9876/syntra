@@ -320,7 +320,7 @@ describe('SAML single sign-on over HTTP-POST', () => {
     expect(bad.body).not.toContain('SAMLResponse');
   });
 
-  it('refuses an unsigned request when the application requires signed ones', async () => {
+  it('refuses an unsigned request when the application requires signed ones, and audits it', async () => {
     await withTenant(ctx.tenantId, (tx) =>
       upsertSamlConfig(tx, applicationId, samlConfig({
         spCertificates: [spPublicPem], wantAuthnRequestsSigned: true,
@@ -329,6 +329,37 @@ describe('SAML single sign-on over HTTP-POST', () => {
     const res = await postSso(authnRequest());
     expect(res.statusCode).toBe(400);
     expect(res.body).not.toContain('SAMLResponse');
+
+    // A service provider whose signing has broken and an attacker probing
+    // signatures both produced a 400 and a server log line and nothing in the
+    // tamper-evident log, where `saml.acs_refused` already records the sibling
+    // case. Read through withTenant: a bare `prisma` read is answered with
+    // nothing under forced row-level security whether the event exists or not.
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'saml.signature_refused' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.outcome).toBe('failure');
+    expect(events[0]!.payload).toMatchObject({
+      reason: 'bad-signature',
+      message: 'AuthnRequest',
+    });
+  });
+
+  it('audits a service provider that requires signed requests with no certificate', async () => {
+    await withTenant(ctx.tenantId, (tx) =>
+      upsertSamlConfig(tx, applicationId, samlConfig({
+        spCertificates: [], wantAuthnRequestsSigned: true,
+      })),
+    );
+    const res = await postSso(authnRequest());
+    expect(res.statusCode).toBe(409);
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'saml.signature_refused' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toMatchObject({ reason: 'no-certificate' });
   });
 
   it('spends a parked request once, so a replayed handle issues no second assertion', async () => {

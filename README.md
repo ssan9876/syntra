@@ -455,12 +455,14 @@ list. What this slice adds:
 | `application.launch` | Somebody entered an application through the portal, carrying whether it was a bookmark, a SAML application or an OIDC one |
 | `saml.assertion_issued` | An assertion was issued to a service provider, naming it, the ACS URL it went to and the factor behind the session |
 | `saml.acs_refused` | A request named an assertion consumer service URL that is not on the application's allowlist. **Somebody is probing, or a service provider changed its address without telling anyone** |
+| `saml.signature_refused` | An `AuthnRequest` or `LogoutRequest` failed signature verification, or arrived for an application that requires signatures and has no certificate registered. **A service provider whose signing has broken and somebody probing signatures look the same here; both are worth a look** |
 | `saml.logout` | A service provider ended a session through single logout |
 | `oidc.interaction_resolved` | `authorize()` allowed an OIDC authorization request |
 | `oidc.decision_missing` | **A token was requested for an authorization code with no `authorize()` decision behind it.** The second chokepoint control fired. This should never happen in normal operation — alert on it |
 | `oidc.client_credentials_authorized` | A machine token was authorized. The one path with no policy decision behind it — see above |
 | `oidc.logout` | An application ended a Syntra session through RP-initiated logout |
-| `federation.user_provisioned` | An upstream login created or refreshed a local account, carrying the groups the upstream asserted (which grant nothing — see below) |
+| `federation.user_provisioned` | An upstream login created a local account, carrying the groups the upstream asserted (which grant nothing — see below) |
+| `federation.user_linked` | An upstream login was matched to a local account that already existed, and refreshed it. **The first one for a given account is where a login was adopted by an upstream** |
 | `federation.provision_refused` | An upstream authenticated somebody Syntra has no account for, or sent too little to identify them |
 | `federation.assertion_refused` | An upstream assertion failed verification |
 | `federation.exchange_refused` | An upstream token exchange failed, including an `id_token` whose signature could not be verified against the provider's published keys |

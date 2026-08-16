@@ -672,6 +672,90 @@ describe('RP-initiated logout', () => {
     expect(after.statusCode).toBe(401);
   });
 
+  it('will not end a session on a bare cross-site GET', async () => {
+    // Logout CSRF. A plain GET revoked the session and cleared the cookie, and
+    // `logoutSource` auto-submits with no confirmation, so an image tag on any
+    // page signed the user out. Three things were wrong at once: no hint was
+    // required, the host was only checked at the END of the handler (after the
+    // revocation), and this was the one protocol route with no rate limit.
+    const bare = await ctx.app.inject({
+      method: 'GET',
+      url: '/oidc/session/end',
+      headers: { host: TEST_HOST, cookie: `syntra_session=${cookie}` },
+    });
+    expect(bare.statusCode).toBe(400);
+
+    // Still signed in.
+    const alive = await ctx.app.inject({
+      method: 'GET', url: '/api/portal/applications',
+      headers: { host: TEST_HOST, cookie: `syntra_session=${cookie}` },
+    });
+    expect(alive.statusCode).toBe(200);
+  });
+
+  it('will not end a session named by somebody else’s id_token', async () => {
+    // Requiring a hint is not enough: an attacker with an account in this
+    // tenant holds an id_token of their own, and a cross-site link carrying it
+    // would sign the victim out. The subject has to match the session.
+    const { url, verifier, state } = await authUrlWithPkce(await discover());
+    const { url: landed } = await walk(url);
+    const tokens = await client.authorizationCodeGrant(await discover(), landed, {
+      pkceCodeVerifier: verifier, expectedState: state,
+    });
+
+    // A second person, with a session of their own.
+    const otherId = await withTenant(ctx.tenantId, async (tx) => {
+      const other = await createUser(tx, {
+        login: 'rroe', email: 'r@acme.test', displayName: 'R Roe',
+      });
+      await setPasswordHash(tx, other.id, PASSWORD_HASH);
+      return other.id;
+    });
+    expect(otherId).not.toBe(userId);
+    const otherLogin = await ctx.app.inject({
+      method: 'POST', url: '/api/auth/login',
+      headers: { host: TEST_HOST },
+      payload: { login: 'rroe', password: PASSWORD },
+    });
+    const otherCookie = otherLogin.cookies.find((c) => c.name === 'syntra_session')!.value;
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: `/oidc/session/end?id_token_hint=${encodeURIComponent(tokens.id_token!)}`,
+      headers: { host: TEST_HOST, cookie: `syntra_session=${otherCookie}` },
+    });
+    expect(res.statusCode).toBe(400);
+
+    const alive = await ctx.app.inject({
+      method: 'GET', url: '/api/portal/applications',
+      headers: { host: TEST_HOST, cookie: `syntra_session=${otherCookie}` },
+    });
+    expect(alive.statusCode).toBe(200);
+  });
+
+  it('refuses a request that arrived on the wrong host before revoking anything', async () => {
+    const { url, verifier, state } = await authUrlWithPkce(await discover());
+    const { url: landed } = await walk(url);
+    const tokens = await client.authorizationCodeGrant(await discover(), landed, {
+      pkceCodeVerifier: verifier, expectedState: state,
+    });
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: `/oidc/session/end?id_token_hint=${encodeURIComponent(tokens.id_token!)}`,
+      headers: { host: 'acme.attacker.example', cookie: `syntra_session=${cookie}` },
+    });
+    expect(res.statusCode).toBe(421);
+
+    // The point of the ordering: the refusal came before the revocation, not
+    // after it.
+    const alive = await ctx.app.inject({
+      method: 'GET', url: '/api/portal/applications',
+      headers: { host: TEST_HOST, cookie: `syntra_session=${cookie}` },
+    });
+    expect(alive.statusCode).toBe(200);
+  });
+
   it('refuses an unregistered post-logout redirect URI', async () => {
     const config = await discover();
     const endSession = client.buildEndSessionUrl(config, {
