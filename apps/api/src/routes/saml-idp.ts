@@ -168,6 +168,69 @@ export interface SamlRouteOptions {
   authRateLimitTenantMax: number;
 }
 
+/**
+ * Runs a decode or a parse over attacker-supplied bytes and turns a failure
+ * into a 400.
+ *
+ * `parseXml`, `parseAuthnRequest`, `parseLogoutRequest` and the two decoders
+ * all throw a plain `Error`, and `problem-json.ts` maps anything that is not a
+ * `ProblemError` to a bare 500 — correctly, because an unrecognised throw is a
+ * bug. So every malformed unauthenticated SAML input answered 500: undeflated
+ * bytes, deflated garbage, a wrong root element, a decompression bomb, a
+ * truncated assertion, single-logout garbage. A 500 says "Syntra is broken";
+ * these all mean "your message is not a SAML message", and the distinction is
+ * the difference between a service provider's integrator fixing their side and
+ * filing a bug here. It also keeps a parser failure out of the 5xx alerting
+ * that ought to mean something.
+ *
+ * A `ProblemError` raised inside is passed through untouched — `verify`'s
+ * `signedRedirectQuery` already raises its own 400 and must not be relabelled.
+ *
+ * The parser's own message rides along as `detail`. It is derived entirely
+ * from the caller's own bytes and names no server state.
+ */
+function readSamlInput<T>(what: string, read: () => T): T {
+  try {
+    return read();
+  } catch (cause) {
+    if (cause instanceof ProblemError) throw cause;
+    throw new ProblemError(
+      400,
+      'saml-malformed',
+      `Malformed ${what}`,
+      cause instanceof Error ? cause.message : undefined,
+    );
+  }
+}
+
+/**
+ * One value for a parameter, or a refusal.
+ *
+ * Fastify hands back an array when a parameter appears more than once, and the
+ * previous `typeof x === 'string'` guards quietly turned that into `null`. For
+ * `RelayState` on the Redirect binding that is a divergence between the bytes
+ * that were verified and the value that is acted on: `signedRedirectQuery`
+ * takes the *first* occurrence into the signed string, the signature checks
+ * out over it, and then the route parks nothing. The effect is deep-link
+ * denial rather than forgery, but "the signature covered something other than
+ * what we used" is not a property to leave standing anywhere in a SAML
+ * implementation. A duplicated parameter is refused instead: it has no
+ * legitimate sender.
+ */
+function singleValued(
+  source: Record<string, unknown> | undefined,
+  name: string,
+): string | undefined {
+  const value = source?.[name];
+  if (value === undefined || typeof value === 'string') return value;
+  throw new ProblemError(
+    400,
+    'saml-bad-request',
+    'Duplicate SAML parameter',
+    `${name} was sent more than once, and only one occurrence can be the one that was signed.`,
+  );
+}
+
 /** Reads the tenant row every SAML route needs, once. */
 export async function samlContext(
   request: FastifyRequest,
@@ -289,7 +352,7 @@ export async function registerSamlIdpRoutes(
     // Parsed only to find out who is asking. Nothing on it is acted on until
     // the signature check below, and the ACS URL is not acted on until
     // `resolveAcsUrl`.
-    const unverified = parseAuthnRequest(input.xml);
+    const unverified = readSamlInput('AuthnRequest', () => parseAuthnRequest(input.xml));
 
     const config = await request.db((tx) =>
       findSamlConfigByEntityId(tx, unverified.issuer),
@@ -315,7 +378,9 @@ export async function registerSamlIdpRoutes(
       // Re-parsed from the VERIFIED bytes, never from the document that
       // arrived. That document may carry a second, forged AuthnRequest beside
       // the signed one.
-      if (verified !== '') trusted = parseAuthnRequest(verified);
+      if (verified !== '') {
+        trusted = readSamlInput('AuthnRequest', () => parseAuthnRequest(verified));
+      }
     }
 
     const acsUrl = resolveAcsUrl(config, trusted.acsUrl);
@@ -354,39 +419,42 @@ export async function registerSamlIdpRoutes(
   };
 
   app.post('/sso', rateLimited, async (request, reply) => {
-    const body = request.body as Record<string, string | undefined> | undefined;
-    const encoded = body?.SAMLRequest;
-    if (typeof encoded !== 'string' || encoded === '') {
+    const body = request.body as Record<string, unknown> | undefined;
+    const encoded = singleValued(body, 'SAMLRequest');
+    if (encoded === undefined || encoded === '') {
       throw new ProblemError(400, 'saml-bad-request', 'No SAMLRequest');
     }
-    const xml = decodePostMessage(encoded);
+    const xml = readSamlInput('SAMLRequest', () => decodePostMessage(encoded));
     return beginSso(request, reply, {
       xml,
-      relayState: typeof body?.RelayState === 'string' ? body.RelayState : null,
-      verify: (config) => verifyPostSignature(xml, config.spCertificates),
+      relayState: singleValued(body, 'RelayState') ?? null,
+      verify: (config) =>
+        readSamlInput('SAMLRequest', () =>
+          verifyPostSignature(xml, config.spCertificates),
+        ),
     });
   });
 
   app.get('/sso', rateLimited, async (request, reply) => {
-    const query = request.query as Record<string, string | undefined>;
-    const encoded = query.SAMLRequest;
-    if (typeof encoded !== 'string' || encoded === '') {
+    const query = request.query as Record<string, unknown>;
+    const encoded = singleValued(query, 'SAMLRequest');
+    if (encoded === undefined || encoded === '') {
       throw new ProblemError(400, 'saml-bad-request', 'No SAMLRequest');
     }
-    const xml = decodeRedirectMessage(encoded);
+    const xml = readSamlInput('SAMLRequest', () => decodeRedirectMessage(encoded));
 
     return beginSso(request, reply, {
       xml,
-      relayState: typeof query.RelayState === 'string' ? query.RelayState : null,
+      relayState: singleValued(query, 'RelayState') ?? null,
       // The detached signature authenticates the query string, not the
       // document, so there are no verified bytes to re-parse — hence `''`
       // rather than the XML. `beginSso` keeps its already-parsed request in
       // that case, which is correct here and only here: the signature covered
       // the encoded form of exactly that document.
       verify: (config) => {
-        const signature = query.Signature;
-        const sigAlg = query.SigAlg;
-        if (typeof signature !== 'string' || typeof sigAlg !== 'string') return null;
+        const signature = singleValued(query, 'Signature');
+        const sigAlg = singleValued(query, 'SigAlg');
+        if (signature === undefined || sigAlg === undefined) return null;
         const ok = verifyRedirectSignature({
           rawQuery: signedRedirectQuery(request.raw.url ?? '', 'SAMLRequest'),
           signature,
@@ -664,21 +732,23 @@ export async function registerSamlIdpRoutes(
   ) => {
     const { identity } = await samlContext(request, options);
     const source = (binding === 'HTTP-POST' ? request.body : request.query) as
-      | Record<string, string | undefined>
+      | Record<string, unknown>
       | undefined;
 
     // A LogoutResponse coming back from a service provider we notified. There
     // is nothing left to do; the session is already gone.
-    if (typeof source?.SAMLResponse === 'string') {
+    if (singleValued(source, 'SAMLResponse') !== undefined) {
       return reply.redirect('/logged-out', 302);
     }
 
-    const encoded = source?.SAMLRequest;
-    if (typeof encoded !== 'string') {
+    const encoded = singleValued(source, 'SAMLRequest');
+    if (encoded === undefined) {
       throw new ProblemError(400, 'saml-bad-request', 'No SAMLRequest');
     }
-    const xml = binding === 'HTTP-POST' ? decodePostMessage(encoded) : decodeRedirectMessage(encoded);
-    const unverified = parseLogoutRequest(xml);
+    const xml = readSamlInput('SAMLRequest', () =>
+      binding === 'HTTP-POST' ? decodePostMessage(encoded) : decodeRedirectMessage(encoded),
+    );
+    const unverified = readSamlInput('LogoutRequest', () => parseLogoutRequest(xml));
 
     const config = await request.db((tx) => findSamlConfigByEntityId(tx, unverified.issuer));
     if (!config) throw new ProblemError(404, 'saml-unknown-sp', 'Unknown service provider');
@@ -691,18 +761,22 @@ export async function registerSamlIdpRoutes(
     let trusted = unverified;
     if (config.wantAuthnRequestsSigned) {
       if (binding === 'HTTP-POST') {
-        const signed = verifyPostSignature(xml, config.spCertificates);
+        const signed = readSamlInput('LogoutRequest', () =>
+          verifyPostSignature(xml, config.spCertificates),
+        );
         if (signed === null) {
           throw new ProblemError(400, 'saml-bad-signature', 'Invalid logout signature');
         }
-        trusted = parseLogoutRequest(signed);
+        trusted = readSamlInput('LogoutRequest', () => parseLogoutRequest(signed));
       } else {
         const rawQuery = signedRedirectQuery(request.raw.url ?? '', 'SAMLRequest');
-        const q = request.query as Record<string, string | undefined>;
+        const q = request.query as Record<string, unknown>;
+        const signature = singleValued(q, 'Signature');
+        const sigAlg = singleValued(q, 'SigAlg');
         if (
-          typeof q.Signature !== 'string' || typeof q.SigAlg !== 'string' ||
+          signature === undefined || sigAlg === undefined ||
           !verifyRedirectSignature({
-            rawQuery, signature: q.Signature, sigAlg: q.SigAlg,
+            rawQuery, signature, sigAlg,
             certificates: config.spCertificates,
           })
         ) {
@@ -764,7 +838,7 @@ export async function registerSamlIdpRoutes(
         destination,
         field: 'SAMLResponse',
         xml: response,
-        relayState: typeof source?.RelayState === 'string' ? source.RelayState : null,
+        relayState: singleValued(source, 'RelayState') ?? null,
       }),
     );
   };

@@ -205,6 +205,24 @@ describe('SAML single logout', () => {
     expect(xml).not.toContain('InResponseTo');
   });
 
+  it('answers 400 rather than 500 for a malformed logout message', async () => {
+    const deflate = (xml: string) =>
+      deflateRawSync(Buffer.from(xml)).toString('base64');
+    const cases: Record<string, string> = {
+      'deflated garbage': deflate('not xml at all'),
+      'wrong root element': deflate(authnRequest()),
+      'truncated document': deflate(
+        '<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_x"',
+      ),
+      undeflated: Buffer.from('<samlp:LogoutRequest/>').toString('base64'),
+    };
+    for (const [name, param] of Object.entries(cases)) {
+      const res = await get(`/saml/slo?SAMLRequest=${encodeURIComponent(param)}`);
+      expect(res.statusCode, name).toBe(400);
+      expect(res.headers['content-type']).toContain('application/problem+json');
+    }
+  });
+
   it('delivers an encrypted assertion when the application asks for one', async () => {
     const { certificatePem } = await generateEncryptionCert();
     await withTenant(ctx.tenantId, (tx) =>

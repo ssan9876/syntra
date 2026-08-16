@@ -123,7 +123,59 @@ describe('SAML single sign-on over HTTP-Redirect', () => {
   it('refuses a decompression bomb', async () => {
     const bomb = deflateRawSync(Buffer.alloc(30 * 1024 * 1024, 0x20)).toString('base64');
     const res = await get(`/saml/sso?SAMLRequest=${encodeURIComponent(bomb)}`);
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    // 400, not `>= 400`. The loose assertion this replaces was satisfied by
+    // the 500 that the endpoint actually returned — a test sitting beside the
+    // defect it was written to catch, passing.
+    expect(res.statusCode).toBe(400);
+    expect(res.body).not.toContain('SAMLResponse');
+  });
+
+  it('answers 400 rather than 500 for every shape of malformed message', async () => {
+    // Every one of these is unauthenticated input that a stranger can send.
+    // `parseXml`, `parseAuthnRequest` and the decoders all throw a plain
+    // `Error`, which `problem-json.ts` maps to a bare 500 — correctly, since
+    // an unrecognised throw is a bug. None of these is a bug: they all mean
+    // "your message is not a SAML message", and a 500 both misleads the sender
+    // and buries a real fault in noise if this ever gets alerted on.
+    const cases: Record<string, string> = {
+      // Base64 of valid XML that was never deflated.
+      undeflated: Buffer.from(authnRequest()).toString('base64'),
+      'deflated garbage': encode('not xml at all'),
+      'wrong root element': encode(
+        '<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"' +
+          ' ID="_x" Version="2.0"/>',
+      ),
+      'truncated document': encode(authnRequest().slice(0, 120)),
+      'no ID attribute': encode(authnRequest().replace(' ID="_req1"', '')),
+      'not base64 at all': '!!!!!',
+    };
+
+    for (const [name, param] of Object.entries(cases)) {
+      const res = await get(`/saml/sso?SAMLRequest=${encodeURIComponent(param)}`);
+      expect(res.statusCode, name).toBe(400);
+      expect(res.headers['content-type']).toContain('application/problem+json');
+      expect(res.body).not.toContain('SAMLResponse');
+    }
+  });
+
+  it('refuses a duplicated RelayState rather than signing one and acting on another', async () => {
+    await saveSamlConfig(
+      ctx.tenantId, applicationId,
+      samlConfig({ spCertificates: [spPublicPem], wantAuthnRequestsSigned: true }),
+      samlKeyOptions,
+    );
+    const request = encodeURIComponent(encode(authnRequest()));
+    // `signedRedirectQuery` lifts the FIRST occurrence into the signed string,
+    // so the signature checks out over `deep/link` — and `request.query
+    // .RelayState` is an array, which the old `typeof` guard turned into null.
+    // The signature covered something other than the value acted on.
+    const signed = `SAMLRequest=${request}&RelayState=${encodeURIComponent('deep/link')}&SigAlg=${encodeURIComponent(SIG_ALG)}`;
+    const res = await get(
+      `/saml/sso?SAMLRequest=${request}&RelayState=${encodeURIComponent('deep/link')}` +
+        `&RelayState=${encodeURIComponent('https://attacker.test')}` +
+        `&SigAlg=${encodeURIComponent(SIG_ALG)}&Signature=${encodeURIComponent(sign(signed))}`,
+    );
+    expect(res.statusCode).toBe(400);
     expect(res.body).not.toContain('SAMLResponse');
   });
 

@@ -406,6 +406,47 @@ describe('SAML single sign-on over HTTP-POST', () => {
     expect(resumed.body).toContain('SAMLResponse');
   });
 
+  it('answers 400 rather than 500 for a malformed POST-binding message', async () => {
+    // The POST binding is base64 only, never deflated, so these are the
+    // shapes that reach `parseXml` and `parseAuthnRequest` directly.
+    const cases: Record<string, string> = {
+      'not xml': 'not xml at all',
+      'wrong root element':
+        '<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_x" Version="2.0"/>',
+      'truncated document': authnRequest().slice(0, 120),
+      'no Issuer': authnRequest().replace(
+        `<saml:Issuer>${SP}</saml:Issuer>`, '',
+      ),
+    };
+    for (const [name, xml] of Object.entries(cases)) {
+      const res = await postSso(xml);
+      expect(res.statusCode, name).toBe(400);
+      expect(res.headers['content-type']).toContain('application/problem+json');
+      expect(res.body).not.toContain('SAMLResponse');
+    }
+  });
+
+  it('refuses a duplicated SAMLRequest rather than picking one', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/saml/sso',
+      headers: {
+        host: TEST_HOST,
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: `syntra_session=${cookie}`,
+      },
+      // Two requests, one of which names an ACS URL that is not on the
+      // allowlist. Whichever the parser happens to pick, the answer is that
+      // nobody legitimate sends this.
+      payload:
+        `SAMLRequest=${encodeURIComponent(Buffer.from(authnRequest()).toString('base64'))}` +
+        `&SAMLRequest=${encodeURIComponent(
+          Buffer.from(authnRequest({ acs: 'https://attacker.test/acs' })).toString('base64'),
+        )}`,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body).not.toContain('SAMLResponse');
+  });
+
   it('refuses when the request arrives on a sibling of the tenant host', async () => {
     const res = await ctx.app.inject({
       method: 'POST', url: '/saml/sso',
