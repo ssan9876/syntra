@@ -12,6 +12,9 @@ import { withTenant } from './with-tenant.js';
 import {
   ALL_PERMISSIONS,
   addRule,
+  ensureActiveKey,
+  localMasterKeyProvider,
+  upsertSamlConfig,
   assignApplication,
   assignRole,
   createApplication,
@@ -193,6 +196,45 @@ await withTenant(tenant.id, async (tx) => {
   await assignApplication(tx, rota.id, { type: 'group', id: nurses.id });
   await assignApplication(tx, finance.id, { type: 'user', id: owner.id });
 
+  // A fourth tile that is a real service provider rather than a bookmark, so
+  // a fresh install has something to demonstrate the SAML identity provider
+  // with and the browser suite has something to click.
+  //
+  // `sp.example.test` deliberately does not resolve. The end-to-end spec
+  // fulfils the POST in the browser, and nothing here should be able to reach
+  // a real host by accident.
+  const crm = await createApplication(tx, {
+    name: 'CRM',
+    slug: 'crm',
+    description: 'Customer records, over SAML single sign-on.',
+    type: 'saml',
+  });
+  await upsertSamlConfig(tx, crm.id, {
+    spEntityId: 'https://sp.example.test/metadata',
+    acsUrls: ['https://sp.example.test/acs'],
+    defaultAcsUrl: 'https://sp.example.test/acs',
+    acsBinding: 'HTTP-POST',
+    nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+    nameIdClaim: null,
+    spCertificates: [],
+    // False, explicitly, and only because this seeded service provider is
+    // reached identity-provider-initiated — from the tile — so there is no
+    // AuthnRequest for a signature to be on. Ruling A2-10's default is true
+    // and the admin API refuses to leave it true with no certificate to check
+    // against; a seed that quietly wrote the weaker posture without saying why
+    // would be exactly the inherited default that ruling exists to prevent.
+    wantAuthnRequestsSigned: false,
+    encryptAssertions: false,
+    encryptionCertificate: null,
+    sloUrl: null,
+    sloBinding: 'HTTP-POST',
+    // The whole point of the tile: a launch with no AuthnRequest behind it.
+    allowIdpInitiated: true,
+    assertionLifetimeMs: 300_000,
+  });
+  await assignApplication(tx, crm.id, { type: 'group', id: nurses.id });
+  await assignApplication(tx, crm.id, { type: 'user', id: owner.id });
+
   // One rule, shipped disabled. Nobody is locked out by it — a user with no
   // factor is offered enrolment rather than refused — but a fresh install
   // should not push a developer through enrolment on their first sign-in
@@ -223,5 +265,34 @@ await withTenant(tenant.id, async (tx) => {
   console.log('  admin / SEED_ADMIN_PASSWORD  — full administrative access');
   console.log('  jdoe  / SEED_USER_PASSWORD   — ordinary portal user');
 });
+
+/**
+ * The SAML signing key the CRM tile needs.
+ *
+ * Outside the transaction above, because RSA-2048 generation plus a
+ * self-signed certificate is well over a second and has no business inside
+ * Prisma's 5000 ms interactive-transaction budget. Idempotent, so running the
+ * seed again is a single read.
+ *
+ * The admin API establishes this key whenever a SAML configuration is written;
+ * a seed writes one straight to the table, so it has to do the same thing by
+ * hand. Without it the tile answers 409 `saml-no-key` at the first click, and
+ * the message points at nothing an operator can act on from the portal.
+ */
+const masterKey = process.env.MASTER_KEY;
+if (masterKey && Buffer.from(masterKey, 'base64').length === 32) {
+  await ensureActiveKey(
+    tenant.id,
+    localMasterKeyProvider(Buffer.from(masterKey, 'base64')),
+    'saml',
+    { commonName: tenant.primaryDomain ?? 'localhost' },
+  );
+  console.log('  CRM tile is a SAML service provider; signing key established.');
+} else {
+  console.warn(
+    'MASTER_KEY is not set to 32 base64 bytes, so no SAML signing key was created. ' +
+      'The CRM tile will refuse with saml-no-key until one exists — set MASTER_KEY and seed again.',
+  );
+}
 
 await prisma.$disconnect();

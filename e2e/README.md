@@ -51,6 +51,34 @@ so it waits. That test raises its own timeout to 180 seconds. The
 administrator's step-up test answers with recovery codes instead, which the
 watermark does not apply to, so it does not wait at all.
 
+**`sso.spec.ts` needs the seed's `CRM` tile and a SAML signing key.** The seed
+creates both: a service-provider application pointed at `sp.example.test`, and
+the tenant's SAML signing key — the latter only if `MASTER_KEY` is set to 32
+base64 bytes in the environment the seed runs in, and it says so loudly when it
+is not. The same `MASTER_KEY` must then be given to the API, because the
+private half is wrapped with it.
+
+`sp.example.test` deliberately does not resolve. The spec fulfils the POST with
+a Playwright route handler registered on the *context* rather than on the page:
+a launch opens the application in a tab of its own, and a handler on the page
+that did the clicking never sees the new tab's request.
+
+**One `sso.spec.ts` case adds and removes a policy rule through the API.** The
+console writes tenant-wide rules only, and a tenant-wide `require_mfa` would
+interrupt the sign-in rather than the launch — a different claim, and one the
+MFA spec already makes. The rule is removed in a `finally`, for the same reason
+the MFA spec removes its own.
+
+**Running a second stack beside the first.** `WEB_PORT`, `API_TARGET` and
+`E2E_BASE_URL` exist so a worktree can run its own API, its own Vite and its
+own database without either answering for the other. Point `PUBLIC_URL` at the
+Vite origin, not the API's: the protocol launch address is derived from it, and
+`/login?next=...` and `/mfa?...&next=...` are relative to whichever origin the
+browser is on.
+
 `SEED_ADMIN_PASSWORD` and `SEED_USER_PASSWORD` must match what the database was
 seeded with; the tests read them from the environment rather than hard-coding a
-password into the repository.
+password into the repository. Seeding a second stack with passwords of its own
+is also the only reliable way to prove a browser run reached *your* build:
+a route that exists in both checkouts answers identically, and a password that
+only one of them knows does not.
