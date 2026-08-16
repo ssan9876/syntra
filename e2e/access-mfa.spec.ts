@@ -97,6 +97,41 @@ async function removeRule(page: Page, name: string) {
   await expect(page.getByText(name)).toHaveCount(0);
 }
 
+/**
+ * Adds a `require_mfa` rule, runs the body, and takes the rule away again
+ * WHATEVER the body does.
+ *
+ * The removal used to be the last statement of each test. A failure anywhere
+ * before it left the rule in place, and a leftover `require_mfa` rule sends
+ * every subsequent sign-in -- in this file and in every other spec, on this
+ * run and on the next one until somebody reseeds -- to a step-up screen. One
+ * genuine failure therefore reported as eleven, none of them anywhere near
+ * their cause.
+ *
+ * The cleanup is best-effort only when the body already failed: a session the
+ * failure killed cannot remove anything, and a throw from here would replace
+ * the error that actually matters. When the body succeeded, a cleanup failure
+ * IS the failure, because the next spec is about to inherit it.
+ */
+async function withRule(page: Page, name: string, body: () => Promise<void>) {
+  await saveRule(page, name);
+  let failed = false;
+  try {
+    await body();
+  } catch (cause) {
+    failed = true;
+    throw cause;
+  } finally {
+    try {
+      await page.goto('/admin/policy');
+      await removeRule(page, name);
+    } catch (cleanup) {
+      if (!failed) throw cleanup;
+      console.error(`could not remove the "${name}" rule after a failing test`, cleanup);
+    }
+  }
+}
+
 test.describe.serial('access, second factors and the console', () => {
   test('a user sees the tiles assigned to them, and launching one opens it', async ({
     page,
@@ -170,52 +205,48 @@ test.describe.serial('access, second factors and the console', () => {
     await expect(
       page.getByRole('heading', { name: 'Authentication policy' }),
     ).toBeVisible();
-    await saveRule(page, RULE);
+    await withRule(page, RULE, async () => {
+      // A second browser for the user. Signing in as somebody else on this page
+      // would overwrite the administrator's cookie, and the rule is now in force
+      // for every sign-in — so the administrator could not get back in to remove
+      // it without going through forced enrolment themselves, and the cleanup
+      // would fail three assertions away from its cause.
+      const userContext = await browser.newContext({
+        baseURL: test.info().project.use.baseURL!,
+      });
+      const user = await userContext.newPage();
+      try {
+        // A user who has never enrolled is offered enrolment, not a dead end.
+        await signIn(user, 'jdoe', USER!);
+        await expect(
+          user.getByRole('heading', { name: /set up a second factor/i }),
+        ).toBeVisible();
+        await user.getByRole('button', { name: 'Start' }).click();
 
-    // A second browser for the user. Signing in as somebody else on this page
-    // would overwrite the administrator's cookie, and the rule is now in force
-    // for every sign-in — so the administrator could not get back in to remove
-    // it without going through forced enrolment themselves, and the cleanup
-    // would fail three assertions away from its cause.
-    const userContext = await browser.newContext({
-      baseURL: test.info().project.use.baseURL!,
+        const secret = await user.getByText(SECRET).innerText();
+        await user.getByLabel('Six-digit code').fill(codeFor(secret));
+        await user.getByRole('button', { name: 'Confirm' }).click();
+
+        // Enrolling is proof of possession, so the sign-in completes rather than
+        // immediately asking for the same code again.
+        await expect(user.getByRole('heading', { name: /good day/i })).toBeVisible();
+
+        // Signing in again now takes the step-up path instead.
+        await signOut(user);
+        await waitForNextTotpStep();
+        await signIn(user, 'jdoe', USER!);
+        await expect(
+          user.getByRole('heading', { name: /one more step/i }),
+        ).toBeVisible();
+        await user.getByLabel('Six-digit code').fill(codeFor(secret));
+        await user.getByRole('button', { name: 'Verify' }).click();
+        await expect(user.getByRole('heading', { name: /good day/i })).toBeVisible();
+        await signOut(user);
+      } finally {
+        await userContext.close();
+      }
     });
-    const user = await userContext.newPage();
-    try {
-      // A user who has never enrolled is offered enrolment, not a dead end.
-      await signIn(user, 'jdoe', USER!);
-      await expect(
-        user.getByRole('heading', { name: /set up a second factor/i }),
-      ).toBeVisible();
-      await user.getByRole('button', { name: 'Start' }).click();
 
-      const secret = await user.getByText(SECRET).innerText();
-      await user.getByLabel('Six-digit code').fill(codeFor(secret));
-      await user.getByRole('button', { name: 'Confirm' }).click();
-
-      // Enrolling is proof of possession, so the sign-in completes rather than
-      // immediately asking for the same code again.
-      await expect(user.getByRole('heading', { name: /good day/i })).toBeVisible();
-
-      // Signing in again now takes the step-up path instead.
-      await signOut(user);
-      await waitForNextTotpStep();
-      await signIn(user, 'jdoe', USER!);
-      await expect(
-        user.getByRole('heading', { name: /one more step/i }),
-      ).toBeVisible();
-      await user.getByLabel('Six-digit code').fill(codeFor(secret));
-      await user.getByRole('button', { name: 'Verify' }).click();
-      await expect(user.getByRole('heading', { name: /good day/i })).toBeVisible();
-      await signOut(user);
-    } finally {
-      await userContext.close();
-    }
-
-    // Put the tenant back. A leftover require_mfa rule sends every later
-    // sign-in in this file to a step-up screen, and the failure would surface
-    // in a test that has nothing to do with it.
-    await removeRule(page, RULE);
     await signOut(page);
   });
 
@@ -250,41 +281,38 @@ test.describe.serial('access, second factors and the console', () => {
     expect(codes).toHaveLength(10);
 
     await elevateTo(page, '/admin/policy');
-    await saveRule(page, RULE);
-    await signOut(page);
+    await withRule(page, RULE, async () => {
+      await signOut(page);
 
-    // Signing in now takes the step-up path.
-    await signIn(page, 'admin', ADMIN!);
-    await expect(page.getByRole('heading', { name: /one more step/i })).toBeVisible();
-    await page.getByRole('button', { name: 'Use a recovery code' }).click();
-    await page.getByLabel('Recovery code').fill(codes[0]!);
-    await page.getByRole('button', { name: 'Verify' }).click();
-    await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
+      // Signing in now takes the step-up path.
+      await signIn(page, 'admin', ADMIN!);
+      await expect(page.getByRole('heading', { name: /one more step/i })).toBeVisible();
+      await page.getByRole('button', { name: 'Use a recovery code' }).click();
+      await page.getByLabel('Recovery code').fill(codes[0]!);
+      await page.getByRole('button', { name: 'Verify' }).click();
+      await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
 
-    // A deep link into the console. The guard bounces to /elevate; elevation
-    // re-authenticates from scratch, so the factor presented at sign-in does
-    // not carry over and the rule is met a second time. Satisfying it must
-    // return the administrator to where they were going rather than to the
-    // console's first page.
-    await page.goto('/admin/audit');
-    await expect(
-      page.getByRole('heading', { name: /confirm your password/i }),
-    ).toBeVisible();
-    await page.getByLabel('Password').fill(ADMIN!);
-    await page.getByRole('button', { name: 'Continue' }).click();
+      // A deep link into the console. The guard bounces to /elevate; elevation
+      // re-authenticates from scratch, so the factor presented at sign-in does
+      // not carry over and the rule is met a second time. Satisfying it must
+      // return the administrator to where they were going rather than to the
+      // console's first page.
+      await page.goto('/admin/audit');
+      await expect(
+        page.getByRole('heading', { name: /confirm your password/i }),
+      ).toBeVisible();
+      await page.getByLabel('Password').fill(ADMIN!);
+      await page.getByRole('button', { name: 'Continue' }).click();
 
-    await expect(page.getByRole('heading', { name: /one more step/i })).toBeVisible();
-    await page.getByRole('button', { name: 'Use a recovery code' }).click();
-    await page.getByLabel('Recovery code').fill(codes[1]!);
-    await page.getByRole('button', { name: 'Verify' }).click();
+      await expect(page.getByRole('heading', { name: /one more step/i })).toBeVisible();
+      await page.getByRole('button', { name: 'Use a recovery code' }).click();
+      await page.getByLabel('Recovery code').fill(codes[1]!);
+      await page.getByRole('button', { name: 'Verify' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Audit log' })).toBeVisible();
-    await expect(page).toHaveURL(/\/admin\/audit/);
+      await expect(page.getByRole('heading', { name: 'Audit log' })).toBeVisible();
+      await expect(page).toHaveURL(/\/admin\/audit/);
+    });
 
-    // Put the tenant back, from the administrative session that rule was just
-    // satisfied for.
-    await page.goto('/admin/policy');
-    await removeRule(page, RULE);
     await signOut(page);
   });
 });
