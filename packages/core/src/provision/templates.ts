@@ -290,3 +290,27 @@ export function escapeDnValue(value: string): string {
   if (escaped.endsWith(' ')) escaped = `${escaped.slice(0, -1)}\\ `;
   return escaped;
 }
+
+/**
+ * Renders a container template — a distinguished name — with every substituted
+ * value escaped.
+ *
+ * This exists so that DN escaping is structural rather than remembered.
+ * {@link renderTemplate} cannot escape unconditionally, because it renders
+ * display names through the same path, so it takes an optional `escapeValue`;
+ * an optional guard is a hole with a lid sitting next to it, and the lid gets
+ * left off. Ruling P22: **`renderTemplate` is never called directly on a
+ * `containerTemplate` or a `fallbackContainer` anywhere in this codebase.**
+ * Call this instead, and there is no way to call it wrongly.
+ *
+ * The failure mode it closes: a department of `Finance,OU=Domain Controllers`
+ * in `OU=%contract.department%,OU=Users,%baseDn%` is not a mangled DN, it is a
+ * valid one naming a container the administrator never wrote — so the account's
+ * placement in the directory is chosen by whoever can edit an HR record.
+ */
+export function renderContainer(
+  template: string,
+  context: TemplateContext,
+): TemplateResult {
+  return renderTemplate(template, context, { escapeValue: escapeDnValue });
+}

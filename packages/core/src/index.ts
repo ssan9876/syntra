@@ -85,3 +85,23 @@ export * from './federation/jit-service.js';
 export * from './provision/condition.js';
 export * from './provision/templates.js';
 export * from './provision/names.js';
+// Member by member, not `export *`: `provision/types.js` declares a
+// `ContractFacts` — the whole contract row the rule engine reads — and
+// `policy/types.js` already exports a different `ContractFacts`, the four-field
+// subset an authentication policy may look at. A star export of both is
+// TS2308, and the barrel silently stops exporting the name at all. Everything
+// inside `provision/` imports it from `./types.js` by its own name; only this
+// barrel needs the alias.
+//
+// Anything added to `provision/types.js` must be added here too.
+export type {
+  Attribution,
+  ContractFacts as ProvisionContractFacts,
+  DesiredAccount,
+  DesiredState,
+  PersonFacts,
+  ProfileFacts,
+  RuleFacts,
+  UnprocessableKind,
+} from './provision/types.js';
+export * from './provision/desired.js';

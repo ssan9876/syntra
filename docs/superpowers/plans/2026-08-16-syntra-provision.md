@@ -4336,6 +4336,52 @@ git commit -m "feat: add account profile templates and correlation key generatio
 
 The pure function at the centre of the design. Spec §7 and §8 in one module.
 
+> **CORRECTIONS APPLIED DURING IMPLEMENTATION — Ruling P23.** Five instructions
+> in this task as first written were wrong. The code below has been amended at
+> each site; the reasoning is here so a later reader does not re-derive it.
+>
+> 1. **An account requirement asked at the horizon ALONE deprovisions an
+>    employee who is still at their desk.** `horizon` is `now + preHireDays`, so
+>    `activeOn(contracts, horizon)` asks "will this person be employed in a
+>    fortnight". Somebody whose contract ends next Tuesday answers no, so
+>    `required` is false — which the planner reads as a mover and treats with an
+>    immediate disable and an immediate revoke of everything, five days before
+>    they leave, while their entitlements (computed at `now`) are still desired.
+>    The requirement is now decided over the **window** `[now, horizon]` via a
+>    new `activeBetween`. Every pre-hire behaviour is unchanged; `preHireDays`
+>    becomes purely additive, which is what a setting of that name must be.
+>    Spec §8 has been amended to match (Ruling P5's second half).
+> 2. **`renderTemplate` was called directly on `containerTemplate`**, which is
+>    exactly what the ledger's Ruling P22 forbids: a department of
+>    `Finance,OU=Domain Controllers` renders a VALID DN naming a container the
+>    administrator never wrote. Task 6 left `escapeDnValue` as an optional
+>    argument nobody is forced to pass, and this was the first call site to not
+>    pass it. `renderContainer()` now exists in `templates.ts` and always
+>    escapes; **Tasks 11 and 16 must call it too** — see the note on Task 16's
+>    `explain.ts`, which had the same line.
+> 3. **The person's own key was excluded from `takenCorrelationKeys`
+>    case-sensitively.** That set is Syntra's rows unioned with the *target's*
+>    inventory, and the target's copy of this person's own account carries the
+>    directory's casing (the ledger's Task 6 carry-forward). `Anna.Novak`
+>    therefore survived the filter, generation folded it to `anna.novak`, found
+>    a collision with the person's own login, and proposed renaming them to
+>    `anna.novak2`. Compared lowercased on both sides now.
+> 4. **`export * from './provision/types.js'` does not compile**: TS2308,
+>    because `policy/types.js` already exports a different `ContractFacts` — the
+>    four-field subset an authentication policy reads. A star export of both
+>    leaves the barrel exporting neither. `index.ts` now enumerates the
+>    provision types and aliases that one to `ProvisionContractFacts`. Nothing
+>    inside `provision/` is affected: every task imports it from `./types.js`.
+> 5. `maxLength: 20` is `SAM_ACCOUNT_NAME_MAX_LENGTH`, already exported by
+>    `names.ts` for this. A hand-copied cap is a cap that drifts.
+>
+> Also folded in: `entitlementsOrAccountActiveNow` is now `accountGrantedBy`,
+> called twice with different contract sets, which removes both the misleading
+> name and the two redundant `length > 0` guards in front of it (each of which
+> was an unkillable mutant). A blank container with a blank fallback is
+> unprocessable rather than a write to an empty DN (spec §13, "a template that
+> resolves to nothing and has no fallback").
+
 **Files:**
 - Create: `packages/core/src/provision/types.ts`
 - Create: `packages/core/src/provision/desired.ts`
@@ -5270,7 +5316,12 @@ export function desiredState(input: DesiredStateInput): DesiredState {
   }
 
   const activeNow = activeOn(contracts, now);
-  const activeAtHorizon = activeOn(contracts, horizon);
+  // AMENDED (correction 1 at the head of this task): the WINDOW [now, horizon],
+  // not the horizon alone. `activeOn(contracts, horizon)` asks whether the
+  // person will still be employed in `preHireDays` time, and answers "no" for
+  // somebody whose contract ends next Tuesday -- who then gets an immediate
+  // disable and revoke as a mover. Read `activeAtHorizon` below as this window.
+  const activeAtHorizon = activeBetween(contracts, now, horizon);
 
   /**
    * Contracts exist and every one of them starts after the horizon.
@@ -5354,7 +5405,10 @@ export function desiredState(input: DesiredStateInput): DesiredState {
   // the required fallbackContainer is for. A container that does not EXIST in
   // the target is a different failure and is detected in reconcile, against
   // the target's own inventory.
-  const containerRendered = renderTemplate(profile.containerTemplate, context);
+  //
+  // AMENDED (correction 2): `renderContainer`, never `renderTemplate`. This is
+  // a DN, and Ruling P22 is closed structurally or not at all.
+  const containerRendered = renderContainer(profile.containerTemplate, context);
   const container = containerRendered.ok
     ? containerRendered.value
     : profile.fallbackContainer;
@@ -15815,7 +15869,12 @@ export async function previewAccountProfile(
       }
     }
 
-    const containerRendered = renderTemplate(profile.containerTemplate, context);
+    // AMENDED by Task 7: `renderContainer` (added to `templates.ts` there),
+    // never `renderTemplate`, because this is a DN and Ruling P22 says the
+    // escaping is structural. A preview that renders the container unescaped
+    // also *shows the administrator the wrong answer*, which is worse than
+    // silently doing the wrong thing: it is the screen they check it on.
+    const containerRendered = renderContainer(profile.containerTemplate, context);
     const container = containerRendered.ok
       ? containerRendered.value
       : profile.fallbackContainer;

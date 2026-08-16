@@ -707,12 +707,22 @@ naive evaluation at `now` produces nothing and the account appears on the mornin
 of day one, or later. Real organizations need it ready before then.
 
 Each target system carries `preHireDays`. Desired state is computed against two
-dates: `horizon = now + preHireDays` decides **whether an account is required and
-what its attributes are**, and `now` decides **whether that account is enabled and
-which entitlements it holds**. A person starting within the horizon therefore gets
+dates: the **window** from `now` to `horizon = now + preHireDays` decides
+**whether an account is required and what its attributes are**, and `now` decides
+**whether that account is enabled and which entitlements it holds**. A person starting within the horizon therefore gets
 their account created, named, placed and password-set — and left disabled, holding
 nothing — and the run on their start date proposes `enable_account` and their
 grants.
+
+The requirement is asked over the window and not at the horizon alone, and that
+is not pedantry. Asking only at `horizon` asks whether the person will still be
+employed in `preHireDays` time, so somebody whose contract ends next Tuesday
+answers *no* — and produces `required: false` while still at their desk, which is
+the mover shape above and earns them an immediate disable and an immediate
+revoke of everything, days before they leave and while their entitlements,
+computed at `now`, are still desired. Over the window, `preHireDays` is purely
+additive: it can bring an account forward and can never take one away, which is
+the only behaviour a setting of that name can safely have.
 
 The security property this preserves is worth being explicit about: **a pre-hire
 never holds access before their start date.** Only the account object exists

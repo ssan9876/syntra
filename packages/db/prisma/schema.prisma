@@ -1009,8 +1009,13 @@ model TargetSystem {
   /// reported under BOTH modes (Ruling P2).
   enforcementMode String @default("additive")
 
-  /// Desired state is computed against `now + preHireDays` for whether an
-  /// account is required, and against `now` for whether it is enabled.
+  /// Desired state is computed over the window from `now` to
+  /// `now + preHireDays` for whether an account is required, and against `now`
+  /// for whether it is enabled. The window, not the far end alone: asking only
+  /// at `now + preHireDays` asks whether the person will still be employed
+  /// then, and answers "no" for somebody whose contract ends next week —
+  /// producing `required: false` for an employee who is still at their desk.
+  /// This setting can only ever bring an account forward.
   preHireDays                    Int  @default(0)
   entitlementRevocationDelayDays Int  @default(0)
   disableGraceDays               Int  @default(0)
