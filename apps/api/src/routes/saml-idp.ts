@@ -4,6 +4,7 @@ import formbody from '@fastify/formbody';
 import { idParam } from '@syntra/contracts';
 import {
   authorize,
+  browserBindingDigest,
   collectSubjectFacts,
   consumeParkedAuthnRequest,
   endSsoSessions,
@@ -16,6 +17,7 @@ import {
   listClaimMappings,
   loadActiveKey,
   localMasterKeyProvider,
+  newBrowserBinding,
   parkAuthnRequest,
   publishedKeys,
   recordEvent,
@@ -58,6 +60,67 @@ const AUTHN_CONTEXT: Record<string, string> = {
 };
 const DEFAULT_AUTHN_CONTEXT =
   'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport';
+
+/**
+ * The cookie that ties a parked sign-in request to the browser that started
+ * it.
+ *
+ * Without it, the handle in `/saml/continue?handle=...` is an unbound bearer
+ * credential. `wantAuthnRequestsSigned` defaults to false, so anyone at all
+ * can POST an unsigned AuthnRequest for a registered service provider's entity
+ * ID, read the handle out of the 302 `Location`, and hand that URL to a
+ * logged-in victim — which mints an assertion *for the victim* and auto-posts
+ * it to the service provider's real ACS. That is login CSRF reached around
+ * `allowIdpInitiated: false`, the very setting whose purpose is to suppress
+ * it, and nothing else on the parked row identifies a browser.
+ *
+ * The value is a nonce, not a session: the sign-in it eventually authenticates
+ * need not exist yet, and forcing a session first would break the ordinary
+ * "service provider sends you here, then you log in" flow. Only its digest is
+ * stored, so the row is not a credential.
+ *
+ * Scoped to `/saml`, because no other route reads it. `sameSite: 'lax'`
+ * matches the session cookie; it is not what makes this safe — a Lax cookie
+ * *is* sent on a cross-site top-level GET, which is exactly the shape of the
+ * attack — the binding check is. A network attacker who can write cookies for
+ * the tenant host (plain HTTP, or a sibling host under the registrable domain)
+ * can still toss a nonce of their own choosing; that is the same exposure the
+ * session cookie already has, and the answer to it is HTTPS and one host per
+ * tenant rather than a second cookie scheme here.
+ */
+const SAML_BINDING_COOKIE = 'syntra_saml_bind';
+
+const SAML_BINDING_COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: 'lax' as const,
+  path: '/saml',
+  // Follows NODE_ENV for the same reason the session cookie does: a
+  // development server runs on plain HTTP and a Secure cookie would never come
+  // back, which reads as "single sign-on is broken".
+  secure: process.env.NODE_ENV === 'production',
+  // Comfortably longer than a parked request's ten minutes, so the row is what
+  // expires the flow and not the cookie, and re-issued on every park.
+  maxAge: 30 * 60,
+};
+
+/**
+ * The binding digest to park a request under, setting the cookie if this
+ * browser has none yet.
+ *
+ * The existing nonce is reused rather than replaced because one browser can
+ * have several sign-ins in flight at once — two tabs entering two service
+ * providers — and a fresh nonce per park would invalidate every earlier tab's
+ * handle.
+ */
+function bindBrowser(request: FastifyRequest, reply: FastifyReply): string {
+  const existing = request.cookies[SAML_BINDING_COOKIE];
+  if (typeof existing === 'string' && existing !== '') {
+    return browserBindingDigest(existing);
+  }
+  const { nonce, digest } = newBrowserBinding();
+  reply.setCookie(SAML_BINDING_COOKIE, nonce, SAML_BINDING_COOKIE_OPTIONS);
+  return digest;
+}
 
 /**
  * The raw query substring an HTTP-Redirect signature covers.
@@ -272,6 +335,7 @@ export async function registerSamlIdpRoutes(
       acsUrl,
       relayState: input.relayState,
       forceAuthn: trusted.forceAuthn,
+      browserBinding: bindBrowser(request, reply),
     });
 
     return completeSso(request, reply, { tenant, identity, config, parked });
@@ -325,6 +389,11 @@ export async function registerSamlIdpRoutes(
   /**
    * Where the login and MFA screens return to. The handle names a parked
    * request; everything else about the flow is read off that row.
+   *
+   * The handle is not a credential on its own — see `SAML_BINDING_COOKIE`. It
+   * is spendable only by the browser that parked it, which is what keeps this
+   * URL from being a login-CSRF gadget anyone can mint for any registered
+   * service provider.
    */
   app.get('/continue', rateLimited, async (request, reply) => {
     const { tenant, identity } = await samlContext(request, options);
@@ -332,7 +401,11 @@ export async function registerSamlIdpRoutes(
     if (typeof handle !== 'string') {
       throw new ProblemError(400, 'saml-bad-request', 'No handle');
     }
-    const parked = await findParkedAuthnRequest(request.tenantId, handle);
+    // The binding cookie, or null. A handle whose row was parked by a
+    // different browser resolves to nothing here and is indistinguishable from
+    // an expired one, so the response confirms nothing to whoever sent it.
+    const presented = request.cookies[SAML_BINDING_COOKIE] ?? null;
+    const parked = await findParkedAuthnRequest(request.tenantId, handle, presented);
     if (!parked) {
       throw new ProblemError(410, 'saml-request-expired', 'That sign-in request has expired');
     }
@@ -388,6 +461,7 @@ export async function registerSamlIdpRoutes(
       acsUrl,
       relayState,
       forceAuthn: false,
+      browserBinding: bindBrowser(request, reply),
     });
     return completeSso(request, reply, { tenant, identity, config, parked });
   });

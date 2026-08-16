@@ -61,13 +61,21 @@ export const extractResponse = (html: string) => {
   return match[1]!.replace(/&amp;/g, '&').replace(/&quot;/g, '"');
 };
 
-const postSso = (xml: string, relayState?: string, withCookie = true) =>
+const postSso = (
+  xml: string,
+  relayState?: string,
+  withCookie = true,
+  extraCookies: string[] = [],
+) =>
   ctx.app.inject({
     method: 'POST', url: '/saml/sso',
     headers: {
       host: TEST_HOST,
       'content-type': 'application/x-www-form-urlencoded',
-      ...(withCookie ? { cookie: `syntra_session=${cookie}` } : {}),
+      cookie: [
+        ...(withCookie ? [`syntra_session=${cookie}`] : []),
+        ...extraCookies,
+      ].join('; '),
     },
     payload: new URLSearchParams({
       SAMLRequest: Buffer.from(xml).toString('base64'),
@@ -75,14 +83,29 @@ const postSso = (xml: string, relayState?: string, withCookie = true) =>
     }).toString(),
   });
 
-const get = (url: string, withCookie = true) =>
+const get = (url: string, withCookie = true, extraCookies: string[] = []) =>
   ctx.app.inject({
     method: 'GET', url,
     headers: {
       host: TEST_HOST,
-      ...(withCookie ? { cookie: `syntra_session=${cookie}` } : {}),
+      cookie: [
+        ...(withCookie ? [`syntra_session=${cookie}`] : []),
+        ...extraCookies,
+      ].join('; '),
     },
   });
+
+/**
+ * The browser-binding cookie a response wrote, in `name=value` form, or none.
+ *
+ * `inject` returns every `Set-Cookie` on the response; this is what a second
+ * request from the *same* browser would send back, and leaving it out is what
+ * a request from a different browser looks like.
+ */
+export const bindingCookie = (res: { cookies: { name: string; value: string }[] }) => {
+  const found = res.cookies.find((c) => c.name === 'syntra_saml_bind');
+  return found ? [`${found.name}=${found.value}`] : [];
+};
 
 describe('SAML single sign-on over HTTP-POST', () => {
   // Scoped to this describe rather than the module's top level: this file is
@@ -286,9 +309,93 @@ describe('SAML single sign-on over HTTP-POST', () => {
       const row = await tx.samlAuthnRequest.findFirstOrThrow();
       return row.handle;
     });
-    const replay = await get(`/saml/continue?handle=${encodeURIComponent(handle)}`);
+    // Replayed from the SAME browser — the binding cookie the first response
+    // set is sent back — so what refuses this is the spend, not the binding.
+    const replay = await get(
+      `/saml/continue?handle=${encodeURIComponent(handle)}`,
+      true,
+      bindingCookie(first),
+    );
     expect(replay.statusCode).toBe(410);
     expect(replay.body).not.toContain('SAMLResponse');
+  });
+
+  it('refuses a continue handle minted in one browser and spent in another', async () => {
+    // The attack. `wantAuthnRequestsSigned` defaults to false, so the attacker
+    // needs nothing but the service provider's entity ID, which is public.
+    // They park a request from their own browser with no session at all and
+    // read the handle straight out of the 302 they are given.
+    const attacker = await postSso(authnRequest(), undefined, false);
+    expect(attacker.statusCode).toBe(302);
+    const handle = new URL(
+      decodeURIComponent(attacker.headers.location as string).replace(
+        /^\/login\?next=/,
+        '',
+      ),
+      'http://x.test',
+    ).searchParams.get('handle');
+    expect(handle).not.toBeNull();
+
+    // Fed to a logged-in victim as a link. The victim's browser carries their
+    // session and their own binding cookie — never the attacker's — so the
+    // handle names a row that was parked by somebody else.
+    const victim = await get(`/saml/continue?handle=${encodeURIComponent(handle!)}`);
+    expect(victim.statusCode).toBe(410);
+    expect(victim.body).not.toContain('SAMLResponse');
+
+    // A victim who has been through single sign-on before, and so does have a
+    // binding cookie of their own, is refused for the same reason rather than
+    // waved through.
+    const own = await postSso(authnRequest({ id: '_other' }));
+    expect(own.statusCode).toBe(200);
+    const withOwnBinding = await get(
+      `/saml/continue?handle=${encodeURIComponent(handle!)}`,
+      true,
+      bindingCookie(own),
+    );
+    expect(withOwnBinding.statusCode).toBe(410);
+    expect(withOwnBinding.body).not.toContain('SAMLResponse');
+
+    // And the positive control: the very same handle, presented with the
+    // binding the attacker's own browser was given, completes. Without this
+    // the test above would pass against an implementation that had simply
+    // broken `/saml/continue` for everyone.
+    const sameBrowser = await get(
+      `/saml/continue?handle=${encodeURIComponent(handle!)}`,
+      true,
+      bindingCookie(attacker),
+    );
+    expect(sameBrowser.statusCode).toBe(200);
+    expect(sameBrowser.body).toContain('SAMLResponse');
+  });
+
+  it('keeps one binding across concurrent sign-ins in the same browser', async () => {
+    // Two service-provider round trips from one browser, the second sending
+    // back the cookie the first wrote. A fresh nonce per park would invalidate
+    // the first tab's handle, so this is what says the binding is per browser
+    // rather than per request.
+    const first = await postSso(authnRequest({ id: '_one' }), undefined, false);
+    expect(first.statusCode).toBe(302);
+    const firstHandle = new URL(
+      decodeURIComponent(first.headers.location as string).replace(/^\/login\?next=/, ''),
+      'http://x.test',
+    ).searchParams.get('handle')!;
+
+    const second = await postSso(
+      authnRequest({ id: '_two' }),
+      undefined,
+      false,
+      bindingCookie(first),
+    );
+    expect(second.statusCode).toBe(302);
+
+    const resumed = await get(
+      `/saml/continue?handle=${encodeURIComponent(firstHandle)}`,
+      true,
+      bindingCookie(first),
+    );
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.body).toContain('SAMLResponse');
   });
 
   it('refuses when the request arrives on a sibling of the tenant host', async () => {

@@ -909,6 +909,17 @@ model SamlAuthnRequest {
   acsUrl        String
   relayState    String?
   forceAuthn    Boolean   @default(false)
+  /// SHA-256 of the high-entropy nonce written to the browser as a cookie
+  /// when this request was parked, and required to match when it is
+  /// continued. `handle` alone is a bearer credential: anyone who can make an
+  /// unsigned AuthnRequest — which is anyone at all, since
+  /// `wantAuthnRequestsSigned` defaults to false — reads it out of the 302 and
+  /// can hand the continue URL to a logged-in victim, minting an assertion for
+  /// the victim and auto-posting it to the service provider's real ACS. This
+  /// column is what makes the handle usable only in the browser that created
+  /// it. The digest rather than the nonce, so a row leak is not a usable
+  /// credential.
+  browserBinding String
   createdAt     DateTime  @default(now())
   expiresAt     DateTime
   consumedAt    DateTime?
