@@ -223,6 +223,9 @@ describe('the policy', () => {
     expect(res.json()).toEqual({
       fallback: { outcome: 'allow', factorType: null },
       rules: [],
+      // Federate rows come back separately from the rules the authorization
+      // engine evaluates, so a routing rule can never be read as an outcome.
+      routes: [],
     });
   });
 

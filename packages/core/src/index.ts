@@ -72,3 +72,7 @@ export * from './access/saml-session-service.js';
 export * from './access/oidc-store.js';
 export * from './access/oidc-client-service.js';
 export * from './access/authorization-decision-service.js';
+export * from './federation/routing.js';
+// upstreamClientSecret is exported because the federation flow needs it to
+// complete a token exchange. No route returns its value.
+export * from './federation/upstream-service.js';

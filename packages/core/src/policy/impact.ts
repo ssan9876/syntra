@@ -143,6 +143,18 @@ export async function previewRuleImpact(
   now: Date = new Date(),
   caps: ImpactCaps = {},
 ): Promise<RuleImpact> {
+  // A federate rule is a routing rule: it never reaches evaluatePolicy, it
+  // matches on nothing this preview can count, and it grants nothing. Answering
+  // "0 users affected" would be read as "this rule does nothing", and answering
+  // with a match count would be read as "this rule allows these people in".
+  // Neither is true, so this refuses rather than inventing a number. The route
+  // turns it into a 400 naming the reason.
+  if (rule.outcome === 'federate') {
+    throw new Error(
+      'a federate rule has no authorization impact to preview: it decides which identity provider a login goes to, and authorize() still runs when the user comes back',
+    );
+  }
+
   const userCap = caps.userCap ?? IMPACT_USER_CAP;
   const membershipCap = caps.membershipCap ?? IMPACT_MEMBERSHIP_CAP;
   const unevaluatedConditions: string[] = [];

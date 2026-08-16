@@ -14,7 +14,11 @@ beforeEach(async () => {
 describe('loadPolicy', () => {
   it('returns an allow fallback and no rules for a tenant that has never configured one', async () => {
     const policy = await withTenant(tenantId, (tx) => loadPolicy(tx));
-    expect(policy).toEqual({ rules: [], fallback: { outcome: 'allow', factorType: null } });
+    expect(policy).toEqual({
+      rules: [],
+      routes: [],
+      fallback: { outcome: 'allow', factorType: null },
+    });
   });
 
   it('returns the configured fallback', async () => {

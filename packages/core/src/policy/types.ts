@@ -78,3 +78,17 @@ export interface PolicyDecision {
   ruleId: string | null;
   ruleName: string | null;
 }
+
+/**
+ * What a stored rule row may say. A superset of `PolicyOutcome`.
+ *
+ * `federate` is deliberately not a `PolicyOutcome`: `authorize.ts` maps every
+ * `PolicyOutcome` exhaustively in its STRENGTH table, and a fifth member there
+ * would change the meaning of a floor, of `satisfiesRequirement` and of the
+ * fallback. A federate row is a routing rule — it says where a browser goes
+ * before anyone is identified, and it grants nothing. `loadPolicy` splits the
+ * two apart so the authorization engine never sees one.
+ */
+export type RuleOutcome = PolicyOutcome | 'federate';
+
+export const RULE_OUTCOMES: RuleOutcome[] = [...POLICY_OUTCOMES, 'federate'];

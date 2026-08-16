@@ -1,4 +1,5 @@
 import type { TenantClient } from '@syntra/db';
+import type { RoutingRule } from '../federation/routing.js';
 import { currentTenant } from '../tenant-context.js';
 import { isIpRangeUsable } from './ip-match.js';
 import { isValidTimeZone } from './time-window.js';
@@ -6,22 +7,29 @@ import {
   CONTRACT_FIELDS,
   FACTOR_TYPES,
   POLICY_OUTCOMES,
+  RULE_OUTCOMES,
   type ContractField,
   type FactorType,
   type PolicyFallback,
   type PolicyOutcome,
   type PolicyRule,
+  type RuleOutcome,
 } from './types.js';
 
 export interface LoadedPolicy {
   rules: PolicyRule[];
+  /**
+   * Rows whose outcome is 'federate'. Never seen by evaluatePolicy: they say
+   * where a login goes before anybody is identified, and they grant nothing.
+   */
+  routes: RoutingRule[];
   fallback: PolicyFallback;
 }
 
 export interface RuleInput {
   name: string;
   enabled?: boolean | undefined;
-  outcome: PolicyOutcome;
+  outcome: RuleOutcome;
   factorType?: FactorType | null | undefined;
   applicationIds?: string[] | undefined;
   groupIds?: string[] | undefined;
@@ -32,6 +40,10 @@ export interface RuleInput {
   startMinute?: number | null | undefined;
   endMinute?: number | null | undefined;
   timezone?: string | null | undefined;
+  /** Required on a federate rule, refused on any other. */
+  upstreamIdpId?: string | null | undefined;
+  /** The login identifier's domain part. Only a federate rule matches on it. */
+  loginDomains?: string[] | undefined;
 }
 
 type RuleRow = {
@@ -50,6 +62,8 @@ type RuleRow = {
   startMinute: number | null;
   endMinute: number | null;
   timezone: string | null;
+  upstreamIdpId: string | null;
+  loginDomains: string[];
 };
 
 const asOutcome = (value: string): PolicyOutcome =>
@@ -91,13 +105,68 @@ function toRule(row: RuleRow): PolicyRule {
 }
 
 /**
+ * A stored federate row narrowed to a routing rule.
+ *
+ * Null when the row names no upstream, which the database's own check
+ * constraint already forbids. Dropping such a row is safe in the way dropping
+ * an unreadable authorization rule would not be: routing grants nothing, so a
+ * row that cannot be read leaves the login local rather than letting somebody
+ * in.
+ */
+function toRoute(row: RuleRow): RoutingRule | null {
+  if (!row.upstreamIdpId) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    enabled: row.enabled,
+    position: row.position,
+    upstreamIdpId: row.upstreamIdpId,
+    applicationIds: row.applicationIds,
+    loginDomains: row.loginDomains,
+    ipRanges: row.ipRanges,
+    daysOfWeek: row.daysOfWeek,
+    startMinute: row.startMinute,
+    endMinute: row.endMinute,
+    timezone: row.timezone,
+  };
+}
+
+/**
  * Rejects a rule that could never be honoured as written. This is where a bad
  * rule is caught; the engine's backstops exist for rows that predate the check
  * or arrive some other way, not as a substitute for it.
  */
 function validate(input: RuleInput): void {
+  if (!(RULE_OUTCOMES as string[]).includes(input.outcome)) {
+    throw new Error(`unknown outcome: ${input.outcome}`);
+  }
   if (input.outcome === 'require_factor' && !input.factorType) {
     throw new Error('factorType is required when the outcome is require_factor');
+  }
+  if (input.outcome === 'federate') {
+    if (!input.upstreamIdpId) {
+      throw new Error('upstreamIdpId is required when the outcome is federate');
+    }
+    if (input.groupIds && input.groupIds.length > 0) {
+      throw new Error(
+        'a federate rule cannot match on group membership: the upstream is chosen before the user is known',
+      );
+    }
+    if (input.contractField) {
+      throw new Error(
+        'a federate rule cannot match on a contract attribute: the upstream is chosen before the user is known',
+      );
+    }
+    if (input.factorType) {
+      throw new Error(
+        'a federate rule cannot require a factor: requirements are decided by authorize() after the upstream returns',
+      );
+    }
+  } else if (input.upstreamIdpId) {
+    throw new Error('upstreamIdpId is only meaningful on a federate rule');
+  }
+  if ((input.loginDomains?.length ?? 0) > 0 && input.outcome !== 'federate') {
+    throw new Error('loginDomains is only meaningful on a federate rule');
   }
   if (input.factorType && !(FACTOR_TYPES as string[]).includes(input.factorType)) {
     throw new Error(`unknown factorType: ${input.factorType}`);
@@ -144,7 +213,7 @@ function validate(input: RuleInput): void {
  */
 async function assertFactorUsable(
   tx: TenantClient,
-  outcome: PolicyOutcome,
+  outcome: RuleOutcome,
   factorType: FactorType | null | undefined,
 ): Promise<void> {
   if (outcome !== 'require_factor' || factorType !== 'webauthn') return;
@@ -168,7 +237,7 @@ async function policyId(tx: TenantClient): Promise<string> {
 export async function loadPolicy(tx: TenantClient): Promise<LoadedPolicy> {
   const policy = await tx.authPolicy.findFirst();
   if (!policy) {
-    return { rules: [], fallback: { outcome: 'allow', factorType: null } };
+    return { rules: [], routes: [], fallback: { outcome: 'allow', factorType: null } };
   }
 
   const rows = await tx.authPolicyRule.findMany({
@@ -176,9 +245,18 @@ export async function loadPolicy(tx: TenantClient): Promise<LoadedPolicy> {
     orderBy: { position: 'asc' },
   });
 
+  // The split. A federate row must never reach evaluatePolicy: `asOutcome`
+  // would narrow its outcome to 'deny', and a routing rule sitting at position
+  // 0 would then refuse every sign-in in the tenant.
+  const federate = rows.filter((row) => row.outcome === 'federate');
+  const authorization = rows.filter((row) => row.outcome !== 'federate');
+
   const outcome = asOutcome(policy.defaultOutcome);
   return {
-    rules: rows.map(toRule),
+    rules: authorization.map(toRule),
+    routes: federate
+      .map(toRoute)
+      .filter((route): route is RoutingRule => route !== null),
     fallback: {
       outcome,
       factorType: outcome === 'require_factor' ? asFactor(policy.defaultFactorType) : null,
@@ -218,6 +296,8 @@ const data = (input: RuleInput) => ({
   startMinute: input.startMinute ?? null,
   endMinute: input.endMinute ?? null,
   timezone: input.timezone ?? null,
+  upstreamIdpId: input.upstreamIdpId ?? null,
+  loginDomains: input.loginDomains ?? [],
 });
 
 export async function addRule(tx: TenantClient, input: RuleInput): Promise<PolicyRule> {
