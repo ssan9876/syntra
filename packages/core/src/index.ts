@@ -1,5 +1,6 @@
 export * from './config.js';
 export * from './net/outbound.js';
+export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
 export * from './directory/user-service.js';
@@ -76,3 +77,5 @@ export * from './federation/routing.js';
 // upstreamClientSecret is exported because the federation flow needs it to
 // complete a token exchange. No route returns its value.
 export * from './federation/upstream-service.js';
+export * from './federation/federation-request-service.js';
+export * from './federation/jit-service.js';

@@ -34,6 +34,7 @@ import { registerOidcRoutes } from './routes/oidc-op.js';
 import { registerOidcInteractionRoutes } from './routes/oidc-interaction.js';
 import { registerOidcTokenRoutes } from './routes/oidc-token.js';
 import { registerOidcLogoutRoutes } from './routes/oidc-logout.js';
+import { registerFederationRoutes } from './routes/federation.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -181,6 +182,18 @@ export async function buildApp(
     masterKey: config.masterKey,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
+  });
+
+  // Syntra as a relying party. Registered before the OIDC provider routes so
+  // its own prefix is unambiguous: this is the consuming direction, and
+  // everything under /oidc is the issuing one.
+  await app.register(registerFederationRoutes, {
+    prefix: '/federation',
+    publicUrl: config.publicUrl,
+    masterKey: config.masterKey,
+    authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
+    outboundAllowPrivate: config.outboundAllowPrivate,
   });
 
   const oidcOptions = {
