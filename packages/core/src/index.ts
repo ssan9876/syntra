@@ -82,3 +82,4 @@ export * from './federation/routing.js';
 export * from './federation/upstream-service.js';
 export * from './federation/federation-request-service.js';
 export * from './federation/jit-service.js';
+export * from './provision/condition.js';
