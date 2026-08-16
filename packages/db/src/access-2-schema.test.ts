@@ -21,7 +21,11 @@ beforeEach(async () => {
   });
 });
 
-const key = (over: Record<string, unknown>) => ({
+// `over` is generic rather than Record<string, unknown> so that spreading it
+// keeps its literal keys. Widened, the result loses `kid` and `secretName` and
+// no longer satisfies Prisma's create input — which vitest never notices,
+// because it does not type-check.
+const key = <T extends object>(over: T) => ({
   tenantId,
   kind: 'oidc',
   alg: 'RS256',
