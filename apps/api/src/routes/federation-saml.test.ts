@@ -144,20 +144,46 @@ beforeEach(async () => {
     data: { primaryDomain: TEST_HOST },
   });
   await setUpFederation(ctx.tenantId);
+  binding = null;
 });
 
 afterEach(async () => {
   await ctx.app.close();
 });
 
-const get = (url: string) =>
-  ctx.app.inject({ method: 'GET', url, headers: { host: TEST_HOST } });
+/**
+ * The browser's `syntra_federation_bind` cookie, as one browser would carry
+ * it across the whole flow.
+ *
+ * This file used to inject with no cookies at all, which meant the request
+ * that STARTED a login and the request that DELIVERED the assertion shared no
+ * browser state whatsoever — and the happy-path test still passed. Read as a
+ * security property that was the attack: a session minted for a caller who
+ * demonstrably did not start the flow. Every helper carries the cookie now, so
+ * a test that wants the unbound case has to ask for it.
+ */
+const BINDING_COOKIE = 'syntra_federation_bind';
+let binding: string | null = null;
 
-const post = (payload: Record<string, string>) =>
+const bindingHeader = (present: boolean) =>
+  present && binding !== null ? { cookie: `${BINDING_COOKIE}=${binding}` } : {};
+
+const get = (url: string, withBinding = true) =>
+  ctx.app.inject({
+    method: 'GET',
+    url,
+    headers: { host: TEST_HOST, ...bindingHeader(withBinding) },
+  });
+
+const post = (payload: Record<string, string>, withBinding = true) =>
   ctx.app.inject({
     method: 'POST',
     url: '/federation/saml/acs',
-    headers: { host: TEST_HOST, 'content-type': 'application/x-www-form-urlencoded' },
+    headers: {
+      host: TEST_HOST,
+      'content-type': 'application/x-www-form-urlencoded',
+      ...bindingHeader(withBinding),
+    },
     payload: new URLSearchParams(payload).toString(),
   });
 
@@ -167,6 +193,10 @@ const start = async (login = 'jdoe@acme.test', next?: string) => {
     next ? `&next=${encodeURIComponent(next)}` : ''
   }`;
   const res = await get(url);
+  // The browser keeps whatever binding cookie it was handed, and Syntra reuses
+  // an existing one rather than replacing it, so this is set once per browser.
+  const issued = res.cookies.find((c) => c.name === BINDING_COOKIE)?.value;
+  if (issued !== undefined) binding = issued;
   if (res.statusCode !== 302) return { res, relayState: null, requestId: null };
   const redirect = new URL(res.headers.location as string);
   const xml = inflateRawSync(
@@ -288,6 +318,69 @@ describe('upstream SAML federation', () => {
     expect(hasSession(res.cookies)).toBe(false);
     expect(await usersOf(ctx.tenantId)).toHaveLength(0);
     expect(await eventsOf(ctx.tenantId, 'federation.assertion_refused')).toHaveLength(1);
+  });
+
+  it('refuses an assertion delivered to a browser that did not start the login', async () => {
+    // Login CSRF. The attacker starts a login of their own, signs in at the
+    // upstream as themselves, and instead of following the redirect posts the
+    // assertion and RelayState into a victim's browser with an auto-submitting
+    // cross-site form. Nothing about the message is forged: the signature, the
+    // issuer, the audience, the Recipient and the signed `InResponseTo` all
+    // check out, because it genuinely is the attacker's assertion answering
+    // the attacker's own request. What is missing is any evidence that THIS
+    // browser asked for it — and if Syntra accepts it, the victim is signed in
+    // as the attacker and every later action lands in his account.
+    //
+    // `sameSite` does not reach this: the assertion arrives as a cross-site
+    // POST that carries no cookie either way. The binding is what refuses it.
+    const { relayState, requestId } = await start();
+
+    const unbound = await post(
+      { SAMLResponse: upstreamResponse(requestId!), RelayState: relayState! },
+      false,
+    );
+    expect(unbound.statusCode).toBe(400);
+    expect(hasSession(unbound.cookies)).toBe(false);
+    expect(await usersOf(ctx.tenantId)).toHaveLength(0);
+
+    // The positive control. The same assertion, from the browser that started
+    // the login, still signs them in — so this test cannot pass by having
+    // broken federation for everybody, which is the failure mode the
+    // identity-provider half of this branch found the hard way.
+    const bound = await post({
+      SAMLResponse: upstreamResponse(requestId!),
+      RelayState: relayState!,
+    });
+    expect(bound.statusCode).toBe(302);
+    expect(hasSession(bound.cookies)).toBe(true);
+  });
+
+  it('refuses an assertion delivered with somebody else’s binding cookie', async () => {
+    // The attacker has a binding cookie of their own — starting a login is
+    // enough to get one — and it is no more use to them than none at all.
+    const { relayState, requestId } = await start();
+    const mine = binding!;
+    binding = null;
+    await start(); // a second browser, with a binding of its own
+    expect(binding).not.toBe(mine);
+
+    const res = await post({
+      SAMLResponse: upstreamResponse(requestId!),
+      RelayState: relayState!,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(hasSession(res.cookies)).toBe(false);
+    expect(await usersOf(ctx.tenantId)).toHaveLength(0);
+
+    // And the refusal did not spend the victim's ticket: a wrong binding must
+    // not be a way to cancel somebody else's sign-in.
+    binding = mine;
+    const bound = await post({
+      SAMLResponse: upstreamResponse(requestId!),
+      RelayState: relayState!,
+    });
+    expect(bound.statusCode).toBe(302);
+    expect(hasSession(bound.cookies)).toBe(true);
   });
 
   it('reads InResponseTo from the signature, not from the envelope', async () => {

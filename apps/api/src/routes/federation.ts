@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import formbody from '@fastify/formbody';
 import {
   authorize,
+  browserBindingDigest,
   evaluateRouting,
   findUpstream,
   findUpstreamBySlug,
@@ -9,6 +10,7 @@ import {
   loadPolicy,
   localMasterKeyProvider,
   mapClaims,
+  newBrowserBinding,
   openFederationRequest,
   recordEvent,
   takeFederationRequest,
@@ -67,6 +69,77 @@ function safeReturnTo(value: unknown): string {
   if (!value.startsWith('/')) return '/';
   if (value.startsWith('//') || value.startsWith('/\\')) return '/';
   return value;
+}
+
+/**
+ * The cookie that ties an in-flight upstream login to the browser that started
+ * it.
+ *
+ * Without it, the callback URL is an unbound bearer credential. An attacker
+ * starts a federation login in their own browser, completes it at the upstream
+ * as themselves, and — instead of following the redirect — copies it and sends
+ * it to a victim. The victim's browser loads it; the PKCE verifier, the nonce
+ * and the expected `InResponseTo` all come off the ROW rather than the
+ * browser, so the exchange succeeds, `linkOrProvision` returns the ATTACKER's
+ * user id, `authorize()` allows, and `issueSession` writes a Syntra session
+ * for the attacker's account into the victim's browser. The victim then works
+ * inside an account somebody else controls: what they upload lands there, and
+ * a second factor they enrol at the prompt is enrolled on the attacker's
+ * account.
+ *
+ * `state` does not close this. Stored server-side and looked up, it is a
+ * single-use replay defence; it is a CSRF defence only when it is bound to a
+ * browser (RFC 6819 section 4.4.1.8). Nor do the checks commit `6eae978`
+ * added — signed issuer, `InResponseTo` against the stored request ID,
+ * `Recipient` naming this ACS. Those defend the other direction, and they all
+ * pass here, because the assertion genuinely is the attacker's and genuinely
+ * answers the attacker's own request.
+ *
+ * This mirrors `SAML_BINDING_COOKIE` in `saml-idp.ts`, which closed the same
+ * defect on the identity-provider side of the same branch, down to the cookie
+ * options and the reasoning about `sameSite`: a Lax cookie *is* sent on a
+ * cross-site top-level GET — which is the shape of the OIDC attack — and on a
+ * cross-site form POST it is not, which is why the SAML ACS reads it too
+ * rather than relying on that. The binding check is what makes both safe.
+ *
+ * Scoped to `/federation`, because no other route reads it. Only its digest is
+ * stored, so the row is not a credential.
+ */
+const FEDERATION_BINDING_COOKIE = 'syntra_federation_bind';
+
+const FEDERATION_BINDING_COOKIE_OPTIONS = {
+  httpOnly: true,
+  // Not `strict`. The SAML assertion arrives as a cross-site form POST from
+  // the upstream, and a Strict cookie is not sent on one — the binding would
+  // then fail for every legitimate SAML login rather than for the attack.
+  sameSite: 'lax' as const,
+  path: '/federation',
+  // Follows NODE_ENV for the same reason the session cookie does: a
+  // development server runs on plain HTTP and a Secure cookie would never come
+  // back, which reads as "single sign-on is broken".
+  secure: process.env.NODE_ENV === 'production',
+  // Comfortably longer than an in-flight login's ten minutes, so the row is
+  // what expires the flow and not the cookie, and re-issued on every start.
+  maxAge: 30 * 60,
+};
+
+/**
+ * The binding digest to open a request under, setting the cookie if this
+ * browser has none yet.
+ *
+ * The existing nonce is reused rather than replaced because one browser can
+ * have several sign-ins in flight at once — two tabs entering two
+ * applications — and a fresh nonce per start would invalidate every earlier
+ * tab's callback.
+ */
+function bindBrowser(request: FastifyRequest, reply: FastifyReply): string {
+  const existing = request.cookies[FEDERATION_BINDING_COOKIE];
+  if (typeof existing === 'string' && existing !== '') {
+    return browserBindingDigest(existing);
+  }
+  const { nonce, digest } = newBrowserBinding();
+  reply.setCookie(FEDERATION_BINDING_COOKIE, nonce, FEDERATION_BINDING_COOKIE_OPTIONS);
+  return digest;
 }
 
 /** What the user is told when their identity provider produced no account. */
@@ -309,6 +382,7 @@ export async function registerFederationRoutes(
         upstreamIdpId: upstream.id,
         returnTo,
         applicationId: query.applicationId ?? null,
+        browserBinding: bindBrowser(request, reply),
         nonce: requestId,
       });
       const sp = upstreamSaml(samlOptionsFor(upstream, identity, requestId));
@@ -325,6 +399,7 @@ export async function registerFederationRoutes(
       upstreamIdpId: upstream.id,
       returnTo,
       applicationId: query.applicationId ?? null,
+      browserBinding: bindBrowser(request, reply),
       nonce,
       verifier,
       provider: keyProvider(),
@@ -356,10 +431,14 @@ export async function registerFederationRoutes(
       throw new ProblemError(400, 'federation-bad-callback', 'Missing state');
     }
 
-    // Single-use. A replayed callback finds nothing.
+    // Single-use, and bound to the browser that started the login. A replayed
+    // callback finds nothing; one presented by a browser that did not start
+    // this login is refused in exactly the same way, and neither is told
+    // which.
     const ticket = await takeFederationRequest(
       request.tenantId,
       query.state,
+      request.cookies[FEDERATION_BINDING_COOKIE] ?? null,
       keyProvider(),
     );
     if (!ticket) {
@@ -516,13 +595,16 @@ export async function registerFederationRoutes(
       throw new ProblemError(400, 'federation-bad-callback', 'Malformed response');
     }
 
-    // Single-use, and it is one half of what ties this response to a request
-    // Syntra started. The other half is the AuthnRequest ID below: RelayState
-    // alone proves only that somebody started a login, and an attacker holding
-    // a captured assertion can start one of their own.
+    // Single-use, and one of the three things that tie this response to a
+    // login this browser started. The AuthnRequest ID below ties it to a
+    // request SYNTRA started; the browser binding ties it to the browser that
+    // asked for it. RelayState alone proves only that somebody started a
+    // login, and an attacker holding a captured assertion can start one of
+    // their own and post it into somebody else's browser.
     const ticket = await takeFederationRequest(
       request.tenantId,
       relayState,
+      request.cookies[FEDERATION_BINDING_COOKIE] ?? null,
       keyProvider(),
     );
     if (!ticket) {

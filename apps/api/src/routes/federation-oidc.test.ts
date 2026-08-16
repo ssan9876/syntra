@@ -189,6 +189,7 @@ beforeEach(async () => {
   issuer = `http://127.0.0.1:${(upstreamServer.address() as AddressInfo).port}`;
 
   await setUpFederation(ctx.tenantId);
+  binding = null;
 });
 
 afterEach(async () => {
@@ -196,12 +197,40 @@ afterEach(async () => {
   await ctx.app.close();
 });
 
-const get = (url: string) =>
-  ctx.app.inject({ method: 'GET', url, headers: { host: TEST_HOST } });
+/**
+ * The browser's `syntra_federation_bind` cookie, carried across the flow.
+ *
+ * This file used to inject with no cookies at all, so the request that STARTED
+ * a login and the request that COMPLETED it shared no browser state — and the
+ * happy-path test passed. That is the attack rather than the feature: the
+ * callback URL is then a bearer credential the attacker can hand to a victim.
+ * Every helper carries the cookie now, and a test that wants the unbound case
+ * asks for it.
+ */
+const BINDING_COOKIE = 'syntra_federation_bind';
+let binding: string | null = null;
+
+const get = (url: string, withBinding = true) =>
+  ctx.app.inject({
+    method: 'GET',
+    url,
+    headers: {
+      host: TEST_HOST,
+      ...(withBinding && binding !== null ? { cookie: `${BINDING_COOKIE}=${binding}` } : {}),
+    },
+  });
+
+/** Starts a login and remembers the binding cookie the browser was handed. */
+const startLogin = async (login = 'jdoe@acme.test', query = '') => {
+  const res = await get(`/federation/start?login=${encodeURIComponent(login)}${query}`);
+  const issued = res.cookies.find((c) => c.name === BINDING_COOKIE)?.value;
+  if (issued !== undefined) binding = issued;
+  return res;
+};
 
 /** Drives the whole round trip, standing in for the upstream's redirect. */
 const federate = async (login = 'jdoe@acme.test') => {
-  const start = await get(`/federation/start?login=${encodeURIComponent(login)}`);
+  const start = await startLogin(login);
   if (start.statusCode !== 302) return { start, callback: null, state: null };
   const authUrl = new URL(start.headers.location as string);
   signedNonce = authUrl.searchParams.get('nonce');
@@ -274,6 +303,71 @@ describe('upstream OIDC federation', () => {
     );
     expect(replay.statusCode).toBe(400);
     expect(hasSession(replay.cookies)).toBe(false);
+  });
+
+  it('refuses a callback presented by a browser that did not start the login', async () => {
+    // Login CSRF, and the reason this file needed a cookie jar at all. The
+    // attacker starts a login in their own browser and signs in at the
+    // upstream as themselves. Instead of following the redirect they copy it
+    // and send it to the victim. Nothing about the request is forged: the
+    // ticket is live, and the PKCE verifier and the nonce come off the ROW
+    // rather than the browser, so the exchange succeeds and `linkOrProvision`
+    // returns the ATTACKER's user id -- which means `issueSession` would write
+    // the attacker's session into the victim's browser and the victim would
+    // never know they were working inside somebody else's account.
+    //
+    // `sameSite: lax` does not reach this either: the callback is a top-level
+    // cross-site GET, which is exactly the shape a Lax cookie IS sent on.
+    const start = await startLogin();
+    const authUrl = new URL(start.headers.location as string);
+    signedNonce = authUrl.searchParams.get('nonce');
+    const state = authUrl.searchParams.get('state')!;
+
+    const unbound = await get(
+      `/federation/oidc/callback?code=up-code&state=${encodeURIComponent(state)}`,
+      false,
+    );
+    expect(unbound.statusCode).toBe(400);
+    expect(hasSession(unbound.cookies)).toBe(false);
+    expect(await usersOf(ctx.tenantId)).toHaveLength(0);
+
+    // The positive control: the browser that started it still completes. A
+    // refusal that also refuses the legitimate flow proves nothing.
+    const bound = await get(
+      `/federation/oidc/callback?code=up-code&state=${encodeURIComponent(state)}`,
+    );
+    expect(bound.statusCode).toBe(302);
+    expect(hasSession(bound.cookies)).toBe(true);
+  });
+
+  it('refuses a callback presented with somebody else’s binding cookie', async () => {
+    const start = await startLogin();
+    const authUrl = new URL(start.headers.location as string);
+    signedNonce = authUrl.searchParams.get('nonce');
+    const state = authUrl.searchParams.get('state')!;
+    const mine = binding!;
+
+    // A second browser. Starting a login is enough to get a binding of one's
+    // own, and it is worth no more than none.
+    binding = null;
+    await startLogin();
+    expect(binding).not.toBe(mine);
+
+    const wrong = await get(
+      `/federation/oidc/callback?code=up-code&state=${encodeURIComponent(state)}`,
+    );
+    expect(wrong.statusCode).toBe(400);
+    expect(hasSession(wrong.cookies)).toBe(false);
+
+    // And it did not spend the ticket: a wrong binding must not be a way to
+    // cancel somebody else's sign-in.
+    binding = mine;
+    signedNonce = authUrl.searchParams.get('nonce');
+    const bound = await get(
+      `/federation/oidc/callback?code=up-code&state=${encodeURIComponent(state)}`,
+    );
+    expect(bound.statusCode).toBe(302);
+    expect(hasSession(bound.cookies)).toBe(true);
   });
 
   it('refuses a callback with a state nobody issued', async () => {
@@ -371,9 +465,7 @@ describe('upstream OIDC federation', () => {
 
   it('never redirects off-origin after federation', async () => {
     for (const bad of ['https://attacker.test/', '//attacker.test/', '/\\attacker.test']) {
-      const start = await get(
-        `/federation/start?login=jdoe@acme.test&next=${encodeURIComponent(bad)}`,
-      );
+      const start = await startLogin('jdoe@acme.test', `&next=${encodeURIComponent(bad)}`);
       const authUrl = new URL(start.headers.location as string);
       signedNonce = authUrl.searchParams.get('nonce');
       const callback = await get(
@@ -389,7 +481,7 @@ describe('upstream OIDC federation', () => {
   });
 
   it('sends the code back to the tenant identity, not to whatever Host said', async () => {
-    const start = await get('/federation/start?login=jdoe@acme.test');
+    const start = await startLogin();
     const redirectUri = new URL(start.headers.location as string).searchParams.get(
       'redirect_uri',
     );
@@ -474,7 +566,7 @@ describe('upstream OIDC federation', () => {
   });
 
   it('keeps the verifier out of the row and out of the vault once spent', async () => {
-    const start = await get('/federation/start?login=jdoe@acme.test');
+    const start = await startLogin();
     const authUrl = new URL(start.headers.location as string);
     signedNonce = authUrl.searchParams.get('nonce');
 

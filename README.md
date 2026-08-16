@@ -362,6 +362,22 @@ a posture an administrator may choose per application, and it has to be chosen
 — importing metadata that publishes no signing certificate is refused rather
 than quietly writing the weaker setting.
 
+**An in-flight sign-in is bound to the browser that started it.** Both halves
+of the protocol surface park a single-use row while somebody authenticates —
+`SamlAuthnRequest` while a service provider's user signs in here,
+`FederationRequest` while a user of ours signs in at an upstream — and both
+hand the browser an opaque identifier to come back with. Bound to nothing, that
+identifier is a bearer credential: whoever can make Syntra park a row can take
+the identifier out of their own redirect and give it to somebody else. On the
+identity-provider side that mints an assertion for the victim; on the consuming
+side the *victim* is signed in **as the attacker**, and every check on the
+upstream's answer passes, because it genuinely is the attacker's answer to the
+attacker's own request. A nonce in a cookie of its own — `syntra_saml_bind` and
+`syntra_federation_bind`, scoped to their own paths — is set when the row is
+parked, and only its SHA-256 is stored, so a row is not a credential even to
+something that can read the table. A callback that does not present the nonce
+is refused exactly as an expired one is, and it does not spend the row.
+
 **One grant is an exemption, deliberately.** The OAuth 2.0 *client credentials*
 grant issues an access token with no `authorize()` decision behind it, because
 there is no person for a decision to be about: it authenticates a client, and a
@@ -377,7 +393,14 @@ bounding it. It is bounded by four things:
   API refuses `client_credentials` as a grant type outright, so that flag is
   the only way it can be on.
 - Every issuance is audited as **`oidc.client_credentials_authorized`**, so
-  "what was issued without a policy decision" is one query.
+  "what was issued without a policy decision" is one query. The event is
+  written only after the client has authenticated, so it cannot be filled with
+  issuances that never happened by a caller who cannot issue anything.
+- The client **must authenticate with a secret**. RFC 6749 section 4.4 asks for
+  a confidential client, this exemption's whole justification is that the
+  client secret is the control standing in for a policy decision, and a client
+  registered with `token_endpoint_auth_method: none` has neither. Refused at
+  registration and again at the token endpoint.
 - The token is **scope-separated**: it may not carry `openid`, `profile`,
   `email` or `offline_access`, and UserInfo refuses it. Registration refuses
   those scopes too, so the configuration cannot exist in the first place. It

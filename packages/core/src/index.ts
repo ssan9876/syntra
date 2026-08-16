@@ -68,6 +68,7 @@ export * from './access/claims/resolve.js';
 export * from './access/claims/collect.js';
 export * from './access/claim-mapping-service.js';
 export * from './access/saml-config-service.js';
+export * from './access/browser-binding.js';
 export * from './access/saml-request-service.js';
 export * from './access/saml-session-service.js';
 export * from './access/oidc-store.js';

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { withTenant } from '@syntra/db';
+import { browserBindingMatches } from '../access/browser-binding.js';
 import { deleteSecret, getSecret, putSecret } from '../vault/vault-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 
@@ -30,6 +31,13 @@ const DEFAULT_TTL_MS = 10 * 60 * 1000;
  *
  * The `state` is 32 bytes from the CSPRNG. It is what the callback is looked
  * up by, so guessing it is guessing an in-flight login.
+ *
+ * `browserBinding` is the digest from `newBrowserBinding()`, and it is a
+ * required argument rather than an option — the same shape `parkAuthnRequest`
+ * uses on the identity-provider side, and for the same reason. A row with no
+ * binding identifies an in-flight login and no particular browser, which makes
+ * the callback URL a bearer credential an attacker can hand to a victim, and a
+ * caller that forgets it must not compile.
  */
 export async function openFederationRequest(
   tenantId: string,
@@ -37,6 +45,7 @@ export async function openFederationRequest(
     upstreamIdpId: string;
     returnTo: string;
     applicationId: string | null;
+    browserBinding: string;
     nonce?: string | undefined;
     verifier?: string | undefined;
     provider?: MasterKeyProvider | undefined;
@@ -60,6 +69,7 @@ export async function openFederationRequest(
         upstreamIdpId: input.upstreamIdpId,
         state,
         nonce: input.nonce ?? null,
+        browserBinding: input.browserBinding,
         verifierName,
         returnTo: input.returnTo,
         applicationId: input.applicationId,
@@ -91,10 +101,22 @@ export async function openFederationRequest(
  * The verifier is read and then deleted in the same transaction that consumes
  * the row. It is worth nothing after this call, and a vault that accumulates
  * one dead secret per sign-in is a vault nobody can audit.
+ *
+ * `presentedBinding` is the nonce out of the browser's cookie, not a digest,
+ * and it is a required argument for the same reason the write side's is: the
+ * check is most of the point of the row's existence and there is no caller for
+ * whom skipping it is correct. A missing cookie is `null` and never matches,
+ * and a wrong binding reads exactly like an expired ticket — null — so neither
+ * confirms from outside that a login is in flight.
+ *
+ * Checked BEFORE the row is spent. A mismatched callback must not consume
+ * somebody else's live sign-in: that would turn a failed attack into a denial
+ * of service against the person whose login it was.
  */
 export async function takeFederationRequest(
   tenantId: string,
   state: string,
+  presentedBinding: string | null,
   provider: MasterKeyProvider,
   now: Date = new Date(),
 ): Promise<(FederationTicket & { verifier: string | null }) | null> {
@@ -103,6 +125,7 @@ export async function takeFederationRequest(
       where: { state, consumedAt: null, expiresAt: { gt: now } },
     });
     if (!row) return null;
+    if (!browserBindingMatches(presentedBinding, row.browserBinding)) return null;
 
     const claimed = await tx.federationRequest.updateMany({
       where: { id: row.id, consumedAt: null },

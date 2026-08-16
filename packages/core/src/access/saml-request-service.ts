@@ -1,5 +1,6 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { withTenant } from '@syntra/db';
+import { browserBindingMatches } from './browser-binding.js';
 
 export interface ParkedAuthnRequest {
   id: string;
@@ -12,42 +13,6 @@ export interface ParkedAuthnRequest {
 }
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
-
-/**
- * A fresh browser-binding nonce, and the digest that is stored beside the
- * parked row.
- *
- * The nonce goes to the browser in a cookie of its own and never anywhere
- * else; only its SHA-256 is written to the database. A parked row is therefore
- * not a credential even to something that can read the table, which matters
- * because the row also carries `handle` in the clear and the pair would
- * otherwise be everything needed to complete somebody else's sign-in.
- *
- * 32 bytes, the same width as `handle` and as a session token. This value is
- * the whole of the CSRF defence on `/saml/continue`, so it is guessing-proof
- * or it is nothing.
- */
-export function newBrowserBinding(): { nonce: string; digest: string } {
-  const nonce = randomBytes(32).toString('base64url');
-  return { nonce, digest: browserBindingDigest(nonce) };
-}
-
-/** The stored form of a browser-binding nonce. */
-export function browserBindingDigest(nonce: string): string {
-  return createHash('sha256').update(nonce, 'utf8').digest('hex');
-}
-
-/**
- * Constant-time comparison of two hex digests.
- *
- * Both operands are public-length hex strings so the length check leaks
- * nothing, and `timingSafeEqual` throws on a length mismatch rather than
- * returning false, which is why the length is compared first.
- */
-function digestsMatch(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
-}
 
 /**
  * Parks a validated AuthnRequest while the user signs in.
@@ -121,12 +86,7 @@ export async function findParkedAuthnRequest(
       where: { handle, consumedAt: null, expiresAt: { gt: now } },
     });
     if (!row) return null;
-    if (
-      presentedBinding === null ||
-      !digestsMatch(browserBindingDigest(presentedBinding), row.browserBinding)
-    ) {
-      return null;
-    }
+    if (!browserBindingMatches(presentedBinding, row.browserBinding)) return null;
     return {
       id: row.id,
       applicationId: row.applicationId,

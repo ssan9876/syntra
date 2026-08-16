@@ -796,20 +796,31 @@ model UpstreamLink {
 /// One in-flight upstream login. Single-use: consuming it is what stops a
 /// captured callback being replayed.
 model FederationRequest {
-  id            String    @id @default(uuid()) @db.Uuid
-  tenantId      String    @db.Uuid
-  upstreamIdpId String    @db.Uuid
-  /// OIDC `state`, or the SAML AuthnRequest ID.
-  state         String
-  nonce         String?
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @db.Uuid
+  upstreamIdpId  String    @db.Uuid
+  /// What the browser carries and this row is looked up by: the OIDC `state`,
+  /// or the SAML `RelayState`.
+  state          String
+  nonce          String?
+  /// SHA-256 of the nonce in the browser's `syntra_federation_bind` cookie.
+  ///
+  /// Not a convenience: without it `state` identifies an in-flight login and
+  /// no particular browser, so an attacker can complete their own login at the
+  /// upstream, keep the callback URL instead of following it, and hand it to a
+  /// victim -- who is then silently signed in AS THE ATTACKER. Every check on
+  /// the assertion or the id_token passes, because it genuinely is the
+  /// attacker's and genuinely answers the attacker's own request. See
+  /// browser-binding.ts.
+  browserBinding String
   /// Vault secret name holding the PKCE code_verifier, for OIDC.
-  verifierName  String?
+  verifierName   String?
   /// Where the browser goes after authorize() allows. Always same-origin.
-  returnTo      String
-  applicationId String?   @db.Uuid
-  createdAt     DateTime  @default(now())
-  expiresAt     DateTime
-  consumedAt    DateTime?
+  returnTo       String
+  applicationId  String?   @db.Uuid
+  createdAt      DateTime  @default(now())
+  expiresAt      DateTime
+  consumedAt     DateTime?
 
   @@index([tenantId])
   @@index([tenantId, state])
