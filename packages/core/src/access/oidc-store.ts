@@ -1,4 +1,4 @@
-import { withTenant } from '@syntra/db';
+import { withTenant, type TenantClient } from '@syntra/db';
 
 export interface StoredArtifact {
   payload: Record<string, unknown>;
@@ -136,6 +136,36 @@ export async function artifactRevokeByGrantId(
   await withTenant(tenantId, async (tx) => {
     await tx.oidcArtifact.deleteMany({ where: { grantId } });
   });
+}
+
+/**
+ * Every artifact belonging to one account, gone at once.
+ *
+ * This is what makes spec section 9.4 point 4 true — "completing a reset
+ * revokes every existing session and refresh token for that user" — for the
+ * refresh tokens that actually exist. Access I's `RefreshToken` table is
+ * empty; the tokens an OIDC relying party holds live here, and until this
+ * existed a password reset revoked the sessions and left a fourteen-day
+ * rotating refresh token in the attacker's hands with no way to cut it short.
+ *
+ * Takes a transaction rather than opening its own, unlike everything else in
+ * this file, because its callers already hold one: a reset that changed the
+ * password and then failed to revoke would be worse than either half alone,
+ * so the two belong in the same transaction, and `withTenant` is
+ * `prisma.$transaction` and does not nest.
+ *
+ * Deletes rather than marks. `oidc-provider` reads its own artifacts back
+ * through `artifactFind`, so a row is either there or the token does not
+ * exist; there is no revoked state for it to honour. Grants go with the rest —
+ * a grant that survived would let a still-live authorization code mint new
+ * tokens against the old password.
+ */
+export async function revokeArtifactsForUser(
+  tx: TenantClient,
+  userId: string,
+): Promise<number> {
+  const result = await tx.oidcArtifact.deleteMany({ where: { accountId: userId } });
+  return result.count;
 }
 
 /** Housekeeping. Called by the scheduler; expiry is enforced on read anyway. */

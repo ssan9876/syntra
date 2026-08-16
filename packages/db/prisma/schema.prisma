@@ -863,6 +863,9 @@ model OidcArtifact {
   @@unique([tenantId, model, artifactId])
   @@index([tenantId])
   @@index([tenantId, grantId])
+  /// Revoking everything one account holds -- what a password reset does --
+  /// is a scan of this table without it. See revokeArtifactsForUser.
+  @@index([tenantId, accountId])
 }
 
 /// Which service providers a Syntra session has signed into, so single logout

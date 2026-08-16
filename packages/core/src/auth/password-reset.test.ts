@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 import * as OTPAuth from 'otpauth';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { artifactFind, artifactUpsert } from '../access/oidc-store.js';
 import { createUser } from '../directory/user-service.js';
 import { notificationsSettled } from '../notify/delivery.js';
 import { memoryTransport } from '../notify/notification-service.js';
@@ -326,6 +327,32 @@ describe('completePasswordReset', () => {
     await complete();
     const rows = await withTenant(tenantId, (tx) => tx.refreshToken.findMany());
     expect(rows[0]!.revokedAt).not.toBeNull();
+  });
+
+  it('revokes the OIDC refresh tokens, which is where the real ones live', async () => {
+    // `RefreshToken` above is Access I's table and is empty in this product.
+    // The tokens an OIDC relying party actually holds are `OidcArtifact` rows,
+    // and a reset that revoked only the empty table satisfied spec section 9.4
+    // point 4 in letter and in nothing else. Another account's artifact is
+    // written alongside, so this cannot pass by deleting the table.
+    const other = await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'other', email: 'other@acme.test', displayName: 'Other' }),
+    );
+    for (const [model, id, accountId] of [
+      ['RefreshToken', 'rt-1', userId],
+      ['Grant', 'g-1', userId],
+      ['RefreshToken', 'rt-2', other.id],
+    ] as const) {
+      await artifactUpsert(tenantId, model, id, { accountId, kind: model }, 3600);
+    }
+
+    await request('jdoe');
+    await complete();
+
+    expect(await artifactFind(tenantId, 'RefreshToken', 'rt-1')).toBeNull();
+    expect(await artifactFind(tenantId, 'Grant', 'g-1')).toBeNull();
+    // The positive control: somebody else's refresh token is untouched.
+    expect(await artifactFind(tenantId, 'RefreshToken', 'rt-2')).not.toBeNull();
   });
 
   it('writes an audit event', async () => {

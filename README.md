@@ -302,8 +302,10 @@ and authenticator apps still work.
 
 **Self-service password reset answers identically whether or not the account
 exists.** A user with a second factor must present it, completion revokes every
-session and refresh token, and an account whose password lives upstream is told
-by mail where to go instead.
+session and refresh token — including the OpenID Connect refresh tokens and
+grants relying parties hold, which is where the ones that actually exist live —
+and an account whose password lives upstream is told by mail where to go
+instead. Deactivating a user and a sync-driven leaver revoke the same set.
 
 **`Tenant.adminMfaRequired` makes a second factor mandatory for reaching the
 administration console.** It is off by default so an existing tenant's owner is
@@ -465,16 +467,6 @@ immediately, because a user's status is re-read on every request.
 Syntra does not sign the person out of the upstream identity provider that
 authenticated them, so the next sign-in may complete without a prompt. That is
 the upstream's session, not Syntra's, and Syntra never had a handle on it.
-
-**A password reset does not revoke OpenID Connect refresh tokens.** Completing
-a self-service reset calls `revokeAllRefreshTokensForUser`, which writes to the
-`RefreshToken` table — Syntra's own. OIDC refresh tokens live in `OidcArtifact`,
-which oidc-provider owns, and nothing touches them. **Spec section 9.4 is
-therefore not satisfied**: a stolen password that has already been exchanged
-for an OIDC refresh token keeps working after the reset, for as long as the
-refresh token's lifetime allows. Sessions and Syntra's own refresh tokens *are*
-revoked. Until this is closed, treat a compromised account as needing the
-client's tokens revoked out of band.
 
 **Token revocation and introspection are advertised and do not work.** The
 discovery document lists `<issuer>/token/revocation` and

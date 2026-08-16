@@ -253,6 +253,30 @@ describe('refresh tokens', () => {
     expect(tokens.refresh_token).toBeUndefined();
   });
 
+  it('stops honouring a refresh token once the password is reset', async () => {
+    const { config, tokens } = await codeFlow('openid offline_access');
+    expect(tokens.refresh_token).toBeTruthy();
+
+    // Spec section 9.4 point 4. This is the revocation a completed password
+    // reset performs, and the same one deactivation and a sync-driven leaver
+    // perform: the user stays active throughout, so nothing here is carried
+    // by `findAccount` refusing an inactive account the way the deactivation
+    // test below is. A phished password already exchanged for a refresh token
+    // has to die with the password.
+    const { revokeAllRefreshTokensForUser } = await import('@syntra/core');
+    await withTenant(ctx.tenantId, (tx) => revokeAllRefreshTokensForUser(tx, userId));
+
+    await expect(client.refreshTokenGrant(config, tokens.refresh_token!)).rejects.toThrow();
+
+    // The positive control. Refresh has to still work for a token issued
+    // after the reset, or the assertion above would hold just as well with
+    // the whole grant type broken.
+    const after = await codeFlow('openid offline_access');
+    await expect(
+      client.refreshTokenGrant(after.config, after.tokens.refresh_token!),
+    ).resolves.toBeTruthy();
+  });
+
   it('stops honouring a refresh token once the user is deactivated', async () => {
     const { config, tokens } = await codeFlow('openid offline_access');
     const { deactivateUser } = await import('@syntra/core');
