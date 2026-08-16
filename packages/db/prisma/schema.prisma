@@ -148,7 +148,9 @@ model Person {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  contracts Contract[]
+  contracts           Contract[]
+  targetAccounts      TargetAccount[]
+  provisionExceptions ProvisionException[]
 
   @@unique([tenantId, externalId])
   @@index([tenantId])
@@ -974,4 +976,438 @@ model SamlAuthnRequest {
 
   @@index([tenantId])
   @@index([tenantId, handle])
+}
+
+/// A system Provision writes accounts and entitlements into. The bind
+/// credential is never on this row: it lives in the Core vault under
+/// `secretName`, so a target can be read and edited without exposing it.
+model TargetSystem {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  name     String
+  /// 'activeDirectory'. A string rather than an enum so a second connector
+  /// family needs no migration.
+  type     String @default("activeDirectory")
+  /// URL, TLS mode, certificate verification, bind DN, base DN, entitlement
+  /// search base, archive container, provenance attribute, page size,
+  /// timeouts. Validated as a whole by adTargetConfigSchema, so it is
+  /// replaced whole on a save rather than merged.
+  config   Json
+  /// Names the Core vault entry holding the bind credential.
+  secretName String
+  /// The directory source that reads this same system back into Syntra. When
+  /// set, account status propagates inward (spec §4) and a successful apply
+  /// enqueues a run of it.
+  pairedDirectorySourceId String? @db.Uuid
+
+  schedule  String?
+  autoApply Boolean @default(false)
+  enabled   Boolean @default(true)
+
+  /// 'additive' | 'authoritative'. Additive is the default because an engine
+  /// that silently strips what it did not grant gets switched off. Drift is
+  /// reported under BOTH modes (Ruling P2).
+  enforcementMode String @default("additive")
+
+  /// Desired state is computed against `now + preHireDays` for whether an
+  /// account is required, and against `now` for whether it is enabled.
+  preHireDays                    Int  @default(0)
+  entitlementRevocationDelayDays Int  @default(0)
+  disableGraceDays               Int  @default(0)
+  /// Null means never. Archiving moves the object and strips its remaining
+  /// managed entitlements, so it is opted into.
+  archiveAfterDays               Int?
+  /// Re-enabling an account disabled for longer than this is confirmable.
+  /// Deliberately not derived from disableGraceDays: with that at its default
+  /// of zero, deriving it would make every re-enable confirmable, including
+  /// the correction the morning after.
+  reenableWithoutConfirmationDays Int @default(7)
+
+  createAccountThresholdPercent        Int @default(20)
+  disableAccountThresholdPercent       Int @default(10)
+  archiveAccountThresholdPercent       Int @default(2)
+  revokeEntitlementThresholdPercent    Int @default(10)
+  deactivateSyntraUserThresholdPercent Int @default(10)
+  /// The second axis. Revoking every holder of one entitlement is 0.2% of a
+  /// 40,000-holding tenant and total for the 90 people it happens to.
+  perEntitlementThresholdPercent       Int @default(50)
+  personPopulationDropPercent          Int @default(20)
+
+  maxAttempts   Int     @default(3)
+  concurrency   Int     @default(4)
+  /// A rename breaks certificate subjects, profile paths, file ownership and
+  /// mailbox aliases. Off by default, and always confirmable when on.
+  renameEnabled Boolean @default(false)
+
+  lastRunAt        DateTime?
+  lastAppliedRunAt DateTime?
+
+  /// Ruling P4. A scheduled run that did not start because one was awaiting
+  /// review is surfaced here, on the target's own row, because that is where
+  /// somebody looks. An audit event nobody reads is not a surfacing.
+  consecutiveSkippedRuns Int       @default(0)
+  lastSkippedAt          DateTime?
+  lastSkipReason         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile     AccountProfile?
+  rules       BusinessRule[]
+  entitlements Entitlement[]
+  accounts    TargetAccount[]
+  runs        ProvisionRun[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+/// One per target. Rules answer *whether* somebody gets an account; the
+/// profile answers *what that account looks like*. Keeping attributes out of
+/// rules removes the whole class of "two rules both want to set department".
+model AccountProfile {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  /// @unique, not a hand-written `account_profile_one_per_target` index in the
+  /// migration as the brief had it: Prisma refuses a one-to-one relation whose
+  /// defining side is not unique (P1012, "A one-to-one relation must use unique
+  /// fields on the defining side"), and `TargetSystem.profile` is
+  /// `AccountProfile?`. This yields `AccountProfile_targetSystemId_key`, which
+  /// enforces exactly the same rule; a second index on the same column would
+  /// have been redundant.
+  targetSystemId String       @unique @db.Uuid
+  target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+
+  /// e.g. "%person.givenName.first%.%person.familyName%"
+  correlationKeyTemplate String
+  /// 'numericSuffix' — base, then base with an incrementing suffix.
+  uniquenessStrategy     String @default("numericSuffix")
+  maxUniquenessAttempts  Int    @default(20)
+  /// e.g. "OU=%contract.department%,OU=Users,%baseDn%"
+  containerTemplate      String
+  /// Used when containerTemplate resolves to an empty value. Required: a
+  /// template that resolves to nothing must land somewhere known, and
+  /// Provision does not create organizational units in somebody else's domain.
+  fallbackContainer      String
+  /// { "displayName": "...", "userPrincipalName": "...", "mail": "..." }
+  attributeTemplates     Json
+  /// { "length": 20, "requireUpper": true, ... }
+  initialPasswordPolicy  Json
+  /// 'manager' | 'personalEmail' | 'vaultOnly'
+  initialPasswordDelivery String @default("vaultOnly")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+/// A condition over ONE contract, mapped to entitlements in ONE target, plus
+/// whether a match requires an account there at all. Evaluated against each
+/// active contract independently and unioned.
+model BusinessRule {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  targetSystemId String       @db.Uuid
+  target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  /// A closed declarative expression, validated by Zod, evaluated by a closed
+  /// interpreter. Nothing an administrator types is executed.
+  condition      Json
+  grantsAccount  Boolean      @default(true)
+  enabled        Boolean      @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entitlements RuleEntitlement[]
+
+  @@index([tenantId])
+  @@index([targetSystemId])
+}
+
+/// A join table, so "which rules grant this entitlement" is a query rather
+/// than a scan over JSON — which is what the guard's remit check and the
+/// person-detail "why" view both need.
+model RuleEntitlement {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @db.Uuid
+  ruleId        String       @db.Uuid
+  rule          BusinessRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  entitlementId String       @db.Uuid
+  entitlement   Entitlement  @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+
+  @@unique([ruleId, entitlementId])
+  @@index([tenantId])
+  @@index([entitlementId])
+}
+
+/// A grantable thing the target offers. `externalId` is the target's own
+/// immutable identifier — the group's objectGUID — never its name or DN. A
+/// name-keyed entitlement turns a group rename into a mass revoke-and-regrant.
+model Entitlement {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  targetSystemId String       @db.Uuid
+  target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  externalId     String
+  /// The target's distinguished name for this object, as last read.
+  /// Active Directory reports a user's group membership as a list of DNs in
+  /// `memberOf`, never as objectGUIDs, so mapping membership back onto
+  /// entitlements needs the DN. It is NOT the identity -- `externalId` is --
+  /// which is why it is nullable and may go stale between catalog refreshes.
+  dn             String?
+  /// 'group' | 'licence' | 'role'
+  type           String
+  displayName    String
+  description    String?
+  /// 'present' | 'missing' | 'unreadable'. A rule naming a missing or
+  /// unreadable entitlement is unresolvable AS A WHOLE — see plan.ts.
+  status         String   @default("present")
+  /// Current holders, the denominator of the per-entitlement guard axis.
+  holderCount    Int      @default(0)
+  lastSeenAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rules    RuleEntitlement[]
+  holdings AccountEntitlement[]
+
+  @@unique([tenantId, targetSystemId, externalId])
+  @@index([tenantId])
+}
+
+/// One account per person per target — which is what makes a rehire find its
+/// own account instead of creating a second one.
+model TargetAccount {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  targetSystemId String       @db.Uuid
+  target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  personId       String       @db.Uuid
+  person         Person       @relation(fields: [personId], references: [id], onDelete: Restrict)
+  /// The target's immutable object identifier. Null until the account exists
+  /// in the target: a `pending` row holds its correlation key reserved so two
+  /// runs cannot generate the same login.
+  anchor         String?
+  correlationKey String
+  /// 'pending' | 'active' | 'disabled' | 'archived' | 'missing_at_target'
+  /// | 'conflict'
+  status         String   @default("pending")
+  statusReason   String?
+  disabledAt     DateTime?
+  disableDueAt   DateTime?
+  archiveDueAt   DateTime?
+  createdActionId String?  @db.Uuid
+  lastReconciledAt DateTime?
+  /// What Provision last wrote, so update_account can carry the complete
+  /// managed set and a no-op run stays a no-op.
+  lastAppliedAttributes Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entitlements AccountEntitlement[]
+
+  @@unique([tenantId, targetSystemId, personId])
+  @@unique([tenantId, targetSystemId, correlationKey])
+  @@index([tenantId])
+  @@index([targetSystemId, status])
+}
+
+/// `origin` separates convergence from drift and is not derivable after the
+/// fact, so it is recorded at the moment of the grant.
+model AccountEntitlement {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @db.Uuid
+  accountId     String        @db.Uuid
+  account       TargetAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  entitlementId String        @db.Uuid
+  /// Cascade, not Restrict. `Entitlement` cascades from `TargetSystem`, and
+  /// PostgreSQL checks RESTRICT immediately -- so with Restrict here, deleting
+  /// a target that holds a single live holding fails with a foreign-key
+  /// violation rather than the confirmable delete deleteTarget offers. The
+  /// holding is a record of a grant into this entitlement; it is meaningless
+  /// once the entitlement row is gone, and the account's own row cascades from
+  /// the target by the same reasoning.
+  entitlement   Entitlement   @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+  /// 'rule' — Provision granted it because a rule said so.
+  /// 'manual' — an administrator linked it in Syntra deliberately.
+  /// 'discovered' — the target already held it when Provision first looked.
+  origin        String
+  grantedByRuleId String? @db.Uuid
+  grantedAt     DateTime  @default(now())
+  revokedAt     DateTime?
+  /// 'held' | 'revoked'
+  state         String    @default("held")
+
+  @@index([tenantId])
+  @@index([accountId])
+  @@index([entitlementId, state])
+}
+
+/// 'running' | 'previewed' | 'blocked' | 'applying' | 'applied'
+/// | 'partially_applied' | 'failed'. A run reaches `applied` only when every
+/// action it proposed reached a terminal state and none failed.
+model ProvisionRun {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  targetSystemId String       @db.Uuid
+  target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  status         String       @default("running")
+  startedAt      DateTime     @default(now())
+  finishedAt     DateTime?
+
+  createAccountCount        Int @default(0)
+  updateAccountCount        Int @default(0)
+  enableAccountCount        Int @default(0)
+  disableAccountCount       Int @default(0)
+  archiveAccountCount       Int @default(0)
+  renameAccountCount        Int @default(0)
+  grantEntitlementCount     Int @default(0)
+  revokeEntitlementCount    Int @default(0)
+  deactivateSyntraUserCount Int @default(0)
+  reactivateSyntraUserCount Int @default(0)
+
+  personsEvaluated           Int @default(0)
+  /// The denominator of the population-collapse refusal.
+  personsWithActiveContract  Int @default(0)
+  personsUnprocessable       Int @default(0)
+  accountsReadFromTarget     Int @default(0)
+  entitlementsReadFromTarget Int @default(0)
+
+  requiresConfirmation Boolean @default(false)
+  blockedReason        String?
+  confirmedByUserId    String? @db.Uuid
+  error                String?
+
+  actions    ProvisionAction[]
+  exceptions ProvisionException[]
+  drift      DriftFinding[]
+
+  @@index([tenantId])
+  @@index([targetSystemId, startedAt])
+}
+
+/// One materialized row per proposed action. The review screen and the
+/// enforcement loop read the same table, so there is no version of "the
+/// preview said one thing and the apply did another".
+model ProvisionAction {
+  id       String       @id @default(uuid()) @db.Uuid
+  tenantId String       @db.Uuid
+  runId    String       @db.Uuid
+  run      ProvisionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  /// create_account | update_account | enable_account | disable_account
+  /// | archive_account | rename_account | grant_entitlement
+  /// | revoke_entitlement | deactivate_syntra_user | reactivate_syntra_user
+  /// THERE IS NO DELETE OF ANY KIND, AND NO TYPE THAT COULD BECOME ONE.
+  actionType    String
+  personId      String? @db.Uuid
+  accountId     String? @db.Uuid
+  entitlementId String? @db.Uuid
+  before        Json?
+  after         Json?
+  /// Which rules caused this. Recorded at evaluation time because it is
+  /// unanswerable afterwards, and "why does this person hold this?" is the
+  /// most-asked question of any provisioning product.
+  attributedRuleIds String[] @default([])
+  /// The order this action is applied in, from ACTION_ORDER (spec section 14:
+  /// within a person, create then attribute updates then grants then
+  /// revocations then disable then archive).
+  ///
+  /// A column rather than an ORDER BY on createdAt, because `now()` in
+  /// PostgreSQL is TRANSACTION START time: every row written by phase 7's
+  /// single `createMany` carries an identical createdAt, so ordering by it
+  /// imposes no order at all. A grant attempted before the create it depends
+  /// on fails `not_found`, nondeterministically -- which passes CI and fails
+  /// in production.
+  sequence      Int      @default(0)
+  /// 'proposed' | 'in_flight' | 'applied' | 'skipped' | 'failed'
+  /// | 'pending_retry' | 'conflict' | 'superseded'
+  status        String   @default("proposed")
+  attempts      Int      @default(0)
+  nextAttemptAt DateTime?
+  message       String?
+  appliedAt     DateTime?
+  /// Whether applying this needs an explicit tick even in an otherwise
+  /// unblocked run: a rename, or a re-enable outside the window.
+  requiresConfirmation Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  /// The apply loop reads by status. Directory Sync indexed its equivalent on
+  /// (runId, changeType) and then queried by status; do not repeat that.
+  @@index([runId, status])
+  /// The apply loop and the run-detail route both read in sequence order.
+  @@index([runId, sequence])
+  @@index([tenantId])
+  @@index([personId])
+}
+
+/// A person Provision could not fully evaluate for a target. Deliberately a
+/// table and not a count-plus-reasons pair: with people, the only useful
+/// question is *which* eleven, and the answer needs to be a list a human can
+/// work down.
+model ProvisionException {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  runId          String       @db.Uuid
+  run            ProvisionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  personId       String       @db.Uuid
+  person         Person       @relation(fields: [personId], references: [id], onDelete: Restrict)
+  targetSystemId String       @db.Uuid
+  /// 'no_contracts' | 'unresolvable_rule' | 'template_unresolvable'
+  /// | 'container_missing' | 'name_generation_exhausted'
+  /// | 'target_read_incomplete' | 'account_conflict'
+  kind    String
+  message String
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([runId])
+  @@index([personId])
+}
+
+/// A finding that persists across runs is updated rather than duplicated, so
+/// the count on the dashboard is a count of problems and not a count of runs.
+model DriftFinding {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  targetSystemId String       @db.Uuid
+  /// The run that most recently observed it. Nullable: `claimSyntraUsers`
+  /// (Task 15) records a finding and can be called when no run has ever
+  /// existed for this target, and resolving a run id it does not have by
+  /// `findFirstOrThrow` would turn a drift report into an exception.
+  runId          String?      @db.Uuid
+  run            ProvisionRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+  accountId      String?      @db.Uuid
+  entitlementId  String?      @db.Uuid
+  /// The target's own identifier for the object a finding is about, when that
+  /// object is not one Syntra holds a row for -- an orphan account. It cannot
+  /// go in `entitlementId`, which is `@db.Uuid` and would reject
+  /// `fake-anchor-0001` outright and, against real Active Directory, would
+  /// accept a valid UUID that points at no Entitlement.
+  subjectAnchor  String?
+  /// 'unmanaged_entitlement' | 'missing_grant' | 'orphan_account'
+  /// | 'account_missing_at_target' | 'unexpected_status'
+  kind   String
+  detail Json
+  /// 'open' | 'acknowledged' | 'resolved'
+  status String @default("open")
+  /// A stable identity for "the same problem", so the upsert has something
+  /// NOT NULL to key on. accountId and entitlementId are both nullable and a
+  /// unique index over nullable columns constrains nothing, so this column
+  /// exists rather than a four-column partial index that would not work.
+  /// Built by driftFingerprint() in reconcile.ts.
+  fingerprint String
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([tenantId, targetSystemId, fingerprint])
+  @@index([tenantId])
+  @@index([targetSystemId, status])
 }
