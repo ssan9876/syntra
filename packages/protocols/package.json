@@ -1,0 +1,23 @@
+{
+  "name": "@syntra/protocols",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@node-saml/node-saml": "5.1.0",
+    "@syntra/core": "workspace:*",
+    "@xmldom/xmldom": "0.9.11",
+    "jose": "6.2.9",
+    "oidc-provider": "9.11.3",
+    "openid-client": "6.8.5",
+    "xml-crypto": "6.1.2",
+    "xml-encryption": "6.0.0",
+    "xpath": "0.0.34"
+  },
+  "devDependencies": {
+    "@types/oidc-provider": "9.11.1",
+    "@types/xml-encryption": "1.2.4"
+  }
+}

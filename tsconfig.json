@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/db" },
     { "path": "packages/core" },
+    { "path": "packages/protocols" },
     { "path": "packages/contracts" },
     { "path": "packages/connectors" },
     { "path": "packages/ui" },
