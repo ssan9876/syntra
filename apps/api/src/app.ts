@@ -33,6 +33,7 @@ import { registerSamlIdpRoutes } from './routes/saml-idp.js';
 import { registerOidcRoutes } from './routes/oidc-op.js';
 import { registerOidcInteractionRoutes } from './routes/oidc-interaction.js';
 import { registerOidcTokenRoutes } from './routes/oidc-token.js';
+import { registerOidcLogoutRoutes } from './routes/oidc-logout.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -190,6 +191,7 @@ export async function buildApp(
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   };
   await app.register(registerOidcInteractionRoutes, { prefix: '/oidc', ...oidcOptions });
+  await app.register(registerOidcLogoutRoutes, { prefix: '/oidc', ...oidcOptions });
   // Its own encapsulated scope, so the body parser it registers to authenticate
   // the client cannot escape into the catch-all's.
   await app.register(registerOidcTokenRoutes, { prefix: '/oidc', ...oidcOptions });

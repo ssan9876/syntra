@@ -59,11 +59,32 @@ export async function providerFor(
   const built = (async () => {
     const [clients, jwks] = await Promise.all([deps.loadClients(), deps.jwks()]);
 
+    // oidc-provider only recognises a scope a client requests if it appears
+    // in `configuration.scopes` — `openid`, `email` and `profile` arrive there
+    // for free because `collectScopes` derives them from the `claims` object
+    // below, but a scope with no matching claims block (an application
+    // resource scope like `reports.read`, the shape a client-credentials
+    // client uses) never would be, and every client that registered one would
+    // fail client-metadata validation with "scope must only contain
+    // Authorization Server supported scope values" — not at startup, but the
+    // first time that client authenticates, which is a confusing place to
+    // discover a registration mistake. Syntra's own `OidcClient.scopes` has no
+    // fixed vocabulary (see `oidc-client-service.ts`), so every scope any
+    // client in this tenant is actually registered for is unioned in here,
+    // alongside the standard baseline oidc-provider ships as its default.
+    const scopes = new Set(['openid', 'offline_access']);
+    for (const client of clients as { scope?: string }[]) {
+      for (const scope of (client.scope ?? '').split(' ').filter((s) => s !== '')) {
+        scopes.add(scope);
+      }
+    }
+
     const configuration: Configuration = {
       adapter: makeAdapterFactory(tenantId) as never,
       clients: clients as never,
       jwks: jwks as never,
       cookies: { keys: deps.cookieKeys },
+      scopes: [...scopes],
 
       // The user store stays Syntra's. This callback is the only way
       // oidc-provider learns anything about a person.
@@ -145,6 +166,17 @@ export async function providerFor(
         profile: ['name', 'preferred_username', 'given_name', 'family_name', 'updated_at'],
       },
 
+      // A refresh token is issued when the client asked for offline_access and
+      // is registered for the grant — the standard's rule, stated explicitly
+      // rather than left to a default that has changed between versions.
+      issueRefreshToken: async (_ctx, client, code) =>
+        client.grantTypeAllowed('refresh_token') && code.scopes.has('offline_access'),
+
+      // Syntra's own paths. `end_session` is answered by
+      // `registerOidcLogoutRoutes` first — it ends the Syntra session — and
+      // then handed on to oidc-provider.
+      routes: { end_session: '/session/end', userinfo: '/me' },
+
       // RS256 only. `none` is not an algorithm and HS256 with a client secret
       // invites the alg-confusion class of bug outright.
       enabledJWA: {
@@ -164,6 +196,12 @@ export async function providerFor(
         Grant: 1209600,
       },
 
+      // Rotate on every use, not on oidc-provider's default 70%-of-lifetime
+      // heuristic. Rotation is what makes a leaked refresh token detectable:
+      // the legitimate client and the attacker both present the same token,
+      // the second presentation is a replay, and oidc-provider revokes the
+      // whole grant. A token that is not rotated is a bearer credential valid
+      // for two weeks with no way to notice it was copied.
       rotateRefreshToken: true,
     };
 

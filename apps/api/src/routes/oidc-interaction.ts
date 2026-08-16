@@ -126,6 +126,20 @@ export async function registerOidcInteractionRoutes(
       // value taken off the request. The `syntraDecision` key is what
       // `syntraAuthorizePrompt` looks for; without it the prompt fires again
       // and the request loops rather than issuing anything.
+      //
+      // `consent: {}` is resolved unconditionally alongside it, for the same
+      // reason: `oidc-provider`'s built-in consent prompt is `requestable`,
+      // so whenever a client asks for it explicitly (`prompt=consent` — the
+      // only way to keep `offline_access` alive through `check_scope.js`, see
+      // `provider-factory.ts`), its own gating check
+      // (`interaction_policy/prompt.js`) stays pending forever unless
+      // `result.consent` is present, independent of whether the scope is
+      // actually covered. Syntra never runs an interactive consent screen —
+      // `loadExistingGrant` grants exactly what a client is registered for on
+      // every launch — so there is nothing to withhold here; omitting this key
+      // does not skip consent, it only leaves the built-in prompt unable to
+      // ever resolve, and the authorization request loops between here and
+      // `/auth` until it exhausts its redirect budget.
       await provider.interactionFinished(
         request.raw,
         reply.raw,
@@ -135,6 +149,7 @@ export async function registerOidcInteractionRoutes(
             remember: false,
             ...(decision.satisfiedFactor ? { amr: [decision.satisfiedFactor] } : {}),
           },
+          consent: {},
           [SYNTRA_DECISION_KEY]: { clientId, at: Date.now() },
         } as never,
         { mergeWithLastSubmission: false },

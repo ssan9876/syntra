@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders } from 'node:http';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   consumeAuthorizationDecision,
+  findOidcClient,
   recordEvent,
   verifyClientSecret,
 } from '@syntra/core';
@@ -180,6 +181,73 @@ async function refuseWithoutDecision(
   };
 }
 
+/** The scopes a user token carries. A machine token may never carry one. */
+const USER_SCOPES = new Set(['openid', 'profile', 'email', 'offline_access']);
+
+/**
+ * The client credentials arm.
+ *
+ * This grant issues a token with no `authorize()` decision behind it — the one
+ * path in the product that does, accepted deliberately by ruling A2-5 because
+ * it authenticates a client rather than a person. The exemption is only
+ * defensible while it stays bounded, and these are the bounds:
+ *
+ * - The client must have been enabled for it explicitly. Checked here against
+ *   Syntra's own row rather than relying on `oidc-provider`'s `grant_types`,
+ *   which is derived from the same flag — two reads of one fact, so a bug in
+ *   the derivation fails closed rather than opening the grant.
+ * - The requested scopes must not include any a user token carries, so the
+ *   result cannot be presented where a user token is accepted.
+ * - Whatever is authorized is audited under its own action, so the set of
+ *   tokens issued without a policy decision is enumerable.
+ *
+ * The event records that *Syntra* permitted issuance. `oidc-provider` may
+ * still refuse afterwards for a protocol reason — an unregistered scope, a
+ * malformed request — so the event means "this passed the checks that stand in
+ * for a policy decision", which is exactly the question it exists to answer.
+ */
+async function guardClientCredentials(
+  request: FastifyRequest,
+  params: URLSearchParams,
+): Promise<{ error: string; error_description: string } | null> {
+  const clientId = presentedCredentials(request, params)?.clientId ?? params.get('client_id');
+  if (clientId === null || clientId === '') {
+    return { error: 'invalid_client', error_description: 'Client authentication failed' };
+  }
+
+  const record = await findOidcClient(request.tenantId, clientId);
+  if (!record?.clientCredentialsEnabled) {
+    return {
+      error: 'unauthorized_client',
+      error_description: 'This client is not enabled for the client credentials grant',
+    };
+  }
+
+  const requested = (params.get('scope') ?? '').split(' ').filter((s) => s !== '');
+  const overlap = requested.filter((s) => USER_SCOPES.has(s));
+  if (overlap.length > 0) {
+    return {
+      error: 'invalid_scope',
+      error_description: `A client credentials token may not carry ${overlap.join(', ')}`,
+    };
+  }
+
+  await request.db((tx) =>
+    recordEvent(tx, {
+      // No user. That is the point, and a null actor is the honest record of
+      // it rather than an invented service account.
+      actorUserId: null,
+      action: 'oidc.client_credentials_authorized',
+      targetType: 'Application',
+      targetId: record.applicationId,
+      outcome: 'success',
+      sourceIp: request.ip,
+      payload: { clientId, scope: requested, noPolicyDecision: true },
+    }),
+  );
+  return null;
+}
+
 /**
  * The token endpoint.
  *
@@ -230,9 +298,16 @@ export async function registerOidcTokenRoutes(
         }
       }
 
-      if (params.get('grant_type') === 'authorization_code') {
+      const grantType = params.get('grant_type');
+      if (grantType === 'authorization_code') {
         const refusal = await refuseWithoutDecision(request, provider, params);
         if (refusal) return reply.status(400).type('application/json').send(refusal);
+      } else if (grantType === 'client_credentials') {
+        const refusal = await guardClientCredentials(request, params);
+        if (refusal) {
+          const status = refusal.error === 'invalid_client' ? 401 : 400;
+          return reply.status(status).type('application/json').send(refusal);
+        }
       }
 
       const forProvider = substitutedRequest(
