@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "type": "module",
   "main": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "license": "Apache-2.0",
   "dependencies": {
     "@node-saml/node-saml": "5.1.0",
@@ -18,7 +20,9 @@
     "xpath": "0.0.34"
   },
   "devDependencies": {
+    "@peculiar/x509": "2.0.0",
     "@types/oidc-provider": "9.11.1",
-    "@types/xml-encryption": "1.2.4"
+    "@types/xml-encryption": "1.2.4",
+    "reflect-metadata": "0.2.2"
   }
 }
