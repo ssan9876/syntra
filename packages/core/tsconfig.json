@@ -13,6 +13,9 @@
   "references": [
     {
       "path": "../db"
+    },
+    {
+      "path": "../connectors"
     }
   ]
 }
