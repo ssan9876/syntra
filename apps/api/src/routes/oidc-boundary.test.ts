@@ -112,6 +112,63 @@ describe('the body-parsing boundary', () => {
     expect(JSON.parse(res.body).issuer).toBe(`http://${TEST_HOST}/oidc`);
   });
 
+  it('lets a form-encoded POST reach the provider on the catch-all', async () => {
+    // The discovery document advertises `<issuer>/token/revocation` and
+    // `<issuer>/token/introspection`, and neither is the exact `/token` route
+    // the token plugin owns — so both land on the catch-all, which had no
+    // parser for `application/x-www-form-urlencoded` and therefore answered
+    // 415 to every client before the handler ran. Advertising an endpoint that
+    // refuses every request is worse than not advertising it.
+    //
+    // The parser there parses nothing: it hands the stream straight back so
+    // `request.raw` is still unread when oidc-provider takes the socket. What
+    // this asserts is that the request got as far as oidc-provider *and* that
+    // oidc-provider could read the body — a 400 naming the client is an answer
+    // from the provider; 415 is Fastify refusing in front of it.
+    for (const path of ['/oidc/token/revocation', '/oidc/token/introspection']) {
+      const res = await ctx.app.inject({
+        method: 'POST',
+        url: path,
+        headers: { host: TEST_HOST, 'content-type': 'application/x-www-form-urlencoded' },
+        payload: new URLSearchParams({
+          token: 'nonsense',
+          client_id: 'boundary',
+          client_secret: boundarySecret,
+        }).toString(),
+      });
+      expect(res.statusCode, path).not.toBe(415);
+      expect(res.statusCode, path).not.toBe(404);
+      // And the answer is oidc-provider's, in OAuth's own shape.
+      expect(JSON.parse(res.body), path).toHaveProperty('error');
+    }
+  });
+
+  it('cannot authenticate a client on those endpoints, and says so plainly', async () => {
+    // The counterpart to the case above, written down rather than discovered.
+    // Client authentication for `/token` is Syntra's own — constant-time,
+    // against the stored SHA-256 hash — and oidc-provider is handed a
+    // *placeholder* secret it never sees the real value of. That is what makes
+    // `/token` safe, and it is also why every other client-authenticated
+    // endpoint answers `invalid_client` to a client presenting its real
+    // secret: the provider is checking against a value nobody has.
+    //
+    // Revocation and introspection are outside spec section 7 and are not
+    // wired to Syntra's client authentication. The README says so; this says
+    // so where somebody changing the token endpoint will read it.
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/oidc/token/revocation',
+      headers: { host: TEST_HOST, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: new URLSearchParams({
+        token: 'nonsense',
+        client_id: 'boundary',
+        client_secret: boundarySecret,
+      }).toString(),
+    });
+    expect(res.statusCode).toBe(401);
+    expect(JSON.parse(res.body).error).toBe('invalid_client');
+  });
+
   it('parses a form body inside the SAML plugin, where one is registered', async () => {
     const res = await ctx.app.inject({
       method: 'POST',

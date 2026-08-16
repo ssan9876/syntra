@@ -240,6 +240,31 @@ export async function registerOidcRoutes(
    * through, and `oidc-boundary.test.ts` asserts nothing has added a parser at
    * the root.
    */
+  /**
+   * A parser that parses nothing, so a form-encoded POST is not refused before
+   * the handler runs.
+   *
+   * Fastify answers 415 for a content type it has no parser for, and it does
+   * that in front of the route — so `POST /oidc/revocation` and
+   * `POST /oidc/introspection` answered "Unsupported Media Type" to every
+   * client, while the discovery document advertised both. Verified against a
+   * running deployment, not inferred.
+   *
+   * This is the stream form of `addContentTypeParser`, not the `parseAs` form
+   * the token endpoint uses: it hands `payload` straight back without reading
+   * a byte, so `request.raw` is still unread when oidc-provider takes the
+   * socket. Consuming it here — which is what any real parser does — would
+   * leave oidc-provider waiting on a stream that had already ended.
+   *
+   * Registered inside this plugin, like the token endpoint's own. The root
+   * instance still has no urlencoded parser, and `oidc-boundary.test.ts`
+   * asserts exactly that.
+   */
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    (_request, payload, done) => done(null, payload),
+  );
+
   app.all('/*', async (request: FastifyRequest, reply: FastifyReply) => {
     const provider = await oidcProviderFor(request, options);
     reply.hijack();
