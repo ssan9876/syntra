@@ -12,3 +12,4 @@ export * from './oidc/adapter.js';
 export * from './oidc/interaction-prompt.js';
 export * from './oidc/provider-factory.js';
 export * from './upstream/oidc-client.js';
+export * from './upstream/saml-sp.js';
