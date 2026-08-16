@@ -192,6 +192,17 @@ const USER_SCOPES = new Set(['openid', 'profile', 'email', 'offline_access']);
  * it authenticates a client rather than a person. The exemption is only
  * defensible while it stays bounded, and these are the bounds:
  *
+ * - The client must have **authenticated**. RFC 6749 section 4.4 gives this
+ *   grant to confidential clients only, and ruling A2-5 accepts the exemption
+ *   on the stated grounds that "the control there is the client secret" — so a
+ *   request that presents no credential at all has no control on it whatever.
+ *   A client registered with `token_endpoint_auth_method: none` is honoured by
+ *   `oidc-provider` at `/token`, which means that without this line the only
+ *   thing standing between an anonymous caller and a bearer token is knowledge
+ *   of a `client_id`: a value that appears in integration tickets,
+ *   configuration files and error messages, and is not a secret. Checked
+ *   first, before anything is read or written, so an unauthenticated caller
+ *   also cannot reach the audit write below.
  * - The client must have been enabled for it explicitly. Checked here against
  *   Syntra's own row rather than relying on `oidc-provider`'s `grant_types`,
  *   which is derived from the same flag — two reads of one fact, so a bug in
@@ -205,13 +216,25 @@ const USER_SCOPES = new Set(['openid', 'profile', 'email', 'offline_access']);
  * still refuse afterwards for a protocol reason — an unregistered scope, a
  * malformed request — so the event means "this passed the checks that stand in
  * for a policy decision", which is exactly the question it exists to answer.
+ * It is written only after the client has authenticated: an event that an
+ * anonymous caller can append is not a record an investigation can trust, and
+ * `oidc.client_credentials_authorized` is the one the README tells an auditor
+ * to read.
  */
 async function guardClientCredentials(
   request: FastifyRequest,
   params: URLSearchParams,
 ): Promise<{ error: string; error_description: string } | null> {
-  const clientId = presentedCredentials(request, params)?.clientId ?? params.get('client_id');
-  if (clientId === null || clientId === '') {
+  // The credential itself was already verified against the stored hash by the
+  // handler below; what this establishes is that there WAS one. A caller that
+  // presented nothing has been past no check at all.
+  const credentials = presentedCredentials(request, params);
+  if (credentials === null) {
+    return { error: 'invalid_client', error_description: 'Client authentication failed' };
+  }
+
+  const clientId = credentials.clientId;
+  if (clientId === '') {
     return { error: 'invalid_client', error_description: 'Client authentication failed' };
   }
 

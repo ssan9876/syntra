@@ -141,7 +141,25 @@ export const oidcClientRequest = z
   .refine((v) => !v.clientCredentialsEnabled || v.scopes.length > 0, {
     message: 'A client credentials client needs at least one scope of its own',
     path: ['scopes'],
-  });
+  })
+  .refine(
+    // RFC 6749 section 4.4: the client credentials grant is for confidential
+    // clients. Ruling A2-5 accepts the chokepoint exemption on the stated
+    // ground that "the control there is the client secret" -- and a client
+    // registered with `none` presents no secret, so the only thing left
+    // between an anonymous caller and a bearer token is knowledge of a client
+    // id. `oidc-provider` accepts the combination without complaint, so this
+    // is the layer that has to refuse it, and it is refused at registration as
+    // well as at the token endpoint for the same reason condition 3 is: an
+    // administrator who cannot save it never has to be told later.
+    (v) => !v.clientCredentialsEnabled || v.tokenEndpointAuthMethod !== 'none',
+    {
+      message:
+        'A client credentials client must authenticate with a secret — ' +
+        'a token issued to a caller that proved nothing has no control on it at all',
+      path: ['tokenEndpointAuthMethod'],
+    },
+  );
 export type OidcClientRequest = z.input<typeof oidcClientRequest>;
 
 export const claimMappingRequest = z

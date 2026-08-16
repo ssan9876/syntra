@@ -401,6 +401,44 @@ describe('admin protocol configuration', () => {
     }
   });
 
+  it('refuses a client credentials client that authenticates with nothing', async () => {
+    const applicationId = await oidcApplication('machine3');
+
+    // RFC 6749 section 4.4, and the ground ruling A2-5 was granted on: the
+    // control on this grant is the client secret. `none` means there is no
+    // secret, so an administrator saving this would be publishing a token
+    // endpoint that answers anyone who knows the client id -- and be told
+    // nothing about it.
+    const open = await put(`/api/admin/applications/${applicationId}/oidc`, {
+      clientId: 'open',
+      redirectUris: [],
+      grantTypes: [],
+      clientCredentialsEnabled: true,
+      scopes: ['reports.read'],
+      tokenEndpointAuthMethod: 'none',
+    });
+    expect(open.statusCode).toBe(400);
+
+    // The positive control: `none` is not being refused across the board, and
+    // neither is this machine client. Only the combination is.
+    const publicClient = await put(`/api/admin/applications/${applicationId}/oidc`, {
+      clientId: 'open',
+      redirectUris: ['https://spa.acme.test/cb'],
+      tokenEndpointAuthMethod: 'none',
+    });
+    expect(publicClient.statusCode).toBe(200);
+
+    const confidential = await put(`/api/admin/applications/${applicationId}/oidc`, {
+      clientId: 'open',
+      redirectUris: [],
+      grantTypes: [],
+      clientCredentialsEnabled: true,
+      scopes: ['reports.read'],
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    });
+    expect(confidential.statusCode).toBe(200);
+  });
+
   it('refuses a wildcard or prefix redirect URI', async () => {
     const applicationId = await oidcApplication('w');
     for (const bad of [

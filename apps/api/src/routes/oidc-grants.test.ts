@@ -358,6 +358,67 @@ describe('client credentials — the one grant that bypasses authorize()', () =>
     const config = await discover();
     await expect(client.clientCredentialsGrant(config)).rejects.toThrow();
   });
+
+  /** A token request with no Authorization header and no `client_secret`. */
+  const anonymousTokenRequest = (form: Record<string, string>) =>
+    ctx.app.inject({
+      method: 'POST',
+      url: '/oidc/token',
+      headers: { host: TEST_HOST, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: new URLSearchParams(form).toString(),
+    });
+
+  const clientCredentialEvents = () =>
+    withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.count({ where: { action: 'oidc.client_credentials_authorized' } }),
+    );
+
+  it('refuses a client credentials request that presents no credential at all', async () => {
+    // The client is registered `none`, which `oidc-provider` honours at
+    // /token, so nothing downstream refuses this: without the guard the only
+    // control left is knowledge of a client id, which is not a secret.
+    // `upsertOidcClient` is called directly rather than through the admin API
+    // because the contract now refuses this registration outright -- the two
+    // halves are independent and this one has to be provable on its own.
+    await machineClient({ tokenEndpointAuthMethod: 'none' });
+
+    const res = await anonymousTokenRequest({
+      grant_type: 'client_credentials',
+      client_id: 'job',
+      scope: 'reports.read',
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('invalid_client');
+    expect(res.body).not.toContain('access_token');
+
+    // A2-5 condition 2. The event an auditor is told to read must not be
+    // writable by a caller who authenticated nothing.
+    expect(await clientCredentialEvents()).toBe(0);
+
+    // The positive control: re-registered to authenticate with a secret, the
+    // same client still gets a token. Without this the assertion above would
+    // pass just as well if the grant were broken for everybody.
+    const config = await machineClient();
+    const tokens = await client.clientCredentialsGrant(config, { scope: 'reports.read' });
+    expect(tokens.access_token).toBeTruthy();
+    expect(await clientCredentialEvents()).toBe(1);
+  });
+
+  it('writes no audit event for an unauthenticated request against a confidential client', async () => {
+    // The client here authenticates with a secret and the request carries
+    // none. oidc-provider answers 401 either way; what this is about is that
+    // Syntra does not first record `outcome: success` in the hash-chained log
+    // for an issuance that never happened.
+    await machineClient();
+
+    const res = await anonymousTokenRequest({
+      grant_type: 'client_credentials',
+      client_id: 'job',
+      scope: 'reports.read',
+    });
+    expect(res.statusCode).toBe(401);
+    expect(await clientCredentialEvents()).toBe(0);
+  });
 });
 
 describe('UserInfo', () => {
