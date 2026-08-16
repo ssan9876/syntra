@@ -15,6 +15,7 @@ import {
   ensureActiveKey,
   fetchExternalDocument,
   findApplication,
+  findSamlConfigByEntityId,
   findSamlConfigForApplication,
   listClaimMappings,
   localMasterKeyProvider,
@@ -91,11 +92,44 @@ export async function registerAdminProtocolRoutes(
     return application;
   };
 
+  /**
+   * Refuses an entity ID another application in this tenant already holds.
+   *
+   * `(tenantId, spEntityId)` is unique in the database, which is what actually
+   * guarantees `findSamlConfigByEntityId` resolves one row. This is the
+   * readable half: without it the administrator gets whatever a unique
+   * violation looks like from three layers down, and the thing they need to
+   * know -- which application already has it -- is nowhere in it.
+   */
+  const refuseTakenEntityId = async (
+    request: FastifyRequest,
+    applicationId: string,
+    spEntityId: string,
+  ) => {
+    const clash = await request.db((tx) => findSamlConfigByEntityId(tx, spEntityId));
+    if (!clash || clash.applicationId === applicationId) return;
+    const owner = await request.db((tx) => findApplication(tx, clash.applicationId));
+    throw new ProblemError(
+      409,
+      'saml-entity-id-taken',
+      'That service provider entity ID is already registered',
+      `The application "${owner?.name ?? clash.applicationId}" is registered for ` +
+        `${spEntityId}. An entity ID identifies one service provider, and an ` +
+        `AuthnRequest carrying it has to resolve to exactly one configuration.`,
+      {
+        spEntityId,
+        applicationId: clash.applicationId,
+        application: owner?.name ?? null,
+      },
+    );
+  };
+
   app.put('/applications/:id/saml', manage, async (request) => {
     const { id } = idParam.parse(request.params);
     const body = samlConfigRequest.parse(request.body);
 
     await requireApplication(request, id, 'saml');
+    await refuseTakenEntityId(request, id, body.spEntityId);
 
     const tenant = await request.db((tx) =>
       tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
@@ -229,6 +263,8 @@ export async function registerAdminProtocolRoutes(
         'This application encrypts its assertions and the imported document leaves nothing to encrypt to.',
       );
     }
+
+    await refuseTakenEntityId(request, id, input.spEntityId);
 
     const tenant = await request.db((tx) =>
       tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),

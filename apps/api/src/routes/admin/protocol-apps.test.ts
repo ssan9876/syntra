@@ -224,6 +224,35 @@ describe('admin protocol configuration', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('refuses an entity ID another application already holds, and names it', async () => {
+    const first = await samlApplication('first');
+    expect((await put(`/api/admin/applications/${first}/saml`, SP)).statusCode).toBe(200);
+
+    const second = await samlApplication('second');
+    const clash = await put(`/api/admin/applications/${second}/saml`, SP);
+    expect(clash.statusCode).toBe(409);
+    // An administrator staring at this needs to know which application has it.
+    expect(clash.json().application).toBe('FIRST');
+    expect(clash.json().applicationId).toBe(first);
+
+    // The same document, imported rather than typed, is refused the same way.
+    const imported = await post(`/api/admin/applications/${second}/saml/import`, {
+      xml: SP_METADATA,
+    });
+    expect(imported.statusCode).toBe(409);
+
+    // The positive control, twice over: the first application can still be
+    // updated with its own entity ID, and the second can register a different
+    // one. Uniqueness must not turn into "a SAML application may be saved
+    // once".
+    expect((await put(`/api/admin/applications/${first}/saml`, SP)).statusCode).toBe(200);
+    const other = await put(`/api/admin/applications/${second}/saml`, {
+      ...SP,
+      spEntityId: 'https://other.example.test/metadata',
+    });
+    expect(other.statusCode).toBe(200);
+  });
+
   it('refuses protocol configuration on an application of the other type', async () => {
     const bookmark = await newApplication({
       name: 'Handbook',

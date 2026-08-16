@@ -667,7 +667,12 @@ model SamlConfig {
   updatedAt               DateTime    @updatedAt
 
   @@index([tenantId])
-  @@index([tenantId, spEntityId])
+  /// UNIQUE, not just indexed. `findSamlConfigByEntityId` resolves an incoming
+  /// AuthnRequest by entity ID, so two applications registering the same one
+  /// make the entry point of an allowlist-based control non-deterministic:
+  /// which application answers is whatever the planner returns, and the
+  /// symptom is one of two integrations intermittently ceasing to work.
+  @@unique([tenantId, spEntityId])
 }
 
 /// An OIDC relying party. One per Application of type 'oidc'.
