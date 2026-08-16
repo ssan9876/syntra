@@ -29,6 +29,7 @@ import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
 import { registerAdminApplicationRoutes } from './routes/admin/applications.js';
 import { registerAdminPolicyRoutes } from './routes/admin/policies.js';
 import { registerPortalRoutes } from './routes/portal.js';
+import { registerSamlIdpRoutes } from './routes/saml-idp.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -168,6 +169,14 @@ export async function buildApp(
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
     publicUrl: config.publicUrl,
+  });
+
+  await app.register(registerSamlIdpRoutes, {
+    prefix: '/saml',
+    publicUrl: config.publicUrl,
+    masterKey: config.masterKey,
+    authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
   });
 
   return app;

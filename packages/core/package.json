@@ -11,6 +11,7 @@
     "@peculiar/x509": "2.0.0",
     "@simplewebauthn/server": "13.3.2",
     "@syntra/connectors": "workspace:*",
+    "@syntra/contracts": "workspace:*",
     "@syntra/db": "workspace:*",
     "argon2": "^0.45.1",
     "ipaddr.js": "2.5.0",

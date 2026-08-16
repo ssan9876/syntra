@@ -59,6 +59,9 @@ importers:
       '@syntra/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@syntra/protocols':
+        specifier: workspace:*
+        version: link:../../packages/protocols
       fastify:
         specifier: ^5.2.0
         version: 5.12.0
@@ -155,6 +158,9 @@ importers:
       '@syntra/connectors':
         specifier: workspace:*
         version: link:../connectors
+      '@syntra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@syntra/db':
         specifier: workspace:*
         version: link:../db
@@ -214,6 +220,9 @@ importers:
       '@node-saml/node-saml':
         specifier: 5.1.0
         version: 5.1.0
+      '@syntra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@syntra/core':
         specifier: workspace:*
         version: link:../core
