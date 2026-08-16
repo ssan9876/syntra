@@ -285,10 +285,15 @@ describe('a peer that never answers', () => {
 
 describe('ldapConnector.write', () => {
   it('refuses, since writing back is not in this slice', async () => {
+    // A real member of the tagged union. The directory-source connector is a
+    // reader: it satisfies the widened signature and refuses every operation,
+    // which is what keeps `write` on `Connector<C>` rather than only on
+    // `TargetConnector<C>` honest.
     const result = await ldapConnector.write(config, {
-      objectType: 'user',
+      op: 'disable_account',
+      actionId: 'action-1',
       anchor: 'a1',
-      attributes: {},
+      reason: 'unused',
     });
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/not implemented/i);
