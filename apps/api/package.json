@@ -22,6 +22,8 @@
   },
   "devDependencies": {
     "@node-saml/node-saml": "5.1.0",
-    "otpauth": "9.5.1"
+    "@peculiar/x509": "2.0.0",
+    "otpauth": "9.5.1",
+    "reflect-metadata": "0.2.2"
   }
 }

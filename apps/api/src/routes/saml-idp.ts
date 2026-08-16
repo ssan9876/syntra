@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import formbody from '@fastify/formbody';
+import { idParam } from '@syntra/contracts';
 import {
   authorize,
   collectSubjectFacts,
   consumeParkedAuthnRequest,
+  endSsoSessions,
   ensureActiveKey,
   findApplication,
   findParkedAuthnRequest,
@@ -26,10 +28,14 @@ import {
 } from '@syntra/core';
 import {
   buildIdpMetadata,
+  buildLogoutResponse,
   buildSignedResponse,
   decodePostMessage,
   decodeRedirectMessage,
+  encryptAssertion,
+  logoutPostForm,
   parseAuthnRequest,
+  parseLogoutRequest,
   postBindingForm,
   verifyPostSignature,
   verifyRedirectSignature,
@@ -338,6 +344,55 @@ export async function registerSamlIdpRoutes(
   });
 
   /**
+   * Identity-provider-initiated sign-on.
+   *
+   * There is no AuthnRequest, so there is no InResponseTo and nothing for the
+   * service provider to correlate against. That is exactly why it is off by
+   * default per application (`allowIdpInitiated`): an unsolicited response is
+   * an assertion the SP cannot tie to a request its own user started, which is
+   * the login-CSRF shape SAML's own security considerations warn about. A
+   * tenant that needs it turns it on for the applications that support it.
+   *
+   * The parked row is created here with `requestId: null`, so the rest of the
+   * flow — assignment check, authorize(), assertion — is byte-for-byte the
+   * SP-initiated path.
+   */
+  app.get('/start/:applicationId', rateLimited, async (request, reply) => {
+    const { tenant, identity } = await samlContext(request, options);
+    const { id: applicationId } = idParam.parse({ id: (request.params as { applicationId: string }).applicationId });
+
+    const config = await request.db((tx) => findSamlConfigForApplication(tx, applicationId));
+    if (!config) throw new ProblemError(404, 'saml-unknown-sp', 'Not a SAML application');
+    if (!config.allowIdpInitiated) {
+      throw new ProblemError(
+        409, 'saml-idp-initiated-disabled',
+        'This application only accepts sign-ins that start at the application itself.',
+      );
+    }
+
+    const acsUrl = resolveAcsUrl(config, null);
+    if (acsUrl === null) {
+      throw new ProblemError(409, 'saml-no-acs', 'This application has no assertion consumer service URL');
+    }
+
+    // A single cast, narrowed through that same reference: re-casting the
+    // same property access twice (once to check, once to read) defeats
+    // control-flow narrowing under `noUncheckedIndexedAccess`, and the read
+    // comes back typed `string | undefined`, not the narrowed `string`.
+    const startQuery = request.query as Record<string, string | undefined>;
+    const relayState = typeof startQuery.RelayState === 'string' ? startQuery.RelayState : null;
+
+    const parked = await parkAuthnRequest(request.tenantId, {
+      applicationId,
+      requestId: null,
+      acsUrl,
+      relayState,
+      forceAuthn: false,
+    });
+    return completeSso(request, reply, { tenant, identity, config, parked });
+  });
+
+  /**
    * The only place a SAML assertion is issued, and it issues one only from an
    * `allow`.
    *
@@ -489,13 +544,145 @@ export async function registerSamlIdpRoutes(
       });
     });
 
+    let deliverable = xml;
+    if (ctx.config.encryptAssertions) {
+      if (!ctx.config.encryptionCertificate) {
+        throw new ProblemError(
+          409, 'saml-no-encryption-certificate',
+          'This application is configured to receive encrypted assertions but has no certificate registered',
+        );
+      }
+      // Outside every transaction: RSA plus AES over the whole assertion.
+      const assertion = xml.slice(
+        xml.indexOf('<saml:Assertion'),
+        xml.lastIndexOf('</saml:Assertion>') + '</saml:Assertion>'.length,
+      );
+      const encrypted = await encryptAssertion(assertion, ctx.config.encryptionCertificate);
+      deliverable = xml.replace(assertion, encrypted);
+    }
+
     return reply
       .type('text/html; charset=utf-8')
       .header('cache-control', 'no-store')
       .send(postBindingForm({
         acsUrl: ctx.parked.acsUrl,
-        samlResponse: xml,
+        samlResponse: deliverable,
         relayState: ctx.parked.relayState,
       }));
   }
+
+  const handleSlo = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    binding: 'HTTP-Redirect' | 'HTTP-POST',
+  ) => {
+    const { identity } = await samlContext(request, options);
+    const source = (binding === 'HTTP-POST' ? request.body : request.query) as
+      | Record<string, string | undefined>
+      | undefined;
+
+    // A LogoutResponse coming back from a service provider we notified. There
+    // is nothing left to do; the session is already gone.
+    if (typeof source?.SAMLResponse === 'string') {
+      return reply.redirect('/logged-out', 302);
+    }
+
+    const encoded = source?.SAMLRequest;
+    if (typeof encoded !== 'string') {
+      throw new ProblemError(400, 'saml-bad-request', 'No SAMLRequest');
+    }
+    const xml = binding === 'HTTP-POST' ? decodePostMessage(encoded) : decodeRedirectMessage(encoded);
+    const unverified = parseLogoutRequest(xml);
+
+    const config = await request.db((tx) => findSamlConfigByEntityId(tx, unverified.issuer));
+    if (!config) throw new ProblemError(404, 'saml-unknown-sp', 'Unknown service provider');
+
+    // A logout request is destructive, so it is verified on exactly the same
+    // terms as an authentication request. An SP that registered certificates
+    // and asked for signed requests gets its signature checked; one that did
+    // not is trusted only to end its own user's session, which is what it
+    // could do by other means anyway.
+    let trusted = unverified;
+    if (config.wantAuthnRequestsSigned) {
+      if (binding === 'HTTP-POST') {
+        const signed = verifyPostSignature(xml, config.spCertificates);
+        if (signed === null) {
+          throw new ProblemError(400, 'saml-bad-signature', 'Invalid logout signature');
+        }
+        trusted = parseLogoutRequest(signed);
+      } else {
+        const rawQuery = signedRedirectQuery(request.raw.url ?? '', 'SAMLRequest');
+        const q = request.query as Record<string, string | undefined>;
+        if (
+          typeof q.Signature !== 'string' || typeof q.SigAlg !== 'string' ||
+          !verifyRedirectSignature({
+            rawQuery, signature: q.Signature, sigAlg: q.SigAlg,
+            certificates: config.spCertificates,
+          })
+        ) {
+          throw new ProblemError(400, 'saml-bad-signature', 'Invalid logout signature');
+        }
+      }
+    }
+
+    // End the Syntra session and every SSO session it opened. Sessions are
+    // found by the session index the assertion carried, never by the NameID
+    // alone — a NameID is not a secret, and ending "every session for this
+    // email address" on an unauthenticated request is a denial of service any
+    // registered SP could aim at any user.
+    const ended = await request.db(async (tx) => {
+      const row = await tx.samlSsoSession.findFirst({
+        where: {
+          applicationId: config.applicationId,
+          sessionIndex: trusted.sessionIndex ?? '__none__',
+          endedAt: null,
+        },
+      });
+      if (!row) return null;
+      await endSsoSessions(tx, row.sessionId);
+      await tx.session.updateMany({
+        where: { id: row.sessionId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await recordEvent(tx, {
+        actorUserId: null,
+        action: 'saml.logout',
+        targetType: 'Application',
+        targetId: config.applicationId,
+        outcome: 'success',
+        sourceIp: request.ip,
+        payload: { spEntityId: config.spEntityId, sessionIndex: trusted.sessionIndex },
+      });
+      return row;
+    });
+
+    reply.clearCookie(SESSION_COOKIE, { path: '/' });
+
+    const destination = config.sloUrl;
+    if (!destination) {
+      // Nowhere to answer. The session is still gone, which is the part that
+      // matters.
+      return reply.redirect('/logged-out', 302);
+    }
+
+    const response = buildLogoutResponse({
+      idpEntityId: identity.entityId,
+      destination,
+      inResponseTo: trusted.id,
+      success: ended !== null,
+      now: new Date(),
+    });
+
+    return reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').send(
+      logoutPostForm({
+        destination,
+        field: 'SAMLResponse',
+        xml: response,
+        relayState: typeof source?.RelayState === 'string' ? source.RelayState : null,
+      }),
+    );
+  };
+
+  app.get('/slo', rateLimited, (request, reply) => handleSlo(request, reply, 'HTTP-Redirect'));
+  app.post('/slo', rateLimited, (request, reply) => handleSlo(request, reply, 'HTTP-POST'));
 }

@@ -6,3 +6,5 @@ export * from './saml/idp-metadata.js';
 export * from './saml/sp-metadata.js';
 export * from './saml/authn-request.js';
 export * from './saml/assertion.js';
+export * from './saml/encrypt.js';
+export * from './saml/logout.js';
