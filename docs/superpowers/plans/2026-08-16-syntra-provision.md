@@ -16840,6 +16840,7 @@ git commit -m "feat: add the provisioning administration API and previews"
 **Files:**
 - Create: `apps/web/src/pages/admin/TargetsPage.tsx`
 - Create: `apps/web/src/pages/admin/TargetDetailPage.tsx`
+- Create: `apps/web/src/pages/admin/TargetDetailPage.test.tsx`
 - Create: `apps/web/src/pages/admin/AccountProfilePage.tsx`
 - Create: `apps/web/src/pages/admin/BusinessRulesPage.tsx`
 - Create: `apps/web/src/pages/admin/ProvisionRunsPage.tsx`
@@ -16973,19 +16974,47 @@ export function TargetsPage() {
 }
 ```
 
-- [ ] **Step 2: Write the target editor**
+- [ ] **Step 2: Write the target editor, including the create path and the connection test**
+
+One page serves both `targets/new` and `targets/:id`, which is how
+`SourceDetailPage` already handles directory sources — read it before writing
+this and match it. It uses the design system (`Panel`, `Field`, `Button`,
+`Alert`, `Status`, `PageHeader`) rather than raw Tailwind on bare `<label>` and
+`<input>` elements, and every other admin page does the same; a page that styles
+itself is a page that drifts.
+
+The connection test is not decoration. `test()` reports four effective rights
+with `unverified` as a third state distinct from `granted`, and without a surface
+for them that distinction ships as dead data. A bind account that can read the
+directory but cannot create users passes an `ok: true` connection test — the
+rights list is the only thing on this page that says so before a run tries it for
+real against a live directory.
 
 `apps/web/src/pages/admin/TargetDetailPage.tsx`:
 
 ```tsx
-import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { api } from '../../session/api.js';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Alert, Button, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { api, ApiError } from '../../session/api.js';
+import { PageHeader } from './PageHeader.js';
+
+interface ConnectorRight {
+  right: 'createUser' | 'modifyUser' | 'moveUser' | 'modifyMembership';
+  status: 'granted' | 'denied' | 'unverified';
+  detail: string;
+}
+
+interface TestResult {
+  ok: boolean;
+  message: string;
+  rights?: ConnectorRight[];
+}
 
 interface Target {
   id: string;
   name: string;
-  config: Record<string, unknown>;
+  config: { url?: string; bindDn?: string; baseDn?: string };
   enabled: boolean;
   autoApply: boolean;
   schedule: string | null;
@@ -17007,195 +17036,440 @@ interface Target {
   lastSkipReason: string | null;
 }
 
+const RIGHT_LABELS: Record<ConnectorRight['right'], string> = {
+  createUser: 'Create accounts',
+  modifyUser: 'Modify accounts',
+  moveUser: 'Move accounts between containers',
+  modifyMembership: 'Change group membership',
+};
+
+/**
+ * `unverified` renders as its own tone, never as a quiet `granted`.
+ *
+ * A directory that does not publish effective rights cannot be read as having
+ * granted them. Collapsing the two turns "we could not tell" into "yes", which
+ * is the one reading an administrator must not be given by a screen whose whole
+ * job is to answer whether this bind account can do the work.
+ */
+function rightTone(status: ConnectorRight['status']): 'active' | 'danger' | 'muted' {
+  if (status === 'granted') return 'active';
+  if (status === 'denied') return 'danger';
+  return 'muted';
+}
+
+function RightsReport({ rights }: { rights: ConnectorRight[] }) {
+  return (
+    <ul className="space-y-2">
+      {rights.map((r) => (
+        <li key={r.right} className="flex flex-wrap items-center gap-2">
+          <Status tone={rightTone(r.status)}>
+            {r.status === 'unverified' ? 'Could not check' : r.status}
+          </Status>
+          <span className="text-ink">{RIGHT_LABELS[r.right]}</span>
+          <span className="text-muted">{r.detail}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TestReport({ result }: { result: TestResult }) {
+  if (!result.ok) {
+    return (
+      <Alert tone="danger" title="Could not connect">
+        {result.message}
+      </Alert>
+    );
+  }
+
+  return (
+    <Panel title="Connection test">
+      <div className="space-y-4 p-4">
+        <p className="flex flex-wrap items-center gap-2">
+          <Status tone="active">Connected</Status>
+          <span className="text-muted">{result.message}</span>
+        </p>
+        {result.rights && result.rights.length > 0 && (
+          <>
+            <p className="text-muted">
+              What this bind account is allowed to do. A right it could not
+              confirm is not a right it has.
+            </p>
+            <RightsReport rights={result.rights} />
+          </>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 export function TargetDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const isNew = id === undefined;
+  const navigate = useNavigate();
+
   const [target, setTarget] = useState<Target | null>(null);
+  const [loading, setLoading] = useState(!isNew);
+  const [name, setName] = useState('');
+  const [url, setUrl] = useState('ldaps://');
+  const [bindDn, setBindDn] = useState('');
+  const [baseDn, setBaseDn] = useState('');
+  const [bindPassword, setBindPassword] = useState('');
+  const [busy, setBusy] = useState<null | 'save' | 'test'>(null);
+  const [result, setResult] = useState<TestResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    void api<Target>(`/api/admin/targets/${id}`).then(setTarget);
-  }, [id]);
+    if (isNew) return;
+    void api<Target>(`/api/admin/targets/${id}`)
+      .then((t) => {
+        setTarget(t);
+        setName(t.name);
+        setUrl(t.config.url ?? '');
+        setBindDn(t.config.bindDn ?? '');
+        setBaseDn(t.config.baseDn ?? '');
+      })
+      .catch(() => setError('That target could not be loaded.'))
+      .finally(() => setLoading(false));
+  }, [id, isNew]);
 
-  if (!target) return <div className="p-6">Loading…</div>;
+  const fail = (cause: unknown, fallback: string) =>
+    setError(cause instanceof ApiError ? cause.problem.title : fallback);
 
-  const patch = async (body: Record<string, unknown>) => {
+  async function onTest() {
+    setBusy('test');
+    setError(null);
+    setResult(null);
+    try {
+      setResult(
+        await api<TestResult>('/api/admin/targets/test', {
+          method: 'POST',
+          body: JSON.stringify({
+            config: { url, bindDn, baseDn },
+            // An existing target borrows its stored password when the field is
+            // left blank, so testing an unchanged target does not require
+            // retyping a secret the server already holds.
+            ...(bindPassword === '' ? {} : { bindPassword }),
+            ...(isNew ? {} : { borrowFromTargetId: id }),
+          }),
+        }),
+      );
+    } catch (cause) {
+      fail(cause, 'The connection could not be tested.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onSave(event: FormEvent) {
+    event.preventDefault();
+    setBusy('save');
+    setError(null);
+    try {
+      if (isNew) {
+        const created = await api<{ id: string }>('/api/admin/targets', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            config: { url, bindDn, baseDn },
+            bindPassword,
+          }),
+        });
+        navigate(`/admin/targets/${created.id}`, { replace: true });
+        return;
+      }
+      await api(`/api/admin/targets/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name,
+          config: { url, bindDn, baseDn },
+          ...(bindPassword === '' ? {} : { bindPassword }),
+        }),
+      });
+      setMessage('Saved.');
+    } catch (cause) {
+      fail(cause, 'The target could not be saved.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function patch(body: Record<string, unknown>) {
+    setError(null);
     try {
       await api(`/api/admin/targets/${id}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
       });
-      setTarget(await api<Target>(`/api/admin/targets/${id}`));
       setMessage('Saved.');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Could not save.');
+    } catch (cause) {
+      fail(cause, 'That change could not be saved.');
     }
-  };
+  }
+
+  if (loading) return <SkeletonRows rows={6} cols={2} />;
 
   return (
-    <div className="space-y-8 p-6">
-      <h1 className="text-2xl font-semibold">{target.name}</h1>
-      {message && <p className="text-sm text-slate-700">{message}</p>}
+    <>
+      <PageHeader
+        title={isNew ? 'New target' : name || 'Target'}
+        description={
+          isNew
+            ? 'Where Syntra creates and maintains accounts. Nothing is written until a run is reviewed.'
+            : 'Provisioning settings for this target.'
+        }
+        actions={
+          <Button onClick={onTest} loading={busy === 'test'} disabled={!!busy}>
+            Test connection
+          </Button>
+        }
+      />
 
-      {target.consecutiveSkippedRuns > 0 && (
-        <div className="rounded border border-red-300 bg-red-50 p-4">
-          <p className="font-medium text-red-900">
-            {target.consecutiveSkippedRuns} scheduled run
-            {target.consecutiveSkippedRuns === 1 ? '' : 's'} did not start
+      {error && <Alert tone="danger">{error}</Alert>}
+      {message && <Alert tone="success">{message}</Alert>}
+      {result && <TestReport result={result} />}
+
+      {/*
+        The skipped-run notice sits above everything a person came here to
+        change, because ruling P4 is explicit that a skipped run has to be
+        surfaced where somebody looks rather than only recorded. A target that
+        has skipped repeatedly must read differently from one running cleanly,
+        and the count is what makes that visible at a glance.
+      */}
+      {target && target.consecutiveSkippedRuns > 0 && (
+        <Alert
+          tone="danger"
+          title={`${target.consecutiveSkippedRuns} scheduled run${
+            target.consecutiveSkippedRuns === 1 ? '' : 's'
+          } did not start`}
+        >
+          <p>{target.lastSkipReason}</p>
+          <p className="mt-2">
+            A scheduled run does not start while a run is awaiting review.
+            Review the outstanding run and this clears on the next schedule.
           </p>
-          <p className="text-sm text-red-800">{target.lastSkipReason}</p>
-          <p className="mt-2 text-sm text-red-800">
-            A scheduled run does not start while a run is awaiting review. Review
-            the outstanding run below and this clears on the next schedule.
-          </p>
-        </div>
+        </Alert>
       )}
 
-      <section>
-        <h2 className="text-lg font-medium">Enforcement</h2>
-        <p className="text-sm text-slate-600">
-          <strong>Additive</strong> records access it did not grant and leaves it
-          alone. <strong>Authoritative</strong> proposes revoking it — but only
-          for entitlements a business rule for this target names. A group no rule
-          mentions is never revoked, in either mode. Drift is reported under both.
-        </p>
-        <select
-          className="mt-2 rounded border px-2 py-1"
-          value={target.enforcementMode}
-          onChange={(event) => void patch({ enforcementMode: event.target.value })}
-        >
-          <option value="additive">additive (default)</option>
-          <option value="authoritative">authoritative</option>
-        </select>
-      </section>
+      <Panel title="Connection">
+        <form onSubmit={onSave} noValidate className="space-y-4 p-4">
+          <Field label="Name" value={name} onChange={setName} required />
+          <Field
+            label="URL"
+            value={url}
+            onChange={setUrl}
+            required
+            hint="Writes require LDAPS or StartTLS. A Samba AD domain controller refuses even a bind in the clear."
+          />
+          <Field label="Bind DN" value={bindDn} onChange={setBindDn} required />
+          <Field
+            label="Bind password"
+            type="password"
+            value={bindPassword}
+            onChange={setBindPassword}
+            autoComplete="new-password"
+            required={isNew}
+            hint={isNew ? undefined : 'Leave blank to keep the stored password.'}
+          />
+          <Field label="Base DN" value={baseDn} onChange={setBaseDn} required />
+          <Button type="submit" variant="primary" loading={busy === 'save'}>
+            {isNew ? 'Create target' : 'Save'}
+          </Button>
+        </form>
+      </Panel>
 
-      <section>
-        <h2 className="text-lg font-medium">Deprovisioning ladder</h2>
-        <p className="text-sm text-slate-600">
-          All three are measured from the latest end date across the person&apos;s
-          contracts — the day they stopped being employed at all. Provision never
-          deletes: it disables, and optionally archives.
-        </p>
-        <div className="mt-2 grid grid-cols-2 gap-4">
-          <label className="text-sm">
-            Entitlement revocation delay (days)
-            <input
-              className="mt-1 w-full rounded border px-2 py-1"
-              type="number"
-              defaultValue={target.entitlementRevocationDelayDays}
-              onBlur={(e) =>
-                void patch({
-                  ladder: { entitlementRevocationDelayDays: Number(e.target.value) },
-                })
-              }
-            />
-          </label>
-          <label className="text-sm">
-            Disable grace (days)
-            <input
-              className="mt-1 w-full rounded border px-2 py-1"
-              type="number"
-              defaultValue={target.disableGraceDays}
-              onBlur={(e) =>
-                void patch({ ladder: { disableGraceDays: Number(e.target.value) } })
-              }
-            />
-          </label>
-          <label className="text-sm">
-            Archive after (days, blank for never)
-            <input
-              className="mt-1 w-full rounded border px-2 py-1"
-              type="number"
-              defaultValue={target.archiveAfterDays ?? ''}
-              onBlur={(e) =>
-                void patch({
-                  ladder: {
-                    archiveAfterDays: e.target.value === '' ? null : Number(e.target.value),
-                  },
-                })
-              }
-            />
-          </label>
-          <label className="text-sm">
-            Re-enable without confirmation within (days)
-            <input
-              className="mt-1 w-full rounded border px-2 py-1"
-              type="number"
-              defaultValue={target.reenableWithoutConfirmationDays}
-              onBlur={(e) =>
-                void patch({
-                  ladder: {
-                    reenableWithoutConfirmationDays: Number(e.target.value),
-                  },
-                })
-              }
-            />
-          </label>
-        </div>
-      </section>
+      {/*
+        These three links are the only route into the rest of the target's
+        configuration. Without them the sub-pages exist and are reachable only
+        by typing a URL, which is the same as not existing.
+      */}
+      {!isNew && (
+        <Panel title="Configuration">
+          <ul className="space-y-2 p-4">
+            <li>
+              <Link
+                className="text-accent underline"
+                to={`/admin/targets/${id}/profile`}
+              >
+                Account profile
+              </Link>
+              <span className="ml-2 text-muted">
+                How an account is named, where it is placed, and what it is
+                given.
+              </span>
+            </li>
+            <li>
+              <Link
+                className="text-accent underline"
+                to={`/admin/targets/${id}/rules`}
+              >
+                Business rules
+              </Link>
+              <span className="ml-2 text-muted">
+                Who gets an account here, and which entitlements come with it.
+              </span>
+            </li>
+            <li>
+              <Link
+                className="text-accent underline"
+                to={`/admin/targets/${id}/runs`}
+              >
+                Runs
+              </Link>
+              <span className="ml-2 text-muted">
+                What each run proposed, what was applied, and what drifted.
+              </span>
+            </li>
+          </ul>
+        </Panel>
+      )}
 
-      <section>
-        <h2 className="text-lg font-medium">Guard thresholds</h2>
-        <p className="text-sm text-slate-600">
-          Each action type is counted against its own population. A run over any
-          of them is blocked until somebody reads the numbers and confirms.
-          Lowering one is an audited, privileged change.
-        </p>
-        <div className="mt-2 grid grid-cols-2 gap-4">
-          {(
-            [
-              ['createAccountThresholdPercent', 'Create accounts'],
-              ['disableAccountThresholdPercent', 'Disable accounts'],
-              ['archiveAccountThresholdPercent', 'Archive accounts'],
-              ['revokeEntitlementThresholdPercent', 'Revoke entitlements'],
-              ['deactivateSyntraUserThresholdPercent', 'Deactivate Syntra users'],
-              ['perEntitlementThresholdPercent', 'Per entitlement'],
-              ['personPopulationDropPercent', 'Person population drop'],
-            ] as const
-          ).map(([field, label]) => (
-            <label className="text-sm" key={field}>
-              {label} (%)
+      {target && (
+        <Panel title="Scheduling">
+          <div className="space-y-4 p-4">
+            <Field
+              label="Schedule"
+              value={target.schedule ?? ''}
+              onChange={(v) => void patch({ schedule: v === '' ? null : v })}
+              hint="A cron expression. Blank means this target only runs when somebody asks it to."
+            />
+            <label className="flex items-center gap-2">
               <input
-                className="mt-1 w-full rounded border px-2 py-1"
-                type="number"
-                defaultValue={target[field]}
-                onBlur={(e) =>
-                  void patch({ thresholds: { [field]: Number(e.target.value) } })
-                }
+                type="checkbox"
+                defaultChecked={target.autoApply}
+                onChange={(e) => void patch({ autoApply: e.target.checked })}
               />
+              <span className="text-ink">
+                Apply automatically when the guard does not block the run
+              </span>
             </label>
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <h2 className="text-lg font-medium">Schedule</h2>
-        <label className="text-sm">
-          Cron expression
-          <input
-            className="mt-1 w-64 rounded border px-2 py-1"
-            defaultValue={target.schedule ?? ''}
-            onBlur={(e) =>
-              void patch({ schedule: e.target.value === '' ? null : e.target.value })
-            }
-          />
-        </label>
-        <label className="mt-3 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            defaultChecked={target.autoApply}
-            onChange={(e) => void patch({ autoApply: e.target.checked })}
-          />
-          Apply automatically when the guard does not block the run
-        </label>
-        <p className="text-sm text-slate-600">
-          The guard is not advisory: a blocked run never applies on a schedule,
-          whatever this says.
-        </p>
-      </section>
-    </div>
+            <p className="text-muted">
+              The guard is not advisory: a blocked run never applies on a
+              schedule, whatever this says.
+            </p>
+          </div>
+        </Panel>
+      )}
+    </>
   );
 }
 ```
+
+Read `apps/web/src/pages/admin/SourceDetailPage.tsx` alongside this. It is the
+same shape against the same helpers, and where the two differ the existing file
+is right: `api(path, RequestInit)` from `session/api.js` with every body
+`JSON.stringify`ed, `ApiError` for the message, `Field` with an `onChange` that
+takes the value rather than the event, and `PageHeader` carrying the actions.
+
+- [ ] **Step 2a: Test the rights report, including the state that must not be mistaken for approval**
+
+`apps/web/src/pages/admin/TargetDetailPage.test.tsx`:
+
+```tsx
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { TargetDetailPage } from './TargetDetailPage.js';
+
+const json = (body: unknown) =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  }) as never;
+
+const renderNew = () =>
+  render(
+    <MemoryRouter initialEntries={['/admin/targets/new']}>
+      <Routes>
+        <Route path="/admin/targets/new" element={<TargetDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('TargetDetailPage', () => {
+  it('reports a right it could not confirm as unchecked, not as granted', async () => {
+    // The failure this test exists to catch: a directory that does not publish
+    // effective rights renders indistinguishably from one that granted them,
+    // so an administrator reads "connected" and discovers at the first run
+    // that the bind account cannot create anybody.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      json({
+        ok: true,
+        message: 'Bound as CN=svc,DC=acme,DC=test',
+        rights: [
+          {
+            right: 'createUser',
+            status: 'granted',
+            detail: 'Confirmed on OU=Staff',
+          },
+          {
+            right: 'modifyUser',
+            status: 'denied',
+            detail: 'Refused on OU=Staff',
+          },
+          {
+            right: 'moveUser',
+            status: 'unverified',
+            detail: 'The server publishes no effective rights',
+          },
+          {
+            right: 'modifyMembership',
+            status: 'granted',
+            detail: 'Confirmed on CN=Finance',
+          },
+        ],
+      }),
+    );
+
+    renderNew();
+    await userEvent.click(
+      screen.getByRole('button', { name: /test connection/i }),
+    );
+
+    expect(
+      await screen.findByText('Move accounts between containers'),
+    ).toBeVisible();
+    expect(screen.getByText(/could not check/i)).toBeVisible();
+
+    // The load-bearing assertion: exactly the two genuinely granted rights say
+    // so. If `unverified` ever renders as `granted`, this count becomes three.
+    expect(screen.getAllByText('granted')).toHaveLength(2);
+    expect(screen.getByText('denied')).toBeVisible();
+  });
+
+  it('offers the create form without loading a target first', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    renderNew();
+
+    expect(await screen.findByLabelText(/^name$/i)).toBeVisible();
+    expect(screen.getByLabelText(/url/i)).toBeVisible();
+    expect(screen.getByLabelText(/bind dn/i)).toBeVisible();
+    expect(screen.getByLabelText(/bind password/i)).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: /create target/i }),
+    ).toBeVisible();
+    // A create page that fetches a target by id is a create page that 404s.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 2b: Run the two tests, then break the rights report on purpose**
+
+Run: `pnpm --filter @syntra/web test -- TargetDetailPage`
+Expected: both PASS.
+
+Then change `rightTone` to return `'active'` for `unverified` and re-run. The
+first test MUST fail on the `granted` count. Restore it. A test that still
+passes when `unverified` renders as granted is not testing the thing the report
+exists for.
+
 
 - [ ] **Step 3: Write the account profile editor with its live preview**
 
@@ -18048,6 +18322,7 @@ In `apps/web/src/pages/admin/AdminApp.tsx`, beside the existing `<Route path="so
 
 ```tsx
             <Route path="targets" element={<TargetsPage />} />
+            <Route path="targets/new" element={<TargetDetailPage />} />
             <Route path="targets/:id" element={<TargetDetailPage />} />
             <Route path="targets/:id/profile" element={<AccountProfilePage />} />
             <Route path="targets/:id/rules" element={<BusinessRulesPage />} />
@@ -18057,6 +18332,8 @@ In `apps/web/src/pages/admin/AdminApp.tsx`, beside the existing `<Route path="so
 ```
 
 with the seven imports at the top of that file, and the `Link`s in the pages above written against the same `/admin/...` paths. Put `people/:id/access` after the existing `people/:id` entry, and `targets/:id/runs/:runId` after `targets/:id/runs`, so a more specific path is never shadowed by a less specific one.
+
+`targets/new` and `targets/:id` both render `TargetDetailPage`, which decides between the create form and the editor from whether `useParams` gave it an id — the same arrangement `sources/new` and `sources/:id` already use for directory sources. It is listed first for readability; React Router ranks a static segment above a dynamic one regardless of order, so `new` is never captured as an id.
 
 - [ ] **Step 8: Write the loop integration test against the real container**
 
@@ -18533,6 +18810,42 @@ The five Critical findings were all seams between tasks rather than mistakes ins
 - **`Person` has no `email` and no `displayName`.** Six tasks read them.
 
 The 16 High findings and most of the Medium ones are folded into the tasks above; the two structural ones worth naming here are that `ApplyOptions` now requires `confirm` **and** `confirmedByUserId` together, and that the initial password is generated by the caller, sealed into the vault and delivered — previously it was invented inside the connector, written to the directory and dropped, which made every account Provision created unusable by the person it was created for.
+
+### 5. What changed after the scoped re-review
+
+Two High findings survived the first fix wave. Both were about ordering and
+surface rather than logic, and neither was visible from inside a single task.
+
+- **Task 14 hard-imports `applySyntraUserAction` from the module Task 15
+  creates**, so Task 14 cannot typecheck or run its tests if it is dispatched
+  first. Task 15's Consumes block takes nothing from Task 14, so this is
+  resolved by dispatch order and not by renumbering: **Task 15 runs first**, and
+  both tasks now carry the note. Adding an optional `applySyntraUser?` seam to
+  `ApplyOptions` would also have worked and was deliberately rejected — a seam
+  that exists only to dodge task ordering is indirection a later reader has to
+  decode, and this slice already carries two legitimate injection seams
+  (`connector`, `transport`) that a third would dilute.
+- **Task 18's end-to-end test drove a console Steps 1-7 never built**: no create
+  form behind the "New target" link, no connection test, and no links from the
+  target page into the account profile, business rules or runs. Step 2 is
+  rewritten and Steps 2a and 2b added.
+
+The rewrite fixed a second thing the re-review did not raise. The original
+Step 2 was written in raw Tailwind on bare `<label>` and `<input>` elements
+while every other admin page in this repository composes `Panel`, `Field`,
+`Button`, `Alert`, `Status` and `PageHeader` from `@syntra/ui`. A page that
+styles itself is a page that drifts, and the fix was to make Step 2 what
+`SourceDetailPage` already is — the same shape, against the same helpers, with
+one page serving both `targets/new` and `targets/:id`.
+
+The connection test is the part that matters. Finding M20's whole fix was to
+have `test()` report four effective rights with `unverified` as a third state
+distinct from `granted`, and until now that shipped with no surface at all — a
+bind account that can read the directory but cannot create users passes an
+`ok: true` test and fails at the first run against a live directory. Step 2a
+asserts exactly two rights render as granted and Step 2b requires the assertion
+be mutation-checked, because the failure this guards against is precisely
+`unverified` quietly rendering as approval.
 
 ---
 
