@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
+import { DOMParser } from '@xmldom/xmldom';
 import { parseXml, selectElements } from './parse.js';
 import { verifySignedFragment } from './verify.js';
 import { signFragment } from './sign.js';
@@ -29,6 +30,78 @@ describe('parseXml', () => {
     expect(() => parseXml('<a><b></a>')).toThrow();
     expect(() => parseXml('not xml at all')).toThrow();
     expect(() => parseXml('')).toThrow();
+  });
+});
+
+describe("parseXml's /entity/i narrowing", () => {
+  /**
+   * `parseXml` swallows `error`-level diagnostics whose message matches
+   * `/entity/i` and rethrows every other one. That is a substring match
+   * against another package's prose, and it is load-bearing in both
+   * directions: too wide and a malformed document is accepted as well formed;
+   * too narrow and every SAML message carrying an entity reference is
+   * rejected. Nothing asserted xmldom's wording, so a patch release could move
+   * it either way in silence.
+   *
+   * Verified against @xmldom/xmldom 0.9.11, whose `sax.js` has exactly three
+   * `error`-level diagnostics mentioning an entity — lines 72, 77 and 86 —
+   * all of them the benign "left it as literal text" case. This is what
+   * notices if a future version rewords them, adds a fourth, or starts
+   * reporting a genuine well-formedness failure in those words. Same shape as
+   * the counter-message pin in `webauthn.test.ts`.
+   */
+  const diagnose = (xml: string) => {
+    const messages: string[] = [];
+    try {
+      new DOMParser({
+        onError: (level, message) => messages.push(`${level}: ${message}`),
+      }).parseFromString(xml, 'text/xml');
+    } catch (thrown) {
+      messages.push(`thrown: ${(thrown as Error).message}`);
+    }
+    return messages;
+  };
+
+  it('still words all three benign entity diagnostics the way the filter expects', () => {
+    expect(diagnose('<r>&amp</r>')).toEqual(['error: EntityRef: expecting ;']);
+    expect(diagnose('<r>&1bad;</r>')).toEqual([
+      'error: entity not matching Reference production: &1bad;',
+    ]);
+    expect(diagnose('<r>&nope;</r>')).toEqual(['error: entity not found:&nope;']);
+    // And each of them is genuinely benign: the reference survives as literal
+    // text and the document parses. If a future version made one of these a
+    // hard failure, swallowing it would be accepting a broken document.
+    expect(parseXml('<r>&amp</r>').documentElement!.textContent).toBe('&amp');
+    expect(parseXml('<r>&1bad;</r>').documentElement!.textContent).toBe('&1bad;');
+    expect(parseXml('<r>&nope;</r>').documentElement!.textContent).toBe('&nope;');
+  });
+
+  it('still reports genuinely malformed documents in words the filter does not match', () => {
+    // Trailing content after the root: an `error`, and it must not look like
+    // an entity diagnostic or `parseXml` would hand back a partial document.
+    expect(diagnose('<r/>trailing')).toEqual([
+      'error: Extra content at the end of the document',
+    ]);
+    expect(() => parseXml('<r/>trailing')).toThrow(/malformed XML/);
+
+    // A mismatched tag is a `fatalError`, which aborts the parse and throws
+    // synchronously out of `parseFromString` — it never reaches the filter at
+    // all, which is why the filter can afford to be a substring match.
+    expect(diagnose('<a><b></a>')).toContain(
+      'thrown: Opening and ending tag mismatch: "b" != "a"',
+    );
+
+    // The one over-broad path: `sax.js:240` builds its message as
+    // `'element parse error: ' + e`, interpolating whatever the inner error
+    // said. Today no inner message contains "entity", so nothing malformed is
+    // swallowed — this asserts that, and fails if a version ever routes an
+    // entity-worded failure through it.
+    const interpolated = diagnose('<r a="x><b/></r>');
+    expect(interpolated[0]).toBe(
+      `error: element parse error: Error: attribute value no end '"' match`,
+    );
+    expect(interpolated.filter((m) => /entity/i.test(m))).toEqual([]);
+    expect(() => parseXml('<r a="x><b/></r>')).toThrow();
   });
 });
 

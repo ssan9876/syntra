@@ -675,6 +675,31 @@ export async function registerSamlIdpRoutes(
       { privateKeyPem: key.privateKeyPem, certificatePem: key.certificate },
     );
 
+    // Encryption happens BEFORE anything is recorded. It can fail — 409 when
+    // the application asks for encrypted assertions and has no certificate
+    // registered, or a 500 out of the cipher — and with the order the other
+    // way round the audit log said an assertion was issued and an SSO session
+    // was open while the service provider received nothing at all. An audit
+    // trail that records deliveries that did not happen is worse than one that
+    // is merely incomplete, because it is the record a later investigation
+    // trusts. Outside every transaction, as before: RSA plus AES over the
+    // whole assertion.
+    let deliverable = xml;
+    if (ctx.config.encryptAssertions) {
+      if (!ctx.config.encryptionCertificate) {
+        throw new ProblemError(
+          409, 'saml-no-encryption-certificate',
+          'This application is configured to receive encrypted assertions but has no certificate registered',
+        );
+      }
+      const assertion = xml.slice(
+        xml.indexOf('<saml:Assertion'),
+        xml.lastIndexOf('</saml:Assertion>') + '</saml:Assertion>'.length,
+      );
+      const encrypted = await encryptAssertion(assertion, ctx.config.encryptionCertificate);
+      deliverable = xml.replace(assertion, encrypted);
+    }
+
     await request.db(async (tx) => {
       await startSamlSsoSession(tx, {
         sessionId: session.sessionId,
@@ -694,26 +719,10 @@ export async function registerSamlIdpRoutes(
           acsUrl: ctx.parked.acsUrl,
           inResponseTo: ctx.parked.requestId,
           satisfiedFactor: decision.satisfiedFactor,
+          encrypted: ctx.config.encryptAssertions,
         },
       });
     });
-
-    let deliverable = xml;
-    if (ctx.config.encryptAssertions) {
-      if (!ctx.config.encryptionCertificate) {
-        throw new ProblemError(
-          409, 'saml-no-encryption-certificate',
-          'This application is configured to receive encrypted assertions but has no certificate registered',
-        );
-      }
-      // Outside every transaction: RSA plus AES over the whole assertion.
-      const assertion = xml.slice(
-        xml.indexOf('<saml:Assertion'),
-        xml.lastIndexOf('</saml:Assertion>') + '</saml:Assertion>'.length,
-      );
-      const encrypted = await encryptAssertion(assertion, ctx.config.encryptionCertificate);
-      deliverable = xml.replace(assertion, encrypted);
-    }
 
     return reply
       .type('text/html; charset=utf-8')
@@ -816,7 +825,14 @@ export async function registerSamlIdpRoutes(
       return row;
     });
 
-    reply.clearCookie(SESSION_COOKIE, { path: '/' });
+    // Only when a session index actually matched. Firing this unconditionally
+    // signs the browser out of Syntra on any unauthenticated `/saml/slo` with
+    // a `SessionIndex` nobody has ever issued — the same "a NameID is not a
+    // secret" denial of service the lookup above exists to prevent, reached
+    // one step later through the cookie instead of the row.
+    if (ended !== null) {
+      reply.clearCookie(SESSION_COOKIE, { path: '/' });
+    }
 
     const destination = config.sloUrl;
     if (!destination) {

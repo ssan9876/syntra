@@ -107,6 +107,40 @@ describe('parseSpMetadata', () => {
     expect(parsed.certificates[0]!.replace(/\s+/g, '')).toContain(CERT_BODY);
   });
 
+  it('does not trust an encryption-only certificate for signature verification', () => {
+    // `certificates` becomes `SamlConfig.spCertificates`, which is the trusted
+    // set `verifyPostSignature` and `verifyRedirectSignature` check an
+    // AuthnRequest against. A service provider that declared a key as
+    // encryption-only has said it does not sign with it; accepting a signature
+    // from it anyway widens the trusted set past what the document says.
+    const ENCRYPTION_BODY = 'MIIBencryptionOnlyKeyQUJD';
+    const withEncryptionKey = sp.replace(
+      '<SingleLogoutService',
+      `<KeyDescriptor use="encryption">
+      <KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>${ENCRYPTION_BODY}</X509Certificate></X509Data></KeyInfo>
+    </KeyDescriptor>
+    <SingleLogoutService`,
+    );
+    const parsed = parseSpMetadata(withEncryptionKey);
+    expect(parsed.certificates).toHaveLength(1);
+    expect(parsed.certificates[0]!.replace(/\s+/g, '')).toContain(CERT_BODY);
+    expect(parsed.certificates[0]!.replace(/\s+/g, '')).not.toContain(ENCRYPTION_BODY);
+    // And it is not discarded — it is the certificate assertions to this
+    // service provider are encrypted to.
+    expect(parsed.encryptionCertificates).toHaveLength(1);
+    expect(parsed.encryptionCertificates[0]!.replace(/\s+/g, '')).toContain(ENCRYPTION_BODY);
+  });
+
+  it('treats a KeyDescriptor with no use as serving both roles', () => {
+    // An omitted `use` means the key serves signing and encryption alike, per
+    // the metadata schema, and plenty of real service providers publish one
+    // key that way. Narrowing it to neither would break them.
+    const noUse = sp.replace('<KeyDescriptor use="signing">', '<KeyDescriptor>');
+    const parsed = parseSpMetadata(noUse);
+    expect(parsed.certificates).toHaveLength(1);
+    expect(parsed.encryptionCertificates).toHaveLength(1);
+  });
+
   it('honours isDefault rather than document order when picking the default', () => {
     // Move isDefault to the second entry and leave the order alone. An
     // implementation that returned acsUrls[0] passes the case above and fails

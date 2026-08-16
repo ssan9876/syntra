@@ -148,6 +148,8 @@ describe('SAML single logout', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain('name="SAMLResponse"');
     expect(res.body).toContain('action="https://sp.example.test/slo"');
+    // The browser is signed out of Syntra too, and the response says so.
+    expect(res.cookies.find((c) => c.name === 'syntra_session')?.value).toBe('');
 
     // Through withTenant: Session is FORCE ROW LEVEL SECURITY, so a read on
     // the bare client sees nothing whatever was written and the assertion
@@ -170,7 +172,7 @@ describe('SAML single logout', () => {
   it('does not end a session when the session index does not match', async () => {
     await get(redirectUrl(authnRequest()));
     const logoutXml = `<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_lr1" Version="2.0" IssueInstant="${new Date().toISOString()}"><saml:Issuer>${SP}</saml:Issuer><saml:NameID>j@acme.test</saml:NameID><samlp:SessionIndex>_not_a_real_index</samlp:SessionIndex></samlp:LogoutRequest>`;
-    await get(
+    const res = await get(
       `/saml/slo?SAMLRequest=${encodeURIComponent(deflateRawSync(Buffer.from(logoutXml)).toString('base64'))}`,
     );
     // A NameID is not a secret. Ending every session for an email address on
@@ -181,6 +183,16 @@ describe('SAML single logout', () => {
       headers: { host: TEST_HOST, cookie: `syntra_session=${cookie}` },
     });
     expect(still.statusCode).toBe(200);
+
+    // And the browser is not signed out either. The server-side row survives
+    // whatever the response says, so `inject`, which re-sends the same cookie
+    // string from a variable rather than keeping a cookie jar, could never
+    // notice an unconditional `clearCookie` — the assertion has to be on the
+    // response's own `Set-Cookie`. Without it, an unauthenticated request
+    // naming any `SessionIndex` at all signed the browser out of Syntra: the
+    // same denial of service the session-index lookup exists to prevent,
+    // reached one step later through the cookie instead of the row.
+    expect(res.cookies.find((c) => c.name === 'syntra_session')).toBeUndefined();
   });
 
   it('refuses identity-provider-initiated sign-on unless the application allows it', async () => {
@@ -221,6 +233,34 @@ describe('SAML single logout', () => {
       expect(res.statusCode, name).toBe(400);
       expect(res.headers['content-type']).toContain('application/problem+json');
     }
+  });
+
+  it('records nothing when delivery fails at the encryption step', async () => {
+    // Encryption asked for, no certificate registered: a 409, thrown after the
+    // assertion is signed and — until this was fixed — after the SSO session
+    // row and the `saml.assertion_issued` audit event had already committed.
+    // The log then said an assertion was issued to a service provider that
+    // received nothing, and an audit trail that records deliveries which did
+    // not happen is worse than one that is merely incomplete, because it is
+    // the record a later investigation trusts.
+    await saveSamlConfig(
+      ctx.tenantId, applicationId,
+      samlConfig({ encryptAssertions: true, encryptionCertificate: null }),
+      samlKeyOptions,
+    );
+
+    const res = await get(redirectUrl(authnRequest()));
+    expect(res.statusCode).toBe(409);
+    expect(res.body).not.toContain('SAMLResponse');
+
+    const { events, sessions } = await withTenant(ctx.tenantId, async (tx) => ({
+      events: await tx.auditEvent.findMany({
+        where: { action: 'saml.assertion_issued' },
+      }),
+      sessions: await tx.samlSsoSession.findMany(),
+    }));
+    expect(events).toHaveLength(0);
+    expect(sessions).toHaveLength(0);
   });
 
   it('delivers an encrypted assertion when the application asks for one', async () => {

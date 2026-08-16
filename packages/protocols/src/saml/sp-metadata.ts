@@ -8,8 +8,21 @@ export interface ParsedSpMetadata {
   defaultAcsUrl: string;
   sloUrl: string | null;
   wantAssertionsSigned: boolean;
-  /** PEM, armour restored. */
+  /**
+   * The certificates this service provider signs with. PEM, armour restored.
+   *
+   * Signing only: a `KeyDescriptor use="encryption"` is excluded. Trusting an
+   * encryption-only certificate for AuthnRequest signature verification is
+   * accepting a signature from a key the SP declared it does not sign with,
+   * and `use` is the only thing in the document that says which is which.
+   */
   certificates: string[];
+  /**
+   * The certificates this service provider is encrypted to. Kept apart for
+   * the same reason: the two roles are not interchangeable, and a document
+   * that separates them must not be flattened back together here.
+   */
+  encryptionCertificates: string[];
   nameIdFormats: string[];
 }
 
@@ -75,13 +88,26 @@ export function parseSpMetadata(xml: string): ParsedSpMetadata {
       .map((e) => e.getAttribute('Location') ?? '')
       .find((url) => isProtocolEndpoint(url)) ?? null;
 
-  const certificates = selectElements(
-    sp,
-    ".//*[local-name(.)='X509Certificate']",
-  )
-    .map((e) => (e.textContent ?? '').trim())
-    .filter((body) => body !== '')
-    .map(pem);
+  // Per role, never flattened. A `KeyDescriptor` with no `use` serves both,
+  // which is what the metadata schema says an omitted `use` means; one that
+  // names a role serves only that role. Certificates that sit outside any
+  // `KeyDescriptor` are ignored rather than swept into the signing set —
+  // that placement is not what the schema allows, and the safe reading of an
+  // ambiguous document is the narrower one.
+  const keyDescriptors = selectElements(sp, ".//*[local-name(.)='KeyDescriptor']");
+  const certificatesFor = (role: 'signing' | 'encryption') =>
+    keyDescriptors
+      .filter((kd) => {
+        const use = (kd.getAttribute('use') ?? '').trim();
+        return use === '' || use === role;
+      })
+      .flatMap((kd) => selectElements(kd, ".//*[local-name(.)='X509Certificate']"))
+      .map((e) => (e.textContent ?? '').trim())
+      .filter((body) => body !== '')
+      .map(pem);
+
+  const certificates = certificatesFor('signing');
+  const encryptionCertificates = certificatesFor('encryption');
 
   const nameIdFormats = selectElements(sp, ".//*[local-name(.)='NameIDFormat']")
     .map((e) => (e.textContent ?? '').trim())
@@ -97,6 +123,7 @@ export function parseSpMetadata(xml: string): ParsedSpMetadata {
     // signs. This flag only records what the SP asked for.
     wantAssertionsSigned: sp.getAttribute('WantAssertionsSigned') === 'true',
     certificates,
+    encryptionCertificates,
     nameIdFormats,
   };
 }

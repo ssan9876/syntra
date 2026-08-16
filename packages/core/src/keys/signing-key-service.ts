@@ -210,13 +210,32 @@ export async function ensureActiveKey(
     await withTenant(tenantId, (tx) =>
       insert(tx, tenantId, kind, generated, provider, 'active'),
     );
-  } catch {
-    // Another worker won. Its key is as good as this one.
+  } catch (cause) {
+    // Only the race is tolerated. `signing_key_one_active` is the partial
+    // unique index that decides it, and Prisma reports its violation as
+    // P2002 — that, and only that, means another worker got there first and
+    // its key is as good as this one.
+    //
+    // A bare `catch {}` here reported a vault write failure, a lost database
+    // connection or a serialization failure as "another worker won", and then
+    // rethrew "could not establish a saml signing key" from the re-read below
+    // — a generic message, with the actual fault discarded, on the one code
+    // path an operator has to diagnose from a log line.
+    if (!isUniqueViolation(cause)) throw cause;
   }
 
   const active = await loadActiveKey(tenantId, provider, kind);
   if (!active) throw new Error(`could not establish a ${kind} signing key`);
   return active;
+}
+
+/** Prisma's unique-constraint code, without importing its error classes. */
+function isUniqueViolation(cause: unknown): boolean {
+  return (
+    typeof cause === 'object' &&
+    cause !== null &&
+    (cause as { code?: unknown }).code === 'P2002'
+  );
 }
 
 /**

@@ -30,6 +30,27 @@ describe('signing keys', () => {
     expect(rows).toHaveLength(1);
   });
 
+  it('reports a vault failure as itself rather than as "another worker won"', async () => {
+    // The insert is wrapped in a `try` so that losing the race against
+    // `signing_key_one_active` re-reads instead of failing. It used to be a
+    // bare `catch {}`, which swallowed everything: a vault write failure, a
+    // dropped connection, a serialization failure — all reported as the race,
+    // and then rethrown from the re-read below as the generic "could not
+    // establish a … signing key", with the real fault discarded. That is the
+    // one line an operator has to diagnose this from.
+    const broken = {
+      ...provider,
+      wrap: async () => {
+        throw new Error('vault is unreachable');
+      },
+    };
+    await expect(ensureActiveKey(tenantId, broken, 'oidc')).rejects.toThrow(
+      /vault is unreachable/,
+    );
+    const rows = await withTenant(tenantId, (tx) => tx.signingKey.findMany());
+    expect(rows).toHaveLength(0);
+  });
+
   it('never stores the private key on the row', async () => {
     const key = await ensureActiveKey(tenantId, provider, 'oidc');
     const row = await withTenant(tenantId, (tx) =>
