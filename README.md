@@ -100,12 +100,18 @@ The integration tests run against a real PostgreSQL in Docker. They are not
 mocked, because the properties worth testing here — row-level security, a
 partial unique index, an append-only rule — only exist in the database.
 
-Two ordering notes for the browser tests. Run `pnpm db:reset && pnpm seed`
-*after* `pnpm test`: the integration tests truncate between cases and leave
-fixtures behind that fool the seed into thinking the tenant is already
-populated. And start the stack with `AUTH_RATE_LIMIT_MAX` raised, since the
-suite signs in far more often in a minute than a person would and the default
-limit is right to refuse it.
+**`pnpm test` creates and migrates a database of its own**, named after the
+absolute path of the checkout it is running in, and never touches the one
+`.env` names. Two checkouts on one machine therefore do not share truncations
+or row locks — which used to produce about twenty-eight simultaneous failures
+that all read `expected 500 to be 200` and sat nowhere near the code being
+changed. It needs `SUPERUSER_DATABASE_URL` (already in `.env.example`) to
+create the database, once. Exporting `DATABASE_URL` in the environment
+overrides all of this and skips provisioning, which is the shape CI wants.
+
+Start the browser stack with `AUTH_RATE_LIMIT_MAX` raised, since the suite
+signs in far more often in a minute than a person would and the default limit
+is right to refuse it.
 
 **If another Syntra is already running, do not test through it.** A second
 checkout — a worktree, a colleague's branch — answers `/health` and every
@@ -125,11 +131,12 @@ only on your branch and check it is not a 404. `/health` proves nothing.
 Vite's dev server uses `strictPort`, so it fails rather than quietly moving to
 the next free port when 5173 is taken.
 
-The integration tests truncate the shared database between cases, so a
-browser suite running while someone else runs `pnpm test` will lose its seeded
-tenant mid-flight. `DATABASE_URL` pointed at a database of its own
-(`CREATE DATABASE syntra_e2e OWNER syntra_app`, then `pnpm db:migrate` and
-`pnpm seed` against it) removes that whole class of confusion.
+`pnpm test` no longer competes with a running stack for the development
+database — it makes its own — but the browser suite still shares whatever
+`DATABASE_URL` the stack was started with. Pointing a second stack at a
+database of its own (`CREATE DATABASE syntra_e2e OWNER syntra_app`, then
+`pnpm db:migrate` and `pnpm seed` against it) removes the rest of that class of
+confusion.
 
 The browser tests need the stack already running — Playwright starts nothing
 itself. If they fail with `ERR_CONNECTION_REFUSED` while `curl` reaches the
