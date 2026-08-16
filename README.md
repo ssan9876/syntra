@@ -14,18 +14,18 @@ log, a secrets vault, a job scheduler, notifications, and an administration
 console. **Directory Sync** is also built: an LDAP source can be read,
 mapped, and correlated against the directory, with every run previewed as a
 reviewable diff and guarded against mass deactivation before anything is
-applied. The first slice of **Access** is built too: one authentication
-chokepoint, an ordered authentication policy, TOTP and WebAuthn second factors
-with recovery codes, self-service password reset, and an application catalog
-the portal launches from. The federation protocols — SAML, OIDC, upstream
-identity providers — are designed but not yet implemented, as are the modules
-after Access.
+applied. **Access** is built: one authentication chokepoint, an ordered
+authentication policy, TOTP and WebAuthn second factors with recovery codes,
+self-service password reset, an application catalog the portal launches from,
+and the federation protocols — Syntra is a SAML 2.0 identity provider and an
+OpenID Connect provider, and can delegate authentication upstream to either.
+The modules after Access are designed but not yet implemented.
 
 | Module | Status | Contents |
 |---|---|---|
 | **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications, web console |
 | **Directory Sync** | built | LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, and console screens for the lot: a source editor with a connection test, a mapping editor, and a run review with per-change skip and partial apply |
-| **Access** | partly built | **Built:** application catalog and assignments, authentication policy, TOTP and WebAuthn second factors, recovery codes, self-service password reset, step-up MFA for the console. **Planned:** SAML 2.0 IdP, OpenID Connect provider, upstream federation |
+| **Access** | built | Application catalog and assignments, authentication policy, TOTP and WebAuthn second factors, recovery codes, self-service password reset, step-up MFA for the console. **SAML 2.0 identity provider**: both bindings, SP-initiated and IdP-initiated, signed assertions, optional encryption, front-channel single logout, metadata by upload or URL. **OpenID Connect provider**: authorization code with PKCE, refresh-token rotation, discovery, JWKS with overlapping rotation, UserInfo, RP-initiated logout, and a bounded client-credentials grant. **Upstream federation**: Syntra as a SAML service provider and as an OIDC relying party, with just-in-time provisioning and policy-driven routing. Every path reaches the same `authorize()`. See [what it does not do](#what-the-federation-half-does-not-do) |
 | **Provision** | planned | Source systems, business rules, evaluation and enforcement, target systems, entitlements |
 | **Automate** | planned | Product catalog, self-service requests, approval workflows, delegated forms |
 | **Govern** | planned | Reconciliation, segregation of duties, recertification campaigns |
@@ -36,7 +36,7 @@ Design and plan documents live in [`docs/superpowers/`](docs/superpowers).
 
 ```
 apps/
-  api/        Fastify: REST API and, later, the SAML and OIDC endpoints
+  api/        Fastify: REST API, the SAML and OIDC endpoints, and federation
   web/        One React application - portal at /, console at /admin
 packages/
   db/         Prisma schema, migrations, the withTenant helper
@@ -316,6 +316,75 @@ off refuses every administrator who does not already hold one, so the screen
 refuses to save that pair until the administrator making the change holds a
 factor themselves.
 
+### Signing in to applications
+
+Syntra is a SAML 2.0 identity provider and an OpenID Connect provider, and it
+can delegate authentication upstream to a SAML identity provider or an OIDC
+one. Every one of those paths — a service provider's `AuthnRequest`, a relying
+party's authorization request, and a login that came back from an upstream
+provider — reaches the same `authorize()` call in `packages/core` that a local
+sign-in does, and none of them issues an assertion or a token without an
+`allow` from it. Policy, second factors and the audit trail apply the same way
+whichever door somebody came in by.
+
+**An application in the catalog is a bookmark, a SAML service provider or an
+OIDC relying party.** A bookmark carries a launch URL. A SAML application's
+launch address is *derived* from the tenant's own protocol identity and never
+stored — the portal sends the browser to `/saml/start/:id`, which re-enters
+`authorize()` on its own rather than inheriting the launch's decision. An OIDC
+application is launched by sending the browser to the relying party's own start
+address, because OpenID Connect has no identity-provider-initiated flow: only
+the relying party knows its own `state`, `nonce` and PKCE verifier.
+
+**Nothing derives an issuer, an entity ID, an audience or a redirect target
+from the `Host` header.** A tenant is resolved from that header, so
+`acme.attacker.example` resolves the tenant `acme`; an identifier built from it
+would let an attacker choose the value a relying party checks against, which is
+the whole content of an identifier. They come from the tenant's own
+`primaryDomain` and from `PUBLIC_URL`, and `assertProtocolHost` refuses a
+protocol request that did not arrive on the host those identifiers name.
+
+**Redirect URIs and assertion consumer service URLs are matched byte for
+byte.** There is no wildcard, no prefix and no normalization anywhere in the
+comparison, and the registration form refuses a URL that is not a plain http(s)
+address — no fragment, no embedded credentials, and nothing in the host that is
+not a host. A pattern like `https://*.example.test/cb` is refused at the form
+rather than accepted and then silently never matched.
+
+**Requiring signed `AuthnRequest`s is the default for a newly registered
+service provider**, and the API will not leave it on with no certificate to
+check against. An unsigned authentication request is something anyone can send:
+hand a signed-in user a link carrying one and Syntra would mint an assertion
+for them and post it to the service provider's real endpoint. Turning it off is
+a posture an administrator may choose per application, and it has to be chosen
+— importing metadata that publishes no signing certificate is refused rather
+than quietly writing the weaker setting.
+
+**One grant is an exemption, deliberately.** The OAuth 2.0 *client credentials*
+grant issues an access token with no `authorize()` decision behind it, because
+there is no person for a decision to be about: it authenticates a client, and a
+policy that matches on group membership, contract attributes and enrolled
+factors has nothing to say about one. The alternative would be to invent a
+service-account user — a user-shaped principal no policy meaningfully governs,
+appearing in the directory, resolvable by assignment, and counted in other
+subsystems' guard denominators — which is worse than naming the exemption and
+bounding it. It is bounded by four things:
+
+- It is **off unless an administrator turns it on for that client**
+  (`OidcClient.clientCredentialsEnabled`, its own field, default false). The
+  API refuses `client_credentials` as a grant type outright, so that flag is
+  the only way it can be on.
+- Every issuance is audited as **`oidc.client_credentials_authorized`**, so
+  "what was issued without a policy decision" is one query.
+- The token is **scope-separated**: it may not carry `openid`, `profile`,
+  `email` or `offline_access`, and UserInfo refuses it. Registration refuses
+  those scopes too, so the configuration cannot exist in the first place. It
+  cannot be presented anywhere a user token is accepted.
+- It carries **no subject**, so nothing downstream can mistake it for a person.
+
+If you are auditing this deployment, `oidc.client_credentials_authorized` is
+the event to read, and `clientCredentialsEnabled` is the column to list.
+
 ### What this slice does not do
 
 **A policy change does not reach sessions that are already live.** Turning on a
@@ -358,16 +427,104 @@ list. What this slice adds:
 | `mfa.removed` | A factor was removed, carrying how many recovery codes went with it |
 | `mfa.recovery_codes_issued` | A fresh set was minted; the old set stopped working |
 | `notify.delivery_failed` | **A notification could not be sent.** The factor-added mail is one of only two things making "a stolen password can enrol a factor" an acceptable trade, so this is the event that says a control has stopped working. Alert on it |
-| `application.launch` | Somebody entered an application through the portal |
+| `application.launch` | Somebody entered an application through the portal, carrying whether it was a bookmark, a SAML application or an OIDC one |
+| `saml.assertion_issued` | An assertion was issued to a service provider, naming it, the ACS URL it went to and the factor behind the session |
+| `saml.acs_refused` | A request named an assertion consumer service URL that is not on the application's allowlist. **Somebody is probing, or a service provider changed its address without telling anyone** |
+| `saml.logout` | A service provider ended a session through single logout |
+| `oidc.interaction_resolved` | `authorize()` allowed an OIDC authorization request |
+| `oidc.decision_missing` | **A token was requested for an authorization code with no `authorize()` decision behind it.** The second chokepoint control fired. This should never happen in normal operation — alert on it |
+| `oidc.client_credentials_authorized` | A machine token was authorized. The one path with no policy decision behind it — see above |
+| `oidc.logout` | An application ended a Syntra session through RP-initiated logout |
+| `federation.user_provisioned` | An upstream login created or refreshed a local account, carrying the groups the upstream asserted (which grant nothing — see below) |
+| `federation.provision_refused` | An upstream authenticated somebody Syntra has no account for, or sent too little to identify them |
+| `federation.assertion_refused` | An upstream assertion failed verification |
+| `federation.exchange_refused` | An upstream token exchange failed, including an `id_token` whose signature could not be verified against the provider's published keys |
+| `access.saml_configured` / `access.saml_metadata_imported` / `access.oidc_configured` | An application's protocol configuration changed, carrying the allowlist that changed with it |
+| `access.claim_mapping_changed` | A claim or attribute released to an application was added or removed |
+| `access.upstream_configured` | An upstream identity provider was registered or changed. **Never the client secret, and never its vault name** |
 | `policy.rule_added` / `policy.rule_updated` / `policy.rule_deleted` / `policy.rules_reordered` / `policy.default_set` | The policy changed, and who changed it |
 | `tenant.settings_updated` | Admin MFA, self-enrolment or the password floor changed |
 | `auth.password_reset_requested` / `auth.password_reset_factor_failed` / `auth.password_reset_completed` | A self-service reset was asked for, refused at the factor, or applied |
 
-**The federation half of Access is not built.** There is no SAML IdP, no OIDC
-provider and no upstream identity provider yet. `Principal.external` and
-`AuthorizeRequest.applicationId` in `authorize()` are the mount points they
-will attach to; an application in the catalog is a bookmark with a launch URL,
-not yet a service provider Syntra asserts an identity to.
+### What the federation half does not do
+
+Each of these is a deliberate absence rather than an oversight, and each is
+worth reading before this is put in front of users.
+
+**Single logout does not propagate to other service providers.** Ending a
+session through `/saml/slo` ends it *at Syntra* and answers the service
+provider that asked. Every other service provider the same person signed into
+still holds its own session until that session expires. Front-channel
+propagation needs the browser to visit each one in turn; back-channel needs an
+outbound HTTP client per service provider and a retry queue. Neither is here,
+so **single logout is a local logout with a protocol answer attached**, and an
+offboarding procedure must not rely on it. Deactivating the account does work
+immediately, because a user's status is re-read on every request.
+
+**There is no single logout on the consuming side either.** Signing out of
+Syntra does not sign the person out of the upstream identity provider that
+authenticated them, so the next sign-in may complete without a prompt. That is
+the upstream's session, not Syntra's, and Syntra never had a handle on it.
+
+**A password reset does not revoke OpenID Connect refresh tokens.** Completing
+a self-service reset calls `revokeAllRefreshTokensForUser`, which writes to the
+`RefreshToken` table — Syntra's own. OIDC refresh tokens live in `OidcArtifact`,
+which oidc-provider owns, and nothing touches them. **Spec section 9.4 is
+therefore not satisfied**: a stolen password that has already been exchanged
+for an OIDC refresh token keeps working after the reset, for as long as the
+refresh token's lifetime allows. Sessions and Syntra's own refresh tokens *are*
+revoked. Until this is closed, treat a compromised account as needing the
+client's tokens revoked out of band.
+
+**Token revocation and introspection are advertised and do not work.** The
+discovery document lists `<issuer>/token/revocation` and
+`<issuer>/token/introspection` because oidc-provider publishes them. Client
+authentication for the token endpoint is Syntra's own — constant-time, against
+the stored SHA-256 hash — and oidc-provider is handed a placeholder secret it
+never learns the real value of, which is what makes `/token` safe. The
+consequence is that every *other* client-authenticated endpoint answers
+`invalid_client` to a client presenting its real secret. Neither endpoint is
+required by spec section 7. `oidc-boundary.test.ts` states this in a test so it
+is not rediscovered.
+
+**An `id_token` signed with HS256 from an upstream is refused, and the reason
+is only in the log.** `openid-client` does not verify an `id_token`'s signature
+by default; Syntra turns that on, which means the signature must verify against
+a key the provider publishes in its JWKS. A symmetric algorithm publishes no
+key, so a provider configured for HS256 fails the exchange with
+`federation.exchange_refused` and a message in the server log. The
+administrator sees a failed sign-in and nothing pointing at the algorithm.
+
+**Groups asserted by an upstream grant nothing.** `groupsAttribute` is read,
+carried through provisioning and recorded on `federation.user_provisioned`, and
+that is all it does: it does not create groups, does not add anybody to one,
+and does not feed the policy engine's group conditions. It is there so the
+mapping can be verified against real traffic before anything acts on it.
+**Do not size a policy on it.**
+
+**A refused request signature is not in the audit log.** A service provider
+whose `AuthnRequest` fails signature verification gets a 400 or a 409 naming
+the setting and the application, and the server logs it — but there is no
+`recordEvent` for it, so it does not appear in the tamper-evident log or in the
+console's audit screen. A service provider that has stopped signing correctly
+is visible in the API logs and nowhere else.
+
+**The console has screens for none of this.** Protocol configuration, metadata
+import, OIDC client registration, claim mappings, upstream identity providers
+and routing (`federate`) rules are all API-only —
+`/api/admin/applications/:id/saml`, `/applications/:id/oidc`,
+`/applications/:id/claims`, `/api/admin/upstreams` and
+`/api/admin/policy/rules`. The policy screen writes tenant-wide rules and does
+not offer the application scope, the upstream, or the login domains. Everything
+is reachable and tested; none of it has a form yet.
+
+**Signed metadata, back-channel logout, a consent screen and a scheduled sweep
+of expired artifacts are all out.** The identity-provider metadata document is
+unsigned — it is served over TLS from the tenant's own host, which
+`assertProtocolHost` enforces. Assignment is the consent decision, so there is
+no per-launch consent screen. `sweepExpiredArtifacts` exists and expiry is
+enforced on read, but nothing runs it on a schedule; the table grows until
+somebody does.
 
 ## License
 
