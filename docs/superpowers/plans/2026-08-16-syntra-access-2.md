@@ -28,8 +28,9 @@ Every task's requirements implicitly include this section.
 10. **A second `app.rateLimit()` hook on one route is silently inert** — `@fastify/rate-limit` marks the request on its first hook and later hooks return without counting. Use `config.rateLimit` for the per-address dimension and `perTenantRateLimit(app, max)` (built on `app.createRateLimit`) for the per-tenant dimension, exactly as `apps/api/src/routes/portal.ts` does.
 11. **Package boundaries (spec §5):** `protocols` depends on `core` and never imports `@syntra/db` — not even `import type`. Core functions that `protocols` calls take a `tenantId: string` and open their own `withTenant`.
 12. **`exactOptionalPropertyTypes` is on.** `{ foo: undefined }` does not satisfy `{ foo?: string }`. Spread conditionally: `...(x === undefined ? {} : { foo: x })`.
-13. **Every outbound fetch to an address a tenant administrator supplied goes through the guard.** SAML metadata import and upstream OIDC discovery both fetch a URL somebody typed into the console. Use `fetchExternalDocument` (Task 2) or the `guardedFetch` wrapper it shares its classifier with; never a bare `fetch`. Loopback, link-local, private and unique-local ranges are refused unless `OUTBOUND_ALLOW_PRIVATE` is set, the check happens after DNS resolution, and redirects are not followed.
-14. **Tests run in a single fork against one PostgreSQL** (`vitest.config.ts`, `poolOptions.forks.singleFork`). `resetDatabase()` truncates between tests. Never assume parallel isolation.
+13. **Nothing issues a token or an assertion without an allow from `authorize()`, and there is exactly one exemption.** The exemption is the OAuth 2.0 client credentials grant, which authenticates a client rather than a person — accepted by ruling A2-5, bounded by per-client opt-in, scope separation and its own audit event in Task 13, and named in the README in Task 17. **Do not add a second.** If a new flow seems to need one, that is a design question and not an implementation decision.
+14. **Every outbound fetch to an address a tenant administrator supplied goes through the guard.** SAML metadata import and upstream OIDC discovery both fetch a URL somebody typed into the console. Use `fetchExternalDocument` (Task 2) or the `guardedFetch` wrapper it shares its classifier with; never a bare `fetch`. Loopback, link-local, private and unique-local ranges are refused unless `OUTBOUND_ALLOW_PRIVATE` is set, the check happens after DNS resolution, and redirects are not followed.
+15. **Tests run in a single fork against one PostgreSQL** (`vitest.config.ts`, `poolOptions.forks.singleFork`). `resetDatabase()` truncates between tests. Never assume parallel isolation.
 
 ---
 
@@ -130,8 +131,10 @@ The IdP-side signing recipe in Task 7 was **executed as a spike before this plan
 - `src/routes/protocol-identity.ts` — `tenantProtocolBase`, `samlEntityId`, `oidcIssuer`, `assertProtocolHost`. The Constraint-5 chokepoint.
 - `src/routes/saml-idp.ts` — `/saml/metadata`, `/saml/sso` (GET+POST), `/saml/continue`, `/saml/slo` (GET+POST).
 - `src/routes/oidc-op.ts` — the per-tenant `Provider`, the mount adaptation, `/oidc/jwks`, and the catch-all that hands oidc-provider an untouched raw stream.
-- `src/routes/oidc-token.ts` — `/oidc/token` alone: constant-time client authentication, the authorization-decision check, and the body replay. Its own plugin so its body parser cannot escape into the catch-all's scope.
 - `src/routes/oidc-interaction.ts` — `/oidc/interaction/:uid`, the route that calls `authorize()` and writes the decision.
+- `src/routes/oidc-authorize.test.ts` — everything up to the authorization code arriving on the redirect URI, including Control 1.
+- `src/routes/oidc-token.ts` — `/oidc/token` alone: constant-time client authentication, the authorization-decision check (Control 2), the client-credentials guard, and the body replay. Its own plugin so its body parser cannot escape into the catch-all's scope.
+- `src/routes/oidc-token.test.ts` — the exchange, Control 2, and the pinned `oidc-provider` model-API contract.
 - `src/routes/oidc-boundary.test.ts` — asserts the body-parsing encapsulation directly, not merely that the routes work.
 - `src/routes/federation.ts` — `/federation/start`, `/federation/oidc/callback`, `/federation/saml/acs`.
 - `src/routes/admin/protocol-apps.ts` — SAML and OIDC application configuration and claim mappings.
@@ -158,7 +161,7 @@ The IdP-side signing recipe in Task 7 was **executed as a spike before this plan
 | Model | Purpose | Notes that matter |
 |---|---|---|
 | `SamlConfig` | one per SAML `Application` | `acsUrls String[]` is the exact-match allowlist. `spCertificates String[]` verify signed AuthnRequests. |
-| `OidcClient` | one per OIDC `Application` | `clientSecretHash` is SHA-256, not Argon2 — see Task 11's note. `redirectUris String[]` is the exact-match allowlist. |
+| `OidcClient` | one per OIDC `Application` | `clientSecretHash` is SHA-256, not Argon2 — see Task 10's note. `redirectUris String[]` is the exact-match allowlist. `clientCredentialsEnabled` defaults false: it is the one grant that bypasses `authorize()`, so it gets its own field rather than a string in an array. |
 | `ClaimMapping` | per application, per protocol | `contractStrategy` is `'primary' \| 'lowestSequence'`, feeding `resolveContractForMapping`. |
 | `UpstreamIdp` | an external IdP this tenant federates to | Client secret and SAML private key live in the vault under `secretName`; the row holds only the name. |
 | `UpstreamLink` | ties a local `User` to an upstream subject | `@@unique([upstreamIdpId, subject])`. Both columns NOT NULL, so a plain unique is sufficient. |
@@ -222,13 +225,15 @@ const key = (over: Record<string, unknown>) => ({
 });
 
 describe('access 2 schema', () => {
-  it('gives an OIDC client PKCE on by default and no redirect URIs', async () => {
+  it('gives an OIDC client PKCE on, client credentials off, and no redirect URIs', async () => {
     const client = await withTenant(tenantId, (tx) =>
       tx.oidcClient.create({
         data: { tenantId, applicationId, clientId: 'crm', clientSecretHash: 'x' },
       }),
     );
     expect(client.requirePkce).toBe(true);
+    // The grant that bypasses authorize() is never on by default (A2-5).
+    expect(client.clientCredentialsEnabled).toBe(false);
     // Empty rather than a permissive default: an unconfigured client can
     // complete no flow at all, which is the safe starting state.
     expect(client.redirectUris).toEqual([]);
@@ -408,6 +413,16 @@ model OidcClient {
   redirectUris             String[]    @default([])
   postLogoutRedirectUris   String[]    @default([])
   grantTypes               String[]    @default(["authorization_code", "refresh_token"])
+  /// Whether this client may use the client credentials grant.
+  ///
+  /// Its own column rather than a member of `grantTypes`, and default false.
+  /// This is the one grant that issues a token without a decision from
+  /// `authorize()` — see ruling A2-5 and Task 13 — so turning it on is a
+  /// deliberate act on one client, not an edit to an array where it could
+  /// arrive by accident alongside an unrelated change. `loadClients` derives
+  /// the protocol-level grant type from this flag; the admin API refuses
+  /// `client_credentials` in `grantTypes` outright.
+  clientCredentialsEnabled Boolean     @default(false)
   scopes                   String[]    @default(["openid", "profile", "email"])
   requirePkce              Boolean     @default(true)
   tokenEndpointAuthMethod  String      @default("client_secret_basic")
@@ -661,7 +676,7 @@ Add three relation fields to the existing `Application` model, beside `assignmen
 Add two columns to the existing `AuthPolicyRule` model:
 
 ```prisma
-  /// Set only on rules whose outcome is 'federate'. See Task 13.
+  /// Set only on rules whose outcome is 'federate'. See Task 14.
   upstreamIdpId String?  @db.Uuid
   /// The login identifier's domain part, for a 'federate' rule. Its own
   /// column rather than a reuse of `contractValues`: the two match on
@@ -959,7 +974,7 @@ export function isProtocolEndpoint(value: string): boolean {
  * cleverer than this one: a `startsWith` that admits `/acs/../evil`, a
  * case-insensitive host compare that admits a homograph, a parsed comparison
  * that treats a trailing slash as equivalent. Storage normalizes on the way
- * in (Task 16 validates with `isProtocolEndpoint` and stores the string as
+ * in (Task 17 validates with `isProtocolEndpoint` and stores the string as
  * given); comparison does nothing at all.
  */
 export function matchesAllowlist(
@@ -1071,7 +1086,7 @@ Expected: PASS, all cases.
 
 The second boundary rule about addresses, and it lives here with the first for the same reason: it is a rule about what an administrator-supplied value is allowed to reach, with no dependency on any protocol.
 
-SAML metadata import (Task 16) and upstream OIDC discovery (Task 14) are both server-side fetches to an address an administrator supplies. That is a server-side request forgery primitive: the deployment's own network is reachable from it, including cloud instance-metadata endpoints on `169.254.169.254`, and the import path *echoes the response back* — entity IDs, ACS URLs, certificates — which turns it from a blind primitive into a read.
+SAML metadata import (Task 17) and upstream OIDC discovery (Task 15) are both server-side fetches to an address an administrator supplies. That is a server-side request forgery primitive: the deployment's own network is reachable from it, including cloud instance-metadata endpoints on `169.254.169.254`, and the import path *echoes the response back* — entity IDs, ACS URLs, certificates — which turns it from a blind primitive into a read.
 
 A self-hosted product does legitimately federate to identity providers on private networks, so this is a refusal an operator can lift rather than a prohibition, and it is off by default.
 
@@ -1377,7 +1392,7 @@ Add `OUTBOUND_ALLOW_PRIVATE` to `packages/core/src/config.ts`:
     .transform((v) => v === 'true'),
 ```
 
-and to the `Config` interface and the returned object as `outboundAllowPrivate: v.OUTBOUND_ALLOW_PRIVATE`. Export the module from `packages/core/src/index.ts`. `apps/api/src/test-support.ts` sets `OUTBOUND_ALLOW_PRIVATE: 'true'` in the env it hands `loadConfig`, because Task 14's stub upstream listens on `127.0.0.1`. Two tests override it back to `'false'` — one in Step 3 of this task and one in Task 14 — so the shipped default is the one under test in both places. `buildTestApp` already merges `options.env` over its defaults, so no change to the helper is needed beyond the new default.
+and to the `Config` interface and the returned object as `outboundAllowPrivate: v.OUTBOUND_ALLOW_PRIVATE`. Export the module from `packages/core/src/index.ts`. `apps/api/src/test-support.ts` sets `OUTBOUND_ALLOW_PRIVATE: 'true'` in the env it hands `loadConfig`, because Task 15's stub upstream listens on `127.0.0.1`. Two tests override it back to `'false'` — one in Step 3 of this task and one in Task 15 — so the shipped default is the one under test in both places. `buildTestApp` already merges `options.env` over its defaults, so no change to the helper is needed beyond the new default.
 
 Run: `pnpm vitest run packages/core/src/net/outbound.test.ts`
 Expected: PASS, all nine cases.
@@ -6407,7 +6422,8 @@ git commit -m "feat(saml): IdP-initiated flow, GCM assertion encryption, single 
   export interface OidcClientRecord {
     id: string; applicationId: string; clientId: string; redirectUris: string[];
     postLogoutRedirectUris: string[]; grantTypes: string[]; scopes: string[];
-    requirePkce: boolean; tokenEndpointAuthMethod: string;
+    requirePkce: boolean; clientCredentialsEnabled: boolean;
+    tokenEndpointAuthMethod: string;
     idTokenSignedResponseAlg: string; accessTokenTtlSeconds: number;
     refreshTokenTtlSeconds: number;
   }
@@ -6696,6 +6712,8 @@ export interface OidcClientRecord {
   grantTypes: string[];
   scopes: string[];
   requirePkce: boolean;
+  /** See ruling A2-5. Off unless an administrator turned it on. */
+  clientCredentialsEnabled: boolean;
   tokenEndpointAuthMethod: string;
   idTokenSignedResponseAlg: string;
   accessTokenTtlSeconds: number;
@@ -6730,6 +6748,7 @@ const toRecord = (row: Record<string, unknown>): OidcClientRecord => ({
   grantTypes: row.grantTypes as string[],
   scopes: row.scopes as string[],
   requirePkce: row.requirePkce as boolean,
+  clientCredentialsEnabled: row.clientCredentialsEnabled as boolean,
   tokenEndpointAuthMethod: row.tokenEndpointAuthMethod as string,
   idTokenSignedResponseAlg: row.idTokenSignedResponseAlg as string,
   accessTokenTtlSeconds: row.accessTokenTtlSeconds as number,
@@ -7256,28 +7275,26 @@ git commit -m "feat(oidc): tenant-scoped adapter, client registry, and the promp
 
 ---
 
-## Task 11: Mounting the OIDC provider — discovery, JWKS, the interaction route, the token endpoint, and the code flow
+## Task 11: Mounting the OIDC provider — the mount adaptation, discovery, JWKS, and the interaction route
 
 **Files:**
 - Create: `apps/api/src/routes/oidc-op.ts`
-- Create: `apps/api/src/routes/oidc-token.ts`
 - Create: `apps/api/src/routes/oidc-interaction.ts`
 - Create: `packages/core/src/access/authorization-decision-service.ts`
-- Create: `apps/api/src/routes/oidc-code-flow.test.ts`
-- Create: `apps/api/src/routes/oidc-boundary.test.ts`
+- Create: `apps/api/src/routes/oidc-authorize.test.ts`
 - Modify: `apps/api/src/app.ts`, `apps/api/package.json`, `packages/core/src/index.ts`
 - Modify: `packages/protocols/src/oidc/provider-factory.ts` (take the code TTL from the shared constant)
 
 **Interfaces:**
-- Consumes: `providerFor`, `invalidateProvider`, `SYNTRA_DECISION_KEY` (Task 10); `tenantProtocolIdentity`, `assertProtocolHost` (Task 2); `publishedKeys`, `ensureActiveKey`, `readSigningKeyPem` (Task 3); `collectSubjectFacts`, `resolveClaims`, `listClaimMappings` (Task 4); `listOidcClients`, `verifyClientSecret` (Task 10); `authorize`, `resolveSession`, `isApplicationAssigned`, `recordEvent` from `@syntra/core`.
+- Consumes: `providerFor`, `invalidateProvider`, `SYNTRA_DECISION_KEY` (Task 10); `tenantProtocolIdentity`, `assertProtocolHost` (Task 2); `publishedKeys`, `ensureActiveKey`, `readSigningKeyPem` (Task 3); `collectSubjectFacts`, `resolveClaims`, `listClaimMappings` (Task 4); `listOidcClients` (Task 10); `authorize`, `resolveSession`, `isApplicationAssigned`, `recordEvent` from `@syntra/core`.
 - Produces:
   ```ts
   // apps/api
   export interface OidcRouteOptions { publicUrl: string; masterKey: Buffer; sessionSecret: string; authRateLimitMax: number; authRateLimitTenantMax: number }
+  export const OIDC_MOUNT: string;
   export function oidcProviderFor(request: FastifyRequest, options: OidcRouteOptions): Promise<Provider>;
   export function requestForProvider(raw: IncomingMessage, body: Buffer | null): IncomingMessage;
   export function registerOidcRoutes(app: FastifyInstance, options: OidcRouteOptions): Promise<void>;
-  export function registerOidcTokenRoutes(app: FastifyInstance, options: OidcRouteOptions): Promise<void>;
   export function registerOidcInteractionRoutes(app: FastifyInstance, options: OidcRouteOptions): Promise<void>;
 
   // @syntra/core
@@ -7285,14 +7302,19 @@ git commit -m "feat(oidc): tenant-scoped adapter, client registry, and the promp
   export function recordAuthorizationDecision(tenantId: string, input: { userId: string; clientId: string; interactionUid: string; satisfiedFactor: string | null }): Promise<void>;
   export function consumeAuthorizationDecision(tenantId: string, userId: string, clientId: string, now?: Date): Promise<boolean>;
   ```
+- Produced for Task 12: `oidcProviderFor` and `requestForProvider`, which the token endpoint reuses unchanged, and the `AuthorizationDecision` rows this task's interaction route writes and Task 12's token endpoint spends.
+
+### What this task deliberately stops short of
+
+**The token endpoint does not work when this task is done, and its tests do not pretend otherwise.** Every case here stops at the authorization code arriving on the redirect URI. Exchanging that code needs client authentication against the stored SHA-256 hash, which `loadClients` cannot do — it hands `oidc-provider` a placeholder — and that, together with the second chokepoint control at the same endpoint, is Task 12's whole subject. Splitting there keeps the two halves separately reviewable, and means a reviewer of this task never has to hold the body-replay mechanics in mind while checking the mount adaptation.
 
 ### Two facts established by spike before this task was written
 
 Both were reproduced against `oidc-provider@9.11.3` mounted in Fastify 5, and both are load-bearing enough that getting them wrong would have cost a day mid-task.
 
-**1. `oidc-provider` must be handed a request whose path has the mount prefix removed, and whose `originalUrl` still has it.** Its router registers `/token`, `/auth`, `/jwks` and matches them against `ctx.path` (`lib/helpers/initialize_app.js`). Handing it `/oidc/token` unchanged returns a bare Koa **404 for every OIDC route**. Separately, `ctx.oidc.urlFor` derives the mount path as `originalUrl.substring(0, originalUrl.indexOf(request.url))` (`lib/helpers/oidc_context.js:86`), so stripping the prefix without setting `originalUrl` publishes a discovery document advertising `http://host/token` — the prefix silently disappears from every URL a relying party consumes. Both halves are required; each alone is broken in a different direction.
+**1. `oidc-provider` must be handed a request whose path has the mount prefix removed, and whose `originalUrl` still has it.** Its router registers `/token`, `/auth`, `/jwks` and matches them against `ctx.path` (`lib/helpers/initialize_app.js`). Handing it `/oidc/auth` unchanged returns a bare Koa **404 for every OIDC route**. Separately, `ctx.oidc.urlFor` derives the mount path as `originalUrl.substring(0, originalUrl.indexOf(request.url))` (`lib/helpers/oidc_context.js:86`), so stripping the prefix without setting `originalUrl` publishes a discovery document advertising `http://host/token` — the prefix silently disappears from every URL a relying party consumes. Both halves are required; each alone is broken in a different direction.
 
-**2. The token endpoint needs the request body twice, and a drained stream fails silently-ish.** Syntra checks the client secret and the authorization decision before oidc-provider runs, both of which need the parsed form; oidc-provider then reads the body from the raw stream itself. Measured: with the body replayed, a `grant_type=bogus` request is answered `unsupported_grant_type`; without the replay it is answered `invalid_request / no client authentication mechanism provided` — oidc-provider saw an empty body. That pair is the discriminator the boundary test in Step 8 asserts on.
+**2. The catch-all must not parse the request body.** `oidc-provider` reads it from the raw stream itself. Fastify core parses only `application/json` and `text/plain`, so the `application/x-www-form-urlencoded` bodies these endpoints receive pass through untouched — provided nothing registers a parser for that type at the root. Task 12 introduces the one plugin that legitimately does, inside its own scope, and its boundary test asserts the separation directly.
 
 - [ ] **Step 1: Add the shared TTL constant and the decision service**
 
@@ -7391,10 +7413,9 @@ import { AUTHORIZATION_CODE_TTL_SECONDS } from '@syntra/core';
         Grant: 1209600,
       },
 ```
+- [ ] **Step 2: Write the failing authorization-endpoint test**
 
-- [ ] **Step 2: Write the failing end-to-end test with a real relying party**
-
-Create `apps/api/src/routes/oidc-code-flow.test.ts`. It drives `openid-client` — a real RP, as spec section 13 requires — against the running Fastify app through a fetch shim over `app.inject`.
+Create `apps/api/src/routes/oidc-authorize.test.ts`. It drives `openid-client` — a real relying party, as spec section 13 requires — against the running Fastify app through a fetch shim over `app.inject`, and stops at the code.
 
 ```ts
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -7466,6 +7487,7 @@ beforeEach(async () => {
       grantTypes: ['authorization_code', 'refresh_token'],
       scopes: ['openid', 'profile', 'email'],
       requirePkce: true,
+      clientCredentialsEnabled: false,
       tokenEndpointAuthMethod: 'client_secret_basic',
       idTokenSignedResponseAlg: 'RS256',
       accessTokenTtlSeconds: 3600,
@@ -7487,6 +7509,7 @@ beforeEach(async () => {
   cookie = login.cookies.find((c) => c.name === 'syntra_session')!.value;
 });
 
+/** Discovery through the shim. Task 12 copies this helper verbatim. */
 const discover = (id = 'crm', secret?: string) =>
   client.discovery(
     new URL(`http://${TEST_HOST}/oidc`),
@@ -7575,35 +7598,7 @@ describe('OIDC discovery and JWKS', () => {
   });
 });
 
-describe('OIDC authorization code flow', () => {
-  it('completes the code flow with PKCE and returns claims from the mapping', async () => {
-    const config = await discover();
-    const { url, verifier, state } = await authUrlWithPkce(config);
-    const { url: landed } = await walk(url);
-    expect(landed.searchParams.get('code')).toBeTruthy();
-
-    const tokens = await client.authorizationCodeGrant(config, landed, {
-      pkceCodeVerifier: verifier, expectedState: state,
-    });
-    expect(tokens.access_token).toBeTruthy();
-    const idClaims = tokens.claims()!;
-    expect(idClaims.sub).toBe(userId);
-    expect(idClaims.aud).toBe('crm');
-    expect(idClaims.iss).toBe(`http://${TEST_HOST}/oidc`);
-    expect((idClaims as Record<string, unknown>).email).toBe('j@acme.test');
-  });
-
-  it('refuses the token exchange when the PKCE verifier does not match', async () => {
-    const config = await discover();
-    const { url, state } = await authUrlWithPkce(config);
-    const { url: landed } = await walk(url);
-    await expect(
-      client.authorizationCodeGrant(config, landed, {
-        pkceCodeVerifier: client.randomPKCECodeVerifier(), expectedState: state,
-      }),
-    ).rejects.toThrow();
-  });
-
+describe('the authorization endpoint', () => {
   it('refuses an authorization request with no PKCE challenge at all', async () => {
     const config = await discover();
     const url = client.buildAuthorizationUrl(config, {
@@ -7614,18 +7609,6 @@ describe('OIDC authorization code flow', () => {
     // registered redirect URI rather than as a code.
     expect(landed.searchParams.get('code')).toBeNull();
     expect(landed.searchParams.get('error')).toBe('invalid_request');
-  });
-
-  it('refuses the token exchange with the wrong client secret', async () => {
-    const config = await discover();
-    const { url, verifier, state } = await authUrlWithPkce(config);
-    const { url: landed } = await walk(url);
-    const wrong = await discover('crm', 'not-the-secret');
-    await expect(
-      client.authorizationCodeGrant(wrong, landed, {
-        pkceCodeVerifier: verifier, expectedState: state,
-      }),
-    ).rejects.toThrow();
   });
 
   it('refuses a redirect URI that is not exactly one of the registered ones', async () => {
@@ -7669,7 +7652,6 @@ describe('OIDC authorization code flow', () => {
     const { url } = await authUrlWithPkce(config);
     const { res } = await walk(url);
     expect(res.statusCode).toBe(403);
-  });
 });
 
 describe('the chokepoint holds on every authorization request, not only the first', () => {
@@ -7693,175 +7675,42 @@ describe('the chokepoint holds on every authorization request, not only the firs
     expect(second.res.statusCode).toBe(403);
   });
 
-  it('CONTROL 2 — a code minted with no interaction at all is refused at the token endpoint', async () => {
-    // What deleting `syntraAuthorizePrompt` would produce: a genuine, valid,
-    // oidc-provider-minted authorization code for a real user and a real
-    // client, with no Syntra decision behind it. Rather than editing the
-    // source, this mints exactly that code through the provider's own model
-    // API — the strongest form of "the prompt is gone".
-    //
-    // `providerFor` returns the cached instance for a tenant and ignores its
-    // deps on a cache hit, so this is the same Provider the app is serving
-    // from. The discovery call above is what put it in the cache.
+  it('records one decision per resolved interaction, for the right user and client', async () => {
+    // The row Task 12's token endpoint independently requires. Asserted here
+    // because this is the task that writes it: if the interaction route stops
+    // writing it, that is this task's failure and not Task 12's.
     const config = await discover();
-    void config;
-    const { providerFor } = await import('@syntra/protocols');
-    const provider = await providerFor(
-      ctx.tenantId,
-      `http://${TEST_HOST}/oidc`,
-      null as never,
-    );
-
-    const grant = new provider.Grant({ clientId: 'crm', accountId: userId });
-    grant.addOIDCScope('openid');
-    const grantId = await grant.save();
-
-    const verifier = client.randomPKCECodeVerifier();
-    const code = new provider.AuthorizationCode({
-      accountId: userId, clientId: 'crm', grantId,
-      redirectUri: REDIRECT, scope: 'openid',
-      codeChallenge: await client.calculatePKCECodeChallenge(verifier),
-      codeChallengeMethod: 'S256',
-    });
-    const value = await code.save();
-
-    // Sanity: the code is real and oidc-provider can find it. If this fails
-    // the test is not exercising what it claims to.
-    expect(await provider.AuthorizationCode.find(value)).toBeTruthy();
-
-    const res = await ctx.app.inject({
-      method: 'POST', url: '/oidc/token',
-      headers: {
-        host: TEST_HOST,
-        'content-type': 'application/x-www-form-urlencoded',
-        authorization: `Basic ${Buffer.from(`crm:${clientSecret}`).toString('base64')}`,
-      },
-      payload: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: value,
-        redirect_uri: REDIRECT,
-        code_verifier: verifier,
-      }).toString(),
-    });
-
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).error).toBe('invalid_grant');
-    expect(res.body).not.toContain('access_token');
-    expect(res.body).not.toContain('id_token');
-
-    // And it is visible afterwards rather than only refused.
-    const events = await prisma.auditEvent.findMany({
-      where: { action: 'oidc.decision_missing' },
-    });
-    expect(events).toHaveLength(1);
-  });
-
-  it('CONTROL 2 — a decision is single-use, so one interaction cannot buy two tokens', async () => {
-    const config = await discover();
-    const { url, verifier, state } = await authUrlWithPkce(config);
+    const { url } = await authUrlWithPkce(config);
     const { url: landed } = await walk(url);
-
-    await client.authorizationCodeGrant(config, landed, {
-      pkceCodeVerifier: verifier, expectedState: state,
-    });
-    // Replaying the same code: oidc-provider's own replay detection answers
-    // this one, because the decision check deliberately steps aside for a code
-    // that is already consumed.
-    await expect(
-      client.authorizationCodeGrant(config, landed, {
-        pkceCodeVerifier: verifier, expectedState: state,
-      }),
-    ).rejects.toThrow();
+    expect(landed.searchParams.get('code')).toBeTruthy();
 
     const rows = await prisma.authorizationDecision.findMany();
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.consumedAt).not.toBeNull();
+    expect(rows[0]!.userId).toBe(userId);
+    expect(rows[0]!.clientId).toBe('crm');
+    expect(rows[0]!.consumedAt).toBeNull();
+    // Its lifetime is the authorization code's, not longer. A decision that
+    // outlived its code would be spendable by a code obtained another way.
+    const { AUTHORIZATION_CODE_TTL_SECONDS } = await import('@syntra/core');
+    const lifetimeMs = rows[0]!.expiresAt.getTime() - rows[0]!.createdAt.getTime();
+    expect(Math.round(lifetimeMs / 1000)).toBe(AUTHORIZATION_CODE_TTL_SECONDS);
   });
 
-  it('CONTROL 2 — a decision made for one client does not satisfy another', async () => {
-    await withTenant(ctx.tenantId, async (tx) => {
-      const other = await createApplication(tx, { name: 'HR', slug: 'hr', type: 'oidc' });
-      await assignApplication(tx, other.id, { type: 'user', id: userId });
-      await upsertOidcClient(tx, other.id, {
-        clientId: 'hr', redirectUris: ['https://hr.acme.test/cb'],
-        postLogoutRedirectUris: [], grantTypes: ['authorization_code'],
-        scopes: ['openid'], requirePkce: true,
-        tokenEndpointAuthMethod: 'client_secret_basic',
-        idTokenSignedResponseAlg: 'RS256',
-        accessTokenTtlSeconds: 3600, refreshTokenTtlSeconds: 0,
-      });
-    });
-    const { invalidateProvider } = await import('@syntra/protocols');
-    invalidateProvider(ctx.tenantId);
-
-    // One legitimate flow for CRM, left unexchanged, so its decision is live.
+  it('records no decision when policy denies', async () => {
+    await withTenant(ctx.tenantId, (tx) =>
+      addRule(tx, { name: 'no crm', outcome: 'deny', applicationIds: [applicationId] }),
+    );
     const config = await discover();
     const { url } = await authUrlWithPkce(config);
     await walk(url);
-    expect(await prisma.authorizationDecision.count()).toBe(1);
-
-    // Now mint an HR code with no interaction. The live CRM decision must not
-    // pay for it — otherwise a launch of a low-risk application would satisfy
-    // the requirement for a high-risk one.
-    const provider = await providerForCached(ctx.tenantId);
-    const grant = new provider.Grant({ clientId: 'hr', accountId: userId });
-    grant.addOIDCScope('openid');
-    const grantId = await grant.save();
-    const verifier = client.randomPKCECodeVerifier();
-    const code = new provider.AuthorizationCode({
-      accountId: userId, clientId: 'hr', grantId,
-      redirectUri: 'https://hr.acme.test/cb', scope: 'openid',
-      codeChallenge: await client.calculatePKCECodeChallenge(verifier),
-      codeChallengeMethod: 'S256',
-    });
-    const value = await code.save();
-
-    const hrSecret = await withTenant(ctx.tenantId, async (tx) => {
-      const application = await tx.application.findFirstOrThrow({ where: { slug: 'hr' } });
-      const { clientSecret: s } = await upsertOidcClient(tx, application.id, {
-        clientId: 'hr', redirectUris: ['https://hr.acme.test/cb'],
-        postLogoutRedirectUris: [], grantTypes: ['authorization_code'],
-        scopes: ['openid'], requirePkce: true,
-        tokenEndpointAuthMethod: 'client_secret_basic',
-        idTokenSignedResponseAlg: 'RS256',
-        accessTokenTtlSeconds: 3600, refreshTokenTtlSeconds: 0,
-        rotateSecret: true,
-      });
-      return s!;
-    });
-
-    const res = await ctx.app.inject({
-      method: 'POST', url: '/oidc/token',
-      headers: {
-        host: TEST_HOST,
-        'content-type': 'application/x-www-form-urlencoded',
-        authorization: `Basic ${Buffer.from(`hr:${hrSecret}`).toString('base64')}`,
-      },
-      payload: new URLSearchParams({
-        grant_type: 'authorization_code', code: value,
-        redirect_uri: 'https://hr.acme.test/cb', code_verifier: verifier,
-      }).toString(),
-    });
-    expect(res.statusCode).toBe(400);
-    expect(res.body).not.toContain('access_token');
-    // The CRM decision is untouched.
-    const rows = await prisma.authorizationDecision.findMany();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.clientId).toBe('crm');
-    expect(rows[0]!.consumedAt).toBeNull();
+    expect(await prisma.authorizationDecision.count()).toBe(0);
   });
 });
-
-/** The Provider the app is serving from, out of `providerFor`'s cache. */
-async function providerForCached(tenantId: string) {
-  const { providerFor } = await import('@syntra/protocols');
-  return providerFor(tenantId, `http://${TEST_HOST}/oidc`, null as never);
-}
 ```
 
 - [ ] **Step 3: Run and watch it fail**
 
-Run: `pnpm vitest run apps/api/src/routes/oidc-code-flow.test.ts`
+Run: `pnpm vitest run apps/api/src/routes/oidc-authorize.test.ts`
 Expected: FAIL — nothing is mounted at `/oidc`.
 
 - [ ] **Step 4: Write `apps/api/src/routes/oidc-op.ts`**
@@ -8011,7 +7860,12 @@ export async function oidcProviderFor(
         client_secret: 'syntra-verified',
         redirect_uris: c.redirectUris,
         post_logout_redirect_uris: c.postLogoutRedirectUris,
-        grant_types: c.grantTypes,
+        // Derived, never read straight off `grantTypes`. The admin API refuses
+        // `client_credentials` there, so the flag is the only way it can be on
+        // — one place to look when asking which clients bypass authorize().
+        grant_types: c.clientCredentialsEnabled
+          ? [...c.grantTypes, 'client_credentials']
+          : c.grantTypes,
         response_types: c.grantTypes.includes('authorization_code') ? ['code'] : [],
         scope: c.scopes.join(' '),
         token_endpoint_auth_method: c.tokenEndpointAuthMethod,
@@ -8083,181 +7937,7 @@ export async function registerOidcRoutes(
 }
 ```
 
-- [ ] **Step 5: Write `apps/api/src/routes/oidc-token.ts` — client authentication and the second chokepoint control**
-
-```ts
-import type { FastifyInstance, FastifyRequest } from 'fastify';
-import {
-  consumeAuthorizationDecision,
-  recordEvent,
-  verifyClientSecret,
-} from '@syntra/core';
-import { perTenantRateLimit } from '../plugins/rate-limit.js';
-import { oidcProviderFor, requestForProvider, type OidcRouteOptions } from './oidc-op.js';
-
-interface ClientCredentials {
-  clientId: string;
-  secret: string;
-}
-
-/**
- * The client credentials a token request presented, or null for a public
- * client authenticating with PKCE alone.
- *
- * Both `client_secret_basic` (the Authorization header) and
- * `client_secret_post` (a form field) are read, because a client may use
- * either and refusing the one a client happens to use is a support ticket.
- * RFC 6749 section 2.3.1 percent-encodes both halves of the Basic credential.
- */
-function presentedCredentials(
-  request: FastifyRequest,
-  params: URLSearchParams,
-): ClientCredentials | null {
-  const header = request.headers.authorization;
-  if (header?.startsWith('Basic ')) {
-    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
-    const index = decoded.indexOf(':');
-    if (index <= 0) return null;
-    return {
-      clientId: decodeURIComponent(decoded.slice(0, index)),
-      secret: decodeURIComponent(decoded.slice(index + 1)),
-    };
-  }
-  const clientId = params.get('client_id');
-  const secret = params.get('client_secret');
-  if (clientId === null || secret === null) return null;
-  return { clientId, secret };
-}
-
-/**
- * The second of the two independent controls behind spec section 7's
- * chokepoint.
- *
- * The first is `syntraAuthorizePrompt`, which forces every authorization
- * request out to Syntra's interaction route. It is one deleted line in a file
- * whose purpose is not obvious, and it depends on `ctx.oidc.result` semantics
- * internal to `oidc-provider`. This one is in Syntra's own route, reads
- * Syntra's own table, and does not touch `oidc-provider`'s configuration at
- * all — so no single edit removes both, which is the whole point of having
- * two. `oidc-code-flow.test.ts` mints a genuine authorization code with no
- * interaction behind it and asserts this refuses it.
- *
- * The ordering is deliberate. A code that is **unknown, expired or already
- * consumed** is handed to oidc-provider untouched, because its own replay
- * detection revokes the entire grant when a consumed code is presented a
- * second time — refusing here first would answer with the same status and lose
- * that revocation. Only a code that is live, and for which no decision exists,
- * is refused here.
- *
- * `refresh_token` and `client_credentials` are not checked. A refresh token
- * descends from a code that was checked, and re-checking would demand a fresh
- * interaction for every refresh. Client credentials authenticate a *client*
- * and involve no user, no session and no policy decision to bypass; the
- * control there is the client secret.
- */
-async function refuseWithoutDecision(
-  request: FastifyRequest,
-  provider: Awaited<ReturnType<typeof oidcProviderFor>>,
-  params: URLSearchParams,
-): Promise<{ error: string; error_description: string } | null> {
-  const code = params.get('code');
-  if (code === null || code === '') return null;
-
-  const stored = await provider.AuthorizationCode.find(code);
-  if (!stored || stored.consumed) return null;
-
-  const accountId = stored.accountId;
-  const clientId = stored.clientId;
-  if (typeof accountId !== 'string' || typeof clientId !== 'string') return null;
-
-  if (await consumeAuthorizationDecision(request.tenantId, accountId, clientId)) {
-    return null;
-  }
-
-  await request.db((tx) =>
-    recordEvent(tx, {
-      actorUserId: accountId,
-      action: 'oidc.decision_missing',
-      targetType: 'User',
-      targetId: accountId,
-      outcome: 'failure',
-      sourceIp: request.ip,
-      payload: {
-        clientId,
-        reason: 'no live authorize() decision for this authorization code',
-      },
-    }),
-  );
-
-  return {
-    error: 'invalid_grant',
-    error_description: 'This authorization was not granted by this identity provider',
-  };
-}
-
-/**
- * The token endpoint.
- *
- * Its own plugin because it is the one OIDC route that must read the body
- * before oidc-provider does. The buffer parser is registered **inside this
- * plugin only** — Fastify's encapsulation keeps it away from
- * `registerOidcRoutes`, whose catch-all must hand oidc-provider an untouched
- * stream. `oidc-boundary.test.ts` asserts that separation directly rather than
- * trusting the registration order to stay right.
- */
-export async function registerOidcTokenRoutes(
-  app: FastifyInstance,
-  options: OidcRouteOptions,
-): Promise<void> {
-  app.addContentTypeParser(
-    'application/x-www-form-urlencoded',
-    { parseAs: 'buffer' },
-    (_request, body, done) => done(null, body),
-  );
-
-  app.post(
-    '/token',
-    {
-      // A token request presents a credential, so both rate-limit dimensions,
-      // as at every other credential-presenting route.
-      config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
-    },
-    async (request, reply) => {
-      const provider = await oidcProviderFor(request, options);
-      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
-      const params = new URLSearchParams(body.toString('utf8'));
-
-      const credentials = presentedCredentials(request, params);
-      if (credentials !== null) {
-        // Constant-time, against the stored SHA-256 hash. oidc-provider never
-        // sees the real secret.
-        const ok = await verifyClientSecret(
-          request.tenantId, credentials.clientId, credentials.secret,
-        );
-        if (!ok) {
-          return reply.status(401).type('application/json').send({
-            error: 'invalid_client',
-            error_description: 'Client authentication failed',
-          });
-        }
-      }
-
-      if (params.get('grant_type') === 'authorization_code') {
-        const refusal = await refuseWithoutDecision(request, provider, params);
-        if (refusal) return reply.status(400).type('application/json').send(refusal);
-      }
-
-      reply.hijack();
-      // The body was consumed above, so it is replayed. See
-      // `requestForProvider`.
-      await provider.callback()(requestForProvider(request.raw, body), reply.raw);
-    },
-  );
-}
-```
-
-- [ ] **Step 6: Write `apps/api/src/routes/oidc-interaction.ts`**
+- [ ] **Step 5: Write `apps/api/src/routes/oidc-interaction.ts`**
 
 ```ts
 import type { FastifyInstance } from 'fastify';
@@ -8406,9 +8086,7 @@ export async function registerOidcInteractionRoutes(
 }
 ```
 
-- [ ] **Step 7: Register everything in `app.ts`**
-
-Order matters twice over: the specific routes must be registered before the catch-all, and the token plugin must be its own encapsulated scope so its body parser cannot escape into the catch-all's.
+- [ ] **Step 6: Register the interaction route and the catch-all in `app.ts`**
 
 ```ts
   const oidcOptions = {
@@ -8419,13 +8097,530 @@ Order matters twice over: the specific routes must be registered before the catc
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   };
   await app.register(registerOidcInteractionRoutes, { prefix: '/oidc', ...oidcOptions });
-  await app.register(registerOidcTokenRoutes, { prefix: '/oidc', ...oidcOptions });
+  // The catch-all last: every specific route must be matched first, and this is
+  // the only one that hands oidc-provider an unparsed body. Task 12 inserts its
+  // token plugin between these two lines.
   await app.register(registerOidcRoutes, { prefix: '/oidc', ...oidcOptions });
 ```
 
 Add `"@syntra/protocols": "workspace:*"` to `apps/api/package.json` dependencies and `"openid-client": "6.8.5"` to its devDependencies (the test's relying party).
 
-- [ ] **Step 8: Write the body-parsing boundary test**
+- [ ] **Step 7: Run the tests**
+
+Run: `pnpm vitest run apps/api/src/routes/oidc-authorize.test.ts`
+Expected: PASS.
+
+**Why these tests are not degenerate.**
+
+- The **discovery** case pins all four endpoint URLs including the `/oidc` prefix, which fails if either half of the mount adaptation is missing — one half 404s everything, the other publishes URLs with the prefix stripped. A test asserting only `statusCode === 200` would pass under the second failure.
+- The **JWKS** case asserts `d`, `p` and `q` are absent, which fails for the obvious mistake of publishing the private JWKs `oidc-provider` is configured with.
+- **CONTROL 1** completes one successful authorization, adds a deny rule, and requires the second to fail. An implementation without `syntraAuthorizePrompt` passes every other case in the file and fails only this one, because `oidc-provider` would answer the second request out of its own session cookie.
+- The **decision-row** case asserts the user, the client and the exact TTL rather than mere existence, so an implementation writing a decision for the wrong subject — or one whose lifetime has drifted from the code's — fails here rather than surfacing as a mysterious refusal in Task 12.
+- The **redirect-URI** case walks five near-miss strings and asserts the response is *not* a redirect to any of them, so an implementation that refused but redirected the error to the unregistered URI — an open redirect — still fails.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add apps/api/src/routes/oidc-op.ts apps/api/src/routes/oidc-interaction.ts apps/api/src/routes/oidc-authorize.test.ts apps/api/src/app.ts apps/api/package.json packages/core/src/access/authorization-decision-service.ts packages/core/src/index.ts packages/protocols/src/oidc/provider-factory.ts pnpm-lock.yaml
+git commit -m "feat(oidc): mount adaptation, discovery, JWKS, and the interaction route"
+```
+
+---
+
+## Task 12: The OIDC token endpoint — client authentication, and the second chokepoint control
+
+**Files:**
+- Create: `apps/api/src/routes/oidc-token.ts`
+- Create: `apps/api/src/routes/oidc-token.test.ts`
+- Create: `apps/api/src/routes/oidc-boundary.test.ts`
+- Modify: `apps/api/src/app.ts`
+
+**Interfaces:**
+- Consumes: `oidcProviderFor`, `requestForProvider`, `OidcRouteOptions`, and the `AuthorizationDecision` rows the interaction route writes (Task 11); `verifyClientSecret` (Task 10); `consumeAuthorizationDecision` (Task 11); `recordEvent` from `@syntra/core`; `perTenantRateLimit` from `apps/api/src/plugins/rate-limit.js`.
+- Produces: `registerOidcTokenRoutes(app: FastifyInstance, options: OidcRouteOptions): Promise<void>`, mounted at `/oidc` **before** Task 11's catch-all.
+
+### Why this is a separate task from the mount
+
+Task 11 gets a browser to an authorization code. This task is everything that happens when that code comes back, and it is where the second of the two controls behind spec section 7's chokepoint lives. It also carries the one piece of framework surgery in the OIDC half — the token endpoint has to read the request body to authenticate the client, and `oidc-provider` then has to read the same body from the raw stream — so it is the only OIDC route with its own content-type parser and its own replay. Reviewing that alongside the mount adaptation means reviewing neither properly.
+
+- [ ] **Step 1: Write the failing token-endpoint test**
+
+Create `apps/api/src/routes/oidc-token.test.ts`. Copy the `beforeEach`, `injectFetch`, `discover`, `walk` and `authUrlWithPkce` helpers from `oidc-authorize.test.ts` verbatim — they close over that file's module-level `ctx`, `cookie` and `clientSecret`, so they are not importable and sharing them would mean sharing mutable test state. Then:
+
+```ts
+describe('the authorization code exchange', () => {
+  it('completes the code flow with PKCE and returns claims from the mapping', async () => {
+    const config = await discover();
+    const { url, verifier, state } = await authUrlWithPkce(config);
+    const { url: landed } = await walk(url);
+    expect(landed.searchParams.get('code')).toBeTruthy();
+
+    const tokens = await client.authorizationCodeGrant(config, landed, {
+      pkceCodeVerifier: verifier, expectedState: state,
+    });
+    expect(tokens.access_token).toBeTruthy();
+    const idClaims = tokens.claims()!;
+    expect(idClaims.sub).toBe(userId);
+    expect(idClaims.aud).toBe('crm');
+    expect(idClaims.iss).toBe(`http://${TEST_HOST}/oidc`);
+    expect((idClaims as Record<string, unknown>).email).toBe('j@acme.test');
+  });
+
+  it('refuses the token exchange when the PKCE verifier does not match', async () => {
+    const config = await discover();
+    const { url, state } = await authUrlWithPkce(config);
+    const { url: landed } = await walk(url);
+    await expect(
+      client.authorizationCodeGrant(config, landed, {
+        pkceCodeVerifier: client.randomPKCECodeVerifier(), expectedState: state,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('refuses the token exchange with the wrong client secret', async () => {
+    const config = await discover();
+    const { url, verifier, state } = await authUrlWithPkce(config);
+    const { url: landed } = await walk(url);
+    const wrong = await discover('crm', 'not-the-secret');
+    await expect(
+      client.authorizationCodeGrant(wrong, landed, {
+        pkceCodeVerifier: verifier, expectedState: state,
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+/**
+ * The library contract Control 2 rests on.
+ *
+ * Ruling A2-7 accepted the dependency on `provider.AuthorizationCode.find` —
+ * public API, verified round trip, version pinned exactly — on the condition
+ * that it fail loudly and specifically if the library stops returning what it
+ * returns today. A pinned dependency that breaks quietly on upgrade is how a
+ * control disappears between releases, and without this the symptom would be
+ * the security test below failing with a bare "expected 400, got 200".
+ */
+describe('the oidc-provider model API Control 2 depends on', () => {
+  const CONTRACT = [
+    'CONTRACT BROKEN: oidc-provider AuthorizationCode.find no longer behaves as',
+    'apps/api/src/routes/oidc-token.ts assumes. That function is the second of the',
+    'two controls behind the spec section 7 chokepoint: without it the token',
+    'endpoint cannot tell which user and client a code belongs to, and therefore',
+    'cannot require an AuthorizationDecision before issuing a token.',
+    'Do NOT relax this test. Either adapt oidc-token.ts to the new behaviour and',
+    'update this contract, or pin oidc-provider back to the version below.',
+  ].join(' ');
+
+  it('returns the stored accountId, clientId and grantId for a code it just minted', async () => {
+    await discover(); // builds and caches the Provider this tenant is served from
+    const provider = await providerForCached(ctx.tenantId);
+
+    const grant = new provider.Grant({ clientId: 'crm', accountId: userId });
+    grant.addOIDCScope('openid');
+    const grantId = await grant.save();
+
+    const verifier = client.randomPKCECodeVerifier();
+    const code = new provider.AuthorizationCode({
+      accountId: userId, clientId: 'crm', grantId,
+      redirectUri: REDIRECT, scope: 'openid',
+      codeChallenge: await client.calculatePKCECodeChallenge(verifier),
+      codeChallengeMethod: 'S256',
+    });
+    const value = await code.save();
+
+    const found = await provider.AuthorizationCode.find(value);
+    expect(found, CONTRACT).toBeTruthy();
+    expect(found!.accountId, CONTRACT).toBe(userId);
+    expect(found!.clientId, CONTRACT).toBe('crm');
+    expect(found!.grantId, CONTRACT).toBe(grantId);
+    // Falsy on a live code is what lets the check know it has not been spent.
+    expect(found!.consumed, CONTRACT).toBeFalsy();
+  });
+
+  it('returns undefined for an unknown code rather than throwing', async () => {
+    // The token endpoint steps aside for an unknown or spent code so that
+    // oidc-provider's own replay detection can revoke the grant. A throw here
+    // would turn that into a 500 and lose the revocation.
+    await discover();
+    const provider = await providerForCached(ctx.tenantId);
+    await expect(
+      provider.AuthorizationCode.find('not-a-real-code'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('is still the exact version this contract was verified against', async () => {
+    const { createRequire } = await import('node:module');
+    const pkg = createRequire(import.meta.url)('oidc-provider/package.json') as {
+      version: string;
+    };
+    // Named separately from the behaviour cases so an upgrade reads as "the
+    // pin moved" rather than as a mysterious behavioural failure.
+    expect(pkg.version, CONTRACT).toBe('9.11.3');
+  });
+});
+
+describe('CONTROL 2 — the token endpoint requires a decision from authorize()', () => {
+  it('CONTROL 2 — a code minted with no interaction at all is refused at the token endpoint', async () => {
+    // What deleting `syntraAuthorizePrompt` would produce: a genuine, valid,
+    // oidc-provider-minted authorization code for a real user and a real
+    // client, with no Syntra decision behind it. Rather than editing the
+    // source, this mints exactly that code through the provider's own model
+    // API — the strongest form of "the prompt is gone".
+    //
+    // `providerFor` returns the cached instance for a tenant and ignores its
+    // deps on a cache hit, so this is the same Provider the app is serving
+    // from. The discovery call above is what put it in the cache.
+    const config = await discover();
+    void config;
+    const { providerFor } = await import('@syntra/protocols');
+    const provider = await providerFor(
+      ctx.tenantId,
+      `http://${TEST_HOST}/oidc`,
+      null as never,
+    );
+
+    const grant = new provider.Grant({ clientId: 'crm', accountId: userId });
+    grant.addOIDCScope('openid');
+    const grantId = await grant.save();
+
+    const verifier = client.randomPKCECodeVerifier();
+    const code = new provider.AuthorizationCode({
+      accountId: userId, clientId: 'crm', grantId,
+      redirectUri: REDIRECT, scope: 'openid',
+      codeChallenge: await client.calculatePKCECodeChallenge(verifier),
+      codeChallengeMethod: 'S256',
+    });
+    const value = await code.save();
+
+    // Sanity: the code is real and oidc-provider can find it. If this fails
+    // the test is not exercising what it claims to.
+    expect(await provider.AuthorizationCode.find(value)).toBeTruthy();
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/oidc/token',
+      headers: {
+        host: TEST_HOST,
+        'content-type': 'application/x-www-form-urlencoded',
+        authorization: `Basic ${Buffer.from(`crm:${clientSecret}`).toString('base64')}`,
+      },
+      payload: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: value,
+        redirect_uri: REDIRECT,
+        code_verifier: verifier,
+      }).toString(),
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toBe('invalid_grant');
+    expect(res.body).not.toContain('access_token');
+    expect(res.body).not.toContain('id_token');
+
+    // And it is visible afterwards rather than only refused.
+    const events = await prisma.auditEvent.findMany({
+      where: { action: 'oidc.decision_missing' },
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it('CONTROL 2 — a decision is single-use, so one interaction cannot buy two tokens', async () => {
+    const config = await discover();
+    const { url, verifier, state } = await authUrlWithPkce(config);
+    const { url: landed } = await walk(url);
+
+    await client.authorizationCodeGrant(config, landed, {
+      pkceCodeVerifier: verifier, expectedState: state,
+    });
+    // Replaying the same code: oidc-provider's own replay detection answers
+    // this one, because the decision check deliberately steps aside for a code
+    // that is already consumed.
+    await expect(
+      client.authorizationCodeGrant(config, landed, {
+        pkceCodeVerifier: verifier, expectedState: state,
+      }),
+    ).rejects.toThrow();
+
+    const rows = await prisma.authorizationDecision.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.consumedAt).not.toBeNull();
+  });
+
+  it('CONTROL 2 — a decision made for one client does not satisfy another', async () => {
+    await withTenant(ctx.tenantId, async (tx) => {
+      const other = await createApplication(tx, { name: 'HR', slug: 'hr', type: 'oidc' });
+      await assignApplication(tx, other.id, { type: 'user', id: userId });
+      await upsertOidcClient(tx, other.id, {
+        clientId: 'hr', redirectUris: ['https://hr.acme.test/cb'],
+        postLogoutRedirectUris: [], grantTypes: ['authorization_code'],
+        scopes: ['openid'], requirePkce: true, clientCredentialsEnabled: false,
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        idTokenSignedResponseAlg: 'RS256',
+        accessTokenTtlSeconds: 3600, refreshTokenTtlSeconds: 0,
+      });
+    });
+    const { invalidateProvider } = await import('@syntra/protocols');
+    invalidateProvider(ctx.tenantId);
+
+    // One legitimate flow for CRM, left unexchanged, so its decision is live.
+    const config = await discover();
+    const { url } = await authUrlWithPkce(config);
+    await walk(url);
+    expect(await prisma.authorizationDecision.count()).toBe(1);
+
+    // Now mint an HR code with no interaction. The live CRM decision must not
+    // pay for it — otherwise a launch of a low-risk application would satisfy
+    // the requirement for a high-risk one.
+    const provider = await providerForCached(ctx.tenantId);
+    const grant = new provider.Grant({ clientId: 'hr', accountId: userId });
+    grant.addOIDCScope('openid');
+    const grantId = await grant.save();
+    const verifier = client.randomPKCECodeVerifier();
+    const code = new provider.AuthorizationCode({
+      accountId: userId, clientId: 'hr', grantId,
+      redirectUri: 'https://hr.acme.test/cb', scope: 'openid',
+      codeChallenge: await client.calculatePKCECodeChallenge(verifier),
+      codeChallengeMethod: 'S256',
+    });
+    const value = await code.save();
+
+    const hrSecret = await withTenant(ctx.tenantId, async (tx) => {
+      const application = await tx.application.findFirstOrThrow({ where: { slug: 'hr' } });
+      const { clientSecret: s } = await upsertOidcClient(tx, application.id, {
+        clientId: 'hr', redirectUris: ['https://hr.acme.test/cb'],
+        postLogoutRedirectUris: [], grantTypes: ['authorization_code'],
+        scopes: ['openid'], requirePkce: true, clientCredentialsEnabled: false,
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        idTokenSignedResponseAlg: 'RS256',
+        accessTokenTtlSeconds: 3600, refreshTokenTtlSeconds: 0,
+        rotateSecret: true,
+      });
+      return s!;
+    });
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/oidc/token',
+      headers: {
+        host: TEST_HOST,
+        'content-type': 'application/x-www-form-urlencoded',
+        authorization: `Basic ${Buffer.from(`hr:${hrSecret}`).toString('base64')}`,
+      },
+      payload: new URLSearchParams({
+        grant_type: 'authorization_code', code: value,
+        redirect_uri: 'https://hr.acme.test/cb', code_verifier: verifier,
+      }).toString(),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body).not.toContain('access_token');
+    // The CRM decision is untouched.
+    const rows = await prisma.authorizationDecision.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.clientId).toBe('crm');
+    expect(rows[0]!.consumedAt).toBeNull();
+  });
+});
+
+/** The Provider the app is serving from, out of `providerFor`'s cache. */
+async function providerForCached(tenantId: string) {
+  // `providerFor` returns the cached instance for a tenant and ignores its
+  // deps on a cache hit, so this is the same Provider the app serves from.
+  // A `discover()` call is what puts it in the cache.
+  const { providerFor } = await import('@syntra/protocols');
+  return providerFor(tenantId, `http://${TEST_HOST}/oidc`, null as never);
+}
+```
+
+- [ ] **Step 2: Run and watch it fail**
+
+Run: `pnpm vitest run apps/api/src/routes/oidc-token.test.ts`
+Expected: FAIL — `/oidc/token` is answered by Task 11's catch-all, which cannot authenticate a client against a stored hash.
+
+- [ ] **Step 3: Write `apps/api/src/routes/oidc-token.ts`**
+
+```ts
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import {
+  consumeAuthorizationDecision,
+  recordEvent,
+  verifyClientSecret,
+} from '@syntra/core';
+import { perTenantRateLimit } from '../plugins/rate-limit.js';
+import { oidcProviderFor, requestForProvider, type OidcRouteOptions } from './oidc-op.js';
+
+interface ClientCredentials {
+  clientId: string;
+  secret: string;
+}
+
+/**
+ * The client credentials a token request presented, or null for a public
+ * client authenticating with PKCE alone.
+ *
+ * Both `client_secret_basic` (the Authorization header) and
+ * `client_secret_post` (a form field) are read, because a client may use
+ * either and refusing the one a client happens to use is a support ticket.
+ * RFC 6749 section 2.3.1 percent-encodes both halves of the Basic credential.
+ */
+function presentedCredentials(
+  request: FastifyRequest,
+  params: URLSearchParams,
+): ClientCredentials | null {
+  const header = request.headers.authorization;
+  if (header?.startsWith('Basic ')) {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    const index = decoded.indexOf(':');
+    if (index <= 0) return null;
+    return {
+      clientId: decodeURIComponent(decoded.slice(0, index)),
+      secret: decodeURIComponent(decoded.slice(index + 1)),
+    };
+  }
+  const clientId = params.get('client_id');
+  const secret = params.get('client_secret');
+  if (clientId === null || secret === null) return null;
+  return { clientId, secret };
+}
+
+/**
+ * The second of the two independent controls behind spec section 7's
+ * chokepoint.
+ *
+ * The first is `syntraAuthorizePrompt`, which forces every authorization
+ * request out to Syntra's interaction route. It is one deleted line in a file
+ * whose purpose is not obvious, and it depends on `ctx.oidc.result` semantics
+ * internal to `oidc-provider`. This one is in Syntra's own route, reads
+ * Syntra's own table, and does not touch `oidc-provider`'s configuration at
+ * all — so no single edit removes both, which is the whole point of having
+ * two. `oidc-token.test.ts` mints a genuine authorization code with no
+ * interaction behind it and asserts this refuses it.
+ *
+ * The ordering is deliberate. A code that is **unknown, expired or already
+ * consumed** is handed to oidc-provider untouched, because its own replay
+ * detection revokes the entire grant when a consumed code is presented a
+ * second time — refusing here first would answer with the same status and lose
+ * that revocation. Only a code that is live, and for which no decision exists,
+ * is refused here.
+ *
+ * `refresh_token` and `client_credentials` are not checked. A refresh token
+ * descends from a code that was checked, and re-checking would demand a fresh
+ * interaction for every refresh. Client credentials authenticate a *client*
+ * and involve no user, no session and no policy decision to bypass; the
+ * control there is the client secret.
+ */
+async function refuseWithoutDecision(
+  request: FastifyRequest,
+  provider: Awaited<ReturnType<typeof oidcProviderFor>>,
+  params: URLSearchParams,
+): Promise<{ error: string; error_description: string } | null> {
+  const code = params.get('code');
+  if (code === null || code === '') return null;
+
+  const stored = await provider.AuthorizationCode.find(code);
+  if (!stored || stored.consumed) return null;
+
+  const accountId = stored.accountId;
+  const clientId = stored.clientId;
+  if (typeof accountId !== 'string' || typeof clientId !== 'string') return null;
+
+  if (await consumeAuthorizationDecision(request.tenantId, accountId, clientId)) {
+    return null;
+  }
+
+  await request.db((tx) =>
+    recordEvent(tx, {
+      actorUserId: accountId,
+      action: 'oidc.decision_missing',
+      targetType: 'User',
+      targetId: accountId,
+      outcome: 'failure',
+      sourceIp: request.ip,
+      payload: {
+        clientId,
+        reason: 'no live authorize() decision for this authorization code',
+      },
+    }),
+  );
+
+  return {
+    error: 'invalid_grant',
+    error_description: 'This authorization was not granted by this identity provider',
+  };
+}
+
+/**
+ * The token endpoint.
+ *
+ * Its own plugin because it is the one OIDC route that must read the body
+ * before oidc-provider does. The buffer parser is registered **inside this
+ * plugin only** — Fastify's encapsulation keeps it away from
+ * `registerOidcRoutes`, whose catch-all must hand oidc-provider an untouched
+ * stream. `oidc-boundary.test.ts` asserts that separation directly rather than
+ * trusting the registration order to stay right.
+ */
+export async function registerOidcTokenRoutes(
+  app: FastifyInstance,
+  options: OidcRouteOptions,
+): Promise<void> {
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'buffer' },
+    (_request, body, done) => done(null, body),
+  );
+
+  app.post(
+    '/token',
+    {
+      // A token request presents a credential, so both rate-limit dimensions,
+      // as at every other credential-presenting route.
+      config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
+      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    },
+    async (request, reply) => {
+      const provider = await oidcProviderFor(request, options);
+      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+      const params = new URLSearchParams(body.toString('utf8'));
+
+      const credentials = presentedCredentials(request, params);
+      if (credentials !== null) {
+        // Constant-time, against the stored SHA-256 hash. oidc-provider never
+        // sees the real secret.
+        const ok = await verifyClientSecret(
+          request.tenantId, credentials.clientId, credentials.secret,
+        );
+        if (!ok) {
+          return reply.status(401).type('application/json').send({
+            error: 'invalid_client',
+            error_description: 'Client authentication failed',
+          });
+        }
+      }
+
+      if (params.get('grant_type') === 'authorization_code') {
+        const refusal = await refuseWithoutDecision(request, provider, params);
+        if (refusal) return reply.status(400).type('application/json').send(refusal);
+      }
+
+      reply.hijack();
+      // The body was consumed above, so it is replayed. See
+      // `requestForProvider`.
+      await provider.callback()(requestForProvider(request.raw, body), reply.raw);
+    },
+  );
+}
+```
+
+- [ ] **Step 4: Register it ahead of the catch-all in `app.ts`**
+
+The token plugin goes between the interaction plugin and the catch-all Task 11 registered. Order matters twice over: the specific routes must be matched before the wildcard, and the token plugin must be its own encapsulated scope so its body parser cannot escape into the catch-all's.
+
+```ts
+  await app.register(registerOidcInteractionRoutes, { prefix: '/oidc', ...oidcOptions });
+  await app.register(registerOidcTokenRoutes, { prefix: '/oidc', ...oidcOptions });
+  // The catch-all last: every specific route above must be matched first, and
+  // this is the only one that hands oidc-provider an unparsed body.
+  await app.register(registerOidcRoutes, { prefix: '/oidc', ...oidcOptions });
+```
+
+- [ ] **Step 5: Write the body-parsing boundary test**
 
 Create `apps/api/src/routes/oidc-boundary.test.ts`. This asserts the *encapsulation*, not merely that the routes work — those are different failures and only one of them is loud.
 
@@ -8520,33 +8715,33 @@ describe('the body-parsing boundary', () => {
 });
 ```
 
-- [ ] **Step 9: Run everything**
+- [ ] **Step 6: Run everything**
 
-Run: `pnpm vitest run apps/api/src/routes/oidc-code-flow.test.ts apps/api/src/routes/oidc-boundary.test.ts`
-Expected: PASS.
+Run: `pnpm vitest run apps/api/src/routes/oidc-token.test.ts apps/api/src/routes/oidc-boundary.test.ts apps/api/src/routes/oidc-authorize.test.ts`
+Expected: PASS. Task 11's suite must still pass unchanged — this task adds a route ahead of the catch-all and must not alter anything the authorization endpoint does.
 
 **Why these tests are not degenerate.**
 
-- **CONTROL 1** completes one successful flow, adds a deny rule, and requires the second to fail. An implementation without `syntraAuthorizePrompt` passes every other case in the file and fails only this one.
-- **CONTROL 2** does not simulate a bypass; it *performs* one. It mints a genuine authorization code through `provider.AuthorizationCode` — the same object oidc-provider mints — for a real user and a real client, with no interaction anywhere in its history, and asserts the token endpoint answers `invalid_grant` and returns neither an access token nor an id_token. That is the state a deleted prompt produces, reached without editing the source. It also asserts the audit event, so the refusal is visible rather than silent. **If someone deletes the prompt, CONTROL 1 fails and CONTROL 2 passes; if someone deletes the decision check, CONTROL 2 fails and CONTROL 1 passes. One edit cannot take both, which is the property the two controls exist to have.**
+- **CONTROL 2** does not simulate a bypass; it *performs* one. It mints a genuine authorization code through `provider.AuthorizationCode` — the same object `oidc-provider` mints — for a real user and a real client, with no interaction anywhere in its history, and asserts the token endpoint answers `invalid_grant` and returns neither an access token nor an id_token. That is the state a deleted prompt produces, reached without editing the source. It also asserts the audit event, so the refusal is visible rather than silent. **Delete `syntraAuthorizePrompt` and Task 11's CONTROL 1 fails while this passes; delete the decision check and this fails while CONTROL 1 passes. One edit cannot take both, which is the property the two controls exist to have.**
 - The **different-client** case leaves a live decision for CRM and presents an HR code, so an implementation keying the decision on the user alone passes everything else and fails here.
+- The **single-use** case exchanges legitimately, replays, and asserts the replay is refused *and* that exactly one decision row exists and is consumed — so an implementation that never spent the decision, or that spent two, fails.
+- The **contract** block is not a security test and is deliberately separated from one. Its failure message names the file that depends on the behaviour and forbids relaxing the assertion, so an upgrade that changes `find` produces a message a reader can act on instead of a 400-versus-200 mystery three tests away.
 - The **boundary** test asserts `hasContentTypeParser` at the root directly, so it fails on the registration itself rather than on a downstream symptom, and its token-endpoint case asserts the specific error that distinguishes a replayed body from a drained one.
-- The **JWKS** case asserts `d`, `p` and `q` are absent, which fails for the obvious mistake of publishing the private JWKs oidc-provider is configured with.
-- The **discovery** case pins all four endpoint URLs including the `/oidc` prefix, which fails if either half of the mount adaptation is missing — one half 404s everything, the other publishes URLs with the prefix stripped.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/api/src/routes/oidc-op.ts apps/api/src/routes/oidc-token.ts apps/api/src/routes/oidc-interaction.ts apps/api/src/routes/oidc-code-flow.test.ts apps/api/src/routes/oidc-boundary.test.ts apps/api/src/app.ts apps/api/package.json packages/core/src/access/authorization-decision-service.ts packages/core/src/index.ts packages/protocols/src/oidc/provider-factory.ts pnpm-lock.yaml
-git commit -m "feat(oidc): mount, discovery, JWKS, code flow, and two independent chokepoint controls"
+git add apps/api/src/routes/oidc-token.ts apps/api/src/routes/oidc-token.test.ts apps/api/src/routes/oidc-boundary.test.ts apps/api/src/app.ts
+git commit -m "feat(oidc): token endpoint with constant-time client auth and the decision check"
 ```
 
 ---
 
-## Task 12: Refresh tokens, client credentials, UserInfo, and RP-initiated logout
+## Task 13: Refresh tokens, client credentials, UserInfo, and RP-initiated logout
 
 **Files:**
 - Modify: `packages/protocols/src/oidc/provider-factory.ts` (grant behaviour and route paths)
+- Modify: `apps/api/src/routes/oidc-token.ts` (the client-credentials guard and its audit event)
 - Create: `apps/api/src/routes/oidc-logout.ts`
 - Create: `apps/api/src/routes/oidc-grants.test.ts`
 - Modify: `apps/api/src/app.ts`
@@ -8557,7 +8752,7 @@ git commit -m "feat(oidc): mount, discovery, JWKS, code flow, and two independen
 
 - [ ] **Step 1: Write the failing test**
 
-Create `apps/api/src/routes/oidc-grants.test.ts`. Copy the `beforeEach`, `injectFetch`, `discover`, `walk` and `authUrlWithPkce` helpers from `oidc-code-flow.test.ts` verbatim — they close over that file's module-level `ctx`, `cookie` and `clientSecret`, so they are not importable and sharing them would mean sharing mutable test state. Then:
+Create `apps/api/src/routes/oidc-grants.test.ts`. Copy the `beforeEach`, `injectFetch`, `discover`, `walk` and `authUrlWithPkce` helpers from `oidc-authorize.test.ts` verbatim — they close over that file's module-level `ctx`, `cookie` and `clientSecret`, so they are not importable and sharing them would mean sharing mutable test state. Then:
 
 ```ts
 describe('refresh tokens', () => {
@@ -8615,42 +8810,85 @@ describe('refresh tokens', () => {
   });
 });
 
-describe('client credentials', () => {
-  it('issues a token to a client registered for the grant', async () => {
-    await withTenant(ctx.tenantId, async (tx) => {
-      const application = await createApplication(tx, { name: 'Job', slug: 'job', type: 'oidc' });
-      await upsertOidcClient(tx, application.id, {
-        clientId: 'job', redirectUris: [], postLogoutRedirectUris: [],
-        grantTypes: ['client_credentials'], scopes: ['reports.read'],
-        requirePkce: true, tokenEndpointAuthMethod: 'client_secret_basic',
-        idTokenSignedResponseAlg: 'RS256', accessTokenTtlSeconds: 3600,
-        refreshTokenTtlSeconds: 0,
-      });
-    });
-    const { invalidateProvider } = await import('@syntra/protocols');
-    invalidateProvider(ctx.tenantId);
-
+describe('client credentials — the one grant that bypasses authorize()', () => {
+  /** Registers a machine client and returns its secret. */
+  const machineClient = async (over: Record<string, unknown> = {}) => {
     const secret = await withTenant(ctx.tenantId, async (tx) => {
-      const application = await tx.application.findFirstOrThrow({ where: { slug: 'job' } });
+      const existing = await tx.application.findFirst({ where: { slug: 'job' } });
+      const application =
+        existing ?? (await createApplication(tx, { name: 'Job', slug: 'job', type: 'oidc' }));
       const { clientSecret } = await upsertOidcClient(tx, application.id, {
         clientId: 'job', redirectUris: [], postLogoutRedirectUris: [],
-        grantTypes: ['client_credentials'], scopes: ['reports.read'],
+        grantTypes: [], clientCredentialsEnabled: true, scopes: ['reports.read'],
         requirePkce: true, tokenEndpointAuthMethod: 'client_secret_basic',
         idTokenSignedResponseAlg: 'RS256', accessTokenTtlSeconds: 3600,
-        refreshTokenTtlSeconds: 0, rotateSecret: true,
+        refreshTokenTtlSeconds: 0, rotateSecret: true, ...over,
       });
       return clientSecret!;
     });
+    const { invalidateProvider } = await import('@syntra/protocols');
     invalidateProvider(ctx.tenantId);
-
-    const config = await client.discovery(
+    return client.discovery(
       new URL(`http://${TEST_HOST}/oidc`), 'job', secret, undefined,
       { [client.customFetch]: injectFetch(), execute: [client.allowInsecureRequests] },
     );
+  };
+
+  it('issues a token to a client an administrator enabled, and audits it distinctly', async () => {
+    const config = await machineClient();
     const tokens = await client.clientCredentialsGrant(config, { scope: 'reports.read' });
     expect(tokens.access_token).toBeTruthy();
     // No user behind it, so no id_token and no subject.
     expect(tokens.id_token).toBeUndefined();
+
+    // A2-5 condition 2. "What was issued with no policy decision behind it"
+    // has to be an answerable question, and a generic token event would not
+    // answer it.
+    const events = await prisma.auditEvent.findMany({
+      where: { action: 'oidc.client_credentials_authorized' },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.actorUserId).toBeNull();
+    expect(JSON.stringify(events[0]!.payload)).toContain('job');
+    // And nothing pretends a decision happened.
+    expect(await prisma.authorizationDecision.count()).toBe(0);
+  });
+
+  it('refuses the grant when the flag is off, even if the request is otherwise perfect', async () => {
+    // A2-5 condition 1. The client exists, the secret is right, the scope is
+    // registered — and the grant is off, which is the default.
+    const config = await machineClient({ clientCredentialsEnabled: false });
+    await expect(client.clientCredentialsGrant(config, { scope: 'reports.read' }))
+      .rejects.toThrow();
+    expect(
+      await prisma.auditEvent.count({ where: { action: 'oidc.client_credentials_authorized' } }),
+    ).toBe(0);
+  });
+
+  it('refuses a scope that would let the token stand in for a user token', async () => {
+    // A2-5 condition 3. If a machine token could carry `openid` it would be
+    // presentable wherever a user token is accepted, and the exemption would
+    // stop being bounded.
+    const config = await machineClient({ scopes: ['reports.read', 'openid'] });
+    await expect(client.clientCredentialsGrant(config, { scope: 'openid' })).rejects.toThrow();
+    await expect(client.clientCredentialsGrant(config, { scope: 'reports.read openid' }))
+      .rejects.toThrow();
+    // The machine scope on its own is still fine.
+    await expect(client.clientCredentialsGrant(config, { scope: 'reports.read' }))
+      .resolves.toBeTruthy();
+  });
+
+  it('issues a token that UserInfo refuses', async () => {
+    // The other half of condition 3, from the resource side: there is no
+    // subject, so the endpoint that answers about a subject must refuse it.
+    const config = await machineClient();
+    const tokens = await client.clientCredentialsGrant(config, { scope: 'reports.read' });
+    const res = await ctx.app.inject({
+      method: 'GET', url: '/oidc/me',
+      headers: { host: TEST_HOST, authorization: `Bearer ${tokens.access_token}` },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.body).not.toContain('sub');
   });
 
   it('refuses client credentials with the wrong secret', async () => {
@@ -8661,7 +8899,7 @@ describe('client credentials', () => {
     await expect(client.clientCredentialsGrant(config)).rejects.toThrow();
   });
 
-  it('refuses client credentials from a client not registered for that grant', async () => {
+  it('refuses client credentials from an ordinary user-facing client', async () => {
     const config = await discover();
     await expect(client.clientCredentialsGrant(config)).rejects.toThrow();
   });
@@ -8757,7 +8995,109 @@ describe('RP-initiated logout', () => {
 Run: `pnpm vitest run apps/api/src/routes/oidc-grants.test.ts`
 Expected: FAIL — refresh tokens are not offered, `/oidc/me` is unmounted, logout does not end the Syntra session.
 
-- [ ] **Step 3: Extend the provider configuration**
+### The one path that does not pass through `authorize()`
+
+`client_credentials` issues a token with no `authorize()` decision behind it, and ruling A2-5 accepts that: the chokepoint exists so that authentication of a *person* has one door, and this grant authenticates a client. There is no subject for a policy to be about — no group membership, no contract, no enrolled factor — and forcing one through would mean inventing a service-account user, a user-shaped principal that no policy meaningfully governs, appearing in the directory, resolvable by assignment, and counted in two other subsystems' guard denominators. That is worse than the exemption.
+
+The exemption is bounded by four things, and all four are implemented in this task:
+
+1. **Per-client opt-in.** `OidcClient.clientCredentialsEnabled`, default false, its own column rather than a member of `grantTypes` so it cannot arrive alongside an unrelated edit to an array. The admin API (Task 17) refuses `client_credentials` in `grantTypes` outright, so the flag is the only way it can be on.
+2. **Audited distinctly** as `oidc.client_credentials_authorized`, so "what was issued with no policy decision behind it" is one `grep` rather than an inference.
+3. **Scope-separated.** A machine token may not carry `openid`, `profile`, `email` or `offline_access`, so it cannot be presented anywhere a user token is accepted, and UserInfo refuses it because there is no subject.
+4. **Documented as the exemption it is** in the README, beside the audit-event list (Task 17).
+
+- [ ] **Step 3: Add the client-credentials guard to `oidc-token.ts`**
+
+Task 12 built the token endpoint with the client-authentication check and the authorization-code decision check. This adds the third arm. It goes in `registerOidcTokenRoutes`, after client authentication has succeeded and before the request is handed on:
+
+```ts
+/** The scopes a user token carries. A machine token may never carry one. */
+const USER_SCOPES = new Set(['openid', 'profile', 'email', 'offline_access']);
+
+/**
+ * The client credentials arm.
+ *
+ * This grant issues a token with no `authorize()` decision behind it — the one
+ * path in the product that does, accepted deliberately by ruling A2-5 because
+ * it authenticates a client rather than a person. The exemption is only
+ * defensible while it stays bounded, and these are the bounds:
+ *
+ * - The client must have been enabled for it explicitly. Checked here against
+ *   Syntra's own row rather than relying on `oidc-provider`'s `grant_types`,
+ *   which is derived from the same flag — two reads of one fact, so a bug in
+ *   the derivation fails closed rather than opening the grant.
+ * - The requested scopes must not include any a user token carries, so the
+ *   result cannot be presented where a user token is accepted.
+ * - Whatever is authorized is audited under its own action, so the set of
+ *   tokens issued without a policy decision is enumerable.
+ *
+ * The event records that *Syntra* permitted issuance. `oidc-provider` may
+ * still refuse afterwards for a protocol reason — an unregistered scope, a
+ * malformed request — so the event means "this passed the checks that stand in
+ * for a policy decision", which is exactly the question it exists to answer.
+ */
+async function guardClientCredentials(
+  request: FastifyRequest,
+  params: URLSearchParams,
+): Promise<{ error: string; error_description: string } | null> {
+  const clientId = presentedCredentials(request, params)?.clientId ?? params.get('client_id');
+  if (clientId === null || clientId === '') {
+    return { error: 'invalid_client', error_description: 'Client authentication failed' };
+  }
+
+  const record = await findOidcClient(request.tenantId, clientId);
+  if (!record?.clientCredentialsEnabled) {
+    return {
+      error: 'unauthorized_client',
+      error_description: 'This client is not enabled for the client credentials grant',
+    };
+  }
+
+  const requested = (params.get('scope') ?? '').split(' ').filter((s) => s !== '');
+  const overlap = requested.filter((s) => USER_SCOPES.has(s));
+  if (overlap.length > 0) {
+    return {
+      error: 'invalid_scope',
+      error_description: `A client credentials token may not carry ${overlap.join(', ')}`,
+    };
+  }
+
+  await request.db((tx) =>
+    recordEvent(tx, {
+      // No user. That is the point, and a null actor is the honest record of
+      // it rather than an invented service account.
+      actorUserId: null,
+      action: 'oidc.client_credentials_authorized',
+      targetType: 'Application',
+      targetId: record.applicationId,
+      outcome: 'success',
+      sourceIp: request.ip,
+      payload: { clientId, scope: requested, noPolicyDecision: true },
+    }),
+  );
+  return null;
+}
+```
+
+and the call, beside the authorization-code arm:
+
+```ts
+      const grantType = params.get('grant_type');
+      if (grantType === 'authorization_code') {
+        const refusal = await refuseWithoutDecision(request, provider, params);
+        if (refusal) return reply.status(400).type('application/json').send(refusal);
+      } else if (grantType === 'client_credentials') {
+        const refusal = await guardClientCredentials(request, params);
+        if (refusal) {
+          const status = refusal.error === 'invalid_client' ? 401 : 400;
+          return reply.status(status).type('application/json').send(refusal);
+        }
+      }
+```
+
+Add `findOidcClient` and `recordEvent` to the file's imports from `@syntra/core`.
+
+- [ ] **Step 4: Extend the provider configuration**
 
 Add these to the `Configuration` object in `packages/protocols/src/oidc/provider-factory.ts`. They are protocol behaviour rather than route wiring, so they belong beside the rest of it.
 
@@ -8784,7 +9124,7 @@ Add these to the `Configuration` object in `packages/protocols/src/oidc/provider
 
 Client authentication needs **no** change here: Task 11's `registerOidcTokenRoutes` already verifies the presented secret against the stored SHA-256 hash in constant time, before oidc-provider sees the request, and `loadClients` hands oidc-provider a placeholder it never compares. The refresh and client-credentials grants arrive at that same route and are authenticated by that same check.
 
-- [ ] **Step 4: Write `apps/api/src/routes/oidc-logout.ts`**
+- [ ] **Step 5: Write `apps/api/src/routes/oidc-logout.ts`**
 
 ```ts
 import type { FastifyInstance } from 'fastify';
@@ -8879,23 +9219,23 @@ Register it in `app.ts` **before** `registerOidcRoutes`:
   await app.register(registerOidcRoutes, { prefix: '/oidc', ...oidcOptions });
 ```
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 6: Run the tests**
 
 Run: `pnpm vitest run apps/api/src/routes/oidc-grants.test.ts`
 Expected: PASS, all eleven cases.
 
 **Why these tests are not degenerate.** The rotation case asserts that *both* the replayed original and its replacement stop working — an implementation that rotated but did not revoke the grant on replay passes the first assertion and fails the second, and that second assertion is the whole security value of rotation. The deactivation case proves the token stops working through `findAccount` returning null, which is the only mechanism that ties an OIDC refresh to Syntra's account state; without it a deactivated employee keeps a live refresh token for two weeks. The logout case asserts the *Syntra* session is dead by making a real portal request, not merely that the OIDC endpoint answered. The post-logout case asserts the response is not a redirect to the attacker's URI, so refusing-but-redirecting fails.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/api/src/routes/oidc-op.ts apps/api/src/routes/oidc-logout.ts apps/api/src/routes/oidc-grants.test.ts apps/api/src/app.ts packages/protocols/src/oidc/provider-factory.ts packages/core/src/access/oidc-client-service.ts
-git commit -m "feat(oidc): refresh rotation, client credentials, UserInfo, RP-initiated logout"
+git add apps/api/src/routes/oidc-token.ts apps/api/src/routes/oidc-logout.ts apps/api/src/routes/oidc-grants.test.ts apps/api/src/app.ts packages/protocols/src/oidc/provider-factory.ts
+git commit -m "feat(oidc): refresh rotation, bounded client credentials, UserInfo, RP-initiated logout"
 ```
 
 ---
 
-## Task 13: Upstream routing — the policy decides which identity provider a login uses
+## Task 14: Upstream routing — the policy decides which identity provider a login uses
 
 **Files:**
 - Create: `packages/core/src/federation/routing.ts` (pure)
@@ -9446,7 +9786,7 @@ git commit -m "feat(core): upstream routing rules, evaluated before the user is 
 
 ---
 
-## Task 14: Upstream OIDC — Syntra as a relying party, with just-in-time provisioning through `authorize()`
+## Task 15: Upstream OIDC — Syntra as a relying party, with just-in-time provisioning through `authorize()`
 
 **Files:**
 - Create: `packages/core/src/federation/federation-request-service.ts`
@@ -9458,7 +9798,7 @@ git commit -m "feat(core): upstream routing rules, evaluated before the user is 
 - Modify: `apps/api/src/app.ts`, `packages/core/src/index.ts`, `packages/protocols/src/index.ts`, `packages/protocols/package.json`
 
 **Interfaces:**
-- Consumes: `classifyAddress` (Task 2); `evaluateRouting`, `loadPolicy`, `findUpstream`, `upstreamClientSecret` (Task 13); `authorize`, `createUser`, `updateUser`, `deactivateUser`, `recordEvent`, `putSecret`, `getSecret` from `@syntra/core`; `issueSession` from `apps/api/src/routes/session-reply.js`; `tenantProtocolIdentity`, `assertProtocolHost` (Task 2).
+- Consumes: `classifyAddress` (Task 2); `evaluateRouting`, `loadPolicy`, `findUpstream`, `upstreamClientSecret` (Task 14); `authorize`, `createUser`, `updateUser`, `deactivateUser`, `recordEvent`, `putSecret`, `getSecret` from `@syntra/core`; `issueSession` from `apps/api/src/routes/session-reply.js`; `tenantProtocolIdentity`, `assertProtocolHost` (Task 2).
 - Produces:
   ```ts
   // @syntra/core
@@ -9762,7 +10102,7 @@ const DEFAULT_TTL_MS = 10 * 60 * 1000;
  * authorization code complete the exchange, and the vault is where this
  * codebase puts secrets. The row holds its name.
  *
- * `returnTo` is stored, not carried through the browser, and Task 14's route
+ * `returnTo` is stored, not carried through the browser, and Task 15's route
  * refuses to store anything but a same-origin path — an open redirect through
  * a federation callback is the classic one.
  */
@@ -10521,7 +10861,7 @@ git commit -m "feat(federation): upstream OIDC relying party with JIT provisioni
 
 ---
 
-## Task 15: Upstream SAML — Syntra as a service provider
+## Task 16: Upstream SAML — Syntra as a service provider
 
 **Files:**
 - Create: `packages/protocols/src/upstream/saml-sp.ts`
@@ -10530,7 +10870,7 @@ git commit -m "feat(federation): upstream OIDC relying party with JIT provisioni
 - Create: `apps/api/src/routes/federation-saml.test.ts`
 
 **Interfaces:**
-- Consumes: `@node-saml/node-saml` 5.1.0; `openFederationRequest`, `takeFederationRequest`, `linkOrProvision`, `findUpstream`, `evaluateRouting`, `loadPolicy`, `authorize` (Tasks 13 and 14); `tenantProtocolIdentity` (Task 2).
+- Consumes: `@node-saml/node-saml` 5.1.0; `openFederationRequest`, `takeFederationRequest`, `linkOrProvision`, `findUpstream`, `evaluateRouting`, `loadPolicy`, `authorize` (Tasks 14 and 15); `tenantProtocolIdentity` (Task 2).
 - Produces:
   ```ts
   export interface UpstreamSamlOptions { idpCertificates: string[]; idpEntityId: string | null; ssoUrl: string; sloUrl: string | null; spEntityId: string; acsUrl: string; wantAssertionsSigned: boolean }
@@ -11074,7 +11414,7 @@ git commit -m "feat(federation): upstream SAML service provider behind the same 
 
 ---
 
-## Task 16: Administration, portal launch, and the end-to-end path
+## Task 17: Administration, portal launch, and the end-to-end path
 
 **Files:**
 - Create: `packages/contracts/src/protocol-admin.ts`
@@ -11084,10 +11424,11 @@ git commit -m "feat(federation): upstream SAML service provider behind the same 
 - Modify: `packages/contracts/src/access.ts`, `packages/contracts/src/index.ts`
 - Modify: `apps/api/src/routes/portal.ts`
 - Modify: `apps/api/src/app.ts`
+- Modify: `README.md` (the audit-event table, and the `client_credentials` exemption)
 - Create: `e2e/sso.spec.ts`
 
 **Interfaces:**
-- Consumes: everything from Tasks 6, 10, 13; `requireSession('admin')`, `requirePermission(PERMISSIONS.ACCESS_MANAGE)`; `invalidateProvider` (Task 10); `parseSpMetadata` (Task 6); `fetchExternalDocument` (Task 2).
+- Consumes: everything from Tasks 6, 10, 14; `requireSession('admin')`, `requirePermission(PERMISSIONS.ACCESS_MANAGE)`; `invalidateProvider` (Task 10); `parseSpMetadata` (Task 6); `fetchExternalDocument` (Task 2).
 - Produces: `registerAdminProtocolRoutes(app)`, `registerAdminUpstreamRoutes(app, { masterKey })`, and the zod schemas below.
 
 - [ ] **Step 1: Widen the application type and write the schemas**
@@ -11176,12 +11517,20 @@ export const samlConfigRequest = z.object({
   });
 export type SamlConfigRequest = z.input<typeof samlConfigRequest>;
 
+/** The scopes a user token carries, which a machine token may never request. */
+const USER_SCOPES = ['openid', 'profile', 'email', 'offline_access'] as const;
+
 export const oidcClientRequest = z.object({
   clientId: z.string().min(1).max(128).regex(/^[A-Za-z0-9._~-]+$/),
-  redirectUris: z.array(endpoint).min(1).max(16),
+  redirectUris: z.array(endpoint).max(16).default([]),
   postLogoutRedirectUris: z.array(endpoint).max(16).default([]),
-  grantTypes: z.array(z.enum(['authorization_code', 'refresh_token', 'client_credentials']))
-    .min(1).default(['authorization_code', 'refresh_token']),
+  // `client_credentials` is deliberately absent from this enum. It is the one
+  // grant that issues a token with no `authorize()` decision behind it, so it
+  // is turned on by its own field below rather than by adding a string to an
+  // array — see ruling A2-5 and Task 13.
+  grantTypes: z.array(z.enum(['authorization_code', 'refresh_token']))
+    .max(2).default(['authorization_code', 'refresh_token']),
+  clientCredentialsEnabled: z.boolean().default(false),
   scopes: z.array(z.string().max(64)).max(32).default(['openid', 'profile', 'email']),
   // Settable but not to false: spec section 7 asks for the code flow with
   // PKCE without qualification, and a client registered without it is a
@@ -11193,7 +11542,35 @@ export const oidcClientRequest = z.object({
   accessTokenTtlSeconds: z.number().int().min(60).max(86_400).default(3600),
   refreshTokenTtlSeconds: z.number().int().min(0).max(7_776_000).default(1_209_600),
   rotateSecret: z.boolean().default(false),
-});
+})
+  .refine(
+    (v) => v.clientCredentialsEnabled || v.grantTypes.length > 0,
+    { message: 'A client needs at least one grant', path: ['grantTypes'] },
+  )
+  .refine(
+    (v) => !v.grantTypes.includes('authorization_code') || v.redirectUris.length > 0,
+    {
+      message: 'A client using the authorization code flow needs a redirect URI',
+      path: ['redirectUris'],
+    },
+  )
+  .refine(
+    // A2-5 condition 3, at write time as well as at the token endpoint. A
+    // machine token carrying `openid` would be presentable wherever a user
+    // token is accepted, and the exemption would stop being bounded.
+    (v) => !v.clientCredentialsEnabled || !v.scopes.some((s) => USER_SCOPES.includes(s as never)),
+    {
+      message: `A client credentials client may not be registered for ${USER_SCOPES.join(', ')} — that token must not be usable where a user token is`,
+      path: ['scopes'],
+    },
+  )
+  .refine(
+    (v) => !v.clientCredentialsEnabled || v.scopes.length > 0,
+    {
+      message: 'A client credentials client needs at least one scope of its own',
+      path: ['scopes'],
+    },
+  );
 export type OidcClientRequest = z.input<typeof oidcClientRequest>;
 
 export const claimMappingRequest = z.object({
@@ -11418,6 +11795,40 @@ describe('admin protocol configuration', () => {
     });
     expect(rotated.json().clientSecret).toMatch(/.{20,}/);
     expect(rotated.json().clientSecret).not.toBe(first.json().clientSecret);
+  });
+
+  it('refuses client_credentials as a grant type, and takes it only as its own flag', async () => {
+    const applicationId = (await post('/api/admin/applications', {
+      name: 'M', slug: 'machine', type: 'oidc',
+    })).json().id;
+
+    // A2-5 condition 1: it cannot arrive by editing the grants array.
+    const smuggled = await put(`/api/admin/applications/${applicationId}/oidc`, {
+      clientId: 'm', redirectUris: [], grantTypes: ['client_credentials'],
+    });
+    expect(smuggled.statusCode).toBe(400);
+
+    const enabled = await put(`/api/admin/applications/${applicationId}/oidc`, {
+      clientId: 'm', redirectUris: [], grantTypes: [],
+      clientCredentialsEnabled: true, scopes: ['reports.read'],
+    });
+    expect(enabled.statusCode).toBe(200);
+    expect(enabled.json().clientCredentialsEnabled).toBe(true);
+  });
+
+  it('refuses a client credentials client registered for a user scope', async () => {
+    const applicationId = (await post('/api/admin/applications', {
+      name: 'N', slug: 'machine2', type: 'oidc',
+    })).json().id;
+    for (const scope of ['openid', 'profile', 'email', 'offline_access']) {
+      const res = await put(`/api/admin/applications/${applicationId}/oidc`, {
+        clientId: 'n', redirectUris: [], grantTypes: [],
+        clientCredentialsEnabled: true, scopes: ['reports.read', scope],
+      });
+      // A2-5 condition 3, refused at the console rather than only at the
+      // token endpoint, so the configuration cannot exist in the first place.
+      expect(res.statusCode).toBe(400);
+    }
   });
 
   it('refuses a wildcard or prefix redirect URI', async () => {
@@ -11780,7 +12191,67 @@ In `apps/api/src/routes/portal.ts`, replace the final block of the launch handle
 >
 > and relax `createApplicationRequest`'s refinement so an `oidc` application also requires `launchUrl`: change the predicate to `value.type === 'saml' || value.launchUrl !== undefined`.
 
-- [ ] **Step 5: Write the end-to-end spec**
+- [ ] **Step 5: Document the slice, and name the exemption**
+
+Add to `README.md`. The audit-event table gains this slice's events, and — ruling A2-5 condition 4 — the one path that does not pass through `authorize()` is named beside it rather than left for a reader to infer from the code.
+
+Replace the closing paragraph of the Access section (**"The federation half of Access is not built."**) with:
+
+```markdown
+### Signing in to applications
+
+Syntra is a SAML 2.0 identity provider and an OpenID Connect provider, and it
+can delegate authentication upstream to a SAML identity provider or an OIDC
+one. Every one of those paths — a service provider's `AuthnRequest`, a relying
+party's authorization request, and a login that came back from an upstream
+provider — reaches the same `authorize()` call in `packages/core` that a local
+sign-in does, and none of them issues an assertion or a token without an
+`allow` from it. Policy, second factors and the audit trail apply the same way
+whichever door somebody came in by.
+
+**One grant is an exemption, deliberately.** The OAuth 2.0 *client credentials*
+grant issues an access token with no `authorize()` decision behind it, because
+there is no person for a decision to be about: it authenticates a client, and
+a policy that matches on group membership, contract attributes and enrolled
+factors has nothing to say about one. The alternative would be to invent a
+service-account user — a user-shaped principal no policy meaningfully governs,
+appearing in the directory, resolvable by assignment, and counted in other
+subsystems' guard denominators — which is worse than naming the exemption and
+bounding it. It is bounded by four things:
+
+- It is **off unless an administrator turns it on for that client**
+  (`OidcClient.clientCredentialsEnabled`, its own field, default false). The
+  API refuses `client_credentials` as a grant type outright, so that flag is
+  the only way it can be on.
+- Every issuance is audited as **`oidc.client_credentials_authorized`**, so
+  "what was issued without a policy decision" is one query.
+- The token is **scope-separated**: it may not carry `openid`, `profile`,
+  `email` or `offline_access`, and UserInfo refuses it. It cannot be presented
+  anywhere a user token is accepted.
+- It carries **no subject**, so nothing downstream can mistake it for a person.
+
+If you are auditing this deployment, `oidc.client_credentials_authorized` is
+the event to read, and `clientCredentialsEnabled` is the column to list.
+```
+
+Add these rows to the audit-event table, after `application.launch`:
+
+```markdown
+| `saml.assertion_issued` | An assertion was issued to a service provider, naming it and the factor behind the session |
+| `saml.acs_refused` | A request named an assertion consumer service URL that is not on the application's allowlist. **Somebody is probing, or a service provider changed its address without telling anyone** |
+| `saml.logout` | A service provider ended a session through single logout |
+| `oidc.interaction_resolved` | `authorize()` allowed an OIDC authorization request |
+| `oidc.decision_missing` | **A token was requested for an authorization code with no `authorize()` decision behind it.** The second chokepoint control fired. This should never happen in normal operation — alert on it |
+| `oidc.client_credentials_authorized` | A machine token was authorized. The one path with no policy decision behind it — see above |
+| `oidc.logout` | An application ended a Syntra session through RP-initiated logout |
+| `federation.provision_refused` | An upstream authenticated somebody Syntra has no account for, or sent too little to identify them |
+| `federation.assertion_refused` | An upstream assertion failed verification |
+| `access.saml_configured` / `access.saml_metadata_imported` / `access.oidc_configured` | An application's protocol configuration changed, carrying the allowlist that changed with it |
+```
+
+Update the status table at the top of the README: **Access** moves from the row describing MFA and policy to one that also names the SAML IdP, the OIDC provider and upstream federation.
+
+- [ ] **Step 6: Write the end-to-end spec**
 
 Create `e2e/sso.spec.ts`, following the shape of the existing Playwright specs:
 
@@ -11829,7 +12300,7 @@ test('an MFA rule interrupts the SAML launch and the assertion follows the code'
 });
 ```
 
-- [ ] **Step 6: Run the whole suite**
+- [ ] **Step 7: Run the whole suite**
 
 ```bash
 pnpm typecheck
@@ -11840,10 +12311,10 @@ Expected: everything passes, including every Access I test — no existing test 
 
 **Why these tests are not degenerate.** The client-secret case asserts three separate things a naive implementation gets wrong: that the secret is returned once, that reading the record back does not include it *or the hash*, and that a plain update does not silently rotate it (which would break every deployed client). The provider-cache case performs a real authorization request with the *newly added* redirect URI, so an implementation that saved the row but did not invalidate the cache fails with a 400 — a bug that otherwise appears only in production, after a restart makes it disappear. The portal launch case asserts the derived URL rather than a stored one.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add packages/contracts/src/protocol-admin.ts packages/contracts/src/access.ts packages/contracts/src/index.ts apps/api/src/routes/admin/protocol-apps.ts apps/api/src/routes/admin/upstreams.ts apps/api/src/routes/admin/protocol-apps.test.ts apps/api/src/routes/portal.ts apps/api/src/app.ts e2e/sso.spec.ts
+git add packages/contracts/src/protocol-admin.ts packages/contracts/src/access.ts packages/contracts/src/index.ts apps/api/src/routes/admin/protocol-apps.ts apps/api/src/routes/admin/upstreams.ts apps/api/src/routes/admin/protocol-apps.test.ts apps/api/src/routes/portal.ts apps/api/src/app.ts README.md e2e/sso.spec.ts
 git commit -m "feat(access): protocol administration, metadata import, and protocol launches from the portal"
 ```
 
@@ -11865,7 +12336,7 @@ Run over the spec with fresh eyes after the plan was written. Every requirement 
 | Optional assertion encryption | 9 (`encryptAssertion`, AES-256-GCM + RSA-OAEP) |
 | Single logout | 9 (`GET` and `POST /saml/slo`, both bindings) |
 | Per-application IdP metadata endpoint | 6 (`/saml/metadata` and `/saml/metadata/:applicationId`) |
-| SP metadata import by upload or URL | 6 (`parseSpMetadata`) and 16 (`POST /applications/:id/saml/import`, both forms, the URL form behind the outbound guard) |
+| SP metadata import by upload or URL | 6 (`parseSpMetadata`) and 17 (`POST /applications/:id/saml/import`, both forms, the URL form behind the outbound guard) |
 | ACS URLs validated against a per-application allowlist | 6 (`resolveAcsUrl` + `matchesAllowlist`, no implicit fallback), enforced in 7 and 8, four near-miss strings tested in each |
 | XML parsed with entity expansion disabled | 5 (`parseXml`, verified empirically, regression-tested) |
 | Signatures verified before any part of the document is trusted | 5 (`verifySignedFragment` returns the signed bytes; callers read only those), applied in 7 for XML-DSig and 8 for the detached query signature |
@@ -11874,33 +12345,33 @@ Run over the spec with fresh eyes after the plan was written. Every requirement 
 
 | Requirement | Task |
 |---|---|
-| Authorization code flow with PKCE | 11 (`pkce: { required: () => true }`, exercised by `openid-client`) |
-| Refresh tokens | 12 (`issueRefreshToken`, `rotateRefreshToken: true`) |
-| Client credentials | 12 |
+| Authorization code flow with PKCE | 11 (the authorization half, `pkce: { required: () => true }`) and 12 (the exchange, both driven by `openid-client`) |
+| Refresh tokens | 13 (`issueRefreshToken`, `rotateRefreshToken: true`) |
+| Client credentials | 13, opt-in per client, scope-separated, audited distinctly — the one path with no `authorize()` decision behind it (ruling A2-5) |
 | Discovery document | 11 (including the mount adaptation that keeps the `/oidc` prefix on every advertised URL) |
 | JWKS endpoint with key rotation, publishing the outgoing key beside the incoming one for the rollover | 3 (`rotateKey`, `publishedKeys`) and 11 (`/oidc/jwks`, asserted during a rollover, no private members) |
-| UserInfo | 12 (`/oidc/me`) |
-| RP-initiated logout | 12 (`/oidc/session/end`, ends the Syntra session first) |
+| UserInfo | 13 (`/oidc/me`) |
+| RP-initiated logout | 13 (`/oidc/session/end`, ends the Syntra session first) |
 | Redirect URIs matched exactly, no wildcard or prefix | 10 (`matchesAllowlist`) and 11 (five near-miss strings, none of them redirected to) |
 
 ### Section 7 — Upstream federation and the chokepoint
 
 | Requirement | Task |
 |---|---|
-| Syntra as a SAML service provider | 15 |
-| Syntra as an OIDC relying party | 14 |
-| Local `User` created on first upstream login | 14 (`linkOrProvision`) |
-| Mapped attributes refreshed on later logins | 14 (`refreshOnLogin`) |
-| Which upstream a login uses is chosen by the authentication policy | 13 (`federate` rules, `evaluateRouting`) |
-| Every path funnels through one `authorize()`; no adapter issues anything without a decision | 7, 8, 9, 11, 14, 15 — each asserts the deny and challenge cases produce no assertion, no code and no cookie |
-| …and for OIDC specifically, two independent controls | 10 (`syntraAuthorizePrompt`, inside `oidc-provider`'s interaction policy) **and** 11 (`AuthorizationDecision`, in Syntra's own route and table). Task 11 mints a genuine code with no interaction behind it and asserts the token endpoint refuses it, so neither control can be removed by the edit that removes the other. |
+| Syntra as a SAML service provider | 16 |
+| Syntra as an OIDC relying party | 15 |
+| Local `User` created on first upstream login | 15 (`linkOrProvision`) |
+| Mapped attributes refreshed on later logins | 15 (`refreshOnLogin`) |
+| Which upstream a login uses is chosen by the authentication policy | 14 (`federate` rules, `evaluateRouting`) |
+| Every path funnels through one `authorize()`; no adapter issues anything without a decision | 7, 8, 9, 11, 15, 16 — each asserts the deny and challenge cases produce no assertion, no code and no cookie. The single exemption, `client_credentials`, is bounded in 13 and named in the README in 17 |
+| …and for OIDC specifically, two independent controls | 10 (`syntraAuthorizePrompt`, inside `oidc-provider`'s interaction policy) **and** 12 (`AuthorizationDecision`, in Syntra's own route and table; the row is written in 11). Task 12 mints a genuine code with no interaction behind it and asserts the token endpoint refuses it, so neither control can be removed by the edit that removes the other. |
 
 ### Section 4 — Embedded protocol libraries
 
 | Requirement | Where |
 |---|---|
-| `oidc-provider` supplies the OIDC provider | Tasks 10–12, pinned at 9.11.3, mounted behind a Syntra-owned session and policy layer |
-| `@node-saml/node-saml` and equivalent assertion signing supply the SAML IdP | Task 15 uses node-saml for the SP half; Tasks 5–9 are the "equivalent assertion signing" — `xml-crypto` — because node-saml has no IdP side. Recorded in the library findings above. |
+| `oidc-provider` supplies the OIDC provider | Tasks 10–13, pinned at 9.11.3, mounted behind a Syntra-owned session and policy layer |
+| `@node-saml/node-saml` and equivalent assertion signing supply the SAML IdP | Task 16 uses node-saml for the SP half; Tasks 5–9 are the "equivalent assertion signing" — `xml-crypto` — because node-saml has no IdP side. Recorded in the library findings above. |
 | Syntra retains the user model, login experience, application catalog and policy engine | Task 10's `findAccount` callback and Task 11's interaction route. No foreign user store, no fork. |
 
 ### Section 12 — Security posture items in this slice's scope
@@ -11911,21 +12382,21 @@ Run over the spec with fresh eyes after the plan was written. Every requirement 
 | Strict allowlisting of redirect URIs and ACS URLs | Tasks 6, 10, 11, and the `isProtocolEndpoint` / `matchesAllowlist` pair in Task 2 |
 | XML signature verification with entity expansion disabled | Task 5 |
 | Per-tenant and per-IP rate limiting on all authentication endpoints | Every protocol route uses `config.rateLimit` plus `perTenantRateLimit`, per Global Constraint 10 |
-| Every privileged action in the hash-chained audit log | `recordEvent` in Tasks 7, 9, 12, 14, 15, 16 |
+| Every privileged action in the hash-chained audit log | `recordEvent` in Tasks 7, 9, 13, 15, 16, 17 |
 | RLS as the primary tenant isolation control | Task 1, with cross-tenant tests |
-| Secrets never returned once written, only replaced | Task 16 (client secret returned once; upstream secret never; the stored hash never) |
-| No server-side request forgery from an administrator-supplied address | Task 2 (`classifyAddress`, `fetchExternalDocument`), applied to upstream discovery in Task 14 and to metadata import in Task 16 |
+| Secrets never returned once written, only replaced | Task 17 (client secret returned once; upstream secret never; the stored hash never) |
+| No server-side request forgery from an administrator-supplied address | Task 2 (`classifyAddress`, `fetchExternalDocument`), applied to upstream discovery in Task 15 and to metadata import in Task 17 |
 
 ### Section 13 — Testing strategy
 
 | Item | Where |
 |---|---|
-| Pure functions covered exhaustively | Task 4 (`resolveClaims`), Task 13 (`evaluateRouting`) |
+| Pure functions covered exhaustively | Task 4 (`resolveClaims`), Task 14 (`evaluateRouting`) |
 | Multi-contract cases: concurrent, one ended, none active | Task 4, `collect.test.ts` |
 | Integration against real PostgreSQL, with explicit cross-tenant tests | Tasks 1 and 10 |
-| Protocol conformance: a real SAML SP and a real OIDC RP driven against Syntra | Task 7 (`@node-saml/node-saml` validates our assertions), Tasks 11–12 (`openid-client` drives the whole code flow), Task 14 (a real stub OP with genuine JWT verification) |
-| End-to-end over launch and MFA | Task 16 (`e2e/sso.spec.ts`) |
-| The framework boundaries the protocol mounts depend on | Task 11 (`oidc-boundary.test.ts`: the root has no urlencoded parser, the token body is replayed rather than drained, the mount prefix is stripped) |
+| Protocol conformance: a real SAML SP and a real OIDC RP driven against Syntra | Task 7 (`@node-saml/node-saml` validates our assertions), Tasks 11–13 (`openid-client` drives the whole code flow), Task 15 (a real stub OP with genuine JWT verification) |
+| End-to-end over launch and MFA | Task 17 (`e2e/sso.spec.ts`) |
+| The framework boundaries the protocol mounts depend on | Task 12 (`oidc-boundary.test.ts`: the root has no urlencoded parser, the token body is replayed rather than drained, the mount prefix is stripped) |
 
 ### Deliberately not in this plan
 
