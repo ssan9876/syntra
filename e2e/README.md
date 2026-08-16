@@ -30,6 +30,13 @@ again. The removal is not tidiness: a rule left in force sends every later
 sign-in in the file — the administrator's included — to a step-up screen, and
 the failure surfaces in a test that has nothing to do with it.
 
+It goes through `withRule`, which puts the removal in a `finally`. It used to
+be the last statement of the test, so any failure before it left the rule
+standing and one genuine failure reported as eleven, none of them anywhere near
+their cause. `withRule` only swallows a cleanup error when the body has already
+failed — a session the failure killed cannot remove anything, and a throw from
+the `finally` would replace the error that matters.
+
 The administrator does that removal from a session established *before* the
 rule existed, and the user is driven through a second browser context so the
 administrator's cookie survives. A policy change does not reach a live session,
