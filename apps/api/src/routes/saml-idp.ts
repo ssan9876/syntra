@@ -754,6 +754,10 @@ export async function registerSamlIdpRoutes(
     if (encoded === undefined) {
       throw new ProblemError(400, 'saml-bad-request', 'No SAMLRequest');
     }
+    // Read before anything is acted on. A duplicated parameter is a refusal,
+    // and refusing after the session has already been ended would leave the
+    // service provider with no LogoutResponse for a logout that happened.
+    const relayState = singleValued(source, 'RelayState') ?? null;
     const xml = readSamlInput('SAMLRequest', () =>
       binding === 'HTTP-POST' ? decodePostMessage(encoded) : decodeRedirectMessage(encoded),
     );
@@ -854,7 +858,7 @@ export async function registerSamlIdpRoutes(
         destination,
         field: 'SAMLResponse',
         xml: response,
-        relayState: singleValued(source, 'RelayState') ?? null,
+        relayState,
       }),
     );
   };
