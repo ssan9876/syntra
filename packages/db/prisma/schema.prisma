@@ -410,6 +410,13 @@ model AuthPolicyRule {
   endMinute      Int?
   /// IANA zone the window is expressed in. Treated as UTC when null.
   timezone       String?
+  /// Set only on rules whose outcome is 'federate'. See Task 14.
+  upstreamIdpId String?  @db.Uuid
+  /// The login identifier's domain part, for a 'federate' rule. Its own
+  /// column rather than a reuse of `contractValues`: the two match on
+  /// different things, and overloading one array is how a later reader
+  /// concludes a routing rule can carry a contract condition.
+  loginDomains  String[] @default([])
 
   @@unique([policyId, position])
   @@index([tenantId])
@@ -435,6 +442,9 @@ model Application {
   updatedAt   DateTime @updatedAt
 
   assignments AppAssignment[]
+  samlConfig    SamlConfig?
+  oidcClient    OidcClient?
+  claimMappings ClaimMapping[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -603,4 +613,306 @@ model RefreshToken {
 
   @@index([tenantId])
   @@index([userId])
+}
+
+/// A SAML service provider Syntra issues assertions to. One per Application
+/// of type 'saml'.
+model SamlConfig {
+  id                      String      @id @default(uuid()) @db.Uuid
+  tenantId                String      @db.Uuid
+  applicationId           String      @unique @db.Uuid
+  application             Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  /// The SP's entity ID. Goes into saml:Audience verbatim.
+  spEntityId              String
+  /// The exact-match allowlist. An ACS URL that is not byte-identical to one
+  /// of these is refused; there is no prefix or wildcard matching anywhere.
+  acsUrls                 String[]    @default([])
+  defaultAcsUrl           String?
+  acsBinding              String      @default("HTTP-POST")
+  nameIdFormat            String      @default("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress")
+  /// Which mapped claim supplies the NameID. Null means the user's email.
+  nameIdClaim             String?
+  /// PEM certificates that may have signed an incoming AuthnRequest or
+  /// LogoutRequest. Empty means unsigned requests are accepted.
+  spCertificates          String[]    @default([])
+  wantAuthnRequestsSigned Boolean     @default(false)
+  encryptAssertions       Boolean     @default(false)
+  /// PEM certificate whose public key wraps the assertion's data key.
+  encryptionCertificate   String?
+  sloUrl                  String?
+  sloBinding              String      @default("HTTP-POST")
+  /// Whether an IdP-initiated Response, with no AuthnRequest behind it, may
+  /// be issued to this SP.
+  allowIdpInitiated       Boolean     @default(false)
+  assertionLifetimeMs     Int         @default(300000)
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, spEntityId])
+}
+
+/// An OIDC relying party. One per Application of type 'oidc'.
+model OidcClient {
+  id                       String      @id @default(uuid()) @db.Uuid
+  tenantId                 String      @db.Uuid
+  applicationId            String      @unique @db.Uuid
+  application              Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  clientId                 String
+  /// SHA-256 of a 256-bit random secret. Task 11 records why this is not
+  /// Argon2id.
+  clientSecretHash         String
+  /// Exact-match allowlist. Never prefix-matched, never wildcarded.
+  redirectUris             String[]    @default([])
+  postLogoutRedirectUris   String[]    @default([])
+  grantTypes               String[]    @default(["authorization_code", "refresh_token"])
+  /// Whether this client may use the client credentials grant.
+  ///
+  /// Its own column rather than a member of `grantTypes`, and default false.
+  /// This is the one grant that issues a token without a decision from
+  /// `authorize()` — see ruling A2-5 and Task 13 — so turning it on is a
+  /// deliberate act on one client, not an edit to an array where it could
+  /// arrive by accident alongside an unrelated change. `loadClients` derives
+  /// the protocol-level grant type from this flag; the admin API refuses
+  /// `client_credentials` in `grantTypes` outright.
+  clientCredentialsEnabled Boolean     @default(false)
+  scopes                   String[]    @default(["openid", "profile", "email"])
+  requirePkce              Boolean     @default(true)
+  tokenEndpointAuthMethod  String      @default("client_secret_basic")
+  idTokenSignedResponseAlg String      @default("RS256")
+  accessTokenTtlSeconds    Int         @default(3600)
+  refreshTokenTtlSeconds   Int         @default(1209600)
+  createdAt                DateTime    @default(now())
+  updatedAt                DateTime    @updatedAt
+
+  @@unique([tenantId, clientId])
+  @@index([tenantId])
+}
+
+/// Maps a directory, person or contract attribute to a SAML attribute or an
+/// OIDC claim, for one application.
+model ClaimMapping {
+  id               String      @id @default(uuid()) @db.Uuid
+  tenantId         String      @db.Uuid
+  applicationId    String      @db.Uuid
+  application      Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  /// 'saml' | 'oidc'
+  protocol         String
+  /// The outgoing name: a SAML Attribute Name, or an OIDC claim name.
+  claimName        String
+  /// SAML only. Ignored for OIDC.
+  nameFormat       String      @default("urn:oasis:names:tc:SAML:2.0:attrname-format:basic")
+  /// 'user' | 'person' | 'contract' | 'attribute' | 'groups' | 'literal'
+  sourceKind       String
+  /// The field on the source, or the UserAttribute key.
+  sourceField      String?
+  /// 'primary' | 'lowestSequence'. Read only when sourceKind is 'contract'.
+  contractStrategy String      @default("primary")
+  literalValue     String?
+  /// OIDC only: the scope that releases this claim. Null releases it under
+  /// 'profile'.
+  releaseScope     String?
+  multiValued      Boolean     @default(false)
+  createdAt        DateTime    @default(now())
+
+  @@unique([applicationId, protocol, claimName])
+  @@index([tenantId])
+  @@index([applicationId])
+}
+
+/// An external identity provider this tenant federates to.
+model UpstreamIdp {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @db.Uuid
+  slug                 String
+  name                 String
+  /// 'saml' | 'oidc'
+  protocol             String
+  enabled              Boolean  @default(true)
+  issuerUrl            String?
+  clientId             String?
+  /// Vault secret name holding the client secret. Never the secret itself.
+  clientSecretName     String?
+  scopes               String[] @default(["openid", "profile", "email"])
+  idpEntityId          String?
+  ssoUrl               String?
+  idpSloUrl            String?
+  ssoBinding           String   @default("HTTP-Redirect")
+  /// PEM certificates trusted to have signed an upstream assertion.
+  idpCertificates      String[] @default([])
+  wantAssertionsSigned Boolean  @default(true)
+  loginAttribute       String   @default("preferred_username")
+  emailAttribute       String   @default("email")
+  displayNameAttribute String   @default("name")
+  groupsAttribute      String?
+  createUsers          Boolean  @default(true)
+  refreshOnLogin       Boolean  @default(true)
+  defaultOrgUnitId     String?  @db.Uuid
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  links UpstreamLink[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+/// Ties a local User to the subject an upstream asserts. This — not the email
+/// address — is how a returning federated user is found.
+model UpstreamLink {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @db.Uuid
+  upstreamIdpId String      @db.Uuid
+  upstream      UpstreamIdp @relation(fields: [upstreamIdpId], references: [id], onDelete: Cascade)
+  userId        String      @db.Uuid
+  /// The upstream `sub`, or the SAML NameID.
+  subject       String
+  lastLoginAt   DateTime?
+  createdAt     DateTime    @default(now())
+
+  @@unique([upstreamIdpId, subject])
+  @@index([tenantId])
+  @@index([userId])
+}
+
+/// One in-flight upstream login. Single-use: consuming it is what stops a
+/// captured callback being replayed.
+model FederationRequest {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @db.Uuid
+  upstreamIdpId String    @db.Uuid
+  /// OIDC `state`, or the SAML AuthnRequest ID.
+  state         String
+  nonce         String?
+  /// Vault secret name holding the PKCE code_verifier, for OIDC.
+  verifierName  String?
+  /// Where the browser goes after authorize() allows. Always same-origin.
+  returnTo      String
+  applicationId String?   @db.Uuid
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  consumedAt    DateTime?
+
+  @@index([tenantId])
+  @@index([tenantId, state])
+}
+
+/// A signing key. One 'active' per tenant and kind; an 'outgoing' one sits
+/// beside it for the length of a rollover so tokens already issued still
+/// verify.
+model SigningKey {
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @db.Uuid
+  /// 'oidc' | 'saml'
+  kind        String
+  /// RFC 7638 thumbprint. The JWKS `kid`, and the SAML KeyDescriptor id.
+  kid         String
+  alg         String    @default("RS256")
+  publicJwk   Json
+  /// PEM, self-signed. SAML metadata needs a certificate; OIDC does not.
+  certificate String?
+  /// Vault secret name holding the PKCS#8 private key.
+  secretName  String
+  /// 'active' | 'outgoing' | 'retired'
+  status      String    @default("active")
+  notBefore   DateTime
+  notAfter    DateTime
+  retiredAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([tenantId, kind, kid])
+  @@index([tenantId])
+}
+
+/// Everything oidc-provider persists. One table rather than nine, because the
+/// adapter's contract is uniform and nine tables would be nine sets of RLS
+/// policies to keep in step.
+model OidcArtifact {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
+  /// The oidc-provider model name: 'AccessToken', 'Grant', 'Session', ...
+  model      String
+  artifactId String
+  uid        String?
+  userCode   String?
+  grantId    String?
+  accountId  String?
+  payload    Json
+  expiresAt  DateTime?
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([tenantId, model, artifactId])
+  @@index([tenantId])
+  @@index([tenantId, grantId])
+}
+
+/// Which service providers a Syntra session has signed into, so single logout
+/// can reach them.
+model SamlSsoSession {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @db.Uuid
+  sessionId     String    @db.Uuid
+  applicationId String    @db.Uuid
+  nameId        String
+  sessionIndex  String
+  createdAt     DateTime  @default(now())
+  endedAt       DateTime?
+
+  @@index([tenantId])
+  @@index([sessionId])
+}
+
+/// One `authorize()` allow, recorded by the OIDC interaction route so the
+/// token endpoint can require it independently of `oidc-provider`.
+///
+/// This is the second of the two controls that keep spec section 7's
+/// chokepoint true for OIDC. The first is the forced-interaction prompt, which
+/// lives inside `oidc-provider`'s configuration; this one lives in Syntra's
+/// own route and its own table, so no single edit removes both. Single-use,
+/// and its lifetime matches the authorization code's exactly — see Task 11.
+model AuthorizationDecision {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @db.Uuid
+  userId         String    @db.Uuid
+  /// The OIDC client this decision was made for. A decision for one
+  /// application never satisfies another.
+  clientId       String
+  /// The interaction it resolved, for the audit trail.
+  interactionUid String
+  satisfiedFactor String?
+  createdAt      DateTime  @default(now())
+  expiresAt      DateTime
+  consumedAt     DateTime?
+
+  @@index([tenantId])
+  @@index([tenantId, userId, clientId])
+}
+
+/// A SAML authentication request that has been validated but not yet
+/// answered, because the user still has to sign in or present a factor.
+///
+/// The request is parked here rather than carried through the browser,
+/// because everything on it has already been checked — the ACS URL against
+/// the allowlist, the signature against the SP's certificate — and a value
+/// that travels through the browser has to be checked again on the way back.
+model SamlAuthnRequest {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @db.Uuid
+  applicationId String    @db.Uuid
+  /// Syntra's own opaque handle. This is what travels in the URL.
+  handle        String
+  /// The SP's AuthnRequest ID, echoed back as InResponseTo. Null when the
+  /// flow is identity-provider-initiated and there was no request.
+  requestId     String?
+  /// Already matched against the allowlist when this row was written.
+  acsUrl        String
+  relayState    String?
+  forceAuthn    Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  consumedAt    DateTime?
+
+  @@index([tenantId])
+  @@index([tenantId, handle])
 }
