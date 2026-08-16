@@ -18,11 +18,15 @@
     "@syntra/db": "workspace:*",
     "@syntra/protocols": "workspace:*",
     "fastify": "^5.2.0",
+    "jose": "6.2.9",
+    "oidc-provider": "9.11.3",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@node-saml/node-saml": "5.1.0",
     "@peculiar/x509": "2.0.0",
+    "@types/oidc-provider": "9.11.1",
+    "openid-client": "6.8.5",
     "otpauth": "9.5.1",
     "reflect-metadata": "0.2.2"
   }

@@ -1,4 +1,5 @@
 import Provider, { type Configuration } from 'oidc-provider';
+import { AUTHORIZATION_CODE_TTL_SECONDS } from '@syntra/core';
 import { makeAdapterFactory } from './adapter.js';
 import { syntraInteractionPolicy } from './interaction-prompt.js';
 
@@ -142,7 +143,8 @@ export async function providerFor(
 
       ttl: {
         AccessToken: 3600,
-        AuthorizationCode: 120,
+        // The same constant `AuthorizationDecision` uses for its own lifetime.
+        AuthorizationCode: AUTHORIZATION_CODE_TTL_SECONDS,
         IdToken: 3600,
         RefreshToken: 1209600,
         Interaction: 900,

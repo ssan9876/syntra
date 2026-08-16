@@ -30,6 +30,8 @@ import { registerAdminApplicationRoutes } from './routes/admin/applications.js';
 import { registerAdminPolicyRoutes } from './routes/admin/policies.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerSamlIdpRoutes } from './routes/saml-idp.js';
+import { registerOidcRoutes } from './routes/oidc-op.js';
+import { registerOidcInteractionRoutes } from './routes/oidc-interaction.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -178,6 +180,19 @@ export async function buildApp(
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   });
+
+  const oidcOptions = {
+    publicUrl: config.publicUrl,
+    masterKey: config.masterKey,
+    sessionSecret: config.sessionSecret,
+    authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
+  };
+  await app.register(registerOidcInteractionRoutes, { prefix: '/oidc', ...oidcOptions });
+  // The catch-all last: every specific route must be matched first, and this is
+  // the only one that hands oidc-provider an unparsed body. Task 12 inserts its
+  // token plugin between these two lines.
+  await app.register(registerOidcRoutes, { prefix: '/oidc', ...oidcOptions });
 
   return app;
 }
