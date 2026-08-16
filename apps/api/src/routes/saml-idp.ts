@@ -191,6 +191,26 @@ export async function registerSamlIdpRoutes(
   // boundary test asserts the root has no such parser.
   await app.register(formbody);
 
+  const rateLimited = {
+    // A SAML SSO endpoint evaluates policy and can mint an attempt, so it is a
+    // credential-issuing endpoint whatever the URL suggests. Both dimensions,
+    // exactly as portal.ts does: the per-address half alone is bounded only by
+    // how many addresses the attacker has, and a second `app.rateLimit()` hook
+    // would be silently inert.
+    //
+    // `/saml/metadata` carries it too. It is unauthenticated, it is where a
+    // tenant's SAML key comes into existence on a cold tenant — RSA-2048
+    // generation plus a self-signed certificate, well over a second — and even
+    // warm it costs three transactions and a vault decrypt per call. Task 7
+    // deliberately kept `ensureActiveKey` out of `completeSso` to keep key
+    // generation off "an unauthenticated rate-limited endpoint" and then put
+    // it on an unauthenticated *un*rate-limited one, because `app.ts` registers
+    // `@fastify/rate-limit` with `global: false` and these two routes named no
+    // limit of their own.
+    config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+  };
+
   /**
    * The tenant's IdP metadata.
    *
@@ -213,10 +233,12 @@ export async function registerSamlIdpRoutes(
       }
     }
 
-    // Generation is expensive and must not sit inside a transaction; the
-    // service opens its own. Fetching metadata is the first thing an
-    // administrator does when wiring an SP, so this is where the tenant's
-    // SAML key comes into existence.
+    // A backstop, not the seam. The tenant's SAML key is created when a
+    // `SamlConfig` is written (`saveSamlConfig`), which is the moment a tenant
+    // commits to being an identity provider; this call covers the tenant that
+    // has configured nothing yet and whose administrator is fetching metadata
+    // to hand to a vendor. Generation is expensive and must not sit inside a
+    // transaction; the service opens its own.
     await ensureActiveKey(request.tenantId, localMasterKeyProvider(options.masterKey), 'saml', {
       commonName: identity.acsHost,
     });
@@ -241,18 +263,8 @@ export async function registerSamlIdpRoutes(
       .send(xml);
   };
 
-  app.get('/metadata', metadata);
-  app.get('/metadata/:applicationId', metadata);
-
-  const rateLimited = {
-    // A SAML SSO endpoint evaluates policy and can mint an attempt, so it is a
-    // credential-issuing endpoint whatever the URL suggests. Both dimensions,
-    // exactly as portal.ts does: the per-address half alone is bounded only by
-    // how many addresses the attacker has, and a second `app.rateLimit()` hook
-    // would be silently inert.
-    config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
-  };
+  app.get('/metadata', rateLimited, metadata);
+  app.get('/metadata/:applicationId', rateLimited, metadata);
 
   /**
    * Validates an incoming AuthnRequest, parks it, and continues.

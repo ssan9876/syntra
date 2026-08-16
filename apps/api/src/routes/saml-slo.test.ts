@@ -9,12 +9,13 @@ import {
   createApplication,
   createUser,
   hashPassword,
+  saveSamlConfig,
   setPasswordHash,
   upsertSamlConfig,
 } from '@syntra/core';
 import { buildTestApp, TEST_HOST } from '../test-support.js';
 import {
-  ACS, SP, authnRequest, extractResponse, samlConfig,
+  ACS, SP, authnRequest, extractResponse, samlConfig, samlKeyOptions,
 } from './saml-sso-post.test.js';
 
 // See packages/protocols/src/saml/saml-logout.test.ts: `xpath`'s type
@@ -103,13 +104,13 @@ describe('SAML single logout', () => {
         name: 'CRM', slug: 'crm', type: 'saml',
       });
       await assignApplication(tx, application.id, { type: 'user', id: user.id });
-      await upsertSamlConfig(tx, application.id, samlConfig());
       return application.id;
     });
 
-    await ctx.app.inject({
-      method: 'GET', url: '/saml/metadata', headers: { host: TEST_HOST },
-    });
+    // Configuring the service provider is what creates the tenant's SAML
+    // signing key. No `/saml/metadata` fetch here on purpose: the convention
+    // this suite used to depend on is now the thing under test.
+    await saveSamlConfig(ctx.tenantId, applicationId, samlConfig(), samlKeyOptions);
 
     const login = await ctx.app.inject({
       method: 'POST', url: '/api/auth/login',

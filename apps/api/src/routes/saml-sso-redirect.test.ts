@@ -9,12 +9,14 @@ import {
   createApplication,
   createUser,
   hashPassword,
+  saveSamlConfig,
   setPasswordHash,
   upsertSamlConfig,
 } from '@syntra/core';
 import { buildTestApp, TEST_HOST } from '../test-support.js';
 import {
-  ACS, SP, authnRequest, extractResponse, samlConfig, spPrivatePem, spPublicPem,
+  ACS, SP, authnRequest, extractResponse, samlConfig, samlKeyOptions,
+  spPrivatePem, spPublicPem,
 } from './saml-sso-post.test.js';
 
 const { SAML } = pkg;
@@ -66,17 +68,13 @@ describe('SAML single sign-on over HTTP-Redirect', () => {
         name: 'CRM', slug: 'crm', type: 'saml',
       });
       await assignApplication(tx, application.id, { type: 'user', id: user.id });
-      await upsertSamlConfig(tx, application.id, samlConfig());
       return application.id;
     });
 
-    // The tenant's SAML signing key comes into existence when its metadata is
-    // first fetched, and `completeSso` only ever reads a key — it never
-    // creates one. Without this, every test below would fail with 409
-    // `saml-no-key` rather than exercising the Redirect binding at all.
-    await ctx.app.inject({
-      method: 'GET', url: '/saml/metadata', headers: { host: TEST_HOST },
-    });
+    // Configuring the service provider is what creates the tenant's SAML
+    // signing key. No `/saml/metadata` fetch here on purpose: the convention
+    // this suite used to depend on is now the thing under test.
+    await saveSamlConfig(ctx.tenantId, applicationId, samlConfig(), samlKeyOptions);
 
     const login = await ctx.app.inject({
       method: 'POST', url: '/api/auth/login',

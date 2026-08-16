@@ -1,5 +1,7 @@
 import { matchesAllowlist } from '@syntra/contracts';
-import type { TenantClient } from '@syntra/db';
+import { withTenant, type TenantClient } from '@syntra/db';
+import { ensureActiveKey } from '../keys/signing-key-service.js';
+import type { MasterKeyProvider } from '../vault/master-key.js';
 import { currentTenant } from '../tenant-context.js';
 
 export type SamlBinding = 'HTTP-POST' | 'HTTP-Redirect';
@@ -58,6 +60,40 @@ export async function upsertSamlConfig(
     update: input,
   });
   return toRecord(row as unknown as Record<string, unknown>);
+}
+
+/**
+ * Writes a service provider's configuration and makes sure the tenant has a
+ * SAML signing key.
+ *
+ * This is the seam, and it is here rather than at any request-time endpoint
+ * because writing a `SamlConfig` is the moment a tenant commits to being an
+ * identity provider. Everything downstream — `/saml/sso`, `/saml/continue`,
+ * `/saml/start` — only ever *loads* a key, and nothing enforced the ordering
+ * that put one there: `ensureActiveKey` lived in exactly one place, the
+ * unauthenticated `/saml/metadata` handler, so an administrator who configured
+ * a service provider and never fetched metadata on that tenant's host had
+ * every first sign-in dead-end at 409 `saml-no-key` with nothing self-healing
+ * it. `/saml/metadata` keeps its call as a backstop; it is no longer the only
+ * route.
+ *
+ * The key comes first and outside the transaction. RSA-2048 generation plus a
+ * self-signed certificate is well over a second — a large bite out of the
+ * 5000 ms `withTenant` budget, spent on work that touches no row — and
+ * ordering it first means a tenant whose key cannot be established does not
+ * end up with a configuration that fails every login later. `ensureActiveKey`
+ * is idempotent, so every write after the first is a single read.
+ */
+export async function saveSamlConfig(
+  tenantId: string,
+  applicationId: string,
+  input: Omit<SamlConfigRecord, 'id' | 'applicationId'>,
+  key: { provider: MasterKeyProvider; commonName: string },
+): Promise<SamlConfigRecord> {
+  await ensureActiveKey(tenantId, key.provider, 'saml', {
+    commonName: key.commonName,
+  });
+  return withTenant(tenantId, (tx) => upsertSamlConfig(tx, applicationId, input));
 }
 
 export async function findSamlConfigByEntityId(

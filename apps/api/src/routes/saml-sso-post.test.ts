@@ -9,6 +9,8 @@ import {
   createClaimMapping,
   createUser,
   hashPassword,
+  localMasterKeyProvider,
+  saveSamlConfig,
   setPasswordHash,
   upsertSamlConfig,
 } from '@syntra/core';
@@ -19,6 +21,16 @@ const { SAML } = pkg;
 
 export const SP = 'https://sp.example.test/metadata';
 export const ACS = 'https://sp.example.test/acs';
+
+/**
+ * What `saveSamlConfig` needs to mint the tenant's SAML key at configuration
+ * time. The master key is the one `buildTestApp` gives the app, so a key
+ * written here is one the running app can decrypt.
+ */
+export const samlKeyOptions = {
+  provider: localMasterKeyProvider(Buffer.alloc(32, 7)),
+  commonName: TEST_HOST,
+};
 const PASSWORD = 'correct horse battery staple';
 const PASSWORD_HASH = await hashPassword(PASSWORD);
 
@@ -130,7 +142,6 @@ describe('SAML single sign-on over HTTP-POST', () => {
         name: 'CRM', slug: 'crm', type: 'saml',
       });
       await assignApplication(tx, application.id, { type: 'user', id: user.id });
-      await upsertSamlConfig(tx, application.id, samlConfig());
       await createClaimMapping(tx, application.id, {
         protocol: 'saml',
         claimName: 'department',
@@ -145,15 +156,12 @@ describe('SAML single sign-on over HTTP-POST', () => {
       return { userId: user.id, applicationId: application.id };
     }));
 
-    // The tenant's SAML signing key comes into existence when its metadata is
-    // first fetched — which is how an administrator wires up a service provider
-    // in the first place, since the SP needs the certificate before it can send
-    // anything. Without that, `completeSso` correctly refuses with 409
-    // `saml-no-key`, which is a real behaviour and not what these tests are
-    // about. Done once here rather than per test.
-    await ctx.app.inject({
-      method: 'GET', url: '/saml/metadata', headers: { host: TEST_HOST },
-    });
+    // Configuring the service provider is what creates the tenant's SAML
+    // signing key — that is the whole point of `saveSamlConfig`, and there is
+    // deliberately no `/saml/metadata` fetch here to make it happen. A suite
+    // that fetched metadata first would prove the flow *given* a convention
+    // rather than proving the convention.
+    await saveSamlConfig(ctx.tenantId, applicationId, samlConfig(), samlKeyOptions);
 
     const login = await ctx.app.inject({
       method: 'POST', url: '/api/auth/login',
