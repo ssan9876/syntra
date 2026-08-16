@@ -11,6 +11,7 @@ import {
 } from '@syntra/core';
 import { parseXml, signFragment } from '@syntra/protocols';
 import { buildTestApp, TEST_HOST } from '../test-support.js';
+import { federationBindingCookieOptions } from './federation.js';
 
 const IDP = 'https://idp.example.test/metadata';
 const SSO = 'https://idp.example.test/sso';
@@ -318,6 +319,33 @@ describe('upstream SAML federation', () => {
     expect(hasSession(res.cookies)).toBe(false);
     expect(await usersOf(ctx.tenantId)).toHaveLength(0);
     expect(await eventsOf(ctx.tenantId, 'federation.assertion_refused')).toHaveLength(1);
+  });
+
+  it('sets a binding cookie a real browser will send back on a cross-site POST', async () => {
+    const { res } = await start();
+    const set = res.cookies.find((c) => c.name === BINDING_COOKIE)!;
+    expect(set).toBeDefined();
+    expect(set.httpOnly).toBe(true);
+    expect(set.path).toBe('/federation');
+
+    // The one that matters, and the reason this is not `lax` like the
+    // identity-provider side's cookie. The upstream delivers the assertion as
+    // a CROSS-SITE form POST, and a Lax cookie is not sent on a cross-site
+    // unsafe method -- so a Lax cookie here would not weaken the control, it
+    // would break every legitimate SAML federation login while the tests, which
+    // set the header themselves, carried on passing.
+    //
+    // `SameSite=None` is only honoured on a `Secure` cookie, so the two move
+    // together; this suite runs outside production and therefore sees the
+    // plain-HTTP pair.
+    expect(federationBindingCookieOptions(true)).toMatchObject({
+      sameSite: 'none',
+      secure: true,
+    });
+    expect(federationBindingCookieOptions(false)).toMatchObject({
+      sameSite: 'lax',
+      secure: false,
+    });
   });
 
   it('refuses an assertion delivered to a browser that did not start the login', async () => {

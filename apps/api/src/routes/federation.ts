@@ -96,32 +96,56 @@ function safeReturnTo(value: unknown): string {
  * answers the attacker's own request.
  *
  * This mirrors `SAML_BINDING_COOKIE` in `saml-idp.ts`, which closed the same
- * defect on the identity-provider side of the same branch, down to the cookie
- * options and the reasoning about `sameSite`: a Lax cookie *is* sent on a
- * cross-site top-level GET — which is the shape of the OIDC attack — and on a
- * cross-site form POST it is not, which is why the SAML ACS reads it too
- * rather than relying on that. The binding check is what makes both safe.
+ * defect on the identity-provider side of the same branch — but NOT its
+ * `sameSite`, and the difference is load-bearing. There the nonce is set on a
+ * cross-site POST and read on a same-site top-level GET
+ * (`/saml/continue?handle=…`, which Syntra's own login screen navigates to),
+ * so `lax` is right. Here the SAML assertion comes back as a cross-site form
+ * POST from the upstream, and a Lax cookie is **not** sent on a cross-site
+ * unsafe method — so a Lax cookie here would not be a weaker control, it would
+ * break every legitimate SAML federation login. See the options below.
  *
  * Scoped to `/federation`, because no other route reads it. Only its digest is
  * stored, so the row is not a credential.
  */
 const FEDERATION_BINDING_COOKIE = 'syntra_federation_bind';
 
-const FEDERATION_BINDING_COOKIE_OPTIONS = {
-  httpOnly: true,
-  // Not `strict`. The SAML assertion arrives as a cross-site form POST from
-  // the upstream, and a Strict cookie is not sent on one — the binding would
-  // then fail for every legitimate SAML login rather than for the attack.
-  sameSite: 'lax' as const,
-  path: '/federation',
-  // Follows NODE_ENV for the same reason the session cookie does: a
-  // development server runs on plain HTTP and a Secure cookie would never come
-  // back, which reads as "single sign-on is broken".
-  secure: process.env.NODE_ENV === 'production',
-  // Comfortably longer than an in-flight login's ten minutes, so the row is
-  // what expires the flow and not the cookie, and re-issued on every start.
-  maxAge: 30 * 60,
-};
+/**
+ * `SameSite=None; Secure` in production, `Lax` without `Secure` otherwise.
+ *
+ * The two move together because they have to: a browser drops a `SameSite=None`
+ * cookie outright unless it is also `Secure`, so on a development server over
+ * plain HTTP the pair would mean no cookie at all — and then no federation
+ * login of either protocol would complete, which reads as "single sign-on is
+ * broken" rather than as a cookie policy. The same `NODE_ENV` reasoning the
+ * session cookie uses for `secure` alone.
+ *
+ * `None` is not a weakening. It is what lets the cookie arrive on the one
+ * request that genuinely is cross-site and genuinely has to carry it; the
+ * control is the digest comparison against the row, not the browser's
+ * willingness to send it, and a cookie that never arrives fails the ordinary
+ * login rather than the attack.
+ *
+ * A development deployment therefore cannot exercise a real upstream's
+ * cross-site SAML POST. That is the trade, and it is the right way round: the
+ * broken case is confined to plain HTTP, where a bearer session cookie is
+ * already indefensible.
+ */
+export function federationBindingCookieOptions(secure: boolean) {
+  return {
+    httpOnly: true,
+    sameSite: secure ? ('none' as const) : ('lax' as const),
+    secure,
+    path: '/federation',
+    // Comfortably longer than an in-flight login's ten minutes, so the row is
+    // what expires the flow and not the cookie, and re-issued on every start.
+    maxAge: 30 * 60,
+  };
+}
+
+const FEDERATION_BINDING_COOKIE_OPTIONS = federationBindingCookieOptions(
+  process.env.NODE_ENV === 'production',
+);
 
 /**
  * The binding digest to open a request under, setting the cookie if this
