@@ -1,3 +1,5 @@
+import { createVerify } from 'node:crypto';
+import { inflateRawSync } from 'node:zlib';
 import { parseXml, selectElements } from '../xml/parse.js';
 import { verifySignedFragment } from '../xml/verify.js';
 
@@ -83,4 +85,82 @@ export function verifyPostSignature(
 ): string | null {
   const doc = parseXml(xml);
   return verifySignedFragment(xml, doc.documentElement!, certificates);
+}
+
+const RSA_SHA256 = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256';
+const RSA_SHA512 = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha512';
+
+/**
+ * Decodes an HTTP-Redirect binding message: base64, then a raw DEFLATE stream
+ * with no zlib header.
+ *
+ * `maxOutputLength` is the whole point. Redirect-binding messages arrive on an
+ * unauthenticated endpoint and are attacker-supplied, and a few kilobytes of
+ * base64 can inflate to hundreds of megabytes. Node's zlib throws once the
+ * ceiling is passed rather than allocating the rest.
+ */
+export function decodeRedirectMessage(param: string): string {
+  const compressed = Buffer.from(param, 'base64');
+  if (compressed.length === 0) throw new Error('empty SAML message');
+  try {
+    return inflateRawSync(compressed, {
+      maxOutputLength: MAX_MESSAGE_BYTES,
+    }).toString('utf8');
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    if (/buffer|maxOutputLength|length/i.test(message)) {
+      throw new Error('SAML message too large once decompressed');
+    }
+    throw new Error(`SAML message could not be decompressed: ${message}`);
+  }
+}
+
+/**
+ * Verifies an HTTP-Redirect binding signature.
+ *
+ * This is not XML-DSig. The signature covers the raw query string —
+ * `SAMLRequest=...&RelayState=...&SigAlg=...` in exactly that order, with
+ * exactly the percent-encoding the sender used. Re-encoding the parameters
+ * from a parsed object produces different bytes and every legitimate signature
+ * fails, which is why the caller passes the raw substring lifted out of
+ * `request.raw.url` rather than anything Fastify parsed.
+ *
+ * An unrecognised `SigAlg` returns false rather than falling back to a
+ * default. A verifier that treats an unknown algorithm as "probably SHA-1" is
+ * how an algorithm-confusion bypass gets in, and SHA-1 is not offered here at
+ * all.
+ *
+ * Every registered certificate is tried, so a service provider rotating its
+ * signing key can register both for the overlap. `certificates` being empty
+ * verifies nothing and returns false — the caller has already refused that
+ * case with a clearer message, and this is the backstop.
+ */
+export function verifyRedirectSignature(input: {
+  rawQuery: string;
+  signature: string;
+  sigAlg: string;
+  certificates: string[];
+}): boolean {
+  if (input.certificates.length === 0) return false;
+
+  const digest =
+    input.sigAlg === RSA_SHA256
+      ? 'RSA-SHA256'
+      : input.sigAlg === RSA_SHA512
+        ? 'RSA-SHA512'
+        : null;
+  if (digest === null) return false;
+
+  const signature = Buffer.from(input.signature, 'base64');
+  if (signature.length === 0) return false;
+
+  return input.certificates.some((certificate) => {
+    try {
+      return createVerify(digest)
+        .update(input.rawQuery)
+        .verify(certificate, signature);
+    } catch {
+      return false;
+    }
+  });
 }

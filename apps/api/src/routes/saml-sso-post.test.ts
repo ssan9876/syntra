@@ -61,56 +61,6 @@ export const extractResponse = (html: string) => {
   return match[1]!.replace(/&amp;/g, '&').replace(/&quot;/g, '"');
 };
 
-beforeEach(async () => {
-  ctx = await buildTestApp();
-  await ctx.app.ready();
-  await prisma.tenant.update({
-    where: { id: ctx.tenantId },
-    data: { primaryDomain: TEST_HOST },
-  });
-
-  ({ userId, applicationId } = await withTenant(ctx.tenantId, async (tx) => {
-    const user = await createUser(tx, {
-      login: 'jdoe', email: 'j@acme.test', displayName: 'J Doe',
-    });
-    await setPasswordHash(tx, user.id, PASSWORD_HASH);
-    const application = await createApplication(tx, {
-      name: 'CRM', slug: 'crm', type: 'saml',
-    });
-    await assignApplication(tx, application.id, { type: 'user', id: user.id });
-    await upsertSamlConfig(tx, application.id, samlConfig());
-    await createClaimMapping(tx, application.id, {
-      protocol: 'saml',
-      claimName: 'department',
-      nameFormat: 'urn:oasis:names:tc:SAML:2.0:attrname-format:basic',
-      sourceKind: 'contract',
-      sourceField: 'department',
-      contractStrategy: 'primary',
-      literalValue: null,
-      releaseScope: null,
-      multiValued: false,
-    });
-    return { userId: user.id, applicationId: application.id };
-  }));
-
-  // The tenant's SAML signing key comes into existence when its metadata is
-  // first fetched — which is how an administrator wires up a service provider
-  // in the first place, since the SP needs the certificate before it can send
-  // anything. Without that, `completeSso` correctly refuses with 409
-  // `saml-no-key`, which is a real behaviour and not what these tests are
-  // about. Done once here rather than per test.
-  await ctx.app.inject({
-    method: 'GET', url: '/saml/metadata', headers: { host: TEST_HOST },
-  });
-
-  const login = await ctx.app.inject({
-    method: 'POST', url: '/api/auth/login',
-    headers: { host: TEST_HOST },
-    payload: { login: 'jdoe', password: PASSWORD },
-  });
-  cookie = login.cookies.find((c) => c.name === 'syntra_session')!.value;
-});
-
 const postSso = (xml: string, relayState?: string, withCookie = true) =>
   ctx.app.inject({
     method: 'POST', url: '/saml/sso',
@@ -135,6 +85,61 @@ const get = (url: string, withCookie = true) =>
   });
 
 describe('SAML single sign-on over HTTP-POST', () => {
+  // Scoped to this describe rather than the module's top level: this file is
+  // also imported by `saml-sso-redirect.test.ts` for its shared fixtures, and
+  // a top-level `beforeEach` becomes a root-level hook for whatever file
+  // imports it, running before every test in that file — including the
+  // Redirect suite's — and racing its own database resets against theirs.
+  beforeEach(async () => {
+    ctx = await buildTestApp();
+    await ctx.app.ready();
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { primaryDomain: TEST_HOST },
+    });
+
+    ({ userId, applicationId } = await withTenant(ctx.tenantId, async (tx) => {
+      const user = await createUser(tx, {
+        login: 'jdoe', email: 'j@acme.test', displayName: 'J Doe',
+      });
+      await setPasswordHash(tx, user.id, PASSWORD_HASH);
+      const application = await createApplication(tx, {
+        name: 'CRM', slug: 'crm', type: 'saml',
+      });
+      await assignApplication(tx, application.id, { type: 'user', id: user.id });
+      await upsertSamlConfig(tx, application.id, samlConfig());
+      await createClaimMapping(tx, application.id, {
+        protocol: 'saml',
+        claimName: 'department',
+        nameFormat: 'urn:oasis:names:tc:SAML:2.0:attrname-format:basic',
+        sourceKind: 'contract',
+        sourceField: 'department',
+        contractStrategy: 'primary',
+        literalValue: null,
+        releaseScope: null,
+        multiValued: false,
+      });
+      return { userId: user.id, applicationId: application.id };
+    }));
+
+    // The tenant's SAML signing key comes into existence when its metadata is
+    // first fetched — which is how an administrator wires up a service provider
+    // in the first place, since the SP needs the certificate before it can send
+    // anything. Without that, `completeSso` correctly refuses with 409
+    // `saml-no-key`, which is a real behaviour and not what these tests are
+    // about. Done once here rather than per test.
+    await ctx.app.inject({
+      method: 'GET', url: '/saml/metadata', headers: { host: TEST_HOST },
+    });
+
+    const login = await ctx.app.inject({
+      method: 'POST', url: '/api/auth/login',
+      headers: { host: TEST_HOST },
+      payload: { login: 'jdoe', password: PASSWORD },
+    });
+    cookie = login.cookies.find((c) => c.name === 'syntra_session')!.value;
+  });
+
   it('issues an assertion a real service provider validates', async () => {
     const res = await postSso(authnRequest());
     expect(res.statusCode).toBe(200);

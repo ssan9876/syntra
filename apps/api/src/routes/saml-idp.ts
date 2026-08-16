@@ -28,9 +28,11 @@ import {
   buildIdpMetadata,
   buildSignedResponse,
   decodePostMessage,
+  decodeRedirectMessage,
   parseAuthnRequest,
   postBindingForm,
   verifyPostSignature,
+  verifyRedirectSignature,
 } from '@syntra/protocols';
 import { ProblemError } from '../plugins/problem-json.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
@@ -50,6 +52,45 @@ const AUTHN_CONTEXT: Record<string, string> = {
 };
 const DEFAULT_AUTHN_CONTEXT =
   'urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport';
+
+/**
+ * The raw query substring an HTTP-Redirect signature covers.
+ *
+ * Lifted out of `request.raw.url` rather than rebuilt from `request.query`,
+ * because the signature is over the sender's exact bytes: their
+ * percent-encoding, their parameter order, and only the parameters the
+ * standard names — `SAMLRequest` (or `SAMLResponse`), then `RelayState` if it
+ * is present, then `SigAlg`, in that order and no other. Re-encoding a parsed
+ * object produces different bytes and every legitimately signed request fails.
+ *
+ * `RelayState` is included only when it actually appears, because the sender
+ * signed what it sent: adding an empty one changes the bytes.
+ *
+ * Exported so Task 9's single-logout handler can call it for `SAMLResponse`.
+ */
+export function signedRedirectQuery(
+  rawUrl: string,
+  parameter: 'SAMLRequest' | 'SAMLResponse',
+): string {
+  const start = rawUrl.indexOf('?');
+  const query = start < 0 ? '' : rawUrl.slice(start + 1);
+
+  const take = (name: string): string | null => {
+    const match = query.match(new RegExp(`(?:^|&)(${name}=[^&]*)`));
+    return match ? match[1]! : null;
+  };
+
+  const message = take(parameter);
+  const sigAlg = take('SigAlg');
+  if (message === null || sigAlg === null) {
+    throw new ProblemError(400, 'saml-bad-request', 'Malformed SAML request');
+  }
+
+  const relayState = take('RelayState');
+  return relayState === null
+    ? `${message}&${sigAlg}`
+    : `${message}&${relayState}&${sigAlg}`;
+}
 
 export interface SamlRouteOptions {
   publicUrl: string;
@@ -241,6 +282,37 @@ export async function registerSamlIdpRoutes(
       xml,
       relayState: typeof body?.RelayState === 'string' ? body.RelayState : null,
       verify: (config) => verifyPostSignature(xml, config.spCertificates),
+    });
+  });
+
+  app.get('/sso', rateLimited, async (request, reply) => {
+    const query = request.query as Record<string, string | undefined>;
+    const encoded = query.SAMLRequest;
+    if (typeof encoded !== 'string' || encoded === '') {
+      throw new ProblemError(400, 'saml-bad-request', 'No SAMLRequest');
+    }
+    const xml = decodeRedirectMessage(encoded);
+
+    return beginSso(request, reply, {
+      xml,
+      relayState: typeof query.RelayState === 'string' ? query.RelayState : null,
+      // The detached signature authenticates the query string, not the
+      // document, so there are no verified bytes to re-parse — hence `''`
+      // rather than the XML. `beginSso` keeps its already-parsed request in
+      // that case, which is correct here and only here: the signature covered
+      // the encoded form of exactly that document.
+      verify: (config) => {
+        const signature = query.Signature;
+        const sigAlg = query.SigAlg;
+        if (typeof signature !== 'string' || typeof sigAlg !== 'string') return null;
+        const ok = verifyRedirectSignature({
+          rawQuery: signedRedirectQuery(request.raw.url ?? '', 'SAMLRequest'),
+          signature,
+          sigAlg,
+          certificates: config.spCertificates,
+        });
+        return ok ? '' : null;
+      },
     });
   });
 
