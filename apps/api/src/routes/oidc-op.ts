@@ -174,13 +174,29 @@ export async function oidcProviderFor(
         // Derived, never read straight off `grantTypes`. The admin API refuses
         // `client_credentials` there, so the flag is the only way it can be on
         // — one place to look when asking which clients bypass authorize().
-        grant_types: c.clientCredentialsEnabled
-          ? [...c.grantTypes, 'client_credentials']
-          : c.grantTypes,
+        //
+        // `refreshTokenTtlSeconds: 0` means "no refresh tokens for this
+        // client", and this is where that is made true: withholding the grant
+        // is stronger than declining to issue at the code exchange, because it
+        // also refuses the refresh grant itself, so a token issued before the
+        // setting changed cannot go on rotating forever.
+        grant_types: [
+          ...c.grantTypes.filter(
+            (g) => g !== 'refresh_token' || c.refreshTokenTtlSeconds > 0,
+          ),
+          ...(c.clientCredentialsEnabled ? ['client_credentials'] : []),
+        ],
         response_types: c.grantTypes.includes('authorization_code') ? ['code'] : [],
         scope: c.scopes.join(' '),
         token_endpoint_auth_method: c.tokenEndpointAuthMethod,
         id_token_signed_response_alg: c.idTokenSignedResponseAlg,
+        // Lifted off by `providerFor` before oidc-provider sees the metadata.
+        // Stored, validated and returned by the admin API since Task 13, and
+        // read by nothing until now.
+        syntraTtl: {
+          accessToken: c.accessTokenTtlSeconds,
+          refreshToken: c.refreshTokenTtlSeconds,
+        },
       }));
     },
 

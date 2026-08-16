@@ -103,7 +103,26 @@ export const oidcClientRequest = z
       .enum(['client_secret_basic', 'client_secret_post', 'none'])
       .default('client_secret_basic'),
     idTokenSignedResponseAlg: z.literal('RS256').default('RS256'),
+    /**
+     * How long this client's access tokens live, in seconds. Also the lifetime
+     * of a client-credentials token, which has no separate setting.
+     */
     accessTokenTtlSeconds: z.number().int().min(60).max(86_400).default(3600),
+    /**
+     * How long this client's refresh tokens live, in seconds.
+     *
+     * **`0` means this client is issued no refresh tokens at all.** The
+     * `refresh_token` grant is withheld from its registration, so the
+     * authorization code exchange mints none and the refresh grant itself is
+     * refused — which also stops a token issued before the setting changed
+     * from rotating on forever. `min(0)` was already here and an administrator
+     * would reasonably read it that way; until this was implemented they were
+     * answered 200, saw `0` echoed back by `GET`, and got fourteen-day
+     * rotating refresh tokens.
+     *
+     * A client that should have refresh tokens for a shorter time gets a
+     * smaller positive number; there is no "unset".
+     */
     refreshTokenTtlSeconds: z.number().int().min(0).max(7_776_000).default(1_209_600),
     /**
      * Whether to mint a fresh secret.

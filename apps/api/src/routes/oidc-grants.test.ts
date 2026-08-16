@@ -287,6 +287,79 @@ describe('refresh tokens', () => {
   });
 });
 
+describe('per-client token lifetimes', () => {
+  /** Re-registers `crm` with different lifetimes and rebuilds the provider. */
+  const reregister = async (over: Record<string, unknown>) => {
+    await withTenant(ctx.tenantId, (tx) =>
+      upsertOidcClient(tx, applicationId, {
+        clientId: 'crm',
+        redirectUris: [REDIRECT],
+        postLogoutRedirectUris: ['https://crm.acme.test/bye'],
+        grantTypes: ['authorization_code', 'refresh_token'],
+        scopes: ['openid', 'profile', 'email', 'offline_access'],
+        requirePkce: true,
+        clientCredentialsEnabled: false,
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        idTokenSignedResponseAlg: 'RS256',
+        accessTokenTtlSeconds: 3600,
+        refreshTokenTtlSeconds: 1_209_600,
+        ...over,
+      }),
+    );
+    const { invalidateProvider } = await import('@syntra/protocols');
+    invalidateProvider(ctx.tenantId);
+  };
+
+  const codeFlow = async (scope = 'openid email') => {
+    const config = await discover();
+    const verifier = client.randomPKCECodeVerifier();
+    const state = client.randomState();
+    const authUrl = client.buildAuthorizationUrl(config, {
+      redirect_uri: REDIRECT, scope, state,
+      code_challenge: await client.calculatePKCECodeChallenge(verifier),
+      code_challenge_method: 'S256',
+      ...(scope.includes('offline_access') ? { prompt: 'consent' } : {}),
+    });
+    const { url: landed } = await walk(authUrl);
+    return client.authorizationCodeGrant(config, landed, {
+      pkceCodeVerifier: verifier,
+      expectedState: state,
+    });
+  };
+
+  it('honours the access token lifetime an administrator set on the client', async () => {
+    // The fixture registers 3600 and the branch shipped `expires_in: 600` --
+    // oidc-provider's own default, because nothing ever read the column. The
+    // per-tenant value was not being applied either, so both halves of the
+    // setting were inert.
+    const asRegistered = await codeFlow();
+    expect(asRegistered.expires_in).toBe(3600);
+
+    await reregister({ accessTokenTtlSeconds: 900 });
+    const shorter = await codeFlow();
+    expect(shorter.expires_in).toBe(900);
+  });
+
+  it('issues no refresh token to a client whose refresh lifetime is zero', async () => {
+    // `min(0)` is in the contract and an administrator will read `0` as "no
+    // refresh tokens for this client". Two of this branch's own fixtures
+    // already set it, which is how invisible it was.
+    await reregister({ refreshTokenTtlSeconds: 0 });
+    const none = await codeFlow('openid offline_access');
+    expect(none.refresh_token).toBeUndefined();
+
+    // The positive control. A positive lifetime still gets one, so this
+    // cannot pass by having broken refresh tokens outright. The jar is emptied
+    // first: `prompt=consent` twice over one oidc-provider session resolves
+    // its second interaction against the grant the first one left, and the
+    // walk loops.
+    await reregister({ refreshTokenTtlSeconds: 3600 });
+    jar = [];
+    const some = await codeFlow('openid offline_access');
+    expect(some.refresh_token).toBeTruthy();
+  });
+});
+
 describe('client credentials — the one grant that bypasses authorize()', () => {
   /** Registers a machine client and returns its secret. */
   const machineClient = async (over: Record<string, unknown> = {}) => {
@@ -329,6 +402,18 @@ describe('client credentials — the one grant that bypasses authorize()', () =>
     expect(JSON.stringify(events[0]!.payload)).toContain('job');
     // And nothing pretends a decision happened.
     expect(await withTenant(ctx.tenantId, (tx) => tx.authorizationDecision.count())).toBe(0);
+  });
+
+  it('gives a machine token the client’s own lifetime, not the library’s default', async () => {
+    // `ttl.ClientCredentials` had no entry at all, so oidc-provider used its
+    // own default and said so at every boot: "default ttl.ClientCredentials
+    // function called, you SHOULD change it". A machine token's lifetime is
+    // the client's access-token lifetime.
+    const config = await machineClient({ accessTokenTtlSeconds: 1800 });
+    const tokens = await client.clientCredentialsGrant(config, { scope: 'reports.read' });
+    expect(tokens.expires_in).toBe(1800);
+    // And not the library's default, which is what this is really about.
+    expect(tokens.expires_in).not.toBe(600);
   });
 
   it('refuses the grant when the flag is off, even if the request is otherwise perfect', async () => {

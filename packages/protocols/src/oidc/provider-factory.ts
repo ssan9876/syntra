@@ -8,17 +8,49 @@ export interface AccountClaims {
   claims: Record<string, unknown>;
 }
 
+/**
+ * A client's own token lifetimes, carried alongside its metadata.
+ *
+ * Not `extraClientMetadata`: oidc-provider would then validate and republish
+ * these as client metadata, and they are Syntra's settings about a client
+ * rather than the client's own. `providerFor` lifts the key off before the
+ * metadata reaches the library, and keeps the map for the `ttl` functions
+ * below to read by client id. The provider is rebuilt whenever a tenant's
+ * clients change (`invalidateProvider`), so the map cannot drift from the
+ * `clients` array it was built beside.
+ */
+export interface ClientTtl {
+  /** Seconds. Also the lifetime of a client-credentials token. */
+  accessToken: number;
+  /** Seconds. `0` means this client is issued no refresh tokens at all. */
+  refreshToken: number;
+}
+
+/** One client's metadata, plus the lifetimes oidc-provider must not see. */
+export type SyntraClientMetadata = Record<string, unknown> & {
+  client_id: string;
+  syntraTtl?: ClientTtl;
+};
+
 export interface ProviderDeps {
   /** Reads the user and their mapped claims. Returns null if unknown. */
   findAccount(accountId: string, clientId: string | null): Promise<AccountClaims | null>;
   /** Every OIDC client this tenant has, in oidc-provider's metadata shape. */
-  loadClients(): Promise<Record<string, unknown>[]>;
+  loadClients(): Promise<SyntraClientMetadata[]>;
   /** The tenant's published JWKS: active key first, outgoing beside it. */
   jwks(): Promise<{ keys: Record<string, unknown>[] }>;
   /** Where an unresolved interaction sends the browser. */
   interactionUrl(uid: string): string;
   cookieKeys: string[];
 }
+
+/**
+ * What a client with no lifetimes of its own gets. Both were the tenant-wide
+ * constants in the `ttl` block before per-client lifetimes were honoured, so
+ * an existing deployment's behaviour is unchanged for any client that never
+ * had one set.
+ */
+const DEFAULT_TTL: ClientTtl = { accessToken: 3600, refreshToken: 1_209_600 };
 
 const providers = new Map<string, Promise<Provider>>();
 
@@ -57,7 +89,15 @@ export async function providerFor(
   if (cached) return cached;
 
   const built = (async () => {
-    const [clients, jwks] = await Promise.all([deps.loadClients(), deps.jwks()]);
+    const [loaded, jwks] = await Promise.all([deps.loadClients(), deps.jwks()]);
+
+    // Split before oidc-provider sees anything. `syntraTtl` is Syntra's, and
+    // the library rejects metadata it does not recognise.
+    const ttls = new Map<string, ClientTtl>();
+    const clients = loaded.map(({ syntraTtl, ...metadata }) => {
+      if (syntraTtl) ttls.set(metadata.client_id, syntraTtl);
+      return metadata;
+    });
 
     // oidc-provider only recognises a scope a client requests if it appears
     // in `configuration.scopes` — `openid`, `email` and `profile` arrive there
@@ -72,6 +112,17 @@ export async function providerFor(
     // fixed vocabulary (see `oidc-client-service.ts`), so every scope any
     // client in this tenant is actually registered for is unioned in here,
     // alongside the standard baseline oidc-provider ships as its default.
+    /**
+     * A client's lifetimes, falling back to the tenant-wide defaults.
+     *
+     * `client` can be undefined in oidc-provider's own type for some token
+     * kinds, and a missing entry means a client registered before this existed
+     * or one oidc-provider synthesised, so the fallback is not decorative.
+     */
+    const clientTtl = (client: { clientId?: string } | undefined): ClientTtl =>
+      (client?.clientId !== undefined ? ttls.get(client.clientId) : undefined) ??
+      DEFAULT_TTL;
+
     const scopes = new Set(['openid', 'offline_access']);
     for (const client of clients as { scope?: string }[]) {
       for (const scope of (client.scope ?? '').split(' ').filter((s) => s !== '')) {
@@ -185,12 +236,31 @@ export async function providerFor(
         requestObjectSigningAlgValues: ['RS256'],
       },
 
+      // Per client where the administrator set one, per tenant otherwise.
+      //
+      // These were columns on `OidcClient`, validated by the contract, stored,
+      // and returned by `GET` -- and read by nothing. An administrator setting
+      // `accessTokenTtlSeconds: 3600` was answered 200, saw it echoed back,
+      // and got tokens on the library's default. That is the shape ruling
+      // A2-10 was made about: a setting made inert by a later layer.
+      //
+      // `ClientCredentials` had no entry at all, so machine tokens ran on
+      // oidc-provider's default and the library said so at every boot:
+      // "default ttl.ClientCredentials function called, you SHOULD change it".
+      // A machine token's lifetime is the client's access-token lifetime;
+      // there is no second setting for it and inventing one would be a third
+      // number an administrator has to keep in step.
       ttl: {
-        AccessToken: 3600,
+        AccessToken: (_ctx, _token, client) => clientTtl(client).accessToken,
+        ClientCredentials: (_ctx, _token, client) => clientTtl(client).accessToken,
         // The same constant `AuthorizationDecision` uses for its own lifetime.
         AuthorizationCode: AUTHORIZATION_CODE_TTL_SECONDS,
         IdToken: 3600,
-        RefreshToken: 1209600,
+        // Never zero: a client whose refresh lifetime is 0 is not registered
+        // for the grant at all (see `loadClients`), so nothing reaches here
+        // asking for a token that expires the instant it is minted.
+        RefreshToken: (_ctx, _token, client) =>
+          clientTtl(client).refreshToken || DEFAULT_TTL.refreshToken,
         Interaction: 900,
         Session: 43200,
         Grant: 1209600,
