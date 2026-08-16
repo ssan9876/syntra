@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   createSession,
   permissionsForUser,
+  type AuthorizeResult,
   type SessionAllowance,
   type SessionScope,
 } from '@syntra/core';
@@ -80,4 +81,49 @@ export async function issueSession(
     status: 'authenticated',
     ...(await sessionBody(request, decision.userId, decision.scope)),
   };
+}
+
+/**
+ * Sends a browser to the step-up screen, carrying everything that screen needs.
+ *
+ * The protocol routes cannot answer a decision the way the JSON endpoints do:
+ * their caller is a *browser mid-redirect*, not the React application's own
+ * fetch, so there is nothing to hand a response body to. The screen therefore
+ * has to be told out of band, and the URL is the only channel there is.
+ *
+ * Three routes built this string by hand and all three sent only the attempt
+ * token, which was not enough for the screen to render: `/mfa` and `/enrol`
+ * read their pending challenge from `sessionStorage`, nothing had written any,
+ * and every SAML, OIDC and upstream-federation step-up therefore dead-ended on
+ * "This step expired. Sign in again to continue." — from a redirect Syntra had
+ * issued itself, one hop earlier. `factors` and `expires` are what closes that:
+ * which factors the chokepoint said it would accept, so the screen offers
+ * those and not a recovery code the server would refuse, and when the attempt
+ * stops being answerable.
+ *
+ * The attempt token is a bearer credential and this puts it in a URL, which is
+ * a real cost — proxy logs, browser history, `Referer`. It is bounded rather
+ * than avoided: the attempt lives minutes, buys exactly one step of one
+ * sign-in, and the screen strips it from the address bar before anything else
+ * loads. There is no other way to carry it across a full-page redirect the
+ * server initiated.
+ */
+export function challengeRedirect(
+  reply: FastifyReply,
+  decision: Extract<AuthorizeResult, { status: 'challenge' | 'enrol' }>,
+  returnTo: string,
+): FastifyReply {
+  const path = decision.status === 'challenge' ? '/mfa' : '/enrol';
+  const factors =
+    decision.status === 'challenge'
+      ? decision.acceptableFactors
+      : decision.enrollableFactors;
+  // Insertion order is preserved, and `attempt` stays first.
+  const query = new URLSearchParams({
+    attempt: decision.attemptToken,
+    factors: factors.join(','),
+    expires: decision.expiresAt.toISOString(),
+    next: returnTo,
+  });
+  return reply.redirect(`${path}?${query.toString()}`, 302);
 }

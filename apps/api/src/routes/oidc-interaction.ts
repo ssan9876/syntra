@@ -11,6 +11,7 @@ import { ProblemError } from '../plugins/problem-json.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { SESSION_COOKIE } from '../plugins/require-session.js';
 import { tenantRelyingParty } from './relying-party.js';
+import { challengeRedirect } from './session-reply.js';
 import { oidcProviderFor, type OidcRouteOptions } from './oidc-op.js';
 
 /**
@@ -85,12 +86,7 @@ export async function registerOidcInteractionRoutes(
       }
 
       if (decision.status === 'challenge' || decision.status === 'enrol') {
-        const next = encodeURIComponent(`/oidc/interaction/${uid}`);
-        const path = decision.status === 'challenge' ? '/mfa' : '/enrol';
-        return reply.redirect(
-          `${path}?attempt=${encodeURIComponent(decision.attemptToken)}&next=${next}`,
-          302,
-        );
+        return challengeRedirect(reply, decision, `/oidc/interaction/${uid}`);
       }
 
       // Written BEFORE the interaction is resolved. If this throws, no code is

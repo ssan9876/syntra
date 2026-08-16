@@ -18,14 +18,24 @@ export default defineConfig({
     // Fail rather than silently move to the next free port: a suite pointed at
     // 5173 must not quietly be served by whatever else was already there.
     strictPort: true,
-    proxy: {
-      '/api': {
-        target: apiTarget,
-        // Must NOT change origin. Syntra resolves the tenant from the Host
-        // header, and Vite's string-shorthand proxy rewrites it to the
-        // target, which makes every request look like an unknown tenant.
-        changeOrigin: false,
-      },
-    },
+    // Everything the API owns, not only `/api`.
+    //
+    // In production both halves sit behind one origin and this file is not
+    // involved. In development Vite is the origin, and a prefix missing from
+    // this list is served the single-page application instead: the router owns
+    // none of these paths, so its catch-all quietly redirects to the portal.
+    // That is what happened to every protocol endpoint — a SAML tile opened
+    // `/saml/start/:id` and the browser landed on `/` with no error anywhere,
+    // which reads as "the tile does nothing" rather than as a proxy gap.
+    //
+    // Must NOT change origin, in any of them. Syntra resolves the tenant from
+    // the Host header, and Vite's string-shorthand proxy rewrites it to the
+    // target, which makes every request look like an unknown tenant.
+    proxy: Object.fromEntries(
+      ['/api', '/saml', '/oidc', '/federation', '/health'].map((prefix) => [
+        prefix,
+        { target: apiTarget, changeOrigin: false },
+      ]),
+    ),
   },
 });

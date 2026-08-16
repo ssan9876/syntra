@@ -48,3 +48,73 @@ export function takeChallenge(): PendingChallenge | null {
 
 /** Where a stored challenge should send the browser. */
 export const routeFor = (kind: PendingKind) => (kind === 'enrol' ? '/enrol' : '/mfa');
+
+/**
+ * A `next` value that may be navigated to, or `/`.
+ *
+ * Everything that reaches this arrived in a query string, which means it
+ * arrived from whoever composed the link. `//evil.test` and `https://evil.test`
+ * are both absolute in a browser, so "starts with a slash" is not the check —
+ * "starts with exactly one slash" is. A backslash is refused too: some
+ * browsers have historically normalized `/\evil.test` to `//evil.test`.
+ *
+ * The server only ever sends its own paths here. This is the guard for the
+ * case where somebody else sends one.
+ */
+export function safeReturnTo(value: string | null | undefined): string {
+  if (!value) return '/';
+  if (!value.startsWith('/')) return '/';
+  if (value.startsWith('//') || value.startsWith('/\\')) return '/';
+  return value;
+}
+
+/**
+ * Paths this React application does not own.
+ *
+ * A step-up that began in a SAML, OIDC or upstream-federation flow returns to
+ * a *server* route, and `navigate()` would hand it to the router, which owns
+ * none of them and would fall through its catch-all to `/`. The user would
+ * land on the portal having answered a challenge for a sign-in that then
+ * silently never completed.
+ */
+const SERVER_PATHS = ['/saml/', '/oidc/', '/federation/'];
+
+export const isServerPath = (path: string): boolean =>
+  SERVER_PATHS.some((prefix) => path.startsWith(prefix));
+
+/**
+ * A challenge the *server* redirected here with, rather than one this
+ * application stored on its way out.
+ *
+ * The JSON endpoints answer the React client, which stores what it was told
+ * and navigates. The protocol routes cannot: their caller is a browser
+ * mid-redirect, so they carry the same four values in the query string
+ * instead. Without this, every SAML, OIDC and upstream step-up landed on
+ * "This step expired" one hop after Syntra itself issued the redirect.
+ *
+ * The token is removed from the address bar by the caller as soon as it has
+ * been read — it is a bearer credential, and the browser's history, the
+ * `Referer` header and every proxy log are not places to leave one.
+ */
+export function challengeFromQuery(
+  search: string,
+  kind: PendingKind,
+): PendingChallenge | null {
+  const params = new URLSearchParams(search);
+  const attemptToken = params.get('attempt');
+  if (!attemptToken) return null;
+  const expiresAt = params.get('expires') ?? '';
+  if (!expiresAt || new Date(expiresAt).getTime() <= Date.now()) return null;
+  const factors = (params.get('factors') ?? '')
+    .split(',')
+    .map((factor) => factor.trim())
+    .filter((factor) => factor !== '');
+  if (factors.length === 0) return null;
+  return {
+    kind,
+    attemptToken,
+    expiresAt,
+    factors,
+    returnTo: safeReturnTo(params.get('next')),
+  };
+}

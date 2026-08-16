@@ -3,11 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { Wordmark } from '../components/Wordmark.js';
 import {
+  challengeFromQuery,
+  isServerPath,
   routeFor,
   storeChallenge,
   takeChallenge,
   type PendingChallenge,
 } from '../mfa/challenge-store.js';
+import { leaveTo } from '../mfa/leave.js';
 import { enrolWebAuthnForAttempt } from '../mfa/webauthn.js';
 import { ApiError, api } from '../session/api.js';
 import { useSession, type AuthOutcome } from '../session/SessionProvider.js';
@@ -32,7 +35,11 @@ export function EnrolFactor() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const pending = takeChallenge();
+    // As on the verify screen: a protocol route redirects a browser here and
+    // carries the attempt in the query string, because there is no response
+    // body it could have stored anything from.
+    const pending =
+      takeChallenge() ?? challengeFromQuery(window.location.search, 'enrol');
     if (pending && pending.kind === 'enrol') {
       // Put it back: the attempt is spent when enrolment succeeds, not when
       // this screen renders, and a mistyped code must not cost the user the
@@ -40,6 +47,10 @@ export function EnrolFactor() {
       storeChallenge(pending);
       setChallenge(pending);
       setMode(pending.factors.includes('totp') ? 'totp' : 'webauthn');
+      // The attempt token does not stay in the address bar.
+      if (window.location.search !== '') {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
     }
     setReady(true);
   }, []);
@@ -64,11 +75,17 @@ export function EnrolFactor() {
 
   function done() {
     takeChallenge();
-    void refresh().then(() =>
-      navigate(challenge!.returnTo.startsWith('/') ? challenge!.returnTo : '/', {
-        replace: true,
-      }),
-    );
+    const returnTo = challenge!.returnTo.startsWith('/') ? challenge!.returnTo : '/';
+    void refresh().then(() => {
+      // A server path — a SAML or OIDC flow resuming — needs a real
+      // navigation; this router owns none of those and would land the user on
+      // the portal with the sign-in silently unfinished.
+      if (isServerPath(returnTo)) {
+        leaveTo(returnTo);
+        return;
+      }
+      navigate(returnTo, { replace: true });
+    });
   }
 
   /**

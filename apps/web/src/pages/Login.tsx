@@ -4,11 +4,30 @@ import { Alert, Button, Field } from '@syntra/ui';
 import { ApiError } from '../session/api.js';
 import { useSession } from '../session/SessionProvider.js';
 import { Wordmark } from '../components/Wordmark.js';
-import { routeFor, storeChallenge } from '../mfa/challenge-store.js';
+import {
+  isServerPath,
+  routeFor,
+  safeReturnTo,
+  storeChallenge,
+} from '../mfa/challenge-store.js';
+import { leaveTo } from '../mfa/leave.js';
 
 export function Login() {
   const { login } = useSession();
   const navigate = useNavigate();
+
+  /**
+   * Where to go once this succeeds.
+   *
+   * `/login?next=/saml/continue?handle=...` is how every protocol route sends
+   * an unauthenticated browser here, and until now nothing read it: the user
+   * signed in, landed on the portal, and the service provider's sign-in was
+   * abandoned with nothing on screen to say so. Run through `safeReturnTo`,
+   * because this value came off a URL somebody else may have composed.
+   */
+  const returnTo = safeReturnTo(
+    new URLSearchParams(window.location.search).get('next'),
+  );
 
   const [loginName, setLoginName] = useState('');
   const [password, setPassword] = useState('');
@@ -23,7 +42,11 @@ export function Login() {
     try {
       const outcome = await login(loginName, password);
       if (outcome.status === 'authenticated') {
-        navigate('/', { replace: true });
+        if (isServerPath(returnTo)) {
+          leaveTo(returnTo);
+          return;
+        }
+        navigate(returnTo, { replace: true });
         return;
       }
 
@@ -36,7 +59,12 @@ export function Login() {
           outcome.status === 'enrol'
             ? outcome.enrollableFactors
             : outcome.acceptableFactors,
-        returnTo: '/',
+        // Where the sign-in was headed. A SAML service provider or an OIDC
+        // relying party sends an unauthenticated browser to `/login?next=...`
+        // and expects it back; without carrying that through the step-up, a
+        // user asked for a second factor lands on the portal and the
+        // application that sent them there never hears anything more.
+        returnTo,
       });
       navigate(routeFor(kind), { replace: true });
     } catch (cause) {

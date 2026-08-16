@@ -41,7 +41,7 @@ import {
   type ProtocolIdentity,
 } from './protocol-identity.js';
 import { tenantRelyingParty } from './relying-party.js';
-import { issueSession } from './session-reply.js';
+import { challengeRedirect, issueSession } from './session-reply.js';
 
 export interface FederationRouteOptions {
   publicUrl: string;
@@ -198,12 +198,7 @@ export async function registerFederationRoutes(
       throw new ProblemError(403, 'federation-denied', 'Sign-in refused');
     }
     if (decision.status === 'challenge' || decision.status === 'enrol') {
-      const next = encodeURIComponent(returnTo);
-      const path = decision.status === 'challenge' ? '/mfa' : '/enrol';
-      return reply.redirect(
-        `${path}?attempt=${encodeURIComponent(decision.attemptToken)}&next=${next}`,
-        302,
-      );
+      return challengeRedirect(reply, decision, returnTo);
     }
     // `issueSession` takes the allow object and nothing else, so this cannot
     // mint a session for a user the decision did not name.

@@ -3,11 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { Wordmark } from '../components/Wordmark.js';
 import {
+  challengeFromQuery,
+  isServerPath,
   routeFor,
   takeChallenge,
   storeChallenge,
   type PendingChallenge,
 } from '../mfa/challenge-store.js';
+import { leaveTo } from '../mfa/leave.js';
 import { assertWebAuthn } from '../mfa/webauthn.js';
 import { ApiError, api } from '../session/api.js';
 import { useSession, type AuthOutcome } from '../session/SessionProvider.js';
@@ -38,13 +41,27 @@ export function MfaChallenge() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const pending = takeChallenge();
+    // Either this application stored one on its way here, or a protocol route
+    // redirected the browser here and put it in the query string — a SAML
+    // service provider's sign-in, an OIDC authorization request, or a login
+    // coming back from an upstream provider. The second case has no
+    // sessionStorage behind it, and without reading the query every one of
+    // those step-ups landed on "This step expired" one hop after Syntra itself
+    // issued the redirect.
+    const pending =
+      takeChallenge() ?? challengeFromQuery(window.location.search, 'verify');
     setChallenge(pending);
     if (pending) {
       // Put it back: the token is spent on a successful verify, not on
       // rendering the screen, and a wrong code must not cost the user the flow.
       storeChallenge(pending);
       setMode(firstMode(pending.factors));
+      // And take it out of the address bar. It is a bearer credential, and the
+      // history entry, the Referer header and every proxy log downstream are
+      // not places to leave one lying.
+      if (window.location.search !== '') {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
     }
     setReady(true);
   }, []);
@@ -103,9 +120,16 @@ export function MfaChallenge() {
 
       takeChallenge();
       await refresh();
-      navigate(challenge.returnTo.startsWith('/') ? challenge.returnTo : '/', {
-        replace: true,
-      });
+      const returnTo = challenge.returnTo.startsWith('/') ? challenge.returnTo : '/';
+      // A SAML, OIDC or federation path belongs to the server, not to this
+      // router: `navigate()` would fall through the catch-all to the portal,
+      // and the sign-in the user just answered a challenge for would never
+      // complete.
+      if (isServerPath(returnTo)) {
+        leaveTo(returnTo);
+        return;
+      }
+      navigate(returnTo, { replace: true });
     } catch (cause) {
       if (cause instanceof ApiError && cause.kind === 'code-already-used-for-setup') {
         // The one refusal a user is guaranteed to meet while looking at a

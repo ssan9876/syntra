@@ -379,3 +379,104 @@ describe('POST /api/portal/applications/:id/launch', () => {
     expect(codes.slice(4)).toEqual([429, 429]);
   });
 });
+
+/**
+ * Launching a service provider or a relying party.
+ *
+ * The address a protocol tile sends the browser to is *derived* — from the
+ * tenant's own protocol identity and from PUBLIC_URL — and never stored and
+ * never taken from the request. `tenant-context.ts` resolves a tenant from the
+ * leftmost label of the Host header, so `acme.attacker.example` resolves
+ * tenant `acme`; a launch address built from that header would let an attacker
+ * choose where a signed-in user's browser is sent next.
+ */
+describe('launching a protocol application', () => {
+  const protocolApp = async (type: 'saml' | 'oidc', launchUrl?: string) =>
+    withTenant(ctx.tenantId, async (tx) => {
+      const application = await createApplication(tx, {
+        name: type.toUpperCase(),
+        slug: type,
+        type,
+        ...(launchUrl ? { launchUrl } : {}),
+      });
+      await assignApplication(tx, application.id, { type: 'user', id: userId });
+      return application;
+    });
+
+  it('derives a SAML launch from the tenant identity, not from a stored URL', async () => {
+    const application = await protocolApp('saml');
+    const res = await call('POST', `/api/portal/applications/${application.id}/launch`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      status: 'launch',
+      url: `http://${ctx.host}/saml/start/${application.id}`,
+    });
+  });
+
+  it('ignores the Host header when it derives that address', async () => {
+    const application = await protocolApp('saml');
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/portal/applications/${application.id}/launch`,
+      // Resolves the same tenant — the leftmost label is the slug — and must
+      // not appear anywhere in the answer.
+      headers: { host: 'acme.attacker.example', cookie: `syntra_session=${cookie}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().url).not.toContain('attacker.example');
+    expect(res.json().url).toBe(`http://${ctx.host}/saml/start/${application.id}`);
+  });
+
+  it('sends an OIDC launch to the relying party through a Syntra redirect', async () => {
+    const application = await protocolApp('oidc', 'https://rp.acme.test/start');
+    const launch = await call('POST', `/api/portal/applications/${application.id}/launch`);
+    expect(launch.json().url).toBe(
+      `http://${ctx.host}/api/portal/oidc-start/${application.id}`,
+    );
+
+    // OpenID Connect has no identity-provider-initiated flow: only the relying
+    // party knows its own state, nonce and PKCE verifier, so the browser is
+    // handed back to the application to start the code flow itself.
+    const start = await call('GET', `/api/portal/oidc-start/${application.id}`);
+    expect(start.statusCode).toBe(302);
+    expect(start.headers.location).toBe('https://rp.acme.test/start');
+  });
+
+  it('refuses an OIDC start for an application the user is not assigned', async () => {
+    const application = await withTenant(ctx.tenantId, (tx) =>
+      createApplication(tx, {
+        name: 'Other',
+        slug: 'other',
+        type: 'oidc',
+        launchUrl: 'https://other.acme.test/start',
+      }),
+    );
+    const res = await call('GET', `/api/portal/oidc-start/${application.id}`);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('will not redirect an OIDC start to a scheme a browser must not follow', async () => {
+    const application = await protocolApp('oidc', 'https://rp.acme.test/start');
+    // A row that predates the check — an old migration, a seed, a restore.
+    // The admin API refuses this on the way in; the launch refuses it on the
+    // way out as well, because storage is not evidence.
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.application.update({
+        where: { id: application.id },
+        data: { launchUrl: 'javascript:alert(1)' },
+      }),
+    );
+    const res = await call('GET', `/api/portal/oidc-start/${application.id}`);
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('still refuses a bookmark with no launch address', async () => {
+    const application = await withTenant(ctx.tenantId, async (tx) => {
+      const created = await createApplication(tx, { name: 'B', slug: 'b' });
+      await assignApplication(tx, created.id, { type: 'user', id: userId });
+      return created;
+    });
+    const res = await call('POST', `/api/portal/applications/${application.id}/launch`);
+    expect(res.statusCode).toBe(409);
+  });
+});
