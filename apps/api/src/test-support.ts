@@ -94,6 +94,7 @@ export async function buildTestApp(
     SESSION_SECRET: 'x'.repeat(32),
     MASTER_KEY: Buffer.alloc(32, 7).toString('base64'),
     SMTP_URL: 'smtp://localhost:1025',
+    OUTBOUND_ALLOW_PRIVATE: 'true',
     ...options.env,
   });
 

@@ -8,3 +8,4 @@ export * from './reset.js';
 export * from './access.js';
 export * from './policy.js';
 export * from './tenant.js';
+export * from './protocol.js';

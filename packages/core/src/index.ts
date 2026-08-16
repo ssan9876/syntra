@@ -1,4 +1,5 @@
 export * from './config.js';
+export * from './net/outbound.js';
 export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
 export * from './directory/user-service.js';

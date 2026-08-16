@@ -46,6 +46,23 @@ const schema = z.object({
    * is correct for a deployment that has none.
    */
   TRUST_PROXY: z.string().trim().optional(),
+  /**
+   * Whether outbound fetches to an administrator-supplied address may reach
+   * this deployment's own network.
+   *
+   * Off by default. SAML metadata import and upstream OIDC discovery both
+   * fetch a URL an administrator typed, and the import path echoes what it
+   * read back to them — so by default a hostname resolving to loopback,
+   * link-local, a private range or a unique-local range is refused, naming the
+   * address so an operator can see why.
+   *
+   * A self-hosted deployment federating to an on-premises identity provider
+   * genuinely needs this on, which is why it is a switch and not a rule.
+   */
+  OUTBOUND_ALLOW_PRIVATE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 /**
@@ -89,6 +106,7 @@ export interface Config {
   authRateLimitTenantMax: number;
   /** false, a hop count, or a comma-separated list of trusted proxies. */
   trustProxy: false | number | string;
+  outboundAllowPrivate: boolean;
 }
 
 /**
@@ -130,5 +148,6 @@ export function loadConfig(
     authRateLimitTenantMax:
       v.AUTH_RATE_LIMIT_TENANT_MAX ?? v.AUTH_RATE_LIMIT_MAX * 10,
     trustProxy,
+    outboundAllowPrivate: v.OUTBOUND_ALLOW_PRIVATE,
   };
 }
