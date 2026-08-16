@@ -41,3 +41,42 @@ services:
     # `rejectUnauthorized: false` deliberately -- which is the point: with
     # verification left at its default, both refuse to connect.
     ports: ['1389:389', '1636:636']
+
+  samba:
+    # Pinned to a dated, immutable tag, verified by `docker pull` before it was
+    # written here (spike, Ruling P3). NOT `:latest`. Five plausible-sounding
+    # alternatives -- elswork/samba-dc, svenpetersen1965/samba-ad-dc,
+    # phillamon/samba-dc, domainc/samba-ad-dc, athenian/samba-dc -- do not
+    # exist in the registry at all. Do not swap this without pulling first.
+    image: nowsci/samba-domain:20260801025201
+    # REQUIRED, not optional. Without it the container gets through most of
+    # domain provisioning and then dies:
+    #   set_nt_acl_no_snum: fset_nt_acl returned NT_STATUS_ACCESS_DENIED.
+    #   ERROR(runtime): uncaught exception - (3221225506, '{Access Denied} ...')
+    #     ... setsysvolacl ... setntacl ... smbd.set_nt_acl
+    #   exit=255
+    # Samba's provisioning sets NT ACLs on the sysvol filesystem, which needs
+    # privileges the container does not have without this. It is a real
+    # constraint on whatever runs the suite: a Docker host that permits
+    # privileged containers. True for a self-hosted runner and for GitHub
+    # Actions' standard Linux runners; NOT guaranteed on more locked-down or
+    # sandboxed CI. See infra/samba/README.md.
+    privileged: true
+    environment:
+      DOMAIN: SYNTRA.TEST
+      DOMAINPASS: 'Syntra!Passw0rd'
+      HOSTIP: 127.0.0.1
+      INSECURELDAP: 'false'
+    # Only 389 and 636 are needed for everything Provision does. The image
+    # documents a much larger port surface (53, 88, 123, 135, 137-139, 445,
+    # 464, 1024-1044, 3268-3269) for domain join; Kerberos and SMB are not
+    # required for anything that goes over ldapts, so the suite stays narrow.
+    # 1390 is mapped for diagnostics only -- see the README: this server
+    # refuses even a plain simple bind, so nothing in the suite uses it.
+    #
+    # NOT 1389: `openldap` above already publishes 389 there, and Docker
+    # refuses the second claim outright --
+    #   Bind for 0.0.0.0:1389 failed: port is already allocated
+    # -- so `docker compose up` could never bring both up at once. Observed,
+    # not theorised.
+    ports: ['1390:389', '1637:636']

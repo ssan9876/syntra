@@ -2854,9 +2854,14 @@ In `infra/docker-compose.yml`, append to `services:`:
     # documents a much larger port surface (53, 88, 123, 135, 137-139, 445,
     # 464, 1024-1044, 3268-3269) for domain join; Kerberos and SMB are not
     # required for anything that goes over ldapts, so the suite stays narrow.
-    # 1389 is mapped for diagnostics only -- see the README: this server
+    # 1390 is mapped for diagnostics only -- see the README: this server
     # refuses even a plain simple bind, so nothing in the suite uses it.
-    ports: ['1389:389', '1637:636']
+    #
+    # CORRECTED DURING IMPLEMENTATION -- was 1389, which cannot start:
+    # `openldap` in this same compose file already publishes 389 on 1389, and
+    # Docker refuses the second claim outright:
+    #   Bind for 0.0.0.0:1389 failed: port is already allocated
+    ports: ['1390:389', '1637:636']
 ```
 
 - [ ] **Step 3: Write the README the constraint belongs in**
@@ -2929,8 +2934,11 @@ benefited from local image-layer caching after the first pull.
 
 ## Ports
 
-Only 636 (LDAPS, published on 1637) is used. 389 is published on 1389 for
+Only 636 (LDAPS, published on 1637) is used. 389 is published on 1390 for
 diagnostics; nothing in the suite binds to it, because it refuses to bind.
+
+1390 rather than 1389 because the `openldap` service in the same compose file
+already owns 1389.
 ```
 
 - [ ] **Step 4: Add the wait script to the root scripts**
@@ -2939,7 +2947,7 @@ In `package.json`, add to `scripts`:
 
 ```json
     "samba:up": "docker compose -f infra/docker-compose.yml up -d samba",
-    "samba:wait": "node --input-type=module -e \"import {Client} from 'ldapts';const url=process.env.SAMBA_LDAPS_URL??'ldaps://localhost:1637';const dn=process.env.SAMBA_BIND_DN??'CN=Administrator,CN=Users,DC=syntra,DC=test';const pw=process.env.SAMBA_BIND_PASSWORD??'Syntra!Passw0rd';const deadline=Date.now()+120000;for(;;){const c=new Client({url,tlsOptions:{rejectUnauthorized:false},connectTimeoutMs:5000});try{await c.bind(dn,pw);await c.unbind();console.log('samba bindable');process.exit(0)}catch(e){await c.unbind().catch(()=>{});if(Date.now()>deadline){console.error('samba never became bindable:',e.message);process.exit(1)}await new Promise(r=>setTimeout(r,2000))}}\""
+    "samba:wait": "node --input-type=module -e \"import {Client} from 'ldapts';const url=process.env.SAMBA_LDAPS_URL??'ldaps://localhost:1637';const dn=process.env.SAMBA_BIND_DN??'CN=Administrator,CN=Users,DC=syntra,DC=test';const pw=process.env.SAMBA_BIND_PASSWORD??'Syntra!Passw0rd';const deadline=Date.now()+120000;for(;;){const c=new Client({url,tlsOptions:{rejectUnauthorized:false},connectTimeout:5000});try{await c.bind(dn,pw);await c.unbind();console.log('samba bindable');process.exit(0)}catch(e){await c.unbind().catch(()=>{});if(Date.now()>deadline){console.error('samba never became bindable:',e.message);process.exit(1)}await new Promise(r=>setTimeout(r,2000))}}\""
 ```
 
 The poll interval is 2000 ms and the budget is 120 s against an observed
@@ -3016,7 +3024,23 @@ export async function purgeSubtree(client: Client, base: string): Promise<void> 
 }
 ```
 
-Add it to `packages/connectors/src/index.ts` **only if** the package's entry point is what other packages import from; the two integration tests in this plan import it by relative path within the package and by `@syntra/connectors/src/ad/samba-connection.js` from `@syntra/core`, matching how the existing suites reach into the package.
+**CORRECTED DURING IMPLEMENTATION.** Do not add it to
+`packages/connectors/src/index.ts` — it is a fixture, and commit `00b7631`
+deliberately keeps fixtures off the package root. Re-export it from
+`packages/connectors/src/testing/index.ts` instead, alongside `FakeTarget`.
+
+The deep path this plan originally gave Task 18 does not resolve at all:
+`@syntra/connectors` declares an `exports` map (`"."` and `"./testing"`), and an
+`exports` map denies every subpath it does not list.
+
+```
+error TS2307: Cannot find module '@syntra/connectors/src/ad/samba-connection.js'
+or its corresponding type declarations.
+```
+
+Task 11's test lives inside `@syntra/connectors` and imports by relative path,
+which is unaffected. Task 18's test lives in `@syntra/core` and must import from
+**`@syntra/connectors/testing`**.
 
 - [ ] **Step 6: Write the failing smoke test**
 
@@ -3024,7 +3048,7 @@ Add it to `packages/connectors/src/index.ts` **only if** the package's entry poi
 
 ```ts
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { Client } from 'ldapts';
+import { Attribute, Change, Client } from 'ldapts';
 import {
   connectAsSambaAdmin,
   purgeSubtree,
@@ -3043,6 +3067,27 @@ const connection = sambaConnection();
  * container nobody has touched is a suite nobody can run twice.
  */
 const usersDn = `OU=Smoke,${connection.baseDn}`;
+
+/**
+ * `replace` on a single attribute, spelled the way `ldapts` actually requires.
+ *
+ * CORRECTED DURING IMPLEMENTATION. This plan originally wrote every change as
+ * an object literal cast `as never`. That throws at send time:
+ *
+ *   TypeError: change.write is not a function
+ *
+ * `Client.modify` takes `Change` instances and `ModifyRequest.writeMessage`
+ * calls `change.write(writer)` on each; `Change.write` then calls
+ * `this.modification.write(writer)`, so the modification must be a real
+ * `Attribute` too. The `as never` cast is what hid it -- the compiler knew the
+ * argument was wrong and the cast told it not to say so.
+ */
+function replace(type: string, value: string | Buffer): Change {
+  return new Change({
+    operation: 'replace',
+    modification: new Attribute({ type, values: [value] as string[] | Buffer[] }),
+  });
+}
 
 let client: Client;
 
@@ -3069,7 +3114,7 @@ describe('the Samba AD container', () => {
     // between the two must default to encrypted rather than assume plain
     // works -- even for a read-only sanity check.
     const plain = new Client({
-      url: process.env.SAMBA_LDAP_URL ?? 'ldap://localhost:1389',
+      url: process.env.SAMBA_LDAP_URL ?? 'ldap://localhost:1390',
       connectTimeout: 10_000,
     });
     await expect(
@@ -3113,9 +3158,7 @@ describe('the Samba AD container', () => {
     });
     expect(String(before.searchEntries[0]!.userAccountControl)).toBe('514');
 
-    await client.modify(dn, [
-      { operation: 'replace', modification: { type: 'userAccountControl', values: ['512'] } },
-    ] as never);
+    await client.modify(dn, replace('userAccountControl', '512'));
 
     const after = await client.search(dn, {
       scope: 'base',
@@ -3138,18 +3181,8 @@ describe('the Samba AD container', () => {
     // AD requires the value UTF-16LE encoded and wrapped in literal double
     // quotes. This is also why the transport must be encrypted: AD refuses a
     // password write over an unencrypted connection.
-    await client.modify(dn, [
-      {
-        operation: 'replace',
-        modification: {
-          type: 'unicodePwd',
-          values: [Buffer.from(`"${password}"`, 'utf16le')],
-        },
-      },
-    ] as never);
-    await client.modify(dn, [
-      { operation: 'replace', modification: { type: 'userAccountControl', values: ['512'] } },
-    ] as never);
+    await client.modify(dn, replace('unicodePwd', Buffer.from(`"${password}"`, 'utf16le')));
+    await client.modify(dn, replace('userAccountControl', '512'));
 
     // Proved by binding, not by "the write did not throw".
     const asUser = new Client({
@@ -8005,6 +8038,41 @@ git commit -m "feat: add the two-axis provisioning guard"
 ---
 
 ## Task 11: The Active Directory target connector
+
+> **CORRECTION FROM TASK 4 — every `client.modify(dn, [...] as never)` below is
+> wrong and will throw at runtime.** Verified against `ldapts@9.0.0` and a live
+> Samba domain controller:
+>
+> ```
+> TypeError: change.write is not a function
+> ```
+>
+> `Client.modify(dn, changes)` is typed `Change | Change[]`, and
+> `ModifyRequest.writeMessage` calls `change.write(writer)` on each element.
+> `Change.write` then calls `this.modification.write(writer)`, so the
+> modification must be a real `Attribute` as well. An object literal of the
+> right *shape* is not enough, and the `as never` cast is precisely what stops
+> the compiler from saying so — the same class of suppressed diagnostic as the
+> three-argument `modifyDN` trap the spike documents two paragraphs later.
+>
+> Spell every change like this instead (Task 4 uses a one-line `replace()`
+> helper so there is a single place to be right):
+>
+> ```ts
+> import { Attribute, Change } from 'ldapts';
+>
+> await client.modify(dn, new Change({
+>   operation: 'replace',
+>   modification: new Attribute({ type: 'userAccountControl', values: ['512'] }),
+> }));
+> ```
+>
+> `Attribute.write` branches on `Buffer.isBuffer(value)`, so a UTF-16LE
+> `unicodePwd` buffer passes through unchanged.
+>
+> Two further corrections from Task 4: import `samba-connection.js` by relative
+> path from inside this package (unchanged), and the diagnostics-only plain-LDAP
+> port is **1390**, not 1389 — `openldap` owns 1389 in the same compose file.
 
 The only module in the system that writes to Active Directory.
 
@@ -18351,7 +18419,11 @@ import {
   connectAsSambaAdmin,
   purgeSubtree,
   sambaConnection,
-} from '@syntra/connectors/src/ad/samba-connection.js';
+// CORRECTED: not `@syntra/connectors/src/ad/samba-connection.js`. That
+// package declares an `exports` map, which denies every unlisted subpath --
+// the deep path fails with TS2307. The fixture is re-exported from the
+// `testing` entry point, alongside `FakeTarget`.
+} from '@syntra/connectors/testing';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createTarget, upsertAccountProfile, upsertBusinessRule } from './target-service.js';
 import { refreshEntitlements } from './entitlement-service.js';

@@ -17,7 +17,9 @@
     "seed": "pnpm --filter @syntra/db seed",
     "dev": "pnpm --parallel --filter @syntra/api --filter @syntra/web dev",
     "e2e": "playwright test",
-    "db:reset": "pnpm --filter @syntra/db reset"
+    "db:reset": "pnpm --filter @syntra/db reset",
+    "samba:up": "docker compose -f infra/docker-compose.yml up -d samba",
+    "samba:wait": "node --input-type=module -e \"import {Client} from 'ldapts';const url=process.env.SAMBA_LDAPS_URL??'ldaps://localhost:1637';const dn=process.env.SAMBA_BIND_DN??'CN=Administrator,CN=Users,DC=syntra,DC=test';const pw=process.env.SAMBA_BIND_PASSWORD??'Syntra!Passw0rd';const deadline=Date.now()+120000;for(;;){const c=new Client({url,tlsOptions:{rejectUnauthorized:false},connectTimeout:5000});try{await c.bind(dn,pw);await c.unbind();console.log('samba bindable');process.exit(0)}catch(e){await c.unbind().catch(()=>{});if(Date.now()>deadline){console.error('samba never became bindable:',e.message);process.exit(1)}await new Promise(r=>setTimeout(r,2000))}}\""
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
