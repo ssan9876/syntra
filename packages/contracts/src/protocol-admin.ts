@@ -30,7 +30,17 @@ export const samlConfigRequest = z
     // every login later at a point nobody connects back to this form.
     acsUrls: z.array(endpoint).min(1).max(16),
     defaultAcsUrl: endpoint.nullable().default(null),
-    acsBinding: binding.default('HTTP-POST'),
+    /**
+     * Settable, and only to HTTP-POST.
+     *
+     * SAML 2.0 Profiles section 4.1.2 forbids HTTP-Redirect for the Web SSO
+     * `<Response>` outright: the assertion does not fit in a URL that user
+     * agents will carry. So there is no second value for this to hold, and a
+     * field that accepted one and was answered with a POST anyway would be the
+     * "stored setting that does nothing" shape this project has now hit three
+     * times. `sloBinding` below is a real choice and is honoured; this is not.
+     */
+    acsBinding: z.literal('HTTP-POST').default('HTTP-POST'),
     nameIdFormat: z
       .string()
       .max(256)
@@ -54,6 +64,10 @@ export const samlConfigRequest = z
     encryptAssertions: z.boolean().default(false),
     encryptionCertificate: pemCertificate.nullable().default(null),
     sloUrl: endpoint.nullable().default(null),
+    /**
+     * How a LogoutResponse is delivered. Both bindings are honoured: a logout
+     * message is small enough for a URL, unlike an assertion.
+     */
     sloBinding: binding.default('HTTP-POST'),
     allowIdpInitiated: z.boolean().default(false),
     assertionLifetimeMs: z.number().int().min(60_000).max(3_600_000).default(300_000),

@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { deflateRawSync } from 'node:zlib';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { randomUUID, webcrypto } from 'node:crypto';
 import * as x509 from '@peculiar/x509';
 import { prisma, withTenant } from '@syntra/db';
@@ -167,6 +167,73 @@ describe('SAML single logout', () => {
       headers: { host: TEST_HOST, cookie: `syntra_session=${cookie}` },
     });
     expect(after.statusCode).toBe(401);
+  });
+
+  it('answers on the binding the service provider registered', async () => {
+    const sso = await get(redirectUrl(authnRequest()));
+    expect(sso.statusCode).toBe(200);
+    const sessionIndex = await withTenant(ctx.tenantId, async (tx) => {
+      const row = await tx.samlSsoSession.findFirstOrThrow();
+      return row.sessionIndex;
+    });
+
+    const withBinding = (sloBinding: 'HTTP-POST' | 'HTTP-Redirect') =>
+      withTenant(ctx.tenantId, (tx) =>
+        upsertSamlConfig(tx, applicationId, {
+          spEntityId: SP, acsUrls: [ACS], defaultAcsUrl: ACS, acsBinding: 'HTTP-POST',
+          nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+          nameIdClaim: null, spCertificates: [], wantAuthnRequestsSigned: false,
+          encryptAssertions: false, encryptionCertificate: null,
+          sloUrl: 'https://sp.example.test/slo', sloBinding,
+          allowIdpInitiated: false, assertionLifetimeMs: 300_000,
+        }),
+      );
+
+    const logout = (index: string) =>
+      get(
+        `/saml/slo?SAMLRequest=${encodeURIComponent(
+          deflateRawSync(
+            Buffer.from(
+              `<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_lr1" Version="2.0" IssueInstant="${new Date().toISOString()}"><saml:Issuer>${SP}</saml:Issuer><saml:NameID>j@acme.test</saml:NameID><samlp:SessionIndex>${index}</samlp:SessionIndex></samlp:LogoutRequest>`,
+            ),
+          ).toString('base64'),
+        )}`,
+      );
+
+    // `sloBinding` was stored, validated, returned by the API and read by
+    // nothing: every service provider got an auto-posting form whatever it
+    // registered.
+    await withBinding('HTTP-Redirect');
+    const redirected = await logout(sessionIndex);
+    expect(redirected.statusCode).toBe(302);
+    const location = new URL(redirected.headers.location as string);
+    expect(location.origin + location.pathname).toBe('https://sp.example.test/slo');
+    const message = inflateRawSync(
+      Buffer.from(location.searchParams.get('SAMLResponse')!, 'base64'),
+    ).toString('utf8');
+    expect(message).toContain('LogoutResponse');
+    expect(message).toContain('urn:oasis:names:tc:SAML:2.0:status:Success');
+
+    // The positive control: HTTP-POST still gets the form, so this cannot pass
+    // by having turned every logout into a redirect. A fresh sign-in first --
+    // the logout above ended the Syntra session, which is the point of it.
+    const again = await ctx.app.inject({
+      method: 'POST', url: '/api/auth/login',
+      headers: { host: TEST_HOST },
+      payload: { login: 'jdoe', password: PASSWORD },
+    });
+    cookie = again.cookies.find((c) => c.name === 'syntra_session')!.value;
+
+    const second = await get(redirectUrl(authnRequest()));
+    expect(second.statusCode).toBe(200);
+    const nextIndex = await withTenant(ctx.tenantId, async (tx) => {
+      const rows = await tx.samlSsoSession.findMany({ where: { endedAt: null } });
+      return rows[0]!.sessionIndex;
+    });
+    await withBinding('HTTP-POST');
+    const posted = await logout(nextIndex);
+    expect(posted.statusCode).toBe(200);
+    expect(posted.body).toContain('name="SAMLResponse"');
   });
 
   it('does not end a session when the session index does not match', async () => {

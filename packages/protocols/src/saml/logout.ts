@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { deflateRawSync } from 'node:zlib';
 import { xmlAttr, xmlText } from '../xml/escape.js';
 import { parseXml, selectElements } from '../xml/parse.js';
 
@@ -106,4 +107,37 @@ export function logoutPostForm(input: {
     `<noscript><button type="submit">Continue</button></noscript>` +
     `</form></body></html>`
   );
+}
+
+/**
+ * The HTTP-Redirect form of a logout message: a URL to send the browser to.
+ *
+ * The message is DEFLATE-compressed with no zlib header, base64-encoded and
+ * carried as a query parameter, which is the encoding SAML 2.0 Bindings
+ * section 3.4.4.1 specifies and the mirror image of `decodeRedirectMessage`.
+ *
+ * Unsigned, like the POST-binding form beside it. A LogoutResponse says only
+ * that a session Syntra had already ended is ended; a service provider that
+ * requires a signature on one is a service provider this does not yet serve,
+ * and the honest place to say so is the README rather than a signature that
+ * looks right and covers the wrong bytes.
+ *
+ * Existing query parameters on the destination are preserved: a service
+ * provider is entitled to register an endpoint that carries one, and
+ * `URL.searchParams.set` keeps them where naive string concatenation would
+ * produce two `?`.
+ */
+export function logoutRedirectUrl(input: {
+  destination: string;
+  field: 'SAMLRequest' | 'SAMLResponse';
+  xml: string;
+  relayState: string | null;
+}): string {
+  const url = new URL(input.destination);
+  url.searchParams.set(
+    input.field,
+    deflateRawSync(Buffer.from(input.xml, 'utf8')).toString('base64'),
+  );
+  if (input.relayState !== null) url.searchParams.set('RelayState', input.relayState);
+  return url.href;
 }

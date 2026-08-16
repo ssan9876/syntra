@@ -36,6 +36,7 @@ import {
   decodeRedirectMessage,
   encryptAssertion,
   logoutPostForm,
+  logoutRedirectUrl,
   parseAuthnRequest,
   parseLogoutRequest,
   postBindingForm,
@@ -956,6 +957,23 @@ export async function registerSamlIdpRoutes(
       success: ended !== null,
       now: new Date(),
     });
+
+    // The binding the service provider registered, which until now was stored
+    // and never read: every SP got HTTP-POST whatever it asked for. The
+    // response is small enough for a URL, so unlike the sign-on Response --
+    // where SAML 2.0 Profiles section 4.1.2 forbids HTTP-Redirect outright
+    // because an assertion does not fit in one -- both bindings are real here.
+    if (config.sloBinding === 'HTTP-Redirect') {
+      return reply.redirect(
+        logoutRedirectUrl({
+          destination,
+          field: 'SAMLResponse',
+          xml: response,
+          relayState,
+        }),
+        302,
+      );
+    }
 
     return reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').send(
       logoutPostForm({

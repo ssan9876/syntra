@@ -493,6 +493,11 @@ Syntra does not sign the person out of the upstream identity provider that
 authenticated them, so the next sign-in may complete without a prompt. That is
 the upstream's session, not Syntra's, and Syntra never had a handle on it.
 
+**A LogoutResponse is not signed on either binding.** It says only that a
+session Syntra had already ended is ended, and the request that asked for it
+was verified. A service provider that requires a signed LogoutResponse is not
+served today; `logoutRedirectUrl` and `logoutPostForm` are where that would go.
+
 **SAML signing keys are not rotated automatically.** OIDC signing keys are:
 every tenant gets a monthly rotation on the job scheduler, with the outgoing
 key published beside the incoming one for a week, so a relying party that
