@@ -383,7 +383,7 @@ export async function registerFederationRoutes(
         returnTo,
         applicationId: query.applicationId ?? null,
         browserBinding: bindBrowser(request, reply),
-        nonce: requestId,
+        expectedResponseTo: requestId,
       });
       const sp = upstreamSaml(samlOptionsFor(upstream, identity, requestId));
       // Deflating and building the request, outside every transaction.
@@ -400,7 +400,7 @@ export async function registerFederationRoutes(
       returnTo,
       applicationId: query.applicationId ?? null,
       browserBinding: bindBrowser(request, reply),
-      nonce,
+      expectedResponseTo: nonce,
       verifier,
       provider: keyProvider(),
     });
@@ -450,7 +450,7 @@ export async function registerFederationRoutes(
     }
 
     const upstream = await findUpstream(request.tenantId, ticket.upstreamIdpId);
-    if (!upstream || !ticket.verifier || !ticket.nonce) {
+    if (!upstream || !ticket.verifier || !ticket.expectedResponseTo) {
       throw new ProblemError(
         409,
         'federation-misconfigured',
@@ -474,7 +474,11 @@ export async function registerFederationRoutes(
       ({ claims, accessToken } = await upstreamExchange(
         config,
         new URL(request.raw.url ?? '', identity.base),
-        { verifier: ticket.verifier, state: ticket.state, nonce: ticket.nonce },
+        {
+          verifier: ticket.verifier,
+          state: ticket.state,
+          nonce: ticket.expectedResponseTo,
+        },
       ));
     } catch (error) {
       request.log.warn(
@@ -616,10 +620,15 @@ export async function registerFederationRoutes(
     }
 
     const upstream = await findUpstream(request.tenantId, ticket.upstreamIdpId);
-    if (!upstream || upstream.protocol !== 'saml' || !upstream.ssoUrl || !ticket.nonce) {
-      // `ticket.nonce` carries the AuthnRequest ID for a SAML login. A ticket
-      // without one was opened by the OIDC branch, and there is nothing to
-      // bind the assertion to.
+    if (
+      !upstream ||
+      upstream.protocol !== 'saml' ||
+      !upstream.ssoUrl ||
+      !ticket.expectedResponseTo
+    ) {
+      // `expectedResponseTo` carries the AuthnRequest ID for a SAML login. A
+      // ticket without one was opened by the OIDC branch, and there is nothing
+      // to bind the assertion to.
       throw new ProblemError(
         409,
         'federation-misconfigured',
@@ -636,7 +645,7 @@ export async function registerFederationRoutes(
     let assertion;
     try {
       assertion = await readUpstreamResponse(sp, samlResponse, {
-        inResponseTo: ticket.nonce,
+        inResponseTo: ticket.expectedResponseTo,
       });
     } catch (cause) {
       request.log.warn(

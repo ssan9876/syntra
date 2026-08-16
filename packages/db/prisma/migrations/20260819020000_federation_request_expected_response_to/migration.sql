@@ -1,0 +1,14 @@
+-- Renames `FederationRequest.nonce` to what it holds.
+--
+-- The column carries the value Syntra minted that the upstream's answer has to
+-- echo back: for OIDC the id_token's `nonce` claim, for SAML the AuthnRequest
+-- ID that the assertion's SIGNED `InResponseTo` is checked against. That check
+-- is the one that closed the session-theft vulnerability in 6eae978 -- and the
+-- schema comment said this column held the SAML AuthnRequest ID in `state`,
+-- which is where the ID emphatically is not. A comment can be true today and
+-- stale in a month; a name travels with every read.
+--
+-- A rename, not a drop and add: the rows are ten-minute in-flight logins, but
+-- there is no reason to lose the ones in flight, and a rename is the operation
+-- that cannot lose them.
+ALTER TABLE "FederationRequest" RENAME COLUMN "nonce" TO "expectedResponseTo";

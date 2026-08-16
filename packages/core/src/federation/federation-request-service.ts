@@ -7,7 +7,12 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
 export interface FederationTicket {
   id: string;
   state: string;
-  nonce: string | null;
+  /**
+   * The value the upstream's answer must echo back: the id_token's `nonce`
+   * claim for OIDC, the AuthnRequest ID the assertion's signed `InResponseTo`
+   * is checked against for SAML. Two protocol meanings, one purpose.
+   */
+  expectedResponseTo: string | null;
   /** Vault secret name holding the PKCE verifier, or null. Never the value. */
   verifierName: string | null;
   upstreamIdpId: string;
@@ -46,7 +51,7 @@ export async function openFederationRequest(
     returnTo: string;
     applicationId: string | null;
     browserBinding: string;
-    nonce?: string | undefined;
+    expectedResponseTo?: string | undefined;
     verifier?: string | undefined;
     provider?: MasterKeyProvider | undefined;
     ttlMs?: number | undefined;
@@ -68,7 +73,7 @@ export async function openFederationRequest(
         tenantId,
         upstreamIdpId: input.upstreamIdpId,
         state,
-        nonce: input.nonce ?? null,
+        expectedResponseTo: input.expectedResponseTo ?? null,
         browserBinding: input.browserBinding,
         verifierName,
         returnTo: input.returnTo,
@@ -79,7 +84,7 @@ export async function openFederationRequest(
     return {
       id: row.id,
       state: row.state,
-      nonce: row.nonce,
+      expectedResponseTo: row.expectedResponseTo,
       verifierName: row.verifierName,
       upstreamIdpId: row.upstreamIdpId,
       returnTo: row.returnTo,
@@ -142,7 +147,7 @@ export async function takeFederationRequest(
     return {
       id: row.id,
       state: row.state,
-      nonce: row.nonce,
+      expectedResponseTo: row.expectedResponseTo,
       verifierName: row.verifierName,
       upstreamIdpId: row.upstreamIdpId,
       returnTo: row.returnTo,

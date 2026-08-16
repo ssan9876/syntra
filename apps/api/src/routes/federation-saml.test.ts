@@ -270,7 +270,7 @@ describe('upstream SAML federation', () => {
     );
     expect(row.state).toBe(relayState);
     // Without this the response can be bound to nothing.
-    expect(row.nonce).toBe(requestId);
+    expect(row.expectedResponseTo).toBe(requestId);
 
     const xml = inflateRawSync(
       Buffer.from(redirect!.searchParams.get('SAMLRequest')!, 'base64'),

@@ -796,13 +796,21 @@ model UpstreamLink {
 /// One in-flight upstream login. Single-use: consuming it is what stops a
 /// captured callback being replayed.
 model FederationRequest {
-  id             String    @id @default(uuid()) @db.Uuid
-  tenantId       String    @db.Uuid
-  upstreamIdpId  String    @db.Uuid
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @db.Uuid
+  upstreamIdpId      String    @db.Uuid
   /// What the browser carries and this row is looked up by: the OIDC `state`,
   /// or the SAML `RelayState`.
-  state          String
-  nonce          String?
+  state              String
+  /// The value Syntra minted that the upstream's answer must echo back, and
+  /// which is checked against the SIGNED part of that answer.
+  ///
+  /// For OIDC it is the `nonce` claim the id_token must carry. For SAML it is
+  /// the AuthnRequest ID the assertion's `InResponseTo` must equal -- the
+  /// binding that closed the session-theft hole in 6eae978. It was called
+  /// `nonce` and documented as holding the AuthnRequest ID in `state`, which
+  /// is how a guard gets deleted by somebody tidying up.
+  expectedResponseTo String?
   /// SHA-256 of the nonce in the browser's `syntra_federation_bind` cookie.
   ///
   /// Not a convenience: without it `state` identifies an in-flight login and
@@ -812,15 +820,15 @@ model FederationRequest {
   /// the assertion or the id_token passes, because it genuinely is the
   /// attacker's and genuinely answers the attacker's own request. See
   /// browser-binding.ts.
-  browserBinding String
+  browserBinding     String
   /// Vault secret name holding the PKCE code_verifier, for OIDC.
-  verifierName   String?
+  verifierName       String?
   /// Where the browser goes after authorize() allows. Always same-origin.
-  returnTo       String
-  applicationId  String?   @db.Uuid
-  createdAt      DateTime  @default(now())
-  expiresAt      DateTime
-  consumedAt     DateTime?
+  returnTo           String
+  applicationId      String?   @db.Uuid
+  createdAt          DateTime  @default(now())
+  expiresAt          DateTime
+  consumedAt         DateTime?
 
   @@index([tenantId])
   @@index([tenantId, state])
