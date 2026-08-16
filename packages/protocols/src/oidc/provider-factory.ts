@@ -99,6 +99,17 @@ export async function providerFor(
       return metadata;
     });
 
+    /**
+     * A client's lifetimes, falling back to the tenant-wide defaults.
+     *
+     * `client` can be undefined in oidc-provider's own type for some token
+     * kinds, and a missing entry means a client registered before this existed
+     * or one oidc-provider synthesised, so the fallback is not decorative.
+     */
+    const clientTtl = (client: { clientId?: string } | undefined): ClientTtl =>
+      (client?.clientId !== undefined ? ttls.get(client.clientId) : undefined) ??
+      DEFAULT_TTL;
+
     // oidc-provider only recognises a scope a client requests if it appears
     // in `configuration.scopes` — `openid`, `email` and `profile` arrive there
     // for free because `collectScopes` derives them from the `claims` object
@@ -112,17 +123,6 @@ export async function providerFor(
     // fixed vocabulary (see `oidc-client-service.ts`), so every scope any
     // client in this tenant is actually registered for is unioned in here,
     // alongside the standard baseline oidc-provider ships as its default.
-    /**
-     * A client's lifetimes, falling back to the tenant-wide defaults.
-     *
-     * `client` can be undefined in oidc-provider's own type for some token
-     * kinds, and a missing entry means a client registered before this existed
-     * or one oidc-provider synthesised, so the fallback is not decorative.
-     */
-    const clientTtl = (client: { clientId?: string } | undefined): ClientTtl =>
-      (client?.clientId !== undefined ? ttls.get(client.clientId) : undefined) ??
-      DEFAULT_TTL;
-
     const scopes = new Set(['openid', 'offline_access']);
     for (const client of clients as { scope?: string }[]) {
       for (const scope of (client.scope ?? '').split(' ').filter((s) => s !== '')) {
