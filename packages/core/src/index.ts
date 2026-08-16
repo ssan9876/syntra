@@ -62,3 +62,7 @@ export * from './sync/jobs.js';
 export * from './access/application-service.js';
 export * from './access/assignment-service.js';
 export * from './access/resolve.js';
+export * from './access/claims/types.js';
+export * from './access/claims/resolve.js';
+export * from './access/claims/collect.js';
+export * from './access/claim-mapping-service.js';
