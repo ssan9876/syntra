@@ -2,9 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyBaseLogger } from 'fastify';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { SYNC_JOB, syncScheduleKey, type Config } from '@syntra/core';
+import {
+  KEY_ROTATION_CRON,
+  KEY_ROTATION_JOB,
+  SYNC_JOB,
+  keyRotationScheduleKey,
+  syncScheduleKey,
+  type Config,
+} from '@syntra/core';
 import { createFakeScheduler } from './test-support.js';
-import { scheduleAllSyncSources, startSyncScheduler } from './scheduler.js';
+import { scheduleBackgroundWork, startSyncScheduler } from './scheduler.js';
 
 function createFakeLogger(): FastifyBaseLogger {
   const noop = () => {};
@@ -56,7 +63,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('scheduleAllSyncSources', () => {
+/**
+ * Only the sync schedules.
+ *
+ * Every tenant also gets a key-rotation schedule now, and the assertions below
+ * are about directory sources. Filtering by queue keeps them saying what they
+ * were written to say instead of counting two unrelated things together.
+ */
+const syncSchedules = (scheduler: ReturnType<typeof createFakeScheduler>) =>
+  scheduler.scheduled.filter((c) => c.name === SYNC_JOB);
+
+describe('scheduleBackgroundWork', () => {
   it('schedules an enabled, cron-bearing source in each of two tenants, each with its own tenantId', async () => {
     const tenantA = await createTenant('A', 'tenant-a');
     const tenantB = await createTenant('B', 'tenant-b');
@@ -64,12 +81,12 @@ describe('scheduleAllSyncSources', () => {
     const sourceB = await createDirectorySource(tenantB.id, { schedule: '0 2 * * *' });
 
     const scheduler = createFakeScheduler();
-    await scheduleAllSyncSources(scheduler, createFakeLogger());
+    await scheduleBackgroundWork(scheduler, createFakeLogger());
 
-    expect(scheduler.scheduled).toHaveLength(2);
+    expect(syncSchedules(scheduler)).toHaveLength(2);
 
     const bySource = new Map(
-      scheduler.scheduled.map((c) => [(c.data as { sourceId: string }).sourceId, c]),
+      syncSchedules(scheduler).map((c) => [(c.data as { sourceId: string }).sourceId, c]),
     );
 
     const callA = bySource.get(sourceA.id);
@@ -89,7 +106,7 @@ describe('scheduleAllSyncSources', () => {
     expect(callB!.data).toEqual({ tenantId: tenantB.id, sourceId: sourceB.id });
     expect(callB!.key).toBe(syncScheduleKey(tenantB.id, sourceB.id));
 
-    expect(new Set(scheduler.scheduled.map((c) => c.key)).size).toBe(2);
+    expect(new Set(syncSchedules(scheduler).map((c) => c.key)).size).toBe(2);
   });
 
   it('does not schedule a disabled source or a source with no cron expression', async () => {
@@ -99,10 +116,12 @@ describe('scheduleAllSyncSources', () => {
     const eligible = await createDirectorySource(tenant.id);
 
     const scheduler = createFakeScheduler();
-    await scheduleAllSyncSources(scheduler, createFakeLogger());
+    await scheduleBackgroundWork(scheduler, createFakeLogger());
 
-    expect(scheduler.scheduled).toHaveLength(1);
-    expect((scheduler.scheduled[0]!.data as { sourceId: string }).sourceId).toBe(eligible.id);
+    expect(syncSchedules(scheduler)).toHaveLength(1);
+    expect((syncSchedules(scheduler)[0]!.data as { sourceId: string }).sourceId).toBe(
+      eligible.id,
+    );
   });
 
   it('unschedules a source that is no longer eligible, rather than merely skipping it', async () => {
@@ -115,9 +134,9 @@ describe('scheduleAllSyncSources', () => {
     const manual = await createDirectorySource(tenant.id, { schedule: null });
 
     const scheduler = createFakeScheduler();
-    await scheduleAllSyncSources(scheduler, createFakeLogger());
+    await scheduleBackgroundWork(scheduler, createFakeLogger());
 
-    expect(scheduler.scheduled).toEqual([]);
+    expect(syncSchedules(scheduler)).toEqual([]);
     expect(scheduler.unscheduled.map((c) => c.key).sort()).toEqual(
       [
         syncScheduleKey(tenant.id, disabled.id),
@@ -133,10 +152,39 @@ describe('scheduleAllSyncSources', () => {
 
     const scheduler = createFakeScheduler(new Set([bad.id]));
 
-    await expect(scheduleAllSyncSources(scheduler, createFakeLogger())).resolves.toBeUndefined();
+    await expect(scheduleBackgroundWork(scheduler, createFakeLogger())).resolves.toBeUndefined();
 
-    expect(scheduler.scheduled).toHaveLength(1);
-    expect((scheduler.scheduled[0]!.data as { sourceId: string }).sourceId).toBe(good.id);
+    expect(syncSchedules(scheduler)).toHaveLength(1);
+    expect((syncSchedules(scheduler)[0]!.data as { sourceId: string }).sourceId).toBe(good.id);
+  });
+
+  it('schedules one signing key rotation per tenant, keyed so neither replaces the other', async () => {
+    // Spec section 12 asks for rotation on a schedule. The mechanism has been
+    // built and correct since Task 3 and had no caller at all -- no job, no
+    // route, no CLI -- so a key was published, used, and never rolled.
+    const tenantA = await createTenant('A', 'tenant-a');
+    const tenantB = await createTenant('B', 'tenant-b');
+
+    const scheduler = createFakeScheduler();
+    await scheduleBackgroundWork(scheduler, createFakeLogger());
+
+    const rotations = scheduler.scheduled.filter((c) => c.name === KEY_ROTATION_JOB);
+    expect(rotations).toHaveLength(2);
+    for (const tenant of [tenantA, tenantB]) {
+      const call = rotations.find(
+        (c) => (c.data as { tenantId: string }).tenantId === tenant.id,
+      );
+      expect(call).toBeDefined();
+      expect(call!.cron).toBe(KEY_ROTATION_CRON);
+      // OIDC only: a SAML service provider typically pins the certificate, so
+      // rotating one on a timer would break working integrations a week later.
+      expect(call!.data).toEqual({ tenantId: tenant.id, kind: 'oidc' });
+      expect(call!.key).toBe(keyRotationScheduleKey(tenant.id, 'oidc'));
+    }
+    // The lesson every directory source once taught by sharing `key: ''`:
+    // pg-boss keys on (queue, key), so two schedules with the same key are one
+    // row and only the last tenant's ever runs.
+    expect(new Set(rotations.map((c) => c.key)).size).toBe(2);
   });
 
   it('resolves rather than rejecting, scheduling nothing, when listing tenants fails', async () => {
@@ -147,7 +195,7 @@ describe('scheduleAllSyncSources', () => {
 
     const scheduler = createFakeScheduler();
 
-    await expect(scheduleAllSyncSources(scheduler, createFakeLogger())).resolves.toBeUndefined();
+    await expect(scheduleBackgroundWork(scheduler, createFakeLogger())).resolves.toBeUndefined();
 
     expect(scheduler.scheduled).toHaveLength(0);
   });
@@ -175,7 +223,7 @@ describe('startSyncScheduler', () => {
 
   it('starts the scheduler and hands it back when it comes up', async () => {
     // Deliberately asserts on start() and the return value rather than on
-    // what got scheduled: scheduleAllSyncSources already has its own
+    // what got scheduled: scheduleBackgroundWork already has its own
     // coverage above, and reaching for the database here would make this
     // test order-dependent on the tenant-listing mock in that block.
     const scheduler = createFakeScheduler();

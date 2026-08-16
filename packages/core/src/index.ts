@@ -10,6 +10,8 @@ export * from './audit/audit-service.js';
 export * from './vault/master-key.js';
 export * from './vault/vault-service.js';
 export * from './keys/signing-key-service.js';
+export * from './keys/key-change.js';
+export * from './keys/jobs.js';
 export * from './identity/person-service.js';
 export * from './identity/contract-service.js';
 export * from './identity/csv-import.js';

@@ -491,6 +491,19 @@ Syntra does not sign the person out of the upstream identity provider that
 authenticated them, so the next sign-in may complete without a prompt. That is
 the upstream's session, not Syntra's, and Syntra never had a handle on it.
 
+**SAML signing keys are not rotated automatically.** OIDC signing keys are:
+every tenant gets a monthly rotation on the job scheduler, with the outgoing
+key published beside the incoming one for a week, so a relying party that
+selects by `kid` from the JWKS never sees a break. SAML is deliberately left
+out. A service provider typically has the identity provider's certificate
+pasted into its own configuration rather than re-reading metadata — which is
+why a Syntra SAML key is minted with a three-year lifetime — and rotating one
+on a timer would silently break every integration that pinned it, one week
+after each rotation. Rolling a SAML key is an operator's decision, and there is
+no console button for it yet: `rotateKey(tenantId, provider, 'saml')` is the
+call, and the tenant's metadata must be re-published to the service providers
+afterwards.
+
 **Token revocation and introspection are advertised and do not work.** The
 discovery document lists `<issuer>/token/revocation` and
 `<issuer>/token/introspection` because oidc-provider publishes them. Client

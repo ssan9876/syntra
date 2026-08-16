@@ -4,14 +4,17 @@ import {
   applySourceSchedule,
   createScheduler,
   localMasterKeyProvider,
+  registerKeyRotationJob,
   registerSyncJobs,
+  scheduleKeyRotation,
   type Config,
   type Scheduler,
 } from '@syntra/core';
 
 /**
- * Reconciles the scheduler against every directory source in every tenant:
- * enabled, cron-bearing sources are scheduled, and the rest are unscheduled.
+ * Reconciles the scheduler against every tenant: one signing-key rotation
+ * apiece, and every directory source, with enabled cron-bearing sources
+ * scheduled and the rest unscheduled.
  *
  * This runs once at process startup, not inside a request, so there is no
  * ambient tenant to scope the lookup to. It reads `Tenant` directly -- the
@@ -31,7 +34,7 @@ import {
  * Takes the `Scheduler` rather than constructing one, so it can be
  * exercised directly against a fake in tests without standing up pg-boss.
  */
-export async function scheduleAllSyncSources(
+export async function scheduleBackgroundWork(
   scheduler: Scheduler,
   logger: FastifyBaseLogger,
 ): Promise<void> {
@@ -44,6 +47,21 @@ export async function scheduleAllSyncSources(
       'failed to list tenants for scheduling; no directory sources were scheduled',
     );
     return;
+  }
+
+  for (const tenant of tenants) {
+    try {
+      // Spec section 12: signing keys rotated on a schedule, with overlap.
+      // Idempotent -- pg-boss keys the schedule row on (queue, key) and this
+      // one names the tenant and the kind -- so re-running it at every boot
+      // reconciles rather than accumulates.
+      await scheduleKeyRotation(scheduler, tenant.id);
+    } catch (cause) {
+      logger.error(
+        { err: cause, tenantId: tenant.id },
+        'failed to schedule signing key rotation',
+      );
+    }
   }
 
   for (const tenant of tenants) {
@@ -81,7 +99,7 @@ export async function scheduleAllSyncSources(
 /**
  * Starts the background job scheduler and schedules every enabled,
  * cron-bearing directory source across every tenant. See
- * `scheduleAllSyncSources` for the scheduling behaviour and its failure
+ * `scheduleBackgroundWork` for the scheduling behaviour and its failure
  * handling.
  *
  * This never rejects, which is what `server.ts` relies on when it says a
@@ -92,7 +110,7 @@ export async function scheduleAllSyncSources(
  * sync unscheduled is strictly better than one that does not boot.
  *
  * Takes its scheduler factory as a parameter for the same reason
- * `scheduleAllSyncSources` takes a `Scheduler`: so the failure path can be
+ * `scheduleBackgroundWork` takes a `Scheduler`: so the failure path can be
  * exercised without standing up pg-boss.
  */
 export async function startSyncScheduler(
@@ -105,6 +123,7 @@ export async function startSyncScheduler(
     scheduler = create(config.databaseUrl);
     const provider = localMasterKeyProvider(config.masterKey);
     registerSyncJobs(scheduler, provider);
+    registerKeyRotationJob(scheduler, provider);
     await scheduler.start();
   } catch (cause) {
     logger.error(
@@ -114,7 +133,7 @@ export async function startSyncScheduler(
     return null;
   }
 
-  await scheduleAllSyncSources(scheduler, logger);
+  await scheduleBackgroundWork(scheduler, logger);
 
   return scheduler;
 }

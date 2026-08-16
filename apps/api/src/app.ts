@@ -6,6 +6,7 @@ import {
   installTotpVerifier,
   installWebAuthnVerifier,
   localMasterKeyProvider,
+  onSigningKeysChanged,
   smtpTransport,
   type Config,
   type Scheduler,
@@ -37,6 +38,7 @@ import { registerOidcInteractionRoutes } from './routes/oidc-interaction.js';
 import { registerOidcTokenRoutes } from './routes/oidc-token.js';
 import { registerOidcLogoutRoutes } from './routes/oidc-logout.js';
 import { registerFederationRoutes } from './routes/federation.js';
+import { invalidateProvider } from '@syntra/protocols';
 
 export interface AppOptions {
   logger?: boolean;
@@ -61,6 +63,13 @@ export interface AppOptions {
    */
   transport?: Transport;
 }
+
+/**
+ * Named, and at module scope, so registering it twice registers it once: the
+ * listener registry is a `Set`, and a fresh arrow per `buildApp` would
+ * accumulate one entry per app the test suite builds.
+ */
+const invalidateProviderOnKeyChange = (tenantId: string) => invalidateProvider(tenantId);
 
 export async function buildApp(
   config: Config,
@@ -114,6 +123,14 @@ export async function buildApp(
   installTotpVerifier(localMasterKeyProvider(config.masterKey));
   installWebAuthnVerifier();
   installRecoveryCodeVerifier();
+
+  // The OIDC Provider resolves its JWKS once, at construction, and is cached
+  // per tenant. Rotating a signing key would leave it signing with the old
+  // private key -- harmless during the overlap, and a total outage the moment
+  // the old key is retired and unpublished, until somebody restarts the
+  // process. `@syntra/core` cannot call `invalidateProvider` itself (the
+  // package dependency runs the other way), so it announces and this listens.
+  onSigningKeysChanged(invalidateProviderOnKeyChange);
 
   // One transport instance, shared by both routers below: the "a factor was
   // added" mail is the same control whether the enrolment happened from a

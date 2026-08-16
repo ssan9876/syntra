@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import * as client from 'openid-client';
+import { createLocalJWKSet, jwtVerify } from 'jose';
 import { prisma, withTenant } from '@syntra/db';
 import {
   addRule,
@@ -284,6 +285,79 @@ describe('refresh tokens', () => {
     // findAccount returns null for an inactive user, and oidc-provider
     // refuses to mint an id_token for an account it cannot find.
     await expect(client.refreshTokenGrant(config, tokens.refresh_token!)).rejects.toThrow();
+  });
+});
+
+/**
+ * One whole authorization code flow, discovering afresh each time.
+ *
+ * Fresh discovery on purpose: a relying party re-reads the JWKS when it meets
+ * a `kid` it does not know, and this file's rotation test is about exactly
+ * which key the provider signed with.
+ */
+const signIntoCrm = async () => {
+  const config = await discover();
+  const { url, verifier, state } = await authUrlWithPkce(config);
+  const { url: landed } = await walk(url);
+  return client.authorizationCodeGrant(config, landed, {
+    pkceCodeVerifier: verifier,
+    expectedState: state,
+  });
+};
+
+/** The `kid` off a JWT header, without verifying anything. */
+const kidOf = (jwt: string): string =>
+  JSON.parse(Buffer.from(jwt.split('.')[0]!, 'base64url').toString('utf8')).kid;
+
+describe('signing key rotation', () => {
+  it('signs with the new key once the old one is retired', async () => {
+    // The Provider resolves `deps.jwks()` ONCE, at construction, and is cached
+    // per tenant. Nothing invalidated it on rotation, so after a roll it kept
+    // signing with the old private key -- invisible during the overlap, and a
+    // total outage the moment `retireExpiredKeys` unpublished that key, until
+    // the process restarted. The existing rotation test could not see it: it
+    // asserts against `GET /oidc/jwks`, which is Syntra's own route reading
+    // `publishedKeys` fresh on every request.
+    //
+    // `overlapMs: 0` collapses the rollover so the old key is retired in the
+    // same breath, which is the state that breaks.
+    const { localMasterKeyProvider, publishedKeys, retireExpiredKeys, rotateKey } =
+      await import('@syntra/core');
+    const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
+
+    const before = await signIntoCrm();
+    expect(before.id_token).toBeTruthy();
+
+    await rotateKey(ctx.tenantId, provider, 'oidc', { overlapMs: 0 });
+    expect(await retireExpiredKeys(ctx.tenantId, 'oidc')).toBe(1);
+
+    // Exactly one key is published, and it is not the one that signed above.
+    const published = await publishedKeys(ctx.tenantId, 'oidc');
+    expect(published).toHaveLength(1);
+    expect(published[0]!.kid).not.toBe(kidOf(before.id_token!));
+
+
+    jar = [];
+    const after = await signIntoCrm();
+    expect(after.id_token).toBeTruthy();
+
+    // THE ASSERTION. Not "the exchange succeeded": openid-client does not
+    // verify an id_token's signature by default, so a token signed with a key
+    // nobody publishes any more sails straight through it -- which is exactly
+    // how this would reach production unnoticed. Verified here against the
+    // document `/oidc/jwks` actually serves.
+    const jwks = await ctx.app.inject({
+      method: 'GET', url: '/oidc/jwks', headers: { host: TEST_HOST },
+    });
+    await expect(
+      jwtVerify(after.id_token!, createLocalJWKSet(jwks.json())),
+    ).resolves.toBeTruthy();
+
+    // And the old token no longer verifies, which is what the outage looked
+    // like from a relying party's side.
+    await expect(
+      jwtVerify(before.id_token!, createLocalJWKSet(jwks.json())),
+    ).rejects.toThrow();
   });
 });
 

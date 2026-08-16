@@ -9,6 +9,7 @@ import {
 import { calculateJwkThumbprint, exportJWK } from 'jose';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { getSecret, putSecret } from '../vault/vault-service.js';
+import { notifySigningKeysChanged } from './key-change.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 
 x509.cryptoProvider.set(webcrypto as unknown as webcrypto.Crypto);
@@ -314,6 +315,7 @@ export async function rotateKey(
 
   const incoming = await loadActiveKey(tenantId, provider, kind);
   if (!incoming) throw new Error('rotation left no active key');
+  notifySigningKeysChanged(tenantId, kind);
   return { incoming, outgoing };
 }
 
@@ -339,17 +341,25 @@ export async function readSigningKeyPem(
   });
 }
 
-/** Marks overlapped-out keys retired. Returns how many. */
+/**
+ * Marks overlapped-out keys retired. Returns how many.
+ *
+ * Announces a change when it retired anything: this is the moment a key stops
+ * being published, and a provider still holding it would be signing with
+ * material no relying party can verify.
+ */
 export async function retireExpiredKeys(
   tenantId: string,
   kind: KeyKind,
   now: Date = new Date(),
 ): Promise<number> {
-  return withTenant(tenantId, async (tx) => {
+  const retired = await withTenant(tenantId, async (tx) => {
     const result = await tx.signingKey.updateMany({
       where: { kind, status: 'outgoing', notAfter: { lte: now } },
       data: { status: 'retired', retiredAt: now },
     });
     return result.count;
   });
+  if (retired > 0) notifySigningKeysChanged(tenantId, kind);
+  return retired;
 }
