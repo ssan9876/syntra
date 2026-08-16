@@ -83,3 +83,5 @@ export * from './federation/upstream-service.js';
 export * from './federation/federation-request-service.js';
 export * from './federation/jit-service.js';
 export * from './provision/condition.js';
+export * from './provision/templates.js';
+export * from './provision/names.js';
