@@ -127,6 +127,18 @@ export async function providerFor(
         return grant;
       },
 
+      // The claims a tenant mapped for an application belong in the id_token,
+      // not only at /userinfo. oidc-provider's default (`conformIdTokenClaims:
+      // true`) strips the id_token to `sub` alone whenever an access token is
+      // issued alongside it — OIDC Core section 5.4 permits that, and it is the
+      // right default for an OP whose relying parties all call /userinfo. It is
+      // the wrong one here: Syntra's whole claim-mapping feature is per
+      // application, and the common relying party for an internal application
+      // reads the id_token and never calls /userinfo, which would leave every
+      // mapping silently unreleased. `/userinfo` stays enabled, so the claims
+      // are available both ways.
+      conformIdTokenClaims: false,
+
       claims: {
         openid: ['sub'],
         email: ['email', 'email_verified'],

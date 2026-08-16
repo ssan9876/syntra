@@ -1,4 +1,4 @@
-import type { IncomingMessage } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
 import { PassThrough } from 'node:stream';
 import { createPrivateKey } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -29,6 +29,24 @@ export interface OidcRouteOptions {
 export const OIDC_MOUNT = '/oidc';
 
 /**
+ * The `client_secret` every client's metadata carries into `oidc-provider`.
+ *
+ * Syntra holds only a SHA-256 hash of the real secret, so it cannot hand
+ * oidc-provider the value the library would need for its own client
+ * authentication (`lib/shared/client_auth.js` compares the presented secret
+ * against `client.clientSecret` with `constantEquals`). The token endpoint
+ * therefore authenticates the client itself, against the stored hash and in
+ * constant time, and then rewrites the credential it forwards to carry this
+ * placeholder — so oidc-provider's own check passes on a request Syntra has
+ * already authenticated, and fails on one it has not.
+ *
+ * Exported so `oidc-token.ts` substitutes exactly what `loadClients` below
+ * registered. Two literals that had to agree would eventually stop agreeing,
+ * and the symptom would be `invalid_client` on every token exchange.
+ */
+export const PROVIDER_CLIENT_SECRET = 'syntra-verified';
+
+/**
  * The request object `oidc-provider` is handed.
  *
  * Two adaptations, both required, both established by spike:
@@ -48,10 +66,19 @@ export const OIDC_MOUNT = '/oidc';
  * stream cannot be read again, so the bytes are replayed through a
  * `PassThrough` carrying the properties Koa reads. Everything else hands
  * oidc-provider the untouched raw request.
+ *
+ * `headers` overrides the ones the request arrived with, and is honoured only
+ * on the replay path. The token endpoint uses it to present
+ * `PROVIDER_CLIENT_SECRET` in place of the secret the client sent, since
+ * oidc-provider authenticates the client a second time against the metadata it
+ * was given. Whoever changes the replayed bytes must change `content-length`
+ * with them: oidc-provider reads the body itself and rejects a request whose
+ * size does not match the header (`lib/shared/selective_body.js`).
  */
 export function requestForProvider(
   raw: IncomingMessage,
   body: Buffer | null,
+  headers: IncomingHttpHeaders = raw.headers,
 ): IncomingMessage {
   const originalUrl = raw.url ?? '/';
   const url = originalUrl.startsWith(OIDC_MOUNT)
@@ -64,7 +91,7 @@ export function requestForProvider(
   replay.end(body);
   return Object.assign(replay, {
     method: raw.method,
-    headers: raw.headers,
+    headers,
     httpVersion: raw.httpVersion,
     httpVersionMajor: raw.httpVersionMajor,
     httpVersionMinor: raw.httpVersionMinor,
@@ -135,12 +162,13 @@ export async function oidcProviderFor(
       const clients = await listOidcClients(tenantId);
       return clients.map((c) => ({
         client_id: c.clientId,
-        // A placeholder, never compared. `registerOidcTokenRoutes` performs
-        // client authentication against the stored SHA-256 hash in constant
-        // time before oidc-provider sees the request; oidc-provider requires
-        // the metadata field to exist for a confidential client, and putting
-        // the real secret here would mean holding it recoverably.
-        client_secret: 'syntra-verified',
+        // The placeholder. `registerOidcTokenRoutes` performs client
+        // authentication against the stored SHA-256 hash in constant time
+        // before oidc-provider sees the request, and then substitutes this
+        // value into the credential it forwards — oidc-provider compares the
+        // metadata field itself, and putting the real secret here would mean
+        // holding it recoverably.
+        client_secret: PROVIDER_CLIENT_SECRET,
         redirect_uris: c.redirectUris,
         post_logout_redirect_uris: c.postLogoutRedirectUris,
         // Derived, never read straight off `grantTypes`. The admin API refuses

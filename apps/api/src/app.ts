@@ -32,6 +32,7 @@ import { registerPortalRoutes } from './routes/portal.js';
 import { registerSamlIdpRoutes } from './routes/saml-idp.js';
 import { registerOidcRoutes } from './routes/oidc-op.js';
 import { registerOidcInteractionRoutes } from './routes/oidc-interaction.js';
+import { registerOidcTokenRoutes } from './routes/oidc-token.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -189,9 +190,11 @@ export async function buildApp(
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   };
   await app.register(registerOidcInteractionRoutes, { prefix: '/oidc', ...oidcOptions });
-  // The catch-all last: every specific route must be matched first, and this is
-  // the only one that hands oidc-provider an unparsed body. Task 12 inserts its
-  // token plugin between these two lines.
+  // Its own encapsulated scope, so the body parser it registers to authenticate
+  // the client cannot escape into the catch-all's.
+  await app.register(registerOidcTokenRoutes, { prefix: '/oidc', ...oidcOptions });
+  // The catch-all last: every specific route above must be matched first, and
+  // this is the only one that hands oidc-provider an unparsed body.
   await app.register(registerOidcRoutes, { prefix: '/oidc', ...oidcOptions });
 
   return app;
