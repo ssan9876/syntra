@@ -75,6 +75,16 @@ const actionTone = (status: string): 'active' | 'warning' | 'danger' | 'neutral'
  */
 const APPLIABLE = ['previewed', 'blocked'];
 
+/**
+ * The server's page size for a drift read, from `provision-runs.ts`.
+ *
+ * `GET /targets/:id/drift` does `take: DRIFT_PAGE` with no cursor and no total,
+ * so a full page is the only evidence the console gets that there was more. A
+ * count that silently caps is a count that lies at exactly the moment it
+ * matters most, so a full page is rendered as `500+` and said out loud.
+ */
+const DRIFT_PAGE = 500;
+
 const DRIFT_LABELS: Record<string, string> = {
   unmanaged_entitlement: 'A holding Provision did not grant',
   missing_grant: 'A holding Provision granted and the target no longer has',
@@ -86,7 +96,8 @@ const DRIFT_LABELS: Record<string, string> = {
 export function ProvisionRunDetailPage() {
   const { id, runId } = useParams<{ id: string; runId: string }>();
   const [run, setRun] = useState<Run | null>(null);
-  const [drift, setDrift] = useState<Drift[]>([]);
+  const [drift, setDrift] = useState<Drift[] | null>(null);
+  const [driftProblem, setDriftProblem] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('person');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState(false);
@@ -109,9 +120,35 @@ export function ProvisionRunDetailPage() {
       })
       .catch(() => setProblem('That run could not be loaded.'))
       .finally(() => setLoading(false));
-    void api<{ findings: Drift[] }>(`/api/admin/targets/${id}/drift`)
+    /**
+     * Open findings only, and its failure is not swallowed.
+     *
+     * Two separate defects lived in the three lines this replaces. The
+     * rejection was discarded, so a `/drift` request that failed rendered
+     * "No drift outstanding — Everything at the target matches what Syntra
+     * believes about it.", which is the most reassuring sentence on the screen
+     * printed on the evidence of a request that did not happen. And the read
+     * was unfiltered, so the count included findings acknowledged and resolved
+     * months ago — while `take: DRIFT_PAGE` and `orderBy: lastSeenAt desc`
+     * meant those stale rows could crowd genuinely open ones off the end of the
+     * page entirely.
+     *
+     * `?status=open` is a filter the route already supports
+     * (`provision-runs.ts`, `GET /targets/:id/drift`), so the cap now applies
+     * to the findings this tab is about.
+     */
+    setDriftProblem(null);
+    void api<{ findings: Drift[] }>(
+      `/api/admin/targets/${id}/drift?status=open`,
+    )
       .then((body) => setDrift(body.findings))
-      .catch(() => undefined);
+      .catch(() => {
+        setDrift(null);
+        setDriftProblem(
+          'The drift for this target could not be read, so this screen cannot ' +
+            'say whether there is any. It is not saying there is none.',
+        );
+      });
   };
   useEffect(reload, [id, runId]);
 
@@ -191,7 +228,14 @@ export function ProvisionRunDetailPage() {
     ['person', 'By person'],
     ['type', 'By type'],
     ['exceptions', `Exceptions (${run.exceptions.length})`],
-    ['drift', `Drift (${drift.length})`],
+    [
+      'drift',
+      // Never `(0)` on a read that failed: that is the same false reassurance
+      // in a smaller place.
+      drift === null
+        ? 'Drift (unknown)'
+        : `Drift (${drift.length >= DRIFT_PAGE ? `${DRIFT_PAGE}+` : drift.length})`,
+    ],
   ];
 
   return (
@@ -368,9 +412,15 @@ export function ProvisionRunDetailPage() {
         {tab === 'drift' && (
           <Panel
             title="Drift"
-            description="What the target holds that Provision did not put there, and what it granted that has gone. Reported under both enforcement modes."
+            description="What the target holds that Provision did not put there, and what it granted that has gone — the findings still open. Reported under both enforcement modes."
           >
-            {drift.length === 0 ? (
+            {drift === null ? (
+              <div className="p-4">
+                <Alert tone="danger" title="Drift could not be read">
+                  {driftProblem}
+                </Alert>
+              </div>
+            ) : drift.length === 0 ? (
               <div className="p-6">
                 <Empty title="No drift outstanding">
                   Everything at the target matches what Syntra believes about it.
@@ -378,6 +428,15 @@ export function ProvisionRunDetailPage() {
               </div>
             ) : (
               <ul>
+                {drift.length >= DRIFT_PAGE && (
+                  <li className="border-b border-border-subtle p-4">
+                    <Alert tone="warning" title="This list is not all of it">
+                      The server returns at most {DRIFT_PAGE} findings in one
+                      read, and it returned {DRIFT_PAGE}. There are more open
+                      findings than are shown here.
+                    </Alert>
+                  </li>
+                )}
                 {drift.map((finding) => (
                   <li
                     key={finding.id}

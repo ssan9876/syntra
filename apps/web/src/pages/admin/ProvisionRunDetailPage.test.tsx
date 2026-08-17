@@ -35,10 +35,24 @@ const run = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-/** Routes every request this page makes: the run, the drift, and the apply. */
+const finding = (overrides: Record<string, unknown> = {}) => ({
+  id: 'd1',
+  kind: 'unmanaged_entitlement',
+  status: 'open',
+  detail: { reason: 'the target holds this entitlement and Provision did not grant it' },
+  ...overrides,
+});
+
+/**
+ * Routes every request this page makes: the run, the drift, and the apply.
+ *
+ * `includes` rather than `endsWith` for the drift path: the page asks for
+ * `/drift?status=open`, and a matcher anchored to the end of the string
+ * silently routed that request to the run body instead.
+ */
 function mockFetch(
   body: Record<string, unknown>,
-  drift: unknown[] = [],
+  drift: unknown[] | 'fails' = [],
   applyResult: Record<string, unknown> = {
     status: 'applied',
     applied: 1,
@@ -51,7 +65,13 @@ function mockFetch(
     const path = String(input);
     if (init?.method === 'POST') return Promise.resolve(json(applyResult));
     if (init?.method === 'PATCH') return Promise.resolve(json(null, 204));
-    if (path.endsWith('/drift')) return Promise.resolve(json({ findings: drift }));
+    if (path.includes('/drift')) {
+      return Promise.resolve(
+        drift === 'fails'
+          ? json({ title: 'Internal Server Error', status: 500 }, 500)
+          : json({ findings: drift }),
+      );
+    }
     return Promise.resolve(json(body));
   });
 }
@@ -243,6 +263,57 @@ describe('ProvisionRunDetailPage', () => {
       await screen.findByRole('button', { name: 'Apply 1 action' }),
     ).toBeVisible();
     expect(screen.queryByText('Nothing further to apply')).toBeNull();
+  });
+
+  it('does not report a failed drift read as nothing being wrong', async () => {
+    // The single most reassuring sentence on the screen was printed on the
+    // evidence of a request that failed: the rejection was discarded and the
+    // drift tab fell through to its empty state.
+    mockFetch(run(), 'fails');
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Drift/ }));
+    expect(screen.getByText('Drift could not be read')).toBeVisible();
+    expect(screen.queryByText('No drift outstanding')).toBeNull();
+    expect(
+      screen.queryByText(/Everything at the target matches/),
+    ).toBeNull();
+  });
+
+  it('does not count a drift read that failed as zero findings', async () => {
+    mockFetch(run(), 'fails');
+    renderPage();
+
+    expect(
+      await screen.findByRole('button', { name: 'Drift (unknown)' }),
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Drift (0)' })).toBeNull();
+  });
+
+  it('asks for the open findings, not for every finding ever recorded', async () => {
+    // The count included findings acknowledged and resolved months ago, and
+    // `take: DRIFT_PAGE` with `orderBy: lastSeenAt desc` meant those stale rows
+    // could crowd genuinely open ones off the end of the page.
+    const fetchMock = mockFetch(run(), [finding()]);
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Drift (1)' })).toBeVisible();
+    const asked = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(asked.some((url) => url.includes('/drift?status=open'))).toBe(true);
+  });
+
+  it('says so when the drift count has been capped rather than reporting the cap as the total', async () => {
+    // A count that silently caps is a count that lies at exactly the moment it
+    // matters most. The server returns at most 500 findings in one read.
+    const full = Array.from({ length: 500 }, (_, i) => finding({ id: `d${i}` }));
+    mockFetch(run(), full);
+    renderPage();
+
+    expect(
+      await screen.findByRole('button', { name: 'Drift (500+)' }),
+    ).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Drift (500+)' }));
+    expect(screen.getByText('This list is not all of it')).toBeVisible();
   });
 
   it('names an action attributed to nobody rather than dropping it', async () => {
