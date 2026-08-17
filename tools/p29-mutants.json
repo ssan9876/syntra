@@ -1,0 +1,173 @@
+[
+  {
+    "id": "P01",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "        for (const user of syntraUsers) {\n          if (user.status !== 'active') continue;\n          push('deactivate_syntra_user', {",
+    "replace": "        for (const user of syntraUsers.slice(-1)) {\n          if (user.status !== 'active') continue;\n          push('deactivate_syntra_user', {",
+    "pattern": "proposes a deactivation for BOTH logins on departure",
+    "note": "THE DEFECT, restored verbatim: a Map keeps the LAST value per key, so only one login is deactivated"
+  },
+  {
+    "id": "P02",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "        for (const user of syntraUsers) {\n          if (user.status !== 'active') continue;\n          push('deactivate_syntra_user', {",
+    "replace": "        for (const user of syntraUsers.slice(0, 1)) {\n          if (user.status !== 'active') continue;\n          push('deactivate_syntra_user', {",
+    "pattern": "does not lose the admin login when it is read first",
+    "note": "the defect the other way round: only the FIRST login deactivated"
+  },
+  {
+    "id": "P03",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "          if (user.status !== 'active') continue;\n          push('deactivate_syntra_user', {",
+    "replace": "          if (user.status === 'active') continue;\n          push('deactivate_syntra_user', {",
+    "pattern": "deactivates only the live logins, leaving an already-inactive one alone",
+    "note": "deactivates the already-inactive login and leaves the live one"
+  },
+  {
+    "id": "P04",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "          if (user.status !== 'active') continue;\n          push('deactivate_syntra_user', {",
+    "replace": "          if (false) continue;\n          push('deactivate_syntra_user', {",
+    "pattern": "deactivates only the live logins, leaving an already-inactive one alone",
+    "note": "the status filter removed: an already-inactive login proposed again"
+  },
+  {
+    "id": "P05",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "            after: { status: 'inactive', userId: user.id },",
+    "replace": "            after: { status: 'inactive', userId: syntraUsers[0]!.id },",
+    "pattern": "names WHICH login each deactivation is for",
+    "note": "both actions name the SAME login: one deactivated twice, the other never"
+  },
+  {
+    "id": "P06",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "          for (const user of syntraUsers) {\n            if (user.status === 'active') continue;\n            push('reactivate_syntra_user', {",
+    "replace": "          for (const user of syntraUsers.slice(-1)) {\n            if (user.status === 'active') continue;\n            push('reactivate_syntra_user', {",
+    "pattern": "gives a returner every one of their logins back",
+    "note": "the same defect on the reactivation side: one login stranded inactive forever"
+  },
+  {
+    "id": "P07",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "            if (user.status === 'active') continue;\n            push('reactivate_syntra_user', {",
+    "replace": "            if (user.status !== 'active') continue;\n            push('reactivate_syntra_user', {",
+    "pattern": "gives back only the login that is not already active",
+    "note": "reactivates the login that is already active and leaves the inactive one"
+  },
+  {
+    "id": "P08",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "              after: { status: 'active', userId: user.id },",
+    "replace": "              after: { status: 'active', userId: syntraUsers[0]!.id },",
+    "pattern": "gives a returner every one of their logins back",
+    "note": "both reactivations name the same login"
+  },
+  {
+    "id": "P09",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "    const syntraUsers: readonly SyntraUserFacts[] = input.pairedDirectorySource\n      ? (input.syntraUserByPerson.get(personId) ?? [])\n      : [];",
+    "replace": "    const syntraUsers: readonly SyntraUserFacts[] =\n      input.syntraUserByPerson.get(personId) ?? [];",
+    "pattern": "proposes nothing for either login when the target has no paired source",
+    "note": "the paired-source gate removed"
+  },
+  {
+    "id": "P10",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "      ? (input.syntraUserByPerson.get(personId) ?? [])",
+    "replace": "      ? (input.syntraUserByPerson.get(personId) ?? [{ id: '', status: 'active' }])",
+    "pattern": "proposes nothing for a person absent from the map entirely",
+    "note": "THE EMPTY CASE: a person with no login given a phantom one"
+  },
+  {
+    "id": "P11",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "            before: { status: user.status },\n            after: { status: 'inactive', userId: user.id },",
+    "replace": "            before: { status: 'inactive' },\n            after: { status: 'inactive', userId: user.id },",
+    "pattern": "names WHICH login each deactivation is for",
+    "note": "the before state stops describing the login this action is about"
+  },
+  {
+    "id": "P12",
+    "file": "packages/core/src/provision/plan.ts",
+    "test": "packages/core/src/provision/plan.test.ts",
+    "find": "    const syntraUsers: readonly SyntraUserFacts[] = input.pairedDirectorySource\n      ? (input.syntraUserByPerson.get(personId) ?? [])\n      : [];",
+    "replace": "    const syntraUsers: readonly SyntraUserFacts[] = input.pairedDirectorySource\n      ? [...input.syntraUserByPerson.values()].flat()\n      : [];",
+    "pattern": "keeps one person",
+    "note": "every person's logins read for every person: a stranger's login deactivated"
+  },
+  {
+    "id": "P13",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      if (user.personId === null) continue;\n      const facts = { id: user.id, status: user.status };\n      const linked = syntraUserByPerson.get(user.personId);\n      if (linked === undefined) syntraUserByPerson.set(user.personId, [facts]);\n      else linked.push(facts);",
+    "replace": "      if (user.personId === null) continue;\n      const facts = { id: user.id, status: user.status };\n      syntraUserByPerson.set(user.personId, [facts]);",
+    "pattern": "proposes a deactivation for BOTH of a leaver",
+    "note": "THE DEFECT AT THE READ, restored verbatim: the last login written wins"
+  },
+  {
+    "id": "P14",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      if (linked === undefined) syntraUserByPerson.set(user.personId, [facts]);\n      else linked.push(facts);",
+    "replace": "      if (linked !== undefined) syntraUserByPerson.set(user.personId, [facts]);",
+    "pattern": "proposes a deactivation for BOTH of a leaver",
+    "note": "the grouping inverted: nothing is ever stored, so no login is deactivated at all"
+  },
+  {
+    "id": "P15",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      const facts = { id: user.id, status: user.status };",
+    "replace": "      const facts = { id: user.id, status: 'active' };",
+    "pattern": "deactivates only the login that is still active",
+    "note": "every login read as active: an already-inactive one proposed again"
+  },
+  {
+    "id": "P16",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      const linked = syntraUserByPerson.get(user.personId);",
+    "replace": "      const linked = [...syntraUserByPerson.values()][0];",
+    "pattern": "keeps one person",
+    "note": "everyone appended to the first bucket: a stranger's login deactivated"
+  },
+  {
+    "id": "P17",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        orderBy: { login: 'asc' },",
+    "replace": "        orderBy: { login: 'desc' },",
+    "pattern": "orders the two deactivations the same way on two runs over the same data",
+    "note": "order reversed: deterministic but not the documented order"
+  },
+  {
+    "id": "P18",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      if (user.personId === null) continue;",
+    "replace": "      if (user.personId === undefined) continue;",
+    "pattern": "leaves a login linked to nobody alone",
+    "note": "the null guard: EXPECTED EQUIVALENT, the query's own where already excludes them"
+  },
+  {
+    "id": "P19",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        // second column read for one.\n        orderBy: { login: 'asc' },\n",
+    "replace": "        // second column read for one.\n",
+    "pattern": "orders the two deactivations the same way on two runs over the same data",
+    "note": "no ORDER BY at all: the read falls back to heap order, which the fixture seeds in reverse"
+  }
+]
