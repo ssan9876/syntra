@@ -4,11 +4,20 @@
 
 **Goal:** Build Syntra's access-governance subsystem — a point-in-time inventory of every holding in the tenant with its provenance, freshness and coverage stated honestly, and the recertification, revocation-dispatch and segregation-of-duties machinery built on top of it.
 
-**Architecture:** Govern is a domain module in `packages/core/src/govern/`, beside `rbac`, `audit`, `provision` and `automate`. It opens no socket, holds no target credential and writes no access-bearing row: it reads PostgreSQL, writes its own tables, and dispatches every access change to the subsystem that owns the write. The snapshot pipeline is `collect → correlate → attribute → classify → detect → write`, with the four middle stages pure functions over plain values so that everything genuinely hard is testable without a database. Slice 1 (Inventory, Tasks 1–14) changes nobody's access; slice 2 (Campaigns and Duties, Tasks 15–22) is where every irreversible act lives.
+**Architecture:** Govern is a domain module in `packages/core/src/govern/`, beside `rbac`, `audit`, `provision` and `automate`. It opens no socket, holds no target credential and writes no access-bearing row: it reads PostgreSQL, writes its own tables, and dispatches every access change to the subsystem that owns the write. The snapshot pipeline is `collect → correlate → attribute → classify → detect → write`, with the four middle stages pure functions over plain values so that everything genuinely hard is testable without a database. Slice 1 (Inventory, Tasks 1–8, 8A, 9–14) changes nobody's access; slice 2 (Campaigns and Duties, Tasks 15–22) is where every irreversible act lives.
 
 **Tech Stack:** TypeScript 5.7 (`exactOptionalPropertyTypes` on), Prisma 6 over PostgreSQL with forced row-level security, Fastify 5, React 19 + react-router 7, Vitest 3 (single fork), Playwright, pg-boss 12, Zod 3.
 
-**Spec:** `docs/superpowers/specs/2026-08-16-syntra-govern-design.md` (24 sections). Rulings that bind this plan: `.superpowers/sdd/govern-rulings.md` (G1), `.superpowers/sdd/provision-rulings.md` (P1–P7), `.superpowers/sdd/provision-preflight-rulings.md` (P8–P23), `.superpowers/sdd/automate-preflight-rulings.md` (A-3–A-10). Dependency plans: `docs/superpowers/plans/2026-08-16-syntra-provision.md` and `docs/superpowers/plans/2026-08-17-syntra-automate.md`. **Where Provision's plan and `.superpowers/sdd/2026-08-16-syntra-provision/progress.md` disagree, the ledger is what shipped and the ledger wins.**
+**Spec:** `docs/superpowers/specs/2026-08-16-syntra-govern-design.md` (24 sections). Rulings that bind this plan: `.superpowers/sdd/govern-rulings.md` (G1), `.superpowers/sdd/govern-plan-rulings.md` (G-2–G-8), `.superpowers/sdd/provision-rulings.md` (P1–P7), `.superpowers/sdd/provision-preflight-rulings.md` (P8–P23), `.superpowers/sdd/automate-preflight-rulings.md` (A-3–A-10). Dependency plans: `docs/superpowers/plans/2026-08-16-syntra-provision.md` and `docs/superpowers/plans/2026-08-17-syntra-automate.md`. **Where Provision's plan and `.superpowers/sdd/2026-08-16-syntra-provision/progress.md` disagree, the ledger is what shipped and the ledger wins.**
+
+**Revision:** this plan has been through a pre-flight review (`.superpowers/sdd/govern-plan-preflight.md` — 6 Critical, 22 High, 13 Medium, verdict *not ready*) and the fix wave that answered it (`.superpowers/sdd/govern-plan-fixes.md`). **23 tasks, 227 steps.** The largest structural changes, so a reader of the committed version can find them:
+
+- **`upsertFindings` no longer resolves anything.** It is split into `upsertFindings` (upsert only, no `snapshotId`) and `reconcileFindings(tenantId, snapshotId, kinds, drafts)`, which closes only within the kinds its caller is authoritative for. The normative caller table is at the head of Task 8. Before this, Task 10's gain wiring closed all six standing findings Task 8 had opened seconds earlier, in the same snapshot build.
+- **Task 8A is new** (Ruling G-2): it links Provision's `DriftFinding` rows to Govern's findings and propagates closure both ways. Dispatched after Task 8, before Task 9.
+- **`readableSnapshot` moved to `packages/core/src/govern/readable.ts`** (Ruling G-6), breaking the `finding-service` ↔ `snapshot-service` cycle. Every consumer imports it from `./readable.js`.
+- **Three tasks are dispatched out of numeric order: 19, 18, 17.** See the dispatch notes at the end.
+- **`confirmRevocationBatch` is written out** (Ruling G-5), including the two `GovernSettings` columns nobody wrote and the re-guard at execution.
+- **`verifyIncremental` verifies the checkpoint's signature before seeding from it**, and falls back to a full walk from genesis when it cannot.
 
 ---
 
@@ -38,19 +47,29 @@ Everything in the Core, Directory Sync, Access, Provision and Automate plans' Gl
    | Snapshot collect reads | fixed **nine** set-based queries, independent of population | Task 6 |
    | `HoldingEvent` writes | `EVENT_WRITE_BATCH = 500` | Task 7 |
    | Finding upserts | `FINDING_BATCH = 200` | Task 8 |
-   | Campaign item generation | `ITEM_BATCH = 500` | Task 17 |
+   | Campaign item generation | `ITEM_BATCH = 500` **created in one transaction, reviewers resolved in a SECOND loop** | Task 17 |
    | Reviewer resolution during generation | `REVIEWER_BATCH = 200` items per transaction | Task 18 |
+   | Campaign close (`closeDueCampaigns`) | `REVIEWER_BATCH` items per transaction; the due-campaign list is a short read returning plain data | Task 18 |
+   | Reviewer reassignment (`reassignInvalidReviewers`) | `REVIEWER_BATCH` items per transaction, paged by id | Task 18 |
+   | `mootDepartedSubjects`, `mootVanishedHoldings` | `REVIEWER_BATCH` items per transaction, paged by id | Task 18 |
+   | Reminders and escalation (`runCampaignReminders`) | `REVIEWER_BATCH` **reviewers** per transaction | Task 18 |
    | Bulk certify | `bulkCertifyLimit` (default 50) — one transaction, one audit event | Task 19 |
-   | Revocation batch compute + write | **one** transaction; a batch is thousands of rows at most | Task 20 |
-   | Revocation dispatch | one transaction **per dispatch row** | Task 20 |
+   | Review quality signals | 200 rows per read page, 200 upserts per transaction | Task 19 |
+   | Revocation batch compute + write | **one** transaction; a batch is thousands of rows at most, and the holder-count denominators are **two grouped queries, not two per resource** | Task 20 |
+   | Revocation dispatch | one transaction **per dispatch row**; `revokeGrant` opens its own and is called outside ours | Task 20 |
+   | `reflectRevocationOutcomes` | 200 dispatch rows per transaction, paged by id | Task 20 |
    | Audit chain verification | `AUDIT_VERIFY_PAGE = 1000` events per transaction | Task 10 |
    | Report reads | one short transaction returning plain data; rendering is outside it | Task 11 |
 
-   Task 12 makes the rule a test: a client wrapper that fails when any `withTenant` in a Govern code path exceeds a time budget under a seeded large tenant.
+   **A batch constant that nothing reads is worth nothing.** `REVIEWER_BATCH = 200` was exported and referenced by no code, while `startCampaign` resolved 500 reviewers inside the item-creation transaction. Every constant in this table is exercised by `transaction-budget.test.ts`, and every task that owns one names the mutation — set it to `Number.MAX_SAFE_INTEGER`, or move the loop back inside a `withTenant` — with the budget test as the assertion.
 
-5. **Unique constraints do not constrain NULLs in PostgreSQL.** Any uniqueness rule over a nullable column, or qualified by a status, is a hand-written partial unique index appended to the generated migration — never `@@unique`. This plan has seven. **Inspect the generated migration before appending:** `prisma migrate diff` compares the schema file against a shadow database, `schema.prisma` cannot express a partial index, so every partial index the previous slices created by hand looks to the diff like something the database has and the model does not, and it emits `DROP INDEX` for them. Delete any such line before going further. Provision's Task 1 found none; that is not a guarantee for this one.
+   Task 12 makes the rule a test: a client wrapper that fails when any `withTenant` in a Govern code path exceeds a time budget. Its slice-1 half runs over a seeded 400-person tenant; **its slice-2 half runs `startCampaign`, `closeDueCampaigns`, the four sweeps, the revocation batch and `reflectRevocationOutcomes` over a seeded 2,000-item campaign**, and is appended by Task 20 because it cannot compile before Tasks 17–20 land.
 
-6. **Every "one non-terminal row per X" index ships with its supersession path and a crash test, in the same task.** Ruling A-4 is a standing rule and this programme has shipped the failure twice: `provision_run_one_non_terminal` bricked a target, `ExpirySweep`'s equivalent stopped every grant expiring. This plan has three such indexes — `govern_snapshot_one_building`, `govern_revocation_batch_one_non_terminal` (two indexes, one predicate) and `govern_revocation_order_one_open` — and each is written in the same task as (a) the adoption path that supersedes a stale row at the head of the transaction that creates the new one, and (b) a test that crashes one and starts another.
+5. **Unique constraints do not constrain NULLs in PostgreSQL.** Any uniqueness rule over a nullable column, or qualified by a status, is a hand-written partial unique index appended to the generated migration — never `@@unique`. This plan has six. **Inspect the generated migration before appending:** `prisma migrate diff` compares the schema file against a shadow database, `schema.prisma` cannot express a partial index, so every partial index the previous slices created by hand looks to the diff like something the database has and the model does not, and it emits `DROP INDEX` for them. Delete any such line before going further. Provision's Task 1 found none; that is not a guarantee for this one.
+
+6. **Every "one non-terminal row per X" index ships with its supersession path and a crash test, in the same task.** Ruling A-4 is a standing rule and this programme has shipped the failure twice: `provision_run_one_non_terminal` bricked a target, `ExpirySweep`'s equivalent stopped every grant expiring. This plan has **three** such indexes — `govern_snapshot_one_building`, `govern_revocation_batch_one_non_terminal_campaign` and `govern_revocation_order_one_open` — and each is written in the same task as (a) the adoption path that supersedes a stale row at the head of the transaction that creates the new one, and (b) a test that crashes one and starts another.
+
+   The corollary, which cost a Medium here: **an index guarding a population no code path produces is not a control, it is a decoration with a maintenance cost.** `govern_revocation_batch_one_non_terminal_standalone` guarded batches with a null `campaignId`, and nothing in 22,000 lines ever created one. It is gone and the column is NOT NULL.
 
 7. **Migration directory names must sort after every migration they depend on.** As of writing, the newest on disk is `20260820000000_provision_targets`; Automate's plan claims `20260821000000_automate_requests`. This plan takes **`20260822000000_govern_inventory`** (Task 1) and **`20260823000000_govern_campaigns`** (Task 15). **Re-read `packages/db/prisma/migrations/` before creating either directory** and bump the date if anything newer has landed. Two agents working the same repo pick the same plausible timestamp, and the failure is a migration ordering that depends on filesystem enumeration (Ruling P7).
 
@@ -259,8 +278,10 @@ packages/core/src/govern/
   attribute.ts          the attribution set and the unattributable definition   (pure)   T4
   diff.ts               consecutive-snapshot diff -> HoldingEvent drafts        (pure)   T5
   collect.ts            the nine set-based readers + resolveApplicationPaths             T6
-  snapshot-service.ts   build, readableSnapshot, prune                                   T7
+  readable.ts           readableSnapshot + SnapshotNotReadableError (the cycle breaker)  T7
+  snapshot-service.ts   build, prune                                                     T7
   finding-service.ts    GovernFinding + RemediationItem lifecycle, standing findings     T8
+  drift-link.ts         DriftFinding <-> GovernFinding linkage and two-way closure       T8A
   orphan-service.ts     AccountAttribution: propose, claim, confirm                      T9
   audit-integrity.ts    verifySegment, checkpoints, signatures, anchors                  T10
   settings-service.ts   GovernSettings, GovernSourcePolicy, ResourceClassification       T11
@@ -317,10 +338,12 @@ e2e/govern.spec.ts                                    T22
 
 `types.ts`, `freshness.ts`, `attribute.ts`, `diff.ts`, `sod.ts`, `dispatch.ts`, `revocation-guard.ts` and `graph.ts` import nothing from `@syntra/db`. They may import from `packages/core/src/provision/condition.ts`, which is itself pure. **Any value import from `@syntra/db` in those eight means the boundary is wrong**, and Task 7's structural test checks it.
 
----
-# Slice 1 — Inventory (Tasks 1–14)
+`readable.ts` is not pure — it takes a `TenantClient` — but it is the module that breaks the `finding-service` ↔ `snapshot-service` cycle (Ruling G-6), so it carries its own rule: **its only relative import is `./freshness.js`**, and Task 7 Step 6 asserts that too.
 
-Read-only. Nothing in Tasks 1–14 changes anybody's access, ever. Slice 1 alone is a complete access-review product: an organization that installs it can answer every question on an auditor's request list with an exported artifact, and it produces the standing findings of §16 with no campaign machinery at all.
+---
+# Slice 1 — Inventory (Tasks 1–8, 8A, 9–14)
+
+Read-only. Nothing in slice 1 changes anybody's access, ever. Slice 1 alone is a complete access-review product: an organization that installs it can answer every question on an auditor's request list with an exported artifact, and it produces the standing findings of §16 with no campaign machinery at all.
 
 ---
 
@@ -354,6 +377,8 @@ ls packages/db/prisma/migrations/
 ```
 
 Expected: `20260820000000_provision_targets` present. If `20260821000000_automate_requests` is present too, this migration is still `20260822000000_govern_inventory`. **If anything sorting at or after `20260822000000` is present, bump this plan's two migration names by one day each and note it in the commit message.** Ruling P7: two agents working the same repo pick the same plausible timestamp, and the failure is a migration ordering that depends on filesystem enumeration.
+
+**Re-checked at the pre-flight fix wave** (`ls packages/db/prisma/migrations/`): the newest on disk is still `20260820000000_provision_targets`; Automate's `20260821000000_automate_requests` has NOT landed yet. `20260822000000_govern_inventory` and `20260823000000_govern_campaigns` both still sort last. **Run the `ls` again anyway** — Automate is in build in this same checkout and the whole point of this step is that the answer changes.
 
 - [ ] **Step 2: Write the failing schema test**
 
@@ -1263,7 +1288,13 @@ model RemediationItem {
 
   /// 'rule_change_required' | 'directory_source_change_required'
   /// | 'direct_assignment_change_required' | 'role_assignment_change_required'
+  /// | 'account_removal_required' | 'syntra_user_change_required'
   /// | 'undecided_item' | 'orphan_attribution'
+  ///
+  /// The first six are the six `requires_change` routes of Task 20's dispatch
+  /// table, one to one. `ROUTE_REMEDIATION_KIND` in `dispatch.ts` is the map,
+  /// and it is a total `Record<RevocationRoute, string | null>` so a route
+  /// added later without a kind is a compile error.
   kind String
   ownerPersonId String  @db.Uuid
   dueAt         DateTime
@@ -1357,7 +1388,10 @@ model AuditChainCheck {
   brokenAtSequence Int?
   startedAt  DateTime @default(now())
   durationMs Int
-  /// 'incremental' | 'full'
+  /// 'incremental' | 'full' | 'full_fallback'
+  /// `full_fallback` is a full walk an incremental run had to fall back to,
+  /// because the checkpoint it would have seeded from carries no valid
+  /// signature. Distinct from `full` so the screen can say which happened.
   mode       String
 
   @@index([tenantId])
@@ -1478,6 +1512,7 @@ ALTER TABLE "RemediationItem" ADD CONSTRAINT remediation_item_status CHECK (
 ALTER TABLE "RemediationItem" ADD CONSTRAINT remediation_item_kind CHECK (
   "kind" IN ('rule_change_required','directory_source_change_required',
              'direct_assignment_change_required','role_assignment_change_required',
+             'account_removal_required','syntra_user_change_required',
              'undecided_item','orphan_attribution'));
 
 ALTER TABLE "AccountAttribution" ADD CONSTRAINT account_attribution_status CHECK (
@@ -1487,8 +1522,13 @@ ALTER TABLE "AccountAttribution" ADD CONSTRAINT account_attribution_confidence C
 
 ALTER TABLE "AuditChainCheck" ADD CONSTRAINT audit_chain_check_result CHECK (
   "result" IN ('valid','broken'));
+-- `full_fallback` is a full walk from genesis that an INCREMENTAL run had to
+-- fall back to, because the checkpoint it would have seeded from does not carry
+-- a valid signature. It is a distinct value from `full` so the integrity screen
+-- can say which happened: an operator asking for a full verification and a
+-- nightly run refusing a checkpoint are different events.
 ALTER TABLE "AuditChainCheck" ADD CONSTRAINT audit_chain_check_mode CHECK (
-  "mode" IN ('incremental','full'));
+  "mode" IN ('incremental','full','full_fallback'));
 -- A broken result names the sequence. A break with no sequence is an alert
 -- nobody can act on.
 ALTER TABLE "AuditChainCheck" ADD CONSTRAINT audit_chain_check_broken_names_sequence CHECK (
@@ -1625,13 +1665,50 @@ Three mutations, run one at a time, each reverted before the next:
 
 Each mutation must produce a failure. A mutation that produces none means the assertion is not attached to the thing it names.
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 13: Amend the spec at its six contradicted sites (Ruling G-7)**
+
+This is a **documentation** step and it belongs to Task 1 because it must land before anybody else reads the spec against the code. It edits `docs/superpowers/specs/2026-08-16-syntra-govern-design.md` and nothing else.
+
+Ruling G-7: *"The plan is right in every case and the spec is wrong about the codebase it describes… **Amend the spec at each site**, the way Ruling P5 required for Provision §21 and §6. A spec that contradicts the shipped code with no record of which won is how the next reader reconciles them in the wrong direction."* Provision's Task 3 ledger records what happens otherwise: §6 was left contradicting an amended §21 in the same document, and the implementer had to fix it later.
+
+**Six edits, each with a one-line note naming the plan task that establishes the corrected fact.** The note is the point: an amended sentence with no provenance is indistinguishable from a sentence somebody disagreed with.
+
+1. **§7 — `resolveApplicationIdsForUser` does not know which unit produced the match.** The spec asserts it "already knows which unit produced the match". It does not: `packages/core/src/access/resolve.ts` issues one `findMany` with an `OR`, selects `applicationId` alone, and `orgUnitChain` is module-private, so the `direct_assignment` / `group_inheritance` / `org_unit_inheritance` attributions and the unit chain §7 calls "the difference between an answer and a shrug" cannot be derived from it.
+   > *Amended: `resolveApplicationIdsForUser` returns `Set<string>` and discards the path. Govern adds its own set-based `resolveApplicationPaths` in `collect.ts` and does not modify `resolve.ts`. — established by Task 6.*
+
+2. **§17 — checkpoint signing does not reuse the master-key provider.** The spec says signing uses "the same key-provider interface Core's vault already uses for its master key". `MasterKeyProvider` is `{ wrap, unwrap }`: envelope encryption, with no `sign` and no `verify`.
+   > *Amended: Govern defines a distinct `CheckpointSigner { keyId, sign, verify }`. Signing a digest and encrypting one are different operations with different key lifetimes. — established by Task 10.*
+
+3. **§21 — `govern.read` is not scopeable through Core's existing mechanism.** The spec says the scope works "through Core's existing `RoleAssignment.scopeOrgUnitId`". `hasPermission` matches a scoped assignment only against that exact unit id, explicitly refuses to satisfy an unscoped question, and does not walk the org-unit tree — so a scope-only holder gets **403 on every Govern route**, and a scope on Head Office would not admit a person in a unit beneath it.
+   > *Amended: Govern adds `governReadScope()` and `requireGovernRead()`, including the descendant walk, and applies the scope on every read path. `RoleAssignment.scopeOrgUnitId` is the storage; the resolution is Govern's. — established by Task 13.*
+
+4. **§5 and §7 — a revocation resolves to exactly one route.** The two sections disagree about whether a revoke on a holding with several attributions dispatches several removals.
+   > *Amended: exactly one route. Where the route is a `requires_change`, `RouteDecision.notRemoved` names every attribution that survives, and the remediation item and the report both carry it. A partial removal under one decision produces exactly the subtly-wrong report this module exists not to produce. — established by Task 20.*
+
+5. **§18 — `CampaignDecision.decidedByUserId` is missing from the column list.** §5's own dispatch requirement makes it necessary: `revokeGrant` takes a `User` id and a reviewer decides as a `Person` who may hold several accounts or none, so re-resolving at dispatch time would pick an arbitrary one.
+   > *Amended: `CampaignDecision` carries `decidedByUserId String? @db.Uuid` — the account the decision was made from, exactly as `ApprovalDecision.userId` does. Where the reviewer holds no active account at dispatch time, the dispatch proceeds with a null actor and records that in words. — established by Tasks 15 and 20.*
+
+6. **§18 — `RevocationBatch.campaignId` is NOT NULL.** The spec's column list implies a standalone SoD remediation batch. §15's remedy for a refused or lapsed exception is a `RemediationItem` and nothing is revoked, so no code path ever creates one.
+   > *Amended: every revocation batch belongs to a campaign. If a standalone batch is ever wanted, the column, its partial index and the path that writes it arrive together. — established by Task 15.*
+
+**And one more, found by the pre-flight review as M5 and not on Ruling G-7's list.** §18's `RevocationBatch.status` enumeration omits `superseded`, which `computeRevocationBatch` writes when it adopts a crashed batch. The plan's schema comment and its CHECK constraint both already carry it — the review's claim that they do not is wrong about the plan — so the spec is the only place that is out of step. Fix it in the same pass:
+
+> *Amended: `RevocationBatch.status` is `computing | previewed | blocked | applying | applied | partially_applied | failed | superseded`. `superseded` is what a crashed non-terminal batch becomes at the head of the transaction that creates its replacement, and Global Constraint 6 requires that path to exist. — established by Task 15.*
+
+Also add, at the head of the spec, the sentence Ruling P5 established as the convention:
+
+> **Amendments.** Seven sites in this document were amended after implementation began — the six Ruling G-7 adjudicated, plus §18's `RevocationBatch.status` enumeration — each because the document was wrong about the codebase it describes rather than because the design changed. Each carries a note naming the plan task that established the corrected fact. Rulings G-7 and P5.
+
+Verification for this step is a read, not a test: `git diff docs/superpowers/specs/2026-08-16-syntra-govern-design.md` shows six amended passages and one new heading, and `grep -n "already knows which unit produced the match" docs/superpowers/specs/2026-08-16-syntra-govern-design.md` returns nothing.
+
+- [ ] **Step 14: Commit**
 
 ```bash
 git add packages/db/prisma/schema.prisma \
         packages/db/prisma/migrations/20260822000000_govern_inventory/migration.sql \
-        packages/db/src/govern-schema.test.ts
-git commit -m "feat(govern): inventory, coverage, findings and audit-integrity data model"
+        packages/db/src/govern-schema.test.ts \
+        docs/superpowers/specs/2026-08-16-syntra-govern-design.md
+git commit -m "feat(govern): inventory, coverage, findings, the data model and the six spec amendments"
 ```
 
 ---
@@ -5282,9 +5359,11 @@ Correlate, classify, detect and write. Spec §6, §8, §19, §21, §23.
 **The atomicity guarantee Provision gets from one transaction, Govern gets from the status flag plus one enforced accessor.** Provision writes its entire plan in one transaction so a run that fails partway writes no plan at all. That is right for a few thousand rows and wrong for several million. Govern's divergence: the `AccessSnapshot` row is created `building` in one short transaction, holdings and attributions and gaps are written in batches each in its own short `withTenant`, and the status flips to `complete` in a final short transaction with the counts and the audit event. **Ruling G1 accepted this divergence on one condition: "make that test load-bearing."** Step 9 is that test.
 
 **Files:**
-- Create: `packages/core/src/govern/snapshot-service.ts`
+- Create: `packages/core/src/govern/readable.ts`, `packages/core/src/govern/snapshot-service.ts`
 - Test: `packages/core/src/govern/snapshot-service.test.ts`, `packages/core/src/govern/boundaries.test.ts`
 - Modify: `packages/core/src/index.ts`
+
+**`readableSnapshot` lives in its own module, and that is Ruling G-6.** Task 8 modifies `snapshot-service.ts` to import `finding-service.ts`, and `finding-service.ts` needs `readableSnapshot`. Left in `snapshot-service.ts` that is a real import cycle — the same shape this plan already removed between `sod-service.ts` and `snapshot-service.ts`, and a real import cycle is not a documentation problem. **`readable.ts` holds `SnapshotNotReadableError`, `ReadableSnapshot` and `readableSnapshot`, imports only `@syntra/db` and `./freshness.js`, and imports nothing else in `packages/core/src/govern/`.** `snapshot-service.ts` imports it and re-exports nothing; every consumer — Tasks 8, 8A, 9, 11, 13, 16, 17, 20, 21 — imports from `./readable.js` directly. Step 6's `boundaries.test.ts` asserts both halves and Step 9 mutates them.
 
 **Interfaces:**
 - Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `currentTenant` from `../tenant-context.js`; `recordEvent` from `../audit/audit-service.js`; `collectTenant`, `type CollectedTenant`, `type CollectedHolding` from `./collect.js`; `classifySources`, `gapsForSources`, `worstCompleteness`, `worstStaleness`, `type ClassifiedSource` from `./freshness.js`; `attributionsFor`, `isUnattributable`, `type AttributionDraft` from `./attribute.js`; `diffSnapshots`, `type DiffHolding`, `type DiffRegion`, `type HoldingEventDraft` from `./diff.js`; `subjectKey`, `SYNTRA_SYSTEM_ID`, `type ResourceKind` from `./types.js`.
@@ -5292,9 +5371,9 @@ Correlate, classify, detect and write. Spec §6, §8, §19, §21, §23.
   - `const SNAPSHOT_WRITE_BATCH = 500`
   - `const EVENT_WRITE_BATCH = 500`
   - `const SNAPSHOT_STALL_MINUTES = 60`
-  - `class SnapshotNotReadableError extends Error { constructor(readonly reason: 'not_found' | 'building' | 'failed' | 'no_sources') }`
-  - `interface ReadableSnapshot { id: string; asOf: Date; status: 'complete'; holdingCount: number; unattributableCount: number; coverageGapCount: number; unattributedAccountCount: number; personsWithActiveContract: number; sources: ClassifiedSource[] }`
-  - `async function readableSnapshot(tx: TenantClient, snapshotId?: string): Promise<ReadableSnapshot>`
+  - **in `./readable.js`** — `class SnapshotNotReadableError extends Error { constructor(readonly reason: 'not_found' | 'building' | 'failed' | 'no_sources') }`
+  - **in `./readable.js`** — `interface ReadableSnapshot { id: string; asOf: Date; status: 'complete'; holdingCount: number; unattributableCount: number; coverageGapCount: number; unattributedAccountCount: number; personsWithActiveContract: number; sources: ClassifiedSource[] }`
+  - **in `./readable.js`** — `async function readableSnapshot(tx: TenantClient, snapshotId?: string): Promise<ReadableSnapshot>`
   - `async function beginSnapshot(tenantId: string, kind: 'scheduled' | 'manual' | 'campaign', asOf: Date, actorUserId: string | null): Promise<string>`
   - `interface BuildOptions { now?: Date; actorUserId?: string | null; kind?: 'scheduled' | 'manual' | 'campaign'; batchSize?: number; collect?: (tenantId: string, options: { asOf: Date }) => Promise<CollectedTenant> }`
   - `interface BuildResult { snapshotId: string; status: 'complete' | 'failed'; holdingCount: number; unattributableCount: number; coverageGapCount: number; eventCount: number }`
@@ -5312,13 +5391,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import type { CollectedTenant } from './collect.js';
+import { SnapshotNotReadableError, readableSnapshot } from './readable.js';
 import {
   SNAPSHOT_STALL_MINUTES,
-  SnapshotNotReadableError,
   beginSnapshot,
   buildSnapshot,
   pruneSnapshots,
-  readableSnapshot,
 } from './snapshot-service.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
@@ -5757,43 +5835,15 @@ describe('pruneSnapshots', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 Run: `pnpm vitest run packages/core/src/govern/snapshot-service.test.ts`
-Expected: FAIL — `Cannot find module './snapshot-service.js'`.
+Expected: FAIL — `Cannot find module './readable.js'`.
 
 - [ ] **Step 3: Write the accessor and the supersession**
 
-`packages/core/src/govern/snapshot-service.ts`:
+**3(a) — `packages/core/src/govern/readable.ts`.** This module is the whole of Ruling G-6's remedy. It imports `@syntra/db` and `./freshness.js` and **nothing else from `packages/core/src/govern/`**, so no module that needs the accessor is forced into a cycle with the builder.
 
 ```ts
-import { withTenant, type TenantClient } from '@syntra/db';
-import { recordEvent } from '../audit/audit-service.js';
-import { currentTenant } from '../tenant-context.js';
-import {
-  attributionsFor,
-  isUnattributable,
-  type AttributionDraft,
-} from './attribute.js';
-import { collectTenant, type CollectedTenant } from './collect.js';
-import { diffSnapshots, type DiffHolding, type DiffRegion } from './diff.js';
-import {
-  classifySources,
-  gapsForSources,
-  worstCompleteness,
-  worstStaleness,
-  type ClassifiedSource,
-} from './freshness.js';
-import { SYNTRA_SYSTEM_ID, subjectKey, type ResourceKind } from './types.js';
-
-export const SNAPSHOT_WRITE_BATCH = 500;
-export const EVENT_WRITE_BATCH = 500;
-
-/**
- * How old a `building` snapshot must be before a new build supersedes it.
- *
- * A code constant, not a setting: a tenant that could raise it could brick its
- * own snapshot pipeline for as long as it liked, and the number only has to be
- * longer than the longest honest build.
- */
-export const SNAPSHOT_STALL_MINUTES = 60;
+import type { TenantClient } from '@syntra/db';
+import type { ClassifiedSource } from './freshness.js';
 
 export class SnapshotNotReadableError extends Error {
   constructor(readonly reason: 'not_found' | 'building' | 'failed' | 'no_sources') {
@@ -5877,6 +5927,46 @@ export async function readableSnapshot(
     })),
   };
 }
+```
+
+**3(b) — `packages/core/src/govern/snapshot-service.ts`.**
+
+```ts
+import { withTenant, type TenantClient } from '@syntra/db';
+import { recordEvent } from '../audit/audit-service.js';
+import { currentTenant } from '../tenant-context.js';
+import {
+  attributionsFor,
+  isUnattributable,
+  type AttributionDraft,
+} from './attribute.js';
+import { collectTenant, type CollectedTenant } from './collect.js';
+import { diffSnapshots, type DiffHolding, type DiffRegion } from './diff.js';
+import {
+  classifySources,
+  gapsForSources,
+  worstCompleteness,
+  worstStaleness,
+  type ClassifiedSource,
+} from './freshness.js';
+import { SYNTRA_SYSTEM_ID, subjectKey, type ResourceKind } from './types.js';
+
+// NOTE: this module does NOT import './readable.js'. It has no use for the
+// accessor — it writes snapshots, it does not read them back — and Task 8 makes
+// it import './finding-service.js', which does. Keeping the dependency
+// one-directional is Ruling G-6's whole point; `boundaries.test.ts` asserts it.
+
+export const SNAPSHOT_WRITE_BATCH = 500;
+export const EVENT_WRITE_BATCH = 500;
+
+/**
+ * How old a `building` snapshot must be before a new build supersedes it.
+ *
+ * A code constant, not a setting: a tenant that could raise it could brick its
+ * own snapshot pipeline for as long as it liked, and the number only has to be
+ * longer than the longest honest build.
+ */
+export const SNAPSHOT_STALL_MINUTES = 60;
 
 /**
  * Creates the `building` row in one short transaction, so there is something to
@@ -6449,6 +6539,37 @@ describe('Govern writes no access-bearing row', () => {
   });
 });
 
+describe('no import cycle reaches snapshot-service.ts — Ruling G-6', () => {
+  // Two modules import `snapshot-service.ts` from inside it: Task 8 makes it
+  // import `finding-service.ts`, and Task 16's first draft had it call
+  // `sod-service.ts`. Both close a loop if those modules import the accessor
+  // back out of it. The accessor therefore lives in `readable.ts`, which
+  // imports nothing else in this directory, and these assertions keep it there.
+  const CYCLE_FREE = ['finding-service.ts', 'drift-link.ts', 'sod-service.ts'];
+
+  it('keeps finding-service.ts, drift-link.ts and sod-service.ts out of snapshot-service.ts', () => {
+    for (const name of CYCLE_FREE) {
+      const file = sourceFiles().find((f) => f.name === name);
+      if (file === undefined) continue; // not yet written; the task that adds it adds the assertion
+      expect(file.text, `${name} must not import snapshot-service.ts — use readable.ts`).not.toMatch(
+        /from '\.\/snapshot-service\.js'/,
+      );
+    }
+  });
+
+  it('keeps snapshot-service.ts out of sod-service.ts and readable.ts', () => {
+    const snapshot = sourceFiles().find((f) => f.name === 'snapshot-service.ts');
+    expect(snapshot?.text ?? '').not.toMatch(/from '\.\/sod-service\.js'/);
+    const readable = sourceFiles().find((f) => f.name === 'readable.ts');
+    expect(readable, 'readable.ts must exist — Ruling G-6').toBeDefined();
+    // readable.ts is the cycle breaker, so its ONLY in-directory import is
+    // ./freshness.js (for ClassifiedSource). Anything else and the cycle
+    // returns by another door. `@syntra/db` is not matched: it is not relative.
+    const imports = [...(readable?.text ?? '').matchAll(/from '(\.[^']+)'/g)].map((m) => m[1]!);
+    expect([...new Set(imports)].sort()).toEqual(['./freshness.js']);
+  });
+});
+
 describe('every snapshot read goes through readableSnapshot', () => {
   it('is asserted over the module list, so a module added later without it fails', () => {
     // Automate's visibility suite, for staleness. Govern trades Provision's
@@ -6479,11 +6600,11 @@ describe('every snapshot read goes through readableSnapshot', () => {
 - [ ] **Step 7: Run the structural tests**
 
 Run: `pnpm vitest run packages/core/src/govern/boundaries.test.ts`
-Expected: PASS, 6 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 8: Export and typecheck**
 
-Add `export * from './govern/snapshot-service.js';` to `packages/core/src/index.ts`.
+Add `export * from './govern/readable.js';` **and** `export * from './govern/snapshot-service.js';` to `packages/core/src/index.ts`, in that order.
 
 Run: `pnpm exec tsc -b --force`
 Expected: exit 0.
@@ -6499,11 +6620,14 @@ Expected: exit 0.
 5. In `readableSnapshot`, delete the `sourceRows.length === 0` branch. Expected: `REFUSES a complete snapshot with NO SnapshotSource rows` FAILS.
 6. In `beginSnapshot`, delete the supersession block. Expected: `SUPERSEDES a build that crashed` FAILS with a P2002 on `govern_snapshot_one_building` — **which is exactly the shape that bricked a target on Provision and stopped every grant expiring on Automate.**
 7. In `beginSnapshot`, remove the `inFlight.startedAt > stallCutoff` guard so it always supersedes. Expected: `refuses a second concurrent build inside the stall window` FAILS. Both directions.
+8. **Move `readableSnapshot` back into `snapshot-service.ts`, re-export it from `readable.ts`, and add `import { readableSnapshot } from './snapshot-service.js';` to a stub `finding-service.ts`.** Expected: `keeps finding-service.ts, drift-link.ts and sod-service.ts out of snapshot-service.ts` FAILS. This is the mutation that proves Ruling G-6 is enforced rather than described — the cycle it removes is the one this plan's own forward-import walk found and left standing.
+9. Add `import { subjectKey } from './types.js';` to `readable.ts`. Expected: `keeps snapshot-service.ts out of sod-service.ts and readable.ts` FAILS on the import list, because `readable.ts` gaining a second in-directory dependency is how it stops being a cycle breaker.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add packages/core/src/govern/snapshot-service.ts \
+git add packages/core/src/govern/readable.ts \
+        packages/core/src/govern/snapshot-service.ts \
         packages/core/src/govern/snapshot-service.test.ts \
         packages/core/src/govern/boundaries.test.ts \
         packages/core/src/index.ts
@@ -6521,7 +6645,7 @@ One lifecycle, one table, one count. Spec §16. **The detection functions are pu
 - Modify: `packages/core/src/govern/snapshot-service.ts` (call `detectStandingFindings` from the detect stage), `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `type FindingKind`, `type Severity`, `raiseSeverity`, `subjectKey`, `type SubjectRef` from `./types.js`; `type ClassifiedSource` from `./freshness.js`; `readableSnapshot` from `./snapshot-service.js`.
+- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `type FindingKind`, `type Severity`, `raiseSeverity`, `subjectKey`, `type SubjectRef` from `./types.js`; `type ClassifiedSource` from `./freshness.js`. **It imports nothing from `./snapshot-service.js` — Ruling G-6; the accessor is in `./readable.js` and this module does not need it.**
 - Produces (all in `./finding-service.js`):
   - `const FINDING_BATCH = 200`
   - `interface FindingDraft { kind: FindingKind; severity: Severity; subjectRefType: string; subjectRefId: string; detail: Record<string, unknown> ; driftFindingId?: string | null }`
@@ -6534,12 +6658,31 @@ One lifecycle, one table, one count. Spec §16. **The detection functions are pu
   - `function detectCoverageGaps(gaps: readonly { kind: string; systemId: string | null; resourceId: string | null; reason: string }[]): FindingDraft[]`
   - `function detectUnexplainedGains(events: readonly { subjectKey: string; systemId: string; resourceKind: string; resourceId: string; resourceName: string; change: string; explained: boolean }[]): FindingDraft[]`
   - `function detectPrivilegedUncertified(holdings: readonly DetectHolding[], certifiedAt: ReadonlyMap<string, Date>, now: Date, privilegedRecertifyDays: number): FindingDraft[]`
-  - `async function upsertFindings(tenantId: string, snapshotId: string, drafts: readonly FindingDraft[], options?: { now?: Date; batchSize?: number }): Promise<{ opened: number; updated: number; resolved: number }>`
+  - `async function upsertFindings(tenantId: string, drafts: readonly FindingDraft[], options?: { now?: Date; batchSize?: number }): Promise<{ opened: number; updated: number }>` — **upsert only. It never resolves anything and it takes no `snapshotId`.**
+  - `async function reconcileFindings(tenantId: string, snapshotId: string, kinds: readonly FindingKind[], drafts: readonly FindingDraft[], options?: { now?: Date; batchSize?: number }): Promise<{ opened: number; updated: number; resolved: number }>` — upserts `drafts`, then resolves the open findings **whose `kind` is in `kinds`** and which are absent from `drafts`. A caller that is not authoritative for a kind must not name it.
   - `async function assignFinding(tenantId: string, actorUserId: string | null, findingId: string, ownerPersonId: string, dueAt: Date): Promise<void>`
   - `async function acceptFinding(tenantId: string, actorUserId: string | null, findingId: string, reason: string, until: Date): Promise<void>`
   - `async function sweepAcceptedFindings(tenantId: string, now: Date): Promise<{ lapsed: number }>`
-  - `async function createRemediationItem(tx: TenantClient, input: { kind: string; ownerPersonId: string; dueAt: Date; findingId?: string | null; campaignItemId?: string | null; description: string; deepLink: string }): Promise<string | null>`
+  - `async function createRemediationItem(tx: TenantClient, tenantId: string, input: { kind: string; ownerPersonId: string; dueAt: Date; findingId?: string | null; campaignItemId?: string | null; description: string; deepLink: string }): Promise<string | null>` — **three parameters. `tenantId` is explicit at every call site in this plan; there is no two-parameter form.**
   - `async function resolveRemediationItem(tenantId: string, actorUserId: string | null, itemId: string, status: 'done' | 'wont_fix', comment: string): Promise<void>`
+
+**Upsert and resolution are two functions, and the resolution names the kinds it owns.**
+
+A single `upsertFindings(tenantId, snapshotId, drafts)` that resolved *everything absent from `drafts`* would be correct for exactly one caller — the detect stage, which passes the complete standing-finding set — and catastrophic for every other one. This plan has six callers and five of them pass a partial set. The worst pair is inside one snapshot build: Step 5 opens the six standing kinds, and Task 10 Step 6 appends the explained-gain wiring to the *same* build with only `unexplained_gain` drafts. A whole-tenant sweep there marks every standing finding `resolved` seconds after it was opened, with `resolvedBySnapshotId` naming a snapshot that never showed it gone — and §16 makes "resolved **with the snapshot that showed it gone**" a first-class fact. The findings dashboard §20 says leads with "the count of things nobody can explain" would read zero after every nightly run, and slice 1's claim in §2 that Inventory alone is a product would be false.
+
+So: **`upsertFindings` never resolves. `reconcileFindings` resolves, and only within the kinds it is handed.** The authoritative table, which every caller in this plan must match:
+
+| Caller | Task | Function | `kinds` |
+|---|---|---|---|
+| the snapshot detect stage | T8 Step 5, rerouted at T8A Step 4 | `reconcileLinkedFindings` | `['unattributable_holding','access_without_contract','no_human_decision','stale_source','coverage_gap','privileged_uncertified']` |
+| explained-gain wiring | T10 Step 6 | `reconcileFindings` | `['unexplained_gain']` |
+| `refreshOrphanProposals` | T9 | `reconcileLinkedFindings` (T8A) | `['orphan_account']` — and only through T8A, so the draft carries Provision's `driftFindingId` |
+| `detectSodViolations` | T16 | `reconcileFindings` | `['sod_violation','sod_laundering','approval_reciprocity']` |
+| `closeDueCampaigns` | T18 | `upsertFindings` | — never reconciles |
+| `reflectRevocationOutcomes` | T20 | `upsertFindings` | — never reconciles |
+| `sweepLapsedExceptions` | T21 | `upsertFindings` | — never reconciles |
+
+`kinds` is `readonly FindingKind[]`, so a kind that does not exist is a compile error rather than a silent no-op, and an empty array resolves nothing at all.
 
 **The signature that closes Ruling A-3's shape by construction.**
 
@@ -6572,10 +6715,12 @@ import {
   detectStaleSources,
   detectUnattributableHoldings,
   detectUnexplainedGains,
+  reconcileFindings,
   resolveRemediationItem,
   sweepAcceptedFindings,
   upsertFindings,
   type DetectHolding,
+  type FindingDraft,
 } from './finding-service.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
@@ -6776,9 +6921,12 @@ describe('the lifecycle', () => {
     personId = seeded.personId;
   });
 
-  const draft = (over: Record<string, unknown> = {}) => ({
-    kind: 'stale_source' as const,
-    severity: 'medium' as const,
+  // Typed as Partial<FindingDraft>, not Record<string, unknown>: overriding
+  // `kind` through an index-signature spread would widen it to `unknown` and
+  // the call sites below would stop type-checking against FindingDraft.
+  const draft = (over: Partial<FindingDraft> = {}): FindingDraft => ({
+    kind: 'stale_source',
+    severity: 'medium',
     subjectRefType: 'source',
     subjectRefId: 'sys-1',
     detail: {},
@@ -6786,11 +6934,11 @@ describe('the lifecycle', () => {
   });
 
   it('opens a finding, then UPDATES it on the next snapshot rather than duplicating', async () => {
-    const first = await upsertFindings(tenantId, snapshotId, [draft()], { now: NOW });
-    expect(first).toMatchObject({ opened: 1, updated: 0, resolved: 0 });
+    const first = await upsertFindings(tenantId, [draft()], { now: NOW });
+    expect(first).toMatchObject({ opened: 1, updated: 0 });
 
     const later = new Date(NOW.getTime() + 86_400_000);
-    const second = await upsertFindings(tenantId, snapshotId, [draft()], { now: later });
+    const second = await upsertFindings(tenantId, [draft()], { now: later });
     expect(second).toMatchObject({ opened: 0, updated: 1 });
 
     const rows = await withTenant(tenantId, (tx) => tx.governFinding.findMany());
@@ -6799,24 +6947,63 @@ describe('the lifecycle', () => {
     expect(rows[0]!.lastSeenAt).toEqual(later);
   });
 
-  it('resolves a finding that stopped being observed, NAMING the snapshot that showed it gone', async () => {
+  it('upsertFindings RESOLVES NOTHING — an empty draft list closes no finding', async () => {
+    // The fixture that could not distinguish pass from fail is the one that
+    // calls upsertFindings with drafts and never checks what happened to the
+    // findings it did not pass. This is that check.
+    await upsertFindings(tenantId, [draft()], { now: NOW });
+    await upsertFindings(tenantId, [], { now: NOW });
+    const row = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
+    expect(row.status).toBe('open');
+    expect(row.resolvedBySnapshotId).toBeNull();
+  });
+
+  it('reconcileFindings resolves a finding that stopped being observed, NAMING the snapshot that showed it gone', async () => {
     // Not silently deleted. "It went away and we do not know why" is itself
     // worth a row, and a resolution with no snapshot behind it is a
     // disappearance nobody can audit.
-    await upsertFindings(tenantId, snapshotId, [draft()], { now: NOW });
-    const result = await upsertFindings(tenantId, snapshotId, [], { now: NOW });
+    await upsertFindings(tenantId, [draft()], { now: NOW });
+    const result = await reconcileFindings(tenantId, snapshotId, ['stale_source'], [], { now: NOW });
     expect(result.resolved).toBe(1);
 
     const row = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
     expect(row).toMatchObject({ status: 'resolved', resolvedBySnapshotId: snapshotId });
   });
 
+  it('reconcileFindings NEVER touches a kind it was not handed — the C1 defect, asserted', async () => {
+    // Task 8 Step 5 opens the six standing kinds; Task 10 Step 6 reconciles
+    // `unexplained_gain` against the SAME snapshot moments later. If resolution
+    // is not narrowed by kind, the second call closes everything the first
+    // opened and slice 1's headline output is empty on every run.
+    await upsertFindings(
+      tenantId,
+      [draft({ kind: 'unattributable_holding', subjectRefType: 'holding', subjectRefId: 'person:p-1|sys-1|targetEntitlement|ent-1' })],
+      { now: NOW },
+    );
+
+    const result = await reconcileFindings(tenantId, snapshotId, ['unexplained_gain'], [], { now: NOW });
+    expect(result.resolved).toBe(0);
+
+    const row = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'unattributable_holding' } }),
+    );
+    expect(row.status).toBe('open');
+    expect(row.resolvedBySnapshotId).toBeNull();
+  });
+
+  it('reconcileFindings with an EMPTY kinds array resolves nothing at all', async () => {
+    await upsertFindings(tenantId, [draft()], { now: NOW });
+    const result = await reconcileFindings(tenantId, snapshotId, [], [], { now: NOW });
+    expect(result.resolved).toBe(0);
+    expect((await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow())).status).toBe('open');
+  });
+
   it('does not resurrect a finding an operator ACCEPTED', async () => {
-    await upsertFindings(tenantId, snapshotId, [draft()], { now: NOW });
+    await upsertFindings(tenantId, [draft()], { now: NOW });
     const row = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
     await acceptFinding(tenantId, null, row.id, 'known and tolerated', day('2026-07-01'));
 
-    await upsertFindings(tenantId, snapshotId, [draft()], { now: NOW });
+    await upsertFindings(tenantId, [draft()], { now: NOW });
     const after = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
     expect(after.status).toBe('accepted');
   });
@@ -6824,7 +7011,7 @@ describe('the lifecycle', () => {
   it('lapses an acceptance back to open and RAISES its severity one step', async () => {
     // A finding somebody once formally accepted and then let quietly expire is
     // a different and worse thing than one nobody has looked at yet.
-    await upsertFindings(tenantId, snapshotId, [draft({ severity: 'medium' })], { now: NOW });
+    await upsertFindings(tenantId, [draft({ severity: 'medium' })], { now: NOW });
     const row = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
     await acceptFinding(tenantId, null, row.id, 'until the migration lands', day('2026-06-10'));
 
@@ -6836,7 +7023,7 @@ describe('the lifecycle', () => {
   });
 
   it('refuses an acceptance with no expiry', async () => {
-    await upsertFindings(tenantId, snapshotId, [draft()], { now: NOW });
+    await upsertFindings(tenantId, [draft()], { now: NOW });
     const row = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
     // Not representable in the type either; this is the runtime backstop.
     await expect(
@@ -6845,7 +7032,7 @@ describe('the lifecycle', () => {
   });
 
   it('writes an audit event when a finding is assigned or accepted', async () => {
-    await upsertFindings(tenantId, snapshotId, [draft()], { now: NOW });
+    await upsertFindings(tenantId, [draft()], { now: NOW });
     const row = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
     await assignFinding(tenantId, null, row.id, personId, day('2026-07-01'));
     await acceptFinding(tenantId, null, row.id, 'known', day('2026-07-01'));
@@ -6895,8 +7082,8 @@ describe('remediation items', () => {
       description: 'confirm or deny the proposed owner',
       deepLink: '/admin/govern/orphans',
     };
-    const first = await withTenant(tenantId, (tx) => createRemediationItem(tx, input));
-    const second = await withTenant(tenantId, (tx) => createRemediationItem(tx, input));
+    const first = await withTenant(tenantId, (tx) => createRemediationItem(tx, tenantId, input));
+    const second = await withTenant(tenantId, (tx) => createRemediationItem(tx, tenantId, input));
     expect(first).not.toBeNull();
     expect(second).toBeNull();
   });
@@ -6910,15 +7097,15 @@ describe('remediation items', () => {
       description: 'confirm or deny',
       deepLink: '/admin/govern/orphans',
     };
-    const first = await withTenant(tenantId, (tx) => createRemediationItem(tx, input));
+    const first = await withTenant(tenantId, (tx) => createRemediationItem(tx, tenantId, input));
     await resolveRemediationItem(tenantId, null, first!, 'wont_fix', 'a service account, deliberately');
-    const second = await withTenant(tenantId, (tx) => createRemediationItem(tx, input));
+    const second = await withTenant(tenantId, (tx) => createRemediationItem(tx, tenantId, input));
     expect(second).not.toBeNull();
   });
 
   it('requires a comment on wont_fix', async () => {
     const id = await withTenant(tenantId, (tx) =>
-      createRemediationItem(tx, {
+      createRemediationItem(tx, tenantId, {
         kind: 'orphan_attribution', ownerPersonId: personId, dueAt: day('2026-07-01'),
         findingId, description: 'x', deepLink: '/y',
       }),
@@ -7001,6 +7188,11 @@ export function detectUnattributableHoldings(
         subjectKey: h.subjectKey,
         systemId: h.systemId,
         systemName: h.systemName,
+        // The target's own anchor for the account that holds it, when there is
+        // one. Task 8A needs it to match this draft against Provision's
+        // `unmanaged_entitlement` DriftFinding, which is keyed on
+        // (targetSystemId, accountId, entitlementId) and not on a person.
+        accountRef: h.accountRef,
         resourceKind: h.resourceKind,
         resourceId: h.resourceId,
         resourceName: h.resourceName,
@@ -7209,10 +7401,14 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
  * One lifecycle, one table, one count.
  *
  * A finding that persists across snapshots is UPDATED, not duplicated, so the
- * dashboard count is a count of problems and not a count of snapshots. A
- * finding that stops being observed becomes `resolved` WITH THE SNAPSHOT THAT
- * SHOWED IT GONE, not silently deleted, because "it went away and we do not
- * know why" is itself worth a row.
+ * dashboard count is a count of problems and not a count of snapshots.
+ *
+ * THIS FUNCTION RESOLVES NOTHING. It has no `snapshotId` parameter and no
+ * sweep, because a sweep here would be correct for exactly one caller and
+ * catastrophic for the other five: every caller that passes a partial draft set
+ * would close every finding it did not happen to be about. Resolution lives in
+ * `reconcileFindings`, which is handed the kinds its caller is authoritative
+ * for. See the table at the head of this task.
  *
  * An `accepted` finding is left alone. Re-opening it every night would make an
  * operator's deliberate risk acceptance a decision they had to re-make daily,
@@ -7220,13 +7416,11 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
  */
 export async function upsertFindings(
   tenantId: string,
-  snapshotId: string,
   drafts: readonly FindingDraft[],
   options: { now?: Date; batchSize?: number } = {},
-): Promise<{ opened: number; updated: number; resolved: number }> {
+): Promise<{ opened: number; updated: number }> {
   const now = options.now ?? new Date();
   const batchSize = options.batchSize ?? FINDING_BATCH;
-  const seen = new Set(drafts.map((d) => `${d.kind}|${d.subjectRefType}|${d.subjectRefId}`));
 
   let opened = 0;
   let updated = 0;
@@ -7281,9 +7475,48 @@ export async function upsertFindings(
     });
   }
 
+  return { opened, updated };
+}
+
+/**
+ * Upsert, then close what this caller is authoritative for and nothing else.
+ *
+ * `kinds` is the whole control. The sweep reads only findings whose `kind` is
+ * in `kinds`, so a caller that owns `unexplained_gain` cannot close an
+ * `unattributable_holding` its sibling opened four lines earlier in the same
+ * snapshot build. An empty `kinds` closes nothing; a `kinds` naming something
+ * the caller did not compute drafts for closes all of it, which is why the
+ * table at the head of this task is normative and why every call site names its
+ * kinds inline rather than deriving them from `drafts`.
+ *
+ * Deriving them from `drafts` — `new Set(drafts.map(d => d.kind))` — is the
+ * tempting simplification and it is wrong: a detector that legitimately
+ * produces zero drafts this run would then never close last run's findings,
+ * which is the case the resolution exists for.
+ *
+ * `resolvedBySnapshotId` names the snapshot that SHOWED IT GONE, per §16, so
+ * only a caller running inside (or immediately after) a snapshot build may pass
+ * one.
+ */
+export async function reconcileFindings(
+  tenantId: string,
+  snapshotId: string,
+  kinds: readonly FindingKind[],
+  drafts: readonly FindingDraft[],
+  options: { now?: Date; batchSize?: number } = {},
+): Promise<{ opened: number; updated: number; resolved: number }> {
+  const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? FINDING_BATCH;
+
+  const { opened, updated } = await upsertFindings(tenantId, drafts, options);
+
+  if (kinds.length === 0) return { opened, updated, resolved: 0 };
+
+  const seen = new Set(drafts.map((d) => `${d.kind}|${d.subjectRefType}|${d.subjectRefId}`));
+
   const stillOpen = await withTenant(tenantId, (tx) =>
     tx.governFinding.findMany({
-      where: { status: { in: ['open', 'acknowledged'] } },
+      where: { status: { in: ['open', 'acknowledged'] }, kind: { in: [...kinds] } },
       select: { id: true, kind: true, subjectRefType: true, subjectRefId: true },
     }),
   );
@@ -7416,6 +7649,7 @@ export async function sweepAcceptedFindings(
  */
 export async function createRemediationItem(
   tx: TenantClient,
+  tenantId: string,
   input: {
     kind: string;
     ownerPersonId: string;
@@ -7439,9 +7673,7 @@ export async function createRemediationItem(
 
   const created = await tx.remediationItem.create({
     data: {
-      tenantId: (await tx.governFinding.findFirst({ select: { tenantId: true } }))?.tenantId ??
-        (await tx.remediationItem.findFirst({ select: { tenantId: true } }))?.tenantId ??
-        '',
+      tenantId,
       kind: input.kind,
       ownerPersonId: input.ownerPersonId,
       dueAt: input.dueAt,
@@ -7482,17 +7714,11 @@ export async function resolveRemediationItem(
 }
 ```
 
-**Correction to `createRemediationItem`'s tenant lookup.** The `tenantId` derivation above is wrong — it reads it off an unrelated row. Replace it with an explicit parameter:
+**Why `createRemediationItem` takes an explicit `tenantId` rather than deriving one.** An earlier draft of this function derived the tenant by reading it off whatever `GovernFinding` or `RemediationItem` row happened to exist:
 
-```ts
-export async function createRemediationItem(
-  tx: TenantClient,
-  tenantId: string,
-  input: { /* as above */ },
-): Promise<string | null>
-```
+> `tenantId: (await tx.governFinding.findFirst({ select: { tenantId: true } }))?.tenantId ?? …`
 
-and pass `tenantId` at every call site. Every caller in this plan is inside a `withTenant(tenantId, …)` and already has it. **This is recorded rather than quietly fixed above** so the implementer sees the shape that was wrong and why: a domain function that infers its tenant from whatever row happens to exist writes into the wrong tenant the moment the first row belongs to somebody else, and forced RLS would not catch it because the transaction's GUC is already the caller's tenant.
+That is wrong, it is recorded here in prose rather than shipped as a compilable body, and **no two-parameter form of this function exists anywhere in this plan** — the Interfaces block, the three Step 1 tests and every call site in Tasks 9, 16, 18, 19, 20 and 21 all pass three arguments. A domain function that infers its tenant from whatever row happens to exist writes into the wrong tenant the moment the first row belongs to somebody else, and forced RLS would not catch it because the transaction's GUC is already the caller's tenant. Every caller in this plan is inside a `withTenant(tenantId, …)` and already has the value in scope.
 
 - [ ] **Step 5: Wire the detectors into the build's detect stage**
 
@@ -7536,9 +7762,26 @@ In `packages/core/src/govern/snapshot-service.ts`, after the `HoldingEvent` writ
       ]),
     );
 
-    await upsertFindings(
+    /**
+     * The detect stage is authoritative for EXACTLY these six kinds and names
+     * them, so the reconciliation cannot reach `unexplained_gain` (Task 10),
+     * `orphan_account` (Task 8A) or any campaign kind. The list is written out
+     * rather than derived from the drafts: a detector that legitimately
+     * produces zero drafts this run must still close last run's findings.
+     */
+    const STANDING_KINDS: readonly FindingKind[] = [
+      'unattributable_holding',
+      'access_without_contract',
+      'no_human_decision',
+      'stale_source',
+      'coverage_gap',
+      'privileged_uncertified',
+    ];
+
+    await reconcileFindings(
       tenantId,
       snapshotId,
+      STANDING_KINDS,
       [
         ...detectUnattributableHoldings(detectHoldings),
         ...detectAccessWithoutContract(detectHoldings, contracts, collected.asOf),
@@ -7566,9 +7809,10 @@ import {
   detectPrivilegedUncertified,
   detectStaleSources,
   detectUnattributableHoldings,
-  upsertFindings,
+  reconcileFindings,
   type DetectHolding,
 } from './finding-service.js';
+import type { FindingKind } from './types.js';
 ```
 
 `detectUnexplainedGains` is deliberately **not** called here: it needs the audit cross-reference that Task 10 supplies, and calling it now would raise an `unexplained_gain` for every gain in the tenant. Task 10 adds the call.
@@ -7576,7 +7820,7 @@ import {
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm vitest run packages/core/src/govern/finding-service.test.ts packages/core/src/govern/snapshot-service.test.ts`
-Expected: PASS, 25 + 17 tests.
+Expected: PASS, 28 + 17 tests. (Three tests were added to the lifecycle block for the upsert/reconcile split: `upsertFindings RESOLVES NOTHING`, `reconcileFindings NEVER touches a kind it was not handed`, and the empty-`kinds` case.)
 
 - [ ] **Step 7: Export and typecheck**
 
@@ -7593,7 +7837,9 @@ Each reverted before the next; every one must produce a failure:
 2. Change the "no contracts at all" path to require a contract row. Expected: `raises a finding for a person with NO contracts at all` FAILS.
 3. **Add a fourth parameter** — `certifications: ReadonlyMap<string, Date>` — and skip persons with a recent certification. Expected: `TAKES NO GOVERN STATE` FAILS on the arity. This is the mutation the arity assertion exists for, and it is precisely the shape of Automate's C1.
 4. In `upsertFindings`, remove the `existing.status === 'accepted'` skip. Expected: `does not resurrect a finding an operator ACCEPTED` FAILS.
-5. In `upsertFindings`, change the resolution to `deleteMany`. Expected: `resolves a finding that stopped being observed, NAMING the snapshot` FAILS.
+5. In `reconcileFindings`, change the resolution to `deleteMany`. Expected: `reconcileFindings resolves a finding that stopped being observed, NAMING the snapshot` FAILS.
+5a. **In `reconcileFindings`, drop `kind: { in: [...kinds] }` from the `stillOpen` where-clause** — restoring the whole-tenant sweep this task exists to remove. Expected: `reconcileFindings NEVER touches a kind it was not handed` FAILS, because the `unattributable_holding` is closed by a call that only computed gains. **This is the mutation that proves C1 is fixed rather than described.**
+5b. In `reconcileFindings`, replace the `kinds` parameter with `new Set(drafts.map((d) => d.kind))`. Expected: `reconcileFindings with an EMPTY kinds array resolves nothing at all` still passes (it has no drafts either) but `reconcileFindings resolves a finding that stopped being observed` FAILS, because an empty draft list then names no kinds and closes nothing. This is the tempting simplification, and it is the reason the kinds are written out at every call site.
 6. In `sweepAcceptedFindings`, drop the `raiseSeverity` call. Expected: `lapses an acceptance back to open and RAISES its severity` FAILS.
 7. In `createRemediationItem`, throw on a duplicate instead of returning null. Expected: `creates one item and returns null rather than throwing` FAILS.
 
@@ -7608,6 +7854,558 @@ git commit -m "feat(govern): findings, remediation and the standing findings"
 ```
 
 ---
+## Task 8A: Drift linkage — one problem, one row, closed in both directions
+
+**Ruling G-2.** `GovernFinding.driftFindingId` exists as a column (Task 1) and as a field on `FindingDraft` (Task 8), and without this task **nothing reads `DriftFinding` and nothing writes that column.** One orphan account then produces a `DriftFinding` in Provision's dashboard and a `GovernFinding` in Govern's, with two counts and two lifecycles — precisely what §6 and §16 say the reference exists to prevent: *"how a problem gets fixed in one and stays open in the other, and then how somebody stops trusting both numbers."* A column that exists and is never written is the half-built state Automate's C3 already cost this programme a Critical for.
+
+**On the number.** This task is `8A` rather than `9` deliberately: it was added after the plan's tasks were numbered and cross-referenced throughout, and renumbering fourteen downstream tasks in a 22,000-line document to gain a tidier integer is a large diff with nothing behind it. **It is dispatched after Task 8 and before Task 9**, because Task 9's `orphan_account` findings must be raised through it.
+
+**Files:**
+- Create: `packages/core/src/govern/drift-link.ts`
+- Test: `packages/core/src/govern/drift-link.test.ts`
+- Modify: `packages/core/src/govern/snapshot-service.ts` (the detect stage calls `reconcileLinkedFindings` instead of `reconcileFindings`), `packages/core/src/index.ts`
+
+**Interfaces:**
+- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent` from `../audit/audit-service.js`; `FINDING_BATCH`, `reconcileFindings`, `type FindingDraft` from `./finding-service.js`; `type FindingKind` from `./types.js`. **It imports nothing from `./snapshot-service.js`** — Ruling G-6, and Task 7 Step 6's `CYCLE_FREE` list names this file.
+- Produces (all in `./drift-link.js`):
+  - `interface DriftRow { id: string; kind: string; targetSystemId: string; accountId: string | null; entitlementId: string | null; subjectAnchor: string | null; status: string }`
+  - `const DRIFT_LINKABLE: Readonly<Record<'orphan_account' | 'unattributable_holding', string>>` — the Govern kind to Provision `DriftKind` map, and the whole of it
+  - `function linkDrafts(drafts: readonly FindingDraft[], drift: readonly DriftRow[], accountIdByAnchor: ReadonlyMap<string, string>): FindingDraft[]` — **pure**
+  - `async function reconcileLinkedFindings(tenantId: string, snapshotId: string, kinds: readonly FindingKind[], drafts: readonly FindingDraft[], options?: { now?: Date; batchSize?: number }): Promise<{ opened: number; updated: number; resolved: number; linked: number; driftClosed: number }>`
+  - `async function adoptDriftClosures(tenantId: string, snapshotId: string, options?: { now?: Date; batchSize?: number }): Promise<{ adopted: number }>`
+
+**The two kinds that link, and the three that cannot.**
+
+| Provision `DriftFinding.kind` | Govern `FindingKind` | Natural key |
+|---|---|---|
+| `orphan_account` | `orphan_account` | `targetSystemId` + `subjectAnchor`, case-folded against Govern's `${systemId}:${accountRef}` |
+| `unmanaged_entitlement` | `unattributable_holding` (only where `resourceKind === 'targetEntitlement'`) | `targetSystemId` + `accountId` + `entitlementId`, where `accountId` is resolved from the draft's `detail.accountRef` through `accountIdByAnchor` |
+| `missing_grant` | none, by construction | Govern's holding table records what **is** held. A grant Syntra believes it made that the target does not have produces no Govern holding and therefore no Govern finding to link. Provision owns it alone, and this is stated rather than left as an omission a later reader would try to close. |
+| `account_missing_at_target`, `unexpected_status` | none | Both are statements about an account's existence or state at the target, which Govern does not model as a finding of its own. |
+
+`DRIFT_LINKABLE` has exactly two entries and the test asserts its keys, so adding a third kind is a deliberate edit with a test behind it rather than a silent widening.
+
+**Govern writes `DriftFinding.status` and nothing else on that table.** `DriftFinding` is not on Global Constraint 2's forbidden list — it is a report row, not an access-bearing row — and §16 requires the closure to propagate. Govern never creates, deletes or re-keys one; it moves `open`/`acknowledged` to `resolved` on a row whose id a Govern finding already carries. Task 7's `boundaries.test.ts` is unchanged by this, which is correct and is worth saying out loud so nobody adds `driftFinding` to `FORBIDDEN` and breaks §16's requirement in order to satisfy §5's.
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/core/src/govern/drift-link.test.ts`:
+
+```ts
+import { beforeEach, describe, expect, it } from 'vitest';
+import { prisma, withTenant } from '@syntra/db';
+import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { upsertFindings, type FindingDraft } from './finding-service.js';
+import {
+  DRIFT_LINKABLE,
+  adoptDriftClosures,
+  linkDrafts,
+  reconcileLinkedFindings,
+  type DriftRow,
+} from './drift-link.js';
+
+const NOW = new Date('2026-06-15T09:00:00Z');
+
+const orphanDraft = (over: Partial<FindingDraft> = {}): FindingDraft => ({
+  kind: 'orphan_account',
+  severity: 'medium',
+  subjectRefType: 'account',
+  subjectRefId: 'sys-1:ANCHOR-7',
+  detail: { systemId: 'sys-1', accountRef: 'ANCHOR-7' },
+  ...over,
+});
+
+const drift = (over: Partial<DriftRow> = {}): DriftRow => ({
+  id: 'd-1',
+  kind: 'orphan_account',
+  targetSystemId: 'sys-1',
+  accountId: null,
+  entitlementId: null,
+  subjectAnchor: 'anchor-7',
+  status: 'open',
+  ...over,
+});
+
+describe('linkDrafts — the natural key', () => {
+  it('stamps driftFindingId on an orphan_account draft, folding case', () => {
+    // AD folds case and PostgreSQL does not. Three defects on Provision came
+    // from that, and an account anchor is exactly an identifier that crosses
+    // the line between the two.
+    const [linked] = linkDrafts([orphanDraft()], [drift()], new Map());
+    expect(linked!.driftFindingId).toBe('d-1');
+  });
+
+  it('leaves driftFindingId null when no drift row matches', () => {
+    const [linked] = linkDrafts([orphanDraft()], [drift({ targetSystemId: 'sys-2' })], new Map());
+    expect(linked!.driftFindingId ?? null).toBeNull();
+  });
+
+  it('links an unattributable targetEntitlement holding to unmanaged_entitlement', () => {
+    const draft: FindingDraft = {
+      kind: 'unattributable_holding',
+      severity: 'high',
+      subjectRefType: 'holding',
+      subjectRefId: 'person:p-1|sys-1|targetEntitlement|ent-1',
+      detail: { systemId: 'sys-1', accountRef: 'anchor-7', resourceKind: 'targetEntitlement', resourceId: 'ent-1' },
+    };
+    const [linked] = linkDrafts(
+      [draft],
+      [drift({ id: 'd-9', kind: 'unmanaged_entitlement', accountId: 'acc-1', entitlementId: 'ent-1', subjectAnchor: null })],
+      new Map([['sys-1|anchor-7', 'acc-1']]),
+    );
+    expect(linked!.driftFindingId).toBe('d-9');
+  });
+
+  it('does NOT link an unattributable holding that is not a targetEntitlement', () => {
+    // A syntraGroup nobody can explain is Govern's alone; Provision has no row
+    // for it, and matching it to one would attach the wrong problem.
+    const draft: FindingDraft = {
+      kind: 'unattributable_holding',
+      severity: 'high',
+      subjectRefType: 'holding',
+      subjectRefId: 'person:p-1|syntra|syntraGroup|g-1',
+      detail: { systemId: 'syntra', accountRef: null, resourceKind: 'syntraGroup', resourceId: 'g-1' },
+    };
+    const [linked] = linkDrafts([draft], [drift({ kind: 'unmanaged_entitlement', entitlementId: 'g-1' })], new Map());
+    expect(linked!.driftFindingId ?? null).toBeNull();
+  });
+
+  it('ignores a drift row Provision has already resolved', () => {
+    const [linked] = linkDrafts([orphanDraft()], [drift({ status: 'resolved' })], new Map());
+    expect(linked!.driftFindingId ?? null).toBeNull();
+  });
+
+  it('links exactly two kinds and no others', () => {
+    // The map is the whole policy. A third entry must be a deliberate edit.
+    expect(Object.keys(DRIFT_LINKABLE).sort()).toEqual(['orphan_account', 'unattributable_holding']);
+  });
+});
+
+describe('one problem, one row, in both dashboards', () => {
+  let tenantId: string;
+  let snapshotId: string;
+  let targetSystemId: string;
+  let driftId: string;
+
+  beforeEach(async () => {
+    await resetDatabase();
+    const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
+    tenantId = t.id;
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const target = await tx.targetSystem.create({
+        data: { tenantId, name: 'Acme AD', kind: 'ldap', secretName: 'acme-ad', config: {} as never },
+      });
+      const snapshot = await tx.accessSnapshot.create({
+        data: { tenantId, kind: 'manual', status: 'complete', asOf: NOW },
+      });
+      const finding = await tx.driftFinding.create({
+        data: {
+          tenantId, targetSystemId: target.id, kind: 'orphan_account',
+          subjectAnchor: 'anchor-7', detail: {} as never, status: 'open',
+          fingerprint: 'orphan_account:-:-:anchor-7',
+        },
+      });
+      return { snapshotId: snapshot.id, targetSystemId: target.id, driftId: finding.id };
+    });
+    snapshotId = seeded.snapshotId;
+    targetSystemId = seeded.targetSystemId;
+    driftId = seeded.driftId;
+  });
+
+  const draftForTarget = () =>
+    orphanDraft({
+      subjectRefId: `${targetSystemId}:anchor-7`,
+      detail: { systemId: targetSystemId, accountRef: 'anchor-7' },
+    });
+
+  it('raises ONE Govern row carrying the drift id rather than a second independent row', async () => {
+    const result = await reconcileLinkedFindings(
+      tenantId, snapshotId, ['orphan_account'], [draftForTarget()], { now: NOW },
+    );
+    expect(result).toMatchObject({ opened: 1, linked: 1 });
+
+    const govern = await withTenant(tenantId, (tx) => tx.governFinding.findMany());
+    const provision = await withTenant(tenantId, (tx) => tx.driftFinding.findMany());
+    expect(govern).toHaveLength(1);
+    expect(provision).toHaveLength(1);
+    expect(govern[0]!.driftFindingId).toBe(driftId);
+    // Still OPEN in both. One problem, one row each, neither closed by the act
+    // of linking them.
+    expect(govern[0]!.status).toBe('open');
+    expect(provision[0]!.status).toBe('open');
+  });
+
+  it('closing it on the GOVERN side closes the Provision row', async () => {
+    await reconcileLinkedFindings(tenantId, snapshotId, ['orphan_account'], [draftForTarget()], { now: NOW });
+    // Next snapshot: the account was claimed, so the draft is gone.
+    const second = await reconcileLinkedFindings(tenantId, snapshotId, ['orphan_account'], [], { now: NOW });
+    expect(second).toMatchObject({ resolved: 1, driftClosed: 1 });
+
+    const provision = await withTenant(tenantId, (tx) => tx.driftFinding.findFirstOrThrow());
+    expect(provision.status).toBe('resolved');
+  });
+
+  it('closing it on the PROVISION side resolves the Govern row and says why', async () => {
+    await reconcileLinkedFindings(tenantId, snapshotId, ['orphan_account'], [draftForTarget()], { now: NOW });
+    await withTenant(tenantId, (tx) =>
+      tx.driftFinding.update({ where: { id: driftId }, data: { status: 'resolved' } }),
+    );
+
+    const result = await adoptDriftClosures(tenantId, snapshotId, { now: NOW });
+    expect(result.adopted).toBe(1);
+
+    const govern = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
+    expect(govern.status).toBe('resolved');
+    expect(govern.resolvedBySnapshotId).toBe(snapshotId);
+    expect((govern.detail as Record<string, unknown>)['resolvedBecause']).toMatch(/Provision/i);
+  });
+
+  it('does NOT close a Provision row behind a Govern finding somebody ACCEPTED', async () => {
+    // Acceptance is not resolution. Closing Provision's row on an acceptance
+    // would tell the other dashboard the problem went away when a human
+    // deliberately said it was tolerated and put an expiry on saying so.
+    await upsertFindings(tenantId, [draftForTarget()], { now: NOW });
+    await withTenant(tenantId, (tx) =>
+      tx.governFinding.updateMany({ where: {}, data: { status: 'accepted', driftFindingId: driftId } }),
+    );
+    const result = await reconcileLinkedFindings(tenantId, snapshotId, ['orphan_account'], [], { now: NOW });
+    expect(result.driftClosed).toBe(0);
+    expect((await withTenant(tenantId, (tx) => tx.driftFinding.findFirstOrThrow())).status).toBe('open');
+  });
+});
+```
+
+**If the fixture could not distinguish pass from fail:** every assertion above would still hold if `linkDrafts` returned its input unchanged and the two closure paths were empty — *except* the four that name `driftFindingId`, `driftClosed` and `adopted`. Those four are the test. Step 7's mutations 4 and 6 delete each propagation direction in turn and require them to fail.
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `pnpm vitest run packages/core/src/govern/drift-link.test.ts`
+Expected: FAIL — `Cannot find module './drift-link.js'`.
+
+- [ ] **Step 3: Write the matcher and the two-way closure**
+
+`packages/core/src/govern/drift-link.ts`:
+
+```ts
+import { withTenant } from '@syntra/db';
+import { recordEvent } from '../audit/audit-service.js';
+import { FINDING_BATCH, reconcileFindings, type FindingDraft } from './finding-service.js';
+import type { FindingKind } from './types.js';
+
+export interface DriftRow {
+  id: string;
+  kind: string;
+  targetSystemId: string;
+  accountId: string | null;
+  entitlementId: string | null;
+  subjectAnchor: string | null;
+  status: string;
+}
+
+/**
+ * The whole policy, in one object. Two entries.
+ *
+ * `missing_grant` is deliberately absent: Govern's holding table records what
+ * IS held, so a grant Syntra believes it made that the target does not have
+ * produces no Govern holding and therefore no Govern finding to link.
+ * `account_missing_at_target` and `unexpected_status` are statements about an
+ * account's existence or state at the target, which Govern does not model as a
+ * finding of its own. Naming the absences here is the point: an omission with
+ * no reason beside it is the thing a later reader closes in the wrong
+ * direction.
+ */
+export const DRIFT_LINKABLE: Readonly<Record<'orphan_account' | 'unattributable_holding', string>> = {
+  orphan_account: 'orphan_account',
+  unattributable_holding: 'unmanaged_entitlement',
+};
+
+/** NFKD, not NFD, and lower-cased: AD folds case and PostgreSQL does not. */
+const fold = (value: string) => value.normalize('NFKD').toLowerCase();
+
+/**
+ * Pure. Given Govern's drafts and Provision's OPEN drift rows, returns the same
+ * drafts with `driftFindingId` set where the two describe one problem.
+ *
+ * It never drops a draft and never invents one. A Govern finding that matches
+ * nothing in Provision is still Govern's to raise — most of them are, because
+ * Provision only sees targets — and the link is an AGGREGATION, never a copy.
+ */
+export function linkDrafts(
+  drafts: readonly FindingDraft[],
+  drift: readonly DriftRow[],
+  accountIdByAnchor: ReadonlyMap<string, string>,
+): FindingDraft[] {
+  const open = drift.filter((d) => d.status === 'open' || d.status === 'acknowledged');
+
+  const byOrphanKey = new Map<string, string>();
+  const byEntitlementKey = new Map<string, string>();
+  for (const row of open) {
+    if (row.kind === DRIFT_LINKABLE.orphan_account && row.subjectAnchor !== null) {
+      byOrphanKey.set(`${row.targetSystemId}|${fold(row.subjectAnchor)}`, row.id);
+    }
+    if (
+      row.kind === DRIFT_LINKABLE.unattributable_holding &&
+      row.accountId !== null &&
+      row.entitlementId !== null
+    ) {
+      byEntitlementKey.set(`${row.targetSystemId}|${row.accountId}|${row.entitlementId}`, row.id);
+    }
+  }
+
+  return drafts.map((draft) => {
+    const detail = draft.detail;
+    const systemId = typeof detail['systemId'] === 'string' ? detail['systemId'] : null;
+    const accountRef = typeof detail['accountRef'] === 'string' ? detail['accountRef'] : null;
+
+    if (draft.kind === 'orphan_account' && systemId !== null && accountRef !== null) {
+      const id = byOrphanKey.get(`${systemId}|${fold(accountRef)}`);
+      return id === undefined ? draft : { ...draft, driftFindingId: id };
+    }
+
+    if (
+      draft.kind === 'unattributable_holding' &&
+      detail['resourceKind'] === 'targetEntitlement' &&
+      systemId !== null &&
+      accountRef !== null &&
+      typeof detail['resourceId'] === 'string'
+    ) {
+      const accountId = accountIdByAnchor.get(`${systemId}|${fold(accountRef)}`);
+      if (accountId === undefined) return draft;
+      const id = byEntitlementKey.get(`${systemId}|${accountId}|${detail['resourceId']}`);
+      return id === undefined ? draft : { ...draft, driftFindingId: id };
+    }
+
+    return draft;
+  });
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/**
+ * `reconcileFindings` with the drift link on both ends.
+ *
+ * Before: every draft is matched against Provision's open drift rows, so one
+ * underlying problem produces one row in each dashboard with a reference
+ * between them rather than two independent lifecycles.
+ *
+ * After: every Govern finding this call moved to `resolved` that carried a
+ * `driftFindingId` closes the Provision row behind it. `accepted` findings are
+ * NOT propagated — acceptance is a human tolerating a live problem with an
+ * expiry on the toleration, and telling the other dashboard it went away would
+ * be false.
+ *
+ * Every read here is a short transaction returning plain data and every write
+ * is batched at FINDING_BATCH. Nothing holds a transaction across a loop.
+ */
+export async function reconcileLinkedFindings(
+  tenantId: string,
+  snapshotId: string,
+  kinds: readonly FindingKind[],
+  drafts: readonly FindingDraft[],
+  options: { now?: Date; batchSize?: number } = {},
+): Promise<{ opened: number; updated: number; resolved: number; linked: number; driftClosed: number }> {
+  const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? FINDING_BATCH;
+
+  const driftRows = await withTenant(tenantId, (tx) =>
+    tx.driftFinding.findMany({
+      where: { status: { in: ['open', 'acknowledged'] } },
+      select: {
+        id: true, kind: true, targetSystemId: true, accountId: true,
+        entitlementId: true, subjectAnchor: true, status: true,
+      },
+    }),
+  );
+  const accounts = await withTenant(tenantId, (tx) =>
+    tx.targetAccount.findMany({
+      where: { anchor: { not: null } },
+      select: { id: true, targetSystemId: true, anchor: true },
+    }),
+  );
+  const accountIdByAnchor = new Map(
+    accounts.map((a) => [`${a.targetSystemId}|${fold(a.anchor!)}`, a.id]),
+  );
+
+  const linkedDrafts = linkDrafts(drafts, driftRows, accountIdByAnchor);
+  const linked = linkedDrafts.filter((d) => (d.driftFindingId ?? null) !== null).length;
+
+  // Which linked findings were open BEFORE the reconcile, so the ones that are
+  // `resolved` after it are exactly the ones this call closed. `reconcileFindings`
+  // returns counts and not ids, and a count cannot say which Provision row to close.
+  const before = await withTenant(tenantId, (tx) =>
+    tx.governFinding.findMany({
+      where: {
+        status: { in: ['open', 'acknowledged'] },
+        kind: { in: [...kinds] },
+        driftFindingId: { not: null },
+      },
+      select: { id: true, driftFindingId: true },
+    }),
+  );
+
+  const { opened, updated, resolved } = await reconcileFindings(
+    tenantId, snapshotId, kinds, linkedDrafts, options,
+  );
+
+  let driftClosed = 0;
+  if (before.length > 0) {
+    const nowResolved = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findMany({
+        where: { id: { in: before.map((f) => f.id) }, status: 'resolved' },
+        select: { id: true, driftFindingId: true },
+      }),
+    );
+    const driftIds = [...new Set(nowResolved.map((f) => f.driftFindingId).filter((id): id is string => id !== null))];
+    for (const batch of chunk(driftIds, batchSize)) {
+      await withTenant(tenantId, async (tx) => {
+        const result = await tx.driftFinding.updateMany({
+          where: { id: { in: batch }, status: { in: ['open', 'acknowledged'] } },
+          data: { status: 'resolved', lastSeenAt: now },
+        });
+        driftClosed += result.count;
+        if (result.count > 0) {
+          await recordEvent(tx, {
+            actorUserId: null,
+            action: 'govern.finding.drift_closed',
+            targetType: 'DriftFinding',
+            targetId: batch[0]!,
+            outcome: 'success',
+            sourceIp: null,
+            payload: { count: result.count, snapshotId, driftFindingIds: batch },
+          });
+        }
+      });
+    }
+  }
+
+  return { opened, updated, resolved, linked, driftClosed };
+}
+
+/**
+ * The other direction. Provision resolved the drift — a run removed the
+ * unmanaged entitlement, an administrator linked the orphan — so the Govern
+ * finding that references it is resolved too, with the reason recorded in
+ * words rather than as a bare status change nobody can account for later.
+ *
+ * `accepted` is left alone here as well, and for the same reason.
+ */
+export async function adoptDriftClosures(
+  tenantId: string,
+  snapshotId: string,
+  options: { now?: Date; batchSize?: number } = {},
+): Promise<{ adopted: number }> {
+  const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? FINDING_BATCH;
+
+  const candidates = await withTenant(tenantId, (tx) =>
+    tx.governFinding.findMany({
+      where: { status: { in: ['open', 'acknowledged'] }, driftFindingId: { not: null } },
+      select: { id: true, driftFindingId: true, detail: true },
+    }),
+  );
+  if (candidates.length === 0) return { adopted: 0 };
+
+  const driftIds = candidates
+    .map((c) => c.driftFindingId)
+    .filter((id): id is string => id !== null);
+
+  const closedDrift = await withTenant(tenantId, (tx) =>
+    tx.driftFinding.findMany({
+      where: { id: { in: driftIds }, status: 'resolved' },
+      select: { id: true },
+    }),
+  );
+  const closedIds = new Set(closedDrift.map((d) => d.id));
+  const toAdopt = candidates.filter((c) => c.driftFindingId !== null && closedIds.has(c.driftFindingId));
+
+  let adopted = 0;
+  for (const batch of chunk(toAdopt, batchSize)) {
+    await withTenant(tenantId, async (tx) => {
+      for (const finding of batch) {
+        await tx.governFinding.update({
+          where: { id: finding.id },
+          data: {
+            status: 'resolved',
+            resolvedAt: now,
+            resolvedBySnapshotId: snapshotId,
+            detail: {
+              ...(finding.detail as Record<string, unknown>),
+              resolvedBecause:
+                'Provision resolved the DriftFinding this aggregates; there is one problem underneath and it is closed',
+              resolvedDriftFindingId: finding.driftFindingId,
+            } as never,
+          },
+        });
+        adopted += 1;
+      }
+    });
+  }
+
+  return { adopted };
+}
+```
+
+- [ ] **Step 4: Route the detect stage through it**
+
+In `packages/core/src/govern/snapshot-service.ts`, change the detect stage written at Task 8 Step 5 to call `reconcileLinkedFindings` instead of `reconcileFindings`, with the same `STANDING_KINDS` and the same drafts, and add the other direction immediately after:
+
+```ts
+    await reconcileLinkedFindings(tenantId, snapshotId, STANDING_KINDS, [ /* unchanged */ ], {
+      now: collected.asOf,
+    });
+
+    // The other direction, in the same build: a DriftFinding Provision closed
+    // since the last snapshot resolves the Govern finding that aggregates it.
+    await adoptDriftClosures(tenantId, snapshotId, { now: collected.asOf });
+```
+
+and swap the import:
+
+```ts
+import { adoptDriftClosures, reconcileLinkedFindings } from './drift-link.js';
+```
+
+`reconcileFindings` is no longer imported by `snapshot-service.ts`. **Task 9 is written against `reconcileLinkedFindings` from the start** — its `orphan_account` drafts are never raised through `reconcileFindings` or a bare `upsertFindings` — and its Interfaces block says so.
+
+- [ ] **Step 5: Run the tests**
+
+Run: `pnpm vitest run packages/core/src/govern/drift-link.test.ts packages/core/src/govern/finding-service.test.ts packages/core/src/govern/snapshot-service.test.ts`
+Expected: PASS, 10 + 28 + 17 tests.
+
+- [ ] **Step 6: Export and typecheck**
+
+Add `export * from './govern/drift-link.js';` to `packages/core/src/index.ts`.
+
+Run: `pnpm exec tsc -b --force`
+Expected: exit 0.
+
+- [ ] **Step 7: Mutation-test the linkage**
+
+Each reverted before the next; every one must produce a failure:
+
+1. In `linkDrafts`, drop the `fold(...)` on both sides of the orphan key. Expected: `stamps driftFindingId on an orphan_account draft, folding case` FAILS — the draft carries `ANCHOR-7` and the drift row carries `anchor-7`, which is exactly the AD-folds-case-and-PostgreSQL-does-not defect this programme has now paid for three times.
+2. In `linkDrafts`, remove the `detail['resourceKind'] === 'targetEntitlement'` condition. Expected: `does NOT link an unattributable holding that is not a targetEntitlement` FAILS.
+3. In `linkDrafts`, include drift rows whose `status` is `resolved`. Expected: `ignores a drift row Provision has already resolved` FAILS.
+4. **In `reconcileLinkedFindings`, delete the drift-closure block entirely and return `driftClosed: 0`.** Expected: `closing it on the GOVERN side closes the Provision row` FAILS. This is the mutation that proves the propagation runs rather than being described — the half of Ruling G-2 that is easiest to write a comment about and never call.
+5. In `reconcileLinkedFindings`, widen the `before` query to include `status: 'accepted'`. Expected: `does NOT close a Provision row behind a Govern finding somebody ACCEPTED` FAILS.
+6. **In `adoptDriftClosures`, drop the `status: 'resolved'` filter on `closedDrift`.** Expected: `raises ONE Govern row carrying the drift id rather than a second independent row` FAILS on `expect(govern[0]!.status).toBe('open')` once `adoptDriftClosures` runs in the build, because every linked finding is then adopted as closed the moment it is raised.
+7. Add a third entry to `DRIFT_LINKABLE`. Expected: `links exactly two kinds and no others` FAILS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add packages/core/src/govern/drift-link.ts \
+        packages/core/src/govern/drift-link.test.ts \
+        packages/core/src/govern/snapshot-service.ts \
+        packages/core/src/index.ts
+git commit -m "feat(govern): link Provision drift findings and propagate closure both ways"
+```
+
+---
 ## Task 9: Orphan attribution — propose, claim, confirm
 
 An account belonging to no person is outside every person-scoped review and every SoD check, so resolving it is inventory work. Spec §16. **Govern proposes an owner and never assigns one.**
@@ -7618,7 +8416,9 @@ An account belonging to no person is outside every person-scoped review and ever
 - Modify: `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `foldIdentifier` from `./collect.js`; `readableSnapshot` from `./snapshot-service.js`; `createRemediationItem`, `upsertFindings`, `type FindingDraft` from `./finding-service.js`; `personDisplayName`, `type PersonFacts` from `../provision/desired.js`; `usersWithPermission` from `../automate/notify.js`.
+- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `foldIdentifier` from `./collect.js`; `readableSnapshot` from `./readable.js`; `createRemediationItem`, `type FindingDraft` from `./finding-service.js`; **`reconcileLinkedFindings` from `./drift-link.js` (Task 8A)**; `personDisplayName`, `type PersonFacts` from `../provision/desired.js`; `usersWithPermission` from `../automate/notify.js`.
+
+**`refreshOrphanProposals` is the only writer of `orphan_account`, and it raises it through Task 8A.** It calls `reconcileLinkedFindings(tenantId, snapshotId, ['orphan_account'], findings, { now })` — never `upsertFindings` and never `reconcileFindings` — for two reasons. First, C1: a whole-tenant sweep from here would close every standing finding the snapshot build opened minutes earlier. Second, Ruling G-2: an orphan account is the one problem Provision and Govern both see, and raising it independently is how one problem becomes two counts in two dashboards.
 - Produces (all in `./orphan-service.js`):
   - `type AttributionMethod = 'name_similarity' | 'mail_address' | 'employee_identifier' | 'adjacent_manager'`
   - `interface OrphanAccount { systemId: string; systemName: string; accountRef: string; displayName: string | null; mail: string | null; employeeId: string | null; managerAccountRef: string | null }`
@@ -7894,8 +8694,9 @@ Expected: FAIL — `Cannot find module './orphan-service.js'`.
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { foldIdentifier } from './collect.js';
-import { createRemediationItem, upsertFindings, type FindingDraft } from './finding-service.js';
-import { readableSnapshot } from './snapshot-service.js';
+import { createRemediationItem, type FindingDraft } from './finding-service.js';
+import { reconcileLinkedFindings } from './drift-link.js';
+import { readableSnapshot } from './readable.js';
 
 export type AttributionMethod =
   | 'name_similarity'
@@ -8179,9 +8980,13 @@ export async function refreshOrphanProposals(
     });
   }
 
-  if (findings.length > 0) {
-    await upsertFindings(tenantId, snapshotId, findings, { now });
-  }
+  // `orphan_account` and NOTHING else: this function is authoritative for that
+  // one kind, and the reconciliation is narrowed to it. Through `drift-link`,
+  // so the draft carries Provision's DriftFinding id rather than becoming a
+  // second row for the same account. Called unconditionally — an empty
+  // `findings` is the case where every orphan was claimed since the last run,
+  // and that is exactly when the previous findings must be closed.
+  await reconcileLinkedFindings(tenantId, snapshotId, ['orphan_account'], findings, { now });
 
   return { orphans: loaded.orphanHoldings.length, proposals: proposalCount };
 }
@@ -8333,8 +9138,10 @@ Govern is the subsystem that finally makes the hash chain load-bearing. Spec §1
   - `function fileAnchorSink(directory: string): AnchorSink`
   - `function mailAnchorSink(transport: Transport, to: string, tenantName: string): AnchorSink`
   - `async function anchorHead(tenantId: string, sink: AnchorSink, options?: { now?: Date }): Promise<{ sequence: number; status: 'anchored' | 'failed' }>`
-  - `interface IntegrityStatus { headSequence: number; headHash: string; lastCheckpoint: { sequence: number; verifiedAt: Date; signed: boolean } | null; lastCheck: { fromSequence: number; toSequence: number; result: string; startedAt: Date; mode: string } | null; anchoring: { configured: boolean; lastAnchoredSequence: number | null; statement: string } }`
-  - `async function integrityStatus(tx: TenantClient, anchoringConfigured: boolean): Promise<IntegrityStatus>`
+  - `type SignatureState = 'signed_and_verified' | 'unsigned_no_signer_configured' | 'unsigned_while_signer_configured' | 'unknown_key' | 'invalid'`
+  - `async function checkpointTrust(checkpoint: { sequence: number; hash: string; signature: string | null; keyId: string | null }, signer: CheckpointSigner | null): Promise<{ seedable: boolean; state: SignatureState }>`
+  - `interface IntegrityStatus { headSequence: number; headHash: string; lastCheckpoint: { sequence: number; verifiedAt: Date; signed: boolean; keyId: string | null; signatureState: SignatureState } | null; lastCheck: { fromSequence: number; toSequence: number; result: string; startedAt: Date; mode: string } | null; checkpointStatement: string; anchoring: { configured: boolean; lastAnchoredSequence: number | null; statement: string } }`
+  - `async function integrityStatus(tx: TenantClient, anchoringConfigured: boolean, signer?: CheckpointSigner | null): Promise<IntegrityStatus>`
 
 **`CheckpointSigner` is a new interface, not `MasterKeyProvider`.** §17 says "the same key-provider interface Core's vault already uses for its master key", but `MasterKeyProvider` is `{ wrap, unwrap }` — envelope encryption, with no `sign` and no `verify`. A signature over `(sequence, hash)` is a different operation with a different key lifetime, and pretending otherwise would mean either widening the vault's interface for a caller that does not encrypt anything, or encrypting a digest and calling it a signature. `CheckpointSigner` mirrors `MasterKeyProvider`'s *shape* — a narrow interface with a local implementation and a KMS-backed one later — without borrowing its semantics.
 
@@ -8369,7 +9176,35 @@ export function stableStringify(value: unknown): string {
 export function auditEventHash(e: Hashable): string {
 ```
 
-and update the two internal call sites in `recordEvent` and `verifyChain` from `computeHash(` to `auditEventHash(`. **Nothing else in this file changes** — `AuditEvent`'s shape, `recordEvent`'s advisory lock and `verifyChain`'s behaviour are all untouched, which is the return on having designed the log as an append-only chain in the first slice.
+and update the two internal call sites in `recordEvent` and `verifyChain` from `computeHash(` to `auditEventHash(`.
+
+**One behavioural change, and only one: `recordEvent` normalises the payload before it hashes it.** `recordEvent` hashes the **in-memory** payload; `verifySegment` hashes the payload read back **out of `jsonb`**. Prisma drops a key whose value is `undefined` on write, and it comes back as an absent key, so `stableStringify` produces a different string and the nightly job reports a `critical` broken chain on a log nobody touched. A verifier that cries wolf is how an organization learns to ignore it.
+
+```ts
+/**
+ * Prisma drops an `undefined` value on write and it returns as an absent key.
+ * Dropping it here too means the digest is computed over exactly what the
+ * database will hold, so the writer and the verifier cannot disagree.
+ *
+ * A throw would be the other resolution and is worse: `exactOptionalPropertyTypes`
+ * makes `{ foo: x ?? undefined }` an ordinary idiom across three subsystems,
+ * and turning it into a runtime failure on the audit path fails the write for
+ * the sake of the hash.
+ */
+function dropUndefined(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(dropUndefined);
+  if (value === null || typeof value !== 'object' || value instanceof Date) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => [k, dropUndefined(v)]),
+  );
+}
+```
+
+`recordEvent` computes `const payload = dropUndefined(e.payload) as Record<string, unknown>;` once and uses **that** value for both `auditEventHash(...)` and the `data.payload` write. **No existing event's digest changes** — an event with no `undefined` value normalises to itself — so `verifyChain` over an existing log is unaffected.
+
+Everything else in this file is untouched: `AuditEvent`'s shape, `recordEvent`'s advisory lock and `verifyChain`'s behaviour, which is the return on having designed the log as an append-only chain in the first slice. Step 7 runs the existing `packages/core/src/audit` suite to prove it.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -8488,6 +9323,43 @@ describe('verifySegment', () => {
     const result = await verifySegment(tenantId, 1, '0'.repeat(64));
     expect(result).toMatchObject({ result: 'valid', fromSequence: 1, toSequence: 0 });
   });
+
+  it('the WRITER and the VERIFIER agree on an awkward payload', async () => {
+    // `recordEvent` hashes the IN-MEMORY payload; `verifySegment` hashes the
+    // payload read back OUT OF JSONB. Anywhere those two disagree, the nightly
+    // job reports a `critical` broken chain on a log nobody touched — and a
+    // verifier that cries wolf is how an organization learns to ignore it.
+    //
+    // The known divergence is `undefined`: Prisma drops the key on write and it
+    // returns as an absent key, so `stableStringify` produces a different
+    // string. Whichever way that is resolved — reject an `undefined` value at
+    // `recordEvent`, or drop undefined keys before hashing — THIS TEST is what
+    // says so, and it must be made to pass by changing the code and not by
+    // deleting the awkward key from the fixture.
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null,
+        action: 'govern.test.awkward',
+        targetType: 'Test',
+        targetId: null,
+        outcome: 'success',
+        sourceIp: null,
+        payload: {
+          absent: undefined,
+          unicode: 'Ijsbrand — ij, naive, nihongo, emoji',
+          nested: [1, [2, 3], { a: null }],
+          float: 0.1 + 0.2,
+          bigish: 9007199254740991,
+          negativeZero: -0,
+          emptyString: '',
+          emptyObject: {},
+        } as Record<string, unknown>,
+      }),
+    );
+
+    const result = await verifySegment(tenantId, 1, '0'.repeat(64));
+    expect(result).toMatchObject({ result: 'valid' });
+  });
 });
 
 describe('verifyIncremental', () => {
@@ -8558,6 +9430,78 @@ describe('verifyIncremental', () => {
       signer.verify(`${checkpoint.sequence}:${checkpoint.hash}`, checkpoint.signature!),
     ).resolves.toBe(true);
     await expect(signer.verify(`999:${checkpoint.hash}`, checkpoint.signature!)).resolves.toBe(false);
+  });
+
+  it('REFUSES to seed from a checkpoint whose hash was tampered with, and reports broken', async () => {
+    // The attack section 17 names, executed exactly: rewrite the chain, insert
+    // a checkpoint that vouches for the rewrite. If `verify` is never called on
+    // the production path, every subsequent run reports `valid` over a segment
+    // that begins after the tampering, forever — and section 17's mitigation is
+    // printed on the cover of every evidence bundle as though it held.
+    const signer = localFileCheckpointSigner('key-1', Buffer.alloc(32, 9));
+    await appendEvents(4);
+    await verifyIncremental(tenantId, { now: NOW, signer });
+
+    await asDatabaseSuperuser(
+      `UPDATE "AuditCheckpoint" SET hash = $2 WHERE "tenantId" = $1`,
+      [tenantId, 'f'.repeat(64)],
+    );
+    await appendEvents(2);
+
+    const result = await verifyIncremental(tenantId, { now: NOW, signer });
+    expect(result.result).toBe('broken');
+    expect(result.signatureState).toBe('invalid');
+    // It re-walked from genesis rather than trusting the checkpoint's sequence.
+    expect(result.fromSequence).toBe(1);
+
+    const check = await withTenant(tenantId, (tx) =>
+      tx.auditChainCheck.findFirstOrThrow({ orderBy: { startedAt: 'desc' } }),
+    );
+    expect(check.mode).toBe('full_fallback');
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { subjectRefId: { startsWith: 'audit-checkpoint:' } } }),
+    );
+    expect(finding.severity).toBe('critical');
+    expect(finding.detail).toMatchObject({ checkpointSequence: 4 });
+    expect(String((finding.detail as Record<string, unknown>)['statement'])).toContain(
+      'does not carry a valid signature',
+    );
+  });
+
+  it('REFUSES to seed from an UNSIGNED checkpoint while a signer is configured', async () => {
+    // The cheaper half of the same attack: the forger does not need the key at
+    // all if an unsigned checkpoint is honoured.
+    const signer = localFileCheckpointSigner('key-1', Buffer.alloc(32, 9));
+    await appendEvents(3);
+    await verifyIncremental(tenantId, { now: NOW, signer });
+    await asDatabaseSuperuser(
+      `UPDATE "AuditCheckpoint" SET signature = NULL, "keyId" = NULL WHERE "tenantId" = $1`,
+      [tenantId],
+    );
+
+    const result = await verifyIncremental(tenantId, { now: NOW, signer });
+    expect(result.signatureState).toBe('unsigned_while_signer_configured');
+    expect(result.fromSequence).toBe(1);
+    expect(result.result).toBe('broken');
+  });
+
+  it('DOES seed from an unsigned checkpoint when no signer is configured, and says what that is worth', async () => {
+    // The honest case. Requiring a signature where none was ever configured
+    // would turn every incremental run into a full walk forever, which is the
+    // integrity check too expensive to run that this task exists to avoid.
+    await appendEvents(3);
+    await verifyIncremental(tenantId, { now: NOW });
+    await appendEvents(2);
+
+    const result = await verifyIncremental(tenantId, { now: NOW });
+    expect(result.fromSequence).toBe(4);
+    expect(result.result).toBe('valid');
+    expect(result.signatureState).toBe('unsigned_no_signer_configured');
+
+    const status = await withTenant(tenantId, (tx) => integrityStatus(tx, false, null));
+    expect(status.checkpointStatement).toContain('UNSIGNED and no signing key is configured');
+    expect(status.lastCheckpoint).toMatchObject({ signatureState: 'unsigned_no_signer_configured' });
   });
 });
 
@@ -8789,21 +9733,106 @@ export function localFileCheckpointSigner(keyId: string, key: Buffer): Checkpoin
   };
 }
 
+/**
+ * What the last checkpoint's signature is worth. Returned by `checkpointTrust`
+ * and reported by `integrityStatus`, because §20's integrity screen must be
+ * able to say it in words the way it already says the anchoring state.
+ */
+export type SignatureState =
+  | 'signed_and_verified'
+  | 'unsigned_no_signer_configured'
+  | 'unsigned_while_signer_configured'
+  | 'unknown_key'
+  | 'invalid';
+
+/**
+ * MAY THIS CHECKPOINT BE SEEDED FROM?
+ *
+ * This is the whole of C5, and it is the difference between a verifier and a
+ * verifier-shaped object. `verifyIncremental` takes a checkpoint's `hash` as
+ * the expected `prevHash` of the next event. If that hash is taken on trust,
+ * the attack §17 names is not merely undetected — it is CHEAPER than §17
+ * claims. An actor with database write access rewrites events 1..N, recomputes
+ * their digests, inserts a checkpoint row at N with `signature: null` and
+ * `keyId: null`, and every subsequent nightly run reports `valid` over a
+ * segment that starts after the tampering. The signing key is never needed.
+ * §17's mitigation — "raises the bar from database access to database access
+ * plus the signing key" — is then inert, and it is printed on the cover of
+ * every evidence bundle as though it were true.
+ *
+ * The append-only RULE pair on `AuditCheckpoint` does not help: `DO INSTEAD
+ * NOTHING` on UPDATE and DELETE is application-level, a superuser drops the
+ * rule, and this attack only needs an INSERT, which the rules permit.
+ *
+ * The rule is on the ROW, not on the deployment:
+ *  - the row claims a signature (`keyId !== null`) -> a signer with that exact
+ *    `keyId` must verify it;
+ *  - the row claims none and no signer is configured -> honest, seedable, and
+ *    `integrityStatus` says in words what that verification is worth;
+ *  - the row claims none while a signer IS configured -> this is exactly the
+ *    forged checkpoint, and it is refused.
+ *
+ * Turning signing on for the first time therefore produces ONE finding and ONE
+ * full walk, for the pre-existing unsigned checkpoint. That is correct and
+ * cheap, and the finding says why.
+ */
+export async function checkpointTrust(
+  checkpoint: { sequence: number; hash: string; signature: string | null; keyId: string | null },
+  signer: CheckpointSigner | null,
+): Promise<{ seedable: boolean; state: SignatureState }> {
+  if (checkpoint.keyId !== null) {
+    if (signer === null || signer.keyId !== checkpoint.keyId) {
+      return { seedable: false, state: 'unknown_key' };
+    }
+    if (checkpoint.signature === null) return { seedable: false, state: 'invalid' };
+    const ok = await signer.verify(`${checkpoint.sequence}:${checkpoint.hash}`, checkpoint.signature);
+    return ok
+      ? { seedable: true, state: 'signed_and_verified' }
+      : { seedable: false, state: 'invalid' };
+  }
+  return signer === null
+    ? { seedable: true, state: 'unsigned_no_signer_configured' }
+    : { seedable: false, state: 'unsigned_while_signer_configured' };
+}
+
+const UNTRUSTED_CHECKPOINT_STATEMENT =
+  'a checkpoint covering this range does not carry a valid signature, so the ' +
+  'hash it offers as a starting point cannot be relied on and this run was ' +
+  'restarted from genesis';
+
 export async function verifyIncremental(
   tenantId: string,
   options: { now?: Date; pageSize?: number; signer?: CheckpointSigner | null } = {},
-): Promise<SegmentResult & { checkpointSequence: number | null }> {
+): Promise<SegmentResult & { checkpointSequence: number | null; signatureState: SignatureState | null }> {
   const now = options.now ?? new Date();
+  const signer = options.signer ?? null;
 
   const checkpoint = await withTenant(tenantId, (tx) =>
     tx.auditCheckpoint.findFirst({ orderBy: { sequence: 'desc' } }),
   );
 
-  const from = (checkpoint?.sequence ?? 0) + 1;
-  const seed = checkpoint?.hash ?? GENESIS_HASH;
-  const result = await verifySegment(tenantId, from, seed, {
+  // THE SEED IS NOT TAKEN ON TRUST. `signer.verify` is called here, on the
+  // production path, and not only in a test.
+  const trust =
+    checkpoint === null
+      ? { seedable: true, state: null as SignatureState | null }
+      : await checkpointTrust(checkpoint, signer);
+
+  const seedFrom = trust.seedable ? checkpoint : null;
+  const from = (seedFrom?.sequence ?? 0) + 1;
+  const seed = seedFrom?.hash ?? GENESIS_HASH;
+  const walked = await verifySegment(tenantId, from, seed, {
     ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
   });
+
+  // An unverifiable checkpoint is itself a break in the evidence, and reporting
+  // `valid` for a run that had to ignore one is the "we checked" lie this
+  // whole task exists to refuse. The walk still happens — from genesis — so the
+  // AuditChainCheck row records what was actually examined.
+  const result: SegmentResult =
+    trust.seedable || checkpoint === null
+      ? walked
+      : { ...walked, result: 'broken', brokenAtSequence: walked.brokenAtSequence ?? checkpoint.sequence };
 
   await withTenant(tenantId, async (tx) => {
     await tx.auditChainCheck.create({
@@ -8815,10 +9844,31 @@ export async function verifyIncremental(
         brokenAtSequence: result.brokenAtSequence,
         startedAt: now,
         durationMs: result.durationMs,
-        mode: 'incremental',
+        mode: trust.seedable ? 'incremental' : 'full_fallback',
       },
     });
   });
+
+  if (checkpoint !== null && !trust.seedable) {
+    await upsertFindings(
+      tenantId,
+      [
+        {
+          kind: 'coverage_gap',
+          severity: 'critical',
+          subjectRefType: 'snapshot',
+          subjectRefId: `audit-checkpoint:${checkpoint.sequence}`,
+          detail: {
+            checkpointSequence: checkpoint.sequence,
+            signatureState: trust.state,
+            keyId: checkpoint.keyId,
+            statement: UNTRUSTED_CHECKPOINT_STATEMENT,
+          },
+        },
+      ],
+      { now },
+    );
+  }
 
   if (result.result === 'valid' && result.toSequence >= result.fromSequence) {
     const head = await withTenant(tenantId, (tx) =>
@@ -8842,15 +9892,15 @@ export async function verifyIncremental(
     }
   }
 
-  if (result.result === 'broken') {
+  if (result.result === 'broken' && walked.result === 'broken') {
     // A failed verification is a `critical` finding, notified immediately and
-    // NEVER digested, and it names the sequence. A checkpoint is deliberately
-    // NOT written: one over a broken segment would seed the next incremental
-    // run with a hash from a chain that does not hold, and every subsequent run
-    // would report valid.
+    // NEVER digested, and it names the sequence.
+    //
+    // `upsertFindings`, never `reconcileFindings`: this caller is authoritative
+    // for one finding and a whole-tenant sweep from here would close every
+    // standing finding the nightly snapshot build opened (C1).
     await upsertFindings(
       tenantId,
-      '',
       [
         {
           kind: 'coverage_gap',
@@ -8869,7 +9919,11 @@ export async function verifyIncremental(
     );
   }
 
-  return { ...result, checkpointSequence: checkpoint?.sequence ?? null };
+  return {
+    ...result,
+    checkpointSequence: seedFrom?.sequence ?? null,
+    signatureState: trust.state,
+  };
 }
 
 /** Full verification from genesis stays available as a separate, explicitly invoked, paged job. */
@@ -9024,12 +10078,43 @@ const ANCHORED_STATEMENT =
   'moment in time somewhere outside the database, which is the only one of the ' +
   'three mitigations that is actually proof against the operator.';
 
+const CHECKPOINT_STATEMENTS: Readonly<Record<SignatureState | 'none', string>> = {
+  none: 'No checkpoint has been written yet, so every verification starts from genesis.',
+  signed_and_verified:
+    'The last checkpoint carries a signature that verifies under the configured key, so the ' +
+    'starting point of the most recent incremental verification was not simply taken on trust.',
+  unsigned_no_signer_configured:
+    'The last checkpoint is UNSIGNED and no signing key is configured. Incremental verification ' +
+    'therefore seeds from a hash held in the same database it is verifying: an actor with database ' +
+    'write access can rewrite the chain, recompute the digests, insert a checkpoint, and every ' +
+    'later run will report valid. Configure a checkpoint signing key to raise that bar.',
+  unsigned_while_signer_configured:
+    'The last checkpoint is UNSIGNED while a signing key IS configured. It was not seeded from and ' +
+    'the chain was re-walked from genesis. This is what a forged checkpoint looks like; it is also ' +
+    'what the first run after signing is switched on looks like.',
+  unknown_key:
+    'The last checkpoint names a signing key this deployment does not hold. It was not seeded from ' +
+    'and the chain was re-walked from genesis.',
+  invalid:
+    'The last checkpoint carries a signature that DOES NOT VERIFY. It was not seeded from and the ' +
+    'chain was re-walked from genesis.',
+};
+
 export async function integrityStatus(
   tx: TenantClient,
   anchoringConfigured: boolean,
+  signer: CheckpointSigner | null = null,
 ): Promise<IntegrityStatus> {
   const head = await tx.auditEvent.findFirst({ orderBy: { sequence: 'desc' } });
   const checkpoint = await tx.auditCheckpoint.findFirst({ orderBy: { sequence: 'desc' } });
+  // `checkpointTrust` is an HMAC over 64 bytes with a key already in memory: no
+  // network, no KMS, no Argon2. It is the one signing-adjacent call this plan
+  // permits inside a `withTenant`, and it is named here so the exception is
+  // deliberate. A KMS-backed signer must be verified OUTSIDE the transaction.
+  const trust =
+    checkpoint === null
+      ? { seedable: true, state: 'none' as const }
+      : await checkpointTrust(checkpoint, signer);
   const check = await tx.auditChainCheck.findFirst({ orderBy: { startedAt: 'desc' } });
   const anchor = await tx.auditAnchor.findFirst({
     where: { status: 'anchored' },
@@ -9046,6 +10131,10 @@ export async function integrityStatus(
             sequence: checkpoint.sequence,
             verifiedAt: checkpoint.verifiedAt,
             signed: checkpoint.signature !== null,
+            keyId: checkpoint.keyId,
+            // The SAME predicate `verifyIncremental` seeds on, so the screen
+            // cannot say one thing while the verifier does another.
+            signatureState: trust.state,
           },
     lastCheck:
       check === null
@@ -9057,6 +10146,11 @@ export async function integrityStatus(
             startedAt: check.startedAt,
             mode: check.mode,
           },
+    // §20's integrity screen says the checkpoint's signature state in words,
+    // the same way it already says the anchoring state, because "signed: false"
+    // rendered as a grey dot is exactly how a mitigation that is not in force
+    // gets read as one that is.
+    checkpointStatement: CHECKPOINT_STATEMENTS[trust.state],
     anchoring: {
       configured: anchoringConfigured,
       lastAnchoredSequence: anchor?.sequence ?? null,
@@ -9134,12 +10228,18 @@ In `packages/core/src/govern/snapshot-service.ts`, after the `HoldingEvent` writ
           },
         }),
       );
-      await upsertFindings(tenantId, snapshotId, detectUnexplainedGains(gainRows), {
+      // `['unexplained_gain']` and NOTHING else. This call runs inside the same
+      // `buildSnapshot` that opened the six standing kinds moments earlier, and
+      // a reconciliation that swept the whole tenant here would mark every one
+      // of them `resolved` with `resolvedBySnapshotId` naming a snapshot that
+      // never showed them gone. That is C1, and it emptied slice 1's headline
+      // output on every nightly run.
+      await reconcileFindings(tenantId, snapshotId, ['unexplained_gain'], detectUnexplainedGains(gainRows), {
         now: collected.asOf,
       });
 ```
 
-and add `detectUnexplainedGains` to the `finding-service.js` import list at the head of the file.
+and add `detectUnexplainedGains` and `reconcileFindings` to the `finding-service.js` import list at the head of the file. (`snapshot-service.ts` imports `reconcileLinkedFindings` from `./drift-link.js` for the detect stage, per Task 8A Step 4, and `reconcileFindings` directly for this one — the gain findings have no Provision counterpart.)
 
 - [ ] **Step 7: Run the tests**
 
@@ -9159,8 +10259,14 @@ Expected: exit 0.
 2. Remove the `recomputed !== e.hash` check. Expected: `reports the sequence where an ALTERED event stops reproducing its digest` FAILS.
 3. In `verifyIncremental`, write the checkpoint unconditionally. Expected: `writes NO checkpoint when the segment is broken` FAILS.
 4. In `verifyIncremental`, seed with `GENESIS_HASH` always instead of the checkpoint's hash. Expected: `verifies only the new segment next time` FAILS on `fromSequence`.
+4a. **In `verifyIncremental`, delete the `checkpointTrust` call and set `trust = { seedable: true, state: 'signed_and_verified' }`** — that is, restore the version that took the seed on trust. Expected: **both** `REFUSES to seed from a checkpoint whose hash was tampered with` and `REFUSES to seed from an UNSIGNED checkpoint while a signer is configured` FAIL. This is the mutation that proves `signer.verify` is called from production code and not only from a test; before this fix it was called in exactly one place in 21,933 lines, and that place was an assertion.
+4b. In `checkpointTrust`, return `{ seedable: true }` for the `keyId === null && signer !== null` arm. Expected: `REFUSES to seed from an UNSIGNED checkpoint while a signer is configured` FAILS.
+4c. In `checkpointTrust`, drop the `signer.keyId !== checkpoint.keyId` comparison. Expected: add a case seeding a checkpoint written by `localFileCheckpointSigner('key-2', …)` and verified with `key-1`; it must FAIL. A signature that verifies under the wrong key's name is a signature nobody can attribute.
 5. In `audit-service.ts`, change `auditEventHash` to hash `JSON.stringify(e.payload)` instead of `stableStringify(e.payload)`. Expected: `auditEventHash reproduces the digest recordEvent wrote` FAILS — **and this is why the primitive is exported rather than reimplemented.**
+5a. In `recordEvent`, remove the `dropUndefined` normalisation. Expected: `the WRITER and the VERIFIER agree on an awkward payload` FAILS with `result: 'broken'` on an untampered chain.
+5b. In `dropUndefined`, drop the `value instanceof Date` guard. Expected: any existing audit test whose payload carries a `Date` FAILS, because a `Date` would be flattened to `{}`. If none does, add one to this file's `appendEvents` fixture — a normaliser that silently mangles a value type is how a hash starts disagreeing with itself six months later.
 6. In `integrityStatus`, return the anchored statement when `anchoringConfigured` is false. Expected: `states IN WORDS that anchoring is not configured` FAILS.
+7. In `integrityStatus`, hard-code `signatureState: 'signed_and_verified'`. Expected: `DOES seed from an unsigned checkpoint when no signer is configured, and says what that is worth` FAILS on `lastCheckpoint`. The screen and the verifier must not be able to disagree.
 
 - [ ] **Step 10: Commit**
 
@@ -9184,10 +10290,13 @@ Spec §8 rule 4, §10, §17, §18. **A number without its header is not a number
 - Modify: `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`, `stableStringify` from `../audit/audit-service.js`; `readableSnapshot`, `type ReadableSnapshot`, `SnapshotNotReadableError` from `./snapshot-service.js`; `countRegion`, `sumRegions`, `percentOf`, `known`, `unknownValue`, `type Tri`, `type ResourceKind`, `SYNTRA_SYSTEM_ID` from `./types.js`; `summariseAttributions`, `type AttributionDraft` from `./attribute.js`; `type ClassifiedSource` from `./freshness.js`; `integrityStatus`, `verifySegment` from `./audit-integrity.js`; `DIFF_LIMITATION` from `./diff.js`; `createHash` from `node:crypto`.
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`, `stableStringify` from `../audit/audit-service.js`; `readableSnapshot`, `type ReadableSnapshot`, `SnapshotNotReadableError` from `./readable.js`; `countRegion`, `sumRegions`, `percentOf`, `known`, `unknownValue`, `type Tri`, `type ResourceKind`, `SYNTRA_SYSTEM_ID` from `./types.js`; `summariseAttributions`, `type AttributionDraft` from `./attribute.js`; `type ClassifiedSource` from `./freshness.js`; `integrityStatus`, `verifySegment` from `./audit-integrity.js`; `DIFF_LIMITATION` from `./diff.js`; `createHash` from `node:crypto`.
 - Produces (in `./settings-service.js`):
   - `async function governSettings(tx: TenantClient): Promise<GovernSettings>` — get-or-create the single row
-  - `async function updateGovernSettings(tenantId: string, actorUserId: string | null, input: Record<string, number | string | number[] | null>): Promise<void>`
+  - `interface GovernSettingsInput` — an explicit partial over the **fifteen** named settings, and nothing else
+  - `const GOVERN_SETTING_KEYS: readonly (keyof GovernSettingsInput)[]`
+  - `class UnknownSettingError extends Error { constructor(readonly keys: readonly string[]) }`
+  - `async function updateGovernSettings(tenantId: string, actorUserId: string | null, input: GovernSettingsInput): Promise<void>` — **no `as never`; a key outside the allow-list is a 400, not a write**
   - `async function upsertSourcePolicy(tenantId: string, actorUserId: string | null, input: { sourceKind: string; sourceId: string; freshnessSlaHours: number; inDefaultScope: boolean }): Promise<void>`
   - `async function setResourceClassification(tenantId: string, actorUserId: string | null, input: { systemId: string; resourceKind: string; resourceId: string; privileged: boolean; note: string | null }): Promise<void>`
 - Produces (in `./report-service.js`):
@@ -9200,7 +10309,12 @@ Spec §8 rule 4, §10, §17, §18. **A number without its header is not a number
   - `function buildHeader(snapshot: ReadableSnapshot, scopeDescription: string): ReportHeader`
   - `interface SystemAccessRow { subjectKey: string; personId: string | null; displayName: string; bucket: 'unattributable' | 'no_active_contract' | 'unattributed_account' | 'other'; resources: { resourceKind: ResourceKind; resourceId: string; resourceName: string; state: string; observedAt: string; provenance: string; lastCertifiedAt: string | null; lastCertifiedBy: string | null }[] }`
   - `async function whoHasAccessToSystem(tenantId: string, input: { snapshotId?: string; systemId: string; resourceId?: string }): Promise<ReportEnvelope<{ rows: SystemAccessRow[]; holderCount: Tri<number> }>>`
-  - `async function whatDoesPersonHold(tenantId: string, input: { snapshotId?: string; personId: string }): Promise<ReportEnvelope<{ personId: string; displayName: string; accounts: string[]; holdings: PersonHoldingRow[] }>>`
+  - `type SnapshotInForce = { covered: true; snapshot: ReadableSnapshot } | { covered: false; nearest: Date | null; statement: string }`
+  - `async function snapshotInForceOn(tx: TenantClient, date: Date, options?: { maxGapDays?: number }): Promise<SnapshotInForce>` — **Ruling G-4. It answers "no snapshot covers 14 March" and never substitutes the nearest.**
+  - `class SnapshotNotCoveredError extends Error { constructor(readonly on: Date, readonly detail: Extract<SnapshotInForce, { covered: false }>) }`
+  - `interface AccountDormancy { userId: string; login: string; lastSuccessfulSignInAt: string | null; lastAttemptAt: string | null; dormantDays: number | null; caveat: string }`
+  - `async function accountDormancy(tx: TenantClient, personId: string, now: Date): Promise<AccountDormancy[]>`
+  - `async function whatDoesPersonHold(tenantId: string, input: { snapshotId?: string; personId: string; on?: Date }): Promise<ReportEnvelope<{ personId: string; displayName: string; accounts: string[]; holdings: PersonHoldingRow[]; dormancy: AccountDormancy[] }>>`
   - `async function whatChanged(tenantId: string, input: { fromSnapshotId: string; toSnapshotId: string }): Promise<ReportEnvelope<ChangeReport>>`
   - `async function whoApprovedIt(tenantId: string, input: { snapshotId?: string; subjectKey: string; systemId: string; resourceKind: ResourceKind; resourceId: string }): Promise<ReportEnvelope<ApprovalReport>>`
 - Produces (in `./export-service.js`):
@@ -9220,7 +10334,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { buildHeader, bodyOf, envelope, headerOf, whoHasAccessToSystem, whatDoesPersonHold } from './report-service.js';
-import { readableSnapshot } from './snapshot-service.js';
+import { readableSnapshot } from './readable.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
 let tenantId: string;
@@ -9428,13 +10542,92 @@ const PERCENT_FIELDS = [
  * caught, and lengthening a cadence is functionally the same as agreeing not to
  * see things.
  */
+/**
+ * The FIFTEEN settings a `govern.manage` holder may write, and nothing else.
+ *
+ * `GovernSettings` also carries `lastAppliedBatchAt` and
+ * `personsWithActiveContractAtLastBatch`, and the schema's own comment says
+ * "they are not settings. They are the denominator the population-collapse
+ * refusal compares against". With `data: input as never` and no allow-list, a
+ * `PATCH /govern/settings` could write both — and setting
+ * `personsWithActiveContractAtLastBatch: 0` disables §13's population-collapse
+ * refusal permanently. §21 lists lowering a threshold as a privileged act
+ * precisely because it "is functionally the same act as confirming everything
+ * it would otherwise have caught"; writing the denominator is that act with no
+ * threshold visible at all.
+ *
+ * Typed as an explicit partial rather than `Record<string, …>`, so the write
+ * needs no cast: **both `as never` casts here and at the route were defects by
+ * Global Constraint 12's own terms.**
+ */
+export interface GovernSettingsInput {
+  snapshotSchedule?: string;
+  snapshotRetentionDays?: number;
+  defaultFreshnessSlaHours?: number;
+  maxSnapshotAgeDays?: number;
+  batchThresholdPercent?: number;
+  perResourceThresholdPercent?: number;
+  personPopulationDropPercent?: number;
+  minimumCoveragePercent?: number;
+  bulkCertifyLimit?: number;
+  dispatchSlaHours?: number;
+  privilegedRecertifyDays?: number;
+  maxExceptionDays?: number;
+  exceptionWarningDays?: number[];
+  minReciprocalDecisions?: number;
+  reciprocityWindowDays?: number;
+}
+
+export const GOVERN_SETTING_KEYS: readonly (keyof GovernSettingsInput)[] = [
+  'snapshotSchedule',
+  'snapshotRetentionDays',
+  'defaultFreshnessSlaHours',
+  'maxSnapshotAgeDays',
+  'batchThresholdPercent',
+  'perResourceThresholdPercent',
+  'personPopulationDropPercent',
+  'minimumCoveragePercent',
+  'bulkCertifyLimit',
+  'dispatchSlaHours',
+  'privilegedRecertifyDays',
+  'maxExceptionDays',
+  'exceptionWarningDays',
+  'minReciprocalDecisions',
+  'reciprocityWindowDays',
+];
+
+/** A type-level guard: the runtime list and the interface cannot drift apart. */
+type _KeysCovered = MutuallyAssignable<
+  keyof GovernSettingsInput,
+  (typeof GOVERN_SETTING_KEYS)[number]
+>;
+
+export class UnknownSettingError extends Error {
+  constructor(readonly keys: readonly string[]) {
+    super(
+      `these are not Govern settings and cannot be written here: ${keys.join(', ')}. ` +
+        `lastAppliedBatchAt and personsWithActiveContractAtLastBatch are written only by ` +
+        `confirmRevocationBatch, because they are the denominator the population-collapse ` +
+        `refusal compares against.`,
+    );
+    this.name = 'UnknownSettingError';
+  }
+}
+
 export async function updateGovernSettings(
   tenantId: string,
   actorUserId: string | null,
-  input: Record<string, number | string | number[] | null>,
+  input: GovernSettingsInput,
 ): Promise<void> {
+  // The runtime backstop. The type stops a caller inside this package; this
+  // stops a JSON body, which is where the request actually comes from.
+  const unknown = Object.keys(input).filter(
+    (key) => !(GOVERN_SETTING_KEYS as readonly string[]).includes(key),
+  );
+  if (unknown.length > 0) throw new UnknownSettingError(unknown);
+
   for (const field of PERCENT_FIELDS) {
-    const value = input[field];
+    const value = (input as Record<string, unknown>)[field];
     if (typeof value === 'number' && (value < 0 || value > 100)) {
       throw new Error(`${field} must be between 0 and 100`);
     }
@@ -9442,10 +10635,9 @@ export async function updateGovernSettings(
 
   await withTenant(tenantId, async (tx) => {
     const before = await governSettings(tx);
-    const after = await tx.governSettings.update({
-      where: { tenantId },
-      data: input as never,
-    });
+    // No cast: `GovernSettingsInput` is a partial over named scalar columns and
+    // Prisma accepts it directly.
+    const after = await tx.governSettings.update({ where: { tenantId }, data: input });
 
     const changed: Record<string, { from: unknown; to: unknown }> = {};
     for (const key of Object.keys(input)) {
@@ -9541,7 +10733,7 @@ export async function setResourceClassification(
 import { withTenant } from '@syntra/db';
 import { summariseAttributions, type AttributionDraft } from './attribute.js';
 import { DIFF_LIMITATION } from './diff.js';
-import { readableSnapshot, type ReadableSnapshot } from './snapshot-service.js';
+import { readableSnapshot, type ReadableSnapshot } from './readable.js';
 import {
   countRegion,
   known,
@@ -9600,8 +10792,25 @@ export interface ReportEnvelope<T> {
   body: T;
 }
 
+/**
+ * THE BRAND IS A TYPE-LEVEL WITNESS AND IS NEVER WRITTEN AT RUNTIME.
+ *
+ * `declare const REPORT_BRAND: unique symbol` emits NO RUNTIME BINDING. A
+ * computed key `{ [REPORT_BRAND]: true, … }` evaluates `REPORT_BRAND` at
+ * runtime and throws `ReferenceError: REPORT_BRAND is not defined` on the first
+ * report call. It compiles, so `tsc -b --force` is clean and the failure
+ * surfaces as a library-looking crash — the same signature Ruling P19 measured
+ * for the `as never` defects.
+ *
+ * The risk is not the crash; it is the fix an implementer reaches for.
+ * REMOVING THE BRAND makes it work and destroys §8 rule 4's only enforcement
+ * ("the report DTO has no constructor that omits it"), and the Step 9 mutation
+ * that watches for the brand's removal then passes too. So: the object is a
+ * plain `{ header, body }` and the cast is what attaches the brand. The brand
+ * exists in the type system and nowhere else, which is all it ever needed to.
+ */
 export function envelope<T>(header: ReportHeader | LiveReportHeader, body: T): ReportEnvelope<T> {
-  return { [REPORT_BRAND]: true, header, body } as ReportEnvelope<T>;
+  return { header, body } as ReportEnvelope<T>;
 }
 
 export function headerOf<T>(e: ReportEnvelope<T>): ReportHeader | LiveReportHeader {
@@ -9996,6 +11205,219 @@ export async function whoApprovedIt(
 }
 ```
 
+
+- [ ] **Step 4a: `snapshotInForceOn` and Syntra-account dormancy (Ruling G-4)**
+
+§9's point-in-time query and §16's dormancy caveat. Both are small, both are named in the spec, and Ruling G-4 puts both here.
+
+**`snapshotInForceOn` must answer "no snapshot covers 14 March" rather than silently using the nearest.** That distinction is the entire requirement: a point-in-time report that quietly substitutes a different date is worse than one that refuses, because the refusal is visible and the substitution is not. The return type makes it unignorable — the caller cannot read `.holdings` off a `{ covered: false }` without a type error.
+
+Append to `packages/core/src/govern/report-service.ts`:
+
+```ts
+export type SnapshotInForce =
+  | { covered: true; snapshot: ReadableSnapshot }
+  | { covered: false; nearest: Date | null; statement: string };
+
+/**
+ * The snapshot IN FORCE on a date: the most recent complete snapshot whose
+ * `asOf` is at or before it, and which is not so far before it that it says
+ * nothing about that day.
+ *
+ * A DISCRIMINATED UNION, not a nullable snapshot and not "the nearest one".
+ * §9 asks "what did Anna hold on 14 March"; answering with 2 April's picture
+ * because it is the closest available is the failure this function exists to
+ * refuse. The caller cannot reach `snapshot` without narrowing on `covered`.
+ *
+ * "Covers" means: there is a snapshot at or before the date, AND the next
+ * snapshot after it is no more than `maxGapDays` later — otherwise the date
+ * sits in a gap between two builds and nothing observed the world on it.
+ */
+export async function snapshotInForceOn(
+  tx: TenantClient,
+  date: Date,
+  options: { maxGapDays?: number } = {},
+): Promise<SnapshotInForce> {
+  const maxGapDays = options.maxGapDays ?? 2;
+
+  const before = await tx.accessSnapshot.findFirst({
+    where: { status: 'complete', asOf: { lte: date } },
+    orderBy: { asOf: 'desc' },
+    select: { id: true, asOf: true },
+  });
+  const after = await tx.accessSnapshot.findFirst({
+    where: { status: 'complete', asOf: { gt: date } },
+    orderBy: { asOf: 'asc' },
+    select: { asOf: true },
+  });
+
+  const iso = date.toISOString().slice(0, 10);
+
+  if (before === null) {
+    return {
+      covered: false,
+      nearest: after?.asOf ?? null,
+      statement:
+        after === null
+          ? `no snapshot covers ${iso}: this tenant has no complete snapshot at all`
+          : `no snapshot covers ${iso}: the earliest complete snapshot is ${after.asOf.toISOString().slice(0, 10)}, which is after that date`,
+    };
+  }
+
+  const gapDays =
+    after === null
+      ? (date.getTime() - before.asOf.getTime()) / 86_400_000
+      : (after.asOf.getTime() - before.asOf.getTime()) / 86_400_000;
+
+  if (gapDays > maxGapDays) {
+    return {
+      covered: false,
+      nearest: before.asOf,
+      statement:
+        `no snapshot covers ${iso}: the nearest is ${before.asOf.toISOString().slice(0, 10)} and the ` +
+        `next is ${after === null ? 'none' : after.asOf.toISOString().slice(0, 10)}, a gap of ` +
+        `${Math.round(gapDays)} days. Reporting either one as the picture on ${iso} would be a ` +
+        `different date wearing this one's label.`,
+    };
+  }
+
+  return { covered: true, snapshot: await readableSnapshot(tx, before.id) };
+}
+```
+
+`whatDoesPersonHold` gains an optional `on?: Date`. When it is supplied, the snapshot comes from `snapshotInForceOn` and an uncovered date is a refusal carrying the statement, never a substitution:
+
+```ts
+  if (input.on !== undefined) {
+    const inForce = await snapshotInForceOn(tx, input.on);
+    if (!inForce.covered) throw new SnapshotNotCoveredError(input.on, inForce);
+    snapshot = inForce.snapshot;
+  }
+```
+
+**Syntra-account dormancy (§16).** A `Session` / `AuthAttempt` read per Syntra user, rendered on the person report **labelled "Syntra account dormancy"**, with the §16 caveat beside it in words:
+
+```ts
+export interface AccountDormancy {
+  userId: string;
+  login: string;
+  lastSuccessfulSignInAt: string | null;
+  lastAttemptAt: string | null;
+  dormantDays: number | null;
+  caveat: string;
+}
+
+const DORMANCY_CAVEAT =
+  'This is SYNTRA ACCOUNT dormancy: when this person last signed in to Syntra. ' +
+  'It is NOT entitlement usage. It says nothing about whether they used the access ' +
+  'this report lists, at the target systems that hold it, and a person who has not ' +
+  'signed in to Syntra for a year may have used every one of these entitlements today.';
+
+/**
+ * Set-based over the person's users. Two queries, not one per user.
+ */
+export async function accountDormancy(
+  tx: TenantClient,
+  personId: string,
+  now: Date,
+): Promise<AccountDormancy[]> {
+  const users = await tx.user.findMany({
+    where: { personId },
+    select: { id: true, login: true },
+  });
+  if (users.length === 0) return [];
+  const ids = users.map((u) => u.id);
+
+  const sessions = await tx.session.groupBy({
+    by: ['userId'],
+    where: { userId: { in: ids } },
+    _max: { createdAt: true },
+  });
+  const attempts = await tx.authAttempt.groupBy({
+    by: ['userId'],
+    where: { userId: { in: ids } },
+    _max: { createdAt: true },
+  });
+  const lastSession = new Map(sessions.map((s) => [s.userId, s._max.createdAt]));
+  const lastAttempt = new Map(attempts.map((a) => [a.userId, a._max.createdAt]));
+
+  return users.map((user) => {
+    const signedIn = lastSession.get(user.id) ?? null;
+    return {
+      userId: user.id,
+      login: user.login,
+      lastSuccessfulSignInAt: signedIn?.toISOString() ?? null,
+      lastAttemptAt: lastAttempt.get(user.id)?.toISOString() ?? null,
+      dormantDays:
+        signedIn === null ? null : Math.floor((now.getTime() - signedIn.getTime()) / 86_400_000),
+      caveat: DORMANCY_CAVEAT,
+    };
+  });
+}
+```
+
+`whatDoesPersonHold`'s body gains `dormancy: AccountDormancy[]`, and Task 14's person report renders it **under its own heading with the caveat printed**, not as a column beside the holdings — a dormancy figure sitting in a table of entitlements reads as a statement about those entitlements, which is exactly what §16 says it is not.
+
+Three tests for `snapshotInForceOn` and one for dormancy, in `report-service.test.ts`:
+
+```ts
+describe('snapshotInForceOn — Ruling G-4', () => {
+  it('returns the snapshot in force on a date inside its coverage', async () => {
+    const result = await withTenant(tenantId, (tx) => snapshotInForceOn(tx, NOW));
+    expect(result.covered).toBe(true);
+    if (result.covered) expect(result.snapshot.id).toBe(snapshotId);
+  });
+
+  it('answers NOT COVERED for a date before the first snapshot, naming the nearest', async () => {
+    const result = await withTenant(tenantId, (tx) =>
+      snapshotInForceOn(tx, new Date('2026-01-01T00:00:00Z')),
+    );
+    expect(result.covered).toBe(false);
+    if (!result.covered) {
+      expect(result.nearest).toEqual(NOW);
+      expect(result.statement).toContain('no snapshot covers 2026-01-01');
+    }
+  });
+
+  it('answers NOT COVERED for a date in a GAP between two snapshots', async () => {
+    // The case the whole ruling is about. There is a snapshot on 15 June and
+    // another on 15 July; nothing observed the world on 1 July, and answering
+    // with either picture would be a different date wearing this one's label.
+    await withTenant(tenantId, async (tx) => {
+      const later = await tx.accessSnapshot.create({
+        data: { tenantId, kind: 'manual', status: 'complete', asOf: new Date('2026-07-15T09:00:00Z') },
+      });
+      await tx.snapshotSource.create({
+        data: {
+          tenantId, snapshotId: later.id, sourceKind: 'syntraInternal', sourceId: 'syntra',
+          sourceName: 'Syntra', completeness: 'complete', staleness: 'fresh', freshnessSlaHours: 24,
+        },
+      });
+    });
+
+    const result = await withTenant(tenantId, (tx) =>
+      snapshotInForceOn(tx, new Date('2026-07-01T00:00:00Z')),
+    );
+    expect(result.covered).toBe(false);
+    if (!result.covered) {
+      expect(result.nearest).toEqual(NOW);
+      expect(result.statement).toContain('a gap of 30 days');
+    }
+  });
+});
+
+describe('Syntra account dormancy — §16', () => {
+  it('reports the last sign-in AND says in words that it is not entitlement usage', async () => {
+    const rows = await withTenant(tenantId, (tx) => accountDormancy(tx, personId, NOW));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.caveat).toContain('NOT entitlement usage');
+    expect(rows[0]!.dormantDays).toBeGreaterThanOrEqual(0);
+  });
+});
+```
+
+Mutations for Step 9: **(a)** make `snapshotInForceOn` return the nearest snapshot whatever the gap — `answers NOT COVERED for a date in a GAP` FAILS, and this is the mutation Ruling G-4 exists for; **(b)** drop the `caveat` from `AccountDormancy` — the dormancy test FAILS, because a dormancy figure with no caveat beside it is read as a statement about the entitlements it sits next to.
+
 - [ ] **Step 5: Run the report tests**
 
 Run: `pnpm vitest run packages/core/src/govern/report-service.test.ts`
@@ -10012,7 +11434,7 @@ import { recordEvent, stableStringify } from '../audit/audit-service.js';
 import { integrityStatus, verifySegment } from './audit-integrity.js';
 import { GENESIS_HASH } from '../audit/audit-service.js';
 import { bodyOf, headerOf, type ReportEnvelope, type ReportHeader, type SystemAccessRow } from './report-service.js';
-import { readableSnapshot } from './snapshot-service.js';
+import { readableSnapshot } from './readable.js';
 
 /**
  * One row per holding, with EVERY HEADER FIELD REPEATED AS LEADING COLUMNS ON
@@ -10261,7 +11683,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { BUNDLE_LIMITATIONS, bundleDigest, createEvidencePack, exportReportCsv, toCsv } from './export-service.js';
 import { buildHeader, envelope } from './report-service.js';
-import { readableSnapshot } from './snapshot-service.js';
+import { readableSnapshot } from './readable.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
 let tenantId: string;
@@ -10889,6 +12311,18 @@ import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { collectTenant } from './collect.js';
 import { buildSnapshot } from './snapshot-service.js';
+// Slice 2. This file is dispatched with Task 12 (slice 1) and EXTENDED by the
+// slice-2 tasks; the imports below land when Tasks 17-20 do, and until then the
+// slice-2 describe block is not in the file.
+import { startCampaign } from './campaign-service.js';
+import {
+  closeDueCampaigns, mootDepartedSubjects, mootVanishedHoldings,
+  reassignInvalidReviewers, runCampaignReminders,
+} from './reviewer-service.js';
+import { computeReviewQualitySignals } from './decision-service.js';
+import {
+  computeRevocationBatch, confirmRevocationBatch, reflectRevocationOutcomes,
+} from './revocation-service.js';
 
 /**
  * Section 23: "No `withTenant` call encloses a loop over an unbounded
@@ -10979,14 +12413,98 @@ describe('the transaction budget', () => {
   }, 120_000);
 
   it('fails when the write batch is unbounded — the mutation this test exists for', async () => {
-    // Documented rather than executed: setting batchSize to Number.MAX_SAFE_INTEGER
-    // here writes every holding in ONE transaction, which is exactly the shape
-    // the budget forbids. Run it by hand when changing the batching, and expect
-    // `slowest` to exceed the budget on a tenant of any real size.
-    expect(BUDGET_MS).toBeLessThan(5000);
-  });
+    // EXECUTED, not documented. The previous version of this case asserted
+    // `expect(BUDGET_MS).toBeLessThan(5000)` — an assertion about a constant —
+    // and said "documented rather than executed". Global Constraint 4 closes
+    // with "Task 12 makes the rule a test", and a test about a constant does
+    // not.
+    const { slowest } = await timedTransactions(() =>
+      buildSnapshot(tenantId, { batchSize: Number.MAX_SAFE_INTEGER }),
+    );
+    expect(slowest).toBeGreaterThan(BUDGET_MS);
+  }, 300_000);
+});
+
+/**
+ * SLICE 2. The budget file covered `collectTenant` and `buildSnapshot` only,
+ * and slice 2 is where the unbounded loops were: `startCampaign` resolved 500
+ * reviewers inside the item-creation transaction, `closeDueCampaigns` held one
+ * transaction over every campaign and every item, and four sweeps did the same.
+ *
+ * A 2,000-item campaign is the size §17 calls ordinary — it explicitly
+ * contemplates 50,000 — and it is small enough to seed in a test.
+ */
+describe('the transaction budget — slice 2', () => {
+  const ITEMS = 2_000;
+  let campaignId: string;
+
+  beforeEach(async () => {
+    // Reviewers: enough that reviewer resolution is a real cost rather than a
+    // single lookup repeated.
+    campaignId = await seedLargeCampaign(tenantId, { items: ITEMS, reviewers: 50 });
+  }, 300_000);
+
+  it('starts a 2,000-item campaign with no transaction over the budget', async () => {
+    const { slowest } = await timedTransactions(() =>
+      startCampaign(tenantId, 'u-1', campaignId, { now: NOW }),
+    );
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  it('closes a 2,000-item campaign with no transaction over the budget', async () => {
+    await startCampaign(tenantId, 'u-1', campaignId, { now: NOW });
+    const { slowest } = await timedTransactions(() =>
+      closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) }),
+    );
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  it('runs the four sweeps over the same campaign within the budget', async () => {
+    await startCampaign(tenantId, 'u-1', campaignId, { now: NOW });
+    const snapshotId = await currentSnapshotId(tenantId);
+    const { slowest } = await timedTransactions(async () => {
+      await mootDepartedSubjects(tenantId, campaignId, { now: NOW });
+      await mootVanishedHoldings(tenantId, campaignId, snapshotId, { now: NOW });
+      await reassignInvalidReviewers(tenantId, campaignId, { now: NOW });
+      await runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 60_000) });
+      await computeReviewQualitySignals(tenantId, campaignId, NOW);
+    });
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  it('computes and confirms a revocation batch within the budget', async () => {
+    await startCampaign(tenantId, 'u-1', campaignId, { now: NOW });
+    await decideEveryItem(tenantId, campaignId, 'revoke', NOW);
+    const { result, slowest } = await timedTransactions(() =>
+      computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW }),
+    );
+    expect(slowest).toBeLessThan(BUDGET_MS);
+
+    const confirmTiming = await timedTransactions(() =>
+      confirmRevocationBatch(tenantId, 'u-1', result.batchId, { now: NOW, confirmed: true }),
+    );
+    // One short transaction PER DISPATCH ROW, so the slowest is one row's work
+    // and not the batch's.
+    expect(confirmTiming.slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  it('reflects the outcomes of a 2,000-row batch within the budget', async () => {
+    await startCampaign(tenantId, 'u-1', campaignId, { now: NOW });
+    await decideEveryItem(tenantId, campaignId, 'revoke', NOW);
+    const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
+    const snapshotId = await currentSnapshotId(tenantId);
+    const { slowest } = await timedTransactions(() =>
+      reflectRevocationOutcomes(tenantId, snapshotId, { now: NOW }),
+    );
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
 });
 ```
+
+`seedLargeCampaign`, `decideEveryItem` and `currentSnapshotId` are local helpers in this file, written with `createMany` so the seed itself is not the thing that times out.
+
+**This file is the enforcement point for Global Constraint 4, and Tasks 17, 18, 19 and 20 each name a mutation against it.** The pattern for every one is the same: set the batch constant to `Number.MAX_SAFE_INTEGER`, or move a loop back inside a `withTenant`, and require `slowest` to exceed `BUDGET_MS`. A budget constant that is declared and never used — which is exactly what `REVIEWER_BATCH = 200` was — cannot be caught any other way.
 
 - [ ] **Step 7: Run the tests**
 
@@ -11006,6 +12524,10 @@ Expected: exit 0.
 2. In `applyGovernSchedules`, `return` early when `snapshotSchedule === null` instead of unscheduling. Expected: `UNSCHEDULES every purpose when the cadence is cleared` FAILS.
 3. Put a UUID placeholder — `{{campaignId}}` — into `govern-review-assigned`. Expected: `every one renders a NAME rather than an id` FAILS.
 4. In `buildSnapshot`, set the effective batch size to `Number.MAX_SAFE_INTEGER`. Expected: `builds a snapshot over the same tenant with no transaction over the budget` FAILS. **This is the mutation the budget test exists for**; run it once by hand and record the observed `slowest` in the commit message.
+5. Set `REVIEWER_BATCH` to `Number.MAX_SAFE_INTEGER`. Expected: `starts a 2,000-item campaign with no transaction over the budget` FAILS. Before the fix wave this constant was **exported by Task 18 and referenced by nothing** — a budget stored and never read, which no test could catch because there was no slice-2 budget test at all.
+6. Set `closeDueCampaigns`'s `batchSize` default to `Number.MAX_SAFE_INTEGER`. Expected: `closes a 2,000-item campaign with no transaction over the budget` FAILS.
+
+**Dispatch note.** The slice-2 half of `transaction-budget.test.ts` cannot run until Tasks 17-20 have landed. Write the slice-1 half here and **add the slice-2 `describe` block as the last step of Task 20**, which is the last of the four; Task 20 Step 8 runs the whole file. The mutations above belong to whichever task owns the constant.
 
 - [ ] **Step 10: Commit**
 
@@ -11432,7 +12954,25 @@ export const governSettingsBody = z
     minReciprocalDecisions: z.number().int().min(1),
     reciprocityWindowDays: z.number().int().min(1),
   })
+  // STRICT, not the default strip. Zod's default silently DROPS an unknown key
+  // and returns a clean object, so a body naming
+  // `personsWithActiveContractAtLastBatch` would be accepted with a 204 and no
+  // write — which reads to a caller as success. `.strict()` makes it a 400, and
+  // `updateGovernSettings` refuses the same key again as the runtime backstop,
+  // because the contract package is not the only caller of the domain function.
+  .strict()
   .partial();
+
+/**
+ * A type-level guard that this schema and the domain function's input type stay
+ * the same shape. `z.infer` over a `.partial().strict()` object is an ordinary
+ * type — no `z.lazy`, no `z.ZodType<T>` annotation — so this guard actually
+ * bites, unlike the annotation Ruling P21 measured.
+ */
+export type _GovernSettingsBodyMatches = MutuallyAssignable<
+  z.infer<typeof governSettingsBody>,
+  GovernSettingsInput
+>;
 
 export const classificationBody = z.object({
   systemId: z.string().min(1),
@@ -11514,13 +13054,90 @@ import { requireSession } from '../../plugins/require-session.js';
  * the request, so every handler can apply it. Section 21: the scope is
  * respected on EVERY READ PATH, not only on the list.
  */
-function requireGovernRead() {
+function requireGovernRead(alsoRequire?: Permission) {
   return async function guard(request: FastifyRequest): Promise<void> {
     const scope = await request.db((tx) => governReadScope(tx, request.session.userId));
     if (scope.kind === 'none') {
       throw new ProblemError(403, 'forbidden', 'Forbidden', 'Requires govern.read');
     }
+    // The export route needs `govern.export` AS WELL, and it still needs the
+    // resolved scope — which is why it cannot use `requirePermission` alone.
+    // That is exactly how the export ended up reading the whole tenant for a
+    // department-scoped holder: a different guard on the same report.
+    if (alsoRequire !== undefined) {
+      const held = await request.db((tx) => hasPermission(tx, request.session.userId, alsoRequire));
+      if (!held) {
+        throw new ProblemError(403, 'forbidden', 'Forbidden', `Requires ${alsoRequire}`);
+      }
+    }
     Reflect.set(request, 'governScope', scope);
+  };
+}
+
+/**
+ * Every Govern READ route, and whether it applies the org-unit scope.
+ *
+ * §21: "`govern.read` is scopeable to an organizational unit, and reporting
+ * screens respect the scope on every read path, not only on the list." Four
+ * routes did not — `/reports/changes`, `/reports/approval`, `/findings` and,
+ * worst, `POST /exports/csv`, which was guarded only by
+ * `requirePermission(GOVERN_EXPORT)` and called `whoHasAccessToSystem` with no
+ * scope filter at all.
+ *
+ * The list is here so the structural test in Step 8 can enumerate it, and the
+ * EXEMPT entries are named one at a time with a reason. Adding a read route and
+ * forgetting the scope is then a test failure rather than a disclosure.
+ */
+export const GOVERN_READ_ROUTES: readonly { path: string; scoped: boolean; why?: string }[] = [
+  { path: 'GET /govern/snapshots', scoped: false, why: 'a snapshot is tenant-wide metadata and names no person' },
+  { path: 'GET /govern/snapshots/:id', scoped: false, why: 'counts and sources; no per-person rows' },
+  { path: 'GET /govern/snapshots/:id/coverage', scoped: false, why: 'regions of the world, not people' },
+  { path: 'GET /govern/reports/system', scoped: true },
+  { path: 'GET /govern/reports/person/:personId', scoped: true },
+  { path: 'GET /govern/reports/changes', scoped: true },
+  { path: 'GET /govern/reports/approval', scoped: true },
+  { path: 'POST /govern/exports/csv', scoped: true },
+  { path: 'GET /govern/findings', scoped: true },
+  { path: 'GET /govern/remediation', scoped: true },
+  { path: 'GET /govern/orphans', scoped: false, why: 'an orphan account belongs to nobody, so it is in no org unit; §6 says a scoped reader must still see that they exist' },
+  { path: 'GET /govern/integrity', scoped: false, why: 'the audit chain is tenant-wide and names no person' },
+];
+
+/**
+ * Is this finding about somebody the reader may see?
+ *
+ * Conservative in the safe direction: a finding whose subject is a person the
+ * reader is not scoped to is withheld, and a finding about a SOURCE, a
+ * SNAPSHOT or a CAMPAIGN — which name no person — is shown. A finding whose
+ * subject cannot be resolved to a person is shown, because a scoped reader
+ * withheld from `coverage_gap` would read the coverage figure as complete.
+ */
+function findingInScope(
+  finding: { subjectRefType: string; subjectRefId: string; detail: unknown },
+  admitted: ReadonlySet<string>,
+): boolean {
+  if (finding.subjectRefType === 'person') return admitted.has(finding.subjectRefId);
+  const subjectKey = (finding.detail as { subjectKey?: unknown } | null)?.subjectKey;
+  if (typeof subjectKey !== 'string') return true;
+  const parsed = parseSubjectKey(subjectKey);
+  return parsed === null || parsed.kind !== 'person' || admitted.has(parsed.personId);
+}
+
+/**
+ * `whatChanged`'s body, filtered to the persons a scoped reader may see, with
+ * the withheld count STATED rather than silently removed — §6's rule that
+ * nobody reads a report as complete while part of it is not shown.
+ */
+function scopedChangeReport(
+  body: ChangeReport,
+  admitted: ReadonlySet<string> | 'all',
+): ChangeReport & { withheldForScope: number } {
+  if (admitted === 'all') return { ...body, withheldForScope: 0 };
+  const visible = body.events.filter((e) => e.personId !== null && admitted.has(e.personId));
+  return {
+    ...body,
+    events: visible,
+    withheldForScope: body.events.length - visible.length,
   };
 }
 
@@ -11617,10 +13234,25 @@ export async function registerAdminGovernRoutes(
     // report that filtered the index and not the detail would hand a
     // department lead the whole tenant one click in.
     const admitted = await request.db((tx) => personIdsInScope(tx, scope));
+    if (admitted === 'all') return report;
+
+    // AN UNATTRIBUTED ACCOUNT IS KEPT. It belongs to nobody, so it sits in no
+    // org unit and no scope admits it — but §6 is explicit: "Nobody may read a
+    // per-person report as complete while accounts belonging to nobody are in
+    // the same systems." Dropping those rows while the header still carries the
+    // tenant's `unattributedAccountCount` gives a scoped reader a report whose
+    // header and body disagree, and the disagreement is invisible.
     const rows = report.body.rows.filter(
-      (row) => row.personId !== null && admitted !== 'all' && admitted.has(row.personId),
+      (row) => row.personId === null || admitted.has(row.personId),
     );
-    return { ...report, body: { ...report.body, rows } };
+    return {
+      ...report,
+      body: {
+        ...report.body,
+        rows,
+        withheldForScope: report.body.rows.length - rows.length,
+      },
+    };
   });
 
   app.get('/govern/reports/person/:personId', { preHandler: requireGovernRead() }, async (request) => {
@@ -11638,22 +13270,75 @@ export async function registerAdminGovernRoutes(
     return whatDoesPersonHold(request.tenantId, { ...query, personId });
   });
 
-  app.get('/govern/reports/changes', { preHandler: requireGovernRead() }, async (request) =>
-    whatChanged(request.tenantId, changeReportQuery.parse(request.query)),
-  );
+  app.get('/govern/reports/changes', { preHandler: requireGovernRead() }, async (request) => {
+    const report = await whatChanged(request.tenantId, changeReportQuery.parse(request.query));
+    const scope = scopeOf(request);
+    if (scope.kind === 'tenant') return report;
 
-  app.get('/govern/reports/approval', { preHandler: requireGovernRead() }, async (request) =>
-    whoApprovedIt(request.tenantId, approvalReportQuery.parse(request.query)),
-  );
+    // §21: the scope is respected on EVERY READ PATH, not only on the list.
+    // `whatChanged` returns tenant-wide `HoldingEvent` rows, and a change
+    // report is a per-person record of what somebody gained and lost.
+    const admitted = await request.db((tx) => personIdsInScope(tx, scope));
+    return { ...report, body: scopedChangeReport(report.body, admitted) };
+  });
+
+  app.get('/govern/reports/approval', { preHandler: requireGovernRead() }, async (request) => {
+    const query = approvalReportQuery.parse(request.query);
+    const scope = scopeOf(request);
+    if (scope.kind !== 'tenant') {
+      // This report is about one subject, so the scope check is the same
+      // 404-not-403 as the person report: the existence of a person in another
+      // department is itself information.
+      const admitted = await request.db((tx) => personIdsInScope(tx, scope));
+      const subject = parseSubjectKey(query.subjectKey);
+      const personId = subject?.kind === 'person' ? subject.personId : null;
+      if (admitted !== 'all' && (personId === null || !admitted.has(personId))) {
+        throw new ProblemError(404, 'not-found', 'Not found');
+      }
+    }
+    return whoApprovedIt(request.tenantId, query);
+  });
 
   // ---- export ------------------------------------------------------------
   app.post(
     '/govern/exports/csv',
-    { preHandler: requirePermission(PERMISSIONS.GOVERN_EXPORT) },
+    { preHandler: requireGovernRead(PERMISSIONS.GOVERN_EXPORT) },
     async (request, reply) => {
       const query = exportCsvBody.parse(request.body ?? {});
       const report = await whoHasAccessToSystem(request.tenantId, query);
-      const csv = await exportReportCsv(request.tenantId, request.session.userId, report, query);
+
+      // THE EXPORT IS THE WORST OF THE FOUR. §10 calls it "a copy of
+      // everybody's access leaving the building" and §3 calls a cross-boundary
+      // read of the holding table "the worst single disclosure this platform
+      // could produce". Guarded only by `requirePermission(GOVERN_EXPORT)` and
+      // with no scope filter at all — unlike the GET of the SAME report three
+      // routes above — a department-scoped reader who also holds
+      // `govern.export` walks out with the tenant.
+      const scope = scopeOf(request);
+      const admitted =
+        scope.kind === 'tenant' ? 'all' : await request.db((tx) => personIdsInScope(tx, scope));
+      const scoped =
+        admitted === 'all'
+          ? report
+          : {
+              ...report,
+              body: {
+                ...report.body,
+                rows: report.body.rows.filter(
+                  (row) => row.personId !== null && admitted.has(row.personId),
+                ),
+              },
+            };
+
+      const csv = await exportReportCsv(request.tenantId, request.session.userId, scoped, {
+        ...query,
+        // The scope travels onto the audit event, so the row count and the
+        // scope agree in the record. An export of 40 rows against a scope of
+        // 12,000 people and an export of 40 rows against a scope of 40 are
+        // different acts, and the event has to be able to tell them apart.
+        scopeOrgUnitId: scope.kind === 'tenant' ? null : scope.orgUnitIds,
+        rowCount: scoped.body.rows.length,
+      });
       return reply
         .header('content-type', 'text/csv; charset=utf-8')
         .header('content-disposition', 'attachment; filename="govern-access.csv"')
@@ -11673,8 +13358,15 @@ export async function registerAdminGovernRoutes(
   // ---- findings and remediation ------------------------------------------
   app.get('/govern/findings', { preHandler: requireGovernRead() }, async (request) => {
     const query = findingQuery.parse(request.query);
-    return request.db(async (tx) => ({
-      findings: await tx.governFinding.findMany({
+    const scope = scopeOf(request);
+    return request.db(async (tx) => {
+      // FINDINGS NAME PERSONS. `access_without_contract` has
+      // `subjectRefType: 'person'` and `subjectRefId` is the person id;
+      // `unattributable_holding` and `privileged_uncertified` carry a
+      // `subjectKey` in `detail`. A tenant-wide list handed a department lead
+      // the leavers of every other department.
+      const admitted = scope.kind === 'tenant' ? 'all' : await personIdsInScope(tx, scope);
+      const findings = await tx.governFinding.findMany({
         where: {
           ...(query.status ? { status: query.status } : {}),
           ...(query.kind ? { kind: query.kind } : {}),
@@ -11684,8 +13376,9 @@ export async function registerAdminGovernRoutes(
         // severity descending and then by age, never alphabetical.
         orderBy: [{ severity: 'desc' }, { firstSeenAt: 'asc' }],
         take: query.limit,
-      }),
-    }));
+      });
+      return { findings: admitted === 'all' ? findings : findings.filter((f) => findingInScope(f, admitted)) };
+    });
   });
 
   app.post(
@@ -11710,15 +13403,25 @@ export async function registerAdminGovernRoutes(
     },
   );
 
-  app.get('/govern/remediation', { preHandler: requireGovernRead() }, async (request) =>
-    request.db(async (tx) => ({
-      items: await tx.remediationItem.findMany({
-        where: { status: { in: ['open', 'in_progress'] } },
-        orderBy: { dueAt: 'asc' },
-        take: 200,
-      }),
-    })),
-  );
+  app.get('/govern/remediation', { preHandler: requireGovernRead() }, async (request) => {
+    const scope = scopeOf(request);
+    return request.db(async (tx) => {
+      const admitted = scope.kind === 'tenant' ? 'all' : await personIdsInScope(tx, scope);
+      return {
+        items: await tx.remediationItem.findMany({
+          where: {
+            status: { in: ['open', 'in_progress'] },
+            // A remediation item is OWNED by a person, so the scope is over the
+            // owner rather than over the subject: a department lead chases their
+            // own department's queue.
+            ...(admitted === 'all' ? {} : { ownerPersonId: { in: [...admitted] } }),
+          },
+          orderBy: { dueAt: 'asc' },
+          take: 200,
+        }),
+      };
+    });
+  });
 
   app.post(
     '/govern/remediation/:id/resolve',
@@ -11802,7 +13505,7 @@ export async function registerAdminGovernRoutes(
     { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
     async (request, reply) => {
       const body = governSettingsBody.parse(request.body ?? {});
-      await updateGovernSettings(request.tenantId, request.session.userId, body as never);
+      await updateGovernSettings(request.tenantId, request.session.userId, body);
       return reply.status(204).send();
     },
   );
@@ -11977,6 +13680,99 @@ describe('reports', () => {
   });
 });
 
+describe('the org-unit scope on EVERY read path — §21', () => {
+  // The shape §23 asks for over `readableSnapshot()`, applied to the scope:
+  // ENUMERATE the routes and assert each either applies the scope or is on an
+  // explicit exempt list. Four routes did not apply it, and the worst was the
+  // CSV export — §10 calls it "a copy of everybody's access leaving the
+  // building", and it was guarded only by `requirePermission(GOVERN_EXPORT)`
+  // with no scope filter at all, three routes below the GET of the same report.
+
+  it('every read route is either scoped or explicitly exempt with a reason', () => {
+    const source = readFileSync(
+      new URL('./govern.ts', import.meta.url),
+      'utf8',
+    );
+    for (const route of GOVERN_READ_ROUTES) {
+      const [method, path] = route.path.split(' ') as [string, string];
+      const literal = `'${path}'`;
+      expect(source, `${route.path} must exist in this module`).toContain(literal);
+      if (route.scoped) {
+        // The handler must mention the scope. A handler that never says
+        // `scopeOf` cannot be applying one.
+        const from = source.indexOf(literal);
+        const handler = source.slice(from, from + 2500);
+        expect(handler, `${route.path} must apply the org-unit scope`).toMatch(/scopeOf\(request\)/);
+      } else {
+        expect(route.why, `${route.path} is exempt and must say why`).toBeTruthy();
+      }
+      expect(method === 'GET' || method === 'POST').toBe(true);
+    }
+  });
+
+  it('the exempt list is short and named, so adding to it is a deliberate edit', () => {
+    expect(GOVERN_READ_ROUTES.filter((r) => !r.scoped).map((r) => r.path).sort()).toEqual([
+      'GET /govern/integrity',
+      'GET /govern/orphans',
+      'GET /govern/snapshots',
+      'GET /govern/snapshots/:id',
+      'GET /govern/snapshots/:id/coverage',
+    ]);
+  });
+
+  it('the CSV export withholds rows outside the caller’s scope', async () => {
+    // The disclosure this closes: a department-scoped reader who also holds
+    // `govern.export` walked out with the tenant.
+    await seedAdmin('lead', [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT], {
+      scopeOrgUnitId: leadOrgUnitId,
+    });
+    const res = await post(
+      '/api/admin/govern/exports/csv',
+      await cookieFor('lead'),
+      { systemId: 'sys-1' },
+    );
+    expect(res.statusCode).toBe(200);
+    const body = res.body as string;
+    expect(body).toContain(inScopePersonName);
+    expect(body).not.toContain(outOfScopePersonName);
+  });
+
+  it('the CSV export’s audit event records the scope AND the row count', async () => {
+    await seedAdmin('lead', [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT], {
+      scopeOrgUnitId: leadOrgUnitId,
+    });
+    await post('/api/admin/govern/exports/csv', await cookieFor('lead'), { systemId: 'sys-1' });
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({
+        where: { action: 'govern.export.csv' },
+        orderBy: { sequence: 'desc' },
+      }),
+    );
+    // A count of 40 against a scope of 12,000 people and a count of 40 against
+    // a scope of 40 are different acts, and the record has to tell them apart.
+    expect(event.payload).toMatchObject({ rowCount: expect.any(Number) });
+    expect((event.payload as { scopeOrgUnitId?: unknown }).scopeOrgUnitId).not.toBeUndefined();
+  });
+
+  it('the changes report withholds out-of-scope events AND says how many', async () => {
+    // §6: nobody reads a report as complete while part of it is not shown.
+    await seedAdmin('lead', [PERMISSIONS.GOVERN_READ], { scopeOrgUnitId: leadOrgUnitId });
+    const res = await get(
+      `/api/admin/govern/reports/changes?fromSnapshotId=${firstSnapshotId}&toSnapshotId=${secondSnapshotId}`,
+      await cookieFor('lead'),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.json().body.withheldForScope).toBeGreaterThan(0);
+  });
+
+  it('the findings list withholds a finding about a person outside the scope', async () => {
+    await seedAdmin('lead', [PERMISSIONS.GOVERN_READ], { scopeOrgUnitId: leadOrgUnitId });
+    const res = await get('/api/admin/govern/findings', await cookieFor('lead'));
+    const subjects = res.json().findings.map((f: { subjectRefId: string }) => f.subjectRefId);
+    expect(subjects).not.toContain(outOfScopePersonId);
+  });
+});
+
 describe('Refresh now enqueues somebody else’s job and says whose', () => {
   it('names Directory Sync for a directory source', async () => {
     await seedAdmin('manager', [PERMISSIONS.GOVERN_MANAGE]);
@@ -12023,6 +13819,9 @@ Expected: exit 0.
 4. Change that 404 to a 403. Expected: the same test FAILS — the status code is the assertion, because a 403 confirms existence.
 5. Change `/govern/exports/csv` to `requirePermission(PERMISSIONS.GOVERN_READ)`. Expected: `refuses an export to a caller holding only govern.read` FAILS.
 6. In `scopeAdmitsPerson`, return `true` for a null `personOrgUnitId` under an org-unit scope. Expected: `REFUSES a person with no org unit under an org-unit scope` FAILS.
+7. **Remove the scope filter from the `POST /govern/exports/csv` handler** — restoring the version guarded only by `requirePermission(GOVERN_EXPORT)`. Expected: `the CSV export withholds rows outside the caller's scope` FAILS, and so does `every read route is either scoped or explicitly exempt with a reason`. **This is H21, and §3 calls what it leaks "the worst single disclosure this platform could produce".**
+8. Move `'GET /govern/findings'` to the exempt half of `GOVERN_READ_ROUTES` without touching the handler. Expected: `the exempt list is short and named` FAILS. The exempt list is the control, so growing it must be as loud as removing a filter.
+9. Drop `withheldForScope` from `scopedChangeReport`. Expected: `the changes report withholds out-of-scope events AND says how many` FAILS. §6: nobody reads a report as complete while part of it is not shown.
 
 - [ ] **Step 11: Commit**
 
@@ -12976,7 +14775,7 @@ git commit -m "feat(govern): the slice-1 console — snapshots, coverage, report
 
 ---
 
-**Slice 1 is complete and shippable here.** An organization that installs Tasks 1–14 can answer every question on an auditor's request list with an exported artifact — who holds what, where it came from, what changed, who approved it, and what we could not see — and it produces the standing findings with no campaign machinery at all. Nothing in it has changed anybody's access.
+**Slice 1 is complete and shippable here.** An organization that installs Tasks 1–8, 8A and 9–14 can answer every question on an auditor's request list with an exported artifact — who holds what, where it came from, what changed, who approved it, and what we could not see — and it produces the standing findings with no campaign machinery at all. Nothing in it has changed anybody's access.
 
 ---
 # Slice 2 — Campaigns and Duties (Tasks 15–22)
@@ -13000,7 +14799,7 @@ Thirteen new tables, one column added to a table Provision owns, and one index a
 - Produces two changes to tables Govern does not own, and **no others**:
   - `ProvisionAction.revocationOrderId String? @db.Uuid` — a bare column, no relation. Spec §5 and §18 name it; Provision's `PlanInput` gains the matching term in Task 20.
   - `ApprovalDecision @@index([tenantId, decidedAt])` — integration finding 7. The reciprocity query is a 180-day window over decisions and there is no supporting index.
-- Produces three hand-written partial unique indexes: `govern_revocation_batch_one_non_terminal_campaign`, `govern_revocation_batch_one_non_terminal_standalone`, `govern_revocation_order_one_open`.
+- Produces two hand-written partial unique indexes: `govern_revocation_batch_one_non_terminal_campaign` and `govern_revocation_order_one_open`. (**The standalone-batch index is deliberately absent — see `RevocationBatch.campaignId`.**)
 - Produces the append-only rule pair on `CampaignDecision`.
 
 **`CampaignDecision` gains `decidedByUserId`, which spec §18 does not list.** Integration finding 8: Automate's `revokeGrant(tenantId, actorUserId, grantId, reason, options?)` takes a `User` id, and a reviewer decides as a `Person`. A person may hold several `User` rows or none, so re-resolving person → user at dispatch time would pick an arbitrary account, or none, for an act somebody performed from a specific one. `ApprovalDecision.userId` exists for exactly this reason and carries exactly this comment; this mirrors it.
@@ -13167,7 +14966,7 @@ describe('CampaignDecision', () => {
 });
 
 describe('RevocationBatch', () => {
-  it('permits one non-terminal batch per campaign and one standalone', async () => {
+  it('permits one non-terminal batch per campaign', async () => {
     const campaignId = await withTenant(tenantId, async (tx) => {
       const c = await tx.campaign.create({ data: campaignData() });
       return c.id;
@@ -13181,18 +14980,30 @@ describe('RevocationBatch', () => {
         tx.revocationBatch.create({ data: { tenantId, campaignId, status: 'computing' } }),
       ),
     ).rejects.toThrow(/govern_revocation_batch_one_non_terminal_campaign/);
+  });
 
-    // A standalone SoD remediation batch has a NULL campaignId. A single
-    // partial index over a nullable column would constrain neither, so there
-    // are two indexes.
-    await withTenant(tenantId, (tx) =>
-      tx.revocationBatch.create({ data: { tenantId, campaignId: null, status: 'previewed' } }),
+  it('has NO standalone batch: campaignId is NOT NULL', () => {
+    // M4. The schema shipped a second partial index for batches with a NULL
+    // campaignId and no production path ever created one — a control guarding a
+    // population nothing produces. §15's remedy for a refused or lapsed
+    // exception is a RemediationItem and nothing is revoked, so there was never
+    // a standalone batch to guard.
+    const schema = readFileSync(
+      new URL('../../../db/prisma/schema.prisma', import.meta.url),
+      'utf8',
     );
-    await expect(
-      withTenant(tenantId, (tx) =>
-        tx.revocationBatch.create({ data: { tenantId, campaignId: null, status: 'computing' } }),
-      ),
-    ).rejects.toThrow(/govern_revocation_batch_one_non_terminal_standalone/);
+    const model = schema.slice(
+      schema.indexOf('model RevocationBatch {'),
+      schema.indexOf('model RevocationDispatch {'),
+    );
+    expect(model).toMatch(/campaignId String\s+@db\.Uuid/);
+    expect(model).not.toMatch(/campaignId String\?/);
+
+    const migration = readFileSync(
+      new URL('../../../db/prisma/migrations/20260823000000_govern_campaigns/migration.sql', import.meta.url),
+      'utf8',
+    );
+    expect(migration).not.toContain('govern_revocation_batch_one_non_terminal_standalone');
   });
 
   it('admits a new batch once the previous one is terminal', async () => {
@@ -13456,6 +15267,14 @@ model CampaignItem {
   reviewers CampaignItemReviewer[]
   decisions CampaignDecision[]
 
+  /// The natural key. A `startCampaign` that crashes mid-generation and is
+  /// retried would otherwise duplicate every item it had already created, and
+  /// the campaign has no `generating`-supersession path of the kind Global
+  /// Constraint 6 requires for the three non-terminal indexes. This is not a
+  /// partial index and needs no hand-written SQL: all five columns are NOT NULL.
+  /// Generation uses `createMany({ skipDuplicates: true })` against it, so a
+  /// retry is idempotent rather than a P2002 on an irreversible-adjacent path.
+  @@unique([campaignId, subjectKey, systemId, resourceKind, resourceId])
   /// How every loop and every screen reads it.
   @@index([campaignId, status])
   @@index([campaignId, personId])
@@ -13477,6 +15296,25 @@ model CampaignItemReviewer {
   unassignedAt     DateTime?
   unassignedReason String?
 
+  /// When this reviewer last had a reminder about this item's campaign, so the
+  /// cadence is driven per REVIEWER and not per campaign. A de-duplication
+  /// keyed on the campaign reminds the first reviewer in the iteration and
+  /// silently skips all 199 others, forever.
+  lastRemindedAt DateTime?
+
+  /// When this reviewer first opened this item's detail, SERVER-SIDE. §12: "Not
+  /// a client-reported dwell time, which is worth nothing." It is a column and
+  /// not an in-process Map because two API workers, a load balancer or a
+  /// restart all make the map empty at decision time — and the resulting signal
+  /// reads "instantaneous, never opened" for a reviewer who read everything,
+  /// which is an accusation the evidence bundle would then carry.
+  openedAt DateTime?
+
+  /// Lets escalation upsert instead of racing a findFirst-then-create, and lets
+  /// `openItem` address the row without synthesising an id. `assignedAt` is in
+  /// the key so a reviewer unassigned and later re-assigned gets a new row
+  /// rather than resurrecting the old one with its old `openedAt`.
+  @@unique([itemId, personId, assignedAt])
   @@index([tenantId])
   @@index([itemId, unassignedAt])
   @@index([tenantId, personId, unassignedAt])
@@ -13507,6 +15345,12 @@ model CampaignDecision {
   /// dwell time, which is worth nothing.
   itemOpenedAt DateTime
   decidedAt    DateTime @default(now())
+
+  /// TRUE when this reviewer never fetched the item's detail before deciding.
+  /// A FACT, not an inference: `itemOpenedAt === decidedAt` is also what a
+  /// decision made in the same second as the open looks like, and the evidence
+  /// bundle must not accuse somebody on a timestamp coincidence.
+  neverOpened Boolean @default(false)
 
   viaBulk  Boolean @default(false)
   bulkSize Int?
@@ -13539,7 +15383,14 @@ model ReviewQualitySignal {
   certifiedShare    Float
   medianIntervalMs  Int
   bulkShare         Float
+  /// The longest RUN of consecutive decisions by this reviewer in this campaign
+  /// -- consecutive by `sessionDecisionOrdinal`, with no gap -- and the elapsed
+  /// time across that run. NOT `max(bulkSize)`, which is a different and much
+  /// smaller statement, and which the screen would have labelled with this
+  /// column's name.
   largestBurst      Int
+  largestBurstMs    Int @default(0)
+  /// The share of this reviewer's decisions carrying `neverOpened`.
   neverOpenedShare  Float
 
   computedAt DateTime @default(now())
@@ -13560,9 +15411,23 @@ Append to `packages/db/prisma/schema.prisma`:
 model RevocationBatch {
   id         String    @id @default(uuid()) @db.Uuid
   tenantId   String    @db.Uuid
-  /// Null for an SoD remediation batch, which belongs to no campaign.
-  campaignId String?   @db.Uuid
-  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  /// NOT NULL. Every revocation batch belongs to a campaign.
+  ///
+  /// An earlier draft made this nullable "for an SoD remediation batch, which
+  /// belongs to no campaign", and shipped a second partial unique index for
+  /// those rows — but NO PRODUCTION PATH EVER CREATED ONE. §15's remedy for a
+  /// refused or lapsed exception is a `RemediationItem` routed to a named
+  /// owner, not a revocation: nothing is revoked when an exception lapses, and
+  /// §15 says so in as many words. Where an SoD violation does have to be
+  /// removed, §15's route is a one-item campaign — which has a campaign id.
+  ///
+  /// A nullable column with a supporting index and no writer is the half-built
+  /// state this programme has now paid for three times, so the column is NOT
+  /// NULL and `govern_revocation_batch_one_non_terminal_standalone` does not
+  /// exist. If a standalone batch is ever wanted, the column, the index and the
+  /// path that writes it arrive together.
+  campaignId String   @db.Uuid
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   /// computing | previewed | blocked | applying | applied | partially_applied
   /// | failed | superseded
@@ -13949,14 +15814,11 @@ CREATE UNIQUE INDEX govern_revocation_batch_one_non_terminal_campaign
   WHERE "campaignId" IS NOT NULL
     AND "status" IN ('computing', 'previewed', 'blocked', 'applying');
 
--- And one for the standalone SoD remediation batches, whose campaignId is
--- NULL. Two indexes rather than one, because a partial unique over a nullable
--- column constrains nothing for the NULL rows — which is exactly the population
--- the second index exists for.
-CREATE UNIQUE INDEX govern_revocation_batch_one_non_terminal_standalone
-  ON "RevocationBatch" ("tenantId")
-  WHERE "campaignId" IS NULL
-    AND "status" IN ('computing', 'previewed', 'blocked', 'applying');
+-- There is NO second index for standalone batches. `RevocationBatch.campaignId`
+-- is NOT NULL, because nothing in this plan ever created a batch without a
+-- campaign: §15's remedy for a refused or lapsed exception is a
+-- `RemediationItem`, and nothing is revoked when an exception lapses. An index
+-- guarding a population no code path produces is a control that cannot fire.
 
 -- One live order per holding, so a holding cannot carry two contradictory
 -- instructions. Superseded by `createRevocationOrder` (Task 20), which cancels
@@ -14006,7 +15868,7 @@ Expected: exit 0.
 
 - [ ] **Step 11: Mutation-test**
 
-1. Drop `govern_revocation_batch_one_non_terminal_standalone`. Expected: the second half of `permits one non-terminal batch per campaign and one standalone` FAILS. **Without it, the SoD remediation batches are unconstrained, because the campaign index's predicate excludes every NULL row.**
+1. Make `RevocationBatch.campaignId` nullable again and re-add `govern_revocation_batch_one_non_terminal_standalone`. Expected: `has NO standalone batch: campaignId is NOT NULL` FAILS. **The index is not the control it looks like: no production path ever created a batch with a null campaign, so it guarded an empty population while the nullable column invited one.**
 2. Drop `revocation_dispatch_applied_was_confirmed`. Expected: add a case creating an `applied` dispatch with no `confirmedAt` and assert it throws — if none exists, **write it**; the vocabulary rule is the whole of §13 and it must be enforced somewhere the code cannot forget.
 3. Drop `campaign_decision_revoke_needs_comment`. Expected: add a case asserting a revoke with no comment is refused.
 4. Drop `sod_rule_functions_differ`. Expected: `refuses a rule naming the same function twice` FAILS.
@@ -14029,10 +15891,12 @@ Spec §14. **`evaluateSodRules` and `sodImpact` are pure functions over plain va
 **Files:**
 - Create: `packages/core/src/govern/sod.ts`, `packages/core/src/govern/sod-service.ts`
 - Test: `packages/core/src/govern/sod.test.ts`, `packages/core/src/govern/sod-service.test.ts`
-- Modify: `packages/core/src/automate/types.ts`, `packages/core/src/automate/eligibility.ts`, `packages/core/src/provision/explain.ts`, `packages/core/src/govern/snapshot-service.ts`, `packages/core/src/index.ts`
+- Modify: `packages/core/src/automate/types.ts`, `packages/core/src/automate/eligibility.ts`, `packages/core/src/provision/explain.ts`, **`packages/core/src/provision/run-service.ts`** (the guard's SoD condition — M13), `packages/core/src/govern/jobs.ts`, `packages/core/src/index.ts`, **`apps/api/src/routes/portal/catalog.ts`** and **`apps/web/src/pages/automate/CatalogPage.tsx`** (the submission-time warning — Ruling G-3)
+
+**`snapshot-service.ts` is NOT modified by this task.** The detect call lives in `jobs.ts`; see Step 6(d) and Task 7 Step 6's `CYCLE_FREE` assertion.
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `readableSnapshot`; `upsertFindings`, `type FindingDraft`; `type Severity`, `raiseSeverity`, `resourceKey`, `type ResourceKind`.
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `readableSnapshot` from `./readable.js`; `upsertFindings`, `reconcileFindings`, `type FindingDraft` from `./finding-service.js`; `type Severity`, `raiseSeverity`, `resourceKey`, `type ResourceKind`.
 - Produces (in `./sod.js` — **pure**):
   - `interface FunctionResource { systemId: string; resourceKind: ResourceKind; resourceId: string }`
   - `interface SodFunction { functionId: string; name: string; resources: readonly FunctionResource[] }`
@@ -14482,7 +16346,7 @@ import {
   type SodRuleFacts,
   type UnevaluableResource,
 } from './sod.js';
-import { readableSnapshot } from './snapshot-service.js';
+import { readableSnapshot } from './readable.js';
 import { raiseSeverity, type ResourceKind, type Severity } from './types.js';
 
 export async function upsertBusinessFunction(
@@ -14769,7 +16633,18 @@ export async function detectSodViolations(
     return result.count;
   });
 
-  await upsertFindings(tenantId, snapshotId, findings, { now });
+  // THE THREE KINDS THIS FUNCTION OWNS, named inline. A whole-tenant sweep here
+  // would close every standing finding the snapshot build opened minutes
+  // earlier (C1); a sweep narrowed to these three closes an `sod_violation`
+  // whose rule was disabled or whose holdings went away, which is correct and
+  // is what the resolution exists for.
+  await reconcileFindings(
+    tenantId,
+    snapshotId,
+    ['sod_violation', 'sod_laundering', 'approval_reciprocity'],
+    findings,
+    { now },
+  );
   return { open, unevaluable, resolved };
 }
 
@@ -14938,6 +16813,89 @@ export async function sodImpactForGrant(
 with `RuleImpact` gaining `sodIntroduced: number`, `sodIntroducedCritical: number` and `sodSample: { personId: string; ruleName: string }[]`.
 
 **Never by blocking a birthright grant.** Provision's guard marks a plan introducing a `critical` violation `requiresConfirmation` — visible, before apply, to a human already reviewing a plan — and it never makes a person unprocessable. A person whose contract entitles them to both sides is not doing anything wrong, and refusing to provision them means they cannot do their job because of a rule somebody else wrote: that is the unprocessable-person trap Provision built its whole exception model to avoid, inverted, produced by a governance control.
+
+**(c2) Provision's guard, in code and not only in prose (M13).** §5: *"Its guard gains one condition: a plan that would introduce a violation of an SoD rule of severity `critical` marks the run `requiresConfirmation`."* Add `packages/core/src/provision/run-service.ts` to this task's `Modify` list — the prose above describes the change and nothing wrote it.
+
+In `previewProvisionRun`, after the plan is computed and beside the existing guard axes:
+
+```ts
+  // The plan's OWN actions, not the tenant's standing violations: a run is
+  // confirmed for what it would introduce, not for what is already true.
+  // `sodImpact` is pure and takes plain values, so `run-service.ts` gains no
+  // dependency on a running Govern — it reads three Govern tables and hands
+  // their rows to a function.
+  const sod = sodImpact({
+    rules: sodRuleFacts,
+    holdingsByPerson,
+    wouldGrant: grantsFromPlan(actions),
+    unevaluable,
+  });
+  if (sod.introducedCritical > 0) {
+    guard.requiresConfirmation = true;
+    guard.reasons.push(
+      `this run would introduce ${sod.introducedCritical} critical segregation-of-duties ` +
+        `violation${sod.introducedCritical === 1 ? '' : 's'}: ` +
+        sod.introduced
+          .filter((i) => i.severity === 'critical')
+          .slice(0, 5)
+          .map((i) => i.ruleName)
+          .join(', '),
+    );
+  }
+```
+
+with a test in `run-service.test.ts`: a rule whose two functions are both granted by one birthright rule produces `requiresConfirmation: true` with the rule named, and **the run is never refused and no person becomes unprocessable** — assert both, because the refusal is the failure this design exists to avoid and a test that only checked the confirmation would not see it.
+
+**(c3) The submission-time warning in Automate's catalog (Ruling G-3).** §14 wants the segregation-of-duties warning at REQUEST time, not only at approval time. `sodImpactForGrant` exists here and the approval half is wired at (b); only the catalog read path is missing, and it lives in Automate's files.
+
+**Govern owns it.** Govern builds after Automate merges, so editing those files is ordinary cross-slice work rather than a conflict. Deferring it to an "Automate follow-up" means it lands in nobody's slice, and **a warning that appears only at approval time tells the requester nothing at the moment they could still choose differently** — which is the only moment at which the warning changes anything.
+
+Add to this task's `Modify` list: `apps/api/src/routes/portal/catalog.ts` (the catalog read route) and `apps/web/src/pages/automate/CatalogPage.tsx`.
+
+In the catalog read route, after the products in view are resolved:
+
+```ts
+  // SET-BASED OVER THE PRODUCT LIST, never `sodImpactForGrant` per subject in a
+  // loop over the tenant — the dependency table's own warning about
+  // `subjectAudienceFacts` applies here for the same reason. One call per
+  // product in view, for ONE subject: the person doing the browsing.
+  const sodWarnings = await request.db((tx) =>
+    sodImpactForProducts(tx, subjectPersonId, products),
+  );
+```
+
+`sodImpactForProducts(tx, subjectPersonId, products)` is a thin set-based wrapper this task adds beside `sodImpactForGrant` in `sod-service.ts`:
+
+```ts
+/**
+ * The catalog form of `sodImpactForGrant`: one subject, many products.
+ *
+ * It loads the subject's holdings and the tenant's rules ONCE and evaluates
+ * every product's grants against them, rather than repeating both reads per
+ * product. A catalog page showing forty products would otherwise issue eighty
+ * queries to render a warning.
+ */
+export async function sodImpactForProducts(
+  tx: TenantClient,
+  subjectPersonId: string,
+  products: readonly { id: string; grants: readonly { targetSystemId: string | null; resourceType: string; resourceId: string }[] }[],
+): Promise<Map<string, SodGrantImpact>> {
+  const facts = await loadSodFacts(tx, subjectPersonId);
+  const out = new Map<string, SodGrantImpact>();
+  for (const product of products) {
+    out.set(product.id, evaluateGrantImpact(facts, product.grants));
+  }
+  return out;
+}
+```
+
+On `CatalogPage.tsx`, a product carrying a warning renders it **inline on the card, naming the rule and the subject's existing holdings on the other side**, in an `Alert` with tone `warning` (there is no `success` tone in `@syntra/ui`):
+
+> **Segregation of duties.** Requesting this would put you on both sides of *"AP entry vs AP approve"*. You already hold **AP entry (Finance-Payments)**. You can still request it; an approver will see the same warning, and a `critical` rule requires an approved exception before it can be fulfilled.
+
+**It does NOT block submission (§14).** The submit button stays enabled and the request goes through. The refusal, when there is one, happens at eligibility (b) with a reason the requester can read — and a catalog that greyed the button out would tell somebody they may not have something without telling them why, which is the failure §14 names.
+
+Two tests: **(i)** in `apps/api`, a catalog read for a subject who already holds one side of a `critical` rule returns the warning naming the rule and the held resource; **(ii)** in `apps/web` (`*.test.tsx`, run under `pnpm --filter @syntra/web test`), the card renders the warning and **the submit control remains enabled** — the second assertion is the one that stops a later "improvement" from turning the warning into a block.
 
 **(d) The detect stage — in `jobs.ts`, NOT in `snapshot-service.ts`.** In `packages/core/src/govern/jobs.ts`, inside `runSnapshotJob`, after `refreshOrphanProposals`:
 
@@ -15356,7 +17314,7 @@ Spec §8 rules 1 and 2, §11, §19. **A campaign cannot be started when any sour
 - Modify: `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `evaluateCondition`, `conditionSchema`, `type Condition`, `type ConditionFacts` from `../provision/condition.js`; `readableSnapshot`, `buildSnapshot`, `type ReadableSnapshot`; `checkSnapshotAge`, `checkSourceFreshness`, `type ClassifiedSource`; `governSettings`; `percentOf`, `known`, `type Tri`, `type ResourceKind`; `resolveItemReviewers` from `./reviewer-service.js` **(Task 18 — see the dispatch note below)**; `enqueueOutbox`, `displayNames`, `recipientsForPersons` from `../automate/notify.js`.
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `evaluateCondition`, `conditionSchema`, `type Condition`, `type ConditionFacts` from `../provision/condition.js`; `readableSnapshot`, `type ReadableSnapshot` from `./readable.js`; `buildSnapshot` from `./snapshot-service.js`; `checkSnapshotAge`, `checkSourceFreshness`, `type ClassifiedSource`; `governSettings`; `percentOf`, `known`, `type Tri`, `type ResourceKind`; `REVIEWER_BATCH`, `resolveItemReviewers` from `./reviewer-service.js` **(Task 18 — see the dispatch note below)**; `enqueueOutbox`, `displayNames`, `recipientsForPersons` from `../automate/notify.js`.
 - Produces (all in `./campaign-service.js`):
   - `const ITEM_BATCH = 500`
   - `interface CampaignScope { resourceKinds: ResourceKind[]; systemIds?: string[]; privilegedOnly?: boolean; orgUnitIds?: string[]; subjectCondition?: Condition; riskFlags?: string[] }`
@@ -15391,6 +17349,7 @@ import {
   startCampaign,
 } from './campaign-service.js';
 import { buildSnapshot } from './snapshot-service.js';
+import { readFileSync } from 'node:fs';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
 const DUE = new Date('2026-07-15T09:00:00Z');
@@ -15582,6 +17541,90 @@ describe('generation', () => {
     expect(items[0]!.riskFlags).toContain('unattributable');
   });
 
+  it('writes needs_review and sod_violation into riskFlags — the two bulk-certify carve-outs', async () => {
+    // §12: "That flag exists precisely so a campaign can consume it, and it is
+    // exactly the item a bulk certify must not sweep up." Before this, both
+    // flags existed in HIGH_RISK_FLAGS and in test fixtures and in nothing that
+    // production ran, so bulk certify swept up both.
+    await buildSnapshot(tenantId, { now: NOW });
+    await withTenant(tenantId, async (tx) => {
+      const entitlement = await tx.entitlement.findFirstOrThrow();
+      await tx.accessGrant.create({
+        data: {
+          tenantId, subjectPersonId, resourceType: 'entitlement', resourceId: entitlement.id,
+          status: 'active', origin: 'request', needsReview: true,
+        },
+      });
+    });
+    const { id } = await createCampaign(tenantId, 'user-1', draft());
+    await startCampaign(tenantId, 'user-1', id, { now: NOW });
+
+    const items = await withTenant(tenantId, (tx) => tx.campaignItem.findMany({ where: { campaignId: id } }));
+    expect(items.filter((i) => i.riskFlags.includes('needs_review'))).toHaveLength(1);
+
+    // And it is not a blanket flag. The negative half, which is what stops the
+    // fixture passing against a `riskFlags: ['needs_review']` constant.
+    await withTenant(tenantId, (tx) => tx.accessGrant.updateMany({ where: {}, data: { needsReview: false } }));
+    const { id: second } = await createCampaign(tenantId, 'user-1', draft({ name: 'Q3 finance review' }));
+    await startCampaign(tenantId, 'user-1', second, { now: NOW });
+    const later = await withTenant(tenantId, (tx) => tx.campaignItem.findMany({ where: { campaignId: second } }));
+    expect(later.every((i) => !i.riskFlags.includes('needs_review'))).toBe(true);
+  });
+
+  it('flags an item on either side of an OPEN SodViolation', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    await withTenant(tenantId, async (tx) => {
+      const snapshot = await tx.accessSnapshot.findFirstOrThrow();
+      const holding = await tx.holding.findFirstOrThrow();
+      const fnA = await tx.businessFunction.create({ data: { tenantId, name: 'AP entry' } });
+      const fnB = await tx.businessFunction.create({ data: { tenantId, name: 'AP approve' } });
+      const rule = await tx.sodRule.create({
+        data: {
+          tenantId, name: 'AP entry vs approve', functionAId: fnA.id, functionBId: fnB.id,
+          severity: 'critical', rationale: 'one person must not both raise and pay an invoice',
+        },
+      });
+      await tx.sodViolation.create({
+        data: {
+          tenantId, ruleId: rule.id, personId: subjectPersonId,
+          severity: 'critical', status: 'open',
+          holdingsA: [
+            {
+              systemId: holding.systemId, resourceKind: holding.resourceKind,
+              resourceId: holding.resourceId, resourceName: holding.resourceName, contractIds: [],
+            },
+          ] as never,
+          holdingsB: [] as never,
+          contractsA: [] as never, contractsB: [] as never,
+          firstSeenAt: NOW, lastSeenAt: NOW, lastSnapshotId: snapshot.id,
+        },
+      });
+    });
+
+    const { id } = await createCampaign(tenantId, 'user-1', draft());
+    await startCampaign(tenantId, 'user-1', id, { now: NOW });
+    const items = await withTenant(tenantId, (tx) => tx.campaignItem.findMany({ where: { campaignId: id } }));
+    expect(items.some((i) => i.riskFlags.includes('sod_violation'))).toBe(true);
+  });
+
+  it('resolves reviewers in REVIEWER_BATCH transactions, not inside the item-creation one', async () => {
+    // C4. Creating ITEM_BATCH items and resolving reviewers for all of them in
+    // the SAME transaction costs a full `resolveStageApprovers` per item inside
+    // one 5000 ms budget, and `REVIEWER_BATCH` was exported and referenced by
+    // nothing. The structural assertion is the one that survives a fast fixture.
+    const source = readFileSync(
+      new URL('./campaign-service.ts', import.meta.url),
+      'utf8',
+    );
+    expect(source).toMatch(/REVIEWER_BATCH/);
+    const creationBlock = source.slice(
+      source.indexOf('// ---- create the items'),
+      source.indexOf('// ---- resolve reviewers'),
+    );
+    expect(creationBlock, 'reviewer resolution must not run inside the item-creation transaction')
+      .not.toMatch(/resolveItemReviewers/);
+  });
+
   it('is INVISIBLE to reviewers while generating, and nobody is notified until it opens', async () => {
     await buildSnapshot(tenantId, { now: NOW });
     const { id } = await createCampaign(tenantId, 'user-1', draft());
@@ -15597,6 +17640,25 @@ describe('generation', () => {
     const { id } = await createCampaign(tenantId, 'user-1', draft());
     const result = await startCampaign(tenantId, 'user-1', id, { now: NOW, batchSize: 1 });
     expect(result.itemCount).toBe(1);
+  });
+
+  it('generating twice over the same scope creates no duplicate item', async () => {
+    // M11. `startCampaign` that crashes mid-generation and is retried would
+    // otherwise duplicate everything it had already written, and the campaign
+    // has no `generating`-supersession path of the kind Global Constraint 6
+    // requires. `@@unique([campaignId, subjectKey, systemId, resourceKind,
+    // resourceId])` plus `skipDuplicates` is what stands in for one.
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, 'user-1', draft());
+    await startCampaign(tenantId, 'user-1', id, { now: NOW });
+
+    // Simulate the crash-then-retry: put it back in `generating` and run again.
+    await withTenant(tenantId, (tx) =>
+      tx.campaign.update({ where: { id }, data: { status: 'draft' } }),
+    );
+    const second = await startCampaign(tenantId, 'user-1', id, { now: NOW });
+    expect(second.itemCount).toBe(1);
+    expect(await withTenant(tenantId, (tx) => tx.campaignItem.count({ where: { campaignId: id } }))).toBe(1);
   });
 
   it('refuses to start a campaign that is not a draft', async () => {
@@ -15731,9 +17793,9 @@ import { recordEvent } from '../audit/audit-service.js';
 import { conditionSchema, evaluateCondition, type Condition, type ConditionFacts } from '../provision/condition.js';
 import { displayNames, enqueueOutbox, recipientsForPersons } from '../automate/notify.js';
 import { checkSnapshotAge, checkSourceFreshness, type ClassifiedSource } from './freshness.js';
-import { resolveItemReviewers } from './reviewer-service.js';
+import { REVIEWER_BATCH, resolveItemReviewers } from './reviewer-service.js';
 import { governSettings } from './settings-service.js';
-import { readableSnapshot, type ReadableSnapshot } from './snapshot-service.js';
+import { readableSnapshot, type ReadableSnapshot } from './readable.js';
 import { RESOURCE_KINDS, percentOf, known, type MutuallyAssignable, type ResourceKind, type Tri } from './types.js';
 
 export const ITEM_BATCH = 500;
@@ -15824,6 +17886,16 @@ interface ScopedHolding {
   privileged: boolean;
   unattributable: boolean;
   attributions: { kind: string; detail: unknown }[];
+  /**
+   * `AccessGrant.needsReview` — Automate's mover flag, carried through to the
+   * item. Section 12: "That flag exists precisely so a campaign can consume it,
+   * and it is exactly the item a bulk certify must not sweep up." Task 6 already
+   * selects it from `AccessGrant`; without this field it never reaches
+   * `riskFlags` and two of the five bulk-certify carve-outs never fire.
+   */
+  needsReview: boolean;
+  /** True when this (person, system, resourceKind, resourceId) is on either side of an OPEN SodViolation. */
+  inSodViolation: boolean;
 }
 
 async function holdingsInScope(
@@ -15831,7 +17903,7 @@ async function holdingsInScope(
   snapshot: ReadableSnapshot,
   scope: CampaignScope,
 ): Promise<ScopedHolding[]> {
-  const rows = await tx.holding.findMany({
+  const holdingRows = await tx.holding.findMany({
     where: {
       snapshotId: snapshot.id,
       resourceKind: { in: scope.resourceKinds },
@@ -15841,8 +17913,56 @@ async function holdingsInScope(
     include: { attributions: { select: { kind: true, detail: true } } },
   });
 
+  // ---- the two risk flags nothing else writes ------------------------------
+  // Both are SET-BASED over the whole scope. `subjectAudienceFacts`'s warning
+  // applies here too: never a per-subject query in a loop over the tenant.
+  const grants = await tx.accessGrant.findMany({
+    where: { needsReview: true },
+    select: { subjectPersonId: true, resourceType: true, resourceId: true },
+  });
+  const needsReviewKeys = new Set(
+    grants.map((g) => `${g.subjectPersonId}|${g.resourceType}|${g.resourceId}`),
+  );
+
+  // `lastSnapshotId`, not `snapshotId`: the column records the snapshot in
+  // which the violation was last observed, and there is no other.
+  const violations = await tx.sodViolation.findMany({
+    where: { status: 'open', lastSnapshotId: snapshot.id },
+    select: { personId: true, holdingsA: true, holdingsB: true },
+  });
+  const sodKeys = new Set<string>();
+  for (const violation of violations) {
+    for (const side of [violation.holdingsA, violation.holdingsB]) {
+      for (const holding of side as { systemId: string; resourceKind: string; resourceId: string }[]) {
+        sodKeys.add(`${violation.personId}|${holding.systemId}|${holding.resourceKind}|${holding.resourceId}`);
+      }
+    }
+  }
+
+  // Automate's `ResourceType` is 'entitlement' | 'application' | 'group'; a
+  // grant is only ever over one of those three, so a Syntra role, a Syntra user
+  // or a target account never matches and never carries `needs_review`. That is
+  // correct rather than a gap: nothing grants those through Automate.
+  const resourceTypeOf = (kind: string): string | null =>
+    kind === 'application' ? 'application' : kind === 'syntraGroup' ? 'group' : kind === 'targetEntitlement' ? 'entitlement' : null;
+
+  const decorate = (r: (typeof holdingRows)[number]): ScopedHolding => {
+    const type = resourceTypeOf(r.resourceKind);
+    return {
+      ...r,
+      attributions: r.attributions,
+      needsReview:
+        r.personId !== null && type !== null && needsReviewKeys.has(`${r.personId}|${type}|${r.resourceId}`),
+      inSodViolation:
+        r.personId !== null &&
+        sodKeys.has(`${r.personId}|${r.systemId}|${r.resourceKind}|${r.resourceId}`),
+    };
+  };
+
+  const rows = holdingRows.map(decorate);
+
   if (scope.subjectCondition === undefined && scope.orgUnitIds === undefined) {
-    return rows.map((r) => ({ ...r, attributions: r.attributions }));
+    return rows;
   }
 
   const users = await tx.user.findMany({
@@ -16029,47 +18149,87 @@ export async function startCampaign(
   let blockedCount = 0;
   const reviewerCounts = new Map<string, number>();
 
+  // TWO LOOPS, NOT ONE. Creating 500 items and then resolving reviewers for all
+  // 500 in the SAME transaction costs a full `resolveStageApprovers` per item
+  // inside one 5000 ms budget — and `REVIEWER_BATCH = 200` was exported by Task
+  // 18 and referenced by nothing, which is a budget stored and never read.
+  // Items are created first, in `ITEM_BATCH` transactions; reviewers are
+  // resolved afterwards, in `REVIEWER_BATCH` transactions, over the ids.
+
+  // ---- create the items, ITEM_BATCH per transaction ------------------------
   for (let i = 0; i < prepared.rows.length; i += batchSize) {
     const batch = prepared.rows.slice(i, i + batchSize);
-    const outcome = await withTenant(tenantId, async (tx) => {
-      const created = await Promise.all(
-        batch.map((row) =>
-          tx.campaignItem.create({
-            data: {
-              tenantId,
-              campaignId,
-              holdingSnapshotId: prepared.snapshot.id,
-              subjectKey: row.subjectKey,
-              personId: row.personId,
-              accountRef: row.accountRef,
-              systemId: row.systemId,
-              resourceKind: row.resourceKind,
-              resourceId: row.resourceId,
-              resourceName: row.resourceName,
-              // Copied, not referenced by id.
-              attributions: row.attributions as never,
-              observedAt: row.observedAt,
-              coverageStatus:
-                prepared.snapshot.sources.find((s) => s.sourceId === row.systemId)?.completeness ??
-                'complete',
-              riskFlags: [
-                ...(row.privileged ? ['privileged'] : []),
-                ...(row.unattributable ? ['unattributable'] : []),
-                ...(prepared.snapshot.sources.find((s) => s.sourceId === row.systemId)?.staleness ===
-                'stale'
-                  ? ['stale']
-                  : []),
-                ...(row.attributions.some((a) => a.kind === 'auto_granted') ? ['no_human_decision'] : []),
-              ],
-            },
-          }),
-        ),
-      );
-
-      // Task 18 resolves reviewers. It is dispatched BEFORE this task.
-      return resolveItemReviewers(tx, campaignId, created.map((c) => c.id), now);
+    await withTenant(tenantId, async (tx) => {
+      // `createMany({ skipDuplicates: true })` against
+      // `@@unique([campaignId, subjectKey, systemId, resourceKind, resourceId])`,
+      // so a generation that crashed partway and was retried is idempotent
+      // rather than duplicating every item it had already written. The campaign
+      // has no `generating`-supersession path, and this is what stands in for
+      // one.
+      await tx.campaignItem.createMany({
+        skipDuplicates: true,
+        data: batch.map((row) => ({
+          tenantId,
+          campaignId,
+          holdingSnapshotId: prepared.snapshot.id,
+          subjectKey: row.subjectKey,
+          personId: row.personId,
+          accountRef: row.accountRef,
+          systemId: row.systemId,
+          resourceKind: row.resourceKind,
+          resourceId: row.resourceId,
+          resourceName: row.resourceName,
+          // Copied, not referenced by id.
+          attributions: row.attributions as never,
+          observedAt: row.observedAt,
+          coverageStatus:
+            prepared.snapshot.sources.find((s) => s.sourceId === row.systemId)?.completeness ??
+            'complete',
+          // ALL SIX of HIGH_RISK_FLAGS are written here. `needs_review` and
+          // `sod_violation` were previously in `HIGH_RISK_FLAGS` and in test
+          // fixtures and in nothing that production ran, so bulk certify swept
+          // up exactly the two items §12 says it must not — the mover, and the
+          // person on both sides of a live SoD rule.
+          riskFlags: [
+            ...(row.privileged ? ['privileged'] : []),
+            ...(row.unattributable ? ['unattributable'] : []),
+            ...(prepared.snapshot.sources.find((s) => s.sourceId === row.systemId)?.staleness ===
+            'stale'
+              ? ['stale']
+              : []),
+            ...(row.attributions.some((a) => a.kind === 'auto_granted') ? ['no_human_decision'] : []),
+            ...(row.needsReview ? ['needs_review'] : []),
+            ...(row.inSodViolation ? ['sod_violation'] : []),
+          ],
+        })),
+      });
     });
-    itemCount += batch.length;
+  }
+
+  // ---- resolve reviewers, REVIEWER_BATCH items per transaction -------------
+  // Task 18 resolves reviewers. It is dispatched BEFORE this task.
+  //
+  // Paged by id rather than by offset: `createdAt` defaults to `now()`, which
+  // in PostgreSQL is TRANSACTION START TIME, so every row of one `createMany`
+  // carries an identical `createdAt` and ordering by it imposes no order at all
+  // (Global Constraint 20).
+  let cursor: string | null = null;
+  for (;;) {
+    const page: { id: string }[] = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findMany({
+        where: { campaignId, ...(cursor === null ? {} : { id: { gt: cursor } }) },
+        orderBy: { id: 'asc' },
+        take: REVIEWER_BATCH,
+        select: { id: true },
+      }),
+    );
+    if (page.length === 0) break;
+    cursor = page[page.length - 1]!.id;
+    itemCount += page.length;
+
+    const outcome = await withTenant(tenantId, (tx) =>
+      resolveItemReviewers(tx, campaignId, page.map((p) => p.id), now),
+    );
     blockedCount += outcome.blocked;
     for (const [personId, count] of outcome.assignedByPerson) {
       reviewerCounts.set(personId, (reviewerCounts.get(personId) ?? 0) + count);
@@ -16292,7 +18452,7 @@ export async function rebaseCampaign(
 - [ ] **Step 7: Run the tests**
 
 Run: `pnpm vitest run packages/core/src/govern/campaign-service.test.ts`
-Expected: PASS, 17 tests. **Task 18 must be complete first** — `resolveItemReviewers` is a hard import.
+Expected: PASS, 21 tests. **Task 18 must be complete first** — `resolveItemReviewers` and `REVIEWER_BATCH` are hard imports.
 
 - [ ] **Step 8: Export and typecheck**
 
@@ -16310,6 +18470,11 @@ Expected: exit 0.
 5. In `rebaseCampaign`, re-open every item. Expected: `keeps a certification of a holding that did not change` FAILS.
 6. In `rebaseCampaign`, keep every item. Expected: `re-opens an item whose holding gained an attribution` FAILS. Both directions.
 7. Delete `_ScopeAssignableToType` and remove `resourceKinds` from `leafScopeSchema`. Expected: **`pnpm exec tsc -b --force` FAILS** with the other guard — proving the guards check what the `z.ZodType<T>` annotation would not.
+8. **Remove `needs_review` from the `riskFlags` array in `startCampaign`'s `createMany`** — that is, restore the version that wrote four of the six flags. Expected: `writes needs_review and sod_violation into riskFlags` FAILS. Do NOT mutate `HIGH_RISK_FLAGS` for this: the previous version of Task 19's mutation did exactly that and passed, because the test fixture supplied a flag the production path could not.
+9. Remove `inSodViolation` from the same array. Expected: `flags an item on either side of an OPEN SodViolation` FAILS.
+10. In `holdingsInScope`, change the violation query's `lastSnapshotId` to a plain `where: { status: 'open' }` with no snapshot filter. Expected: nothing in this file fails, which is the point — add the case where a violation from an OLDER snapshot must NOT flag an item in the current one, and require it to fail.
+11. **Move `resolveItemReviewers` back inside the item-creation transaction.** Expected: `resolves reviewers in REVIEWER_BATCH transactions` FAILS, and Task 12's extended `transaction-budget.test.ts` FAILS on `startCampaign` over the 2,000-item seed.
+12. Drop `skipDuplicates: true` from the `createMany`. Expected: `generating twice over the same scope creates no duplicate item` FAILS with a P2002 on the new `@@unique`. Then also remove the `@@unique` from the schema: the same test FAILS with a count of 2, which is the version that ships duplicates silently and is the worse of the two failures.
 
 - [ ] **Step 10: Commit**
 
@@ -16329,7 +18494,9 @@ Spec §12. The hard part of recertification, and the reason the workflow is not.
 - Modify: `packages/core/src/govern/jobs.ts` (register `remind` and `close`), `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `resolveStageApprovers`, `resolveEscalationApprovers`, `isValidApprover`, `type StageSnapshot`, `type ResolutionSubject`, `type ApproverSelector`, `type SelectorConfig` from `../automate/approvers.js`; `enqueueOutbox`, `recipientsForPersons`, `displayNames`, `usersWithPermission` from `../automate/notify.js`; `PERMISSIONS`; `activeContracts` from `../identity/contract-service.js`; `createRemediationItem`, `upsertFindings` from `./finding-service.js`; `governSettings`; `coverageOf` — **no: `coverageOf` lives in Task 17 and importing it here would be a forward import. This module computes the four counts and Task 17's `coverageOf` is applied by the caller.**
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `resolveStageApprovers`, `resolveEscalationApprovers`, `isValidApprover`, `type StageSnapshot`, `type ResolutionSubject`, `type ApproverSelector`, `type SelectorConfig` from `../automate/approvers.js`; `enqueueOutbox`, `recipientsForPersons`, `displayNames`, `usersWithPermission` from `../automate/notify.js`; `PERMISSIONS`; `activeContracts` from `../identity/contract-service.js`; `createRemediationItem`, `upsertFindings` from `./finding-service.js`; `governSettings`; `readableSnapshot` from `./readable.js`; **`computeReviewQualitySignals` from `./decision-service.js` (Task 19 — dispatched before this task; see the dispatch note)**; `coverageOf` — **no: `coverageOf` lives in Task 17 and importing it here would be a forward import. This module computes the four counts and Task 17's `coverageOf` is applied by the caller.**
+
+**Dispatch order for slice 2's three campaign tasks, stated once and repeated in each: Task 19, then Task 18, then Task 17.** Task 18 imports `computeReviewQualitySignals` from Task 19 (§12's reviewer-quality section "is not hidden behind a toggle", so the signals are computed when a campaign closes rather than only when a test calls them); Task 17 imports `resolveItemReviewers` and `REVIEWER_BATCH` from Task 18. Task 19 imports nothing from either. The numbers are labels, not an order.
 - Produces (all in `./reviewer-service.js`):
   - `const REVIEWER_BATCH = 200`
   - `interface ResolveOutcome { assignedByPerson: Map<string, number>; blocked: number }`
@@ -16337,8 +18504,12 @@ Spec §12. The hard part of recertification, and the reason the workflow is not.
   - `async function reassignInvalidReviewers(tenantId: string, campaignId: string, options?: { now?: Date; publicUrl?: string }): Promise<{ reassigned: number; blocked: number }>`
   - `async function mootDepartedSubjects(tenantId: string, campaignId: string, options?: { now?: Date }): Promise<{ mooted: number; preserved: number }>`
   - `async function mootVanishedHoldings(tenantId: string, campaignId: string, currentSnapshotId: string, options?: { now?: Date }): Promise<{ mooted: number }>`
-  - `async function runCampaignReminders(tenantId: string, options?: { now?: Date; publicUrl?: string }): Promise<{ reminded: number; escalated: number }>`
-  - `async function closeDueCampaigns(tenantId: string, options?: { now?: Date; publicUrl?: string }): Promise<{ closed: number; undecided: number }>`
+  - `async function runCampaignReminders(tenantId: string, options?: { now?: Date; publicUrl?: string; batchSize?: number }): Promise<{ reminded: number; escalated: number }>`
+  - `async function closeDueCampaigns(tenantId: string, options?: { now?: Date; publicUrl?: string; batchSize?: number }): Promise<{ closed: number; undecided: number }>`
+  - `function automateResourceType(resourceKind: string): 'entitlement' | 'application' | 'group' | null`
+  - `const RESOURCE_OWNER_UNSUPPORTED_KINDS: readonly string[]`
+  - `interface ReviewerResolutionPreview { resolved: number; viaFallback: number; blocked: number; blockedSample: { subjectKey: string; resourceName: string; reason: string }[] }`
+  - `async function previewReviewerResolution(tenantId: string, input: { scope: unknown; reviewerSelector: string; reviewerConfig: Record<string, unknown>; fallbackSelector: string; fallbackConfig: Record<string, unknown>; snapshotId?: string }): Promise<ReviewerResolutionPreview>`
 
 **The invariant, borrowed intact from Automate and enforced the same way.** No person may be resolved as a reviewer of an item whose subject is themselves. It is a **subtraction from the resolved set**, applied at the end of expansion so that every selector inherits it and no expansion step can reintroduce what an earlier step removed (Ruling A-6). The new path here is **the resource owner who holds the resource** — the ordinary case, the finance systems manager in the finance group — and dropping them from their own item while leaving them the other 300 is correct and is what happens.
 
@@ -16351,9 +18522,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import {
+  automateResourceType,
   closeDueCampaigns,
   mootDepartedSubjects,
   mootVanishedHoldings,
+  previewReviewerResolution,
   reassignInvalidReviewers,
   resolveItemReviewers,
   runCampaignReminders,
@@ -16481,6 +18654,46 @@ describe('resolution', () => {
     expect(item.statusReason).toContain('would be attesting to their own access');
   });
 
+  it('an unattributed account resolves to the named fallback, or blocks — never to a sentinel', async () => {
+    // M2. `subjectFor` used to pass `item.personId ?? '00000000-…'` as the
+    // resolution subject. That is a sentinel a `person` selector configured with
+    // that value would silently match, and it is a manager query against a
+    // person who does not exist. `ResolutionSubject.subjectPersonId` is `string`
+    // and not `string | null`, so an account item cannot be handed to
+    // `resolveStageApprovers` at all.
+    const itemId = await withTenant(tenantId, async (tx) => {
+      const item = await tx.campaignItem.create({
+        data: {
+          tenantId, campaignId, holdingSnapshotId: snapshotId,
+          subjectKey: 'account:sys-1:anchor-9', personId: null, accountRef: 'anchor-9',
+          systemId: 'sys-1', resourceKind: 'targetAccount',
+          resourceId: 'anchor-9', resourceName: 'anchor-9 (active)',
+          attributions: [], observedAt: NOW, coverageStatus: 'complete',
+        },
+      });
+      return item.id;
+    });
+
+    // The campaign's fallback IS a named person, so it resolves to them.
+    const resolved = await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+    expect(resolved.blocked).toBe(0);
+    expect([...resolved.assignedByPerson.keys()]).toEqual([person['Ola']]);
+
+    // With a fallback that is not a named person, it BLOCKS and says why.
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItemReviewer.deleteMany({ where: { itemId } });
+      await tx.campaignItem.update({ where: { id: itemId }, data: { status: 'pending' } });
+      await tx.campaign.update({
+        where: { id: campaignId },
+        data: { fallbackSelector: 'manager', fallbackConfig: {} },
+      });
+    });
+    const blocked = await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+    expect(blocked.blocked).toBe(1);
+    const item = await withTenant(tenantId, (tx) => tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }));
+    expect(item.statusReason).toContain('belongs to nobody');
+  });
+
   it('notifies the campaign owner and govern.manage about a blocked item', async () => {
     const itemId = await seedItem('Ola');
     await withTenant(tenantId, (tx) =>
@@ -16545,6 +18758,28 @@ describe('the reviewer who leaves mid-campaign', () => {
     expect(result.reassigned).toBe(0);
     const item = await withTenant(tenantId, (tx) => tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }));
     expect(item.status).toBe('certified');
+  });
+
+  it('returns a reassigned item to pending', async () => {
+    // M3. Leaving a successfully-reassigned item on `blocked_no_reviewer` keeps
+    // it on the blocked dashboard forever, and would force `recordDecision` to
+    // permit a `blocked_no_reviewer -> certified` transition that
+    // `CERTIFYING_TRANSITIONS = [{ from: 'pending' }]` says does not exist.
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({ where: { id: itemId }, data: { status: 'blocked_no_reviewer' } });
+      await tx.user.updateMany({ where: { personId: person['Jan'] }, data: { status: 'inactive' } });
+      await tx.contract.updateMany({
+        where: { personId: person['Anna'] },
+        data: { managerPersonId: person['Ola'] },
+      });
+    });
+
+    const result = await reassignInvalidReviewers(tenantId, campaignId, { now: NOW });
+    expect(result.reassigned).toBe(1);
+    const item = await withTenant(tenantId, (tx) => tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }));
+    expect(item.status).toBe('pending');
   });
 
   it('BLOCKS when re-resolution yields nobody valid, and never auto-decides', async () => {
@@ -16666,6 +18901,101 @@ describe('the reviewer who does nothing', () => {
     expect(outbox.map((o) => o.template)).toContain('govern-review-escalated');
   });
 
+  it('reminds EVERY reviewer of a campaign in one run, not just the first', async () => {
+    // H14. The de-duplication used to ask NotificationOutbox for any reminder
+    // naming this campaign in the last 24 hours and narrow it by nothing else,
+    // so the first reviewer in the iteration was reminded and every other
+    // reviewer of the same campaign matched that same row and was skipped —
+    // forever, because tomorrow the same reviewer is first again. A campaign
+    // with 200 reviewers reminded one of them.
+    await seedPerson('Kees');
+    const first = await seedItem('Anna');
+    const second = await seedItem('Bram');
+    await withTenant(tenantId, async (tx) => {
+      await resolveItemReviewers(tx, campaignId, [first, second], NOW);
+      // Two different reviewers, one campaign.
+      await tx.campaignItemReviewer.updateMany({
+        where: { itemId: second },
+        data: { personId: person['Kees']! },
+      });
+    });
+
+    const halfway = new Date(NOW.getTime() + (DUE.getTime() - NOW.getTime()) / 2 + 60_000);
+    const result = await runCampaignReminders(tenantId, { now: halfway });
+    expect(result.reminded).toBe(2);
+
+    const reviewers = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { lastRemindedAt: { not: null } } }),
+    );
+    expect(new Set(reviewers.map((r) => r.personId)).size).toBe(2);
+  });
+
+  it('escalates to EACH reviewer’s OWN manager, not to an arbitrary item subject’s manager', async () => {
+    // H13. `resolveEscalationApprovers(tx, stage, subjectFor(items[0]!), now)`
+    // resolved the manager of the campaign's FIRST PENDING ITEM'S SUBJECT and
+    // added them as a reviewer on all of the silent reviewer's items — granting
+    // review authority, which §21 says comes from resolution and from nothing
+    // else, to somebody with no relationship to those items. It is also
+    // self-review-adjacent: if that arbitrary subject's manager is themselves
+    // the subject of one of the escalated items, they now review their own
+    // access.
+    await seedPerson('ChiefOne');
+    await seedPerson('ChiefTwo');
+    await seedPerson('Kees', { manager: 'ChiefTwo' });
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({
+        where: { personId: person['Jan'] },
+        data: { managerPersonId: person['ChiefOne'] },
+      }),
+    );
+
+    const first = await seedItem('Anna');
+    const second = await seedItem('Bram');
+    await withTenant(tenantId, async (tx) => {
+      await resolveItemReviewers(tx, campaignId, [first, second], NOW);
+      await tx.campaignItemReviewer.updateMany({
+        where: { itemId: second },
+        data: { personId: person['Kees']! },
+      });
+    });
+
+    await runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 60_000) });
+
+    const byItem = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { via: 'escalation' } }),
+    );
+    const onFirst = byItem.filter((r) => r.itemId === first).map((r) => r.personId);
+    const onSecond = byItem.filter((r) => r.itemId === second).map((r) => r.personId);
+    expect(onFirst).toEqual([person['ChiefOne']]);
+    expect(onSecond).toEqual([person['ChiefTwo']]);
+  });
+
+  it('escalation CREATES the reviewer row rather than upserting on a synthesised id', async () => {
+    // H12. The previous form upserted on `id: `${itemId}:${personId}``, which is
+    // not a uuid, so the query errored before `create` was reached — and a query
+    // error inside a Prisma interactive transaction leaves the Postgres
+    // transaction ABORTED, so the `.catch(() => undefined)` did not rescue the
+    // one escalation; every subsequent statement in the run failed with
+    // "current transaction is aborted". The whole reminder run died silently.
+    await seedPerson('Chief');
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({ where: { personId: person['Jan'] }, data: { managerPersonId: person['Chief'] } }),
+    );
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+
+    const result = await runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 60_000) });
+    expect(result).toMatchObject({ reminded: 1, escalated: 1 });
+
+    // Running it again the next day must not duplicate the escalation reviewer.
+    const tomorrow = new Date(DUE.getTime() + 86_400_000);
+    await runCampaignReminders(tenantId, { now: tomorrow });
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { itemId, personId: person['Chief']!, unassignedAt: null } }),
+    );
+    expect(rows).toHaveLength(1);
+  });
+
   it('does NOT remind a reviewer who has left', async () => {
     // A reminder in a leaver's mailbox is a campaign asking somebody who no
     // longer works there to certify somebody else's access.
@@ -16677,6 +19007,80 @@ describe('the reviewer who does nothing', () => {
     const halfway = new Date(NOW.getTime() + (DUE.getTime() - NOW.getTime()) / 2 + 60_000);
     const result = await runCampaignReminders(tenantId, { now: halfway });
     expect(result.reminded).toBe(0);
+  });
+});
+
+describe('previewReviewerResolution', () => {
+  it('says how many resolve, how many fall to the fallback and NAMES the ones that resolve to nobody', async () => {
+    // H17. The route in Task 22 Step 3 calls this function, and before the fix
+    // wave nothing in 21,933 lines produced it — so `apps/api/src/routes/admin/
+    // govern.ts` did not compile and §20's reviewer-resolution preview, the
+    // screen that catches an unreviewable campaign before 200 people are
+    // emailed, had no implementation.
+    await withTenant(tenantId, async (tx) => {
+      const snapshot = await tx.accessSnapshot.findUniqueOrThrow({ where: { id: snapshotId } });
+      for (const [subject, resourceId] of [['Anna', 'ent-1'], ['Ola', 'ent-2']] as const) {
+        await tx.holding.create({
+          data: {
+            tenantId, snapshotId: snapshot.id,
+            subjectKey: `person:${person[subject]!}`, personId: person[subject]!,
+            systemKind: 'targetSystem', systemId: 'sys-1',
+            resourceKind: 'targetEntitlement', resourceId, resourceName: 'Finance-Payments',
+            observedAt: NOW, observedVia: 'test', firstSeenAt: NOW,
+          },
+        });
+      }
+    });
+
+    const preview = await previewReviewerResolution(tenantId, {
+      scope: { resourceKinds: ['targetEntitlement'] },
+      reviewerSelector: 'manager',
+      reviewerConfig: {},
+      // A fallback that is the subject of the second holding, so it blocks.
+      fallbackSelector: 'person',
+      fallbackConfig: { personId: person['Ola'] },
+      snapshotId,
+    });
+
+    // Anna resolves to Jan; Ola's own item resolves to nobody, because the
+    // manager selector and the fallback both land on Ola herself.
+    expect(preview.resolved).toBe(1);
+    expect(preview.blocked).toBe(1);
+    expect(preview.blockedSample[0]!.resourceName).toBe('Finance-Payments');
+  });
+
+  it('writes NO CampaignItem and NO CampaignItemReviewer row', async () => {
+    // The whole point of a preview. It runs against a campaign that is still a
+    // draft, and a preview that generated items would be a campaign nobody
+    // started.
+    const before = await withTenant(tenantId, async (tx) => [
+      await tx.campaignItem.count(),
+      await tx.campaignItemReviewer.count(),
+    ]);
+    await previewReviewerResolution(tenantId, {
+      scope: { resourceKinds: ['targetEntitlement'] },
+      reviewerSelector: 'manager', reviewerConfig: {},
+      fallbackSelector: 'person', fallbackConfig: { personId: person['Ola'] },
+      snapshotId,
+    });
+    const after = await withTenant(tenantId, async (tx) => [
+      await tx.campaignItem.count(),
+      await tx.campaignItemReviewer.count(),
+    ]);
+    expect(after).toEqual(before);
+  });
+
+  it('maps only the three kinds Automate has a resource type for', async () => {
+    // M1. `ResourceOwner` is keyed on `'entitlement' | 'application' | 'group'`.
+    // Mapping `syntraRole`, `syntraUser` and `targetAccount` onto
+    // `'entitlement'` makes a `resourceOwner` selector look up an entitlement id
+    // that is not one, find nothing, and fall through with no explanation.
+    expect(automateResourceType('targetEntitlement')).toBe('entitlement');
+    expect(automateResourceType('application')).toBe('application');
+    expect(automateResourceType('syntraGroup')).toBe('group');
+    for (const kind of ['syntraRole', 'syntraUser', 'targetAccount']) {
+      expect(automateResourceType(kind), `${kind} has no Automate resource type`).toBeNull();
+    }
   });
 });
 
@@ -16723,6 +19127,82 @@ describe('closing', () => {
     expect((finding.detail as { reviewers?: string[] }).reviewers).toContain(person['Jan']);
   });
 
+  it('NEVER counts a revocation_requires_change item as revoked, and counts dispatched ones as decided', async () => {
+    // H5. `'revocation_dispatched'.startsWith('revoke')` is FALSE — "revocation"
+    // begins "revoca" — so the old string test matched `revoke_decided` alone
+    // and excluded all four `revocation_*` outcome statuses, while explicitly
+    // INCLUDING `revocation_requires_change`. Two rules broken at once: the
+    // vocabulary rule says `revocation_requires_change` is never counted in a
+    // revoked figure, and §13 calls a rule-attributed holding counted as revoked
+    // "a lie with a signature on it". The coverage figure was wrong in the other
+    // direction: a campaign that dispatched 91 revocations reported them as
+    // uncovered.
+    const dispatched = await seedItem('Anna');
+    const requiresChange = await seedItem('Bram');
+    await withTenant(tenantId, async (tx) => {
+      for (const [itemId, status, personId] of [
+        [dispatched, 'revocation_dispatched', person['Jan']!],
+        [requiresChange, 'revocation_requires_change', person['Ola']!],
+      ] as const) {
+        await tx.campaignItem.update({ where: { id: itemId }, data: { status } });
+        await tx.campaignDecision.create({
+          data: {
+            tenantId, itemId, personId, decision: 'revoke', comment: 'no longer needed',
+            itemOpenedAt: NOW, decidedAt: NOW, sessionDecisionOrdinal: 1, coverageAtDecision: {},
+          },
+        });
+      }
+    });
+
+    await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    const campaign = await withTenant(tenantId, (tx) =>
+      tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
+    );
+
+    // Both carry a decision, so both are DECIDED and coverage is 100.
+    expect(campaign.coveragePercent).toBe(100);
+    expect(campaign.status).toBe('closed_complete');
+    // Both decisions were `revoke`, so both count as revoked...
+    expect(campaign.revokedItems).toBe(2);
+    // ...and the one Govern could not execute is ALSO reported on its own line.
+    expect(campaign.requiresChangeItems).toBe(1);
+  });
+
+  it('counts `decided` from CampaignDecision rows, not from statuses', async () => {
+    // The negative half. An item whose status was changed without a decision is
+    // NOT decided, however final the status looks.
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) =>
+      tx.campaignItem.update({ where: { id: itemId }, data: { status: 'revocation_applied' } }),
+    );
+    await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    const campaign = await withTenant(tenantId, (tx) =>
+      tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
+    );
+    expect(campaign.coveragePercent).toBe(0);
+    expect(campaign.revokedItems).toBe(0);
+  });
+
+  it('writes ReviewQualitySignal rows when the campaign closes', async () => {
+    // H18. `computeReviewQualitySignals` was called from its own test and
+    // nowhere else, so `ReviewQualitySignal` was permanently empty and §12's
+    // reviewer-quality section — which "is not hidden behind a toggle" — had
+    // nothing to show, in the product and in the evidence bundle.
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({ where: { id: itemId }, data: { status: 'certified' } });
+      await tx.campaignDecision.create({
+        data: {
+          tenantId, itemId, personId: person['Jan']!, decision: 'certify',
+          itemOpenedAt: NOW, decidedAt: NOW, sessionDecisionOrdinal: 1, coverageAtDecision: {},
+        },
+      });
+    });
+    await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    const signals = await withTenant(tenantId, (tx) => tx.reviewQualitySignal.findMany());
+    expect(signals.length).toBeGreaterThan(0);
+  });
+
   it('closes COMPLETE when every item was decided or mooted', async () => {
     const itemId = await seedItem('Anna');
     await withTenant(tenantId, async (tx) => {
@@ -16766,7 +19246,13 @@ import {
 import { displayNames, enqueueOutbox, recipientsForPersons, usersWithPermission } from '../automate/notify.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
 import { createRemediationItem, upsertFindings } from './finding-service.js';
+import { readableSnapshot } from './readable.js';
 import { governSettings } from './settings-service.js';
+// Task 19, dispatched BEFORE this task. §12's reviewer-quality section "is not
+// hidden behind a toggle", so `closeDueCampaigns` computes the signals rather
+// than leaving `ReviewQualitySignal` permanently empty. Task 19 imports nothing
+// from here.
+import { computeReviewQualitySignals } from './decision-service.js';
 
 export const REVIEWER_BATCH = 200;
 
@@ -16801,6 +19287,51 @@ function stageFor(campaign: {
 }
 
 /**
+ * Automate's `ResourceType` is `'entitlement' | 'application' | 'group'`, and
+ * `ResourceOwner` is keyed on it. A campaign covers three kinds Automate has no
+ * resource type for — `syntraRole`, `syntraUser` and `targetAccount` — so this
+ * returns `null` for them rather than mapping them onto `'entitlement'`, where
+ * a `resourceOwner` selector would look up an entitlement id that is not one,
+ * silently find nothing, and fall through to the fallback with no explanation.
+ */
+export function automateResourceType(resourceKind: string): 'entitlement' | 'application' | 'group' | null {
+  return resourceKind === 'application'
+    ? 'application'
+    : resourceKind === 'syntraGroup'
+      ? 'group'
+      : resourceKind === 'targetEntitlement'
+        ? 'entitlement'
+        : null;
+}
+
+/**
+ * The named fallback person for an item that HAS NO SUBJECT PERSON.
+ *
+ * `ResolutionSubject.subjectPersonId` is `string` and not `string | null`
+ * (Automate Task 4), so an unattributed account cannot be handed to
+ * `resolveStageApprovers` at all — and the previous form's zero UUID is a
+ * sentinel a `person` selector configured with that value would silently match.
+ * Widening Automate's type for this one caller is the wrong trade, and
+ * reimplementing its `role` and `group` expansion here is the reimplementation
+ * this module exists not to do.
+ *
+ * So: an account item resolves to the campaign's fallback ONLY when that
+ * fallback is a named `person`, and otherwise becomes `blocked_no_reviewer`
+ * with the reason stated. A blocked item is visible, chased and counted; a
+ * silently-misresolved one is not.
+ */
+function fallbackPersonFor(stage: StageSnapshot): string | null {
+  return stage.fallbackSelector === 'person' ? (stage.fallbackConfig.personId ?? null) : null;
+}
+
+/** The three kinds `resourceOwner` cannot resolve, named once. */
+export const RESOURCE_OWNER_UNSUPPORTED_KINDS: readonly string[] = [
+  'syntraRole',
+  'syntraUser',
+  'targetAccount',
+];
+
+/**
  * The self-review invariant, applied as a SUBTRACTION FROM THE RESOLVED SET so
  * that every selector inherits it, and applied at the END of expansion so no
  * expansion step can reintroduce what an earlier one removed (Ruling A-6).
@@ -16810,27 +19341,51 @@ function stageFor(campaign: {
  * the resource owner who holds the resource — the finance systems manager in
  * the finance group — and dropping them from their own item while leaving them
  * the other 300 is correct and is what happens.
+ *
+ * Returns `null` for an item whose subject is an unattributed ACCOUNT. There is
+ * no person to subtract and no contract to resolve a manager from, and the
+ * previous form passed a zero UUID as `subjectPersonId` — harmless only for as
+ * long as nobody configures a `person` selector with that value, at which point
+ * it becomes a silent match on a sentinel. `resolveItemReviewers` routes a null
+ * subject straight to the fallback and says so in the item's `statusReason`.
  */
-function subjectFor(item: { personId: string | null; systemId: string; resourceKind: string; resourceId: string }): ResolutionSubject {
+function subjectFor(item: {
+  personId: string | null;
+  systemId: string;
+  resourceKind: string;
+  resourceId: string;
+}): ResolutionSubject | null {
+  if (item.personId === null) return null;
+  const resourceType = automateResourceType(item.resourceKind);
   return {
-    subjectPersonId: item.personId ?? '00000000-0000-0000-0000-000000000000',
+    subjectPersonId: item.personId,
     // A campaign item has no submitter. That is the one Automate path with no
     // analogue here.
     submitterPersonId: null,
     productOwnerPersonId: null,
     productOwnerGroupId: null,
     productCategory: null,
-    resources: [
-      {
-        resourceType:
-          item.resourceKind === 'application'
-            ? 'application'
-            : item.resourceKind === 'syntraGroup'
-              ? 'group'
-              : 'entitlement',
-        resourceId: item.resourceId,
-      },
-    ],
+    // An empty `resources` for a kind Automate cannot key on, so a
+    // `resourceOwner` selector resolves to nobody and FALLS BACK rather than
+    // resolving against a resource type that is a lie.
+    resources: resourceType === null ? [] : [{ resourceType, resourceId: item.resourceId }],
+  };
+}
+
+/**
+ * The resolution subject for ESCALATION, which is about the REVIEWER and not
+ * about the item. Section 12: escalation goes to `Contract.managerPersonId` on
+ * "the reviewer's own resolved contract, by `resolveContractForMapping`, the
+ * same relation Automate's `manager` selector uses and not a second one".
+ */
+function reviewerAsSubject(personId: string): ResolutionSubject {
+  return {
+    subjectPersonId: personId,
+    submitterPersonId: null,
+    productOwnerPersonId: null,
+    productOwnerGroupId: null,
+    productCategory: null,
+    resources: [],
   };
 }
 
@@ -16853,7 +19408,21 @@ export async function resolveItemReviewers(
   const blockedItems: string[] = [];
 
   for (const item of items) {
-    const resolution = await resolveStageApprovers(tx, stage, subjectFor(item), now);
+    const subject = subjectFor(item);
+
+    // An unattributed account has no person and no contract, so no selector
+    // over people can resolve it. It goes to the campaign's named fallback
+    // person if there is one, and is blocked with a reason if there is not.
+    const resolution =
+      subject === null
+        ? {
+            approvers: ((): { personId: string }[] => {
+              const person = fallbackPersonFor(stage);
+              return person === null ? [] : [{ personId: person }];
+            })(),
+            usedFallback: true,
+          }
+        : await resolveStageApprovers(tx, stage, subject, now);
 
     if (resolution.approvers.length === 0) {
       blockedItems.push(item.id);
@@ -16862,8 +19431,11 @@ export async function resolveItemReviewers(
         data: {
           status: 'blocked_no_reviewer',
           statusReason:
-            'the reviewer selector and the fallback both resolved to nobody who may decide this. ' +
-            'The likeliest cause is that everybody they resolved to would be attesting to their own access.',
+            subject === null
+              ? 'this item is an account belonging to nobody, so no selector over people can resolve it, ' +
+                'and the campaign fallback also resolved to nobody. Attribute the account or name a fallback person.'
+              : 'the reviewer selector and the fallback both resolved to nobody who may decide this. ' +
+                'The likeliest cause is that everybody they resolved to would be attesting to their own access.',
         },
       });
       continue;
@@ -16927,83 +19499,128 @@ Append the four remaining functions. Their shapes:
 export async function reassignInvalidReviewers(
   tenantId: string,
   campaignId: string,
-  options: { now?: Date; publicUrl?: string } = {},
+  options: { now?: Date; publicUrl?: string; batchSize?: number } = {},
 ): Promise<{ reassigned: number; blocked: number }> {
   const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? REVIEWER_BATCH;
 
-  return withTenant(tenantId, async (tx) => {
-    const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: campaignId } });
-    // Only items still awaiting a decision. A certified or revoke_decided item
-    // is finished with its reviewer.
-    const open = await tx.campaignItem.findMany({
-      where: { campaignId, status: { in: ['pending', 'blocked_no_reviewer'] } },
-      include: { reviewers: { where: { unassignedAt: null } } },
-    });
+  const campaign = await withTenant(tenantId, (tx) =>
+    tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
+  );
 
-    let reassigned = 0;
-    let blocked = 0;
+  let reassigned = 0;
+  let blocked = 0;
+  let cursor: string | null = null;
 
-    for (const item of open) {
-      const invalid: string[] = [];
-      for (const reviewer of item.reviewers) {
-        if ((await isValidApprover(tx, reviewer.personId, now)) !== null) invalid.push(reviewer.personId);
-      }
-      if (invalid.length === 0 && item.reviewers.length > 0) continue;
+  // ONE TRANSACTION PER BATCH. The previous form held one transaction over
+  // every open item of the campaign and, inside it, an `isValidApprover` per
+  // reviewer plus a full `resolveStageApprovers` per item.
+  for (;;) {
+    const open = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findMany({
+        // Only items still awaiting a decision. A certified or revoke_decided
+        // item is finished with its reviewer.
+        where: {
+          campaignId,
+          status: { in: ['pending', 'blocked_no_reviewer'] },
+          ...(cursor === null ? {} : { id: { gt: cursor } }),
+        },
+        include: { reviewers: { where: { unassignedAt: null } } },
+        orderBy: { id: 'asc' },
+        take: batchSize,
+      }),
+    );
+    if (open.length === 0) break;
+    cursor = open[open.length - 1]!.id;
 
-      for (const personId of invalid) {
-        await tx.campaignItemReviewer.updateMany({
-          where: { itemId: item.id, personId, unassignedAt: null },
-          data: { unassignedAt: now, unassignedReason: 'this reviewer is no longer valid' },
-        });
-      }
+    await withTenant(tenantId, async (tx) => {
+      for (const item of open) {
+        const invalid: string[] = [];
+        for (const reviewer of item.reviewers) {
+          if ((await isValidApprover(tx, reviewer.personId, now)) !== null) invalid.push(reviewer.personId);
+        }
+        if (invalid.length === 0 && item.reviewers.length > 0) continue;
 
-      const resolution = await resolveStageApprovers(tx, stageFor(campaign), subjectFor(item), now);
-      const incoming = resolution.approvers.filter((a) => !invalid.includes(a.personId));
+        for (const personId of invalid) {
+          await tx.campaignItemReviewer.updateMany({
+            where: { itemId: item.id, personId, unassignedAt: null },
+            data: { unassignedAt: now, unassignedReason: 'this reviewer is no longer valid' },
+          });
+        }
 
-      if (incoming.length === 0) {
-        blocked += 1;
+        const subject = subjectFor(item);
+        const stage = stageFor(campaign);
+        const resolution =
+          subject === null
+            ? {
+                approvers: ((): { personId: string }[] => {
+                  const person = fallbackPersonFor(stage);
+                  return person === null ? [] : [{ personId: person }];
+                })(),
+              }
+            : await resolveStageApprovers(tx, stage, subject, now);
+        const incoming = resolution.approvers.filter((a) => !invalid.includes(a.personId));
+
+        if (incoming.length === 0) {
+          blocked += 1;
+          await tx.campaignItem.update({
+            where: { id: item.id },
+            data: {
+              status: 'blocked_no_reviewer',
+              statusReason: 'the reviewer became invalid and re-resolution yielded nobody',
+            },
+          });
+          continue;
+        }
+
+        for (const approver of incoming) {
+          await tx.campaignItemReviewer.create({
+            data: {
+              tenantId, itemId: item.id, personId: approver.personId,
+              via: 'reassignment', assignedAt: now,
+            },
+          });
+        }
+        // BACK TO `pending`. Leaving a successfully-reassigned item on
+        // `blocked_no_reviewer` keeps it on the blocked dashboard forever, and
+        // `recordDecision` would then have to permit a
+        // `blocked_no_reviewer -> certified` transition that
+        // `CERTIFYING_TRANSITIONS = [{ from: 'pending' }]` says does not exist.
+        // Task 19's structural test asserts this.
         await tx.campaignItem.update({
           where: { id: item.id },
           data: {
-            status: 'blocked_no_reviewer',
-            statusReason: 'the reviewer became invalid and re-resolution yielded nobody',
+            status: 'pending',
+            statusReason: 'the previous reviewer became invalid and this item was reassigned',
           },
         });
-        continue;
+        reassigned += 1;
+
+        const parties = await recipientsForPersons(tx, [...invalid, ...incoming.map((a) => a.personId)]);
+        const names = await displayNames(tx, { personIds: invalid });
+        await enqueueOutbox(
+          tx,
+          parties.map((recipient) => ({
+            template: 'govern-review-reassigned' as const,
+            to: recipient.email,
+            vars: {
+              displayName: recipient.displayName,
+              campaignName: campaign.name,
+              itemCount: '1',
+              previousReviewer: names.get(`person:${invalid[0] ?? ''}`) ?? 'the previous reviewer',
+              reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaignId}`,
+            },
+            requestId: null,
+            userId: recipient.userId,
+          })),
+        );
       }
+    });
+  }
 
-      for (const approver of incoming) {
-        await tx.campaignItemReviewer.create({
-          data: {
-            tenantId, itemId: item.id, personId: approver.personId,
-            via: 'reassignment', assignedAt: now,
-          },
-        });
-      }
-      reassigned += 1;
-
-      const parties = await recipientsForPersons(tx, [...invalid, ...incoming.map((a) => a.personId)]);
-      const names = await displayNames(tx, { personIds: invalid });
-      await enqueueOutbox(
-        tx,
-        parties.map((recipient) => ({
-          template: 'govern-review-reassigned' as const,
-          to: recipient.email,
-          vars: {
-            displayName: recipient.displayName,
-            campaignName: campaign.name,
-            itemCount: '1',
-            previousReviewer: names.get(`person:${invalid[0] ?? ''}`) ?? 'the previous reviewer',
-            reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaignId}`,
-          },
-          requestId: null,
-          userId: recipient.userId,
-        })),
-      );
-    }
-
-    if (reassigned > 0 || blocked > 0) {
-      await recordEvent(tx, {
+  if (reassigned > 0 || blocked > 0) {
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
         actorUserId: null,
         action: 'govern.campaign.reassign',
         targetType: 'Campaign',
@@ -17011,10 +19628,10 @@ export async function reassignInvalidReviewers(
         outcome: 'success',
         sourceIp: null,
         payload: { reassigned, blocked },
-      });
-    }
-    return { reassigned, blocked };
-  });
+      }),
+    );
+  }
+  return { reassigned, blocked };
 }
 
 /**
@@ -17030,19 +19647,40 @@ export async function reassignInvalidReviewers(
 export async function mootDepartedSubjects(
   tenantId: string,
   campaignId: string,
-  options: { now?: Date } = {},
+  options: { now?: Date; batchSize?: number } = {},
 ): Promise<{ mooted: number; preserved: number }> {
   const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? REVIEWER_BATCH;
 
-  return withTenant(tenantId, async (tx) => {
-    const items = await tx.campaignItem.findMany({
-      where: { campaignId, personId: { not: null } },
-      select: { id: true, personId: true, status: true },
-    });
-    const contracts = await tx.contract.findMany({
-      where: { personId: { in: items.map((i) => i.personId!) } },
-      select: { personId: true, startDate: true, endDate: true },
-    });
+  let mooted = 0;
+  let preserved = 0;
+  let cursor: string | null = null;
+
+  // Paged. A campaign section 17 sizes at 50,000 items would otherwise load
+  // every item and every contract for every subject into one transaction and
+  // then issue an update per mooted row inside it.
+  for (;;) {
+    const items = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findMany({
+        where: {
+          campaignId,
+          personId: { not: null },
+          ...(cursor === null ? {} : { id: { gt: cursor } }),
+        },
+        select: { id: true, personId: true, status: true },
+        orderBy: { id: 'asc' },
+        take: batchSize,
+      }),
+    );
+    if (items.length === 0) break;
+    cursor = items[items.length - 1]!.id;
+
+    const contracts = await withTenant(tenantId, (tx) =>
+      tx.contract.findMany({
+        where: { personId: { in: items.map((i) => i.personId!) } },
+        select: { personId: true, startDate: true, endDate: true },
+      }),
+    );
 
     const activeByPerson = new Map<string, boolean>();
     const latestEnd = new Map<string, Date>();
@@ -17055,29 +19693,30 @@ export async function mootDepartedSubjects(
       }
     }
 
-    let mooted = 0;
-    let preserved = 0;
-    for (const item of items) {
-      if (activeByPerson.get(item.personId!) === true) continue;
-      if (item.status !== 'pending' && item.status !== 'blocked_no_reviewer') {
-        preserved += 1;
-        continue;
+    await withTenant(tenantId, async (tx) => {
+      for (const item of items) {
+        if (activeByPerson.get(item.personId!) === true) continue;
+        if (item.status !== 'pending' && item.status !== 'blocked_no_reviewer') {
+          preserved += 1;
+          continue;
+        }
+        const departedOn = latestEnd.get(item.personId!);
+        await tx.campaignItem.update({
+          where: { id: item.id },
+          data: {
+            status: 'moot',
+            statusReason:
+              `the subject's contracts have all ended${departedOn === undefined ? '' : ` on ${departedOn.toISOString().slice(0, 10)}`}. ` +
+              `Provision's leaver ladder and Automate's lapse sweep now own this holding; asking a manager to attest to it would be theatre. ` +
+              `This item is NOT counted as certified in any figure.`,
+          },
+        });
+        mooted += 1;
       }
-      const departedOn = latestEnd.get(item.personId!);
-      await tx.campaignItem.update({
-        where: { id: item.id },
-        data: {
-          status: 'moot',
-          statusReason:
-            `the subject's contracts have all ended${departedOn === undefined ? '' : ` on ${departedOn.toISOString().slice(0, 10)}`}. ` +
-            `Provision's leaver ladder and Automate's lapse sweep now own this holding; asking a manager to attest to it would be theatre. ` +
-            `This item is NOT counted as certified in any figure.`,
-        },
-      });
-      mooted += 1;
-    }
-    return { mooted, preserved };
-  });
+    });
+  }
+
+  return { mooted, preserved };
 }
 
 /** VERIFIED against the current snapshot, never inferred from a revocation somebody else dispatched. */
@@ -17085,35 +19724,58 @@ export async function mootVanishedHoldings(
   tenantId: string,
   campaignId: string,
   currentSnapshotId: string,
-  options: { now?: Date } = {},
+  options: { now?: Date; batchSize?: number } = {},
 ): Promise<{ mooted: number }> {
-  return withTenant(tenantId, async (tx) => {
-    const items = await tx.campaignItem.findMany({
-      where: { campaignId, status: { in: ['pending', 'blocked_no_reviewer'] } },
-    });
-    const present = await tx.holding.findMany({
-      where: { snapshotId: currentSnapshotId, subjectKey: { in: items.map((i) => i.subjectKey) } },
-      select: { subjectKey: true, systemId: true, resourceKind: true, resourceId: true },
-    });
+  const batchSize = options.batchSize ?? REVIEWER_BATCH;
+  let mooted = 0;
+
+  // No cursor: every item this page moots leaves the `where` clause, so the
+  // same query returns the next page. Items that survive would repeat, so the
+  // cursor advances over them explicitly.
+  let cursor: string | null = null;
+  for (;;) {
+    const items = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findMany({
+        where: {
+          campaignId,
+          status: { in: ['pending', 'blocked_no_reviewer'] },
+          ...(cursor === null ? {} : { id: { gt: cursor } }),
+        },
+        orderBy: { id: 'asc' },
+        take: batchSize,
+      }),
+    );
+    if (items.length === 0) break;
+    cursor = items[items.length - 1]!.id;
+
+    const present = await withTenant(tenantId, (tx) =>
+      tx.holding.findMany({
+        where: { snapshotId: currentSnapshotId, subjectKey: { in: items.map((i) => i.subjectKey) } },
+        select: { subjectKey: true, systemId: true, resourceKind: true, resourceId: true },
+      }),
+    );
     const keys = new Set(
       present.map((h) => `${h.subjectKey}|${h.systemId}|${h.resourceKind}|${h.resourceId}`),
     );
 
-    let mooted = 0;
-    for (const item of items) {
-      const key = `${item.subjectKey}|${item.systemId}|${item.resourceKind}|${item.resourceId}`;
-      if (keys.has(key)) continue;
-      await tx.campaignItem.update({
-        where: { id: item.id },
-        data: {
-          status: 'moot',
-          statusReason: `snapshot ${currentSnapshotId} no longer shows this holding`,
-        },
+    const gone = items.filter(
+      (item) => !keys.has(`${item.subjectKey}|${item.systemId}|${item.resourceKind}|${item.resourceId}`),
+    );
+    if (gone.length > 0) {
+      await withTenant(tenantId, async (tx) => {
+        const result = await tx.campaignItem.updateMany({
+          where: { id: { in: gone.map((i) => i.id) } },
+          data: {
+            status: 'moot',
+            statusReason: `snapshot ${currentSnapshotId} no longer shows this holding`,
+          },
+        });
+        mooted += result.count;
       });
-      mooted += 1;
     }
-    return { mooted };
-  });
+  }
+
+  return { mooted };
 }
 
 /**
@@ -17122,116 +19784,183 @@ export async function mootVanishedHoldings(
  */
 export async function runCampaignReminders(
   tenantId: string,
-  options: { now?: Date; publicUrl?: string } = {},
+  options: { now?: Date; publicUrl?: string; batchSize?: number } = {},
 ): Promise<{ reminded: number; escalated: number }> {
   const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? REVIEWER_BATCH;
   let reminded = 0;
   let escalated = 0;
 
-  await withTenant(tenantId, async (tx) => {
-    const campaigns = await tx.campaign.findMany({ where: { status: 'open' } });
+  const campaigns = await withTenant(tenantId, (tx) =>
+    tx.campaign.findMany({
+      where: { status: 'open' },
+      select: {
+        id: true, name: true, opensAt: true, dueAt: true,
+        reviewerSelector: true, reviewerConfig: true,
+        fallbackSelector: true, fallbackConfig: true,
+      },
+    }),
+  );
 
-    for (const campaign of campaigns) {
-      const elapsed = now.getTime() - campaign.opensAt.getTime();
-      const total = campaign.dueAt.getTime() - campaign.opensAt.getTime();
-      const share = total <= 0 ? 1 : elapsed / total;
-      if (share < 0.5) continue;
+  for (const campaign of campaigns) {
+    const elapsed = now.getTime() - campaign.opensAt.getTime();
+    const total = campaign.dueAt.getTime() - campaign.opensAt.getTime();
+    const share = total <= 0 ? 1 : elapsed / total;
+    if (share < 0.5) continue;
 
-      const items = await tx.campaignItem.findMany({
-        where: { campaignId: campaign.id, status: 'pending' },
-        include: { reviewers: { where: { unassignedAt: null } } },
-      });
-      if (items.length === 0) continue;
+    // Plain data out of a short transaction, then one transaction per reviewer
+    // batch. The previous form held ONE transaction over every open campaign,
+    // every pending item, a validity query per reviewer and an outbox lookup
+    // per reviewer.
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({
+        where: {
+          unassignedAt: null,
+          item: { campaignId: campaign.id, status: 'pending' },
+          // PER REVIEWER, not per campaign. The previous de-duplication asked
+          // NotificationOutbox for any reminder naming this campaign in the
+          // last 24 hours and narrowed it by nothing else, so the first
+          // reviewer in the iteration was reminded and every other reviewer of
+          // the same campaign matched that same row and was skipped -- forever,
+          // because tomorrow the same reviewer is first again. A campaign with
+          // 200 reviewers reminded one of them. Section 12's "a campaign never
+          // stops asking" became a campaign that asks one person. Escalation
+          // sat downstream of the same skip, so nobody else was ever escalated
+          // either.
+          OR: [
+            { lastRemindedAt: null },
+            { lastRemindedAt: { lt: new Date(now.getTime() - 86_400_000) } },
+          ],
+        },
+        select: { id: true, personId: true, itemId: true },
+      }),
+    );
+    if (rows.length === 0) continue;
 
-      const byReviewer = new Map<string, string[]>();
-      for (const item of items) {
-        for (const reviewer of item.reviewers) {
-          byReviewer.set(reviewer.personId, [...(byReviewer.get(reviewer.personId) ?? []), item.id]);
-        }
-      }
+    const byReviewer = new Map<string, { reviewerRowIds: string[]; itemIds: string[] }>();
+    for (const row of rows) {
+      const entry = byReviewer.get(row.personId) ?? { reviewerRowIds: [], itemIds: [] };
+      entry.reviewerRowIds.push(row.id);
+      entry.itemIds.push(row.itemId);
+      byReviewer.set(row.personId, entry);
+    }
 
-      for (const [personId, itemIds] of byReviewer) {
-        // A reminder in a leaver's mailbox is a campaign asking somebody who no
-        // longer works there to certify somebody else's access.
-        if ((await isValidApprover(tx, personId, now)) !== null) continue;
+    const reviewers = [...byReviewer];
+    for (let i = 0; i < reviewers.length; i += batchSize) {
+      const batch = reviewers.slice(i, i + batchSize);
+      const outcome = await withTenant(tenantId, async (tx) => {
+        let sent = 0;
+        let raised = 0;
 
-        const lastSent = await tx.notificationOutbox.findFirst({
-          where: {
-            template: 'govern-review-reminder',
-            userId: { not: null },
-            createdAt: { gte: new Date(now.getTime() - 86_400_000) },
-            vars: { path: ['campaignName'], equals: campaign.name },
-          },
-          orderBy: { createdAt: 'desc' },
-        });
-        if (lastSent !== null) continue;
+        for (const [personId, entry] of batch) {
+          // A reminder in a leaver's mailbox is a campaign asking somebody who
+          // no longer works there to certify somebody else's access.
+          if ((await isValidApprover(tx, personId, now)) !== null) continue;
 
-        const recipients = await recipientsForPersons(tx, [personId]);
-        await enqueueOutbox(
-          tx,
-          recipients.map((recipient) => ({
-            template: 'govern-review-reminder' as const,
-            to: recipient.email,
-            vars: {
-              displayName: recipient.displayName,
-              campaignName: campaign.name,
-              itemCount: String(itemIds.length),
-              dueAt: campaign.dueAt.toDateString(),
-              reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaign.id}`,
-            },
-            requestId: null,
-            userId: recipient.userId,
-          })),
-        );
-        reminded += 1;
-
-        if (share >= 1) {
-          // Escalation ADDS a reviewer and never replaces one, and it tells the
-          // original they were escalated past.
-          const escalation = await resolveEscalationApprovers(
-            tx,
-            stageFor(campaign),
-            subjectFor(items[0]!),
-            now,
-          );
-          const added = escalation.approvers.filter((a) => a.personId !== personId);
-          if (added.length === 0) continue;
-
-          for (const itemId of itemIds) {
-            for (const approver of added) {
-              await tx.campaignItemReviewer.upsert({
-                where: { id: `${itemId}:${approver.personId}` },
-                create: {
-                  tenantId, itemId, personId: approver.personId,
-                  via: 'escalation', assignedAt: now,
-                },
-                update: {},
-              }).catch(() => undefined);
-            }
-          }
-
-          const names = await displayNames(tx, { personIds: added.map((a) => a.personId) });
+          const recipients = await recipientsForPersons(tx, [personId]);
           await enqueueOutbox(
             tx,
             recipients.map((recipient) => ({
-              template: 'govern-review-escalated' as const,
+              template: 'govern-review-reminder' as const,
               to: recipient.email,
               vars: {
                 displayName: recipient.displayName,
                 campaignName: campaign.name,
-                itemCount: String(itemIds.length),
-                escalatedTo: added.map((a) => names.get(`person:${a.personId}`) ?? 'their manager').join(', '),
+                itemCount: String(entry.itemIds.length),
+                dueAt: campaign.dueAt.toDateString(),
                 reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaign.id}`,
               },
               requestId: null,
               userId: recipient.userId,
             })),
           );
-          escalated += 1;
+          // The cadence is driven from the reviewer's own row, so it is per
+          // reviewer per campaign and two campaigns with the same name cannot
+          // suppress each other.
+          await tx.campaignItemReviewer.updateMany({
+            where: { id: { in: entry.reviewerRowIds } },
+            data: { lastRemindedAt: now },
+          });
+          sent += 1;
+
+          if (share >= 1) {
+            // Escalation ADDS a reviewer and never replaces one, and it tells
+            // the original they were escalated past.
+            //
+            // THE SUBJECT IS THE REVIEWER, NOT THE ITEM. Section 12: escalation
+            // goes to "`Contract.managerPersonId` on THE REVIEWER'S OWN
+            // RESOLVED CONTRACT". Passing the first pending item's subject
+            // resolved an arbitrary person's manager and granted them review
+            // authority over up to 340 items they have no relationship to --
+            // and if that arbitrary subject's manager is themselves the subject
+            // of one of the escalated items, they now review their own access,
+            // which the self-review invariant is only re-checked for against
+            // the ITEM's own subject.
+            const escalation = await resolveEscalationApprovers(
+              tx,
+              stageFor(campaign),
+              reviewerAsSubject(personId),
+              now,
+            );
+            const added = escalation.approvers.filter((a) => a.personId !== personId);
+            if (added.length === 0) continue;
+
+            for (const itemId of entry.itemIds) {
+              for (const approver of added) {
+                // `findFirst` then `create`, with NO swallowed error.
+                //
+                // The previous form was an `upsert` on
+                // `where: { id: `${itemId}:${approver.personId}` }` -- a
+                // synthesised value that is not a uuid, so the query errored
+                // before `create` was reached; and a query error inside a
+                // Prisma interactive transaction leaves the Postgres
+                // transaction ABORTED, so the `.catch(() => undefined)` did not
+                // rescue the one escalation, it killed the whole reminder run
+                // with "current transaction is aborted" on the next statement.
+                // Ruling P11 banned swallowed errors on a destructive path for
+                // exactly this reason.
+                const existing = await tx.campaignItemReviewer.findFirst({
+                  where: { itemId, personId: approver.personId, unassignedAt: null },
+                  select: { id: true },
+                });
+                if (existing !== null) continue;
+                await tx.campaignItemReviewer.create({
+                  data: {
+                    tenantId, itemId, personId: approver.personId,
+                    via: 'escalation', assignedAt: now,
+                  },
+                });
+              }
+            }
+
+            const names = await displayNames(tx, { personIds: added.map((a) => a.personId) });
+            await enqueueOutbox(
+              tx,
+              recipients.map((recipient) => ({
+                template: 'govern-review-escalated' as const,
+                to: recipient.email,
+                vars: {
+                  displayName: recipient.displayName,
+                  campaignName: campaign.name,
+                  itemCount: String(entry.itemIds.length),
+                  escalatedTo: added.map((a) => names.get(`person:${a.personId}`) ?? 'their manager').join(', '),
+                  reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaign.id}`,
+                },
+                requestId: null,
+                userId: recipient.userId,
+              })),
+            );
+            raised += 1;
+          }
         }
-      }
+
+        return { sent, raised };
+      });
+
+      reminded += outcome.sent;
+      escalated += outcome.raised;
     }
-  });
+  }
 
   return { reminded, escalated };
 }
@@ -17244,89 +19973,136 @@ export async function runCampaignReminders(
  */
 export async function closeDueCampaigns(
   tenantId: string,
-  options: { now?: Date; publicUrl?: string } = {},
+  options: { now?: Date; publicUrl?: string; batchSize?: number } = {},
 ): Promise<{ closed: number; undecided: number }> {
   const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? REVIEWER_BATCH;
   let closed = 0;
   let undecidedTotal = 0;
 
-  await withTenant(tenantId, async (tx) => {
-    const settings = await governSettings(tx);
-    const campaigns = await tx.campaign.findMany({ where: { status: 'open', dueAt: { lte: now } } });
+  // A SHORT TRANSACTION RETURNING PLAIN DATA, not a transaction held open
+  // across every campaign and every item. Section 17 contemplates 50,000-item
+  // campaigns; one `withTenant` over a 1,840-item campaign is roughly 5,500
+  // round trips inside a 5000 ms budget.
+  const due = await withTenant(tenantId, (tx) =>
+    tx.campaign.findMany({
+      where: { status: 'open', dueAt: { lte: now } },
+      select: { id: true, name: true, ownerPersonId: true, snapshotId: true },
+    }),
+  );
+  const settings = await withTenant(tenantId, (tx) => governSettings(tx));
 
-    for (const campaign of campaigns) {
-      const items = await tx.campaignItem.findMany({
-        where: { campaignId: campaign.id },
-        include: { reviewers: { where: { unassignedAt: null }, select: { personId: true } } },
-      });
-
-      const stillOpen = items.filter(
-        (i) => i.status === 'pending' || i.status === 'blocked_no_reviewer',
+  for (const campaign of due) {
+    // ---- mark the undecided, batchSize items per transaction ---------------
+    let undecided = 0;
+    const silentReviewers = new Set<string>();
+    for (;;) {
+      const page = await withTenant(tenantId, (tx) =>
+        tx.campaignItem.findMany({
+          where: { campaignId: campaign.id, status: { in: ['pending', 'blocked_no_reviewer'] } },
+          include: { reviewers: { where: { unassignedAt: null }, select: { personId: true } } },
+          take: batchSize,
+          orderBy: { id: 'asc' },
+        }),
       );
-      for (const item of stillOpen) {
-        await tx.campaignItem.update({
-          where: { id: item.id },
+      if (page.length === 0) break;
+
+      await withTenant(tenantId, async (tx) => {
+        await tx.campaignItem.updateMany({
+          where: { id: { in: page.map((i) => i.id) } },
           data: {
             status: 'undecided',
             statusReason: 'the campaign closed and nobody decided this item. It was NOT attested.',
           },
         });
-        await createRemediationItem(tx, tenantId, {
-          kind: 'undecided_item',
-          ownerPersonId: campaign.ownerPersonId,
-          dueAt: new Date(now.getTime() + 14 * 86_400_000),
-          campaignItemId: item.id,
-          description: `${item.resourceName} for ${item.subjectKey} was not decided in "${campaign.name}". Somebody has to decide it by hand.`,
-          deepLink: `/admin/govern/campaigns/${campaign.id}`,
-        });
+        for (const item of page) {
+          await createRemediationItem(tx, tenantId, {
+            kind: 'undecided_item',
+            ownerPersonId: campaign.ownerPersonId,
+            dueAt: new Date(now.getTime() + 14 * 86_400_000),
+            campaignItemId: item.id,
+            description: `${item.resourceName} for ${item.subjectKey} was not decided in "${campaign.name}". Somebody has to decide it by hand.`,
+            deepLink: `/admin/govern/campaigns/${campaign.id}`,
+          });
+        }
+      });
+
+      for (const item of page) {
+        for (const reviewer of item.reviewers) silentReviewers.add(reviewer.personId);
+      }
+      undecided += page.length;
+      // The page's items are no longer `pending`, so the same query returns the
+      // next page without needing a cursor.
+    }
+
+    // ---- the counts, computed from what they are DEFINED as ----------------
+    //
+    // Section 12: `coveragePercent = (decided + moot) / total` where `decided`
+    // is EVERY ITEM CARRYING A CampaignDecision. Deriving it from statuses
+    // instead omits the four `revocation_*` outcome statuses, so a campaign
+    // that dispatched 91 revocations reports them as uncovered.
+    //
+    // And `revoked` is items whose LATEST decision is `revoke`, not items whose
+    // status begins with the letters "revoke". `'revocation_dispatched'
+    // .startsWith('revoke')` is FALSE -- "revocation" begins "revoca" -- so the
+    // string test matched `revoke_decided` alone while explicitly including
+    // `revocation_requires_change`, which the vocabulary rule says is NEVER
+    // counted in a revoked figure and which section 13 calls "a lie with a
+    // signature on it".
+    const counts = await withTenant(tenantId, async (tx) => {
+      const total = await tx.campaignItem.count({ where: { campaignId: campaign.id } });
+      const moot = await tx.campaignItem.count({ where: { campaignId: campaign.id, status: 'moot' } });
+      const requiresChange = await tx.campaignItem.count({
+        where: { campaignId: campaign.id, status: 'revocation_requires_change' },
+      });
+
+      const decidedGroups = await tx.campaignDecision.groupBy({
+        by: ['itemId'],
+        where: { item: { campaignId: campaign.id } },
+        _max: { decidedAt: true },
+      });
+      const decided = decidedGroups.length;
+
+      // The LATEST decision per item decides which side of the line it is on.
+      // An item revoked and then re-certified on appeal is certified. Ordered
+      // ascending and overwritten, because `CampaignDecision` is append-only and
+      // `sessionDecisionOrdinal` is per session rather than per item.
+      const history = await tx.campaignDecision.findMany({
+        where: { item: { campaignId: campaign.id } },
+        select: { itemId: true, decision: true },
+        orderBy: { decidedAt: 'asc' },
+      });
+      const decisionByItem = new Map<string, string>();
+      for (const row of history) decisionByItem.set(row.itemId, row.decision);
+      let certified = 0;
+      let revoked = 0;
+      for (const decision of decisionByItem.values()) {
+        if (decision === 'certify') certified += 1;
+        if (decision === 'revoke') revoked += 1;
       }
 
-      const certified = items.filter((i) => i.status === 'certified').length;
-      const revoked = items.filter((i) => i.status.startsWith('revoke') || i.status === 'revocation_requires_change').length;
-      const moot = items.filter((i) => i.status === 'moot').length;
-      const undecided = stillOpen.length;
-      const total = items.length;
-      const coverage = total === 0 ? 0 : Math.round(((certified + revoked + moot) / total) * 1000) / 10;
+      return { total, moot, requiresChange, decided, certified, revoked };
+    });
 
+    const coverage =
+      counts.total === 0
+        ? 0
+        : Math.round(((counts.decided + counts.moot) / counts.total) * 1000) / 10;
+
+    await withTenant(tenantId, async (tx) => {
       await tx.campaign.update({
         where: { id: campaign.id },
         data: {
           status: undecided === 0 ? 'closed_complete' : 'closed_incomplete',
-          certifiedItems: certified,
-          revokedItems: revoked,
-          mootItems: moot,
+          certifiedItems: counts.certified,
+          revokedItems: counts.revoked,
+          requiresChangeItems: counts.requiresChange,
+          mootItems: counts.moot,
           undecidedItems: undecided,
-          totalItems: total,
+          totalItems: counts.total,
           coveragePercent: coverage,
         },
       });
-
-      if (coverage < settings.minimumCoveragePercent) {
-        // The point of a recertification programme is not the certifications;
-        // it is knowing which parts of the organization are not looking.
-        await upsertFindings(
-          tenantId,
-          campaign.snapshotId,
-          [
-            {
-              kind: 'campaign_low_coverage',
-              severity: 'high',
-              subjectRefType: 'campaign',
-              subjectRefId: campaign.id,
-              detail: {
-                campaignName: campaign.name,
-                coveragePercent: coverage,
-                minimum: settings.minimumCoveragePercent,
-                certified, revoked, moot, undecided, total,
-                reviewers: [
-                  ...new Set(stillOpen.flatMap((i) => i.reviewers.map((r) => r.personId))),
-                ],
-              },
-            },
-          ],
-          { now },
-        );
-      }
 
       await recordEvent(tx, {
         actorUserId: null,
@@ -17335,15 +20111,181 @@ export async function closeDueCampaigns(
         targetId: campaign.id,
         outcome: 'success',
         sourceIp: null,
-        payload: { certified, revoked, moot, undecided, total, coveragePercent: coverage },
+        payload: {
+          certified: counts.certified,
+          revoked: counts.revoked,
+          requiresChange: counts.requiresChange,
+          moot: counts.moot,
+          undecided,
+          decided: counts.decided,
+          total: counts.total,
+          coveragePercent: coverage,
+        },
       });
+    });
 
-      closed += 1;
-      undecidedTotal += undecided;
+    if (coverage < settings.minimumCoveragePercent) {
+      // The point of a recertification programme is not the certifications; it
+      // is knowing which parts of the organization are not looking.
+      //
+      // `upsertFindings`, never `reconcileFindings`: this caller computes ONE
+      // draft, and a whole-tenant sweep from here would close everything else
+      // that is open (C1).
+      await upsertFindings(
+        tenantId,
+        [
+          {
+            kind: 'campaign_low_coverage',
+            severity: 'high',
+            subjectRefType: 'campaign',
+            subjectRefId: campaign.id,
+            detail: {
+              campaignName: campaign.name,
+              coveragePercent: coverage,
+              minimum: settings.minimumCoveragePercent,
+              certified: counts.certified,
+              revoked: counts.revoked,
+              requiresChange: counts.requiresChange,
+              moot: counts.moot,
+              undecided,
+              decided: counts.decided,
+              total: counts.total,
+              reviewers: [...silentReviewers],
+            },
+          },
+        ],
+        { now },
+      );
     }
-  });
+
+    // Section 12's reviewer-quality section is "not hidden behind a toggle", so
+    // the signals are computed at close rather than only when somebody asks.
+    // Before this, `computeReviewQualitySignals` was called from its own test
+    // and nowhere else, and `ReviewQualitySignal` was permanently empty.
+    await computeReviewQualitySignals(tenantId, campaign.id, now);
+
+    closed += 1;
+    undecidedTotal += undecided;
+  }
 
   return { closed, undecided: undecidedTotal };
+}
+```
+
+**`computeReviewQualitySignals` is imported from `./decision-service.js` (Task 19).** That is a forward import from this task's point of view and is closed the same way Task 17's is: **Task 19 is dispatched before Task 18, which is dispatched before Task 17.** Task 19 consumes nothing from this module — it takes `CampaignItem`, `CampaignItemReviewer` and `CampaignDecision` rows, all of which exist as of Task 15's migration. All three tasks carry this note.
+
+
+- [ ] **Step 4a: Write `previewReviewerResolution`**
+
+`apps/api`'s `POST /govern/campaigns/preview-reviewers` route (Task 22 Step 3) calls this, and without it that route module does not compile. §20 asks for the screen in words: *"stage: manager; 1,102 items resolve, 61 fall to the fallback, 17 resolve to nobody — here they are", which is the screen that catches an unreviewable campaign before 200 people are emailed rather than at 3am on the due date.*
+
+It lives here and not in `campaign-service.ts` because **resolution is this module's remit**, and because `reviewer-service.ts` must not import `campaign-service.ts` (Task 17 imports this file, not the other way round). It reads the scope's holdings and **writes no `CampaignItem` and no `CampaignItemReviewer` row.**
+
+Append to `packages/core/src/govern/reviewer-service.ts`:
+
+```ts
+export interface ReviewerResolutionPreview {
+  resolved: number;
+  viaFallback: number;
+  blocked: number;
+  /** Named, not counted. A count of 17 unreviewable items is not actionable. */
+  blockedSample: { subjectKey: string; resourceName: string; reason: string }[];
+}
+
+/**
+ * A DRY RUN of `resolveItemReviewers` over a scope, before any item exists.
+ *
+ * It duplicates no resolution logic: it builds the same `StageSnapshot` and the
+ * same `ResolutionSubject` and calls the same `resolveStageApprovers`. What it
+ * does not do is write, which is the whole point — this runs against a campaign
+ * that is still a draft.
+ *
+ * Bounded: it samples at most PREVIEW_LIMIT holdings and says so, because a
+ * preview that takes four minutes over 50,000 items is a screen nobody opens.
+ */
+export const PREVIEW_LIMIT = 2_000;
+
+export async function previewReviewerResolution(
+  tenantId: string,
+  input: {
+    scope: unknown;
+    reviewerSelector: string;
+    reviewerConfig: Record<string, unknown>;
+    fallbackSelector: string;
+    fallbackConfig: Record<string, unknown>;
+    snapshotId?: string;
+  },
+): Promise<ReviewerResolutionPreview> {
+  const now = new Date();
+  const stage = stageFor({
+    reviewerSelector: input.reviewerSelector,
+    reviewerConfig: input.reviewerConfig,
+    fallbackSelector: input.fallbackSelector,
+    fallbackConfig: input.fallbackConfig,
+  });
+
+  const scope = input.scope as { resourceKinds?: string[]; systemIds?: string[]; privilegedOnly?: boolean };
+
+  const holdings = await withTenant(tenantId, async (tx) => {
+    const snapshot = await readableSnapshot(tx, input.snapshotId);
+    return tx.holding.findMany({
+      where: {
+        snapshotId: snapshot.id,
+        ...(scope.resourceKinds === undefined ? {} : { resourceKind: { in: scope.resourceKinds } }),
+        ...(scope.systemIds === undefined ? {} : { systemId: { in: scope.systemIds } }),
+        ...(scope.privilegedOnly === true ? { privileged: true } : {}),
+      },
+      select: {
+        subjectKey: true, personId: true, systemId: true,
+        resourceKind: true, resourceId: true, resourceName: true,
+      },
+      take: PREVIEW_LIMIT,
+      orderBy: { id: 'asc' },
+    });
+  });
+
+  let resolved = 0;
+  let viaFallback = 0;
+  let blocked = 0;
+  const blockedSample: ReviewerResolutionPreview['blockedSample'] = [];
+
+  for (let i = 0; i < holdings.length; i += REVIEWER_BATCH) {
+    const batch = holdings.slice(i, i + REVIEWER_BATCH);
+    await withTenant(tenantId, async (tx) => {
+      for (const holding of batch) {
+        const subject = subjectFor(holding);
+        const result =
+          subject === null
+            ? {
+                approvers: ((): { personId: string }[] => {
+                  const person = fallbackPersonFor(stage);
+                  return person === null ? [] : [{ personId: person }];
+                })(),
+                usedFallback: true,
+              }
+            : await resolveStageApprovers(tx, stage, subject, now);
+
+        if (result.approvers.length === 0) {
+          blocked += 1;
+          if (blockedSample.length < 25) {
+            blockedSample.push({
+              subjectKey: holding.subjectKey,
+              resourceName: holding.resourceName,
+              reason:
+                subject === null
+                  ? 'this holding belongs to an account with no person, and the fallback is not a named person'
+                  : 'the selector and the fallback both resolved to nobody who may decide it',
+            });
+          }
+          continue;
+        }
+        resolved += 1;
+        if (result.usedFallback) viaFallback += 1;
+      }
+    });
+  }
+
+  return { resolved, viaFallback, blocked, blockedSample };
 }
 ```
 
@@ -17380,7 +20322,7 @@ and add `mootDepartedSubjects` and `mootVanishedHoldings` to `runSnapshotJob`, p
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm vitest run packages/core/src/govern/reviewer-service.test.ts packages/core/src/govern/jobs.test.ts`
-Expected: PASS.
+Expected: PASS. Nine tests were added by the fix wave: three for the reminder/escalation defects (H12, H13, H14), three for the closing counts and quality signals (H5, H18), one for reassignment returning to `pending` (M3), one for the unattributed-account subject (M1, M2), and one for `previewReviewerResolution` (H17).
 
 - [ ] **Step 7: Export and typecheck**
 
@@ -17398,6 +20340,15 @@ Expected: exit 0.
 5. In `runCampaignReminders`, drop the `isValidApprover` check. Expected: `does NOT remind a reviewer who has left` FAILS.
 6. In `runCampaignReminders`, drop the 24-hour `lastSent` check. Expected: `reminds at 50% of the time to due, then daily, and never more than once a day` FAILS on the second call.
 7. In `runCampaignReminders`, make escalation REPLACE the original reviewer. Expected: `escalates to the reviewer's manager, ADDS them` FAILS on the reviewer list.
+8. **In `runCampaignReminders`, drop `lastRemindedAt` from the `where` and restore the campaign-name-only `NotificationOutbox` lookup.** Expected: `reminds EVERY reviewer of a campaign in one run, not just the first` FAILS with `reminded: 1`. This is H14, and the version that shipped reminded one reviewer of a 200-reviewer campaign forever.
+9. **In `runCampaignReminders`, pass `subjectFor(items[0]!)` to `resolveEscalationApprovers` instead of `reviewerAsSubject(personId)`.** Expected: `escalates to EACH reviewer's OWN manager` FAILS — both reviewers escalate to `ChiefOne`. This is H13, and it granted review authority over up to 340 items to somebody with no relationship to them.
+10. In `runCampaignReminders`, replace the escalation `findFirst`-then-`create` with the old `upsert` on `id: \`${itemId}:${approver.personId}\`` plus `.catch(() => undefined)`. Expected: `escalation CREATES the reviewer row rather than upserting on a synthesised id` FAILS — and note *how* it fails: the run dies with "current transaction is aborted" rather than losing one escalation, because the catch cannot rescue an aborted Postgres transaction.
+11. **In `closeDueCampaigns`, restore `items.filter((i) => i.status.startsWith('revoke') || i.status === 'revocation_requires_change').length`.** Expected: `NEVER counts a revocation_requires_change item as revoked` FAILS on `revokedItems` (it becomes 1, counting the wrong one of the two).
+12. In `closeDueCampaigns`, compute `decided` from statuses instead of from `campaignDecision.groupBy`. Expected: `counts \`decided\` from CampaignDecision rows, not from statuses` FAILS with a coverage of 100 on an item nobody decided.
+13. In `closeDueCampaigns`, delete the `computeReviewQualitySignals` call. Expected: `writes ReviewQualitySignal rows when the campaign closes` FAILS.
+14. In `reassignInvalidReviewers`, remove the `status: 'pending'` update after a successful reassignment. Expected: `returns a reassigned item to pending` FAILS, and Task 19's `CERTIFYING_TRANSITIONS` structural test then has to admit a `blocked_no_reviewer -> certified` transition it says does not exist.
+15. In `subjectFor`, map every non-`application`/non-`syntraGroup` kind to `'entitlement'` again. Expected: add the case where a `syntraRole` item with a `resourceOwner` selector must fall back rather than resolving against an entitlement id that is not one, and require it to fail.
+16. In `subjectFor`, return a zero-UUID subject for `personId === null` instead of `null`. Expected: `an unattributed account resolves to the named fallback, or blocks` FAILS.
 
 - [ ] **Step 9: Commit**
 
@@ -17480,16 +20431,37 @@ describe('the structural tests that must fail if somebody forgets', () => {
     expect(CERTIFYING_TRANSITIONS.map((t) => t.from)).toEqual(['pending']);
   });
 
-  it('only the files in DECISION_ENTRY_POINTS write status = certified', () => {
+  it('only the files in DECISION_ENTRY_POINTS WRITE status = certified', () => {
     // A convention that lives in a document is a convention that survives until
     // the third person touches the code.
+    //
+    // THE REGEX MATCHES A WRITE, NOT THE WORD. `/['"]certified['"]/` matches
+    // every READ of the status too — `items.filter((i) => i.status ===
+    // 'certified')` in `closeDueCampaigns`, the same comparison in
+    // `report-service.ts` and `campaign-service.ts` — so all three were
+    // offenders on day one, and the implementer's cheapest fix is to add them to
+    // `DECISION_ENTRY_POINTS`, at which point the test PERMITS those files to
+    // write `certified` and proves nothing. §23 calls this "the test that would
+    // fail if anybody ever adds a negative-confirmation setting"; a test that
+    // can be satisfied by widening its own allow-list would not.
     const dir = dirname(fileURLToPath(import.meta.url));
     const offenders = readdirSync(dir)
       .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
-      .filter((f) => /['"]certified['"]/.test(readFileSync(join(dir, f), 'utf8')))
+      .filter((f) => /status:\s*['"]certified['"]/.test(readFileSync(join(dir, f), 'utf8')))
       .filter((f) => !DECISION_ENTRY_POINTS.includes(f));
     expect(offenders).toEqual([]);
+    // ONE entry. Growing this list is the failure mode, not the fix.
     expect(DECISION_ENTRY_POINTS).toEqual(['decision-service.ts']);
+  });
+
+  it('reading the status is still allowed, which is what makes the write test meaningful', () => {
+    // The negative half. If this ever fails it means the offender regex has been
+    // widened back to matching the word, and the write test above has silently
+    // become a test about vocabulary.
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const reviewer = readFileSync(join(dir, 'reviewer-service.ts'), 'utf8');
+    expect(reviewer).toMatch(/['"]certified['"]/);
+    expect(reviewer).not.toMatch(/status:\s*['"]certified['"]/);
   });
 
   it('no Govern file contains a timeout or expiry that certifies', () => {
@@ -17566,8 +20538,29 @@ describe('a departed subject', () => {
       }, { now: NOW }),
     ).rejects.toMatchObject({ code: 'subject_departed' });
 
+    // THE ASSERTION IS ON THE ITEM, NOT ON THE THROW.
+    //
+    // The version this replaces set `status: 'moot'` and then threw inside the
+    // SAME `withTenant`. `withTenant` is `prisma.$transaction(fn)`, so the throw
+    // rolled the update back with it: the item stayed `pending`, the reviewer
+    // was told it "is now moot" when it was not, the refusal repeated for the
+    // rest of the campaign, and at `dueAt` the item became `undecided` and
+    // raised a remediation item — so a leaver's holding ended up in the
+    // manual-chase queue instead of on the `moot` line, and §12's coverage
+    // arithmetic counted it against the organization. A test that asserted only
+    // the rejection would pass against that code.
     const item = await withTenant(tenantId, (tx) => tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }));
     expect(item.status).toBe('moot');
+    expect(item.statusReason).toContain('contracts have all ended');
+
+    // And a second attempt refuses on the item's status rather than repeating
+    // the departure refusal, because the moot really happened.
+    await expect(
+      recordDecision(tenantId, {
+        itemId, deciderPersonId: person['Jan']!, deciderUserId: user['Jan']!,
+        decision: 'certify', comment: null,
+      }, { now: NOW }),
+    ).rejects.toMatchObject({ code: 'item_not_pending' });
   });
 
   it('ALLOWS a revoke decision on a departed subject’s item', async () => {
@@ -17763,10 +20756,77 @@ describe('quality signals', () => {
     const computed = await computeReviewQualitySignals(tenantId, campaignId, NOW);
     expect(computed).toBe(1);
     const signal = await withTenant(tenantId, (tx) => tx.reviewQualitySignal.findFirstOrThrow());
-    expect(signal).toMatchObject({ itemsDecided: 3, largestBurst: 2 });
+    // All three decisions are consecutive by `sessionDecisionOrdinal`, so the
+    // run is 3 — not `max(bulkSize)`, which is 2.
+    expect(signal).toMatchObject({ itemsDecided: 3, largestBurst: 3 });
     expect(signal.certifiedShare).toBeCloseTo(2 / 3, 5);
     expect(signal.bulkShare).toBeCloseTo(2 / 3, 5);
     expect(signal.neverOpenedShare).toBe(1);
+    // The elapsed time across the run, which §12 asks for and which was
+    // recorded nowhere.
+    expect(signal.largestBurstMs).toBe(120_000);
+  });
+
+  it('largestBurst counts a RUN OF CONSECUTIVE DECISIONS, not the biggest bulk action', async () => {
+    // M9. `max(bulkSize)` reports 0 for a reviewer who decides forty items one
+    // at a time in ninety seconds — which is exactly the behaviour this signal
+    // exists to surface — and it is not what the screen's label says.
+    const ids = [await seedItem('Anna'), await seedItem('Bram'), await seedItem('Anna')];
+    for (const id of ids) await assign(id, 'Jan');
+    for (const [index, id] of ids.entries()) {
+      await recordDecision(tenantId, {
+        itemId: id, deciderPersonId: person['Jan']!, deciderUserId: user['Jan']!,
+        decision: 'revoke', comment: 'not needed',
+      }, { now: new Date(NOW.getTime() + index * 20_000) });
+    }
+
+    await computeReviewQualitySignals(tenantId, campaignId, NOW);
+    const signal = await withTenant(tenantId, (tx) => tx.reviewQualitySignal.findFirstOrThrow());
+    expect(signal.bulkShare).toBe(0);
+    expect(signal.largestBurst).toBe(3);
+    expect(signal.largestBurstMs).toBe(40_000);
+  });
+
+  it('neverOpenedShare counts the RECORDED FACT, not a timestamp coincidence', async () => {
+    // H19. A decision made in the same second as the open is not a decision
+    // made without opening, and the evidence bundle carries this figure as
+    // "the closest thing to evidence of engagement the system can honestly
+    // produce". Accusing a reviewer who read everything is worse than silence.
+    const itemId = await seedItem('Anna');
+    await assign(itemId, 'Jan');
+    await openItem(tenantId, person['Jan']!, itemId, NOW);
+    await recordDecision(tenantId, {
+      itemId, deciderPersonId: person['Jan']!, deciderUserId: user['Jan']!,
+      decision: 'certify', comment: null,
+    }, { now: NOW });
+
+    const decision = await withTenant(tenantId, (tx) => tx.campaignDecision.findFirstOrThrow());
+    expect(decision.neverOpened).toBe(false);
+    expect(decision.itemOpenedAt).toEqual(NOW);
+
+    await computeReviewQualitySignals(tenantId, campaignId, NOW);
+    const signal = await withTenant(tenantId, (tx) => tx.reviewQualitySignal.findFirstOrThrow());
+    expect(signal.neverOpenedShare).toBe(0);
+  });
+
+  it('openItem PERSISTS the open time, so it survives a different process', async () => {
+    // The whole of H19. `openItem` used to write to a module-level Map and do a
+    // no-op `updateMany({ data: {} })` against the database. Across two API
+    // workers, behind a load balancer or after a restart, that map is empty at
+    // decision time.
+    const itemId = await seedItem('Anna');
+    await assign(itemId, 'Jan');
+    await openItem(tenantId, person['Jan']!, itemId, NOW);
+
+    const row = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findFirstOrThrow({ where: { itemId, personId: person['Jan']! } }),
+    );
+    expect(row.openedAt).toEqual(NOW);
+
+    // Opening again does not restart the clock.
+    const later = new Date(NOW.getTime() + 60_000);
+    const second = await openItem(tenantId, person['Jan']!, itemId, later);
+    expect(second.openedAt).toEqual(NOW);
   });
 });
 
@@ -17890,10 +20950,22 @@ Append:
 /**
  * Records that the reviewer FETCHED this item's detail, so the interval in the
  * decision is a server-side measurement rather than a client-reported dwell
- * time, which is worth nothing.
+ * time, which is worth nothing (§12).
  *
- * An item never opened produces `itemOpenedAt === decidedAt`, which is what the
- * `neverOpenedShare` signal counts.
+ * IT IS A COLUMN, NOT AN IN-PROCESS MAP. A module-level `Map<string, Date>` is
+ * empty at decision time across two API workers, behind any load balancer, and
+ * after any restart — so `itemOpenedAt === decidedAt` for everybody,
+ * `medianIntervalMs` is 0 for every reviewer and `neverOpenedShare` is 1.0 for
+ * every reviewer. §17 puts these signals in the evidence bundle as "the closest
+ * thing to evidence of engagement the system can honestly produce", and a
+ * signal that reads "instantaneous, never opened" about a reviewer who read
+ * everything is worse than no signal: it is an accusation the bundle carries.
+ * The map was also unbounded — one entry per (reviewer, item) for the life of
+ * the process.
+ *
+ * `openedAt: null` in the `where` so the FIRST open is the one recorded. A
+ * reviewer who opens an item, reads it, and opens it again before deciding has
+ * not read it twice as fast.
  */
 export async function openItem(
   tenantId: string,
@@ -17901,23 +20973,18 @@ export async function openItem(
   itemId: string,
   now: Date = new Date(),
 ): Promise<{ openedAt: Date }> {
-  await withTenant(tenantId, async (tx) => {
+  return withTenant(tenantId, async (tx) => {
     await tx.campaignItemReviewer.updateMany({
-      where: { itemId, personId, unassignedAt: null },
-      data: {},
+      where: { itemId, personId, unassignedAt: null, openedAt: null },
+      data: { openedAt: now },
     });
+    const row = await tx.campaignItemReviewer.findFirst({
+      where: { itemId, personId, unassignedAt: null },
+      select: { openedAt: true },
+    });
+    return { openedAt: row?.openedAt ?? now };
   });
-  OPENED.set(`${personId}:${itemId}`, now);
-  return { openedAt: now };
 }
-
-/**
- * In-process, deliberately. The open time is a measurement of one reviewer's
- * session and it does not need to survive a restart: a decision made after a
- * restart records `itemOpenedAt === decidedAt`, which reads as "never opened"
- * and is the honest answer for a measurement that was lost.
- */
-const OPENED = new Map<string, Date>();
 
 export interface DecisionInput {
   itemId: string;
@@ -17927,13 +20994,47 @@ export interface DecisionInput {
   comment: string | null;
 }
 
-export async function recordDecision(
+/**
+ * THE REFUSALS ARE COMPUTED BEFORE THE WRITE TRANSACTION OPENS.
+ *
+ * The previous form set a departed subject's item to `moot` and then threw
+ * `DecisionRefusedError` in the SAME `withTenant`. `withTenant` is
+ * `prisma.$transaction(fn)`, so the throw rolled the `moot` back with it: the
+ * item stayed `pending`, the reviewer was told it "is now moot" when it was
+ * not, the same refusal repeated for the rest of the campaign, and at `dueAt`
+ * the item became `undecided` and raised a remediation item — so a leaver's
+ * holding ended up in the manual-chase queue instead of on the `moot` line, and
+ * §12's coverage arithmetic counted it against the organization.
+ *
+ * That was the fourth distinct route on this programme to a person's access
+ * outliving their employment, and the shape is now a standing suspicion: ANY
+ * CODE PATH THAT SPECIAL-CASES A DEPARTED PERSON IS SUSPECT UNTIL ITS FAILURE
+ * MODE IS CHECKED.
+ *
+ * So: one short read-only transaction returns plain facts; the departure case
+ * moots the item in its OWN COMMITTED transaction and only then throws; the
+ * ordinary case writes in one transaction as before.
+ */
+interface DecisionFacts {
+  campaignStatus: string;
+  itemStatus: string;
+  itemPersonId: string | null;
+  riskFlags: string[];
+  coverageStatus: string;
+  campaignId: string;
+  resourceName: string;
+  subjectKey: string;
+  isReviewer: boolean;
+  reviewerInvalid: string | null;
+  subjectDeparted: boolean;
+  openedAt: Date | null;
+}
+
+async function decisionFacts(
   tenantId: string,
   input: DecisionInput,
-  options: { now?: Date } = {},
-): Promise<{ status: string }> {
-  const now = options.now ?? new Date();
-
+  now: Date,
+): Promise<DecisionFacts> {
   return withTenant(tenantId, async (tx) => {
     const item = await tx.campaignItem.findUniqueOrThrow({
       where: { id: input.itemId },
@@ -17941,79 +21042,132 @@ export async function recordDecision(
     });
     const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: item.campaignId } });
 
-    if (campaign.status !== 'open' && campaign.status !== 'executing') {
-      throw new DecisionRefusedError('campaign_not_open', `this campaign is ${campaign.status}`);
-    }
+    const contracts =
+      item.personId === null
+        ? []
+        : await tx.contract.findMany({
+            where: { personId: item.personId },
+            select: { startDate: true, endDate: true },
+          });
+
+    return {
+      campaignStatus: campaign.status,
+      itemStatus: item.status,
+      itemPersonId: item.personId,
+      riskFlags: item.riskFlags,
+      coverageStatus: item.coverageStatus,
+      campaignId: item.campaignId,
+      resourceName: item.resourceName,
+      subjectKey: item.subjectKey,
+      isReviewer: item.reviewers.some((r) => r.personId === input.deciderPersonId),
+      // Re-checked here because deactivation revoking sessions covers most of it
+      // and "most of it" is not a security control.
+      reviewerInvalid: await isValidApprover(tx, input.deciderPersonId, now),
+      subjectDeparted:
+        item.personId !== null &&
+        !contracts.some((c) => c.startDate <= now && (c.endDate === null || c.endDate >= now)),
+      openedAt:
+        item.reviewers.find((r) => r.personId === input.deciderPersonId)?.openedAt ?? null,
+    };
+  });
+}
+
+export async function recordDecision(
+  tenantId: string,
+  input: DecisionInput,
+  options: { now?: Date } = {},
+): Promise<{ status: string }> {
+  const now = options.now ?? new Date();
+  const facts = await decisionFacts(tenantId, input, now);
+
+  if (facts.campaignStatus !== 'open' && facts.campaignStatus !== 'executing') {
+    throw new DecisionRefusedError('campaign_not_open', `this campaign is ${facts.campaignStatus}`);
+  }
+  if (facts.itemStatus !== 'pending' && facts.itemStatus !== 'blocked_no_reviewer') {
+    throw new DecisionRefusedError('item_not_pending', `this item is already ${facts.itemStatus}`);
+  }
+
+  // THE SELF-REVIEW INVARIANT, at the moment of decision as well as at
+  // resolution. Every path Automate enumerated closes the same way, including
+  // deciding through the API rather than the console.
+  if (facts.itemPersonId !== null && facts.itemPersonId === input.deciderPersonId) {
+    throw new DecisionRefusedError(
+      'self_review',
+      'no person may record a decision on an item whose subject is themselves',
+    );
+  }
+  if (!facts.isReviewer) {
+    throw new DecisionRefusedError('not_reviewer', 'this item is not assigned to you');
+  }
+  if (facts.reviewerInvalid !== null) {
+    throw new DecisionRefusedError('reviewer_invalid', `you may no longer decide: ${facts.reviewerInvalid}`);
+  }
+
+  // A departed subject: certifying is refused AND the item moots. Revoking is
+  // ALLOWED — a departure never suppresses a revocation.
+  //
+  // The moot is committed in its own transaction BEFORE the throw, so the item
+  // really is `moot` after this call returns. The test asserts the status, not
+  // the throw.
+  if (facts.subjectDeparted && input.decision === 'certify') {
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({
+        where: { id: input.itemId },
+        data: {
+          status: 'moot',
+          statusReason:
+            "the subject's contracts have all ended. A certification is a signed statement about somebody's access; signing one for a person who left would be false assurance.",
+        },
+      });
+      await recordEvent(tx, {
+        actorUserId: input.deciderUserId,
+        action: 'govern.decision.refused',
+        targetType: 'CampaignItem',
+        targetId: input.itemId,
+        outcome: 'failure',
+        sourceIp: null,
+        payload: { reason: 'subject_departed', mooted: true, campaignId: facts.campaignId },
+      });
+    });
+    throw new DecisionRefusedError(
+      'subject_departed',
+      'this person has left; the item is now moot and cannot be certified. Revoking is still available.',
+    );
+  }
+
+  // Revoking is one at a time, WITH A COMMENT.
+  if (input.decision === 'revoke' && (input.comment ?? '').trim().length === 0) {
+    throw new DecisionRefusedError('comment_required', 'a revoke decision requires a comment');
+  }
+  // An unattributable holding is excluded from bulk certify AND given a
+  // mandatory comment.
+  if (
+    input.decision === 'certify' &&
+    facts.riskFlags.includes('unattributable') &&
+    (input.comment ?? '').trim().length === 0
+  ) {
+    throw new DecisionRefusedError(
+      'comment_required',
+      'this holding has no recorded cause; certifying it requires a comment saying who said it was fine and why',
+    );
+  }
+
+  return withTenant(tenantId, async (tx) => {
+    // Re-read inside the write transaction: the checks above ran in an earlier
+    // one, and an item that changed in between must not be decided twice.
+    const item = await tx.campaignItem.findUniqueOrThrow({ where: { id: input.itemId } });
     if (item.status !== 'pending' && item.status !== 'blocked_no_reviewer') {
       throw new DecisionRefusedError('item_not_pending', `this item is already ${item.status}`);
-    }
-
-    // THE SELF-REVIEW INVARIANT, at the moment of decision as well as at
-    // resolution. Every path Automate enumerated closes the same way, including
-    // deciding through the API rather than the console.
-    if (item.personId !== null && item.personId === input.deciderPersonId) {
-      throw new DecisionRefusedError(
-        'self_review',
-        'no person may record a decision on an item whose subject is themselves',
-      );
-    }
-    if (!item.reviewers.some((r) => r.personId === input.deciderPersonId)) {
-      throw new DecisionRefusedError('not_reviewer', 'this item is not assigned to you');
-    }
-    // Re-checked here because deactivation revoking sessions covers most of it
-    // and "most of it" is not a security control.
-    const invalid = await isValidApprover(tx, input.deciderPersonId, now);
-    if (invalid !== null) {
-      throw new DecisionRefusedError('reviewer_invalid', `you may no longer decide: ${invalid}`);
-    }
-
-    // A departed subject: certifying is refused and the item moots. Revoking is
-    // ALLOWED — a departure never suppresses a revocation.
-    if (item.personId !== null) {
-      const contracts = await tx.contract.findMany({
-        where: { personId: item.personId },
-        select: { startDate: true, endDate: true },
-      });
-      const active = contracts.some(
-        (c) => c.startDate <= now && (c.endDate === null || c.endDate >= now),
-      );
-      if (!active && input.decision === 'certify') {
-        await tx.campaignItem.update({
-          where: { id: item.id },
-          data: {
-            status: 'moot',
-            statusReason:
-              "the subject's contracts have all ended. A certification is a signed statement about somebody's access; signing one for a person who left would be false assurance.",
-          },
-        });
-        throw new DecisionRefusedError(
-          'subject_departed',
-          'this person has left; the item is now moot and cannot be certified. Revoking is still available.',
-        );
-      }
-    }
-
-    // Revoking is one at a time, WITH A COMMENT.
-    if (input.decision === 'revoke' && (input.comment ?? '').trim().length === 0) {
-      throw new DecisionRefusedError('comment_required', 'a revoke decision requires a comment');
-    }
-    // An unattributable holding is excluded from bulk certify AND given a
-    // mandatory comment.
-    if (
-      input.decision === 'certify' &&
-      item.riskFlags.includes('unattributable') &&
-      (input.comment ?? '').trim().length === 0
-    ) {
-      throw new DecisionRefusedError(
-        'comment_required',
-        'this holding has no recorded cause; certifying it requires a comment saying who said it was fine and why',
-      );
     }
 
     const lastOrdinal = await tx.campaignDecision.count({
       where: { personId: input.deciderPersonId, item: { campaignId: item.campaignId } },
     });
-    const openedAt = OPENED.get(`${input.deciderPersonId}:${item.id}`) ?? now;
+    // `neverOpened` is recorded as a FACT rather than inferred from a timestamp
+    // coincidence: `itemOpenedAt === decidedAt` is also what a decision made in
+    // the same second as the open looks like.
+    const openedAt = facts.openedAt ?? now;
+    const neverOpened = facts.openedAt === null;
 
     const decision = await tx.campaignDecision.create({
       data: {
@@ -18024,6 +21178,7 @@ export async function recordDecision(
         decision: input.decision,
         comment: input.comment,
         itemOpenedAt: openedAt,
+        neverOpened,
         decidedAt: now,
         viaBulk: false,
         sessionDecisionOrdinal: lastOrdinal + 1,
@@ -18163,7 +21318,9 @@ export async function bulkCertify(
 
     const items = await tx.campaignItem.findMany({
       where: { id: { in: [...input.itemIds] }, campaignId: input.campaignId },
-      include: { reviewers: { where: { unassignedAt: null }, select: { personId: true } } },
+      include: {
+        reviewers: { where: { unassignedAt: null }, select: { personId: true, openedAt: true } },
+      },
     });
 
     const refused: { itemId: string; reason: string }[] = [];
@@ -18199,8 +21356,19 @@ export async function bulkCertify(
       where: { personId: input.deciderPersonId, item: { campaignId: input.campaignId } },
     });
 
+    // The reviewer's own `openedAt` per item, read from the reviewer rows
+    // already loaded. A persisted column, not a module-level Map that is empty
+    // on a second worker and after every restart.
+    const openedByItem = new Map<string, Date>(
+      eligible.flatMap((item) =>
+        item.reviewers
+          .filter((r) => r.personId === input.deciderPersonId && r.openedAt !== null)
+          .map((r) => [item.id, r.openedAt!] as const),
+      ),
+    );
+
     for (const [index, item] of eligible.entries()) {
-      const openedAt = OPENED.get(`${input.deciderPersonId}:${item.id}`) ?? now;
+      const openedAt = openedByItem.get(item.id) ?? now;
       const decision = await tx.campaignDecision.create({
         data: {
           tenantId,
@@ -18210,6 +21378,7 @@ export async function bulkCertify(
           decision: 'certify',
           comment: null,
           itemOpenedAt: openedAt,
+          neverOpened: !openedByItem.has(item.id),
           decidedAt: now,
           viaBulk: true,
           bulkSize: eligible.length,
@@ -18260,83 +21429,147 @@ export async function computeReviewQualitySignals(
   tenantId: string,
   campaignId: string,
   now: Date = new Date(),
+  batchSize = 200,
 ): Promise<number> {
-  return withTenant(tenantId, async (tx) => {
-    const items = await tx.campaignItem.findMany({
-      where: { campaignId },
-      include: {
-        reviewers: { select: { personId: true } },
-        decisions: true,
-      },
+  // Plain data out of short, paged transactions. One `withTenant` over every
+  // item with every reviewer and every decision, plus an upsert per reviewer,
+  // is the same unbounded-loop-in-one-transaction shape as the rest of slice 2.
+  const assigned = new Map<string, number>();
+  let cursor: string | null = null;
+  for (;;) {
+    const page = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({
+        where: {
+          item: { campaignId },
+          ...(cursor === null ? {} : { id: { gt: cursor } }),
+        },
+        select: { id: true, personId: true },
+        orderBy: { id: 'asc' },
+        take: batchSize,
+      }),
+    );
+    if (page.length === 0) break;
+    cursor = page[page.length - 1]!.id;
+    for (const row of page) assigned.set(row.personId, (assigned.get(row.personId) ?? 0) + 1);
+  }
+
+  interface DecisionRow {
+    personId: string;
+    decision: string;
+    viaBulk: boolean;
+    neverOpened: boolean;
+    itemOpenedAt: Date;
+    decidedAt: Date;
+    sessionDecisionOrdinal: number;
+  }
+  const byPerson = new Map<string, DecisionRow[]>();
+  cursor = null;
+  for (;;) {
+    const page: (DecisionRow & { id: string })[] = await withTenant(tenantId, (tx) =>
+      tx.campaignDecision.findMany({
+        where: { item: { campaignId }, ...(cursor === null ? {} : { id: { gt: cursor } }) },
+        select: {
+          id: true, personId: true, decision: true, viaBulk: true, neverOpened: true,
+          itemOpenedAt: true, decidedAt: true, sessionDecisionOrdinal: true,
+        },
+        orderBy: { id: 'asc' },
+        take: batchSize,
+      }),
+    );
+    if (page.length === 0) break;
+    cursor = page[page.length - 1]!.id;
+    for (const row of page) byPerson.set(row.personId, [...(byPerson.get(row.personId) ?? []), row]);
+  }
+
+  const drafts: {
+    personId: string;
+    itemsAssigned: number;
+    itemsDecided: number;
+    certifiedShare: number;
+    medianIntervalMs: number;
+    bulkShare: number;
+    largestBurst: number;
+    largestBurstMs: number;
+    neverOpenedShare: number;
+  }[] = [];
+
+  for (const [personId, itemsAssigned] of assigned) {
+    const mine = (byPerson.get(personId) ?? []).sort(
+      (a, b) => a.sessionDecisionOrdinal - b.sessionDecisionOrdinal,
+    );
+    if (mine.length === 0) continue;
+
+    const intervals = mine
+      .map((d) => d.decidedAt.getTime() - d.itemOpenedAt.getTime())
+      .sort((a, b) => a - b);
+    const median = intervals[Math.floor(intervals.length / 2)] ?? 0;
+
+    // A RUN OF CONSECUTIVE DECISIONS, and the elapsed time across that run —
+    // which is what §12 describes and what the screen's label says. It is NOT
+    // `max(bulkSize)`: a reviewer who decides 40 items one at a time in ninety
+    // seconds is exactly the behaviour this signal exists to surface, and
+    // `max(bulkSize)` reports 0 for them. Consecutive by
+    // `sessionDecisionOrdinal`, which is per reviewer per campaign and is an
+    // explicit ordinal precisely because `createdAt` is transaction start time.
+    let largestBurst = 0;
+    let largestBurstMs = 0;
+    let runLength = 0;
+    let runStartedAt: Date | null = null;
+    let previousOrdinal: number | null = null;
+    for (const decision of mine) {
+      const consecutive = previousOrdinal !== null && decision.sessionDecisionOrdinal === previousOrdinal + 1;
+      if (consecutive) {
+        runLength += 1;
+      } else {
+        runLength = 1;
+        runStartedAt = decision.decidedAt;
+      }
+      previousOrdinal = decision.sessionDecisionOrdinal;
+      if (runLength > largestBurst) {
+        largestBurst = runLength;
+        largestBurstMs = decision.decidedAt.getTime() - (runStartedAt ?? decision.decidedAt).getTime();
+      }
+    }
+
+    drafts.push({
+      personId,
+      itemsAssigned,
+      itemsDecided: mine.length,
+      certifiedShare: mine.filter((d) => d.decision === 'certify').length / mine.length,
+      medianIntervalMs: median,
+      bulkShare: mine.filter((d) => d.viaBulk).length / mine.length,
+      largestBurst,
+      largestBurstMs,
+      // The RECORDED FACT, not a timestamp coincidence. A decision made in the
+      // same second as the open is not a decision made without opening.
+      neverOpenedShare: mine.filter((d) => d.neverOpened).length / mine.length,
     });
+  }
 
-    const assigned = new Map<string, number>();
-    const decisions = new Map<string, typeof items[number]['decisions']>();
-    for (const item of items) {
-      for (const reviewer of item.reviewers) {
-        assigned.set(reviewer.personId, (assigned.get(reviewer.personId) ?? 0) + 1);
+  let written = 0;
+  for (let i = 0; i < drafts.length; i += batchSize) {
+    const batch = drafts.slice(i, i + batchSize);
+    await withTenant(tenantId, async (tx) => {
+      for (const draft of batch) {
+        const { personId, ...values } = draft;
+        await tx.reviewQualitySignal.upsert({
+          where: { campaignId_personId: { campaignId, personId } },
+          create: { tenantId, campaignId, personId, ...values, computedAt: now },
+          update: { ...values, computedAt: now },
+        });
+        written += 1;
       }
-      for (const decision of item.decisions) {
-        decisions.set(decision.personId, [...(decisions.get(decision.personId) ?? []), decision]);
-      }
-    }
+    });
+  }
 
-    let written = 0;
-    for (const [personId, itemsAssigned] of assigned) {
-      const mine = (decisions.get(personId) ?? []).sort(
-        (a, b) => a.sessionDecisionOrdinal - b.sessionDecisionOrdinal,
-      );
-      if (mine.length === 0) continue;
-
-      const intervals = mine
-        .map((d) => d.decidedAt.getTime() - d.itemOpenedAt.getTime())
-        .sort((a, b) => a - b);
-      const median = intervals[Math.floor(intervals.length / 2)] ?? 0;
-
-      let largestBurst = 0;
-      let run = 0;
-      for (const decision of mine) {
-        run = decision.viaBulk ? run + 1 : 0;
-        largestBurst = Math.max(largestBurst, decision.viaBulk ? (decision.bulkSize ?? run) : 1);
-      }
-
-      await tx.reviewQualitySignal.upsert({
-        where: { campaignId_personId: { campaignId, personId } },
-        create: {
-          tenantId, campaignId, personId,
-          itemsAssigned,
-          itemsDecided: mine.length,
-          certifiedShare: mine.filter((d) => d.decision === 'certify').length / mine.length,
-          medianIntervalMs: median,
-          bulkShare: mine.filter((d) => d.viaBulk).length / mine.length,
-          largestBurst,
-          neverOpenedShare:
-            mine.filter((d) => d.itemOpenedAt.getTime() === d.decidedAt.getTime()).length / mine.length,
-          computedAt: now,
-        },
-        update: {
-          itemsAssigned,
-          itemsDecided: mine.length,
-          certifiedShare: mine.filter((d) => d.decision === 'certify').length / mine.length,
-          medianIntervalMs: median,
-          bulkShare: mine.filter((d) => d.viaBulk).length / mine.length,
-          largestBurst,
-          neverOpenedShare:
-            mine.filter((d) => d.itemOpenedAt.getTime() === d.decidedAt.getTime()).length / mine.length,
-          computedAt: now,
-        },
-      });
-      written += 1;
-    }
-    return written;
-  });
+  return written;
 }
 ```
 
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm vitest run packages/core/src/govern/decision-service.test.ts`
-Expected: PASS, 20 tests.
+Expected: PASS, 24 tests. (The fix wave added the `certified`-read structural test, two quality-signal tests and the `openItem` persistence test.)
 
 - [ ] **Step 7: Export and typecheck**
 
@@ -18350,8 +21583,10 @@ Expected: exit 0.
 Every one must produce a failure:
 
 1. Add `{ from: 'pending', to: 'certified', causedBy: 'timeout' }` to `CERTIFYING_TRANSITIONS`. Expected: `every transition into \`certified\` is caused by a CampaignDecision row` FAILS. **This is the assertion that would catch a negative-confirmation setting.**
-2. Add `status: 'certified'` to a close path in `reviewer-service.ts`. Expected: both `only the files in DECISION_ENTRY_POINTS write status = certified` and `no Govern file contains a timeout or expiry that certifies` FAIL.
-3. Remove `'needs_review'` from `HIGH_RISK_FLAGS`. Expected: `REFUSES a high-risk item from the bulk action` FAILS.
+2. Add `status: 'certified'` to a close path in `reviewer-service.ts`. Expected: both `only the files in DECISION_ENTRY_POINTS WRITE status = certified` and `no Govern file contains a timeout or expiry that certifies` FAIL. **Confirm it fails with the CORRECTED regex** — under the old `/['"]certified['"]/` it fails for the wrong reason, because `reviewer-service.ts` reads that status legitimately and was an offender on day one.
+2a. Change the offender regex back to `/['"]certified['"]/`. Expected: `only the files in DECISION_ENTRY_POINTS WRITE status = certified` FAILS immediately, naming `reviewer-service.ts`, `report-service.ts` and `campaign-service.ts` — and note that the cheapest way to make it pass again is to add those three to `DECISION_ENTRY_POINTS`, at which point the test permits them to WRITE `certified` and proves nothing. That is H16.
+3. **Remove `needs_review` from the `riskFlags` array in Task 17's `startCampaign` generation** — not from `HIGH_RISK_FLAGS`. Expected: `REFUSES a high-risk item from the bulk action` FAILS for a `needsReview` grant, and Task 17's `writes needs_review and sod_violation into riskFlags` FAILS too. **The old form of this mutation removed the flag from `HIGH_RISK_FLAGS` and passed**, because the test fixture supplied by hand a flag no production path wrote — the third instance in this plan of a test proving something production did not do.
+3a. Remove `'needs_review'` from `HIGH_RISK_FLAGS`. Expected: `REFUSES a high-risk item from the bulk action` FAILS. Both halves, because the flag has to be written AND consulted.
 4. In `isBulkCertifiable`, drop the `coverageStatus` check. Expected: the same test FAILS on the `partial` item.
 5. In `recordDecision`, allow a certification of a departed subject. Expected: `REFUSES a certification and moots the item instead` FAILS.
 6. In `recordDecision`, refuse a *revoke* on a departed subject too. Expected: `ALLOWS a revoke decision on a departed subject's item` FAILS. **Both directions, because refusing both is how a leaver's access becomes permanent.**
@@ -18389,14 +21624,16 @@ Spec §5, §13, Ruling G1. **A reviewer clicking revoke has not revoked anything
 - Modify: `packages/core/src/provision/types.ts`, `packages/core/src/provision/plan.ts`, `packages/core/src/provision/run-service.ts`, `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `revokeGrant` from `../automate/fulfil.js`; `createRemediationItem`, `upsertFindings` from `./finding-service.js`; `governSettings`; `readableSnapshot`; `checkSnapshotAge`, `checkSourceFreshness`; `countRegion`, `known`, `unknownValue`, `type Tri`; `usersWithPermission`, `enqueueOutbox`, `recipientsForPersons` from `../automate/notify.js`; `type PlanInput`, `type PlannedAction` from `../provision/plan.js`.
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `revokeGrant` from `../automate/fulfil.js`; **`LIVE_GRANT_STATUSES` from `../automate/types.js`**; `createRemediationItem`, `upsertFindings` from `./finding-service.js`; `governSettings`; `readableSnapshot` from `./readable.js`; `checkSnapshotAge`, `checkSourceFreshness`; `countRegion`, `known`, `unknownValue`, `type Tri`; `usersWithPermission`, `enqueueOutbox`, `recipientsForPersons` from `../automate/notify.js`; **`personDisplayName` from `../provision/desired.js`**; `type PlanInput`, `type PlannedAction` from `../provision/plan.js`.
+- **Modify** also: `packages/core/src/govern/jobs.ts` — `runSnapshotJob` calls `reflectRevocationOutcomes` after the build (H18).
 - Produces (in `./dispatch.js` — **pure**):
-  - `type RevocationRoute = 'automate_grant' | 'revocation_order' | 'requires_change_rule' | 'requires_change_role' | 'requires_change_directory_source' | 'requires_change_direct_assignment'`
+  - `type RevocationRoute = 'automate_grant' | 'revocation_order' | 'requires_change_rule' | 'requires_change_role' | 'requires_change_directory_source' | 'requires_change_direct_assignment' | 'requires_change_account' | 'requires_change_syntra_user'`
   - `const REVOCATION_ROUTES: readonly RevocationRoute[]`
   - `const DISPATCHABLE_ROUTES: readonly RevocationRoute[]` — `['automate_grant', 'revocation_order']`
   - `interface RouteInput { resourceKind: ResourceKind; systemKind: SystemKind; attributionKinds: readonly string[]; liveRuleAttribution: boolean; grantIds: readonly string[]; directorySourceId: string | null }`
   - `interface RouteDecision { route: RevocationRoute; dispatchable: boolean; remediationKind: string | null; explanation: string; notRemoved: string[] }`
-  - `function routeRevocation(input: RouteInput): RouteDecision`
+  - `const ROUTE_REMEDIATION_KIND: Readonly<Record<RevocationRoute, string | null>>`
+  - `function routeRevocation(input: RouteInput): RouteDecision` — **no fall-through: the final line is `const exhaustive: never = input.resourceKind`, so a seventh `ResourceKind` is a compile error rather than a silent `revocation_order`.**
 - Produces (in `./revocation-guard.js` — **pure**):
   - `interface GuardThresholds { batchThresholdPercent: number; perResourceThresholdPercent: number; personPopulationDropPercent: number }`
   - `interface GuardInput { revocationsInBatch: number; holdingsInScope: number; revocationsByResource: ReadonlyMap<string, number>; holderCountByResource: ReadonlyMap<string, Tri<number>>; resourceNameById: ReadonlyMap<string, string>; thresholds: GuardThresholds; snapshotAgeDays: number; maxSnapshotAgeDays: number; staleSources: { sourceName: string; staleness: string; completeness: string }[]; personsWithActiveContract: number; previousPersonsWithActiveContract: number | null; hasEverApplied: boolean }`
@@ -18405,7 +21642,8 @@ Spec §5, §13, Ruling G1. **A reviewer clicking revoke has not revoked anything
 - Produces (in `./revocation-service.js`):
   - `async function computeRevocationBatch(tenantId, actorUserId, campaignId, options?): Promise<{ batchId: string; status: string; requiresConfirmation: boolean; blockedReason: string | null }>`
   - `async function skipDispatch(tenantId, actorUserId, dispatchId, reason): Promise<void>`
-  - `async function confirmRevocationBatch(tenantId, actorUserId, batchId, options?): Promise<{ status: string; dispatched: number; requiresChange: number; failed: number }>`
+  - `class RevocationRefusedError extends Error { constructor(readonly code: 'blocked' | 'not_previewed' | 'confirmation_required', message: string) }`
+  - `async function confirmRevocationBatch(tenantId: string, actorUserId: string, batchId: string, options?: { now?: Date; confirmed?: boolean }): Promise<{ status: string; dispatched: number; requiresChange: number; failed: number }>` — **written out in full at Step 4 (Ruling G-5). `confirmed` must be passed explicitly for a batch whose guard set `requiresConfirmation`.**
   - `async function reflectRevocationOutcomes(tenantId: string, snapshotId: string, options?): Promise<{ confirmed: number; applied: number; notApplied: number; slaBreaches: number }>`
   - `async function loadRevocationOrders(tx: TenantClient, targetSystemId: string): Promise<RevocationOrderFacts[]>`
 - Produces in `../provision/types.js`:
@@ -18419,7 +21657,13 @@ Spec §5, §13, Ruling G1. **A reviewer clicking revoke has not revoked anything
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { DISPATCHABLE_ROUTES, REVOCATION_ROUTES, routeRevocation, type RouteInput } from './dispatch.js';
+import {
+  DISPATCHABLE_ROUTES,
+  REVOCATION_ROUTES,
+  routeRevocation,
+  type RevocationRoute,
+  type RouteInput,
+} from './dispatch.js';
 
 const input = (over: Partial<RouteInput> = {}): RouteInput => ({
   resourceKind: 'targetEntitlement',
@@ -18540,29 +21784,187 @@ describe('the dispatch table — exactly one route per holding', () => {
     expect(routeRevocation(input({ attributionKinds: [] })).route).toBe('revocation_order');
   });
 
-  it('resolves EVERY attribution combination to exactly one route', () => {
-    // A table over every combination, so a kind added later without a route
-    // fails rather than silently falling through.
-    const kinds = [
+  it('resolves EVERY (kind, resourceKind) pair to EXACTLY ONE NAMED route', () => {
+    // THE PREVIOUS VERSION OF THIS TEST ASSERTED NOTHING.
+    //
+    // Its only assertion inside the loop was
+    // `expect(REVOCATION_ROUTES).toContain(decision.route)` — which a router
+    // returning `'requires_change_role'` unconditionally passes. It iterated
+    // single kinds and never combinations despite its name, and `syntraUser`
+    // was absent from the resourceKind list, which is exactly the kind that
+    // fell through to `revocation_order` and would have failed on a NOT NULL
+    // column inside the dispatch loop. This is the `some`→`every` shape from
+    // Provision Task 8: a test whose fixture cannot distinguish pass from fail
+    // is the same defect as a missing test, and it is invisible to every other
+    // check.
+    //
+    // §23 asks for the table "over every attribution combination, asserting
+    // that each resolves to exactly one route". So: an explicit
+    // [input, expectedRoute] array, and the EXACT route asserted.
+    const rk = (k: RouteInput['resourceKind']): RouteInput['systemKind'] =>
+      k.startsWith('target') ? 'targetSystem' : 'syntraInternal';
+
+    const KINDS = [
       'business_rule', 'request', 'delegated_admin', 'auto_granted', 'direct_assignment',
       'group_inheritance', 'org_unit_inheritance', 'directory_source', 'discovered',
       'manual', 'unattributable',
-    ];
-    for (const kind of kinds) {
-      for (const resourceKind of ['targetEntitlement', 'targetAccount', 'syntraGroup', 'application', 'syntraRole'] as const) {
-        const decision = routeRevocation(
-          input({
+    ] as const;
+
+    /** What the route MUST be, derived from the spec rather than from the code. */
+    const expected = (
+      resourceKind: RouteInput['resourceKind'],
+      kinds: readonly string[],
+      liveRule: boolean,
+      hasGrant: boolean,
+    ): RevocationRoute => {
+      if (resourceKind === 'syntraRole') return 'requires_change_role';
+      if (resourceKind === 'syntraUser') return 'requires_change_syntra_user';
+      if (kinds.includes('business_rule') && liveRule) return 'requires_change_rule';
+      if (kinds.includes('directory_source')) return 'requires_change_directory_source';
+      if (hasGrant && kinds.some((k) => ['request', 'delegated_admin', 'auto_granted'].includes(k))) {
+        return 'automate_grant';
+      }
+      if (resourceKind === 'application' || resourceKind === 'syntraGroup') {
+        return 'requires_change_direct_assignment';
+      }
+      if (resourceKind === 'targetAccount') return 'requires_change_account';
+      return 'revocation_order';
+    };
+
+    const cases: { input: RouteInput; expected: RevocationRoute }[] = [];
+
+    // Every single kind × every resource kind, INCLUDING syntraUser.
+    for (const kind of KINDS) {
+      for (const resourceKind of [
+        'targetEntitlement', 'targetAccount', 'syntraGroup', 'application', 'syntraRole', 'syntraUser',
+      ] as const) {
+        const liveRule = kind === 'business_rule';
+        const hasGrant = ['request', 'delegated_admin', 'auto_granted'].includes(kind);
+        cases.push({
+          input: input({
             resourceKind,
-            systemKind: resourceKind.startsWith('target') ? 'targetSystem' : 'syntraInternal',
+            systemKind: rk(resourceKind),
             attributionKinds: [kind],
-            liveRuleAttribution: ['business_rule', 'request', 'delegated_admin', 'auto_granted'].includes(kind),
-            grantIds: ['request', 'delegated_admin', 'auto_granted'].includes(kind) ? ['g-1'] : [],
+            liveRuleAttribution: liveRule,
+            grantIds: hasGrant ? ['g-1'] : [],
             directorySourceId: kind === 'directory_source' ? 'src-1' : null,
           }),
-        );
-        expect(REVOCATION_ROUTES).toContain(decision.route);
+          expected: expected(resourceKind, [kind], liveRule, hasGrant),
+        });
       }
     }
+
+    // The four PAIRS that matter, which the single-kind sweep cannot reach.
+    cases.push(
+      {
+        // enabled rule + request: the rule wins, and the grant is named in notRemoved.
+        input: input({
+          attributionKinds: ['business_rule', 'request'],
+          liveRuleAttribution: true,
+          grantIds: ['g-1'],
+        }),
+        expected: 'requires_change_rule',
+      },
+      {
+        // DISABLED rule + request: the grant is the only live cause. H6.
+        input: input({
+          attributionKinds: ['business_rule', 'request'],
+          liveRuleAttribution: false,
+          grantIds: ['g-1'],
+        }),
+        expected: 'automate_grant',
+      },
+      {
+        // directory source + request: the source rewrites it every run.
+        input: input({
+          resourceKind: 'syntraGroup',
+          systemKind: 'syntraInternal',
+          attributionKinds: ['directory_source', 'request'],
+          grantIds: ['g-1'],
+          directorySourceId: 'src-1',
+        }),
+        expected: 'requires_change_directory_source',
+      },
+      {
+        // discovered + manual: nothing in desired state wants it.
+        input: input({ attributionKinds: ['discovered', 'manual'] }),
+        expected: 'revocation_order',
+      },
+      // The empty set.
+      { input: input({ attributionKinds: [] }), expected: 'revocation_order' },
+      { input: input({ resourceKind: 'targetAccount', attributionKinds: [] }), expected: 'requires_change_account' },
+      {
+        input: input({ resourceKind: 'syntraUser', systemKind: 'syntraInternal', attributionKinds: [] }),
+        expected: 'requires_change_syntra_user',
+      },
+    );
+
+    expect(cases.length).toBe(KINDS.length * 6 + 7);
+
+    for (const { input: routeInput, expected: expectedRoute } of cases) {
+      const decision = routeRevocation(routeInput);
+      expect(
+        decision.route,
+        `${routeInput.resourceKind} / [${routeInput.attributionKinds.join(',')}] / liveRule=${routeInput.liveRuleAttribution}`,
+      ).toBe(expectedRoute);
+      // "Exactly one route" asserted rather than assumed: the decision names one
+      // route, and its dispatchability follows from that route alone.
+      expect(DISPATCHABLE_ROUTES.includes(decision.route)).toBe(decision.dispatchable);
+    }
+  });
+
+  it('routes a DISABLED business rule beside a live grant to Automate', () => {
+    // H6. `liveRuleAttribution` was computed at the call site as
+    //   `attributions.some((a) =>
+    //      (a.kind === 'business_rule' && a.detail?.['ruleEnabled'] === true) ||
+    //      a.kind === 'request' || a.kind === 'delegated_admin' || a.kind === 'auto_granted')`
+    // so a holding whose `business_rule` attribution names a DISABLED rule and
+    // which also carries a `request` got `hasRule && liveRuleAttribution` and
+    // routed to `requires_change_rule` — explained as "a business rule grants it
+    // … Provision would grant it back tonight", about a rule that is switched
+    // off. The grant, the only live cause, was never revoked, and a
+    // `rule_change_required` remediation item was filed against a disabled rule.
+    //
+    // The mover shape: the birthright rule was turned off when the person
+    // changed job; the requested grant is what remains.
+    const decision = routeRevocation(
+      input({
+        attributionKinds: ['business_rule', 'request'],
+        liveRuleAttribution: false,
+        grantIds: ['g-1'],
+      }),
+    );
+    expect(decision).toMatchObject({ route: 'automate_grant', dispatchable: true });
+    expect(decision.notRemoved).toContain('business_rule');
+  });
+
+  it('routes a targetAccount holding to requires_change_account, never to an order', () => {
+    // H7. `RevocationOrder.entitlementId` is `String @db.Uuid` NOT NULL and an
+    // account-level holding has no entitlement, so the old fall-through would
+    // have failed inside the dispatch loop, on an irreversible path.
+    const decision = routeRevocation(
+      input({ resourceKind: 'targetAccount', attributionKinds: ['discovered'] }),
+    );
+    expect(decision).toMatchObject({
+      route: 'requires_change_account',
+      dispatchable: false,
+      remediationKind: 'account_removal_required',
+    });
+    expect(decision.explanation).toContain('leaver ladder');
+  });
+
+  it('routes a syntraUser holding to requires_change_syntra_user, never to an order', () => {
+    // H7, second half. `RevocationOrder.targetSystemId` and `accountId` are both
+    // NOT NULL and a Syntra login has neither — and Govern must not deactivate a
+    // Syntra login in any case.
+    const decision = routeRevocation(
+      input({ resourceKind: 'syntraUser', systemKind: 'syntraInternal', attributionKinds: ['direct_assignment'] }),
+    );
+    expect(decision).toMatchObject({
+      route: 'requires_change_syntra_user',
+      dispatchable: false,
+      remediationKind: 'syntra_user_change_required',
+    });
   });
 
   it('never marks a requires_change route dispatchable', () => {
@@ -18604,7 +22006,9 @@ export type RevocationRoute =
   | 'requires_change_rule'
   | 'requires_change_role'
   | 'requires_change_directory_source'
-  | 'requires_change_direct_assignment';
+  | 'requires_change_direct_assignment'
+  | 'requires_change_account'
+  | 'requires_change_syntra_user';
 
 export const REVOCATION_ROUTES: readonly RevocationRoute[] = [
   'automate_grant',
@@ -18613,6 +22017,8 @@ export const REVOCATION_ROUTES: readonly RevocationRoute[] = [
   'requires_change_role',
   'requires_change_directory_source',
   'requires_change_direct_assignment',
+  'requires_change_account',
+  'requires_change_syntra_user',
 ];
 
 export const DISPATCHABLE_ROUTES: readonly RevocationRoute[] = ['automate_grant', 'revocation_order'];
@@ -18621,7 +22027,25 @@ export interface RouteInput {
   resourceKind: ResourceKind;
   systemKind: SystemKind;
   attributionKinds: readonly string[];
-  /** Anything that would RE-CREATE the holding: an enabled rule, or a live grant. */
+  /**
+   * TRUE only when an ENABLED business rule is in the attribution set.
+   *
+   * It is not "anything that would re-create the holding". A holding whose
+   * `business_rule` attribution names a DISABLED rule and which also carries a
+   * `request` attribution would then have `hasRule && liveRuleAttribution` and
+   * route to `requires_change_rule` with the explanation "a business rule
+   * grants it … Provision would grant it back tonight" — about a rule that is
+   * switched off. The grant, which is the only live cause, is never revoked,
+   * and a `rule_change_required` remediation item is filed against a rule
+   * nobody can change because it is already off. That is the common mover
+   * shape: the birthright rule was turned off when the person changed job and
+   * the requested grant is what remains, so access outlives its own cause and
+   * the campaign reports it as somebody else's problem.
+   *
+   * The broader "any live rule OR grant attribution" test §5 requires belongs
+   * on `createRevocationOrder`'s `liveAttribution` parameter, which is a
+   * different question about a different thing and is already separate.
+   */
   liveRuleAttribution: boolean;
   grantIds: readonly string[];
   directorySourceId: string | null;
@@ -18657,10 +22081,28 @@ export function routeRevocation(input: RouteInput): RouteDecision {
     };
   }
 
-  // 2. A live business rule would grant it again tonight. This comes BEFORE the
+  // 2. A Syntra LOGIN. `RevocationOrder` has `targetSystemId`, `accountId` and
+  //    `entitlementId`, all NOT NULL, and a `syntraUser` holding has none of
+  //    them; the fall-through would produce an invalid-uuid failure inside the
+  //    dispatch loop, on the irreversible path. Beyond the mechanics, Govern
+  //    must not deactivate a Syntra login: that is Core's user administration,
+  //    and it is the same privilege-escalation shape as route 1.
+  if (input.resourceKind === 'syntraUser') {
+    return {
+      route: 'requires_change_syntra_user',
+      dispatchable: false,
+      remediationKind: 'syntra_user_change_required',
+      explanation:
+        'this is a Syntra login. Govern does not deactivate accounts in Syntra itself; a holder of rbac.manage has to do it in user administration, and a departure is normally handled by Provision’s leaver ladder rather than by a campaign.',
+      notRemoved: [...kinds],
+    };
+  }
+
+  // 3. A live business rule would grant it again tonight. This comes BEFORE the
   //    grant route deliberately: a holding explained by both a rule and a grant
   //    is not "a grant and nothing else", and removing the grant would leave the
-  //    rule to re-create it.
+  //    rule to re-create it. `liveRuleAttribution` means an ENABLED rule and
+  //    nothing else — see the field's docstring.
   if (hasRule && input.liveRuleAttribution) {
     return {
       route: 'requires_change_rule',
@@ -18672,7 +22114,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
     };
   }
 
-  // 3. A membership on a group carrying a sourceId. The source rewrites it every
+  // 4. A membership on a group carrying a sourceId. The source rewrites it every
   //    run; a removal here would survive until the small hours and then come
   //    back, which is worse than refusing.
   if (kinds.has('directory_source') || input.directorySourceId !== null) {
@@ -18686,7 +22128,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
     };
   }
 
-  // 4. An Automate grant — request or delegated admin — and nothing else.
+  // 5. An Automate grant — request or delegated admin — and nothing else.
   if (grantKinds.length > 0 && input.grantIds.length > 0) {
     return {
       route: 'automate_grant',
@@ -18698,7 +22140,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
     };
   }
 
-  // 5. A Syntra application or local group with NO grant behind it: an
+  // 6. A Syntra application or local group with NO grant behind it: an
   //    administrator assigned it in the console.
   if (input.resourceKind === 'application' || input.resourceKind === 'syntraGroup') {
     return {
@@ -18711,18 +22153,48 @@ export function routeRevocation(input: RouteInput): RouteDecision {
     };
   }
 
-  // 6. A target holding whose attributions are all `discovered` or `manual`, or
-  //    which is unattributable — nothing in desired state wants it. Including
-  //    the EMPTY set: a holding nothing explains is the most interesting thing
-  //    an access review can find, and it must be removable.
-  return {
-    route: 'revocation_order',
-    dispatchable: true,
-    remediationKind: null,
-    explanation:
-      'nothing in desired state wants this holding, so a one-shot revocation order carrying the deciding human is written for Provision to plan.',
-    notRemoved: [],
-  };
+  // 7. A TARGET ACCOUNT. `RevocationOrder.entitlementId` is NOT NULL and an
+  //    account-level holding has no entitlement, so this cannot go to route 8
+  //    either. Removing an account is the leaver ladder's job — disable, then
+  //    delete after a retention window, with the whole ladder's safety around
+  //    it — and a campaign item is not the place to shortcut it.
+  if (input.resourceKind === 'targetAccount') {
+    return {
+      route: 'requires_change_account',
+      dispatchable: false,
+      remediationKind: 'account_removal_required',
+      explanation:
+        'this is an account at a target system, not an entitlement within one. Govern dispatches entitlement removals; removing the account itself belongs to Provision’s leaver ladder, which disables first and deletes only after the retention window.',
+      notRemoved: [...kinds],
+    };
+  }
+
+  // 8. A target ENTITLEMENT whose attributions are all `discovered` or `manual`,
+  //    or which is unattributable — nothing in desired state wants it.
+  //    Including the EMPTY set: a holding nothing explains is the most
+  //    interesting thing an access review can find, and it must be removable.
+  if (input.resourceKind === 'targetEntitlement') {
+    return {
+      route: 'revocation_order',
+      dispatchable: true,
+      remediationKind: null,
+      explanation:
+        'nothing in desired state wants this holding, so a one-shot revocation order carrying the deciding human is written for Provision to plan.',
+      notRemoved: [],
+    };
+  }
+
+  // NO FALL-THROUGH. `ResourceKind` is a closed union and every member is
+  // routed above, so this line is unreachable and `never` proves it: adding a
+  // seventh resource kind is a COMPILE ERROR here rather than a silent
+  // `revocation_order` against a table whose three id columns are NOT NULL.
+  //
+  // That is the whole of H7: the previous version's route 6 was a bare
+  // fall-through, so `targetAccount` and `syntraUser` both reached
+  // `createRevocationOrder`, which would fail on a NOT NULL or an invalid uuid
+  // inside the dispatch loop, on an irreversible path.
+  const exhaustive: never = input.resourceKind;
+  throw new Error(`unroutable resource kind: ${String(exhaustive)}`);
 }
 ```
 
@@ -18861,7 +22333,25 @@ export function evaluateRevocationGuard(input: GuardInput): GuardVerdict {
 
 - [ ] **Step 4: Write the batch service**
 
-`packages/core/src/govern/revocation-service.ts` — `computeRevocationBatch` opens **one transaction** for the whole batch (Provision's rule applies at a few thousand rows), supersedes a stale non-terminal batch at the head of it, and never auto-applies:
+`packages/core/src/govern/revocation-service.ts` — `computeRevocationBatch` opens **one transaction** for the whole batch (Provision's rule applies at a few thousand rows), supersedes a stale non-terminal batch at the head of it, and never auto-applies.
+
+Its import header:
+
+```ts
+import { withTenant, type TenantClient } from '@syntra/db';
+import { recordEvent } from '../audit/audit-service.js';
+import { revokeGrant } from '../automate/fulfil.js';
+import { LIVE_GRANT_STATUSES } from '../automate/types.js';
+import { enqueueOutbox, recipientsForPersons, usersWithPermission } from '../automate/notify.js';
+import { personDisplayName } from '../provision/desired.js';
+import { checkSnapshotAge, checkSourceFreshness } from './freshness.js';
+import { createRemediationItem, upsertFindings, type FindingDraft } from './finding-service.js';
+import { readableSnapshot } from './readable.js';
+import { governSettings } from './settings-service.js';
+import { countRegion, known, unknownValue, type Tri } from './types.js';
+import { ROUTE_REMEDIATION_KIND, routeRevocation } from './dispatch.js';
+import { evaluateRevocationGuard } from './revocation-guard.js';
+```
 
 ```ts
 export async function computeRevocationBatch(
@@ -18901,9 +22391,19 @@ export async function computeRevocationBatch(
     // Route every item, then guard the aggregate. THE WHOLE BATCH IN ONE
     // TRANSACTION: a batch is thousands of rows at most, and Provision's rule
     // applies at that size.
+    // `status` was SELECTED AND NEVER USED. A revoked, expired or handed-back
+    // grant still contributed a `grantIds` entry, routed the holding to
+    // `automate_grant`, and `confirmRevocationBatch` then called `revokeGrant`
+    // on a dead grant — which either errors on the irreversible path or
+    // succeeds as a no-op and reports `revocation_dispatched` for a holding
+    // nothing removed. `LIVE_GRANT_STATUSES` exists in `../automate/types.js`
+    // for exactly this and is already imported by Task 6.
     const grants = await tx.accessGrant.findMany({
-      where: { subjectPersonId: { in: decided.map((d) => d.personId).filter((p): p is string => p !== null) } },
-      select: { id: true, subjectPersonId: true, resourceId: true, status: true },
+      where: {
+        subjectPersonId: { in: decided.map((d) => d.personId).filter((p): p is string => p !== null) },
+        status: { in: [...LIVE_GRANT_STATUSES] },
+      },
+      select: { id: true, subjectPersonId: true, resourceId: true },
     });
 
     const dispatches = decided.map((item, index) => {
@@ -18912,10 +22412,19 @@ export async function computeRevocationBatch(
         resourceKind: item.resourceKind as never,
         systemKind: item.systemId === 'syntra' ? 'syntraInternal' : 'targetSystem',
         attributionKinds: attributions.map((a) => a.kind),
+        // AN ENABLED BUSINESS RULE, AND NOTHING ELSE. Including the grant kinds
+        // here made a holding with a DISABLED rule plus a live grant route to
+        // `requires_change_rule` — "Provision would grant it back tonight",
+        // about a rule that is switched off — so the grant, the only live
+        // cause, was never revoked and a `rule_change_required` remediation
+        // item was filed against a disabled rule. That is the mover shape: the
+        // birthright rule was turned off when the person changed job.
+        //
+        // The broader "any live rule OR grant" test §5 requires is a DIFFERENT
+        // question and lives on `createRevocationOrder`'s `liveAttribution`,
+        // which is computed separately below.
         liveRuleAttribution: attributions.some(
-          (a) =>
-            (a.kind === 'business_rule' && a.detail?.['ruleEnabled'] === true) ||
-            a.kind === 'request' || a.kind === 'delegated_admin' || a.kind === 'auto_granted',
+          (a) => a.kind === 'business_rule' && a.detail?.['ruleEnabled'] === true,
         ),
         grantIds: grants
           .filter((g) => g.subjectPersonId === item.personId && g.resourceId === item.resourceId)
@@ -18942,18 +22451,46 @@ export async function computeRevocationBatch(
     // denominator therefore comes from this campaign's OWN snapshot, and a
     // resource sitting behind a coverage gap answers `unknown` rather than a
     // confident number.
+    //
+    // TWO GROUPED QUERIES, NOT TWO PER RESOURCE. A batch spanning 200 resources
+    // was 400 extra round trips inside the one transaction §19 sizes at
+    // "thousands of rows at most".
+    const resourceIds = [...revocationsByResource.keys()];
+    const holderRows = await tx.holding.groupBy({
+      by: ['resourceId'],
+      where: { snapshotId: snapshot.id, resourceId: { in: resourceIds }, state: 'held' },
+      _count: { _all: true },
+    });
+    const heldByResource = new Map(holderRows.map((r) => [r.resourceId, r._count._all]));
+
+    const gapRows = await tx.coverageGap.findMany({
+      where: {
+        snapshotId: snapshot.id,
+        OR: [{ resourceId: { in: resourceIds } }, { resourceId: null }],
+      },
+      select: { resourceId: true, reason: true },
+    });
+    // A gap with a null `resourceId` is a whole region nobody read, so it
+    // applies to every resource in the batch.
+    const tenantWideGapReasons = gapRows.filter((g) => g.resourceId === null).map((g) => g.reason);
+    const gapReasonsByResource = new Map<string, string[]>();
+    for (const gap of gapRows) {
+      if (gap.resourceId === null) continue;
+      gapReasonsByResource.set(gap.resourceId, [
+        ...(gapReasonsByResource.get(gap.resourceId) ?? []),
+        gap.reason,
+      ]);
+    }
+
     const holderCountByResource = new Map<string, Tri<number>>();
-    for (const resourceId of revocationsByResource.keys()) {
-      const gaps = await tx.coverageGap.findMany({
-        where: { snapshotId: snapshot.id, OR: [{ resourceId }, { resourceId: null }] },
-        select: { reason: true },
-      });
-      const holders = await tx.holding.count({
-        where: { snapshotId: snapshot.id, resourceId, state: 'held' },
-      });
+    for (const resourceId of resourceIds) {
       holderCountByResource.set(
         resourceId,
-        countRegion({ held: holders, unknownHoldings: 0, gapReasons: gaps.map((g) => g.reason) }),
+        countRegion({
+          held: heldByResource.get(resourceId) ?? 0,
+          unknownHoldings: 0,
+          gapReasons: [...tenantWideGapReasons, ...(gapReasonsByResource.get(resourceId) ?? [])],
+        }),
       );
     }
 
@@ -19037,7 +22574,451 @@ export async function computeRevocationBatch(
 }
 ```
 
-`confirmRevocationBatch` then dispatches **per row, each in its own short transaction alongside its audit event** — `revokeGrant(tenantId, actorUserId, grantId, reason)` for the `automate_grant` route, `createRevocationOrder` for the `revocation_order` route, and `createRemediationItem` for the four `requires_change` routes. `autoApply` does not exist; confirmation is per batch, explicit, and the confirming user is recorded.
+**`confirmRevocationBatch` — written out, because it is the function that performs the irreversible act (Ruling G-5).**
+
+An implementer handed a pinned contract and eleven tests designed to pass writes an improvisation, and the review then checks the improvisation against the tests. So the body is here.
+
+Four things about it are load-bearing and none of them are obvious from the contract:
+
+1. **It re-reads the guard against CURRENT settings before dispatching**, not the verdict stored at compute time. §13 refuses again at execution: a batch computed at 09:00 and confirmed at 17:00 may be a different act, and a snapshot that aged past `maxSnapshotAgeDays` in between must stop it.
+2. **One short transaction per dispatch row**, each alongside its audit event. `revokeGrant` opens its own transaction (Automate Task 13), so it is called OUTSIDE this module's transaction, never inside one.
+3. **A deciding person with no active `User`** dispatches with `actorUserId: null` and records *"the deciding person holds no active Syntra account"* on the dispatch. A missing account is a recorded message, never a dropped revocation.
+4. **The final transaction writes `GovernSettings.lastAppliedBatchAt` and `personsWithActiveContractAtLastBatch`.** Nothing in the plan wrote either column, so `previousPersonsWithActiveContract` stayed `null` forever and §13's person-population-collapse refusal — one of the four conditions "no confirmation can fix", whose stated failure is *"a truncated HR import makes everybody look like a leaver, and a campaign running over that data revokes the organization"* — **never fired.** The guard was present, reachable, read a value nobody wrote, and therefore always passed. That is the same shape as Provision's "nothing ever created the central inventory row", and it is why this is Critical rather than a repeat of a known ruling.
+
+```ts
+export async function confirmRevocationBatch(
+  tenantId: string,
+  actorUserId: string,
+  batchId: string,
+  options: { now?: Date; confirmed?: boolean } = {},
+): Promise<{ status: string; dispatched: number; requiresChange: number; failed: number }> {
+  const now = options.now ?? new Date();
+
+  // ---- refuse, before anything is dispatched -------------------------------
+  const prepared = await withTenant(tenantId, async (tx) => {
+    const batch = await tx.revocationBatch.findUniqueOrThrow({ where: { id: batchId } });
+
+    // A `blocked` batch has no confirmation. §13's four outright conditions —
+    // the stale snapshot, the unread source, the collapsed person population,
+    // the first batch against a zero denominator — are the ones "no
+    // confirmation can fix", and offering a confirm button for them would make
+    // them advisory.
+    if (batch.status === 'blocked') {
+      throw new RevocationRefusedError(
+        'blocked',
+        `this batch is blocked and cannot be confirmed: ${batch.blockedReason ?? 'no reason recorded'}`,
+      );
+    }
+    if (batch.status !== 'previewed') {
+      throw new RevocationRefusedError('not_previewed', `this batch is ${batch.status}`);
+    }
+    // `requiresConfirmation` needs an EXPLICIT confirmation from the caller.
+    // Defaulting it to true would make the second axis of §13's guard a
+    // formality that every caller passes by not thinking about it.
+    if (batch.requiresConfirmation && options.confirmed !== true) {
+      throw new RevocationRefusedError(
+        'confirmation_required',
+        `this batch requires an explicit confirmation: ${batch.blockedReason ?? ''}`,
+      );
+    }
+
+    // `campaignId` is NOT NULL: every batch belongs to a campaign (M4).
+    const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: batch.campaignId } });
+    const snapshot = await readableSnapshot(tx, campaign.snapshotId);
+    const settings = await governSettings(tx);
+
+    // RE-READ THE GUARD AGAINST CURRENT SETTINGS AND THE CURRENT CLOCK. The
+    // verdict stored at compute time is a report, not a permission.
+    const reguard = evaluateRevocationGuard({
+      revocationsInBatch: batch.proposedCount,
+      holdingsInScope: await tx.campaignItem.count({ where: { campaignId: campaign.id } }),
+      revocationsByResource: new Map(),
+      holderCountByResource: new Map(),
+      resourceNameById: new Map(),
+      thresholds: {
+        batchThresholdPercent: settings.batchThresholdPercent,
+        perResourceThresholdPercent: settings.perResourceThresholdPercent,
+        personPopulationDropPercent: settings.personPopulationDropPercent,
+      },
+      snapshotAgeDays: Math.floor((now.getTime() - snapshot.asOf.getTime()) / 86_400_000),
+      maxSnapshotAgeDays: settings.maxSnapshotAgeDays,
+      staleSources: snapshot.sources.map((s) => ({
+        sourceName: s.sourceName, staleness: s.staleness, completeness: s.completeness,
+      })),
+      personsWithActiveContract: snapshot.personsWithActiveContract,
+      previousPersonsWithActiveContract: settings.personsWithActiveContractAtLastBatch,
+      hasEverApplied: settings.lastAppliedBatchAt !== null,
+    });
+    if (reguard.outcome === 'refused') {
+      await tx.revocationBatch.update({
+        where: { id: batchId },
+        data: { status: 'blocked', blockedReason: reguard.reasons.join('; ') },
+      });
+      throw new RevocationRefusedError(
+        'blocked',
+        `this batch is refused at execution: ${reguard.reasons.join('; ')}`,
+      );
+    }
+
+    await tx.revocationBatch.update({
+      where: { id: batchId },
+      data: { status: 'applying', confirmedByUserId: actorUserId, confirmedAt: now },
+    });
+
+    const rows = await tx.revocationDispatch.findMany({
+      // `skipped` rows are excluded: a per-row skip is a decision and this must
+      // not undo it. `cancelled` likewise.
+      where: { batchId, status: { in: ['proposed', 'requires_change'] } },
+      orderBy: { sequence: 'asc' },
+    });
+
+    return {
+      rows,
+      campaignName: campaign.name,
+      campaignOwnerPersonId: campaign.ownerPersonId,
+      personsWithActiveContract: snapshot.personsWithActiveContract,
+    };
+  });
+
+  let dispatched = 0;
+  let requiresChange = 0;
+  let failed = 0;
+
+  // ---- one short transaction per row, alongside its audit event ------------
+  for (const row of prepared.rows) {
+    const descriptor = row.holdingDescriptor as {
+      subjectKey?: string; systemId?: string; resourceKind?: string;
+      resourceId?: string; resourceName?: string; explanation?: string; notRemoved?: string[];
+    };
+
+    // The deciding PERSON and the account they decided from. Integration
+    // finding 8: `revokeGrant` takes a `User` id and a reviewer decides as a
+    // `Person` who may hold several accounts or none, so re-resolving here
+    // would pick an arbitrary one. `CampaignDecision.decidedByUserId` records
+    // the account the decision was actually made from.
+    const decision = await withTenant(tenantId, async (tx) => {
+      if (row.itemId === null) return null;
+      return tx.campaignDecision.findFirst({
+        where: { itemId: row.itemId, decision: 'revoke' },
+        orderBy: { decidedAt: 'desc' },
+        select: { id: true, personId: true, decidedByUserId: true, comment: true },
+      });
+    });
+
+    // An ACTIVE user, re-checked now. A `decidedByUserId` naming an account
+    // that has since been deactivated is not an actor.
+    const deciderUserId = await withTenant(tenantId, async (tx) => {
+      if (decision?.decidedByUserId == null) return null;
+      const user = await tx.user.findFirst({
+        where: { id: decision.decidedByUserId, status: 'active' },
+        select: { id: true },
+      });
+      return user?.id ?? null;
+    });
+    const noAccountNote =
+      decision !== null && deciderUserId === null
+        ? 'the deciding person holds no active Syntra account, so this was dispatched with no actor recorded against it'
+        : null;
+
+    const reason =
+      `${prepared.campaignName}: ${decision?.comment ?? 'revoked by decision'}`;
+
+    try {
+      if (row.route === 'automate_grant') {
+        // `revokeGrant` OPENS ITS OWN TRANSACTION (Automate Task 13), so it is
+        // called outside this module's. Automate's single-grant hand-back
+        // exemption is deliberately NOT in this path: §13 says Govern's batch
+        // guard is what makes the aggregate safe, and a reviewer's 340
+        // decisions arriving at once are mass action wearing 340 individual
+        // coats.
+        const grantId = await withTenant(tenantId, async (tx) => {
+          const grant = await tx.accessGrant.findFirst({
+            where: {
+              subjectPersonId: (
+                await tx.campaignItem.findUniqueOrThrow({ where: { id: row.itemId! } })
+              ).personId ?? undefined,
+              resourceId: descriptor.resourceId ?? '',
+              status: { in: [...LIVE_GRANT_STATUSES] },
+            },
+            select: { id: true },
+          });
+          return grant?.id ?? null;
+        });
+
+        if (grantId === null) {
+          // The grant died between compute and confirm. That is not a failure
+          // and it is not a success: the holding may already be gone, and the
+          // next snapshot decides. It is recorded in words.
+          await withTenant(tenantId, async (tx) => {
+            await tx.revocationDispatch.update({
+              where: { id: row.id },
+              data: {
+                status: 'failed',
+                message:
+                  'the grant behind this holding was already ended between the preview and the confirmation; nothing was dispatched',
+              },
+            });
+            await recordEvent(tx, {
+              actorUserId, action: 'govern.revocation.dispatch', targetType: 'RevocationDispatch',
+              targetId: row.id, outcome: 'failure', sourceIp: null,
+              payload: { route: row.route, reason: 'grant_already_ended' },
+            });
+          });
+          failed += 1;
+          continue;
+        }
+
+        await revokeGrant(tenantId, deciderUserId ?? actorUserId, grantId, reason);
+
+        await withTenant(tenantId, async (tx) => {
+          await tx.revocationDispatch.update({
+            where: { id: row.id },
+            data: {
+              status: 'dispatched',
+              dispatchedAt: now,
+              grantId,
+              ...(noAccountNote === null ? {} : { message: noAccountNote }),
+            },
+          });
+          if (row.itemId !== null) {
+            await tx.campaignItem.update({
+              where: { id: row.itemId },
+              data: { status: 'revocation_dispatched' },
+            });
+          }
+          await recordEvent(tx, {
+            actorUserId, action: 'govern.revocation.dispatch', targetType: 'RevocationDispatch',
+            targetId: row.id, outcome: 'success', sourceIp: null,
+            payload: {
+              route: row.route, grantId, batchId,
+              decidedByPersonId: decision?.personId ?? null,
+              actedAs: deciderUserId, note: noAccountNote,
+            },
+          });
+        });
+        dispatched += 1;
+        continue;
+      }
+
+      if (row.route === 'revocation_order') {
+        await withTenant(tenantId, async (tx) => {
+          const item = await tx.campaignItem.findUniqueOrThrow({ where: { id: row.itemId! } });
+          const person = decision === null
+            ? null
+            : await tx.person.findUniqueOrThrow({ where: { id: decision.personId } });
+          const account = await tx.targetAccount.findFirstOrThrow({
+            where: { targetSystemId: item.systemId, personId: item.personId ?? undefined },
+            select: { id: true },
+          });
+
+          // `liveAttribution` is derived from the item's attribution set AT
+          // DISPATCH TIME, not at compute time. Between the preview and the
+          // confirmation somebody may have enabled a rule that wants this
+          // holding, and `createRevocationOrder` refuses in that case — which
+          // is Ruling G1's first constraint and the whole reason the parameter
+          // exists.
+          const attributions = item.attributions as { kind: string; detail?: Record<string, unknown> }[];
+          const liveAttribution = attributions.some(
+            (a) =>
+              (a.kind === 'business_rule' && a.detail?.['ruleEnabled'] === true) ||
+              a.kind === 'request' || a.kind === 'delegated_admin' || a.kind === 'auto_granted',
+          );
+
+          const orderId = await createRevocationOrder(tx, tenantId, {
+            targetSystemId: item.systemId,
+            accountId: account.id,
+            entitlementId: item.resourceId,
+            decidedByPersonId: decision?.personId ?? '',
+            decidedByPersonName: person === null ? 'an unnamed reviewer' : personDisplayName(person),
+            campaignName: prepared.campaignName,
+            campaignDecisionId: decision?.id ?? null,
+            reason,
+            liveAttribution,
+          });
+
+          await tx.revocationDispatch.update({
+            where: { id: row.id },
+            data: {
+              status: 'dispatched',
+              dispatchedAt: now,
+              revocationOrderId: orderId,
+              ...(noAccountNote === null ? {} : { message: noAccountNote }),
+            },
+          });
+          await tx.campaignItem.update({
+            where: { id: row.itemId! },
+            data: { status: 'revocation_dispatched' },
+          });
+          await recordEvent(tx, {
+            actorUserId, action: 'govern.revocation.dispatch', targetType: 'RevocationDispatch',
+            targetId: row.id, outcome: 'success', sourceIp: null,
+            payload: {
+              route: row.route, revocationOrderId: orderId, batchId,
+              decidedByPersonId: decision?.personId ?? null,
+              actedAs: deciderUserId, note: noAccountNote,
+            },
+          });
+        });
+        dispatched += 1;
+        continue;
+      }
+
+      // The four `requires_change` routes. NOT REVOCATIONS, and no report calls
+      // them one: the item goes to `revocation_requires_change`, a
+      // `RemediationItem` is created naming what has to change and who owns it,
+      // and the vocabulary rule keeps it out of every revoked figure.
+      await withTenant(tenantId, async (tx) => {
+        const owner = prepared.campaignOwnerPersonId;
+        const remediationId = await createRemediationItem(tx, tenantId, {
+          kind: ROUTE_REMEDIATION_KIND[row.route] ?? 'direct_assignment_change_required',
+          ownerPersonId: owner,
+          dueAt: new Date(now.getTime() + 14 * 86_400_000),
+          ...(row.itemId === null ? {} : { campaignItemId: row.itemId }),
+          description:
+            `${descriptor.resourceName ?? 'this holding'} for ${descriptor.subjectKey ?? 'a subject'}: ` +
+            `${descriptor.explanation ?? 'Govern cannot execute this removal.'}` +
+            (descriptor.notRemoved?.length
+              ? ` Attributions that were NOT removed: ${descriptor.notRemoved.join(', ')}.`
+              : ''),
+          deepLink: `/admin/govern/batches/${batchId}`,
+        });
+
+        await tx.revocationDispatch.update({
+          where: { id: row.id },
+          data: {
+            status: 'requires_change',
+            // The CHECK constraint `revocation_dispatch_requires_change_has_item`
+            // requires this, and a null here would abort the transaction.
+            remediationItemId: remediationId,
+            message: descriptor.explanation ?? null,
+          },
+        });
+        if (row.itemId !== null) {
+          await tx.campaignItem.update({
+            where: { id: row.itemId },
+            data: {
+              status: 'revocation_requires_change',
+              statusReason: descriptor.explanation ?? null,
+            },
+          });
+        }
+        await recordEvent(tx, {
+          actorUserId, action: 'govern.revocation.requires_change', targetType: 'RevocationDispatch',
+          targetId: row.id, outcome: 'success', sourceIp: null,
+          payload: { route: row.route, remediationItemId: remediationId, batchId },
+        });
+      });
+      requiresChange += 1;
+    } catch (error) {
+      // NOT SWALLOWED (Ruling P11). The failure is recorded on the row, with its
+      // message, and the loop continues so one target being down does not
+      // abandon the other 339 rows. `failed` is returned and the batch closes
+      // `partially_applied`.
+      const message = error instanceof Error ? error.message : String(error);
+      await withTenant(tenantId, async (tx) => {
+        await tx.revocationDispatch.update({
+          where: { id: row.id },
+          data: { status: 'failed', message },
+        });
+        if (row.itemId !== null) {
+          await tx.campaignItem.update({
+            where: { id: row.itemId },
+            data: { status: 'revocation_failed', statusReason: message },
+          });
+        }
+        await recordEvent(tx, {
+          actorUserId, action: 'govern.revocation.dispatch', targetType: 'RevocationDispatch',
+          targetId: row.id, outcome: 'failure', sourceIp: null,
+          payload: { route: row.route, batchId, error: message },
+        });
+      });
+      failed += 1;
+    }
+  }
+
+  // ---- close the batch AND write the denominator --------------------------
+  const status = failed > 0 ? 'partially_applied' : 'applied';
+  await withTenant(tenantId, async (tx) => {
+    await tx.revocationBatch.update({
+      where: { id: batchId },
+      data: {
+        status,
+        finishedAt: now,
+        dispatchedCount: dispatched,
+        requiresChangeCount: requiresChange,
+        failedCount: failed,
+      },
+    });
+
+    // THE TWO COLUMNS NOBODY WROTE.
+    //
+    // `personsWithActiveContractAtLastBatch` is the denominator §13's
+    // person-population-collapse refusal compares against, and
+    // `lastAppliedBatchAt` is how the guard knows a batch has ever been
+    // applied. Without these writes the first column stays `null` forever, the
+    // guard's `previousPersonsWithActiveContract !== null && > 0` condition
+    // never holds, and the refusal whose stated failure is "a truncated HR
+    // import makes everybody look like a leaver, and a campaign running over
+    // that data revokes the organization" NEVER FIRES.
+    //
+    // Stored rather than recomputed, for the reason Provision stores
+    // `lastAppliedRunAt` and Automate stores `lastAppliedSweepAt`: the
+    // comparison is against the last state SOMEBODY ACCEPTED, not the last
+    // state observed.
+    await tx.governSettings.update({
+      where: { tenantId },
+      data: {
+        lastAppliedBatchAt: now,
+        personsWithActiveContractAtLastBatch: prepared.personsWithActiveContract,
+      },
+    });
+
+    await recordEvent(tx, {
+      actorUserId,
+      action: 'govern.revocation.confirm',
+      targetType: 'RevocationBatch',
+      targetId: batchId,
+      outcome: 'success',
+      sourceIp: null,
+      payload: {
+        status, dispatched, requiresChange, failed,
+        personsWithActiveContractAtLastBatch: prepared.personsWithActiveContract,
+      },
+    });
+  });
+
+  return { status, dispatched, requiresChange, failed };
+}
+```
+
+`ROUTE_REMEDIATION_KIND` is a `Readonly<Record<RevocationRoute, string | null>>` beside `REVOCATION_ROUTES` in `dispatch.ts`, so a route added later without a remediation kind is a compile error rather than a silent fall-back to `direct_assignment_change_required`:
+
+```ts
+export const ROUTE_REMEDIATION_KIND: Readonly<Record<RevocationRoute, string | null>> = {
+  automate_grant: null,
+  revocation_order: null,
+  requires_change_rule: 'rule_change_required',
+  requires_change_role: 'role_assignment_change_required',
+  requires_change_directory_source: 'directory_source_change_required',
+  requires_change_direct_assignment: 'direct_assignment_change_required',
+  requires_change_account: 'account_removal_required',
+  requires_change_syntra_user: 'syntra_user_change_required',
+};
+```
+
+`RevocationRefusedError` sits beside it in `revocation-service.ts`:
+
+```ts
+export class RevocationRefusedError extends Error {
+  constructor(
+    readonly code: 'blocked' | 'not_previewed' | 'confirmation_required',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RevocationRefusedError';
+  }
+}
+```
 
 `createRevocationOrder` carries Ruling G1's three constraints plus its condition:
 
@@ -19070,7 +23051,16 @@ async function createRevocationOrder(
     data: { status: 'cancelled', cancelledReason: 'superseded by a later decision' },
   });
 
-  const order = await tx.revocationOrder.create({ data: { tenantId, ...input, status: 'open' } });
+  // DESTRUCTURE, NEVER SPREAD A MIXED CONTROL/DATA OBJECT INTO A PRISMA `data`.
+  // `liveAttribution` is a control flag, not a column on `RevocationOrder`, and
+  // TypeScript does not apply excess-property checking to SPREAD properties — so
+  // `{ ...input }` compiled cleanly and threw
+  // `PrismaClientValidationError: Unknown argument 'liveAttribution'` at
+  // runtime, on every revocation order, on the irreversible path.
+  const { liveAttribution: _liveAttribution, ...columns } = input;
+  const order = await tx.revocationOrder.create({
+    data: { tenantId, ...columns, status: 'open' },
+  });
   return order.id;
 }
 ```
@@ -19137,6 +23127,36 @@ In `packages/core/src/provision/plan.ts`, inside `planActions`, after the ordina
 ```
 
 and `run-service.ts` loads them via `loadRevocationOrders(tx, targetSystemId)`, writes `revocationOrderId` onto the `ProvisionAction` row, and marks the order `planned`.
+
+- [ ] **Step 5a: Wire `reflectRevocationOutcomes` into the snapshot job**
+
+**Nothing called it.** Task 20 listed `packages/core/src/index.ts` as its only `Modify` target, so `reflectRevocationOutcomes` was invoked from its own test and from nowhere else — which means a dispatch never advanced past `dispatched`, `revocation_confirmed` and `revocation_applied` were never written, the `dispatch_not_applied` SLA finding never fired, and §13's stated failure — *"a campaign that closes with 91 revocations, of which 34 never happened, and nobody notices for a year"* — is what the product would do.
+
+Add `packages/core/src/govern/jobs.ts` to this task's `Modify` list, and append to `runSnapshotJob` **after** the build and **after** Task 18's mooting calls (it reads the snapshot the build just wrote):
+
+```ts
+  // The snapshot is what closes the loop: `applied` requires BOTH the owning
+  // subsystem's confirmation AND a subsequent snapshot that no longer shows the
+  // holding, so this runs against the build that just completed.
+  await reflectRevocationOutcomes(payload.tenantId, built.snapshotId, { now });
+```
+
+with `import { reflectRevocationOutcomes } from './revocation-service.js';` at the head of `jobs.ts`.
+
+Add to `packages/core/src/govern/jobs.test.ts`:
+
+```ts
+it('advances a dispatched revocation when the snapshot job runs', async () => {
+  // Not "the function works when a test calls it" — that was already true. The
+  // question is whether anything in the product calls it.
+  const dispatch = await seedDispatchedRevocation();
+  await runSnapshotJob({ tenantId }, { now: NOW });
+  const after = await withTenant(tenantId, (tx) =>
+    tx.revocationDispatch.findUniqueOrThrow({ where: { id: dispatch } }),
+  );
+  expect(after.status).not.toBe('dispatched');
+});
+```
 
 - [ ] **Step 6: Write `reflectRevocationOutcomes`**
 
@@ -19303,30 +23323,52 @@ export async function reflectRevocationOutcomes(
   }
 
   if (findings.length > 0) {
-    await upsertFindings(tenantId, snapshotId, findings, { now });
+    // `upsertFindings`, never `reconcileFindings`: this caller computes only
+    // `dispatch_not_applied` drafts, and a whole-tenant sweep from here would
+    // close every other open finding in the tenant (C1). Nothing resolves a
+    // `dispatch_not_applied` from here either — the dispatch advancing to
+    // `applied` is what ends it, and that is a different transition.
+    await upsertFindings(tenantId, findings, { now });
   }
 
   // ---- roll the outcomes back onto the campaign items ---------------------
-  await withTenant(tenantId, async (tx) => {
-    const rows = await tx.revocationDispatch.findMany({
-      where: { itemId: { not: null }, status: { in: ['confirmed', 'applied', 'failed'] } },
-      select: { itemId: true, status: true, message: true },
-    });
-    for (const row of rows) {
-      await tx.campaignItem.update({
-        where: { id: row.itemId! },
-        data: {
-          status:
-            row.status === 'applied'
-              ? 'revocation_applied'
-              : row.status === 'failed'
-                ? 'revocation_failed'
-                : 'revocation_confirmed',
-          ...(row.message === null ? {} : { statusReason: row.message }),
+  // PAGED, one transaction per page. The previous form issued a
+  // `campaignItem.update` per dispatch row, tenant-wide, in one transaction.
+  const REFLECT_BATCH = 200;
+  let cursor: string | null = null;
+  for (;;) {
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.revocationDispatch.findMany({
+        where: {
+          itemId: { not: null },
+          status: { in: ['confirmed', 'applied', 'failed'] },
+          ...(cursor === null ? {} : { id: { gt: cursor } }),
         },
-      });
-    }
-  });
+        select: { id: true, itemId: true, status: true, message: true },
+        orderBy: { id: 'asc' },
+        take: REFLECT_BATCH,
+      }),
+    );
+    if (rows.length === 0) break;
+    cursor = rows[rows.length - 1]!.id;
+
+    await withTenant(tenantId, async (tx) => {
+      for (const row of rows) {
+        await tx.campaignItem.update({
+          where: { id: row.itemId! },
+          data: {
+            status:
+              row.status === 'applied'
+                ? 'revocation_applied'
+                : row.status === 'failed'
+                  ? 'revocation_failed'
+                  : 'revocation_confirmed',
+            ...(row.message === null ? {} : { statusReason: row.message }),
+          },
+        });
+      }
+    });
+  }
 
   return { confirmed, applied, notApplied, slaBreaches };
 }
@@ -19502,6 +23544,11 @@ describe('computeRevocationBatch', () => {
 });
 
 describe('confirmRevocationBatch', () => {
+  // Every test here passes `confirmed: true` unless it is testing the refusal
+  // itself: the FIRST batch for a tenant always sets `requiresConfirmation`,
+  // because every denominator is zero and no percentage can say anything about
+  // it. A test that omitted it would be asserting against a refusal.
+
   it('refuses to confirm a BLOCKED batch — there is nothing to confirm', async () => {
     await withTenant(tenantId, (tx) =>
       tx.snapshotSource.updateMany({ where: { snapshotId }, data: { staleness: 'stale' } }),
@@ -19516,7 +23563,7 @@ describe('confirmRevocationBatch', () => {
     // Ruling G1's condition: the record at the point of application must show a
     // human decision and name the campaign and the reviewer.
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
 
     const order = await withTenant(tenantId, (tx) => tx.revocationOrder.findFirstOrThrow());
     expect(order).toMatchObject({
@@ -19532,7 +23579,7 @@ describe('confirmRevocationBatch', () => {
 
   it('produces a RemediationItem and NO dispatch for the rule-attributed item', async () => {
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    const result = await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    const result = await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
 
     expect(result).toMatchObject({ dispatched: 1, requiresChange: 1 });
     const remediation = await withTenant(tenantId, (tx) =>
@@ -19571,7 +23618,7 @@ describe('confirmRevocationBatch', () => {
       });
     });
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
 
     expect(spy).toHaveBeenCalledWith(
       tenantId,
@@ -19602,7 +23649,7 @@ describe('confirmRevocationBatch', () => {
       });
     });
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
 
     const dispatch = await withTenant(tenantId, (tx) =>
       tx.revocationDispatch.findFirstOrThrow({ where: { route: 'automate_grant' } }),
@@ -19615,11 +23662,158 @@ describe('confirmRevocationBatch', () => {
 
   it('records the confirming user and there is no autoApply anywhere', async () => {
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
     const batch = await withTenant(tenantId, (tx) =>
       tx.revocationBatch.findUniqueOrThrow({ where: { id: batchId } }),
     );
     expect(batch.confirmedByUserId).toBe('u-1');
+  });
+
+  it('WRITES the population denominator, so the second batch can be refused for a collapse', async () => {
+    // C2, the half nobody noticed. `evaluateRevocationGuard` reads
+    // `previousPersonsWithActiveContract: settings.personsWithActiveContractAtLastBatch`
+    // and `hasEverApplied: settings.lastAppliedBatchAt !== null`, and NOTHING IN
+    // THE PLAN WROTE EITHER COLUMN. So the first stayed `null`, the guard's
+    // `previousPersonsWithActiveContract !== null && > 0` condition never held,
+    // and §13's person-population-collapse refusal — one of the four conditions
+    // "no confirmation can fix", whose stated failure is "a truncated HR import
+    // makes everybody look like a leaver, and a campaign running over that data
+    // revokes the organization" — NEVER FIRED. The guard was present,
+    // reachable, read a value nobody wrote, and always passed.
+    const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
+
+    const settings = await withTenant(tenantId, (tx) =>
+      tx.governSettings.findUniqueOrThrow({ where: { tenantId } }),
+    );
+    expect(settings.lastAppliedBatchAt).toEqual(NOW);
+    expect(settings.personsWithActiveContractAtLastBatch).toBeGreaterThan(0);
+
+    // Now a second batch over a population 25% smaller. The default
+    // `personPopulationDropPercent` is 20, so this is REFUSED outright.
+    const later = new Date(NOW.getTime() + 3600_000);
+    await withTenant(tenantId, async (tx) => {
+      await tx.accessSnapshot.update({
+        where: { id: snapshotId },
+        data: {
+          personsWithActiveContract: Math.floor(
+            settings.personsWithActiveContractAtLastBatch! * 0.75,
+          ),
+        },
+      });
+      // Fresh revoke decisions, so there is something to compute.
+      await tx.campaignItem.updateMany({
+        where: { campaignId, status: { in: ['revocation_dispatched', 'revocation_requires_change'] } },
+        data: { status: 'revoke_decided' },
+      });
+    });
+
+    const second = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: later });
+    expect(second.status).toBe('blocked');
+    expect(second.blockedReason).toMatch(/population|active contract/i);
+    await expect(
+      confirmRevocationBatch(tenantId, 'u-1', second.batchId, { now: later, confirmed: true }),
+    ).rejects.toMatchObject({ code: 'blocked' });
+  });
+
+  it('refuses a batch that requiresConfirmation unless the caller says so explicitly', async () => {
+    // Defaulting `confirmed` to true would make the second axis of §13's guard a
+    // formality that every caller passes by not thinking about it.
+    await withTenant(tenantId, (tx) =>
+      tx.governSettings.update({ where: { tenantId }, data: { batchThresholdPercent: 1 } }),
+    );
+    const computed = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
+    expect(computed.requiresConfirmation).toBe(true);
+    await expect(
+      confirmRevocationBatch(tenantId, 'u-1', computed.batchId, { now: NOW }),
+    ).rejects.toMatchObject({ code: 'confirmation_required' });
+
+    const result = await confirmRevocationBatch(tenantId, 'u-1', computed.batchId, {
+      now: NOW, confirmed: true,
+    });
+    expect(result.dispatched).toBeGreaterThan(0);
+  });
+
+  it('RE-READS the guard at execution, not the verdict stored at compute time', async () => {
+    // §13 refuses again at execution. A batch computed at 09:00 and confirmed at
+    // 17:00 may be a different act; the stored verdict is a report, not a
+    // permission.
+    const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
+    await withTenant(tenantId, (tx) =>
+      tx.snapshotSource.updateMany({ where: { snapshotId }, data: { staleness: 'stale' } }),
+    );
+    await expect(
+      confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true }),
+    ).rejects.toMatchObject({ code: 'blocked' });
+
+    const batch = await withTenant(tenantId, (tx) =>
+      tx.revocationBatch.findUniqueOrThrow({ where: { id: batchId } }),
+    );
+    expect(batch.status).toBe('blocked');
+    expect(await withTenant(tenantId, (tx) => tx.revocationOrder.count())).toBe(0);
+  });
+
+  it('records a FAILED row and keeps going, rather than abandoning the rest of the batch', async () => {
+    // Ruling P11: an error on a destructive path is recorded, never swallowed —
+    // and never allowed to abandon the other 339 rows either.
+    const spy = vi.spyOn(fulfil, 'revokeGrant').mockRejectedValue(new Error('the target is unreachable'));
+    await withTenant(tenantId, async (tx) => {
+      const item = await tx.campaignItem.findFirstOrThrow({ where: { resourceId: 'ent-0' } });
+      await tx.campaignItem.update({
+        where: { id: item.id },
+        data: { attributions: [{ kind: 'request', detail: {} }] as never },
+      });
+      await tx.accessGrant.create({
+        data: {
+          tenantId, subjectPersonId: item.personId!, resourceType: 'entitlement',
+          resourceId: 'ent-0', targetSystemId: 'sys-1', origin: 'request',
+          startsAt: NOW, status: 'active',
+        },
+      });
+    });
+    const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
+    const result = await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
+
+    expect(result.failed).toBe(1);
+    expect(result.status).toBe('partially_applied');
+    const dispatch = await withTenant(tenantId, (tx) =>
+      tx.revocationDispatch.findFirstOrThrow({ where: { route: 'automate_grant' } }),
+    );
+    expect(dispatch.status).toBe('failed');
+    expect(dispatch.message).toContain('unreachable');
+    // The OTHER row still got its remediation item.
+    expect(result.requiresChange).toBe(1);
+    spy.mockRestore();
+  });
+
+  it('does NOT route a REVOKED grant to Automate', async () => {
+    // H22. `status` was selected and never used, so a revoked, expired or
+    // handed-back grant still contributed a `grantIds` entry, routed the holding
+    // to `automate_grant`, and `revokeGrant` was called on a dead grant — which
+    // either errors on the irreversible path or succeeds as a no-op and reports
+    // `revocation_dispatched` for a holding nothing removed.
+    await withTenant(tenantId, async (tx) => {
+      const item = await tx.campaignItem.findFirstOrThrow({ where: { resourceId: 'ent-0' } });
+      await tx.campaignItem.update({
+        where: { id: item.id },
+        data: { attributions: [{ kind: 'discovered', detail: {} }] as never },
+      });
+      await tx.accessGrant.create({
+        data: {
+          tenantId, subjectPersonId: item.personId!, resourceType: 'entitlement',
+          resourceId: 'ent-0', targetSystemId: 'sys-1', origin: 'request',
+          startsAt: NOW, status: 'revoked',
+        },
+      });
+    });
+    const computed = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
+    const dispatch = await withTenant(tenantId, (tx) =>
+      tx.revocationDispatch.findFirstOrThrow({
+        where: { batchId: computed.batchId, itemId: { not: null } },
+        orderBy: { sequence: 'asc' },
+      }),
+    );
+    expect(dispatch.route).toBe('revocation_order');
   });
 
   it('honours a per-row skip', async () => {
@@ -19628,7 +23822,7 @@ describe('confirmRevocationBatch', () => {
       tx.revocationDispatch.findFirstOrThrow({ where: { status: 'proposed' } }),
     );
     await skipDispatch(tenantId, 'u-1', dispatch.id, 'I meant Anna’s, not the whole group');
-    const result = await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    const result = await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
     expect(result.dispatched).toBe(0);
     const after = await withTenant(tenantId, (tx) =>
       tx.revocationDispatch.findUniqueOrThrow({ where: { id: dispatch.id } }),
@@ -19649,20 +23843,20 @@ describe('the RevocationOrder’s three constraints', () => {
       });
     });
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
     expect(await withTenant(tenantId, (tx) => tx.revocationOrder.count())).toBe(0);
   });
 
   it('CANCELS an existing open order for the same holding rather than colliding', async () => {
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
 
     await withTenant(tenantId, async (tx) => {
       const item = await tx.campaignItem.findFirstOrThrow({ where: { resourceId: 'ent-0' } });
       await tx.campaignItem.update({ where: { id: item.id }, data: { status: 'revoke_decided' } });
     });
     const second = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', second.batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', second.batchId, { now: NOW, confirmed: true });
 
     const orders = await withTenant(tenantId, (tx) =>
       tx.revocationOrder.findMany({ orderBy: { createdAt: 'asc' } }),
@@ -19677,7 +23871,7 @@ describe('the RevocationOrder’s three constraints', () => {
 describe('reflectRevocationOutcomes — the vocabulary rule', () => {
   it('advances to `applied` only when confirmed AND observed gone', async () => {
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
     await withTenant(tenantId, (tx) =>
       tx.revocationDispatch.updateMany({
         where: { status: 'dispatched' },
@@ -19708,7 +23902,7 @@ describe('reflectRevocationOutcomes — the vocabulary rule', () => {
 
   it('DOES NOT advance, and raises dispatch_not_applied, when the holding is still there', async () => {
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
     await withTenant(tenantId, (tx) =>
       tx.revocationDispatch.updateMany({
         where: { status: 'dispatched' },
@@ -19727,7 +23921,7 @@ describe('reflectRevocationOutcomes — the vocabulary rule', () => {
 
   it('raises the SLA finding for a dispatch older than dispatchSlaHours', async () => {
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
     const much_later = new Date(NOW.getTime() + 100 * 3_600_000);
     const result = await reflectRevocationOutcomes(tenantId, snapshotId, { now: much_later });
     expect(result.slaBreaches).toBe(1);
@@ -19739,7 +23933,7 @@ describe('reflectRevocationOutcomes — the vocabulary rule', () => {
     // produce a finding saying a revocation was not applied, about a revocation
     // that was correctly abandoned.
     const { batchId } = await computeRevocationBatch(tenantId, 'u-1', campaignId, { now: NOW });
-    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW });
+    await confirmRevocationBatch(tenantId, 'u-1', batchId, { now: NOW, confirmed: true });
     await withTenant(tenantId, (tx) =>
       tx.revocationDispatch.updateMany({
         where: { status: 'dispatched' },
@@ -19773,12 +23967,21 @@ Expected: exit 0.
 - [ ] **Step 10: Mutation-test the router and the guard**
 
 1. Move the live-rule branch below the grant branch in `routeRevocation`. Expected: `routes a LIVE-RULE holding to requires_change, NOT to an order` FAILS. **This is the mutation that produces the campaign report that is a lie by morning.**
-2. Make the final fallback return `requires_change_direct_assignment`. Expected: `routes an EMPTY attribution set to a RevocationOrder` FAILS.
-3. Add `'requires_change_rule'` to `DISPATCHABLE_ROUTES`. Expected: `never marks a requires_change route dispatchable` FAILS.
-4. In the guard, treat an `unknown` holder count as `known(0)` and skip. Expected: add the case if absent — a resource whose count is unknown must force confirmation, not be waved through.
-5. In the guard, drop the `hasEverApplied` clause. Expected: the first-batch case FAILS. **Provision found this hole in Directory Sync's guard.**
-6. In the guard, move the population-drop check into `reasons` rather than `refusals`. Expected: the population case FAILS on `outcome`.
-7. In `createRevocationOrder`, drop the `liveAttribution` refusal. Expected: `refused at creation when a live attribution exists` FAILS — **Ruling G1's first constraint.**
+2. **Reorder routes 3 and 5** — put the grant branch above the live-rule branch — and require the `[input, expectedRoute]` table to fail. §23 asks for that table, and the version it replaces asserted only `REVOCATION_ROUTES).toContain(decision.route)`, which a router returning one route unconditionally passes.
+3. **Replace the `const exhaustive: never` line with `return { route: 'revocation_order', … }`** — the fall-through this task removed. Expected: `routes a targetAccount holding to requires_change_account` and `routes a syntraUser holding to requires_change_syntra_user` both FAIL. Then add a seventh member to `ResourceKind` and confirm `pnpm exec tsc -b --force` FAILS on the `never` assignment: a resource kind added later must be a compile error here, not a `revocation_order` against a table whose three id columns are NOT NULL.
+4. **In `computeRevocationBatch`, restore `liveRuleAttribution` to the broad form** (`business_rule && ruleEnabled` OR any grant kind). Expected: `routes a DISABLED business rule beside a live grant to Automate` FAILS. **This is H6, and its failure mode is a mover keeping access after the rule that granted it was switched off.**
+5. Add `'requires_change_rule'` to `DISPATCHABLE_ROUTES`. Expected: `never marks a requires_change route dispatchable` FAILS, and so does the `dispatchable` assertion in the route table.
+6. In the guard, treat an `unknown` holder count as `known(0)` and skip. Expected: add the case if absent — a resource whose count is unknown must force confirmation, not be waved through.
+7. In the guard, drop the `hasEverApplied` clause. Expected: the first-batch case FAILS. **Provision found this hole in Directory Sync's guard.**
+8. In the guard, move the population-drop check into `reasons` rather than `refusals`. Expected: the population case FAILS on `outcome`.
+9. **In `confirmRevocationBatch`, delete the `governSettings.update` that writes `lastAppliedBatchAt` and `personsWithActiveContractAtLastBatch`.** Expected: `WRITES the population denominator, so the second batch can be refused for a collapse` FAILS — the second batch is `previewed` rather than `blocked`, because `previousPersonsWithActiveContract` is `null` and the refusal's guard condition never holds. **This is C2's second half: a guard that is present, reachable, reads a value nobody writes, and therefore always passes.**
+10. In `confirmRevocationBatch`, default `options.confirmed` to `true`. Expected: `refuses a batch that requiresConfirmation unless the caller says so explicitly` FAILS.
+11. In `confirmRevocationBatch`, delete the re-guard and trust `batch.requiresConfirmation` from compute time. Expected: `RE-READS the guard at execution` FAILS.
+12. In `confirmRevocationBatch`, let the per-row `catch` rethrow. Expected: `records a FAILED row and keeps going` FAILS on `requiresChange`, because the second row never runs.
+13. In `computeRevocationBatch`, drop `status: { in: [...LIVE_GRANT_STATUSES] }`. Expected: `does NOT route a REVOKED grant to Automate` FAILS.
+14. In `createRevocationOrder`, drop the `liveAttribution` refusal. Expected: `refused at creation when a live attribution exists` FAILS — **Ruling G1's first constraint.**
+15. In `createRevocationOrder`, spread `input` into the `create` instead of destructuring `liveAttribution` out. Expected: every `revocation_order` test FAILS at runtime with `PrismaClientValidationError: Unknown argument 'liveAttribution'` — **and note that `tsc -b --force` stays green, which is why H20 was invisible: TypeScript does not apply excess-property checking to spread properties.**
+16. In `reflectRevocationOutcomes`, delete the call from `runSnapshotJob`. Expected: `advances a dispatched revocation when the snapshot job runs` FAILS. The function itself still passes its own tests, which is exactly how H18 stayed invisible.
 
 - [ ] **Step 11: Verify the cancelled-order composition explicitly**
 
@@ -19790,6 +23993,7 @@ Mutate `reflectRevocationOutcomes` to include `cancelled` dispatches in the SLA 
 git add packages/core/src/govern/dispatch.ts packages/core/src/govern/dispatch.test.ts \
         packages/core/src/govern/revocation-guard.ts packages/core/src/govern/revocation-guard.test.ts \
         packages/core/src/govern/revocation-service.ts packages/core/src/govern/revocation-service.test.ts \
+        packages/core/src/govern/jobs.ts packages/core/src/govern/jobs.test.ts \
         packages/core/src/provision/types.ts packages/core/src/provision/plan.ts \
         packages/core/src/provision/run-service.ts packages/core/src/index.ts
 git commit -m "feat(govern): the dispatch router, the batch guard, revocation orders and Provision's plan term"
@@ -19806,7 +24010,7 @@ Spec §14 (the graph), §15 (exceptions). **Nothing in this task revokes anythin
 - Modify: `packages/core/src/govern/jobs.ts` (register `exception`), `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `submitRequest`, `type SubmitOutcome` from `../automate/request-service.js`; `resolveStageApprovers`, `type StageSnapshot`, `type ResolutionSubject` from `../automate/approvers.js`; `usersWithPermission`, `recipientsForPersons`, `enqueueOutbox`, `displayNames` from `../automate/notify.js`; `PERMISSIONS` from `../rbac/permissions.js`; `governSettings` from `./settings-service.js`; `upsertFindings`, `createRemediationItem`, `type FindingDraft` from `./finding-service.js`; `raiseSeverity`, `type Severity` from `./types.js`; `readableSnapshot` from `./snapshot-service.js`; `evaluateSodRule` from `./sod.js`.
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `submitRequest`, `type SubmitOutcome` from `../automate/request-service.js`; `resolveStageApprovers`, `type StageSnapshot`, `type ResolutionSubject` from `../automate/approvers.js`; `usersWithPermission`, `recipientsForPersons`, `enqueueOutbox`, `displayNames` from `../automate/notify.js`; `PERMISSIONS` from `../rbac/permissions.js`; `governSettings` from `./settings-service.js`; `upsertFindings`, `createRemediationItem`, `type FindingDraft` from `./finding-service.js`; `raiseSeverity`, `type Severity` from `./types.js`; `readableSnapshot` from `./readable.js`; `evaluateSodRule` from `./sod.js`.
   - **Not** `campaign-service.ts` or `decision-service.ts`. An exception is a risk acceptance, not a decision on a campaign item, and importing either would make `exception-service.ts` depend on a module that does not need to exist for it to work.
 - Produces (in `./exception-service.js`):
   - `class ExceptionRefusedError extends Error { constructor(readonly code: 'no_end_date' | 'too_long' | 'beneficiary_is_approver' | 'blocked_no_approver' | 'missing_justification', message: string) }`
@@ -20945,9 +25149,13 @@ import { requireSession } from '../plugins/require-session.js';
 export async function registerGovernPortalRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireSession('portal'));
 
-  const personOf = async (request: Parameters<typeof requireSession>[0] extends never ? never : any) => {
-    const user = await request.db((tx: never) =>
-      (tx as never as { user: { findUnique: Function } }).user.findUnique({
+  // `TenantClient` exposes `user`. The `as never as { user: { findUnique:
+  // Function } }` cast this replaces was an `as never` outside a Prisma `Json`
+  // write — a defect by Global Constraint 12's own terms — plus a bare
+  // `Function`, which types nothing at all.
+  const personOf = async (request: FastifyRequest): Promise<string> => {
+    const user = await request.db((tx) =>
+      tx.user.findUnique({
         where: { id: request.session.userId },
         select: { personId: true },
       }),
@@ -20958,7 +25166,7 @@ export async function registerGovernPortalRoutes(app: FastifyInstance): Promise<
         'Reviewing is done as a person, because a certification names a human.',
       );
     }
-    return user.personId as string;
+    return user.personId;
   };
 
   app.get('/govern/reviews', async (request) => {
@@ -21041,9 +25249,60 @@ Register it in `apps/api/src/app.ts` after the portal routes: `await app.registe
 
 - [ ] **Step 3: Add the slice-2 admin routes**
 
-Append the campaign, batch and SoD routes to `apps/api/src/routes/admin/govern.ts`, each behind `requirePermission(PERMISSIONS.GOVERN_MANAGE)` except the reads, which use `requireGovernRead()`. The two previews are `POST` because their bodies are conditions:
+Append the campaign, batch and SoD routes to `apps/api/src/routes/admin/govern.ts`, each behind `requirePermission(PERMISSIONS.GOVERN_MANAGE)` except the reads, which use `requireGovernRead()`. The two previews are `POST` because their bodies are conditions.
+
+**All seventeen are written out here.** The previous version wrote four and left thirteen implied, while the placeholder scan claimed only two unwritten bodies — and the scan is what a dispatcher trusts. An implementer handed four routes and a Produces list writes thirteen improvisations, and `POST /govern/campaigns/:id/revocations` in particular is what makes §13's entire "revocation is a run" machinery reachable from the product at all: without it nothing computes a batch and `POST /govern/batches/:id/confirm` has nothing to confirm.
 
 ```ts
+  // ---- campaigns ---------------------------------------------------------
+  app.get('/govern/campaigns', { preHandler: requireGovernRead() }, async (request) => {
+    const query = campaignListQuery.parse(request.query);
+    return request.db(async (tx) => ({
+      campaigns: await tx.campaign.findMany({
+        where: { ...(query.status ? { status: query.status } : {}) },
+        orderBy: [{ dueAt: 'asc' }],
+        take: query.limit,
+      }),
+    }));
+  });
+
+  app.post(
+    '/govern/campaigns',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const body = createCampaignBody.parse(request.body);
+      const created = await createCampaign(request.tenantId, request.session.userId, body);
+      return reply.status(201).send(created);
+    },
+  );
+
+  app.get('/govern/campaigns/:id', { preHandler: requireGovernRead() }, async (request) => {
+    const { id } = idParam.parse(request.params);
+    return request.db(async (tx) => {
+      const campaign = await tx.campaign.findUniqueOrThrow({ where: { id } });
+      // §12: a campaign report NEVER prints a percentage without the four
+      // counts beside it, and every percentage names its denominator inline.
+      return {
+        campaign,
+        counts: {
+          total: campaign.totalItems,
+          certified: campaign.certifiedItems,
+          revoked: campaign.revokedItems,
+          requiresChange: campaign.requiresChangeItems,
+          moot: campaign.mootItems,
+          undecided: campaign.undecidedItems,
+          blocked: campaign.blockedItems,
+        },
+        coverage: {
+          percent: campaign.coveragePercent,
+          denominator: campaign.totalItems,
+          statement: '(decided + moot) / total',
+        },
+        signals: await tx.reviewQualitySignal.findMany({ where: { campaignId: id } }),
+      };
+    });
+  });
+
   app.post(
     '/govern/campaigns/preview-scope',
     { preHandler: requireGovernRead() },
@@ -21058,19 +25317,193 @@ Append the campaign, batch and SoD routes to `apps/api/src/routes/admin/govern.t
       // "Stage: manager; 1,102 items resolve, 61 fall to the fallback, 17
       // resolve to nobody — here they are." The screen that catches an
       // unreviewable campaign before 200 people are emailed rather than at 3am
-      // on the due date.
+      // on the due date. `previewReviewerResolution` is produced by TASK 18,
+      // which owns resolution; it writes no CampaignItem and no
+      // CampaignItemReviewer row.
       return previewReviewerResolution(request.tenantId, body);
     },
   );
+
+  app.post(
+    '/govern/campaigns/:id/start',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      try {
+        return await startCampaign(request.tenantId, request.session.userId, id, {
+          publicUrl: request.publicUrl,
+        });
+      } catch (error) {
+        // The four refusals are 409s carrying their code, not 500s. A stale
+        // source or an empty scope is a decision this endpoint made, and the
+        // console renders the reason.
+        if (error instanceof CampaignRefusedError) {
+          throw new ProblemError(409, error.code, 'Campaign refused', error.message);
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/govern/campaigns/:id/extend',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = extendCampaignBody.parse(request.body);
+      await extendCampaign(request.tenantId, request.session.userId, id, body.dueAt);
+      return reply.status(204).send();
+    },
+  );
+
+  app.post(
+    '/govern/campaigns/:id/rebase',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = rebaseCampaignBody.parse(request.body);
+      return rebaseCampaign(request.tenantId, request.session.userId, id, body.snapshotId);
+    },
+  );
+
+  // ---- revocation --------------------------------------------------------
+  app.post(
+    '/govern/campaigns/:id/revocations',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      // WITHOUT THIS ROUTE nothing computes a batch, and §13's whole "revocation
+      // is a run" machinery is unreachable from the product.
+      return computeRevocationBatch(request.tenantId, request.session.userId, id);
+    },
+  );
+
+  app.get('/govern/batches/:id', { preHandler: requireGovernRead() }, async (request) => {
+    const { id } = idParam.parse(request.params);
+    return request.db(async (tx) => ({
+      batch: await tx.revocationBatch.findUniqueOrThrow({ where: { id } }),
+      dispatches: await tx.revocationDispatch.findMany({
+        where: { batchId: id },
+        // An explicit ordinal: `createdAt` is transaction start time and every
+        // row of the batch's `createMany` carries the same one.
+        orderBy: { sequence: 'asc' },
+      }),
+    }));
+  });
 
   app.post(
     '/govern/batches/:id/confirm',
     { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
     async (request) => {
       const { id } = idParam.parse(request.params);
+      const body = confirmBatchBody.parse(request.body ?? {});
       // `autoApply` does not exist for a batch. Confirmation is per batch,
-      // explicit, and the confirming user is recorded.
-      return confirmRevocationBatch(request.tenantId, request.session.userId, id);
+      // explicit, and the confirming user is recorded. `confirmed` is a required
+      // field of the body rather than a default, so a batch the guard flagged
+      // cannot be waved through by a caller who did not read the reason.
+      try {
+        return await confirmRevocationBatch(request.tenantId, request.session.userId, id, {
+          confirmed: body.confirmed,
+        });
+      } catch (error) {
+        if (error instanceof RevocationRefusedError) {
+          throw new ProblemError(409, error.code, 'Revocation refused', error.message);
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/govern/dispatches/:id/skip',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = skipDispatchBody.parse(request.body);
+      await skipDispatch(request.tenantId, request.session.userId, id, body.reason);
+      return reply.status(204).send();
+    },
+  );
+
+  // ---- segregation of duties ---------------------------------------------
+  app.get('/govern/sod/functions', { preHandler: requireGovernRead() }, async (request) =>
+    request.db(async (tx) => ({
+      functions: await tx.businessFunction.findMany({
+        include: { resources: true },
+        orderBy: { name: 'asc' },
+      }),
+    })),
+  );
+
+  app.post(
+    '/govern/sod/functions',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const body = businessFunctionBody.parse(request.body);
+      const created = await upsertBusinessFunction(request.tenantId, request.session.userId, body);
+      return reply.status(201).send(created);
+    },
+  );
+
+  app.get('/govern/sod/rules', { preHandler: requireGovernRead() }, async (request) =>
+    request.db(async (tx) => ({
+      rules: await tx.sodRule.findMany({
+        include: { functionA: true, functionB: true },
+        orderBy: { name: 'asc' },
+      }),
+    })),
+  );
+
+  app.post(
+    '/govern/sod/rules',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const body = sodRuleBody.parse(request.body);
+      const created = await upsertSodRule(request.tenantId, request.session.userId, body);
+      return reply.status(201).send(created);
+    },
+  );
+
+  app.post(
+    '/govern/sod/rules/preview',
+    { preHandler: requireGovernRead() },
+    // Before it is saved. A rule that would fire against 400 people is a
+    // configuration error, and the person with the console open is who should
+    // see it, at that moment.
+    async (request) => previewSodRuleImpact(request.tenantId, sodRulePreviewBody.parse(request.body)),
+  );
+
+  app.get('/govern/sod/violations', { preHandler: requireGovernRead() }, async (request) => {
+    const query = violationQuery.parse(request.query);
+    const scope = scopeOf(request);
+    return request.db(async (tx) => {
+      // A violation names a person, so the org-unit scope applies here exactly
+      // as it does to the findings list (§21).
+      const admitted = scope.kind === 'tenant' ? 'all' : await personIdsInScope(tx, scope);
+      return {
+        violations: await tx.sodViolation.findMany({
+          where: {
+            status: query.status ?? 'open',
+            ...(admitted === 'all' ? {} : { personId: { in: [...admitted] } }),
+          },
+          include: { rule: { select: { id: true, name: true, rationale: true } } },
+          orderBy: [{ severity: 'desc' }, { firstSeenAt: 'asc' }],
+          take: query.limit,
+        }),
+      };
+    });
+  });
+
+  app.post(
+    '/govern/sod/violations/:id/except',
+    // Requesting an exception is not accepting one. This opens a request; the
+    // decision below is a different permission.
+    { preHandler: requireGovernRead() },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = requestExceptionBody.parse(request.body);
+      const created = await requestSodException(request.tenantId, request.session.userId, id, body);
+      return reply.status(201).send(created);
     },
   );
 
@@ -21086,7 +25519,13 @@ Append the campaign, batch and SoD routes to `apps/api/src/routes/admin/govern.t
       return reply.status(204).send();
     },
   );
+
+  app.get('/govern/sod/graph', { preHandler: requireGovernRead() }, async (request) =>
+    decisionGraph(request.tenantId, graphQuery.parse(request.query)),
+  );
 ```
+
+Every schema named above — `campaignListQuery`, `createCampaignBody`, `extendCampaignBody`, `rebaseCampaignBody`, `previewScopeBody`, `previewReviewersBody`, `confirmBatchBody`, `skipDispatchBody`, `businessFunctionBody`, `sodRuleBody`, `sodRulePreviewBody`, `violationQuery`, `requestExceptionBody`, `decideExceptionBody`, `graphQuery` — is added to `packages/contracts/src/govern.ts` in Step 1 of this task. `confirmBatchBody` is `z.object({ confirmed: z.boolean() }).strict()`: required, not defaulted.
 
 - [ ] **Step 4: Write the portal reviewer page**
 
@@ -21563,7 +26002,7 @@ export function GovernBatchPage() {
         <th className="px-4 py-2">Share certified</th>
         <th className="px-4 py-2">Median time on an item</th>
         <th className="px-4 py-2">Share in bulk</th>
-        <th className="px-4 py-2">Largest single burst</th>
+        <th className="px-4 py-2">Longest run of consecutive decisions</th>
         <th className="px-4 py-2">Never opened the detail</th>
       </tr>
     </thead>
@@ -21575,7 +26014,9 @@ export function GovernBatchPage() {
           <td className="px-4 py-2">{Math.round(s.certifiedShare * 100)}%</td>
           <td className="px-4 py-2">{Math.round(s.medianIntervalMs / 1000)}s</td>
           <td className="px-4 py-2">{Math.round(s.bulkShare * 100)}%</td>
-          <td className="px-4 py-2">{s.largestBurst}</td>
+          <td className="px-4 py-2">
+            {s.largestBurst} in {Math.round(s.largestBurstMs / 1000)}s
+          </td>
           <td className="px-4 py-2">{Math.round(s.neverOpenedShare * 100)}%</td>
         </tr>
       ))}
@@ -21801,20 +26242,20 @@ Run against the spec with fresh eyes, per the writing-plans skill. **A self-revi
 | §5 Ruling G1's condition — provenance to the target | T20 Step 5 (`RevocationOrderFacts` carries `decidedByPersonName`, `campaignName`, `campaignDecisionId`; the plan stage puts them in `PlannedAction.before`) | present in the `planActions` snippet |
 | §5 Provision's plan gains `revocationOrders`; `ProvisionAction.revocationOrderId` | T20 Step 5, T15 Step 6 | both written out |
 | §5 Automate gains `sod_violation` as a refusal reason | T16 Step 6(a), tested at T16 Step 7 | the union edit and the test are both there |
-| §5 Provision's guard gains an SoD condition; the rule editor gains an SoD column | T16 Step 6(c) | the `previewRuleImpact` edit is written; **the guard's `requiresConfirmation` condition is described in the same step and its code lives in Provision's `run-service.ts`, which this plan does not otherwise touch — see the gap list below** |
+| §5 Provision's guard gains an SoD condition; the rule editor gains an SoD column | T16 Step 6(c) and 6(c2) | both written. `run-service.ts` is in this task's `Modify` list and the guard's `requiresConfirmation` condition is code, not prose; its test asserts the run is **never refused** and no person becomes unprocessable |
 | §6 Snapshot, three-valued state, `not_held` is never a row | T1 Step 8 (`holding_state_is_held_or_unknown`), T2 (`countRegion`) | the CHECK and the counting function are both present |
 | §6 Six resource kinds, correlation through the three existing links | T6 Steps 3, 6 | all six kinds are collected; the three links are `TargetAccount.personId`, `User.personId`, `AccessGrant.subjectPersonId` |
-| §6 `GovernFinding` aggregates `DriftFinding` by reference | T1 Step 6 (`driftFindingId`, bare column), T8 (`FindingDraft.driftFindingId`) | the column and the field are present. **The Provision-side aggregation that fills it is NOT written — see the gap list** |
+| §6 `GovernFinding` aggregates `DriftFinding` by reference, and closing it in either place closes it in both | T1 Step 6 (the column), T8 (the field), **T8A (`linkDrafts`, `reconcileLinkedFindings`, `adoptDriftClosures`)** | written in both directions, with T9's `orphan_account` drafts raised through T8A. The three drift kinds with no Govern counterpart are named with their reason in `DRIFT_LINKABLE`'s docstring (Ruling G-2) |
 | §7 Provenance is a set; eleven kinds; the unattributable definition | T4 Steps 3–4 | all eleven kinds, `isUnattributable`, and seven test cases with two answers |
 | §7 `org_unit_inheritance` names which unit and the chain | T6 Step 3 (`resolveApplicationPaths`), T4 Step 4 | the chain is truncated at the match and asserted |
 | §8 Two clocks, both checked, a refusal names which | T3 Steps 3–4, T17 Step 5 | `checkSnapshotAge` and `checkSourceFreshness` carry a `clock` field and both are used |
 | §8 `CoverageGap` is a row; six kinds | T1 Steps 5, 8 | the model and the CHECK |
 | §8 Rule 3: no aggregation collapses unknown into not_held, as a property test | T2 Step 1 (500 generated scopes, two-directional) | the generator and both properties are written out |
-| §8 Rule 4: every report carries its header, with no constructor that omits it | T11 Steps 1, 4 (the `REPORT_BRAND` brand + the `@ts-expect-error` case), Step 9 mutation 1 | the brand, the negative test, and the TS2578 mutation are all present |
+| §8 Rule 4: every report carries its header, with no constructor that omits it | T11 Steps 1, 4 (the `REPORT_BRAND` brand + the `@ts-expect-error` case), Step 9 mutation 1 | present. **`envelope` returns `{ header, body } as ReportEnvelope<T>`: the brand is a type-level witness and is never written at runtime, because `declare const … unique symbol` emits no binding and a computed key over it throws.** |
 | §8 Rule 5: an item over a stale source tells the reviewer before they decide | T22 Step 4 (the age banner), T19 (`coverageAtDecision`) | the banner and the recorded coverage are both written |
 | §9 `HoldingEvent`, five change kinds, `became_unknown` is not `lost` | T5 Steps 1, 3 | four `became_unknown` cases plus the "still a loss elsewhere" case |
 | §9 The limitation stated on the report; cadence named; two panes never merged | T5 (`DIFF_LIMITATION`), T11 Step 4 (`whatChanged`: `snapshotsOverPeriod`, `observedChanges`, `recordedActions`, `actionsWithNoObservedChange`) | present |
-| §9 Point-in-time answers name their snapshot or say none covers the date | **NOT COVERED — see the gap list** | |
+| §9 Point-in-time answers name their snapshot or say none covers the date | T11 Step 4a (`snapshotInForceOn`), three tests | written; it answers "no snapshot covers 14 March" and never substitutes the nearest (Ruling G-4) |
 | §9 Retention, and never pruning a referenced snapshot | T7 Step 4 (`pruneSnapshots`), tested at Step 1 | the evidence-pack and open-finding references are both checked |
 | §10 The four reports | T11 Step 4 | all four functions written |
 | §10 The four buckets, uncomfortable first | T11 Step 4 (`BUCKET_ORDER`), tested at Step 1 | present |
@@ -21827,17 +26268,17 @@ Run against the spec with fresh eyes, per the writing-plans skill. **A self-revi
 | §12 Reminders at 50% then daily; escalation adds and tells | T18 Step 4 | written |
 | §12 Coverage arithmetic, four counts beside it | T17 Step 3 (`coverageOf`), T22 Step 5 | written |
 | §12 A `RemediationItem` per undecided item; low coverage is a finding | T18 Step 4 | written |
-| §12 Rubber-stamping made visible: five signals | T15 Step 4 (`ReviewQualitySignal`), T19 Step 5 | written |
-| §12 Bulk bounded, five carve-outs, no bulk revoke | T19 Steps 3, 5 | `HIGH_RISK_FLAGS` has all five; the no-bulk-revoke assertion is a source scan |
+| §12 Rubber-stamping made visible: five signals | T15 Step 4 (`ReviewQualitySignal`), T19 Step 5, **called from T18's `closeDueCampaigns`** | written. `largestBurst` is a run of CONSECUTIVE decisions with `largestBurstMs` beside it, and `neverOpenedShare` counts the recorded `neverOpened` fact rather than a timestamp coincidence |
+| §12 Bulk bounded, five carve-outs, no bulk revoke | T19 Steps 3, 5; **T17 Step 5 writes all six flags** | `HIGH_RISK_FLAGS` has all five and `startCampaign` now WRITES `needs_review` and `sod_violation`, which nothing did before; the no-bulk-revoke assertion is a source scan |
 | §12 The self-review invariant at the moment of decision | T19 Step 4 | written |
 | §12 A reviewer who leaves: decisions stand, items reassign, both told, then block | T18 Step 4 | written |
-| §13 Revocation is a run; the review screen; nothing auto-applies | T20 Step 4, T22 Step 5 | written; `autoApply` appears nowhere |
-| §13 Two axes and four outright refusals | T20 Step 3 | written, including the first-batch case |
+| §13 Revocation is a run; the review screen; nothing auto-applies | T20 Step 4, T22 Steps 3 and 5 | written; `autoApply` appears nowhere, `confirmed` is a required body field, and `POST /govern/campaigns/:id/revocations` exists — without it nothing computes a batch |
+| §13 Two axes and four outright refusals | T20 Steps 3 and 4 | written, including the first-batch case. **`confirmRevocationBatch` writes `lastAppliedBatchAt` and `personsWithActiveContractAtLastBatch`, which nothing wrote — without them the person-population-collapse refusal never fired.** It also re-reads the guard at execution. |
 | §13 The vocabulary: dispatched / confirmed / applied / requires_change / failed | T15 Step 8 (`revocation_dispatch_applied_was_confirmed`), T20 Step 6 | both |
 | §13 `dispatch_not_applied` on the SLA and on the observation gap | T20 Step 6 | both branches written |
 | §14 Rules over business functions; immutable identifiers | T15 Step 5, T16 Steps 3, 5 | written |
 | §14 Detection per person, cross-system; contracts recorded; unevaluable | T16 Steps 3, 5 | written, with the empty-function case |
-| §14 Prevention at the request, the approval, fulfilment and the rule editor | T16 Step 6 | (a)–(c) written; **the catalog's submission-time warning is NOT written — see the gap list** |
+| §14 Prevention at the request, the approval, fulfilment and the rule editor | T16 Step 6 (a), (b), (c), (c2), (c3) | all five written; the catalog's submission-time warning is (c3) and Govern owns it (Ruling G-3), and it does NOT block submission |
 | §14 The decision graph, three edge kinds, three patterns, three qualifications | T21 Steps 1–2 | written |
 | §15 Exceptions: required end date, cap, justification, compensating control | T15 Step 5, T21 Step 3 | written |
 | §15 Approved through Automate's workflow; the `govern.accept_risk` fallback | T21 Step 3, T22 Step 3 | written |
@@ -21846,70 +26287,79 @@ Run against the spec with fresh eyes, per the writing-plans skill. **A self-revi
 | §16 One finding lifecycle; fifteen kinds; `accepted` needs an expiry | T2, T8, T1 Step 8 | written |
 | §16 `RemediationItem` and its six kinds; chased | T1 Steps 6, 8; T8 | written |
 | §16 Orphan attribution: propose, claim, confirm, never automatic | T9 | written |
-| §16 Syntra account dormancy, labelled as exactly that | **NOT COVERED — see the gap list** | |
+| §16 Syntra account dormancy, labelled as exactly that | T11 Step 4a (`accountDormancy`), T14 person report | written, with the "not entitlement usage" caveat as a field and a mutation that removes it |
 | §17 Incremental verification, checkpoints, signatures, anchors, evidence packs | T10, T11 Step 6 | written |
 | §17 One audit event per bulk decision, not one per item | T19 Step 5 | written and tested |
 | §17 What it cannot prove, printed on the cover | T11 Step 6 (`BUNDLE_LIMITATIONS`, seven statements) | written |
 | §18 Every table, every setting, the permissions | T1, T15, T13 Step 1 | written |
 | §19 The pipeline; the batching divergence; the accessor; the jobs | T6, T7, T12 | written |
 | §20 Portal and console | T14, T22 | written |
-| §21 Security posture | across; the two structural tests at T7 Step 6 | written |
+| §21 Security posture | across; the four structural tests at T7 Step 6; the route-scope table at T13 | written. The org-unit scope is applied on **every** read path, including `POST /govern/exports/csv`, and `GOVERN_READ_ROUTES` enumerates the exemptions with a reason each |
 | §23 Every named test | across; the structural ones at T7 Step 6, T19 Step 1 | written |
 
-### The four spec requirements this plan does NOT cover, and why
+### The four spec requirements this plan did NOT cover — all four now covered
 
-1. **§9's point-in-time query — "what did Anna hold on 14 March"** — has no task. `whatDoesPersonHold` takes a `snapshotId` and `readableSnapshot` defaults to the newest, but nothing resolves *a date* to the snapshot in force on it, and nothing answers **"no snapshot covers 14 March"** rather than silently using the nearest. That last sentence is the whole requirement and it is a one-function gap: `snapshotInForceOn(tx, date)` returning `ReadableSnapshot | { covered: false; nearest: Date | null }`. **It belongs in Task 11 as a fourth exported function** and is called out here rather than quietly folded in, because adding it means adding its tests too.
+All four were adjudicated in `govern-plan-rulings.md` (G-2, G-3, G-4) and closed by the pre-flight fix wave. They are recorded here rather than deleted, because "this was a gap and here is where it was closed" is the part a later reader needs.
 
-2. **§16's Syntra account dormancy** — "reported and labelled exactly that, with the statement on the same screen that it is not entitlement usage" — has no task. It is a `Session`/`AuthAttempt` read and a paragraph of copy, and its only risk is the one §16 names: shipping the number without the caveat. It is small and it is missing.
+1. ~~**§9's point-in-time query**~~ — **closed (H3 / Ruling G-4).** `snapshotInForceOn(tx, date)` is Task 11 Step 4a, returning a discriminated `{ covered: true; snapshot } | { covered: false; nearest; statement }` so a caller cannot read a snapshot off an uncovered date. Three tests: inside coverage, before the first snapshot, and in a gap between two. **It answers "no snapshot covers 14 March" and never substitutes the nearest** — the distinction Ruling G-4 calls the entire requirement.
 
-3. **§14's submission-time warning in Automate's catalog** — "the catalog shows a product that would create a violation with a warning at submission, naming the rule and what the subject already holds on the other side" — is not written. `sodImpactForGrant` (T16) is exactly the function it needs and the approval-screen half is wired, but the catalog read path in `apps/web/src/pages/automate/CatalogPage.tsx` is Automate's file and this plan does not modify it. **A reviewer should decide whether that edit belongs here or in an Automate follow-up**; leaving it undecided is how a requirement ends up in neither.
+2. ~~**§16's Syntra account dormancy**~~ — **closed (H3 / Ruling G-4).** `accountDormancy(tx, personId, now)` is in the same step, on the person report, under its own heading, with the §16 sentence printed beside it in words. The mutation is "drop the caveat", and it must fail.
 
-4. **The Provision-side aggregation that fills `GovernFinding.driftFindingId`** — §6 says a `GovernFinding` of the corresponding kind references a `DriftFinding` by id "and closing it in either place closes it in both". The column exists (T1 Step 6) and `FindingDraft` carries the field (T8 Step 3), but **nothing reads `DriftFinding` and nothing propagates a close in either direction.** `orphan_account` findings in T9 are raised from Govern's own orphan holdings rather than from Provision's rows, so today there would be two rows about one problem — which is exactly the outcome §16 says the reference exists to prevent. This is the largest of the four gaps and it needs a task of its own, or an explicit deferral.
+3. ~~**§14's submission-time warning in Automate's catalog**~~ — **closed (H2 / Ruling G-3).** **Govern owns it.** Task 16 Step 6(c3) adds `sodImpactForProducts` (set-based over the products in view, one subject) and edits `apps/api/src/routes/portal/catalog.ts` and `apps/web/src/pages/automate/CatalogPage.tsx`. It does **not** block submission (§14), and the web test asserts the submit control stays enabled — because a warning that turns into a block is the failure §14 names.
+
+4. ~~**The aggregation that fills `GovernFinding.driftFindingId`**~~ — **closed (C3 / Ruling G-2).** **Task 8A** is a new task, dispatched after Task 8 and before Task 9. It reads Provision's open `DriftFinding` rows, matches on the natural key, sets `driftFindingId` rather than raising a second row, and **propagates closure in both directions**. Task 9's `orphan_account` drafts are raised through it and through nothing else. `missing_grant`, `account_missing_at_target` and `unexpected_status` have no Govern counterpart **by construction**, and the reason is written into `DRIFT_LINKABLE`'s docstring rather than left as an omission.
 
 ### 2. Placeholder scan
 
 Searched the plan for `TBD`, `TODO`, `implement later`, `fill in details`, `add appropriate error handling`, `handle edge cases`, `write tests for the above`, `similar to Task`, and `...`.
 
 - **Four steps were prose descriptions of code when first drafted and have been rewritten with the code**: Task 14 Step 5 (four console pages), Task 16 Step 7 (`sod-service.test.ts`), Task 20 Steps 6 and 7 (`reflectRevocationOutcomes` and `revocation-service.test.ts`), Task 21 Steps 3, 4, 5 and 7 (the exception tests, the `lapse` helper, `MyReviewsPage`, the console pages, the e2e spec). **Checked: each of those steps now contains a fenced code block with a body, not a sentence describing one.**
-- **Task 22 Step 5's three secondary console pages** are given as the fragments that carry a decision — the coverage line, the reviewer-quality panel, the impact preview — rather than as whole files. That is deliberate and is stated at the step: the surrounding structure is `SyncRunsPage.tsx`'s, verbatim, and repeating three hundred lines of `Panel`/`SkeletonRows`/`Empty` would bury the four lines a reviewer needs to check. **A reviewer who disagrees should say so; it is the one place this plan shows less than a whole file.**
-- **Task 20 Step 4's `confirmRevocationBatch` and `skipDispatch`** are described in a paragraph between two code blocks rather than written out. Their contract is fully specified — one short transaction per dispatch row, `revokeGrant` for one route, `createRevocationOrder` for another, `createRemediationItem` for four, no `autoApply` — and eleven test cases at Step 7 pin the behaviour. **This is the second and last place a function body is not written out, and it is named here rather than glossed.**
+- ~~**Task 20 Step 4's `confirmRevocationBatch`**~~ — **written out in full by the fix wave (C2 / Ruling G-5).** It is the function that performs the irreversible act, and a pinned contract plus eleven tests designed to pass is an invitation to an improvisation the review then checks against the tests. Its body now carries the four things the contract could not: the two refusals, the re-guard against *current* settings at execution, the null-actor dispatch when the deciding person holds no active account, and the write of `lastAppliedBatchAt` / `personsWithActiveContractAtLastBatch`.
+- ~~**Task 22 Step 3's slice-2 admin routes**~~ — **all seventeen are now written.** The previous version wrote four and the scan did not name the other thirteen, which is worse than the omission: *the scan is what a dispatcher trusts*. `POST /govern/campaigns/:id/revocations` was among the missing, and without it nothing computes a batch and §13's entire "revocation is a run" machinery is unreachable from the product.
+- ~~**`previewReviewerResolution`**~~ — was called at a Task 22 route and produced by no task, so `apps/api/src/routes/admin/govern.ts` did not compile. **It is now Task 18 Step 4a**, which is where resolution lives.
+- **Task 22 Step 5's three secondary console pages** are given as the fragments that carry a decision — the coverage line, the reviewer-quality panel, the impact preview — rather than as whole files. That is deliberate and is stated at the step: the surrounding structure is `SyncRunsPage.tsx`'s, verbatim, and repeating three hundred lines of `Panel`/`SkeletonRows`/`Empty` would bury the four lines a reviewer needs to check. **This is now the only place this plan shows less than a whole file.**
 
 ### 3. Type consistency
 
 Walked every Interfaces block against its consumers.
 
-- `subjectKey` / `parseSubjectKey` (T2) — used in T7, T9, T19. Same spelling throughout. **Checked at T19 Step 4's `projectCertification`, which calls `parseSubjectKey(item.subjectKey)`.**
+- `subjectKey` / `parseSubjectKey` (T2) — used in T7, T9, T13, T19. Same spelling throughout. **Checked at T19 Step 4's `projectCertification`, which calls `parseSubjectKey(item.subjectKey)`.**
 - `Tri<T>` / `countRegion` / `percentOf` (T2) — used in T11 (`whoHasAccessToSystem`), T17 (`coverageOf`), T20 (`holderCountByResource`). **Checked: `evaluateRevocationGuard` destructures `holders.known` and `holders.reason`, which are the two arms `Tri` actually has.**
-- `ClassifiedSource` (T3) — used in T7's `ReadableSnapshot.sources`, T8's `detectStaleSources`, T20's guard input. **Checked: T7 Step 3 constructs it with `ageHours`, which T8 Step 3 reads and T3 defines.**
+- `ClassifiedSource` (T3) — used in `ReadableSnapshot.sources` (now in `readable.ts`), T8's `detectStaleSources`, T20's guard input. **Checked: T7 Step 3(a) constructs it with `ageHours`, which T8 Step 3 reads and T3 defines.**
 - `AttributionDraft` (T4) — used in T7 and T11. **Checked: T11's `summariseAttributions` call maps `a.kind as AttributionDraft['kind']`, which is `AttributionKind` from T2.**
 - `DiffHolding` / `DiffRegion` (T5) — used in T7 only. **Checked: T7 Step 4's `toDiff` produces every field `DiffHolding` declares.**
 - `CollectedTenant` (T6) — used in T7's `BuildOptions.collect` seam and in T12. **Checked: T7's `emptyCollection` test helper sets all nine fields.**
-- `createRemediationItem` — **T8 Step 4 ships it with a wrong tenant derivation and the step says so, then gives the corrected three-parameter signature `(tx, tenantId, input)`. T18 Step 4 calls the corrected form.** This is the one place the plan deliberately shows a wrong version: the shape that infers a tenant from whatever row exists is worth a reader seeing once, because forced RLS would not catch it.
-- `FindingDraft.kind` — must be a `FindingKind` from T2. **Checked: T10's broken-chain finding uses `'coverage_gap'`, which is in `FINDING_KINDS`. It is a slightly odd fit for an audit-chain break and a reviewer may prefer a sixteenth kind; the alternative is a kind that appears in no other code path.**
-- `readableSnapshot` (T7) — used in T8, T9, T11, T16, T17, T20. Same name and arity everywhere. **Checked at T16's `loadSodFacts` and T20's `computeRevocationBatch`.**
+- `upsertFindings` / `reconcileFindings` (T8) — **the split the fix wave made for C1.** `upsertFindings(tenantId, drafts, options)` never resolves and takes no `snapshotId`; `reconcileFindings(tenantId, snapshotId, kinds, drafts, options)` resolves only within `kinds`. **Checked at every one of the seven call sites against the normative table at the head of Task 8**: T8 Step 5 (six standing kinds, rerouted through T8A), T8A, T9 (`['orphan_account']` via T8A), T10 Step 6 (`['unexplained_gain']`), T16 (three SoD kinds), T18 and T20 (`upsertFindings`, never reconciling).
+- `createRemediationItem` — **three parameters, `(tx, tenantId, input)`, everywhere: the Interfaces block, the three Task 8 Step 1 tests, and every call site in T8A, T9, T16, T18, T19, T20 and T21.** The wrong two-parameter form that infers a tenant from whatever row exists is described in prose at Task 8 Step 4 and **is not shipped as a compilable body**, because leaving the task's own TDD tests calling a superseded arity gives an implementer TS2554 on three lines and a choice between two fixes, one of which reverts the correction.
+- `FindingDraft.kind` — must be a `FindingKind` from T2. **Checked: T10's broken-chain and untrusted-checkpoint findings both use `'coverage_gap'`, which is in `FINDING_KINDS`. It is a slightly odd fit for an audit-chain break and a reviewer may prefer a sixteenth kind; the alternative is a kind that appears in no other code path.**
+- `readableSnapshot` (T7, in **`readable.ts`**) — used in T8A, T9, T11, T13, T16, T17, T20, T21. Same name and arity everywhere. **Checked at T16's `loadSodFacts` and T20's `computeRevocationBatch`. Every consumer imports it from `./readable.js`.**
 - `governSettings` (T11) — used in T12, T18, T19, T20, T21. **Checked: every caller passes a `tx`, which is what T11 declares.**
-- `resolveItemReviewers` (T18) — the one forward import, consumed by T17. Signature `(tx, campaignId, itemIds, now) => Promise<ResolveOutcome>`. **Checked: T17 Step 5 calls it with exactly those four arguments and reads `.blocked` and `.assignedByPerson`, which `ResolveOutcome` declares.**
-- `evaluateSodRule` / `sodImpact` (T16) — used by T16's own service, by T21's exception service, and by Provision's `explain.ts`. **Checked: the `SodImpactInput` T16 Step 6(c) passes to `sodImpact` has all four fields.**
-- `routeRevocation` (T20) — used by `computeRevocationBatch` in the same task. **Checked: the call site supplies all six `RouteInput` fields.**
+- `GovernSettingsInput` (T11) — the fifteen named settings, with `_KeysCovered` and `_GovernSettingsBodyMatches` as `MutuallyAssignable` guards over the runtime list and the Zod schema. **Neither is a `z.ZodType<T>` annotation over a `z.lazy`, so both bite** (Ruling P21).
+- `resolveItemReviewers` / `REVIEWER_BATCH` (T18) — consumed by T17. **Checked: T17 Step 5 calls it with exactly four arguments and reads `.blocked` and `.assignedByPerson`, which `ResolveOutcome` declares, and chunks by `REVIEWER_BATCH`.**
+- `computeReviewQualitySignals` (T19) — consumed by T18's `closeDueCampaigns`. **A second forward import, closed by dispatch order: 19, then 18, then 17.**
+- `evaluateSodRule` / `sodImpact` (T16) — used by T16's own service, by T21's exception service, by Provision's `explain.ts` **and by Provision's `run-service.ts` guard (M13)**. **Checked: the `SodImpactInput` each passes has all four fields.**
+- `routeRevocation` (T20) — used by `computeRevocationBatch` in the same task. **Checked: the call site supplies all six `RouteInput` fields, and `liveRuleAttribution` is now an enabled-rule test only (H6).** The router has **no fall-through**: its last line is `const exhaustive: never = input.resourceKind`.
 - `RevocationOrderFacts` (T20) — **must be hand-added to the enumerated `provision/types.js` export block in `packages/core/src/index.ts`, and T20 Step 9 says so.** Provision's ledger records that this barrel is enumerate-and-alias rather than `export *`, and that anything added to `provision/types.ts` silently does not leave the package otherwise.
 
 ### 4. Forward-import walk
 
 Walked every task's Consumes list against the tasks that precede it. **A forward import has stopped a dispatched task twice on this programme.**
 
-- Tasks 1–16 and 18–22 consume only what precedes them. **Checked one by one.**
-- **Task 17 consumes `resolveItemReviewers` from Task 18.** This is a real forward import and it is handled the way Provision handled the same shape: **Task 18 is dispatched before Task 17**, the note is at the head of both tasks' Interfaces blocks, and Task 18 consumes nothing from Task 17 — its `closeDueCampaigns` computes coverage inline rather than importing `coverageOf`, which is stated in its Consumes list as a deliberate omission.
-- **One import cycle was found and removed during this review.** `sod-service.ts` imports `readableSnapshot` from `snapshot-service.ts`; the first draft of Task 16 Step 6(d) called `detectSodViolations` from inside `buildSnapshot`, closing the loop. It is now called from `jobs.ts`, which already depends on both, **and Task 7's `boundaries.test.ts` gains an assertion that `snapshot-service.ts` never imports `sod-service.ts`** so the cycle cannot come back.
-- Task 8 modifies `snapshot-service.ts` to import `finding-service.ts`; `finding-service.ts` imports `readableSnapshot` from `snapshot-service.ts`. **That is also a cycle.** It is smaller — `finding-service` uses `readableSnapshot` only in `upsertFindings`'s resolution path — but it is the same shape, and **a reviewer should decide whether to move `readableSnapshot` into its own module or to have `upsertFindings` take a snapshot id it does not validate.** This plan leaves it as written and names it rather than hiding it, because discovering it at dispatch time costs a task.
+- Tasks 1–16 and 20–22 consume only what precedes them, once Task 8A is placed between 8 and 9. **Checked one by one.**
+- **Three tasks are dispatched out of numeric order: 19, then 18, then 17.** Task 18 consumes `computeReviewQualitySignals` from Task 19; Task 17 consumes `resolveItemReviewers` and `REVIEWER_BATCH` from Task 18. Task 19 consumes nothing from either. The note is at the head of all three Interfaces blocks.
+- **Task 8A is dispatched after Task 8 and before Task 9**, because Task 9's `orphan_account` findings must be raised through it.
+- **Both import cycles are removed, and both are asserted.** `sod-service.ts` ↔ `snapshot-service.ts` was found and removed during the plan's own review by moving the detect call into `jobs.ts`. `finding-service.ts` ↔ `snapshot-service.ts` was left named-but-unfixed and is now closed by Ruling G-6: **`readableSnapshot`, `SnapshotNotReadableError` and `ReadableSnapshot` live in `packages/core/src/govern/readable.ts`**, whose only relative import is `./freshness.js`. Task 7 Step 6's `boundaries.test.ts` asserts both directions and Step 9 mutations 8 and 9 prove the assertions bite. **A real import cycle is not a documentation problem.**
 
 ### 5. Things a reviewer should press on
 
-- **Task 20's `confirmRevocationBatch` body is not written** (see the placeholder scan). It is the function that performs the irreversible act.
-- **The `finding-service` ↔ `snapshot-service` cycle** above.
-- **Four spec gaps**, listed in full above. The `driftFindingId` one is the largest.
-- **`OPENED` in Task 19 is an in-process `Map`.** It is deliberate and the reasoning is in the docstring, but it means the `neverOpenedShare` signal reads high after a restart, and a reviewer may want it on the `CampaignItemReviewer` row instead.
-- **Task 18's escalation upsert** uses a synthesised composite id in a `catch(() => undefined)`. That is a swallowed error on a write, which Ruling P11 banned outright for a destructive path; this one is additive, but the pattern is the one that hid a failed membership removal on Provision. **A `findFirst` then `create` is the honest form and a reviewer should ask for it.**
-- **Task 12's reminder de-duplication reads `NotificationOutbox` by a JSON path on `vars.campaignName`.** It works and it is fragile: two campaigns with the same name in one tenant would suppress each other's reminders. A `campaignId` column on the outbox, or a `lastRemindedAt` on `CampaignItemReviewer`, is the sturdier form.
+The pre-flight review (`.superpowers/sdd/govern-plan-preflight.md`) found 6 Critical, 22 High and 13 Medium against the committed plan, and the fix wave that followed rewrote the sites named below. This list is what remains worth a second opinion.
+
+- **The two-loop `startCampaign` reads campaign items back by id cursor** rather than by the natural keys it just wrote, so a campaign whose scope changed between the two loops resolves reviewers for items the second loop can see and the first did not create. That is the right behaviour for a retry and a reviewer should confirm it is the intended one.
+- **`checkpointTrust` refuses to seed from an unsigned checkpoint when a signer is configured (C5).** The first run after signing is switched on therefore produces one `critical` finding and one full walk from genesis, for the pre-existing unsigned checkpoint. That is stated in the docstring and in the finding's text, and it is cheap — but it is a `critical` finding raised by a configuration change, and an operator should not be surprised by it.
+- **Task 8A writes `DriftFinding.status`.** `DriftFinding` is a Provision report row and is deliberately not on Global Constraint 2's forbidden list — it is not access-bearing, and §16 requires the closure to propagate. A reviewer who disagrees should say so **before** adding `driftFinding` to `FORBIDDEN`, because doing that satisfies §5 by breaking §16.
+- **`RevocationBatch.campaignId` is now NOT NULL (M4)** and the standalone partial index is gone. If a future SoD remediation wants a campaign-less batch, the column, the index and the writer arrive together.
+- **The `certified`-writer structural test matches `status:\s*'certified'` and not the bare word (H16).** `DECISION_ENTRY_POINTS` has exactly one entry and must stay that way: growing the list is how the test stops proving anything, so the second test asserts the list's contents directly.
+- **`largestBurstMs` is new (M9)** and is the elapsed time across the longest run of consecutive decisions. §12 asks for it; nothing recorded it. The screen's column is relabelled to say what it measures.
 
 ---
 
@@ -21925,9 +26375,12 @@ Walked every task's Consumes list against the tasks that precede it. **A forward
 
 ### Dispatch notes for whichever is chosen
 
-- **Task 18 is dispatched before Task 17.** The numbers are labels, not an order. Both tasks carry the note.
-- **Tasks 1–5 can start immediately.** They depend only on Provision's Task 1 migration, which is committed, and on Core.
+- **The dispatch order is 1, 2, 3, 4, 5, 6, 7, 8, 8A, 9, 10, 11, 12, 13, 14, 15, 16, 19, 18, 17, 20, 21, 22.** Three tasks run out of numeric order and one carries a letter. The numbers are labels, not an order, and every affected task carries the note at the head of its Interfaces block:
+  - **Task 8A** (drift linkage, Ruling G-2) is dispatched after Task 8 and before Task 9, because Task 9's `orphan_account` findings are raised through it. It is `8A` rather than `9` because it was added after the plan's tasks were numbered and cross-referenced throughout, and renumbering fourteen downstream tasks to gain a tidier integer is a large diff with nothing behind it.
+  - **Task 19, then Task 18, then Task 17.** Task 18 imports `computeReviewQualitySignals` from Task 19; Task 17 imports `resolveItemReviewers` and `REVIEWER_BATCH` from Task 18; Task 19 imports nothing from either.
+- **Tasks 1–5 can start immediately.** They depend only on Provision's Task 1 migration, which is committed, and on Core. **None of the six Criticals touches them**, so they are safe to dispatch even while the rest of the plan is being read.
 - **Task 6 waits on** Provision Tasks 1, 5, 7, 8, 9, 12, 13, 14, 15, 16 and Automate Tasks 1–9.
 - **Tasks 15–22 wait on** everything in slice 1 plus Automate Tasks 4, 5, 6, 9, 13, 15.
-- **Slice 1 (Tasks 1–14) is shippable on its own** and nothing in it changes anybody's access. A review checkpoint at the end of Task 14 is worth taking whichever execution mode is used.
+- **Task 20 appends the slice-2 half of `transaction-budget.test.ts`** (Task 12 writes the slice-1 half). It cannot compile before Tasks 17–20 have landed, and it is the assertion behind every batch-constant mutation in those four tasks.
+- **Slice 1 (Tasks 1–8, 8A, 9–14 — fifteen tasks) is shippable on its own** and nothing in it changes anybody's access. A review checkpoint at the end of Task 14 is worth taking whichever execution mode is used.
 - **Every task's final step names at least one mutation and the assertion that must catch it.** On this programme, six consecutive tasks found real defects that way and three found them in their own new tests. An implementer who reports "tests pass" without having run the named mutations has not finished the task.
