@@ -1,0 +1,450 @@
+[
+  {
+    "id": "M01",
+    "verdict": "KILLED",
+    "seconds": "6.9",
+    "passed": 0,
+    "failed": 1,
+    "note": "the brief's gate: a tick overrides the guard's non-confirmable refusals"
+  },
+  {
+    "id": "M02",
+    "verdict": "KILLED",
+    "seconds": "6.8",
+    "passed": 0,
+    "failed": 1,
+    "note": "naming a user without confirming satisfies the gate"
+  },
+  {
+    "id": "M03",
+    "verdict": "SURVIVED",
+    "seconds": "6.5",
+    "passed": 1,
+    "failed": 0,
+    "note": "confirmedByUserId: null passes the gate -- the original hole"
+  },
+  {
+    "id": "M04",
+    "verdict": "KILLED",
+    "seconds": "6.7",
+    "passed": 0,
+    "failed": 1,
+    "note": "a terminal or superseded run can be applied again"
+  },
+  {
+    "id": "M05",
+    "verdict": "KILLED",
+    "seconds": "6.8",
+    "passed": 0,
+    "failed": 1,
+    "note": "the confirming user is never recorded on the run"
+  },
+  {
+    "id": "M06",
+    "verdict": "KILLED",
+    "seconds": "6.8",
+    "passed": 0,
+    "failed": 1,
+    "note": "the grant is attempted before the create it depends on"
+  },
+  {
+    "id": "M07",
+    "verdict": "KILLED",
+    "seconds": "6.8",
+    "passed": 0,
+    "failed": 1,
+    "note": "an empty `only` applies the whole run -- the empty case is the universal case"
+  },
+  {
+    "id": "M08",
+    "verdict": "KILLED",
+    "seconds": "6.6",
+    "passed": 0,
+    "failed": 1,
+    "note": "a re-enable outside the window applies with no tick"
+  },
+  {
+    "id": "M09",
+    "verdict": "KILLED",
+    "seconds": "5.7",
+    "passed": 0,
+    "failed": 1,
+    "note": "a confirmed run never applies its confirmable actions"
+  },
+  {
+    "id": "M10",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "the two Syntra-directory actions are routed to a connector that has no such operation"
+  },
+  {
+    "id": "M11",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "one throw abandons every later action in sequence order"
+  },
+  {
+    "id": "M12",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "an action that threw is left in_flight, so the target needs adopting"
+  },
+  {
+    "id": "M13",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the brief verbatim: Prisma drops an undefined personId and returns a stranger's account"
+  },
+  {
+    "id": "M14",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "Ruling P22: DN injection through the RDN half"
+  },
+  {
+    "id": "M15",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "a blank container renders CN=x, -- a malformed DN sent to the directory"
+  },
+  {
+    "id": "M16",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "every update carries a DN, so the connector renames objects whose RDN is not CN=<sAMAccountName>"
+  },
+  {
+    "id": "M17",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "the archive strips a group no business rule names"
+  },
+  {
+    "id": "M18",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "Syntra records revoked a membership that is still at the target"
+  },
+  {
+    "id": "M19",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "Task 9's obligation: every later re-enable becomes confirmable, forever"
+  },
+  {
+    "id": "M20",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "a stale disable date beside an active status, which the ladder reads"
+  },
+  {
+    "id": "M21",
+    "verdict": "KILLED",
+    "seconds": "5.0",
+    "passed": 0,
+    "failed": 1,
+    "note": "only the wait budget bounds the loop, and a zero retryAfterMs does not advance it"
+  },
+  {
+    "id": "M22",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "a target asking for a minute each time gets twenty of them"
+  },
+  {
+    "id": "M23",
+    "verdict": "KILLED",
+    "seconds": "4.3",
+    "passed": 0,
+    "failed": 1,
+    "note": "a zero wait is honoured, so the budget never advances"
+  },
+  {
+    "id": "M24",
+    "verdict": "SURVIVED",
+    "seconds": "4.3",
+    "passed": 1,
+    "failed": 0,
+    "note": "NaN defeats the budget comparison from the other side"
+  },
+  {
+    "id": "M25",
+    "verdict": "KILLED",
+    "seconds": "4.0",
+    "passed": 0,
+    "failed": 1,
+    "note": "sleep(Infinity) -- a run that never finishes and never says why"
+  },
+  {
+    "id": "M26",
+    "verdict": "KILLED",
+    "seconds": "4.0",
+    "passed": 0,
+    "failed": 1,
+    "note": "the jitter fraction"
+  },
+  {
+    "id": "M27",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the successful call is not counted, so the column under-reports"
+  },
+  {
+    "id": "M28",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "one more call than the administrator allowed"
+  },
+  {
+    "id": "M29",
+    "verdict": "SURVIVED",
+    "seconds": "4.1",
+    "passed": 1,
+    "failed": 0,
+    "note": "maxAttempts hardcoded rather than read from the target"
+  },
+  {
+    "id": "M30",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "an account Syntra can never address again, recorded as done"
+  },
+  {
+    "id": "M31",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the account no longer records the action that created it"
+  },
+  {
+    "id": "M32",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "a duplicate AccountEntitlement row nothing ever reconciles"
+  },
+  {
+    "id": "M33",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "an exhausted retryable failure is recorded failed, so the next run does not pick it up"
+  },
+  {
+    "id": "M34",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "a conflict is recorded as an ordinary failure"
+  },
+  {
+    "id": "M35",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the account is left looking usable while somebody else holds its name"
+  },
+  {
+    "id": "M36",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "Ruling P12: the credential is generated, written to the directory and dropped"
+  },
+  {
+    "id": "M37",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the in-flight marker that makes the gap between the write and its record observable"
+  },
+  {
+    "id": "M38",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "an audit log that cannot distinguish 'we never tried' from 'we tried and never found out'"
+  },
+  {
+    "id": "M39",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the attempt number on the intent event"
+  },
+  {
+    "id": "M40",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "a landed write reads as one that did not land, and the next run creates a second object"
+  },
+  {
+    "id": "M41",
+    "verdict": "SURVIVED",
+    "seconds": "4.1",
+    "passed": 1,
+    "failed": 0,
+    "note": "anybody able to create an object in the target is handed an existing person's account"
+  },
+  {
+    "id": "M42",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "every preview of every target reads the whole directory a second time"
+  },
+  {
+    "id": "M43",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "a run that did nothing it was asked to reports success"
+  },
+  {
+    "id": "M44",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "hasEverApplied never becomes true, so the guard stays on its first-run refusal forever"
+  },
+  {
+    "id": "M45",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the skipped count"
+  },
+  {
+    "id": "M46",
+    "verdict": "KILLED",
+    "seconds": "4.0",
+    "passed": 0,
+    "failed": 1,
+    "note": "a class the policy asked for by default is dropped"
+  },
+  {
+    "id": "M47",
+    "verdict": "KILLED",
+    "seconds": "4.0",
+    "passed": 0,
+    "failed": 1,
+    "note": "the policy's own switch is ignored"
+  },
+  {
+    "id": "M48",
+    "verdict": "KILLED",
+    "seconds": "3.9",
+    "passed": 0,
+    "failed": 1,
+    "note": "randomInt(0) throws, so the create fails on a policy the schema accepts"
+  },
+  {
+    "id": "M49",
+    "verdict": "KILLED",
+    "seconds": "4.0",
+    "passed": 0,
+    "failed": 1,
+    "note": "the floor and the ceiling on the generated length"
+  },
+  {
+    "id": "M50",
+    "verdict": "KILLED",
+    "seconds": "4.0",
+    "passed": 0,
+    "failed": 1,
+    "note": "the first four characters are always upper, lower, digit, symbol in that order"
+  },
+  {
+    "id": "M51",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the seam Task 13 left open is still a no-op on the production path"
+  },
+  {
+    "id": "M52",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "an account nobody can sign in to, with nothing recorded saying why"
+  },
+  {
+    "id": "M53",
+    "verdict": "KILLED",
+    "seconds": "4.1",
+    "passed": 0,
+    "failed": 1,
+    "note": "the audit trail claims a credential was sealed that was lost with the process"
+  },
+  {
+    "id": "M54",
+    "verdict": "SURVIVED",
+    "seconds": "5.3",
+    "passed": 1,
+    "failed": 0,
+    "note": "control mutant: a no-op inside the read loop, expected SURVIVED"
+  },
+  {
+    "id": "M55",
+    "verdict": "KILLED",
+    "seconds": "4.2",
+    "passed": 0,
+    "failed": 1,
+    "note": "a revocation that landed at the target is still recorded held"
+  },
+  {
+    "id": "M56",
+    "verdict": "SURVIVED",
+    "seconds": "4.1",
+    "passed": 1,
+    "failed": 0,
+    "note": "control on the archive status write; the refused case must not reach it at all"
+  }
+]

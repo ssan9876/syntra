@@ -801,6 +801,33 @@ describe('applyProvisionRun', () => {
     expect(waits.every((w) => Number.isFinite(w) && w > 0)).toBe(true);
   });
 
+  it('refuses a retryAfterMs of infinity', async () => {
+    // `Number.isFinite` is not redundant beside `> 0`: NaN fails both, but
+    // `Infinity > 0` is true and `Math.min(Infinity, budget)` is the whole
+    // budget -- so one throttled action sleeps for the entire two minutes on a
+    // number the target chose, with every later action waiting behind it.
+    const waits: number[] = [];
+    target.program('create_account', {
+      failTimes: Infinity,
+      failure: 'throttled',
+      retryAfterMs: Number.POSITIVE_INFINITY,
+    });
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: target as never,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    expect(waits.length).toBeGreaterThan(0);
+    expect(waits.every((w) => Number.isFinite(w) && w > 0 && w <= 60_000)).toBe(true);
+  });
+
   it('stops waiting when the target asks for more patience than the budget allows', async () => {
     // The other bound, and the one the count cannot supply: a target that asks
     // for a minute each time would get twenty minutes of an apply's life for
@@ -1216,6 +1243,10 @@ describe('applyProvisionRun: the leaver ladder', () => {
     expect(holdings.find((h) => h.entitlementId === entitlementId)!.state).toBe(
       'revoked',
     );
+    const archived = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findUniqueOrThrow({ where: { id: accountId } }),
+    );
+    expect(archived.status).toBe('archived');
   });
 
   it('does not record an archive that the target refused', async () => {
@@ -1654,11 +1685,17 @@ describe('resolveInFlightActions', () => {
     // Provenance, not the name. Anybody able to create an object in the target
     // could otherwise choose a name that causes Syntra to hand them an
     // existing person's account.
-    target.seedForeignObject('anna.novak');
+    //
+    // Seeded AFTER the preview, and that is the whole test. Seeded before it,
+    // the preview's `taken` set unions the target's inventory and the
+    // generator picks `anna.novak2` -- so the two names never match, the
+    // provenance check is never reached, and deleting it entirely leaves the
+    // test green.
     const run = await previewProvisionRun(tenantId, provider, targetId, {
       now: NOW,
       connector: target as never,
     });
+    target.seedForeignObject('anna.novak');
     const createId = (await actionsOf(run.id)).find(
       (a) => a.actionType === 'create_account',
     )!.id;

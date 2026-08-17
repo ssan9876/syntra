@@ -23,8 +23,8 @@
     "test": "packages/core/src/provision/apply.test.ts",
     "find": "    options.confirmedByUserId !== null &&",
     "replace": "    true &&",
-    "pattern": "refuses a blocked run when a caller passes a null confirming user",
-    "note": "confirmedByUserId: null passes the gate -- the original hole"
+    "pattern": "refuses a blocked run confirmed with no user, and one naming a user without confirming",
+    "note": "confirmedByUserId: null passes the gate once confirm is set -- the original hole"
   },
   {
     "id": "M04",
@@ -48,8 +48,8 @@
     "id": "M06",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "      // which passes CI and fails in production.\n      orderBy: { sequence: 'asc' },",
-    "replace": "      // which passes CI and fails in production.\n      orderBy: { sequence: 'desc' },",
+    "find": "      // which passes CI and fails in production.\r\n      orderBy: { sequence: 'asc' },",
+    "replace": "      // which passes CI and fails in production.\r\n      orderBy: { sequence: 'desc' },",
     "pattern": "applies a confirmed run and records the confirming user",
     "note": "the grant is attempted before the create it depends on"
   },
@@ -111,8 +111,8 @@
     "id": "M13",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "  if (action.accountId === null) return null;\n  return withTenant(tenantId, async (tx) => {\n    const account = await tx.targetAccount.findUnique({\n      where: { id: action.accountId! },\n    });",
-    "replace": "  return withTenant(tenantId, async (tx) => {\n    const account =\n      action.accountId === null\n        ? await tx.targetAccount.findFirst({\n            where: {\n              targetSystemId: options.targetSystemId,\n              personId: action.personId ?? undefined,\n            },\n          })\n        : await tx.targetAccount.findUnique({ where: { id: action.accountId } });",
+    "find": "  if (action.accountId === null) return null;\r\n  return withTenant(tenantId, async (tx) => {\r\n    const account = await tx.targetAccount.findUnique({\r\n      where: { id: action.accountId! },\r\n    });",
+    "replace": "  return withTenant(tenantId, async (tx) => {\r\n    const account =\r\n      action.accountId === null\r\n        ? await tx.targetAccount.findFirst({\r\n            where: {\r\n              targetSystemId: options.targetSystemId,\r\n              personId: action.personId ?? undefined,\r\n            },\r\n          })\r\n        : await tx.targetAccount.findUnique({ where: { id: action.accountId } });",
     "pattern": "never falls back to another person's account",
     "note": "the brief verbatim: Prisma drops an undefined personId and returns a stranger's account"
   },
@@ -156,7 +156,7 @@
     "id": "M18",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "                entitlementId: { in: meta.strippedEntitlementIds! },\n",
+    "find": "                entitlementId: { in: meta.strippedEntitlementIds! },\r\n",
     "replace": "",
     "pattern": "hands the archive only the entitlements Provision manages",
     "note": "Syntra records revoked a membership that is still at the target"
@@ -212,7 +212,7 @@
     "test": "packages/core/src/provision/apply.test.ts",
     "find": "    Number.isFinite(retryAfterMs) &&",
     "replace": "    true &&",
-    "pattern": "gives up on a throttle whose retryAfterMs is not a number at all",
+    "pattern": "refuses a retryAfterMs of infinity",
     "note": "NaN defeats the budget comparison from the other side"
   },
   {
@@ -237,8 +237,8 @@
     "id": "M27",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "    if (result.ok) {\n      attempts = attempt;\n      break;\n    }",
-    "replace": "    if (result.ok) {\n      break;\n    }",
+    "find": "    if (result.ok) {\r\n      attempts = attempt;\r\n      break;\r\n    }",
+    "replace": "    if (result.ok) {\r\n      break;\r\n    }",
     "pattern": "retries a transient failure within the run and succeeds",
     "note": "the successful call is not counted, so the column under-reports"
   },
@@ -257,7 +257,7 @@
     "test": "packages/core/src/provision/apply.test.ts",
     "find": "    if (attempts >= options.maxAttempts) break;",
     "replace": "    if (attempts >= 3) break;",
-    "pattern": "leaves an action pending_retry when it exhausts maxAttempts",
+    "pattern": "honours a maxAttempts the administrator lowered",
     "note": "maxAttempts hardcoded rather than read from the target"
   },
   {
@@ -273,8 +273,8 @@
     "id": "M31",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "              status: 'active',\n              statusReason: null,\n              createdActionId: actionId,",
-    "replace": "              status: 'active',\n              statusReason: null,",
+    "find": "              status: 'active',\r\n              statusReason: null,\r\n              createdActionId: actionId,",
+    "replace": "              status: 'active',\r\n              statusReason: null,",
     "pattern": "writes the anchor back onto the account after a create",
     "note": "the account no longer records the action that created it"
   },
@@ -318,8 +318,8 @@
     "id": "M36",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "      await putSecret(\n        tx,",
-    "replace": "      await Promise.resolve(\n        tx,",
+    "find": "      await putSecret(\r\n        tx,",
+    "replace": "      await Promise.resolve(\r\n        tx,",
     "pattern": "seals the initial password into the vault and never writes it anywhere else",
     "note": "Ruling P12: the credential is generated, written to the directory and dropped"
   },
@@ -444,8 +444,8 @@
     "id": "M50",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "  for (let i = chars.length - 1; i > 0; i -= 1) {\n    const j = randomInt(i + 1);\n    [chars[i], chars[j]] = [chars[j]!, chars[i]!];\n  }",
-    "replace": "  for (let i = chars.length - 1; i > 0; i -= 1) {\n    const j = i;\n    [chars[i], chars[j]] = [chars[j]!, chars[i]!];\n  }",
+    "find": "  for (let i = chars.length - 1; i > 0; i -= 1) {\r\n    const j = randomInt(i + 1);\r\n    [chars[i], chars[j]] = [chars[j]!, chars[i]!];\r\n  }",
+    "replace": "  for (let i = chars.length - 1; i > 0; i -= 1) {\r\n    const j = i;\r\n    [chars[i], chars[j]] = [chars[j]!, chars[i]!];\r\n  }",
     "pattern": "shuffles, so the class of each position is not fixed",
     "note": "the first four characters are always upper, lower, digit, symbol in that order"
   },
@@ -462,7 +462,7 @@
     "id": "M52",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "              statusReason:\n                'created by an apply that was interrupted before its initial password could be sealed; the password must be reset before this account can be used',",
+    "find": "              statusReason:\r\n                'created by an apply that was interrupted before its initial password could be sealed; the password must be reset before this account can be used',",
     "replace": "              statusReason: null,",
     "pattern": "says plainly that the adopted account's initial password was lost",
     "note": "an account nobody can sign in to, with nothing recorded saying why"
@@ -489,8 +489,8 @@
     "id": "M55",
     "file": "packages/core/src/provision/apply.ts",
     "test": "packages/core/src/provision/apply.test.ts",
-    "find": "            data: { state: 'revoked', revokedAt: now },\n          });\n        }\n        break;\n    }",
-    "replace": "            data: { state: 'held', revokedAt: now },\n          });\n        }\n        break;\n    }",
+    "find": "                state: 'held',\r\n              },\r\n              data: { state: 'revoked', revokedAt: now },\r\n            });\r\n          }\r\n          break;\r\n      }",
+    "replace": "                state: 'held',\r\n              },\r\n              data: { state: 'held', revokedAt: now },\r\n            });\r\n          }\r\n          break;\r\n      }",
     "pattern": "revokes a holding through the inventory when the revoke lands",
     "note": "a revocation that landed at the target is still recorded held"
   },
@@ -500,7 +500,7 @@
     "test": "packages/core/src/provision/apply.test.ts",
     "find": "            data: { status: 'archived' },",
     "replace": "            data: { status: 'active' },",
-    "pattern": "does not record an archive that the target refused",
-    "note": "control on the archive status write; the refused case must not reach it at all"
+    "pattern": "hands the archive only the entitlements Provision manages",
+    "note": "an archived account is not recorded archived, so the ladder proposes it forever"
   }
 ]
