@@ -158,6 +158,15 @@ const withFoldedAttributeNames = () =>
     ),
   }));
 
+/** The same target, recording which entitlements the run asked it about. */
+const recordingProbes = (probed: string[]) => ({
+  ...mapping((record) => record),
+  readEntitlementMembers: (c: never, dn: string) => {
+    probed.push(dn);
+    return target.readEntitlementMembers(c, dn);
+  },
+});
+
 const markApplied = () =>
   withTenant(tenantId, (tx) =>
     tx.targetSystem.update({
@@ -509,6 +518,42 @@ describe('previewProvisionRun', () => {
       tx.entitlement.findUniqueOrThrow({ where: { id: entitlementId } }),
     );
     expect(entitlement.status).toBe('present');
+  });
+
+  it('probes only the groups a business rule names', async () => {
+    // Every probe is a round trip, and narrowing to the remit is what bounds
+    // their number by what an administrator configured rather than by the size
+    // of the domain. A group no rule names cannot make any rule unresolvable,
+    // so probing it buys nothing -- and on a domain with five thousand groups
+    // it is five thousand round trips before the run has read one account.
+    const unnamedDn = 'CN=Unnamed,OU=Groups,DC=acme,DC=test';
+    target.entitlements.push({
+      externalId: 'guid-unnamed',
+      dn: unnamedDn,
+      type: 'group',
+      displayName: 'Unnamed',
+    });
+    await withTenant(tenantId, (tx) =>
+      tx.entitlement.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          externalId: 'guid-unnamed',
+          dn: unnamedDn,
+          type: 'group',
+          displayName: 'Unnamed',
+          status: 'present',
+        },
+      }),
+    );
+    await seedPerson('Anna', 'Novak', null);
+
+    const probed: string[] = [];
+    await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: recordingProbes(probed) as never,
+    });
+    expect(probed).toEqual([FINANCE_DN]);
   });
 
   it('leaves an unreadable group this run never probed alone', async () => {

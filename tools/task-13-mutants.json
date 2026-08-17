@@ -131,7 +131,7 @@
     "test": "packages/core/src/provision/run-service.test.ts",
     "find": "      if (id === undefined || !prepared.remit.has(id)) continue;",
     "replace": "      if (id === undefined) continue;",
-    "pattern": "leaves an unreadable group this run never probed alone",
+    "pattern": "probes only the groups a business rule names",
     "note": "every group in the domain is probed"
   },
   {
