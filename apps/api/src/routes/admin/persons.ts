@@ -10,6 +10,7 @@ import {
   PERMISSIONS,
   createContract,
   createPerson,
+  explainPersonAccess,
   importPersons,
   linkUserToPerson,
   listContracts,
@@ -53,6 +54,31 @@ export async function registerAdminPersonRoutes(
           users: await usersForPerson(tx, id),
         };
       });
+    },
+  );
+
+  /**
+   * Why this person holds what they hold, in every target system.
+   *
+   * `PROVISION_READ` and not `IDENTITY_READ`: somebody who may read the person
+   * register is not thereby entitled to see every entitlement that person
+   * holds in every target system. It lives here, beside `/persons/:id`,
+   * because the person routes are already a plugin under `/api/admin` and
+   * there is no `/api/persons` in this application.
+   */
+  app.get(
+    '/persons/:id/access',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const person = await request.db((tx) =>
+        tx.person.findUnique({ where: { id }, select: { id: true } }),
+      );
+      // Otherwise a person who does not exist answers 200 with an empty list,
+      // which reads as "this person holds nothing" rather than "no such
+      // person" — and those are opposite answers to an auditor.
+      if (!person) throw new ProblemError(404, 'not-found', 'Person not found');
+      return explainPersonAccess(request.tenantId, id);
     },
   );
 

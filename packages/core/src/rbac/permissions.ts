@@ -18,6 +18,20 @@ export const PERMISSIONS = {
   ACCESS_MANAGE: 'access.manage',
   POLICY_READ: 'policy.read',
   POLICY_MANAGE: 'policy.manage',
+  /**
+   * Reading who holds what, and why.
+   *
+   * Run history, drift, exceptions and the person-access view. Separate from
+   * `provision.manage` because reading who holds what in the finance system is
+   * a reasonable thing to grant an auditor, and changing a threshold is not --
+   * lowering one is functionally the same as approving everything it would
+   * have caught. Deliberately not inherited from `identity.read` either:
+   * somebody who may read the person register is not thereby entitled to see
+   * every entitlement that person holds in every target system.
+   */
+  PROVISION_READ: 'provision.read',
+  /** Every configuration mutation, every apply and every confirmation. */
+  PROVISION_MANAGE: 'provision.manage',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

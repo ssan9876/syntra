@@ -174,3 +174,32 @@ export * from './provision/apply.js';
 // concepts, which is the collision that has bitten this slice twice; under
 // TS2308 the barrel would then export NEITHER side, silently.
 export * from './provision/jobs.js';
+// Member by member, not `export *`, and for the same reason as
+// `provision/types.js` and `provision/guard.js` above: `policy/impact.js`
+// ALREADY exports `previewRuleImpact` and `RuleImpact` -- the policy
+// simulator's blast-radius preview, a different function answering a
+// different question. A star export of both is TS2308 twice over, and under
+// TS2308 the barrel exports NEITHER side, silently: the provisioning preview
+// would compile, pass its own tests, and be unreachable from `apps/api`, and
+// so would the policy one it collided with.
+//
+// Fourth barrel collision on this slice. The names are aliased here rather
+// than renamed at the source, because inside `provision/` there is one rule
+// impact and `previewRuleImpact` is what it is called; the ambiguity exists
+// only at the barrel. Route code imports the aliases.
+//
+// `explainPersonAccess`, `previewAccountProfile`, `PersonAccess`,
+// `PersonAccessEntitlement`, `ProfilePreview` and `RULE_IMPACT_SAMPLE_SIZE`
+// were each grepped workspace-wide and appear nowhere else.
+export {
+  RULE_IMPACT_SAMPLE_SIZE,
+  explainPersonAccess,
+  previewAccountProfile,
+  previewRuleImpact as previewProvisionRuleImpact,
+} from './provision/explain.js';
+export type {
+  PersonAccess,
+  PersonAccessEntitlement,
+  ProfilePreview,
+  RuleImpact as ProvisionRuleImpact,
+} from './provision/explain.js';

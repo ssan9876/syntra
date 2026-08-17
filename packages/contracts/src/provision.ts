@@ -1,0 +1,247 @@
+import { z } from 'zod';
+
+export const enforcementModeSchema = z.enum(['additive', 'authoritative']);
+
+export const targetConfigSchema = z.object({
+  url: z.string().min(1),
+  // `plain` is absent: writes to a target require an encrypted transport
+  // unconditionally, and a target that could be configured to write in the
+  // clear is a target that eventually does.
+  tlsMode: z.enum(['ldaps', 'starttls']),
+  rejectUnauthorized: z.boolean().default(true),
+  bindDn: z.string().min(1),
+  baseDn: z.string().min(1),
+  entitlementSearchBase: z.string().min(1),
+  archiveContainer: z.string().min(1),
+  provenanceAttribute: z.string().default('info'),
+  anchorAttribute: z.string().default('objectGUID'),
+  accountFilter: z.string().default('(&(objectCategory=person)(objectClass=user))'),
+  groupFilter: z.string().default('(objectClass=group)'),
+  primaryGroupExternalIds: z.array(z.string()).default([]),
+  pageSize: z.number().int().positive().max(5000).default(1000),
+  connectTimeoutMs: z.number().int().positive().max(120_000).default(10_000),
+  timeoutMs: z.number().int().positive().max(600_000).default(60_000),
+});
+
+/**
+ * `.strict()` on the request bodies, and it is not decoration.
+ *
+ * `TargetSystem.concurrency` is stored, validated and rendered, and the apply
+ * loop is sequential — the setting has never done anything. It is therefore
+ * deliberately ABSENT from these schemas: an API that accepts a knob which
+ * changes nothing tells its caller a lie that no amount of documentation
+ * unsays. Without `.strict()` Zod would silently strip it, which is the same
+ * lie with a 204 on it; with `.strict()` a caller who sends it is told the
+ * field is not accepted.
+ *
+ * The same reasoning covers every mistyped field name: a `PATCH` that saves
+ * nothing must not answer 204.
+ */
+export const createTargetRequestSchema = z
+  .object({
+    name: z.string().min(1),
+    config: targetConfigSchema,
+    bindPassword: z.string().min(1),
+    pairedDirectorySourceId: z.string().uuid().nullable().optional(),
+    schedule: z.string().nullable().optional(),
+    autoApply: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    enforcementMode: enforcementModeSchema.optional(),
+  })
+  .strict();
+export type CreateTargetRequest = z.input<typeof createTargetRequestSchema>;
+
+export const ladderSchema = z
+  .object({
+    entitlementRevocationDelayDays: z.number().int().min(0).max(3650).optional(),
+    disableGraceDays: z.number().int().min(0).max(3650).optional(),
+    archiveAfterDays: z.number().int().min(0).max(3650).nullable().optional(),
+    reenableWithoutConfirmationDays: z.number().int().min(0).max(3650).optional(),
+    renameEnabled: z.boolean().optional(),
+  })
+  .strict();
+
+export const thresholdsSchema = z
+  .object({
+    createAccountThresholdPercent: z.number().int().min(0).max(100).optional(),
+    disableAccountThresholdPercent: z.number().int().min(0).max(100).optional(),
+    archiveAccountThresholdPercent: z.number().int().min(0).max(100).optional(),
+    revokeEntitlementThresholdPercent: z.number().int().min(0).max(100).optional(),
+    deactivateSyntraUserThresholdPercent: z.number().int().min(0).max(100).optional(),
+    perEntitlementThresholdPercent: z.number().int().min(0).max(100).optional(),
+    personPopulationDropPercent: z.number().int().min(0).max(100).optional(),
+  })
+  .strict();
+
+export const updateTargetRequestSchema = createTargetRequestSchema
+  .partial()
+  .extend({
+    ladder: ladderSchema.optional(),
+    thresholds: thresholdsSchema.optional(),
+    preHireDays: z.number().int().min(0).max(365).optional(),
+    maxAttempts: z.number().int().min(1).max(10).optional(),
+  })
+  .strict();
+export type UpdateTargetRequest = z.input<typeof updateTargetRequestSchema>;
+
+export const testTargetRequestSchema = z
+  .object({
+    config: targetConfigSchema,
+    bindPassword: z.string().min(1).optional(),
+    borrowFromTargetId: z.string().uuid().optional(),
+  })
+  .strict();
+
+/**
+ * How deeply a condition arriving over HTTP may nest, and how many nodes it
+ * may hold.
+ *
+ * These are the numbers `businessRuleSchema` in `@syntra/core` enforces at the
+ * write boundary, and they live HERE because this is the outer boundary:
+ * `@syntra/core` depends on `@syntra/contracts`, so core imports them rather
+ * than restating them. Two copies of a cap that must agree is a cap that
+ * eventually does not — and the dangerous direction is silent, because a
+ * looser edge simply lets the deep body through to the recursive parser it was
+ * meant to keep it away from.
+ *
+ * Both numbers are far above any rule a person writes. A condition twelve
+ * levels deep is already unreadable; a hundred nodes is already a rule that
+ * wants to be several.
+ */
+export const MAX_CONDITION_DEPTH = 32;
+export const MAX_CONDITION_NODES = 512;
+
+/**
+ * Walks a raw condition **iteratively**, before any recursive schema sees it.
+ *
+ * An explicit stack rather than recursion, because a recursive bounds check
+ * overflows on exactly the input it exists to refuse — which would make the
+ * check the vulnerability. Nothing here parses or trusts the shape; it only
+ * follows the three keys that nest.
+ */
+export function conditionBoundsProblem(raw: unknown): string | null {
+  const stack: { node: unknown; depth: number }[] = [{ node: raw, depth: 1 }];
+  let nodes = 0;
+
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop()!;
+    if (node === null || typeof node !== 'object') continue;
+
+    nodes += 1;
+    if (nodes > MAX_CONDITION_NODES) {
+      return `a condition may hold at most ${MAX_CONDITION_NODES} nodes`;
+    }
+    if (depth > MAX_CONDITION_DEPTH) {
+      return `a condition may nest at most ${MAX_CONDITION_DEPTH} levels deep`;
+    }
+
+    const record = node as Record<string, unknown>;
+    for (const key of ['all', 'any'] as const) {
+      const children = record[key];
+      if (Array.isArray(children)) {
+        for (const child of children) stack.push({ node: child, depth: depth + 1 });
+      }
+    }
+    if ('not' in record) stack.push({ node: record.not, depth: depth + 1 });
+  }
+
+  return null;
+}
+
+/**
+ * The recursive transport shape. Unbounded on its own, which is why nothing
+ * exports it: {@link conditionRequestSchema} is the bounded wrapper and is the
+ * only thing a route may parse with.
+ */
+const unboundedConditionRequestSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.union([
+    z.object({ all: z.array(unboundedConditionRequestSchema) }).strict(),
+    z.object({ any: z.array(unboundedConditionRequestSchema) }).strict(),
+    z.object({ not: unboundedConditionRequestSchema }).strict(),
+    z.record(z.unknown()),
+  ]),
+);
+
+/**
+ * The TRANSPORT shape of a condition, and deliberately not the real one.
+ *
+ * `@syntra/contracts` cannot import the closed field and operator sets from
+ * `@syntra/core` without inverting the dependency, so the leaf falls back to
+ * an open record here. That makes this schema a shape check and a bounds check
+ * and nothing more: a leaf naming `contract.salary`, or `op: 'regex'`, parses
+ * cleanly.
+ *
+ * **Every route that touches a condition therefore re-parses it with
+ * `boundedConditionSchema` from `@syntra/core` before evaluating or storing
+ * it.** Without that second parse, `evaluateCondition` falls through both of
+ * its switches on a malformed leaf and returns `undefined`, which `.some()`
+ * reads as false: the rule previews as "matches 0 persons", which is
+ * indistinguishable from a correctly narrow rule, and it gets saved.
+ *
+ * ## The bounds are applied HERE, not only behind this schema
+ *
+ * Core's `businessRuleSchema` caps depth and node count too — but core's cap
+ * runs *after* this parser, and this parser is the recursive one. A 20,000-deep
+ * body would blow the stack inside the `z.lazy` above and come back as a bare
+ * 500 from a body the caller chose the size of, on the one endpoint an
+ * administrator uses to fix rules. A cap that sits behind the parser it is
+ * meant to protect is not a cap, so the same iterative walk runs first here.
+ *
+ * `z.preprocess` runs BEFORE the wrapped schema and `fatal: true` stops the
+ * pipeline there, so an over-deep condition is refused without the recursive
+ * schema ever being entered.
+ */
+export const conditionRequestSchema: z.ZodType<unknown> = z.preprocess(
+  (raw, ctx) => {
+    const problem = conditionBoundsProblem(raw);
+    if (problem !== null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem, fatal: true });
+      return z.NEVER;
+    }
+    return raw;
+  },
+  unboundedConditionRequestSchema,
+);
+
+export const businessRuleRequestSchema = z
+  .object({
+    id: z.string().uuid().optional(),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    condition: conditionRequestSchema,
+    grantsAccount: z.boolean(),
+    enabled: z.boolean(),
+    entitlementIds: z.array(z.string().uuid()),
+  })
+  .strict();
+export type BusinessRuleRequest = z.input<typeof businessRuleRequestSchema>;
+
+export const accountProfileRequestSchema = z
+  .object({
+    correlationKeyTemplate: z.string().min(1),
+    uniquenessStrategy: z.literal('numericSuffix').default('numericSuffix'),
+    maxUniquenessAttempts: z.number().int().positive().max(200),
+    containerTemplate: z.string().min(1),
+    fallbackContainer: z.string().min(1),
+    attributeTemplates: z.record(z.string()),
+    initialPasswordPolicy: z.record(z.unknown()),
+    initialPasswordDelivery: z.enum(['manager', 'personalEmail', 'vaultOnly']),
+  })
+  .strict();
+export type AccountProfileRequest = z.input<typeof accountProfileRequestSchema>;
+
+export const applyRunRequestSchema = z
+  .object({
+    /** Action ids to apply. Omitted, every proposed action is applied. */
+    only: z.array(z.string().uuid()).optional(),
+    /** Required to apply a blocked run, or any action needing confirmation. */
+    confirm: z.boolean().default(false),
+  })
+  .strict();
+export type ApplyRunRequest = z.input<typeof applyRunRequestSchema>;
+
+export const acknowledgeDriftRequestSchema = z
+  .object({
+    status: z.enum(['acknowledged', 'resolved']),
+  })
+  .strict();

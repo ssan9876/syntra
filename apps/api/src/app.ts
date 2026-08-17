@@ -31,6 +31,10 @@ import { registerAdminApplicationRoutes } from './routes/admin/applications.js';
 import { registerAdminPolicyRoutes } from './routes/admin/policies.js';
 import { registerAdminProtocolRoutes } from './routes/admin/protocol-apps.js';
 import { registerAdminUpstreamRoutes } from './routes/admin/upstreams.js';
+import { registerAdminTargetRoutes } from './routes/admin/targets.js';
+import { registerAdminProfileRoutes } from './routes/admin/profiles.js';
+import { registerAdminRuleRoutes } from './routes/admin/rules.js';
+import { registerAdminProvisionRunRoutes } from './routes/admin/provision-runs.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerSamlIdpRoutes } from './routes/saml-idp.js';
 import { registerOidcRoutes } from './routes/oidc-op.js';
@@ -200,6 +204,29 @@ export async function buildApp(
   await app.register(registerAdminUpstreamRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,
+  });
+
+  // Provisioning. Registered AFTER `registerAdminPersonRoutes` so
+  // `/persons/:id` cannot shadow `/persons/:id/access` — the access view lives
+  // in the person plugin for that reason, and the ordering here is what keeps
+  // the four plugins below from being read as owning it.
+  //
+  // `transport` is the same value the password-reset routes are given, so a
+  // delivered initial password goes through the memory transport in tests and
+  // SMTP in production.
+  await app.register(registerAdminTargetRoutes, {
+    prefix: '/api/admin',
+    masterKey: config.masterKey,
+    authRateLimitMax: config.authRateLimitMax,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+  await app.register(registerAdminProfileRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminRuleRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminProvisionRunRoutes, {
+    prefix: '/api/admin',
+    masterKey: config.masterKey,
+    transport,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
 
   await app.register(registerPortalRoutes, {

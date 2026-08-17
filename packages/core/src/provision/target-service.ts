@@ -6,6 +6,11 @@ import {
   type ConnectionResult,
 } from '@syntra/connectors';
 import { z } from 'zod';
+import {
+  MAX_CONDITION_DEPTH,
+  MAX_CONDITION_NODES,
+  conditionBoundsProblem,
+} from '@syntra/contracts';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { deleteSecret, getSecret, putSecret } from '../vault/vault-service.js';
@@ -39,6 +44,24 @@ export class BusinessRuleNotFoundError extends Error {
   constructor(readonly ruleId: string) {
     super(`no such business rule: ${ruleId}`);
     this.name = 'BusinessRuleNotFoundError';
+  }
+}
+
+/**
+ * A rule edited through the wrong target's endpoint, or naming an entitlement
+ * another target owns.
+ *
+ * Both are the caller naming something that exists and is not theirs to name
+ * here, which is a 400 and not a 500. They were plain `Error`s, and a plain
+ * `Error` out of a service reaches the API's error handler as an unhandled
+ * fault: the response is a bare 500 with no detail, so an administrator who
+ * picked a group from the wrong list is told the server broke. The message
+ * is unchanged, so every existing test that matches on it still matches.
+ */
+export class ProvisionOwnershipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProvisionOwnershipError';
   }
 }
 
@@ -750,57 +773,23 @@ export async function upsertAccountProfile(
  * `conditionSchema` is `z.lazy` and recurses once per level with no cap of its
  * own — Task 5 flagged that and both Tasks 6 and 7 correctly refused it as out
  * of scope, being pure modules with no write boundary. This is the write
- * boundary, so it is owned here.
+ * boundary, so it is enforced here.
+ *
+ * The numbers and the walk itself now live in `@syntra/contracts`, and are
+ * re-exported rather than restated. `conditionRequestSchema` at the HTTP edge
+ * is a second `z.lazy` that is parsed BEFORE anything in this package runs, so
+ * the cap has to exist there too — and two copies of a cap that must agree is
+ * a cap that eventually does not, silently and in the dangerous direction.
+ * `@syntra/core` already depends on `@syntra/contracts`, so there is exactly
+ * one definition and both boundaries share it.
  *
  * It fails closed either way: a 20,000-deep condition throws a `RangeError`
  * rather than parsing into something dangerous. What it costs is a stack
  * unwind per request, on a body a client chooses the size of, which is a cheap
  * denial of service against the one endpoint an administrator uses to fix
  * rules.
- *
- * Both numbers are far above any rule a person writes. A condition twelve
- * levels deep is already unreadable; a hundred nodes is already a rule that
- * wants to be several.
  */
-export const MAX_CONDITION_DEPTH = 32;
-export const MAX_CONDITION_NODES = 512;
-
-/**
- * Walks the raw value **iteratively**, before the recursive schema sees it.
- *
- * An explicit stack rather than recursion, because a recursive bounds check
- * overflows on exactly the input it exists to refuse — which would make the
- * check the vulnerability. Nothing here parses or trusts the shape; it only
- * follows the three keys that nest.
- */
-function conditionBoundsProblem(raw: unknown): string | null {
-  const stack: { node: unknown; depth: number }[] = [{ node: raw, depth: 1 }];
-  let nodes = 0;
-
-  while (stack.length > 0) {
-    const { node, depth } = stack.pop()!;
-    if (node === null || typeof node !== 'object') continue;
-
-    nodes += 1;
-    if (nodes > MAX_CONDITION_NODES) {
-      return `a condition may hold at most ${MAX_CONDITION_NODES} nodes`;
-    }
-    if (depth > MAX_CONDITION_DEPTH) {
-      return `a condition may nest at most ${MAX_CONDITION_DEPTH} levels deep`;
-    }
-
-    const record = node as Record<string, unknown>;
-    for (const key of ['all', 'any'] as const) {
-      const children = record[key];
-      if (Array.isArray(children)) {
-        for (const child of children) stack.push({ node: child, depth: depth + 1 });
-      }
-    }
-    if ('not' in record) stack.push({ node: record.not, depth: depth + 1 });
-  }
-
-  return null;
-}
+export { MAX_CONDITION_DEPTH, MAX_CONDITION_NODES };
 
 /**
  * The bounded condition schema.
@@ -867,7 +856,7 @@ export async function upsertBusinessRule(
     if (rule.id !== undefined) {
       const existing = await tx.businessRule.findUnique({ where: { id: rule.id } });
       if (!existing || existing.targetSystemId !== targetId) {
-        throw new Error('this rule does not belong to this target');
+        throw new ProvisionOwnershipError('this rule does not belong to this target');
       }
     }
 
@@ -878,7 +867,9 @@ export async function upsertBusinessRule(
         where: { id: { in: entitlementIds }, targetSystemId: targetId },
       });
       if (owned !== entitlementIds.length) {
-        throw new Error('an entitlement named by this rule does not belong to this target');
+        throw new ProvisionOwnershipError(
+          'an entitlement named by this rule does not belong to this target',
+        );
       }
     }
 
