@@ -16,6 +16,13 @@ import { ApplicationsPage } from './ApplicationsPage.js';
 import { ApplicationDetailPage } from './ApplicationDetailPage.js';
 import { PoliciesPage } from './PoliciesPage.js';
 import { TenantSettingsPage } from './TenantSettingsPage.js';
+import { TargetsPage } from './TargetsPage.js';
+import { TargetDetailPage } from './TargetDetailPage.js';
+import { AccountProfilePage } from './AccountProfilePage.js';
+import { BusinessRulesPage } from './BusinessRulesPage.js';
+import { ProvisionRunsPage } from './ProvisionRunsPage.js';
+import { ProvisionRunDetailPage } from './ProvisionRunDetailPage.js';
+import { PersonAccessPage } from './PersonAccessPage.js';
 
 interface NavItem {
   to: string;
@@ -33,6 +40,7 @@ const NAV: NavItem[] = [
   { to: '/admin/import', label: 'Import', permission: 'identity.write' },
   { to: '/admin/sources', label: 'Directory sources', permission: 'sync.read' },
   { to: '/admin/sync-runs', label: 'Sync runs', permission: 'sync.read' },
+  { to: '/admin/targets', label: 'Target systems', permission: 'provision.read' },
   { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
   { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
 ];
@@ -76,6 +84,9 @@ export function AdminApp() {
             <Route path="org-units" element={<OrgUnitsPage />} />
             <Route path="people" element={<PersonsPage />} />
             <Route path="people/:id" element={<PersonDetailPage />} />
+            {/* After the person, so the more specific path is reached rather
+                than shadowed by the less specific one. */}
+            <Route path="people/:id/access" element={<PersonAccessPage />} />
             <Route path="import" element={<ImportPage />} />
             <Route path="sources" element={<SourcesPage />} />
             {/* Before the parametric route, so "new" is a page rather than an
@@ -84,6 +95,19 @@ export function AdminApp() {
             <Route path="sources/:id" element={<SourceDetailPage />} />
             <Route path="sync-runs" element={<SyncRunsPage />} />
             <Route path="sync-runs/:id" element={<SyncRunDetailPage />} />
+            <Route path="targets" element={<TargetsPage />} />
+            {/* React Router ranks a static segment above a dynamic one however
+                they are ordered, so "new" is never captured as an id. Listed
+                first for readability, exactly as sources/new is. */}
+            <Route path="targets/new" element={<TargetDetailPage />} />
+            <Route path="targets/:id" element={<TargetDetailPage />} />
+            <Route path="targets/:id/profile" element={<AccountProfilePage />} />
+            <Route path="targets/:id/rules" element={<BusinessRulesPage />} />
+            <Route path="targets/:id/runs" element={<ProvisionRunsPage />} />
+            <Route
+              path="targets/:id/runs/:runId"
+              element={<ProvisionRunDetailPage />}
+            />
             <Route path="applications" element={<ApplicationsPage />} />
             <Route path="applications/:id" element={<ApplicationDetailPage />} />
             <Route path="policy" element={<PoliciesPage />} />

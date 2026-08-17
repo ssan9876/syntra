@@ -155,6 +155,23 @@ export function PersonDetailPage() {
           )}
         </Panel>
 
+        {/* The one question every auditor asks, and it has to be reachable
+            from the person rather than only by typing a URL. */}
+        <Panel title="Access">
+          <div className="p-4">
+            <Link
+              to={`/admin/people/${data.id}/access`}
+              className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+            >
+              Why does this person hold what they hold?
+            </Link>
+            <p className="mt-1 text-muted">
+              Every target-system account and entitlement, with the rule and the
+              contract behind it.
+            </p>
+          </div>
+        </Panel>
+
         <Link
           to="/admin/people"
           className="inline-block text-muted underline-offset-2 hover:text-ink hover:underline"
