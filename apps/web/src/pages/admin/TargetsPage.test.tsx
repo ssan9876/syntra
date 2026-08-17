@@ -9,14 +9,26 @@ const json = (body: unknown) =>
     headers: { 'content-type': 'application/json' },
   }) as never;
 
+/**
+ * Fixtures dated relative to the real clock, not a frozen one.
+ *
+ * Every judgement this page makes about a target is a judgement about how long
+ * ago something happened, so the fixture has to be positioned against the same
+ * clock the component reads. Freezing time with `vi.useFakeTimers` is the
+ * obvious move and the wrong one: `findBy*` polls on a timer, so a frozen
+ * clock makes every query in this file time out.
+ */
+const hoursAgo = (n: number) =>
+  new Date(Date.now() - n * 60 * 60 * 1000).toISOString();
+
 const target = (overrides: Record<string, unknown> = {}) => ({
   id: 't1',
   name: 'Samba AD',
   enabled: true,
   enforcementMode: 'additive',
   schedule: '0 3 * * *',
-  lastRunAt: '2026-08-01T03:00:00.000Z',
-  lastAppliedRunAt: '2026-08-01T03:00:00.000Z',
+  lastRunAt: hoursAgo(6),
+  lastAppliedRunAt: hoursAgo(6),
   consecutiveSkippedRuns: 0,
   lastSkipReason: null,
   ...overrides,
@@ -57,7 +69,7 @@ describe('TargetsPage', () => {
     renderPage();
 
     expect(await screen.findByText('3 scheduled runs skipped')).toBeVisible();
-    expect(screen.queryByText('Running cleanly')).toBeNull();
+    expect(screen.queryByText(/^Ran /)).toBeNull();
   });
 
   it('says one run in the singular', async () => {
@@ -67,13 +79,65 @@ describe('TargetsPage', () => {
     expect(await screen.findByText('1 scheduled run skipped')).toBeVisible();
   });
 
-  it('reads a clean target as running cleanly', async () => {
+  it('reads a target that completed a run within its schedule as healthy', async () => {
     // The other half. A badge that is always red is a badge nobody reads.
     mockFetch([target()]);
     renderPage();
 
-    expect(await screen.findByText('Running cleanly')).toBeVisible();
+    expect(await screen.findByText('Ran 6 hours ago')).toBeVisible();
     expect(screen.queryByText(/skipped/)).toBeNull();
+    expect(screen.queryByText(/No completed run/)).toBeNull();
+  });
+
+  it('does not call a target healthy because nothing skipped, when every run fails', async () => {
+    // The defect this badge was rewritten for. `runProvisionJob` zeroes
+    // `consecutiveSkippedRuns` when a run STARTS, before the preview is
+    // attempted, and `run-service.ts` writes `lastRunAt` only when a preview
+    // FINISHES. A target whose bind credential was rotated therefore reports
+    // zero skipped runs for ever while never completing a run — and the old
+    // badge read that as `Running cleanly`.
+    mockFetch([
+      target({
+        schedule: '0 3 * * *',
+        consecutiveSkippedRuns: 0,
+        lastRunAt: hoursAgo(24 * 9),
+      }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText('No completed run for 9 days')).toBeVisible();
+    expect(screen.queryByText(/^Ran /)).toBeNull();
+  });
+
+  it('measures lateness against the target’s own cadence, not a fixed window', async () => {
+    // Six days without a run is a fault on a nightly schedule and entirely
+    // ordinary on a weekly one, so one window for both would either shout at
+    // the weekly target or stay quiet about the nightly one.
+    mockFetch([
+      target({ id: 'nightly', name: 'Nightly', schedule: '0 3 * * *', lastRunAt: hoursAgo(24 * 6) }),
+      target({ id: 'weekly', name: 'Weekly', schedule: '0 3 * * 1', lastRunAt: hoursAgo(24 * 6) }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText('No completed run for 6 days')).toBeVisible();
+    expect(screen.getByText('Ran 6 days ago')).toBeVisible();
+  });
+
+  it('reports a scheduled target that has never completed a run', async () => {
+    mockFetch([target({ lastRunAt: null })]);
+    renderPage();
+
+    expect(await screen.findByText('No run has ever completed')).toBeVisible();
+  });
+
+  it('keeps the last-run timestamp visible on every screen size', async () => {
+    // It is the evidence the badge's judgement is made from. Hidden on small
+    // screens, the badge could not be contradicted by anything on the page.
+    mockFetch([target()]);
+    renderPage();
+
+    const heading = await screen.findByRole('columnheader', { name: 'Last run' });
+    expect(heading.className).not.toMatch(/max-sm:hidden/);
   });
 
   it('reports a disabled target as disabled rather than as clean', async () => {
@@ -81,7 +145,7 @@ describe('TargetsPage', () => {
     renderPage();
 
     expect(await screen.findByText('Disabled')).toBeVisible();
-    expect(screen.queryByText('Running cleanly')).toBeNull();
+    expect(screen.queryByText(/^Ran /)).toBeNull();
   });
 
   it('leads with the skipping when a disabled target has also been skipping', async () => {
@@ -116,6 +180,16 @@ describe('TargetsPage', () => {
     renderPage();
 
     expect(await screen.findByText('By hand only')).toBeVisible();
-    expect(screen.getByText('Never run')).toBeVisible();
+    // Twice: once in the Last run column, once in the badge — and nothing is
+    // late when nothing is scheduled, so neither is red.
+    expect(screen.getAllByText('Never run')).toHaveLength(2);
+  });
+
+  it('does not call an unscheduled target late however long it has been', async () => {
+    mockFetch([target({ schedule: null, lastRunAt: hoursAgo(24 * 90) })]);
+    renderPage();
+
+    expect(await screen.findByText('Ran 90 days ago')).toBeVisible();
+    expect(screen.queryByText(/No completed run/)).toBeNull();
   });
 });
