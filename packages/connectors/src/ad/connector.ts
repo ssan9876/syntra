@@ -1,4 +1,12 @@
-import { Attribute, Change, Client } from 'ldapts';
+import {
+  AndFilter,
+  Attribute,
+  Change,
+  Client,
+  EqualityFilter,
+  FilterParser,
+} from 'ldapts';
+import type { Filter } from 'ldapts';
 import { normaliseAnchor } from '../ldap/anchor.js';
 import { RANGE_STEP, readRangedAttribute } from '../ldap/range.js';
 import { CONNECTOR_ACTION_TYPES } from '../types.js';
@@ -225,28 +233,61 @@ export function splitDn(dn: string): { rdn: string; parent: string } {
 }
 
 /**
- * The escaped binary form of an objectGUID, for a filter that finds one object
+ * The raw stored bytes of an objectGUID, for a filter that finds one object
  * instead of reading the whole directory.
  *
- * The inverse of `normaliseAnchor`: Active Directory stores objectGUID as 16
- * raw bytes with the first three groups little-endian, and a filter has to
- * match those bytes rather than the rendered string. Returns undefined for
+ * The exact inverse of `normaliseAnchor`: Active Directory stores objectGUID
+ * as 16 raw bytes with the first three groups little-endian, and a filter has
+ * to match those bytes rather than the rendered string. Returns undefined for
  * anything that is not a 32-hex-digit GUID -- a text `entryUUID`, a fixture
  * anchor -- and the caller falls back to the scan, so this is an optimisation
  * that cannot become a correctness bug.
+ *
+ * A **Buffer**, and not the RFC 4515 escaped string the plan specified.
+ * Measured against the container: a filter built from an object's own bytes,
+ * read back from the server moments earlier and escaped `\xx` per octet,
+ * returns **zero hits** -- ldapts's filter parser decodes those escapes as
+ * text rather than as octets, so the value reaching the wire is not the value
+ * that was written. The same bytes handed to `EqualityFilter` return the one
+ * object.
+ *
+ * That mattered more than a misspelling usually does. With the escaped string
+ * the fast path never fired at all, every anchor resolution fell through to
+ * the subtree scan, and the cost this exists to avoid -- "a 500-action apply
+ * performs 500 full directory reads" -- was the only behaviour there was. It
+ * was invisible precisely because the fall-through is correct.
  */
-export function guidFilterValue(anchor: string): string | undefined {
+export function guidBytes(anchor: string): Buffer | undefined {
   const hex = anchor.replace(/-/g, '');
   if (!/^[0-9a-fA-F]{32}$/.test(hex)) return undefined;
   const bytes: number[] = [];
   for (let i = 0; i < 32; i += 2) bytes.push(Number.parseInt(hex.slice(i, i + 2), 16));
-  const ordered = [
+  return Buffer.from([
     ...bytes.slice(0, 4).reverse(),
     ...bytes.slice(4, 6).reverse(),
     ...bytes.slice(6, 8).reverse(),
     ...bytes.slice(8, 16),
-  ];
-  return ordered.map((b) => `\\${b.toString(16).padStart(2, '0')}`).join('');
+  ]);
+}
+
+/**
+ * `(&<accountFilter>(<anchorAttribute>=<bytes>))`, as a Filter object.
+ *
+ * The configured account filter is parsed rather than concatenated, because
+ * the two halves cannot be joined as text once one of them carries raw octets.
+ * The conjunction is not decoration: without it a GROUP's objectGUID handed in
+ * as an anchor resolves to the group, and an operation aimed at a person lands
+ * on an object that is not one.
+ */
+function anchorFilter(config: Resolved, anchor: string): Filter | undefined {
+  const bytes = guidBytes(anchor);
+  if (bytes === undefined) return undefined;
+  return new AndFilter({
+    filters: [
+      FilterParser.parseString(config.accountFilter),
+      new EqualityFilter({ attribute: config.anchorAttribute, value: bytes }),
+    ],
+  });
 }
 
 /**
@@ -291,15 +332,37 @@ async function findByAnchor(
   // A scoped filter first. Every non-create write resolves an anchor, so the
   // fallback below is a full subtree read of every user with every attribute,
   // once per action: a 500-action apply performs 500 full directory reads.
-  const scoped = guidFilterValue(anchor);
-  if (scoped !== undefined && config.anchorAttribute.toLowerCase() === 'objectguid') {
+  const scoped =
+    config.anchorAttribute.toLowerCase() === 'objectguid'
+      ? anchorFilter(config, anchor)
+      : undefined;
+  if (scoped !== undefined) {
     const { searchEntries } = await client.search(config.baseDn, {
       scope: 'sub',
-      filter: `(&${config.accountFilter}(objectGUID=${scoped}))`,
+      filter: scoped,
       attributes: writeAttributes(config),
     });
     const raw = searchEntries[0] as unknown as Record<string, unknown> | undefined;
-    if (raw) return { dn: String(raw.dn), entry: raw };
+    if (raw) {
+      // The same exactness the scan below applies, for the same reason. The
+      // filter matches BYTES, and `guidBytes` accepts either hex case, so
+      // `A1B2…` and `a1b2…` produce one filter and resolve one object — while
+      // the scan, comparing rendered strings, refuses the first. An
+      // optimisation that widens what matches is not an optimisation, and the
+      // widening is invisible: every other test in this file passes with the
+      // fast path accepting a case it should refuse, because every anchor they
+      // use came out of `normaliseAnchor` already lowercase.
+      const value = raw[config.anchorAttribute];
+      const source = Array.isArray(value) ? value[0] : value;
+      if (source !== undefined && source !== null) {
+        const normalised = normaliseAnchor(
+          config.anchorAttribute,
+          Buffer.isBuffer(source) ? source : String(source),
+        );
+        if (normalised === anchor) return { dn: String(raw.dn), entry: raw };
+      }
+      return undefined;
+    }
     // Deliberately falls through rather than returning `not_found`. If the
     // byte ordering above is ever wrong, the scan finds the object anyway and
     // the cost is a slow apply, not a run that reports every account missing.

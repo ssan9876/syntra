@@ -345,11 +345,19 @@ describe('adTargetConnector — test and discovery', () => {
       bindPassword: INITIAL_PASSWORD,
     });
     expect(result.ok).toBe(true);
-    const statuses = result.rights!.map((r) => r.status);
-    expect(statuses).toContain('denied');
-    expect(statuses).not.toContain('granted');
-    const denied = result.rights!.find((r) => r.status === 'denied')!;
-    expect(denied.detail).toContain('this bind cannot perform this operation');
+    // All FOUR, not merely one of them. This bind can read its own account and
+    // may write a handful of its own attributes, so `modifyUser` reaches
+    // `denied` by a different route from the other three -- and a mutation
+    // that turned the other three into `unverified` was invisible to an
+    // assertion that only asked for one `denied` somewhere.
+    expect(result.rights!.map((r) => `${r.right}:${r.status}`).sort()).toEqual([
+      'createUser:denied',
+      'modifyMembership:denied',
+      'modifyUser:denied',
+      'moveUser:denied',
+    ]);
+    expect(result.rights![0]!.detail).toContain('this bind cannot perform this operation');
+    expect(result.message).toContain('4 of 4 write rights not confirmed');
   });
 
   it('reports unverified against a server that does not publish effective rights', async () => {
@@ -548,6 +556,24 @@ describe('adTargetConnector — create_account, which is three writes', () => {
     expect(other.failure).toBe('conflict');
   });
 
+  it('never treats a GROUP of the same name as an account it could adopt', async () => {
+    // Active Directory enforces sAMAccountName uniqueness across every
+    // security principal, so a group can hold the name an account wants. The
+    // correlation lookup is conjoined with `accountFilter` precisely so the
+    // adoption path cannot reach a non-account: the add is still issued and
+    // the SERVER refuses it, which is a different sentence from this
+    // connector claiming an account is already there.
+    await admin.add(`CN=GhostGroup,${testOu}`, {
+      objectClass: ['top', 'group'],
+      sAMAccountName: 'ghost.acct',
+    });
+    const result = await adTargetConnector.write(config, createOp('ghost-1', 'ghost.acct'));
+    expect(result.ok).toBe(false);
+    expect(result.failure).toBe('conflict');
+    expect(result.message).toMatch(/already in use/i);
+    expect(result.message).not.toContain('provenance marker');
+  });
+
   it('conflicts when the recorded action id merely STARTS WITH this one', async () => {
     // `marker.includes(op.actionId)` adopts here, which is the one outcome the
     // provenance marker exists to prevent: action `act-1` walking off with the
@@ -712,6 +738,43 @@ describe('adTargetConnector — the account lifecycle', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.failure).toBe('not_found');
+    // The MESSAGE, not only the failure. Without the conjunction the group
+    // resolves, the disable is attempted on it, and Samba answers
+    // `NoSuchAttribute` because a group has no userAccountControl -- which
+    // this connector also classifies `not_found`. The two are one code away
+    // from each other and the status alone cannot tell them apart.
+    expect(result.message).toContain('no object at anchor');
+  });
+
+  it('resolves an anchor with ONE search rather than reading every account', async () => {
+    // The objectGUID fast path, proven to fire rather than assumed to. It is
+    // an optimisation whose fall-through is correct, so nothing else in this
+    // file can tell a working one from an inert one -- and the plan's escaped
+    // `\8a\74…` filter was inert against ldapts, which made "a 500-action
+    // apply performs 500 full directory reads" the only behaviour there was.
+    const anchor = await anchorFor('life-3e', 'one.search');
+    const original = Client.prototype.search;
+    const bases: string[] = [];
+    try {
+      Client.prototype.search = async function counted(
+        this: Client,
+        ...args: Parameters<Client['search']>
+      ) {
+        bases.push(String(args[0]));
+        return original.apply(this, args);
+      } as Client['search'];
+      const result = await adTargetConnector.write(config, {
+        op: 'enable_account',
+        actionId: 'life-3e-e',
+        anchor,
+      });
+      expect(result.ok).toBe(true);
+    } finally {
+      Client.prototype.search = original;
+    }
+    // Exactly one: the scoped filter found the object, so the subtree scan
+    // never ran. Two means the fast path missed and the fallback carried it.
+    expect(bases).toEqual([testOu]);
   });
 
   it('does not move an account whose target DN differs only in case', async () => {

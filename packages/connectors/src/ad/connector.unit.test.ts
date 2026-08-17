@@ -5,7 +5,7 @@ import {
   encodeUnicodePwd,
   escapeDnValue,
   escapeFilterValue,
-  guidFilterValue,
+  guidBytes,
   isAlreadyInRequestedState,
   provenanceActionId,
   provenanceValue,
@@ -202,22 +202,14 @@ describe('splitDn', () => {
   });
 });
 
-describe('guidFilterValue', () => {
+describe('guidBytes', () => {
   it('is the exact inverse of normaliseAnchor', () => {
     // Every byte value distinct, so a transposed pair cannot survive.
     const bytes = Buffer.from([
       0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
       0x0f, 0x10,
     ]);
-    const anchor = normaliseAnchor('objectGUID', bytes);
-    const filter = guidFilterValue(anchor)!;
-    const roundTripped = Buffer.from(
-      filter
-        .split('\\')
-        .filter((part) => part !== '')
-        .map((part) => Number.parseInt(part, 16)),
-    );
-    expect(roundTripped).toEqual(bytes);
+    expect(guidBytes(normaliseAnchor('objectGUID', bytes))).toEqual(bytes);
   });
 
   it('little-endian reverses only the first three groups', () => {
@@ -228,33 +220,38 @@ describe('guidFilterValue', () => {
     expect(normaliseAnchor('objectGUID', bytes)).toBe(
       '04030201-0605-0807-090a-0b0c0d0e0f10',
     );
-    expect(guidFilterValue('04030201-0605-0807-090a-0b0c0d0e0f10')).toBe(
-      '\\01\\02\\03\\04\\05\\06\\07\\08\\09\\0a\\0b\\0c\\0d\\0e\\0f\\10',
+    expect(guidBytes('04030201-0605-0807-090a-0b0c0d0e0f10')!.toString('hex')).toBe(
+      '0102030405060708090a0b0c0d0e0f10',
     );
   });
 
-  it('pads a byte below 16 to two hex digits', () => {
-    // `\0` rather than `\00` shifts every byte after it and the filter matches
-    // a different object, or none.
-    const filter = guidFilterValue('00000000-0000-0000-0000-000000000000')!;
-    expect(filter).toBe('\\00'.repeat(16));
+  it('is sixteen bytes, whatever the values are', () => {
+    // A Buffer and not an escaped string: measured against the container, a
+    // filter of `\8a\74…` built from an object's own bytes returns zero
+    // hits, because ldapts decodes those escapes as text rather than octets.
+    expect(guidBytes('00000000-0000-0000-0000-000000000000')).toEqual(
+      Buffer.alloc(16, 0),
+    );
+    expect(guidBytes('ffffffff-ffff-ffff-ffff-ffffffffffff')).toEqual(
+      Buffer.alloc(16, 0xff),
+    );
   });
 
   it('declines anything that is not a 32-hex-digit GUID, so the caller scans', () => {
     // An OpenLDAP `entryUUID` is text, and a fixture anchor is whatever the
-    // fixture chose. Returning a filter for those would search for bytes the
+    // fixture chose. Returning bytes for those would search for a value the
     // directory does not hold and report every account missing; returning
     // undefined falls back to the scan, which cannot be wrong.
-    expect(guidFilterValue('not-a-guid')).toBeUndefined();
-    expect(guidFilterValue('')).toBeUndefined();
-    expect(guidFilterValue('0102030405060708090a0b0c0d0e0f')).toBeUndefined();
-    expect(guidFilterValue('0102030405060708090a0b0c0d0e0f1011')).toBeUndefined();
-    expect(guidFilterValue('0102030405060708090a0b0c0d0e0fzz')).toBeUndefined();
+    expect(guidBytes('not-a-guid')).toBeUndefined();
+    expect(guidBytes('')).toBeUndefined();
+    expect(guidBytes('0102030405060708090a0b0c0d0e0f')).toBeUndefined();
+    expect(guidBytes('0102030405060708090a0b0c0d0e0f1011')).toBeUndefined();
+    expect(guidBytes('0102030405060708090a0b0c0d0e0fzz')).toBeUndefined();
   });
 
   it('accepts an upper-case GUID, because that is a rendering and not a value', () => {
-    expect(guidFilterValue('04030201-0605-0807-090A-0B0C0D0E0F10')).toBe(
-      '\\01\\02\\03\\04\\05\\06\\07\\08\\09\\0a\\0b\\0c\\0d\\0e\\0f\\10',
+    expect(guidBytes('04030201-0605-0807-090A-0B0C0D0E0F10')!.toString('hex')).toBe(
+      '0102030405060708090a0b0c0d0e0f10',
     );
   });
 });
