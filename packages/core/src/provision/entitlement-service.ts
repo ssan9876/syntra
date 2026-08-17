@@ -133,17 +133,54 @@ export async function refreshEntitlements(
       if (known > 0) throw new EmptyEntitlementReadError(known);
     }
 
+    /**
+     * The catalog write, in a bounded number of statements rather than one
+     * per group.
+     *
+     * A per-group `upsert` is one round trip each, and `withTenant` is
+     * `prisma.$transaction(fn)` on Prisma's five-second default. An Active
+     * Directory domain with five thousand groups — ordinary at the size of
+     * directory this product is aimed at — exceeds that budget and aborts with
+     * P2028, rolling the whole refresh back; retrying re-runs the same
+     * statements against the same volume, so the catalog can never be
+     * populated at all and the failure is permanent rather than transient.
+     *
+     * Splitting the transaction is not the way out. A half-written catalog
+     * followed by the sweep below would mark everything the write had not
+     * reached yet as `missing`, which is the same fail-open the empty-read
+     * refusal above exists to prevent, arrived at from inside. So the
+     * transaction stays one transaction and what shrinks is the number of
+     * statements in it: read, insert the new ones, stamp `lastSeenAt`, promote,
+     * sweep — five, plus one update per group whose metadata actually changed,
+     * which on a directory that did not change is none.
+     */
+    const byExternalId = new Map<string, DiscoveredEntitlement>();
     for (const entitlement of discovered) {
+      // Last wins. The map is also what makes a target that returns the same
+      // group twice in one page walk one row rather than two writes.
+      byExternalId.set(entitlement.externalId, entitlement);
       seen.add(entitlement.externalId);
-      await tx.entitlement.upsert({
-        where: {
-          tenantId_targetSystemId_externalId: {
-            tenantId: bound,
-            targetSystemId: targetId,
-            externalId: entitlement.externalId,
-          },
-        },
-        create: {
+    }
+
+    const knownRows = await tx.entitlement.findMany({
+      where: { targetSystemId: targetId },
+      select: {
+        id: true,
+        externalId: true,
+        dn: true,
+        type: true,
+        displayName: true,
+        description: true,
+      },
+    });
+    const knownByExternalId = new Map(knownRows.map((row) => [row.externalId, row]));
+
+    const fresh = [...byExternalId.values()].filter(
+      (entitlement) => !knownByExternalId.has(entitlement.externalId),
+    );
+    if (fresh.length > 0) {
+      await tx.entitlement.createMany({
+        data: fresh.map((entitlement) => ({
           tenantId: bound,
           targetSystemId: targetId,
           externalId: entitlement.externalId,
@@ -157,21 +194,50 @@ export async function refreshEntitlements(
           description: entitlement.description ?? null,
           status: 'present',
           lastSeenAt: now,
-        },
-        update: {
+        })),
+        // A concurrent refresh may have inserted the same group between the
+        // read above and this write. Skipping is right: the row exists, with
+        // that refresh's metadata, and the next refresh reconciles it. The
+        // alternative is a P2002 that rolls back a catalog update over a row
+        // that already says what this one was going to say.
+        skipDuplicates: true,
+      });
+    }
+
+    for (const [externalId, entitlement] of byExternalId) {
+      const row = knownByExternalId.get(externalId);
+      if (row === undefined) continue;
+      const description = entitlement.description ?? null;
+      if (
+        row.dn === entitlement.dn &&
+        row.type === entitlement.type &&
+        row.displayName === entitlement.displayName &&
+        row.description === description
+      ) {
+        continue;
+      }
+      await tx.entitlement.update({
+        where: { id: row.id },
+        data: {
           dn: entitlement.dn,
           type: entitlement.type,
           displayName: entitlement.displayName,
-          description: entitlement.description ?? null,
+          description,
           // `status` is deliberately NOT written here. This function knows
           // whether a group is in the catalog; it knows nothing about whether
           // its membership could be read. Writing `present` unconditionally
           // would clear an `unreadable` the run had set, and a rule naming
           // that group would become resolvable again -- evaluated against a
-          // membership nobody could read. The line below promotes `missing`
+          // membership nobody could read. The promotion below moves `missing`
           // back to `present` and leaves `unreadable` alone.
-          lastSeenAt: now,
         },
+      });
+    }
+
+    if (seen.size > 0) {
+      await tx.entitlement.updateMany({
+        where: { targetSystemId: targetId, externalId: { in: [...seen] } },
+        data: { lastSeenAt: now },
       });
     }
 

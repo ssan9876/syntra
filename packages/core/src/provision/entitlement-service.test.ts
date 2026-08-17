@@ -576,3 +576,85 @@ describe('the gaps the mutation pass found', () => {
     expect(rows[0]!.holderCount).toBe(0);
   });
 });
+
+describe('the batched catalog write', () => {
+  it('writes a change to any one field on its own', async () => {
+    // The write skips a group whose metadata is unchanged, which is what keeps
+    // a steady-state refresh to a fixed number of statements. A comparison
+    // that checks only some of the fields it writes turns that optimisation
+    // into a silent drop: the group is in the catalog, Syntra's copy of it is
+    // wrong, and nothing ever corrects it because the next refresh compares
+    // the same way. One field at a time, so no single comparison can be
+    // missing and still pass.
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance')]),
+    );
+
+    const only = (over: Partial<DiscoveredEntitlement>) =>
+      refreshEntitlements(tenantId, provider, null, targetId, reader([
+        { ...group('guid-1', 'Finance'), ...over },
+      ]));
+
+    await only({ displayName: 'Finance and Legal' });
+    expect((await entitlements())[0]!.displayName).toBe('Finance and Legal');
+
+    await only({ dn: 'CN=Finance,OU=Corporate,DC=acme,DC=test' });
+    expect((await entitlements())[0]!.dn).toBe('CN=Finance,OU=Corporate,DC=acme,DC=test');
+
+    await only({ type: 'role' });
+    expect((await entitlements())[0]!.type).toBe('role');
+
+    await only({ description: 'the finance team' });
+    expect((await entitlements())[0]!.description).toBe('the finance team');
+  });
+
+  it('stamps lastSeenAt on every refresh, not only the first', async () => {
+    // `lastSeenAt` is how anybody tells a catalog that is being kept current
+    // from one whose refresh has been failing quietly since March. It is
+    // written for every group the target returned, including the ones the
+    // change comparison skipped.
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance')]),
+    );
+    const first = (await entitlements())[0]!.lastSeenAt!;
+
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance')]),
+    );
+    const second = (await entitlements())[0]!.lastSeenAt!;
+
+    expect(second.getTime()).toBeGreaterThan(first.getTime());
+  });
+
+  it('writes a catalog of several hundred groups in one transaction', async () => {
+    // The reason the write is batched at all. A per-group upsert is one round
+    // trip each and `withTenant` is `prisma.$transaction(fn)` on Prisma's
+    // five-second default, so a domain of any real size aborts with P2028 and
+    // rolls the whole refresh back -- permanently, because retrying re-runs
+    // the same statements against the same volume.
+    const many = Array.from({ length: 400 }, (_, i) =>
+      group(`guid-${i}`, `Group${i}`),
+    );
+    expect(
+      await refreshEntitlements(tenantId, provider, null, targetId, reader(many)),
+    ).toEqual({ present: 400, missing: 0 });
+
+    // And the second pass, where nothing changed, must not rewrite them.
+    expect(
+      await refreshEntitlements(tenantId, provider, null, targetId, reader(many)),
+    ).toEqual({ present: 400, missing: 0 });
+    expect(await entitlements()).toHaveLength(400);
+  });
+});
