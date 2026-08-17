@@ -1,3 +1,5 @@
+import type { ProvisionActionType } from '@syntra/connectors';
+
 import type { Condition } from './condition.js';
 
 /**
@@ -230,4 +232,30 @@ export interface DraftDriftFinding {
   subjectAnchor: string | null;
   detail: Record<string, unknown>;
   fingerprint: string;
+}
+
+export interface LadderSettings {
+  entitlementRevocationDelayDays: number;
+  disableGraceDays: number;
+  /** Null means never. */
+  archiveAfterDays: number | null;
+  reenableWithoutConfirmationDays: number;
+  renameEnabled: boolean;
+}
+
+export interface PlannedAction {
+  actionType: ProvisionActionType;
+  personId: string | null;
+  accountId: string | null;
+  entitlementId: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  attributedRuleIds: string[];
+  /**
+   * True for a rename, a re-enable outside the window, and a re-create of a
+   * vanished account. These need an explicit tick even in a run the guard did
+   * not block.
+   */
+  requiresConfirmation: boolean;
+  message: string | null;
 }

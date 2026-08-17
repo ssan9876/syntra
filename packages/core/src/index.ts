@@ -106,7 +106,9 @@ export type {
   EnforcementMode,
   KnownAccount,
   KnownHolding,
+  LadderSettings,
   PersonFacts,
+  PlannedAction,
   ProfileFacts,
   RuleFacts,
   TargetObject,
@@ -114,3 +116,4 @@ export type {
 } from './provision/types.js';
 export * from './provision/desired.js';
 export * from './provision/reconcile.js';
+export * from './provision/plan.js';
