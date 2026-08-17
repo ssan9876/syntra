@@ -1420,3 +1420,168 @@ describe('planActions — the guards that hold when something upstream changes',
     ).toEqual(['revoke_entitlement']);
   });
 });
+
+describe('planActions — three more the mutation pass asked for', () => {
+  it('does not enable a pre-hire whose account already exists but who has not started', () => {
+    // The security property the two dates in `desiredState` exist for. The
+    // account is REQUIRED before the start date and must stay disabled until
+    // it; an enable driven by "the target says disabled" alone hands somebody
+    // their login a fortnight early, every run, silently.
+    expect(
+      types(
+        plan({
+          desired: [
+            desired({
+              account: {
+                required: true,
+                attributes: { displayName: ['Anna Novak'] },
+                container: 'OU=Finance,OU=Users,DC=acme,DC=test',
+                enabledNow: false,
+                correlationKey: 'anna.novak',
+              },
+              entitlements: new Set(),
+              attribution: new Map(),
+            }),
+          ],
+          actual: new Map([
+            [
+              'person-1',
+              actual({
+                enabledAtTarget: false,
+                heldEntitlements: new Set(),
+                heldWithinRemit: new Set(),
+              }),
+            ],
+          ]),
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('runs the archive timer on its own days, not on the disable grace', () => {
+    // Both timers are measured from the same contract end date, which is what
+    // makes reading the wrong one invisible whenever the two settings happen
+    // to have both elapsed. Here the disable has fallen due and the archive
+    // has not.
+    expect(
+      types(
+        plan({
+          desired: [
+            desired({
+              account: {
+                required: false,
+                attributes: {},
+                container: '',
+                enabledNow: false,
+                correlationKey: null,
+              },
+              entitlements: new Set(),
+              attribution: new Map(),
+            }),
+          ],
+          actual: new Map([
+            ['person-1', actual({ heldEntitlements: new Set(), heldWithinRemit: new Set() })],
+          ]),
+          contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-01') })]]]),
+          ladder: { ...ladder, disableGraceDays: 7, archiveAfterDays: 90 },
+        }),
+      ),
+    ).toEqual(['disable_account']);
+  });
+
+  it('reports whole days elapsed, rounding neither up nor to the calendar', () => {
+    // `disabledAt` is a real timestamp, not a midnight-aligned contract date.
+    // 164 days and 18 hours is 164 whole days; reporting 165 overstates how
+    // long the account was out of use in the sentence an administrator reads
+    // before deciding.
+    const actions = plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            status: 'disabled',
+            enabledAtTarget: false,
+            disabledAt: new Date('2026-01-01T06:00:00Z'),
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+    });
+    expect(actions[0]!.requiresConfirmation).toBe(true);
+    expect(actions[0]!.message).toContain('disabled for 164 days');
+  });
+});
+
+describe('planActions — the re-enable window is an interval, not a day count', () => {
+  it('confirms a re-enable seven days and twelve hours after the disable', () => {
+    // The window is decided on the instant. Rounding the elapsed time down to
+    // whole days first makes a window an administrator wrote as seven days run
+    // for very nearly eight, and where it lands depends on what time of day
+    // the run starts -- so the same account confirms or does not depending on
+    // when the scheduler happens to fire.
+    const actions = plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            status: 'disabled',
+            enabledAtTarget: false,
+            disabledAt: new Date('2026-06-07T12:00:00Z'),
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+    });
+    expect(types(actions)).toEqual(['enable_account', 'grant_entitlement']);
+    expect(actions[0]!.requiresConfirmation).toBe(true);
+  });
+});
+
+describe('planActions — what the re-create of a vanished account carries', () => {
+  it('recreates it disabled when the person has not started, and under the name it had', () => {
+    // The brief's vanished-account test could not see either of these: its
+    // fixture wanted an enabled account and gave the account the same key the
+    // profile would generate, so `enabled: true` and "use the generated key"
+    // were both indistinguishable from the right answers. A pre-hire whose
+    // account somebody deleted must come back disabled, and it must come back
+    // as the login they had rather than as a second name for the same person.
+    const actions = plan({
+      desired: [
+        desired({
+          account: {
+            required: true,
+            attributes: { displayName: ['Anna Novak'] },
+            container: 'OU=Finance,OU=Users,DC=acme,DC=test',
+            enabledNow: false,
+            correlationKey: 'anna.novak',
+          },
+          entitlements: new Set(),
+          attribution: new Map(),
+        }),
+      ],
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            correlationKey: 'Anna.Novak',
+            status: 'missing_at_target',
+            existsAtTarget: false,
+            enabledAtTarget: false,
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+    });
+    expect(types(actions)).toEqual(['create_account']);
+    expect(actions[0]!.after).toEqual({
+      correlationKey: 'Anna.Novak',
+      container: 'OU=Finance,OU=Users,DC=acme,DC=test',
+      attributes: { displayName: ['Anna Novak'] },
+      enabled: false,
+    });
+    expect(actions[0]!.requiresConfirmation).toBe(true);
+  });
+});

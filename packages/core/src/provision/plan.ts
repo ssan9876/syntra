@@ -301,9 +301,20 @@ export function planActions(input: PlanInput): PlannedAction[] {
           // joiner happy path and must not need a tick.
           const disableDateUnknown =
             current.status === 'disabled' && current.disabledAt === null;
+          // Decided on the instant, not on the rounded day count: both
+          // `disabledAt` and `now` are real timestamps rather than the
+          // midnight-aligned contract dates the rest of the ladder runs on, so
+          // rounding here would make the window a day longer or a day shorter
+          // than the number the administrator typed, depending on the time of
+          // day the run happens to start. The day count below is only ever
+          // reported, never compared.
           const outsideWindow =
-            disabledDays !== null &&
-            disabledDays > ladder.reenableWithoutConfirmationDays;
+            current.disabledAt !== null &&
+            now.getTime() >
+              addDays(
+                current.disabledAt,
+                ladder.reenableWithoutConfirmationDays,
+              ).getTime();
           push('enable_account', {
             before: { enabled: false },
             after: { enabled: true },
