@@ -70,10 +70,41 @@ export async function readRangedAttribute(
 
     const entry = (searchEntries[0] ?? {}) as Record<string, unknown>;
 
+    // What the DIRECTORY answered, which is not the same as what is on the
+    // object handed back here.
+    //
+    // ldapts finishes `SearchEntry.toObject` by writing an empty array into
+    // every REQUESTED attribute the server did not return under that name
+    // (ldapts@9.0.0, dist/index.mjs):
+    //
+    //   for (const attribute of requestAttributes)
+    //     if (typeof result[attribute] === "undefined" &&
+    //         !resultLCAttributes.has(attribute.toLocaleLowerCase()))
+    //       result[attribute] = [];
+    //
+    // Ask for `member` on a group over MaxValRange and the server answers
+    // `member;range=0-1499`; the returned-name set holds the ranged name and
+    // NOT `member`, so the entry arrives carrying an injected `member: []`
+    // beside it. Reading that as "the attribute came back and it was empty"
+    // returned [] on the first response for every group past the limit --
+    // with no readFailure, indistinguishable from a genuinely empty group --
+    // and so the walk below has never executed once.
+    //
+    // The distinction is between "the server returned this attribute and it
+    // was empty" and "the server did not return this attribute under this
+    // name". An empty key whose name is exactly the spec just requested is
+    // always the second: ldapts injects under the requested spelling and
+    // nothing else, and LDAP has no way to carry a valueless attribute that
+    // the server chose to send. So it is dropped, and the two cases below --
+    // nothing on the first request, nothing on a later one -- decide what
+    // that absence means.
+    const isEcho = (key: string): boolean =>
+      key.toLowerCase() === spec.toLowerCase() && valuesOf(entry[key]).length === 0;
+
     // The plain name comes back when the attribute fits in one response, and
     // also on the very first request for a small group.
     const plain = Object.keys(entry).find(
-      (key) => key.toLowerCase() === attribute.toLowerCase(),
+      (key) => key.toLowerCase() === attribute.toLowerCase() && !isEcho(key),
     );
     if (plain) {
       collected.push(...valuesOf(entry[plain]));
@@ -81,6 +112,7 @@ export async function readRangedAttribute(
     }
 
     const rangedKey = Object.keys(entry).find((key) => {
+      if (isEcho(key)) return false;
       const parsed = parseRangeKey(key);
       return parsed && parsed.attribute.toLowerCase() === attribute.toLowerCase();
     });

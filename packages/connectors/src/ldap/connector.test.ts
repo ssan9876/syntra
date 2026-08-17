@@ -316,9 +316,32 @@ describe('ldapConnector.write', () => {
  * A `windows` entry of `undefined` is a server that stopped answering partway
  * through: an entry with neither a plain `member` nor a ranged one.
  *
+ * Each window is passed through `asLdaptsReturns`, because a `windows` entry
+ * describes what the SERVER sent and `readRangedAttribute` is handed what
+ * LDAPTS produces. Those differ by exactly the key this whole finding turns
+ * on: ldapts writes an empty array into every requested attribute the server
+ * answered under some other name, so a real `member;range=0-1499` response
+ * arrives carrying `member: []` beside it.
+ *
+ * The subtree branch below needs no such treatment: `read` asks it for
+ * `['*', anchorAttribute]`, never for `member` by name, so ldapts injects
+ * nothing for a group whose membership came back ranged.
+ *
  * Returns the attribute specs actually requested, so a test can say the walk
  * happened rather than only that the answer looked right.
  */
+function asLdaptsReturns(
+  entry: Record<string, unknown>,
+  requested: readonly string[],
+): Record<string, unknown> {
+  const result = { ...entry };
+  const returned = new Set(Object.keys(result).map((key) => key.toLowerCase()));
+  for (const attribute of requested) {
+    if (!returned.has(attribute.toLowerCase())) result[attribute] = [];
+  }
+  return result;
+}
+
 function serveRangedMembership(
   groupDn: string,
   windows: (Record<string, string[]> | undefined)[],
@@ -338,7 +361,9 @@ function serveRangedMembership(
       const window = windows[served];
       served += 1;
       return {
-        searchEntries: [{ dn: groupDn, ...(window ?? {}) }],
+        searchEntries: [
+          asLdaptsReturns({ dn: groupDn, ...(window ?? {}) }, options.attributes ?? []),
+        ],
         searchReferences: [],
       } as unknown as Awaited<ReturnType<Client['search']>>;
     }
