@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { accountProfileRequestSchema } from '@syntra/contracts';
+import { accountProfileRequestSchema, idParam } from '@syntra/contracts';
 import {
   PERMISSIONS,
   TargetNotFoundError,
@@ -25,7 +25,7 @@ export async function registerAdminProfileRoutes(app: FastifyInstance): Promise<
     '/targets/:id/profile',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       const profile = await request.db((tx) =>
         tx.accountProfile.findFirst({ where: { targetSystemId: id } }),
       );
@@ -38,7 +38,7 @@ export async function registerAdminProfileRoutes(app: FastifyInstance): Promise<
     '/targets/:id/profile',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       const body = accountProfileRequestSchema.parse(request.body);
       try {
         // Parsed twice on purpose: the contract schema is a transport shape,
@@ -62,7 +62,7 @@ export async function registerAdminProfileRoutes(app: FastifyInstance): Promise<
     '/targets/:id/profile/preview',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       // Parsed, both halves. A template language nobody can try is a template
       // language everybody gets wrong, and a preview that accepts anything is
       // a preview of something other than what would be saved —

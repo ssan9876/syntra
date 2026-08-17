@@ -1,5 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { acknowledgeDriftRequestSchema, applyRunRequestSchema } from '@syntra/contracts';
+import { z } from 'zod';
+import {
+  acknowledgeDriftRequestSchema,
+  applyRunRequestSchema,
+  idParam,
+} from '@syntra/contracts';
 import {
   PERMISSIONS,
   PROVISION_JOB,
@@ -24,6 +29,16 @@ export interface ProvisionRunRouteOptions {
   transport: Transport;
 }
 
+/**
+ * A target id and a run id, both parsed.
+ *
+ * `idParam.extend` rather than a second `z.object({ id: … })`: the shape of a
+ * target id is defined in one place, and a route that names two ids must not
+ * be the place a looser one creeps in. `@syntra/contracts` carries no
+ * two-id schema for this pair yet; when it does, this is the thing to delete.
+ */
+const runParams = idParam.extend({ runId: z.string().uuid() });
+
 /** How many runs, actions and findings one request may return. */
 const RUN_PAGE = 50;
 const DRIFT_PAGE = 500;
@@ -39,7 +54,7 @@ export async function registerAdminProvisionRunRoutes(
     '/targets/:id/runs',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       const target = await request.db((tx) =>
         tx.targetSystem.findUnique({ where: { id }, select: { id: true } }),
       );
@@ -72,7 +87,7 @@ export async function registerAdminProvisionRunRoutes(
     '/targets/:id/runs',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       return {
         runs: await request.db((tx) =>
           tx.provisionRun.findMany({
@@ -89,7 +104,7 @@ export async function registerAdminProvisionRunRoutes(
     '/targets/:id/runs/:runId',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
-      const { id, runId } = request.params as { id: string; runId: string };
+      const { id, runId } = runParams.parse(request.params);
       return request.db(async (tx) => {
         const run = await tx.provisionRun.findUnique({
           where: { id: runId },
@@ -160,7 +175,7 @@ export async function registerAdminProvisionRunRoutes(
     '/targets/:id/runs/:runId/apply',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request) => {
-      const { id, runId } = request.params as { id: string; runId: string };
+      const { id, runId } = runParams.parse(request.params);
       const body = applyRunRequestSchema.parse(request.body ?? {});
 
       const run = await request.db((tx) =>
@@ -241,7 +256,7 @@ export async function registerAdminProvisionRunRoutes(
     '/targets/:id/drift',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       const { status, kind } = request.query as { status?: string; kind?: string };
       return {
         findings: await request.db((tx) =>
@@ -260,10 +275,13 @@ export async function registerAdminProvisionRunRoutes(
   );
 
   app.patch(
-    '/drift/:findingId',
+    // `:id` and not `:findingId`, so the id is parsed by the same `idParam`
+    // every other admin route uses rather than by a second schema saying the
+    // same thing. The path a caller sends is unchanged.
+    '/drift/:id',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request, reply) => {
-      const { findingId } = request.params as { findingId: string };
+      const { id: findingId } = idParam.parse(request.params);
       const body = acknowledgeDriftRequestSchema.parse(request.body);
       // `updateMany` rather than `update`: a `findingId` that is not there —
       // or belongs to another tenant, where RLS makes those the same thing —

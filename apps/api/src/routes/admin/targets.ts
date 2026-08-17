@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   createTargetRequestSchema,
+  idParam,
   testTargetRequestSchema,
   updateTargetRequestSchema,
 } from '@syntra/contracts';
@@ -116,7 +117,7 @@ export async function registerAdminTargetRoutes(
     '/targets/:id',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       const target = await request.db((tx) =>
         tx.targetSystem.findUnique({ where: { id }, select: TARGET_FIELDS }),
       );
@@ -147,7 +148,7 @@ export async function registerAdminTargetRoutes(
     '/targets/:id',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       // The two nested bags are destructured out first: they need the same
       // treatment one level down (`Partial<GuardThresholds>` does not admit an
       // explicit `undefined` either), and spreading them twice would leave the
@@ -182,7 +183,7 @@ export async function registerAdminTargetRoutes(
     '/targets/:id',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request, reply) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       const { confirm } = request.query as { confirm?: string };
       let result;
       try {
@@ -238,7 +239,7 @@ export async function registerAdminTargetRoutes(
     '/targets/:id/entitlements/refresh',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       // Named before the read, so a refresh against a target that is not there
       // is a 404 rather than a 500 out of "target configuration or credential
       // missing" — which is a real fault and must stay distinguishable from a
@@ -255,7 +256,7 @@ export async function registerAdminTargetRoutes(
     '/targets/:id/entitlements',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       return {
         entitlements: await request.db((tx) =>
           tx.entitlement.findMany({

@@ -745,6 +745,40 @@ describe('run detail and drift', () => {
   });
 });
 
+describe('malformed ids', () => {
+  /**
+   * A 400, not a 500, on every id-bearing provisioning route.
+   *
+   * These four route files reached the id with `request.params as { id: string }`
+   * — the same suppression as `as never`, wearing a plausible type — so a
+   * malformed id travelled to PostgreSQL and came back out of the catch-all as
+   * a bare 500, where every pre-existing admin route answers 400. One case per
+   * route file, and each of the three param shapes.
+   */
+  it('answers 400 rather than 500 on every id-bearing route', async () => {
+    const cookie = await manager();
+    await create(cookie);
+
+    const cases: [string, Promise<{ statusCode: number }>][] = [
+      ['GET target', get('/api/admin/targets/not-a-uuid', cookie)],
+      ['GET rules', get('/api/admin/targets/not-a-uuid/rules', cookie)],
+      ['DELETE rule', del('/api/admin/rules/not-a-uuid', cookie)],
+      ['GET profile', get('/api/admin/targets/not-a-uuid/profile', cookie)],
+      ['GET runs', get('/api/admin/targets/not-a-uuid/runs', cookie)],
+      ['GET one run', get(`/api/admin/targets/${targetId}/runs/not-a-uuid`, cookie)],
+      [
+        'PATCH drift',
+        patch('/api/admin/drift/not-a-uuid', cookie, { status: 'resolved' }),
+      ],
+    ];
+
+    const statuses = await Promise.all(
+      cases.map(async ([name, response]) => [name, (await response).statusCode]),
+    );
+    expect(statuses).toEqual(cases.map(([name]) => [name, 400]));
+  });
+});
+
 describe('GET /api/admin/persons/:id/access', () => {
   it('answers why this person holds this', async () => {
     const manage = await manager();

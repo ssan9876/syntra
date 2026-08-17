@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { businessRuleRequestSchema } from '@syntra/contracts';
+import { businessRuleRequestSchema, idParam, ruleParams } from '@syntra/contracts';
 import {
   BusinessRuleNotFoundError,
   PERMISSIONS,
@@ -59,7 +59,7 @@ export async function registerAdminRuleRoutes(app: FastifyInstance): Promise<voi
     '/targets/:id/rules',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       return {
         rules: await request.db((tx) =>
           tx.businessRule.findMany({
@@ -76,7 +76,7 @@ export async function registerAdminRuleRoutes(app: FastifyInstance): Promise<voi
     '/targets/:id/rules',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       const rule = parseRule(request.body);
       try {
         return await upsertBusinessRule(
@@ -95,7 +95,7 @@ export async function registerAdminRuleRoutes(app: FastifyInstance): Promise<voi
     '/rules/:ruleId',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request, reply) => {
-      const { ruleId } = request.params as { ruleId: string };
+      const { ruleId } = ruleParams.parse(request.params);
       try {
         await deleteBusinessRule(request.tenantId, request.session.userId, ruleId);
       } catch (cause) {
@@ -112,7 +112,7 @@ export async function registerAdminRuleRoutes(app: FastifyInstance): Promise<voi
     '/targets/:id/rules/impact',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request) => {
-      const { id } = request.params as { id: string };
+      const { id } = idParam.parse(request.params);
       const rule = parseRule(request.body);
       const target = await request.db((tx) =>
         tx.targetSystem.findUnique({ where: { id }, select: { id: true } }),
