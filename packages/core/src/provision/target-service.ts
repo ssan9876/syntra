@@ -17,6 +17,30 @@ import type { LadderSettings } from './types.js';
 const secretNameFor = (targetId: string) => `target/${targetId}/bind`;
 
 /**
+ * Named errors rather than `findUniqueOrThrow`.
+ *
+ * Prisma's P2025 reads "An operation failed because it depends on one or more
+ * records that were required but not found" and names neither the table nor
+ * the id — so it is indistinguishable from the foreign-key violation that
+ * happens two statements later when the check is dropped, and a test asserting
+ * `rejects.toThrow()` cannot tell the check from its absence. That is the
+ * "fixture cannot distinguish pass from fail" shape, moved into the error.
+ */
+export class TargetNotFoundError extends Error {
+  constructor(readonly targetId: string) {
+    super(`no such target system: ${targetId}`);
+    this.name = 'TargetNotFoundError';
+  }
+}
+
+export class BusinessRuleNotFoundError extends Error {
+  constructor(readonly ruleId: string) {
+    super(`no such business rule: ${ruleId}`);
+    this.name = 'BusinessRuleNotFoundError';
+  }
+}
+
+/**
  * The only `type` this service can honestly store.
  *
  * `TargetSystem.type` is a column of type text so that a second connector
@@ -290,7 +314,8 @@ export async function updateTarget(
   const thresholds = pickThresholds(input.thresholds);
 
   await withTenant(tenantId, async (tx) => {
-    const before = await tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } });
+    const before = await tx.targetSystem.findUnique({ where: { id: targetId } });
+    if (!before) throw new TargetNotFoundError(targetId);
 
     const ladder = {
       entitlementRevocationDelayDays:
@@ -391,7 +416,8 @@ export async function deleteTarget(
     // Read before the counts, so a request naming a target that is not there
     // fails as "no such target" rather than reporting three convincing zeroes
     // and, on `confirm: true`, a Prisma P2025 from two statements further on.
-    const target = await tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } });
+    const target = await tx.targetSystem.findUnique({ where: { id: targetId } });
+    if (!target) throw new TargetNotFoundError(targetId);
 
     const counts = {
       accounts: await tx.targetAccount.count({ where: { targetSystemId: targetId } }),
@@ -635,7 +661,8 @@ export async function upsertAccountProfile(
     const bound = await currentTenant(tx);
     // Named, so a profile for a target that is not there is a message rather
     // than a foreign-key violation two statements later.
-    await tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } });
+    const target = await tx.targetSystem.findUnique({ where: { id: targetId } });
+    if (!target) throw new TargetNotFoundError(targetId);
 
     // One statement rather than find-then-branch. `targetSystemId` is
     // `@unique` — the Task 1 deviation — so it is a valid unique selector, and
@@ -862,7 +889,8 @@ export async function deleteBusinessRule(
   ruleId: string,
 ): Promise<void> {
   await withTenant(tenantId, async (tx) => {
-    const rule = await tx.businessRule.findUniqueOrThrow({ where: { id: ruleId } });
+    const rule = await tx.businessRule.findUnique({ where: { id: ruleId } });
+    if (!rule) throw new BusinessRuleNotFoundError(ruleId);
     await tx.businessRule.delete({ where: { id: ruleId } });
     await recordEvent(tx, {
       actorUserId,

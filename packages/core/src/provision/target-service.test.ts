@@ -532,7 +532,7 @@ describe('updateTarget, beyond the brief', () => {
     const other = await prisma.tenant.create({ data: { name: 'Other', slug: 'other' } });
     await expect(
       updateTarget(other.id, provider, null, id, { enabled: false }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/no such target system/);
   });
 });
 
@@ -564,7 +564,7 @@ describe('deleteTarget, beyond the brief', () => {
   it('refuses a target that is not there rather than reporting three zeroes', async () => {
     await expect(
       deleteTarget(tenantId, null, '00000000-0000-4000-8000-000000000000', false),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/no such target system/);
   });
 
   it('counts only this target rows', async () => {
@@ -717,7 +717,7 @@ describe('upsertAccountProfile, beyond the brief', () => {
         '00000000-0000-4000-8000-000000000000',
         profile,
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/no such target system/);
   });
 
   it('refuses an attribute template that would disable the account', async () => {
@@ -940,6 +940,176 @@ describe('deleteBusinessRule', () => {
   it('refuses a rule that is not there', async () => {
     await expect(
       deleteBusinessRule(tenantId, null, '00000000-0000-4000-8000-000000000000'),
+    ).rejects.toThrow(/no such business rule/);
+  });
+});
+
+describe('the gaps the mutation pass found', () => {
+  it('accepts a revocation that falls on the disable day itself', async () => {
+    // The ladder rule is `<=`, not `<`. Revoking the entitlements on the same
+    // day the account is disabled is the ordinary configuration, and a `>`
+    // mutated to `>=` refuses exactly it while every refusal test still
+    // passes.
+    const { id } = await create();
+    await updateTarget(tenantId, provider, null, id, {
+      ladder: { entitlementRevocationDelayDays: 7, disableGraceDays: 7 },
+    });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(row.entitlementRevocationDelayDays).toBe(7);
+  });
+
+  it('refuses a disable pushed past an archive step already set', async () => {
+    // The merge is what makes this work: the update mentions only the disable,
+    // and the archive has to be read off the row for the comparison to happen
+    // at all. Without the merge this reaches the CHECK constraint and comes
+    // back as a 500 with a constraint name in it.
+    const { id } = await create();
+    await updateTarget(tenantId, provider, null, id, {
+      ladder: { disableGraceDays: 7, archiveAfterDays: 90 },
+    });
+    await expect(
+      updateTarget(tenantId, provider, null, id, {
+        ladder: { disableGraceDays: 100 },
+      }),
+    ).rejects.toThrow(/archive must fall strictly after the disable/);
+  });
+
+  it('creates a target enabled and not auto-applying', async () => {
+    // A target created disabled is configured but never runs; one created
+    // auto-applying writes to a live directory before anybody has looked at a
+    // preview.
+    const { id } = await create();
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(row.enabled).toBe(true);
+    expect(row.autoApply).toBe(false);
+    expect(row.enforcementMode).toBe('additive');
+  });
+
+  it('honours an explicit disabled, non-additive create', async () => {
+    const created = await createTarget(tenantId, provider, null, {
+      name: 'Staged',
+      config,
+      bindPassword: 'x',
+      enabled: false,
+      autoApply: true,
+      enforcementMode: 'authoritative',
+    });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: created.id } }),
+    );
+    expect(row.enabled).toBe(false);
+    expect(row.autoApply).toBe(true);
+    expect(row.enforcementMode).toBe('authoritative');
+  });
+
+  it('records where the target points on the creation event', async () => {
+    // Not decoration: this is the record of what an administrator pointed
+    // Syntra at, and it is the only place the transport is written down
+    // outside the row itself.
+    const { id } = await create();
+    const events = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'provision.target.create' } }),
+    );
+    expect(events[0]!.payload).toMatchObject({
+      name: 'Acme AD',
+      url: 'ldaps://dc.acme.test:636',
+      tlsMode: 'ldaps',
+      enforcementMode: 'additive',
+    });
+    expect(events[0]!.targetId).toBe(id);
+  });
+
+  it('refuses a name longer than the column should hold', async () => {
+    await expect(
+      createTarget(tenantId, provider, null, {
+        name: 'x'.repeat(201),
+        config,
+        bindPassword: 'x',
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a paired directory source that is not a uuid', async () => {
+    await expect(
+      createTarget(tenantId, provider, null, {
+        name: 'Paired',
+        config,
+        bindPassword: 'x',
+        pairedDirectorySourceId: 'the head office one',
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('pairs a target with a directory source and stores it', async () => {
+    const source = await withTenant(tenantId, (tx) =>
+      tx.directorySource.create({
+        data: {
+          tenantId,
+          name: 'Head office AD',
+          type: 'ldap',
+          config: {},
+          secretName: 'source/x',
+        },
+      }),
+    );
+    const created = await createTarget(tenantId, provider, null, {
+      name: 'Paired',
+      config,
+      bindPassword: 'x',
+      pairedDirectorySourceId: source.id,
+    });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: created.id } }),
+    );
+    expect(row.pairedDirectorySourceId).toBe(source.id);
+  });
+
+  it('stores the schedule an update sets and clears it with null', async () => {
+    const { id } = await create();
+    await updateTarget(tenantId, provider, null, id, { schedule: '0 2 * * *' });
+    expect(
+      (
+        await withTenant(tenantId, (tx) =>
+          tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+        )
+      ).schedule,
+    ).toBe('0 2 * * *');
+    await updateTarget(tenantId, provider, null, id, { schedule: null });
+    expect(
+      (
+        await withTenant(tenantId, (tx) =>
+          tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+        )
+      ).schedule,
+    ).toBeNull();
+  });
+
+  it('replaces the configuration whole on an update', async () => {
+    // Replaced, never merged: the schema resolves defaults and cross-checks
+    // the TLS mode against the URL scheme, and merging a fragment over a
+    // stored blob would let a half-configuration reach the connector with the
+    // checks having passed on the fragment alone.
+    const { id } = await create();
+    await updateTarget(tenantId, provider, null, id, {
+      config: { ...config, baseDn: 'OU=Staff,DC=acme,DC=test', pageSize: 250 },
+    });
+    const loaded = await withTenant(tenantId, (tx) =>
+      targetWithCredential(tx, provider, id),
+    );
+    expect(loaded?.baseDn).toBe('OU=Staff,DC=acme,DC=test');
+    expect(loaded?.pageSize).toBe(250);
+  });
+
+  it('refuses an update that would put the configuration in the clear', async () => {
+    const { id } = await create();
+    await expect(
+      updateTarget(tenantId, provider, null, id, {
+        config: { ...config, tlsMode: 'plain', url: 'ldap://dc.acme.test:389' },
+      }),
     ).rejects.toThrow();
   });
 });

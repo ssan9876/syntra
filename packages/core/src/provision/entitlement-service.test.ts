@@ -479,3 +479,100 @@ describe('remitFor', () => {
     expect(remit.size).toBe(0);
   });
 });
+
+describe('the gaps the mutation pass found', () => {
+  it('scopes the empty-read refusal to this target', async () => {
+    // The refusal counts what Syntra holds *for this target*. Counting the
+    // tenant would make a first refresh of a new target refuse because some
+    // other target has a catalog, which is a target that can never be
+    // populated at all.
+    const other = await createTarget(tenantId, provider, null, {
+      name: 'Other AD',
+      config,
+      bindPassword: 'x',
+    });
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      other.id,
+      reader([group('guid-1', 'Finance')]),
+    );
+    const result = await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([]),
+    );
+    expect(result).toEqual({ present: 0, missing: 0 });
+  });
+
+  it('does not recount an entitlement that was already missing', async () => {
+    // `missing` is the count of entitlements that went missing on THIS
+    // refresh. Without the `status: { not: 'missing' }` filter it is the count
+    // of everything absent, which never falls and makes the number on the
+    // audit event mean nothing.
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance'), group('guid-2', 'Sales')]),
+    );
+    expect(
+      await refreshEntitlements(
+        tenantId,
+        provider,
+        null,
+        targetId,
+        reader([group('guid-1', 'Finance')]),
+      ),
+    ).toEqual({ present: 1, missing: 1 });
+    expect(
+      await refreshEntitlements(
+        tenantId,
+        provider,
+        null,
+        targetId,
+        reader([group('guid-1', 'Finance')]),
+      ),
+    ).toEqual({ present: 1, missing: 0 });
+  });
+
+  it('records the type the target reported', async () => {
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([
+        {
+          externalId: 'guid-lic',
+          dn: 'CN=E3,OU=Licences,DC=acme,DC=test',
+          type: 'licence',
+          displayName: 'E3',
+        },
+      ]),
+    );
+    const rows = await entitlements();
+    expect(rows[0]!.type).toBe('licence');
+  });
+
+  it('starts a newly discovered entitlement with no holders', async () => {
+    // `holderCount` is the denominator of the per-entitlement guard axis and
+    // Task 13 writes it from the reconciled target inventory. A catalog
+    // refresh must not invent one: Ruling P25 makes a zero denominator against
+    // a proposed revocation a non-confirmable refusal, and a guess here would
+    // be a denominator that came from a different read than the plan.
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance')]),
+    );
+    const rows = await entitlements();
+    expect(rows[0]!.holderCount).toBe(0);
+  });
+});
