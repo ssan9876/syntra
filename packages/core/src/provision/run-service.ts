@@ -10,6 +10,7 @@ import {
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
+import { resolveInFlightActions } from './apply.js';
 import { desiredState } from './desired.js';
 import { evaluateProvisionGuard } from './guard.js';
 import { planActions } from './plan.js';
@@ -247,10 +248,17 @@ export async function previewProvisionRun(
   const now = options.now ?? new Date();
   const connector = (options.connector ??
     adTargetConnector) as unknown as TargetConnector<unknown>;
-  // Task 14 supplies the real one. Until it does, a crashed `applying` run is
-  // adopted without resolving its in-flight actions, which is still strictly
-  // better than the target becoming permanently unrunnable.
-  const resolveInFlight = options.resolveInFlight ?? (async () => 0);
+  // Called inside `adoptStaleRunsAndStart`, before a new run is created and
+  // outside any transaction. An action left `in_flight` by a dead process is
+  // in an UNKNOWN state — not a failed one — and it has to be asked about
+  // against the target before anything new is planned. The option remains a
+  // seam so a test can observe or stub it; the default is the real function.
+  const resolveInFlight =
+    options.resolveInFlight ??
+    ((id: string) =>
+      resolveInFlightActions(tenantId, provider, id, {
+        ...(options.connector === undefined ? {} : { connector: options.connector }),
+      }));
 
   // Phase 1, and phase 3 inside it.
   const run = await adoptStaleRunsAndStart(tenantId, targetSystemId, resolveInFlight);

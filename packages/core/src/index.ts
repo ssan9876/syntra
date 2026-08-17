@@ -155,3 +155,12 @@ export * from './provision/run-service.js';
 // collided twice on this slice, and under TS2308 the barrel then exports
 // NEITHER side, silently.
 export * from './provision/syntra-user.js';
+// Grepped workspace-wide before adding, as the four lines above were: none of
+// `applyProvisionRun`, `resolveInFlightActions`, `backoffMs`,
+// `generateInitialPassword`, `ApplyOptions`, `InitialPasswordPolicy`,
+// `ProvisionRunNotAppliableError` or `ProvisionRunNotConfirmableError` appears
+// anywhere else in the workspace. `sync/apply.js` exports `applyChange`, which
+// is a different name — the collision that has bitten this slice twice is two
+// modules choosing the SAME name, and under TS2308 the barrel then exports
+// neither.
+export * from './provision/apply.js';
