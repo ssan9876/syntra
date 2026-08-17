@@ -873,8 +873,27 @@ describe('registerProvisionJobs — what the registration passes, and what arriv
 
   it('enqueues no paired sync when the apply changed nothing', async () => {
     const scheduler = schedulerStub();
+    // The paired source matters: without one `enqueuePairedSync` returns
+    // early whatever the applied count is, so the fixture would agree with a
+    // `result.applied >= 0` bug and this test could not fail. Found by
+    // mutation, and it is the "fixture cannot distinguish pass from fail"
+    // shape this slice keeps turning up.
+    const source = await withTenant(tenantId, (tx) =>
+      tx.directorySource.create({
+        data: {
+          tenantId,
+          name: 'Acme AD source',
+          type: 'ldap',
+          config: {},
+          secretName: 'src',
+        },
+      }),
+    );
     await withTenant(tenantId, (tx) =>
-      tx.targetSystem.update({ where: { id: targetId }, data: { autoApply: true } }),
+      tx.targetSystem.update({
+        where: { id: targetId },
+        data: { autoApply: true, pairedDirectorySourceId: source.id },
+      }),
     );
     await runProvisionJob(
       scheduler as never,
