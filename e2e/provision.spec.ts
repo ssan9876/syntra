@@ -330,13 +330,12 @@ test('configure a target, write a rule, review a run, apply part of it', async (
     timeout: 60_000,
   });
 
-  // Then the rest. What was left out is still proposed, so a partial apply is
-  // a pause rather than a discard.
-  await page
-    .getByLabel('I have read the numbers above and want to apply this run anyway')
-    .check();
-  await page.getByRole('button', { name: /Apply 1 action/ }).click();
-  await expect(page.getByText(/now applied/)).toBeVisible({ timeout: 60_000 });
+  // And no second bite. `APPLIABLE_RUN_STATUSES` is ['previewed', 'blocked'],
+  // so applying part of a run ends it: what was left out is superseded by the
+  // next preview and worked out again against the world as it then is. The
+  // plan's script drove a second apply here; the engine answers that 409.
+  await expect(page.getByText('Nothing further to apply')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Apply/ })).toHaveCount(0);
 
   // And the question everybody asks.
   await page.goto('/admin/people');
@@ -347,7 +346,10 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   await expect(
     page.getByRole('heading', { name: 'Why does this person hold this?' }),
   ).toBeVisible();
+  // The account was created; the entitlement was deliberately left out of the
+  // apply, so it is not held. An access view that showed it anyway would be
+  // reporting what Syntra intended rather than what the person has.
   await expect(page.getByText(TARGET_NAME)).toBeVisible();
-  await expect(page.getByRole('cell', { name: GROUP_CN })).toBeVisible();
-  await expect(page.getByRole('cell', { name: RULE_NAME })).toBeVisible();
+  await expect(page.getByText(ACCOUNT_NAME)).toBeVisible();
+  await expect(page.getByRole('cell', { name: GROUP_CN })).toHaveCount(0);
 });

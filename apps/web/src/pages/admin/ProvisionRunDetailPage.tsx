@@ -61,6 +61,20 @@ const actionTone = (status: string): 'active' | 'warning' | 'danger' | 'neutral'
   return 'neutral';
 };
 
+/**
+ * The only two statuses `applyProvisionRun` will accept.
+ *
+ * `APPLIABLE_RUN_STATUSES` in `apply.ts` is `['previewed', 'blocked']`, so a
+ * run that has already been partly applied cannot be applied again: a partial
+ * apply ENDS the run, and whatever was left unticked is superseded by the next
+ * preview and re-derived against the world as it then is. That is the right
+ * design — replaying half a stale plan is how a revocation lands after the
+ * grant that reversed it — but a console that offers an Apply button here
+ * would be offering a 409, and the sentence under the button would be a
+ * promise the engine does not keep.
+ */
+const APPLIABLE = ['previewed', 'blocked'];
+
 const DRIFT_LABELS: Record<string, string> = {
   unmanaged_entitlement: 'A holding Provision did not grant',
   missing_grant: 'A holding Provision granted and the target no longer has',
@@ -392,7 +406,18 @@ export function ProvisionRunDetailPage() {
           </Panel>
         )}
 
-        {run.actions.length > 0 && (
+        {run.actions.length > 0 && !APPLIABLE.includes(run.status) && (
+          <Panel title="Nothing further to apply">
+            <p className="p-4 text-muted">
+              This run is <strong className="font-semibold">{run.status}</strong>
+              . Applying part of a run ends it: anything left unticked was not
+              written, and the next run works out afresh what is still needed
+              rather than replaying a plan that has gone stale.
+            </p>
+          </Panel>
+        )}
+
+        {run.actions.length > 0 && APPLIABLE.includes(run.status) && (
           <Panel title="Apply">
             <div className="space-y-4 p-4">
               {needsConfirmation && run.requiresConfirmation && (
@@ -421,8 +446,9 @@ export function ProvisionRunDetailPage() {
                 Apply {selected.size} action{selected.size === 1 ? '' : 's'}
               </Button>
               <p className="text-muted">
-                Anything left unticked stays proposed until this run is
-                superseded, so a partial apply is a pause rather than a discard.
+                Applying part of a run ends it. Anything left unticked is not
+                written, and the next run decides again whether it is still
+                needed — this is a plan, not a queue to work through.
               </p>
             </div>
           </Panel>

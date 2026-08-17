@@ -219,6 +219,32 @@ describe('ProvisionRunDetailPage', () => {
     expect(screen.getByText('Rin Fujimoto')).toBeVisible();
   });
 
+  it('offers no second apply for a run that has already been partly applied', async () => {
+    // `APPLIABLE_RUN_STATUSES` in apply.ts is ['previewed', 'blocked'], so
+    // applying part of a run ENDS it: the remainder is superseded by the next
+    // preview. A button here would send a request the engine answers 409 to,
+    // and the copy under it would promise a second bite the engine does not
+    // give. Found by reading apply.ts rather than by any test — the plan's own
+    // end-to-end script drove exactly this second apply.
+    mockFetch(run({ status: 'partially_applied' }));
+    renderPage();
+
+    expect(
+      await screen.findByText('Nothing further to apply'),
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: /^Apply/ })).toBeNull();
+  });
+
+  it('still offers the apply for a run nothing has been written from', async () => {
+    mockFetch(run({ status: 'previewed' }));
+    renderPage();
+
+    expect(
+      await screen.findByRole('button', { name: 'Apply 1 action' }),
+    ).toBeVisible();
+    expect(screen.queryByText('Nothing further to apply')).toBeNull();
+  });
+
   it('names an action attributed to nobody rather than dropping it', async () => {
     // `ProvisionAction.personId` is nullable, and an action nobody owns is
     // still an action about to be written to a live directory.
