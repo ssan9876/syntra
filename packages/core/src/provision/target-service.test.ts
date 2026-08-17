@@ -1105,11 +1105,171 @@ describe('the gaps the mutation pass found', () => {
   });
 
   it('refuses an update that would put the configuration in the clear', async () => {
+    // `Invalid enum value` is Zod's. The CHECK constraint
+    // `target_system_encrypted_transport` refuses this too, and a bare
+    // `toThrow()` cannot tell the schema from the backstop -- which is the
+    // difference between a field an editor can highlight and a 500 with a
+    // constraint name in it.
     const { id } = await create();
     await expect(
       updateTarget(tenantId, provider, null, id, {
         config: { ...config, tlsMode: 'plain', url: 'ldap://dc.acme.test:389' },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/Invalid enum value/);
+  });
+});
+
+describe('the second gaps the mutation pass found', () => {
+  it('resolves the configuration defaults into the stored column', async () => {
+    // The create-time parse and the read-time parse each hid the other: with
+    // both in place, dropping either one still produced a resolved config at
+    // every assertion, because whichever survived filled the defaults in.
+    // This one looks at the column itself.
+    const { id } = await create();
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(row.config).toMatchObject({
+      anchorAttribute: 'objectGUID',
+      pageSize: 1000,
+      provenanceAttribute: 'info',
+      rejectUnauthorized: false,
+    });
+  });
+
+  it('resolves defaults a stored row never had', async () => {
+    // And the other half: a column written before the schema grew a field.
+    // A cast asserts that such a row satisfies today's schema; parsing makes
+    // it true, and the difference reaches the connector as `undefined` in a
+    // live LDAP request.
+    const { id } = await create();
+    await withTenant(tenantId, (tx) =>
+      tx.targetSystem.update({
+        where: { id },
+        data: {
+          config: {
+            url: 'ldaps://dc.acme.test:636',
+            tlsMode: 'ldaps',
+            bindDn: 'CN=svc,DC=acme,DC=test',
+            baseDn: 'OU=Users,DC=acme,DC=test',
+            entitlementSearchBase: 'OU=Groups,DC=acme,DC=test',
+            archiveContainer: 'OU=Archive,DC=acme,DC=test',
+          },
+        },
+      }),
+    );
+    const loaded = await withTenant(tenantId, (tx) =>
+      targetWithCredential(tx, provider, id),
+    );
+    expect(loaded?.anchorAttribute).toBe('objectGUID');
+    expect(loaded?.pageSize).toBe(1000);
+    expect(loaded?.rejectUnauthorized).toBe(true);
+  });
+
+  it('writes the fields an update names', async () => {
+    // Every other update test asserted a *derived* consequence -- an audit
+    // payload, a ladder column -- so an update that silently dropped `name`
+    // or `enabled` passed all of them.
+    const { id } = await create();
+    await updateTarget(tenantId, provider, null, id, {
+      name: 'Acme AD (renamed)',
+      enabled: false,
+      autoApply: true,
+      pairedDirectorySourceId: null,
+    });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(row.name).toBe('Acme AD (renamed)');
+    expect(row.enabled).toBe(false);
+    expect(row.autoApply).toBe(true);
+  });
+
+  it('resolves the defaults again on an update that replaces the config', async () => {
+    const { id } = await create();
+    await updateTarget(tenantId, provider, null, id, {
+      config: { ...config, pageSize: 250 },
+    });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(row.config).toMatchObject({ pageSize: 250, anchorAttribute: 'objectGUID' });
+  });
+
+  it('refuses an out-of-range threshold as a validation error, not a constraint', async () => {
+    // `target_system_thresholds_are_percent` catches this too, so a test that
+    // only asserts "it threw" cannot tell the service's validation from the
+    // database's backstop -- and the difference is a message an administrator
+    // can act on versus a 500 with a constraint name in it.
+    const { id } = await create();
+    await expect(
+      updateTarget(tenantId, provider, null, id, {
+        thresholds: { createAccountThresholdPercent: 400 },
+      }),
+    ).rejects.toThrow(/less than or equal to 100/);
+  });
+
+  it('refuses a non-uuid paired source as a validation error, not a driver error', async () => {
+    // Prisma rejects a non-uuid for a `@db.Uuid` column too, so the same
+    // problem: the check and its absence are indistinguishable unless the
+    // message is asserted.
+    await expect(
+      createTarget(tenantId, provider, null, {
+        name: 'Paired',
+        config,
+        bindPassword: 'x',
+        pairedDirectorySourceId: 'the head office one',
+      }),
+    // `Invalid uuid` is Zod's wording. Prisma's is "Error creating UUID,
+    // invalid character", so a case-insensitive /uuid/ matches both and the
+    // check and its absence stay indistinguishable -- the exact failure this
+    // assertion was added to fix, one layer in.
+    ).rejects.toThrow(/Invalid uuid/);
+  });
+
+  it('counts only this target’s accounts and rules', async () => {
+    // The earlier version of this test gave the other target an entitlement
+    // and nothing else, so dropping the `where` from the ACCOUNT count -- a
+    // different statement -- changed nothing anybody looked at.
+    const { id } = await create();
+    const other = await createTarget(tenantId, provider, null, {
+      name: 'Other AD',
+      config,
+      bindPassword: 'x',
+    });
+    await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Anna', familyName: 'Novak' },
+      });
+      await tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: other.id,
+          personId: person.id,
+          correlationKey: 'anna.novak',
+        },
+      });
+      await tx.entitlement.create({
+        data: {
+          tenantId,
+          targetSystemId: other.id,
+          externalId: 'guid-elsewhere',
+          type: 'group',
+          displayName: 'Elsewhere',
+        },
+      });
+    });
+    await upsertBusinessRule(tenantId, null, other.id, {
+      name: 'Elsewhere staff',
+      condition: { all: [] },
+      grantsAccount: true,
+      enabled: true,
+      entitlementIds: [],
+    });
+
+    expect(await deleteTarget(tenantId, null, id, false)).toEqual({
+      ok: false,
+      counts: { accounts: 0, rules: 0, entitlements: 0 },
+    });
   });
 });

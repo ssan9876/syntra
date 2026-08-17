@@ -42,7 +42,7 @@
     "find": "  pairedDirectorySourceId: z.string().uuid().nullable().optional(),",
     "replace": "  pairedDirectorySourceId: z.string().nullable().optional(),",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "refuses a paired directory source that is not a uuid"
+    "pattern": "refuses a non-uuid paired source as a validation error"
   },
   {
     "id": "M06",
@@ -105,7 +105,7 @@
     "find": "  const parsed = provisionThresholdsSchema.parse(thresholds);",
     "replace": "  const parsed = thresholds as Record<string, number>;",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "refuses a threshold outside the range and writes nothing at all"
+    "pattern": "refuses an out-of-range threshold as a validation error"
   },
   {
     "id": "M13",
@@ -141,7 +141,7 @@
     "find": "    ladder.archiveAfterDays <= ladder.disableGraceDays",
     "replace": "    ladder.archiveAfterDays < ladder.disableGraceDays",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "validates that archive falls strictly after the disable"
+    "pattern": "validates that archive falls strictly after disable"
   },
   {
     "id": "M17",
@@ -159,7 +159,7 @@
     "find": "  const config = adTargetConfigSchema.parse(input.config);\n  const scalars = createScalarsSchema.parse(input);",
     "replace": "  const config = input.config as z.infer<typeof adTargetConfigSchema>;\n  const scalars = createScalarsSchema.parse(input);",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "stores the resolved configuration, defaults and all"
+    "pattern": "resolves the configuration defaults into the stored column"
   },
   {
     "id": "M19",
@@ -222,7 +222,7 @@
     "find": "        ...(scalars.name === undefined ? {} : { name: scalars.name }),",
     "replace": "        ...(scalars.name === undefined ? {} : {}),",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "stores the schedule an update sets and clears it with null|leaves the ladder alone when the update does not mention it"
+    "pattern": "writes the fields an update names"
   },
   {
     "id": "M26",
@@ -240,7 +240,7 @@
     "find": "    input.config === undefined ? undefined : adTargetConfigSchema.parse(input.config);",
     "replace": "    input.config === undefined ? undefined : (input.config as never);",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "refuses an update that would put the configuration in the clear"
+    "pattern": "resolves the defaults again on an update that replaces the config"
   },
   {
     "id": "M28",
@@ -258,7 +258,7 @@
     "find": "        ...(scalars.enabled === undefined ? {} : { enabled: scalars.enabled }),",
     "replace": "        ...(scalars.enabled === undefined ? {} : {}),",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "says so when no credential was replaced"
+    "pattern": "writes the fields an update names"
   },
   {
     "id": "M30",
@@ -411,7 +411,7 @@
     "find": "      accounts: await tx.targetAccount.count({ where: { targetSystemId: targetId } }),",
     "replace": "      accounts: await tx.targetAccount.count(),",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "refuses without confirmation and reports what it holds"
+    "pattern": "counts only this target"
   },
   {
     "id": "M47",
@@ -429,7 +429,7 @@
     "find": "    ...adTargetConfigSchema.parse(target.config),\n    bindPassword,",
     "replace": "    ...(target.config as unknown as AdTargetConfig),\n    bindPassword,",
     "test": "packages/core/src/provision/target-service.test.ts",
-    "pattern": "stores the resolved configuration, defaults and all"
+    "pattern": "resolves defaults a stored row never had"
   },
   {
     "id": "M49",
@@ -537,7 +537,7 @@
     "find": "  'member',\n  'memberOf',\n  'primaryGroupID',\n  'distinguishedName',",
     "replace": "  'primaryGroupID',",
     "test": "packages/core/src/provision/target-service.schemas.test.ts",
-    "pattern": "refuses a template writing"
+    "pattern": "refuses every name the export claims to refuse, and no fewer"
   },
   {
     "id": "M61",
@@ -1014,7 +1014,7 @@
     "find": "    if (discovered.length === 0) {",
     "replace": "    if (discovered.length >= 0) {",
     "test": "packages/core/src/provision/entitlement-service.test.ts",
-    "pattern": "writes the catalog it read, identity and DN both"
+    "pattern": "marks a vanished entitlement missing rather than deleting it"
   },
   {
     "id": "M114",
@@ -1239,6 +1239,267 @@
     "find": "      byExternalId.set(entitlement.externalId, entitlement);",
     "replace": "      byExternalId.set(`${entitlement.externalId}-${byExternalId.size}`, entitlement);",
     "test": "packages/core/src/provision/entitlement-service.test.ts",
-    "pattern": "counts an entitlement the target returned twice once"
+    "pattern": "keeps the last of two entries for the same group"
+  },
+  {
+    "id": "M139",
+    "note": "a name added to the unwritable export with no test behind it",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  'ntSecurityDescriptor',\n] as const;",
+    "replace": "  'ntSecurityDescriptor',\n  'lockoutTime',\n] as const;",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "refuses every name the export claims to refuse, and no fewer"
+  },
+  {
+    "id": "M140",
+    "note": "brief's test: the vault entry is replaced on rotation",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    if (scalars.bindPassword !== undefined) {",
+    "replace": "    if (false) {",
+    "test": "packages/core/src/provision/target-service.test.ts",
+    "pattern": "replaces the vault entry when a new bind password is supplied"
+  },
+  {
+    "id": "M141",
+    "note": "brief's test: the credential comes back attached",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  return {\n    ...adTargetConfigSchema.parse(target.config),\n    bindPassword,\n  };",
+    "replace": "  return {\n    ...adTargetConfigSchema.parse(target.config),\n    bindPassword: '',\n  };",
+    "test": "packages/core/src/provision/target-service.test.ts",
+    "pattern": "returns the configuration with the credential attached"
+  },
+  {
+    "id": "M142",
+    "note": "brief's test: the profile's templates are stored",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "      create: { tenantId: bound, targetSystemId: targetId, ...profile },",
+    "replace": "      create: {\n        tenantId: bound,\n        targetSystemId: targetId,\n        ...profile,\n        fallbackContainer: 'OU=Wrong,DC=acme,DC=test',\n      },",
+    "test": "packages/core/src/provision/target-service.test.ts",
+    "pattern": "stores the templates and audits the change"
+  },
+  {
+    "id": "M145",
+    "note": "unwritable attribute check off, seen from the service",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "      if (unwritableAttributes.has(name.toLowerCase())) {",
+    "replace": "      if (false) {",
+    "test": "packages/core/src/provision/target-service.test.ts",
+    "pattern": "refuses an attribute template that would disable the account"
+  },
+  {
+    "id": "M146",
+    "note": "an update may put the configuration in the clear",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    input.config === undefined ? undefined : adTargetConfigSchema.parse(input.config);",
+    "replace": "    input.config === undefined ? undefined : (input.config as never);",
+    "test": "packages/core/src/provision/target-service.test.ts",
+    "pattern": "refuses an update that would put the configuration in the clear"
+  },
+  {
+    "id": "M147",
+    "note": "rule name bound off by one",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  name: z.string().trim().min(1).max(200),\n  description: z.string().max(2000).optional(),",
+    "replace": "  name: z.string().trim().min(1).max(199),\n  description: z.string().max(2000).optional(),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts a name at the bound and refuses one past it"
+  },
+  {
+    "id": "M148",
+    "note": "rule description bound off by one",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  description: z.string().max(2000).optional(),",
+    "replace": "  description: z.string().max(1999).optional(),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts a description up to the bound and refuses one past it"
+  },
+  {
+    "id": "M149",
+    "note": "entitlement list bound off by one",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  entitlementIds: z.array(z.string().uuid()).max(512),",
+    "replace": "  entitlementIds: z.array(z.string().uuid()).max(511),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts five hundred and twelve entitlement ids and refuses more"
+  },
+  {
+    "id": "M150",
+    "note": "attribute template value bound off by one",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    z.string().max(1024),\n  )\n  .superRefine",
+    "replace": "    z.string().max(1023),\n  )\n  .superRefine",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts an attribute template value at the bound"
+  },
+  {
+    "id": "M151",
+    "note": "container template bound off by one",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  containerTemplate: z.string().min(1).max(1024),",
+    "replace": "  containerTemplate: z.string().min(1).max(1023),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts a template at the bound and refuses one past it"
+  },
+  {
+    "id": "M152",
+    "note": "uniqueness attempt ceiling off by one",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  maxUniquenessAttempts: z.number().int().positive().max(200),",
+    "replace": "  maxUniquenessAttempts: z.number().int().positive().max(199),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts the highest and lowest uniqueness attempt count"
+  },
+  {
+    "id": "M153",
+    "note": "the delivery choice the console produces is refused",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  initialPasswordDelivery: z.enum(['manager', 'personalEmail', 'vaultOnly']),",
+    "replace": "  initialPasswordDelivery: z.enum(['manager', 'personalEmail']) as never,",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts the profile the console produces"
+  },
+  {
+    "id": "M154",
+    "note": "the uniqueness strategy is not defaulted",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  uniquenessStrategy: z.literal('numericSuffix').default('numericSuffix'),",
+    "replace": "  uniquenessStrategy: z.literal('numericSuffix').optional() as never,",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "defaults the uniqueness strategy rather than requiring it"
+  },
+  {
+    "id": "M155",
+    "note": "a threshold is dropped from the list the guard reads",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  'personPopulationDropPercent',\n] as const;",
+    "replace": "] as const;",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "names all seven thresholds"
+  },
+  {
+    "id": "M156",
+    "note": "the fallback container may be blank, seen from the schema",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  fallbackContainer: z.string().min(1).max(1024),",
+    "replace": "  fallbackContainer: z.string().min(0).max(1024),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "refuses a blank fallback container"
+  },
+  {
+    "id": "M157",
+    "note": "the attribute-count bound off by one, from the accepting side",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    if (Object.keys(templates).length > 64) {",
+    "replace": "    if (Object.keys(templates).length > 63) {",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts sixty-four attribute templates and refuses sixty-five"
+  },
+  {
+    "id": "M158",
+    "note": "a profile attribute the profile is for is refused",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  UNWRITABLE_ACCOUNT_ATTRIBUTES.map((a) => a.toLowerCase()),",
+    "replace": "  [...UNWRITABLE_ACCOUNT_ATTRIBUTES, 'mail'].map((a) => a.toLowerCase()),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts the attributes a profile is for"
+  },
+  {
+    "id": "M159",
+    "note": "the remit is narrowed to enabled rules",
+    "file": "packages/core/src/provision/entitlement-service.ts",
+    "find": "    where: { rule: { targetSystemId: targetId } },",
+    "replace": "    where: { rule: { targetSystemId: targetId, enabled: true } },",
+    "test": "packages/core/src/provision/entitlement-service.test.ts",
+    "pattern": "counts a disabled rule"
+  },
+  {
+    "id": "M160",
+    "note": "the remit is a list rather than a set",
+    "file": "packages/core/src/provision/entitlement-service.ts",
+    "find": "  return new Set(joins.map((j) => j.entitlementId));",
+    "replace": "  return [...joins.map((j) => j.entitlementId), ...joins.map((j) => j.entitlementId)] as never as Set<string>;",
+    "test": "packages/core/src/provision/entitlement-service.test.ts",
+    "pattern": "names each entitlement once even when two rules grant it"
+  },
+  {
+    "id": "M162",
+    "note": "a rename keeps the old display name",
+    "file": "packages/core/src/provision/entitlement-service.ts",
+    "find": "          type: entitlement.type,\n          displayName: entitlement.displayName,\n          description,",
+    "replace": "          type: entitlement.type,\n          description,",
+    "test": "packages/core/src/provision/entitlement-service.test.ts",
+    "pattern": "updates a group that was renamed and moved, keeping its identity"
+  },
+  {
+    "id": "M163",
+    "note": "a missing credential is not detected, seen across tenants",
+    "file": "packages/core/src/provision/entitlement-service.ts",
+    "find": "  if (!config) throw new Error('target configuration or credential missing');",
+    "replace": "  if (!config) throw new Error('nothing to see here');",
+    "test": "packages/core/src/provision/entitlement-service.test.ts",
+    "pattern": "refuses a target in another tenant"
+  },
+  {
+    "id": "M164",
+    "note": "a rule must name at least one entitlement",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "  entitlementIds: z.array(z.string().uuid()).max(512),",
+    "replace": "  entitlementIds: z.array(z.string().uuid()).min(1).max(512),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts a rule with an empty entitlement list"
+  },
+  {
+    "id": "M165",
+    "note": "the password length becomes required",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    length: z.number().int().min(12).max(256).optional(),",
+    "replace": "    length: z.number().int().min(12).max(256),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts an empty policy, which means the generator decides"
+  },
+  {
+    "id": "M166",
+    "note": "the threshold range excludes its own endpoints",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "        z.number().int().min(0).max(100).optional(),",
+    "replace": "        z.number().int().min(1).max(99).optional(),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "accepts the two ends of the range"
+  },
+  {
+    "id": "M167",
+    "note": "the depth cap is gone, so a deep condition is a RangeError",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    if (depth > MAX_CONDITION_DEPTH) {",
+    "replace": "    if (false) {",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "refuses a condition that is deep enough to overflow the stack"
+  },
+  {
+    "id": "M168",
+    "note": "any password length is issuable",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    length: z.number().int().min(12).max(256).optional(),",
+    "replace": "    length: z.number().int().min(1).max(1e9).optional(),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "refuses a length nobody should be issued"
+  },
+  {
+    "id": "M169",
+    "note": "a password requirement need not be a boolean",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    requireSymbol: z.boolean().optional(),",
+    "replace": "    requireSymbol: z.any().optional(),",
+    "test": "packages/core/src/provision/target-service.schemas.test.ts",
+    "pattern": "refuses a non-boolean requirement"
+  },
+  {
+    "id": "M170",
+    "note": "the depth cap is gone, seen at the write boundary itself",
+    "file": "packages/core/src/provision/target-service.ts",
+    "find": "    if (depth > MAX_CONDITION_DEPTH) {",
+    "replace": "    if (false) {",
+    "test": "packages/core/src/provision/target-service.test.ts",
+    "pattern": "refuses a condition deeper than the cap, at the write boundary"
   }
 ]

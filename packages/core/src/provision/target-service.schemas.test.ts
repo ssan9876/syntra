@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { adTargetConfigSchema } from '@syntra/connectors';
 import {
   MAX_CONDITION_DEPTH,
   MAX_CONDITION_NODES,
@@ -266,7 +267,36 @@ describe('accountProfileSchema', () => {
   });
 
   describe('attribute templates', () => {
-    it.each(UNWRITABLE_ACCOUNT_ATTRIBUTES)('refuses a template writing %s', (name) => {
+    // Written out, NOT derived from UNWRITABLE_ACCOUNT_ATTRIBUTES. Drawing
+    // the cases from the constant under test means deleting a name from the
+    // list deletes the test that would have caught it: the mutation pass
+    // removed four and eleven cases went green.
+    const MUST_REFUSE = [
+      'userAccountControl',
+      'unicodePwd',
+      'userPassword',
+      'pwdLastSet',
+      'member',
+      'memberOf',
+      'primaryGroupID',
+      'distinguishedName',
+      'objectClass',
+      'objectCategory',
+      'objectGUID',
+      'objectSid',
+      'sAMAccountName',
+      'ntSecurityDescriptor',
+    ] as const;
+
+    it('refuses every name the export claims to refuse, and no fewer', () => {
+      // The list and the export, checked against each other. A name added to
+      // the export and not to this list is a name nothing above tests.
+      expect([...UNWRITABLE_ACCOUNT_ATTRIBUTES].sort()).toEqual(
+        [...MUST_REFUSE].sort(),
+      );
+    });
+
+    it.each(MUST_REFUSE)('refuses a template writing %s', (name) => {
       const parsed = accountProfileSchema.safeParse({
         ...validProfile,
         attributeTemplates: { [name]: 'x' },
@@ -506,5 +536,69 @@ describe('the gaps the mutation pass found', () => {
         initialPasswordDelivery: 'sms',
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('the transport coupling the borrow check relies on', () => {
+  // `testTargetConfiguration` compares the URL, the TLS mode and the
+  // certificate setting before it will lend a saved credential. Removing the
+  // TLS-mode comparison changes no behaviour, and this is why: the schema ties
+  // `tlsMode` to the URL scheme in both directions and excludes `plain`
+  // outright, so two configurations whose URLs are equal cannot differ in
+  // `tlsMode` at all. The comparison is defence in depth against a future
+  // schema that decouples them -- and these three tests are what would fail if
+  // one ever did, which is the only thing that makes keeping it honest.
+  const base = {
+    bindDn: 'CN=svc,DC=acme,DC=test',
+    baseDn: 'OU=Users,DC=acme,DC=test',
+    entitlementSearchBase: 'OU=Groups,DC=acme,DC=test',
+    archiveContainer: 'OU=Archive,DC=acme,DC=test',
+  };
+
+  it('refuses starttls on an ldaps URL', () => {
+    expect(
+      adTargetConfigSchema.safeParse({
+        ...base,
+        url: 'ldaps://dc.acme.test:636',
+        tlsMode: 'starttls',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses ldaps on an ldap URL', () => {
+    expect(
+      adTargetConfigSchema.safeParse({
+        ...base,
+        url: 'ldap://dc.acme.test:389',
+        tlsMode: 'ldaps',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses plain outright, whatever the URL says', () => {
+    expect(
+      adTargetConfigSchema.safeParse({
+        ...base,
+        url: 'ldap://dc.acme.test:389',
+        tlsMode: 'plain',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('leaves exactly one TLS mode available for each URL scheme', () => {
+    expect(
+      adTargetConfigSchema.safeParse({
+        ...base,
+        url: 'ldaps://dc.acme.test:636',
+        tlsMode: 'ldaps',
+      }).success,
+    ).toBe(true);
+    expect(
+      adTargetConfigSchema.safeParse({
+        ...base,
+        url: 'ldap://dc.acme.test:389',
+        tlsMode: 'starttls',
+      }).success,
+    ).toBe(true);
   });
 });

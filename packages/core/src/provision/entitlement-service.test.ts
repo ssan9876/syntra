@@ -229,6 +229,27 @@ describe('refreshEntitlements', () => {
     expect(rows[0]!.status).toBe('unreadable');
   });
 
+  it('keeps the last of two entries for the same group', async () => {
+    // Deduplicating by externalId is not only about the row count. The map
+    // decides WHICH of the two the row ends up holding, and a version that
+    // let both through would insert the first and drop the second -- so the
+    // catalog would hold the entry the target sent first rather than last,
+    // which is the opposite of "the latest read wins".
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([
+        group('guid-1', 'Finance'),
+        { ...group('guid-1', 'Finance'), displayName: 'Finance (renamed)' },
+      ]),
+    );
+    const rows = await entitlements();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.displayName).toBe('Finance (renamed)');
+  });
+
   it('counts an entitlement the target returned twice once', async () => {
     const result = await refreshEntitlements(
       tenantId,
@@ -289,23 +310,37 @@ describe('refreshEntitlements', () => {
       provider,
       null,
       other.id,
-      reader([group('guid-1', 'Finance')]),
+      reader([group('guid-1', 'Finance'), group('guid-only-theirs', 'Theirs')]),
     );
+    // The SAME externalId, deliberately: two targets can offer groups whose
+    // identifiers collide, @@unique([tenantId, targetSystemId, externalId])
+    // says they are two entitlements, and a read of the existing rows that
+    // forgets to scope by target would see the other target's row, decide
+    // this one already exists, and create nothing at all here.
     await refreshEntitlements(
       tenantId,
       provider,
       null,
       targetId,
-      reader([group('guid-9', 'Ops')]),
+      reader([group('guid-1', 'Ops')]),
     );
 
     const theirs = await withTenant(tenantId, (tx) =>
-      tx.entitlement.findMany({ where: { targetSystemId: other.id } }),
+      tx.entitlement.findMany({
+        where: { targetSystemId: other.id },
+        orderBy: { externalId: 'asc' },
+      }),
     );
-    expect(theirs.map((r) => [r.externalId, r.status])).toEqual([['guid-1', 'present']]);
-    // The same externalId in two targets is two entitlements, per
-    // @@unique([tenantId, targetSystemId, externalId]).
-    expect(await entitlements()).toHaveLength(1);
+    // Both of theirs untouched: the shared id proves the existing-row READ
+    // is scoped, and `guid-only-theirs` -- which this refresh never saw --
+    // proves the vanished SWEEP is. Without the second one the sweep's
+    // `notIn` happens to exclude their row anyway and the scope is untested.
+    expect(theirs.map((r) => [r.externalId, r.displayName, r.status])).toEqual([
+      ['guid-1', 'Finance', 'present'],
+      ['guid-only-theirs', 'Theirs', 'present'],
+    ]);
+    const ours = await entitlements();
+    expect(ours.map((r) => [r.externalId, r.displayName])).toEqual([['guid-1', 'Ops']]);
   });
 
   it('audits the refresh with the numbers it returned', async () => {
@@ -594,22 +629,28 @@ describe('the batched catalog write', () => {
       reader([group('guid-1', 'Finance')]),
     );
 
-    const only = (over: Partial<DiscoveredEntitlement>) =>
-      refreshEntitlements(tenantId, provider, null, targetId, reader([
-        { ...group('guid-1', 'Finance'), ...over },
-      ]));
+    // CUMULATIVE. Rebuilding the input from the original group each time
+    // changes the field under test *and* changes the previous one back, so a
+    // comparison that ignores one of them still sees the other and writes the
+    // whole row -- which is exactly how three of these mutants survived the
+    // first pass. Each step below differs from the stored row in one field.
+    let current: DiscoveredEntitlement = group('guid-1', 'Finance');
+    const only = async (over: Partial<DiscoveredEntitlement>) => {
+      current = { ...current, ...over };
+      await refreshEntitlements(tenantId, provider, null, targetId, reader([current]));
+      return (await entitlements())[0]!;
+    };
 
-    await only({ displayName: 'Finance and Legal' });
-    expect((await entitlements())[0]!.displayName).toBe('Finance and Legal');
-
-    await only({ dn: 'CN=Finance,OU=Corporate,DC=acme,DC=test' });
-    expect((await entitlements())[0]!.dn).toBe('CN=Finance,OU=Corporate,DC=acme,DC=test');
-
-    await only({ type: 'role' });
-    expect((await entitlements())[0]!.type).toBe('role');
-
-    await only({ description: 'the finance team' });
-    expect((await entitlements())[0]!.description).toBe('the finance team');
+    expect((await only({ displayName: 'Finance and Legal' })).displayName).toBe(
+      'Finance and Legal',
+    );
+    expect((await only({ dn: 'CN=Finance,OU=Corporate,DC=acme,DC=test' })).dn).toBe(
+      'CN=Finance,OU=Corporate,DC=acme,DC=test',
+    );
+    expect((await only({ type: 'role' })).type).toBe('role');
+    expect((await only({ description: 'the finance team' })).description).toBe(
+      'the finance team',
+    );
   });
 
   it('stamps lastSeenAt on every refresh, not only the first', async () => {
