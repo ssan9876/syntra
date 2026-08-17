@@ -329,6 +329,20 @@ describe('rules', () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it('refuses a rule body carrying a key it does not know', async () => {
+    // The transport schema is `.strict()` and core's `businessRuleSchema` is
+    // not, so this is the one thing only the contract boundary can refuse. A
+    // misspelled field that is silently dropped is a rule saved with a
+    // property the author believes they set.
+    const cookie = await manager();
+    await create(cookie);
+    const response = await put(`/api/admin/targets/${targetId}/rules`, cookie, {
+      ...rule(),
+      grantsAcount: true,
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it('refuses a condition nested past the cap without a 500', async () => {
     // The exposure Task 12 closed only half of: `conditionRequestSchema` is a
     // second `z.lazy`, parsed at the HTTP edge BEFORE core's cap runs, so
@@ -490,6 +504,19 @@ describe('the account profile', () => {
     expect(JSON.stringify(response.json())).toContain('userAccountControl');
   });
 
+  it('refuses a profile body carrying a key it does not know', async () => {
+    // Same reasoning as the rule body: `accountProfileSchema` in core is not
+    // strict, so a misspelled `fallbackContianer` would be dropped and the
+    // profile saved without the fallback its author thought they set.
+    const cookie = await manager();
+    await create(cookie);
+    const response = await put(`/api/admin/targets/${targetId}/profile`, cookie, {
+      ...profile,
+      fallbackContianer: 'OU=Users,DC=acme,DC=test',
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it('answers 404 before there is a profile', async () => {
     const cookie = await manager();
     await create(cookie);
@@ -544,6 +571,10 @@ describe('POST /api/admin/targets/:id/runs/:runId/apply', () => {
       { confirm: false },
     );
     expect(response.statusCode).toBe(409);
+    // The `type` as well as the prose: RFC 9457 says the type is the
+    // machine-readable half, and "needs confirmation" and "cannot be confirmed
+    // away" are two different answers whose prose both contains "confirm".
+    expect(response.json().type).toContain('run-needs-confirmation');
     expect(response.json().detail).toContain('confirm');
   });
 
@@ -563,6 +594,7 @@ describe('POST /api/admin/targets/:id/runs/:runId/apply', () => {
     // There is nothing an administrator could usefully confirm about a
     // directory that may simply be unreachable.
     expect(response.statusCode).toBe(409);
+    expect(response.json().type).toContain('run-unconfirmable');
     expect(response.json().detail).toContain('cannot be confirmed');
   });
 

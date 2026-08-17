@@ -106,6 +106,17 @@ describe('the target a caller may create', () => {
     ).toBe(false);
   });
 
+  it('refuses an unknown key on a create rather than dropping it', () => {
+    expect(
+      createTargetRequestSchema.safeParse({
+        name: 'Acme AD',
+        config,
+        bindPassword: 'x',
+        concurrency: 8,
+      }).success,
+    ).toBe(false);
+  });
+
   it('refuses a field it does not implement rather than dropping it', () => {
     // `concurrency` is stored, validated and rendered, and the apply loop is
     // sequential — the column has never had a reader. Without `.strict()` Zod
