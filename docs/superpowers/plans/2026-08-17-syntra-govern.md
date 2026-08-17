@@ -8,9 +8,9 @@
 
 **Tech Stack:** TypeScript 5.7 (`exactOptionalPropertyTypes` on), Prisma 6 over PostgreSQL with forced row-level security, Fastify 5, React 19 + react-router 7, Vitest 3 (single fork), Playwright, pg-boss 12, Zod 3.
 
-**Spec:** `docs/superpowers/specs/2026-08-16-syntra-govern-design.md` (24 sections). Rulings that bind this plan: `.superpowers/sdd/govern-rulings.md` (G1), `.superpowers/sdd/govern-plan-rulings.md` (G-2–G-8), `.superpowers/sdd/provision-rulings.md` (P1–P7), `.superpowers/sdd/provision-preflight-rulings.md` (P8–P23), `.superpowers/sdd/automate-preflight-rulings.md` (A-3–A-10). Dependency plans: `docs/superpowers/plans/2026-08-16-syntra-provision.md` and `docs/superpowers/plans/2026-08-17-syntra-automate.md`. **Where Provision's plan and `.superpowers/sdd/2026-08-16-syntra-provision/progress.md` disagree, the ledger is what shipped and the ledger wins.**
+**Spec:** `docs/superpowers/specs/2026-08-16-syntra-govern-design.md` (24 sections). Rulings that bind this plan: `.superpowers/sdd/govern-rulings.md` (G1), `.superpowers/sdd/govern-plan-rulings.md` (G-2–G-13; **G-11 makes the composite check standing, G-12 makes an untrusted checkpoint recoverable, G-13 removes `lapsed_exception`**), `.superpowers/sdd/provision-rulings.md` (P1–P7), `.superpowers/sdd/provision-preflight-rulings.md` (P8–P23), `.superpowers/sdd/automate-preflight-rulings.md` (A-3–A-10). Dependency plans: `docs/superpowers/plans/2026-08-16-syntra-provision.md` and `docs/superpowers/plans/2026-08-17-syntra-automate.md`. **Where Provision's plan and `.superpowers/sdd/2026-08-16-syntra-provision/progress.md` disagree, the ledger is what shipped and the ledger wins.**
 
-**Revision:** this plan has been through a pre-flight review (`.superpowers/sdd/govern-plan-preflight.md` — 6 Critical, 22 High, 13 Medium, verdict *not ready*) and the fix wave that answered it (`.superpowers/sdd/govern-plan-fixes.md`). **23 tasks, 227 steps.** The largest structural changes, so a reader of the committed version can find them:
+**Revision:** this plan has been through a pre-flight review (`.superpowers/sdd/govern-plan-preflight.md` — 6 Critical, 22 High, 13 Medium, verdict *not ready*), the fix wave that answered it (`.superpowers/sdd/govern-plan-fixes.md`), a scoped re-review (`.superpowers/sdd/govern-plan-rereview.md` — 1 Critical, 6 High, 2 Medium, verdict *not ready*) and the second fix wave that answered that (`.superpowers/sdd/govern-plan-fixes-2.md`). **23 tasks, 231 steps.** The largest structural changes, so a reader of the committed version can find them:
 
 - **`upsertFindings` no longer resolves anything.** It is split into `upsertFindings` (upsert only, no `snapshotId`) and `reconcileFindings(tenantId, snapshotId, kinds, drafts)`, which closes only within the kinds its caller is authoritative for. The normative caller table is at the head of Task 8. Before this, Task 10's gain wiring closed all six standing findings Task 8 had opened seconds earlier, in the same snapshot build.
 - **Task 8A is new** (Ruling G-2): it links Provision's `DriftFinding` rows to Govern's findings and propagates closure both ways. Dispatched after Task 8, before Task 9.
@@ -18,6 +18,15 @@
 - **Three tasks are dispatched out of numeric order: 19, 18, 17.** See the dispatch notes at the end.
 - **`confirmRevocationBatch` is written out** (Ruling G-5), including the two `GovernSettings` columns nobody wrote and the re-guard at execution.
 - **`verifyIncremental` verifies the checkpoint's signature before seeding from it**, and falls back to a full walk from genesis when it cannot.
+
+From the second fix wave:
+
+- **`audit_chain_broken` is a new `FindingKind` and `lapsed_exception` is gone.** The audit integrity alarm was raised under `coverage_gap`, which is one of the six standing kinds the nightly detect stage reconciles — so the build closed it every night with a snapshot that had read no audit events. The new kind is deliberately absent from `STANDING_KINDS` and is closed by `resolveAuditIntegrityFindings`, a third resolver that names no snapshot. `lapsed_exception` had no producer and never should have had one: §15 rule 3 ages the violation's existing finding, which is what `lapse()` does. Both are amended in the spec at Task 1 Step 13.
+- **An untrusted checkpoint is recoverable** (Ruling G-12). A clean genesis walk appends an audit event saying a checkpoint was re-established and why, then writes a new checkpoint past the refused one. Append-only holds: nothing is rewritten, a later row supersedes.
+- **`registerGovernJobs` is passed its options** — signer, anchor sink, `publicUrl`, transport — and `packages/core/src/config.ts` gains the optional keys that produce the first two. Before this, C5's protection could not be reached in a deployed system and §17's anchoring never ran.
+- **Task 20's guard types are exported from the barrel by enumeration and alias**, not `export *`: `GuardInput` / `GuardVerdict` / `GuardThresholds` already exist there from `sync/` and `provision/`, and under TS2308 a duplicate star export leaves the barrel exporting neither side, silently.
+- **Task 19's three cross-task verifications moved to Task 17 Step 9a**, the last of the three campaign tasks dispatched. Under the order `19, 18, 17` they reached into files that did not exist yet — and a mutation of a file that is not there cannot be applied, so it reports success.
+- **`govern-finding-critical` has a producer** (Task 12 Steps 3a and 4b). The template existed, §17's *"notified immediately and never digested"* was printed in its body, and no code path sent it — a hardened detector wired to a notification nobody receives. `runVerifyJob` now notifies the `audit.read` holders on the transition into open, and `NEVER_DIGESTED` carries the template so the digest cannot silently swallow it. The same step widens `OutboxDraft.template` to admit `govern-*` names at all, **without which all nine of this plan's `enqueueOutbox` call sites are TS2322.**
 
 ---
 
@@ -111,7 +120,7 @@ Two individually correct rules producing a defect where they meet is the failure
 |---|---|---|
 | `moot` on subject departure (§11) **+** a `revoke_decided` item already carrying a decision | A leaver's holding is mooted, the decision never dispatches, and the campaign reports it handled. **Only `pending` and `blocked_no_reviewer` items moot.** | Task 18 Step 7 |
 | `RevocationOrder` cancelled-as-overtaken (§5) **+** the `dispatch_not_applied` SLA finding (§13) | A cancelled order raises a finding saying a revocation was not applied, about a revocation that was correctly abandoned. | Task 20 Step 11 |
-| `HoldingCertification` projection (§18) **+** campaign re-base re-opening only changed items (§8) | Re-basing rolls the projection back for items whose holding did not change, and a certification that is still good reads as never made. | Task 19 Step 9 |
+| `HoldingCertification` projection (§18) **+** campaign re-base re-opening only changed items (§8) | Re-basing rolls the projection back for items whose holding did not change, and a certification that is still good reads as never made. | Task 17 Step 9a |
 
 ### The leaver question, answered once
 
@@ -199,6 +208,7 @@ Govern is built on Provision — Targets and Automate — Requests, both of whic
 | `personDisplayName`, `activeOn`, `latestContractEnd`, `resolveMappingContract`, `desiredState` | `packages/core/src/provision/desired.ts` (Provision Task 7) | the account requirement is decided over the **window** `[now, horizon]`, not at the horizon |
 | `type PersonFacts`, `type Attribution`, `type DesiredState`, `type KnownHolding`, `type ActualState`, `type DriftKind`, `type AccountStatus` | `packages/core/src/provision/types.ts` | the barrel exports the contract type as **`ProvisionContractFacts`**, not `ContractFacts` — `policy/types.js` already owns that name (TS2308). Inside `packages/core` import from `../provision/types.js` by its own name. |
 | `renderTemplate`, `renderContainer`, `escapeDnValue` | `packages/core/src/provision/templates.ts` | **`renderContainer` always escapes and is the only function called on a container template** (Ruling P22) |
+| `type GuardInput`, `type GuardVerdict`, `type GuardThresholds` | `packages/core/src/sync/guard.ts` (star-exported at index.ts:59) and `packages/core/src/provision/guard.ts` (aliased at index.ts:121-134) | **Govern's `revocation-guard.ts` uses all three names and must NOT be star-exported.** The barrel already carries `GuardInput`/`GuardVerdict` from `sync/` and `GuardThresholds` from `provision/`; a second star export is TS2308, and under TS2308 the barrel exports **neither** side of an ambiguous name — silently, with no error where the collision was introduced. T20 Step 9 enumerates and aliases (`GovernGuardInput` / `GovernGuardVerdict` / `GovernGuardThresholds`), the same remedy Provision's two rulings established. |
 | `type PlannedAction`, `planActions`, `type PlanInput`, `addDays`, `ACTION_ORDER` | `packages/core/src/provision/plan.ts` (Provision Task 9) | **`PlanInput` has no `revocationOrders` — Task 20 adds it** |
 | `remitFor`, `refreshEntitlements`, `grantedEntitlementsFor` | `packages/core/src/provision/entitlement-service.ts` | there is deliberately **no `holderCounts` helper** |
 | `previewProvisionRun`, `ProvisionRunInFlightError` | `packages/core/src/provision/run-service.ts` | — |
@@ -208,7 +218,7 @@ Govern is built on Provision — Targets and Automate — Requests, both of whic
 | `claimSyntraUsers`, `applySyntraUserAction` | `packages/core/src/provision/syntra-user.ts` (Provision Task 15) | Task 9 calls Provision's account-linking path; Govern never writes `TargetAccount` |
 | `SYNC_JOB`, `syncJobPayload` | `packages/core/src/sync/jobs.ts` | Task 13's **Refresh now** enqueues it for a directory source |
 | `resolveStageApprovers`, `resolveSelector`, `type StageSnapshot`, `type ResolutionSubject`, `type ResolvedApprover`, `type ApproverSelector`, `type SelectorConfig`, `isValidApprover`, `managerChainFor`, `type DropReason`, `MAX_MANAGER_DEPTH` | `packages/core/src/automate/approvers.ts` (Automate Task 4) | exclusions are subtracted **after** expansion, never before (Ruling A-6) |
-| `enqueueOutbox`, `type OutboxDraft`, `recipientsForPersons`, `type Recipient`, `usersWithPermission`, `displayNames`, `nameList`, `isDigestible`, `NEVER_DIGESTED` | `packages/core/src/automate/notify.ts` (Automate Task 5) | **every `var` a template renders is a name, never an id** |
+| `enqueueOutbox`, `type OutboxDraft`, `type OutboxTemplate`, `recipientsForPersons`, `type Recipient`, `usersWithPermission`, `displayNames`, `nameList`, `isDigestible`, `NEVER_DIGESTED` | `packages/core/src/automate/notify.ts` (Automate Task 5) | **every `var` a template renders is a name, never an id.** **`OutboxDraft.template` was `AutomateTemplate = Extract<TemplateName, 'automate-${string}'>`, which admits no `govern-*` name** — every one of this plan's nine `enqueueOutbox` call sites was TS2322 on it. **Task 12 Step 3a** widens it to `OutboxTemplate` (the two prefixes, so Core's own `welcome`/`password-reset` stay unenqueueable) and adds `govern-finding-critical` to `NEVER_DIGESTED`, which is where §17's "never digested" is enforced for every caller at once. |
 | `automateSettings`, `subjectAudienceFacts`, `allSubjectAudienceFacts`, `orgUnitChainFor`, `upsertResourceOwner` | `packages/core/src/automate/catalog-service.ts` (Automate Task 6) | never call the per-subject form in a loop over the tenant |
 | `revokeGrant`, `handBackGrant`, `fulfilRequest`, `subjectHoldings`, `requestUrl` | `packages/core/src/automate/fulfil.ts` (Automate Task 9) | `revokeGrant(tenantId, actorUserId, grantId, reason, options?)` — **takes a `User` id, not a person**, and opens its own transaction |
 | `checkEligibility` | `packages/core/src/automate/eligibility.ts` (Automate Task 9) | Task 16 adds the SoD check here |
@@ -309,7 +319,11 @@ packages/core/src/provision/run-service.ts MODIFIED — load orders, write revoc
 packages/core/src/provision/explain.ts     MODIFIED — previewRuleImpact gains sodImpact (T16)
 packages/core/src/automate/types.ts        MODIFIED — RefusalReason gains 'sod_violation' (T16)
 packages/core/src/automate/eligibility.ts  MODIFIED — the SoD re-check (T16)
-packages/core/src/index.ts                 MODIFIED — one export line per Govern module
+packages/core/src/index.ts                 MODIFIED — one export line per Govern module, EXCEPT
+                                           govern/revocation-guard.js, which is enumerated and
+                                           aliased: GuardInput/GuardVerdict/GuardThresholds
+                                           already exist in the barrel from sync/ and provision/,
+                                           and under TS2308 a star export leaves NEITHER (T20 Step 9)
 
 packages/contracts/src/govern.ts           every request/response schema (T13, T22)
 packages/contracts/src/index.ts            MODIFIED
@@ -1504,8 +1518,20 @@ ALTER TABLE "GovernFinding" ADD CONSTRAINT govern_finding_accepted_needs_expiry 
 
 -- A resolved finding names the snapshot that showed it gone. "It went away and
 -- we do not know why" is itself worth a row, and this is what makes it one.
+--
+-- `audit_chain_broken` is the ONE exemption, and it is exempt because it is not
+-- a snapshot finding in either direction: no snapshot build raises it, and no
+-- snapshot build can show it gone. It is raised by `verifyIncremental` (Task 10)
+-- and closed by `verifyIncremental`, from an `AuditChainCheck` row written in
+-- the same run. Without the exemption the only kind that CANNOT name a snapshot
+-- would be the only kind that could never be resolved — a `critical` integrity
+-- alarm that no clean verification could ever clear, which is the trap Ruling
+-- G-12 refused. The exemption is written as an equality on one literal kind and
+-- not as a general escape, so every other kind still names its snapshot.
 ALTER TABLE "GovernFinding" ADD CONSTRAINT govern_finding_resolved_names_snapshot CHECK (
-  "status" <> 'resolved' OR "resolvedBySnapshotId" IS NOT NULL);
+  "status" <> 'resolved'
+  OR "resolvedBySnapshotId" IS NOT NULL
+  OR "kind" = 'audit_chain_broken');
 
 ALTER TABLE "RemediationItem" ADD CONSTRAINT remediation_item_status CHECK (
   "status" IN ('open','in_progress','done','wont_fix'));
@@ -1665,13 +1691,13 @@ Three mutations, run one at a time, each reverted before the next:
 
 Each mutation must produce a failure. A mutation that produces none means the assertion is not attached to the thing it names.
 
-- [ ] **Step 13: Amend the spec at its six contradicted sites (Ruling G-7)**
+- [ ] **Step 13: Amend the spec at its nine contradicted sites (Rulings G-7, G-13 and the C-a fix)**
 
 This is a **documentation** step and it belongs to Task 1 because it must land before anybody else reads the spec against the code. It edits `docs/superpowers/specs/2026-08-16-syntra-govern-design.md` and nothing else.
 
 Ruling G-7: *"The plan is right in every case and the spec is wrong about the codebase it describes… **Amend the spec at each site**, the way Ruling P5 required for Provision §21 and §6. A spec that contradicts the shipped code with no record of which won is how the next reader reconciles them in the wrong direction."* Provision's Task 3 ledger records what happens otherwise: §6 was left contradicting an amended §21 in the same document, and the implementer had to fix it later.
 
-**Six edits, each with a one-line note naming the plan task that establishes the corrected fact.** The note is the point: an amended sentence with no provenance is indistinguishable from a sentence somebody disagreed with.
+**Nine edits — six from Ruling G-7, one from M5, two from Ruling G-13 and the C-a fix — each with a one-line note naming the plan task that establishes the corrected fact.** The note is the point: an amended sentence with no provenance is indistinguishable from a sentence somebody disagreed with.
 
 1. **§7 — `resolveApplicationIdsForUser` does not know which unit produced the match.** The spec asserts it "already knows which unit produced the match". It does not: `packages/core/src/access/resolve.ts` issues one `findMany` with an `OR`, selects `applicationId` alone, and `orgUnitChain` is module-private, so the `direct_assignment` / `group_inheritance` / `org_unit_inheritance` attributions and the unit chain §7 calls "the difference between an answer and a shrug" cannot be derived from it.
    > *Amended: `resolveApplicationIdsForUser` returns `Set<string>` and discards the path. Govern adds its own set-based `resolveApplicationPaths` in `collect.ts` and does not modify `resolve.ts`. — established by Task 6.*
@@ -1695,11 +1721,19 @@ Ruling G-7: *"The plan is right in every case and the spec is wrong about the co
 
 > *Amended: `RevocationBatch.status` is `computing | previewed | blocked | applying | applied | partially_applied | failed | superseded`. `superseded` is what a crashed non-terminal batch becomes at the head of the transaction that creates its replacement, and Global Constraint 6 requires that path to exist. — established by Task 15.*
 
+**And two more on §16's kind table, both adjudicated after the first fix wave.** These two differ in kind from the seven above: the spec is not wrong about the codebase here, it is inconsistent with **itself**, and §15 and the mechanism win.
+
+8. **§16 — `lapsed_exception` is not a finding kind.** §16's kind table lists it; §15 rule 3 says a lapsed exception **ages the violation**, raising the *existing* `GovernFinding` one severity step and naming the lapse on it. Both cannot be true: a second kind would put two Govern rows and two counts behind one problem, which §16 itself calls "how somebody stops trusting both numbers" and which Task 8A exists to prevent. §15 is the operative text and `lapse()` implements it verbatim.
+   > *Amended: `lapsed_exception` is removed from §16's kind table. A lapsed exception is recorded on the violation's own `sod_violation` finding — reopened at original severity, raised one step, with `lapsedExceptionAt` and `lapsedExceptionReason` in its `detail` — per §15 rule 3. — established by Task 21, Ruling G-13.*
+
+9. **§16 — `audit_chain_broken` is a finding kind, and §17's integrity failures are raised under it.** §16's table has no audit-integrity kind at all, so the verifier's two `critical` findings were raised under `coverage_gap`. `coverage_gap` is one of the six standing kinds the nightly snapshot build is authoritative for, and its only producer describes a region of a *snapshot*, never the audit log — so the build's reconciliation resolved the integrity alarm on the run after it was raised, naming a snapshot that had read no audit events.
+   > *Amended: §16's kind table gains `audit_chain_broken` — "the audit log cannot be shown to be intact" — and §17's two failures (a checkpoint that does not verify, and a chain that does not hold) are raised under it. It is deliberately NOT one of the standing kinds a snapshot build reconciles: nothing in a snapshot build raises it and nothing in a snapshot build can show it gone, so it is resolved by the verification run that re-establishes trust. — established by Tasks 2, 8 and 10.*
+
 Also add, at the head of the spec, the sentence Ruling P5 established as the convention:
 
-> **Amendments.** Seven sites in this document were amended after implementation began — the six Ruling G-7 adjudicated, plus §18's `RevocationBatch.status` enumeration — each because the document was wrong about the codebase it describes rather than because the design changed. Each carries a note naming the plan task that established the corrected fact. Rulings G-7 and P5.
+> **Amendments.** Nine sites in this document were amended after implementation began — the six Ruling G-7 adjudicated, §18's `RevocationBatch.status` enumeration, and two entries in §16's kind table (`lapsed_exception` removed, `audit_chain_broken` added). The first seven were amended because the document was wrong about the codebase it describes; the last two because §16 contradicted §15 and §17. Each carries a note naming the plan task that established the corrected fact. Rulings G-7, G-13 and P5.
 
-Verification for this step is a read, not a test: `git diff docs/superpowers/specs/2026-08-16-syntra-govern-design.md` shows six amended passages and one new heading, and `grep -n "already knows which unit produced the match" docs/superpowers/specs/2026-08-16-syntra-govern-design.md` returns nothing.
+Verification for this step is a read, not a test: `git diff docs/superpowers/specs/2026-08-16-syntra-govern-design.md` shows nine amended passages and one new heading; `grep -n "already knows which unit produced the match" docs/superpowers/specs/2026-08-16-syntra-govern-design.md` returns nothing; and `grep -n "lapsed_exception" docs/superpowers/specs/2026-08-16-syntra-govern-design.md` returns only the amendment note, never a kind-table row.
 
 - [ ] **Step 14: Commit**
 
@@ -1738,7 +1772,8 @@ This is the safety core of slice 1 and it comes before anything that counts. §8
   - `const COVERAGE_GAP_KINDS: readonly CoverageGapKind[]`
   - `type Completeness = 'complete' | 'partial' | 'unread'`
   - `type Staleness = 'fresh' | 'stale'`
-  - `type FindingKind` — the fifteen kinds of §16 — and `const FINDING_KINDS: readonly FindingKind[]`
+  - `type FindingKind` — fifteen kinds — and `const FINDING_KINDS: readonly FindingKind[]`. **Two deliberate departures from §16's kind table, both amended in the spec at Task 1 Step 13:** `audit_chain_broken` is added (it must not be a member of `STANDING_KINDS`, which is what C-a was) and `lapsed_exception` is removed (§15 rule 3 puts a lapse on the existing `sod_violation` finding — Ruling G-13).
+  - `const AUDIT_CHECKPOINT_REF = 'audit-checkpoint:'` and `const AUDIT_CHAIN_REF = 'audit-chain:'` — the two `audit_chain_broken` subject-reference prefixes, defined once because `audit-integrity.ts` writes them and `finding-service.ts` parses them
   - `type Severity = 'low' | 'medium' | 'high' | 'critical'` and `const SEVERITY_ORDER: readonly Severity[]` and `function raiseSeverity(s: Severity): Severity`
   - `type SubjectRef = { kind: 'person'; personId: string } | { kind: 'account'; systemId: string; accountRef: string }`
   - `function subjectKey(subject: SubjectRef): string`
@@ -1762,6 +1797,8 @@ This is the safety core of slice 1 and it comes before anything that counts. §8
 import { describe, expect, it } from 'vitest';
 import {
   ATTRIBUTION_KINDS,
+  AUDIT_CHAIN_REF,
+  AUDIT_CHECKPOINT_REF,
   COVERAGE_GAP_KINDS,
   FINDING_KINDS,
   RESOURCE_KINDS,
@@ -1987,6 +2024,29 @@ describe('the closed sets', () => {
     expect(FINDING_KINDS).toContain('dispatch_not_applied');
     expect(FINDING_KINDS).toContain('unmergeable_actor');
   });
+
+  it('carries the two deliberate departures from section 16 and says which way', () => {
+    // Both are amended in the spec at Task 1 Step 13, and both are the kind of
+    // decision that gets quietly reverted by somebody reading section 16's kind
+    // table on its own. This is the assertion that stops that.
+    //
+    // IN: the audit integrity alarm needs a kind the nightly detect-stage sweep
+    // does not own. `STANDING_KINDS` is a written-out literal in
+    // `snapshot-service.ts` and `audit_chain_broken` is deliberately not in it.
+    expect(FINDING_KINDS).toContain('audit_chain_broken');
+    // OUT: a lapsed exception ages the EXISTING `sod_violation` finding
+    // (section 15 rule 3, implemented by `lapse()`), so a second kind would be
+    // two rows for one problem — the thing Task 8A exists to prevent.
+    expect(FINDING_KINDS).not.toContain('lapsed_exception');
+  });
+
+  it('gives the two audit subject references exactly one definition each', () => {
+    // `audit-integrity.ts` writes them, `finding-service.ts` parses them back.
+    // Two literals is how a writer and a reader drift.
+    expect(AUDIT_CHECKPOINT_REF).toBe('audit-checkpoint:');
+    expect(AUDIT_CHAIN_REF).toBe('audit-chain:');
+    expect(AUDIT_CHECKPOINT_REF).not.toBe(AUDIT_CHAIN_REF);
+  });
 });
 ```
 
@@ -2097,6 +2157,27 @@ export const COVERAGE_GAP_KINDS: readonly CoverageGapKind[] = [
 export type Completeness = 'complete' | 'partial' | 'unread';
 export type Staleness = 'fresh' | 'stale';
 
+/**
+ * Section 16's closed set, with two deliberate departures from its kind table,
+ * both amended in the spec at Task 1 Step 13:
+ *
+ *  - `audit_chain_broken` is HERE and is not in section 16. It is the audit
+ *    integrity alarm, and it needs a kind of its own for a structural reason
+ *    rather than a taxonomic one: `snapshot-service.ts`'s detect stage sweeps
+ *    `STANDING_KINDS` on every nightly build, `coverage_gap` is a member, and
+ *    the only `coverage_gap` producer emits `subjectRefType: 'source'`. Raising
+ *    the two `critical` findings of Task 10 under `coverage_gap` therefore had
+ *    the nightly build resolve them, naming a snapshot that had shown nothing.
+ *    That is C1's defect at the two sites C5's fix created. `audit_chain_broken`
+ *    is absent from `STANDING_KINDS` and must stay absent; Task 10 closes it
+ *    itself, from evidence a snapshot build does not have.
+ *  - `lapsed_exception` is NOT here, and section 16 lists it. Section 15 rule 3
+ *    puts a lapse on the violation's OWN `sod_violation` finding — reopened at
+ *    original severity, raised one step, `lapsedExceptionAt` stamped into its
+ *    detail — which is what `lapse()` implements. A second kind would be two
+ *    rows and two counts behind one problem, which is the exact thing Task 8A
+ *    exists to prevent. Section 15 is the operative text (Ruling G-13).
+ */
 export type FindingKind =
   | 'unattributable_holding'
   | 'unexplained_gain'
@@ -2110,7 +2191,7 @@ export type FindingKind =
   | 'sod_violation'
   | 'sod_laundering'
   | 'approval_reciprocity'
-  | 'lapsed_exception'
+  | 'audit_chain_broken'
   | 'no_human_decision'
   | 'unmergeable_actor';
 
@@ -2127,10 +2208,24 @@ export const FINDING_KINDS: readonly FindingKind[] = [
   'sod_violation',
   'sod_laundering',
   'approval_reciprocity',
-  'lapsed_exception',
+  'audit_chain_broken',
   'no_human_decision',
   'unmergeable_actor',
 ];
+
+/**
+ * The two `audit_chain_broken` subject references, as prefixes.
+ *
+ * Exported because TWO modules must agree on them: `audit-integrity.ts` writes
+ * `${AUDIT_CHECKPOINT_REF}${sequence}` and `${AUDIT_CHAIN_REF}${sequence}`, and
+ * `finding-service.ts` parses them back to decide which of those findings a
+ * clean run is entitled to close. A second literal in either place is how the
+ * writer and the reader start disagreeing about the same string — the shape
+ * that cost this programme a Critical when a guard and a holder map read the
+ * same fact from two sources.
+ */
+export const AUDIT_CHECKPOINT_REF = 'audit-checkpoint:';
+export const AUDIT_CHAIN_REF = 'audit-chain:';
 
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
 export const SEVERITY_ORDER: readonly Severity[] = ['low', 'medium', 'high', 'critical'];
@@ -2330,7 +2425,7 @@ export function percentOf(
 - [ ] **Step 6: Run the test**
 
 Run: `pnpm vitest run packages/core/src/govern/types.test.ts`
-Expected: PASS, 19 tests.
+Expected: PASS, 21 tests. (The two added by this fix wave are `carries the two deliberate departures from section 16 and says which way` and `gives the two audit subject references exactly one definition each`.)
 
 - [ ] **Step 7: Export from the barrel**
 
@@ -6645,7 +6740,7 @@ One lifecycle, one table, one count. Spec §16. **The detection functions are pu
 - Modify: `packages/core/src/govern/snapshot-service.ts` (call `detectStandingFindings` from the detect stage), `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `type FindingKind`, `type Severity`, `raiseSeverity`, `subjectKey`, `type SubjectRef` from `./types.js`; `type ClassifiedSource` from `./freshness.js`. **It imports nothing from `./snapshot-service.js` — Ruling G-6; the accessor is in `./readable.js` and this module does not need it.**
+- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `recordEvent`; `type FindingKind`, `type Severity`, `raiseSeverity`, `subjectKey`, `type SubjectRef`, `AUDIT_CHECKPOINT_REF`, `AUDIT_CHAIN_REF` from `./types.js`; `type ClassifiedSource` from `./freshness.js`. **It imports nothing from `./snapshot-service.js` — Ruling G-6; the accessor is in `./readable.js` and this module does not need it.**
 - Produces (all in `./finding-service.js`):
   - `const FINDING_BATCH = 200`
   - `interface FindingDraft { kind: FindingKind; severity: Severity; subjectRefType: string; subjectRefId: string; detail: Record<string, unknown> ; driftFindingId?: string | null }`
@@ -6660,6 +6755,7 @@ One lifecycle, one table, one count. Spec §16. **The detection functions are pu
   - `function detectPrivilegedUncertified(holdings: readonly DetectHolding[], certifiedAt: ReadonlyMap<string, Date>, now: Date, privilegedRecertifyDays: number): FindingDraft[]`
   - `async function upsertFindings(tenantId: string, drafts: readonly FindingDraft[], options?: { now?: Date; batchSize?: number }): Promise<{ opened: number; updated: number }>` — **upsert only. It never resolves anything and it takes no `snapshotId`.**
   - `async function reconcileFindings(tenantId: string, snapshotId: string, kinds: readonly FindingKind[], drafts: readonly FindingDraft[], options?: { now?: Date; batchSize?: number }): Promise<{ opened: number; updated: number; resolved: number }>` — upserts `drafts`, then resolves the open findings **whose `kind` is in `kinds`** and which are absent from `drafts`. A caller that is not authoritative for a kind must not name it.
+  - `async function resolveAuditIntegrityFindings(tenantId: string, evidence: { trustedCheckpointSequence: number | null; genesisWalkClean: boolean }, options?: { now?: Date; batchSize?: number }): Promise<{ resolved: number }>` — closes `audit_chain_broken` findings and **only** that kind, from evidence a snapshot build does not have. The third resolver, and the only one that does not name a snapshot; the CHECK constraint exempts exactly this kind (Task 1 Step 8, Ruling G-12).
   - `async function assignFinding(tenantId: string, actorUserId: string | null, findingId: string, ownerPersonId: string, dueAt: Date): Promise<void>`
   - `async function acceptFinding(tenantId: string, actorUserId: string | null, findingId: string, reason: string, until: Date): Promise<void>`
   - `async function sweepAcceptedFindings(tenantId: string, now: Date): Promise<{ lapsed: number }>`
@@ -6668,7 +6764,7 @@ One lifecycle, one table, one count. Spec §16. **The detection functions are pu
 
 **Upsert and resolution are two functions, and the resolution names the kinds it owns.**
 
-A single `upsertFindings(tenantId, snapshotId, drafts)` that resolved *everything absent from `drafts`* would be correct for exactly one caller — the detect stage, which passes the complete standing-finding set — and catastrophic for every other one. This plan has six callers and five of them pass a partial set. The worst pair is inside one snapshot build: Step 5 opens the six standing kinds, and Task 10 Step 6 appends the explained-gain wiring to the *same* build with only `unexplained_gain` drafts. A whole-tenant sweep there marks every standing finding `resolved` seconds after it was opened, with `resolvedBySnapshotId` naming a snapshot that never showed it gone — and §16 makes "resolved **with the snapshot that showed it gone**" a first-class fact. The findings dashboard §20 says leads with "the count of things nobody can explain" would read zero after every nightly run, and slice 1's claim in §2 that Inventory alone is a product would be false.
+A single `upsertFindings(tenantId, snapshotId, drafts)` that resolved *everything absent from `drafts`* would be correct for exactly one caller — the detect stage, which passes the complete standing-finding set — and catastrophic for every other one. This plan has seven callers and six of them pass a partial set. The worst pair is inside one snapshot build: Step 5 opens the six standing kinds, and Task 10 Step 6 appends the explained-gain wiring to the *same* build with only `unexplained_gain` drafts. A whole-tenant sweep there marks every standing finding `resolved` seconds after it was opened, with `resolvedBySnapshotId` naming a snapshot that never showed it gone — and §16 makes "resolved **with the snapshot that showed it gone**" a first-class fact. The findings dashboard §20 says leads with "the count of things nobody can explain" would read zero after every nightly run, and slice 1's claim in §2 that Inventory alone is a product would be false.
 
 So: **`upsertFindings` never resolves. `reconcileFindings` resolves, and only within the kinds it is handed.** The authoritative table, which every caller in this plan must match:
 
@@ -6680,9 +6776,13 @@ So: **`upsertFindings` never resolves. `reconcileFindings` resolves, and only wi
 | `detectSodViolations` | T16 | `reconcileFindings` | `['sod_violation','sod_laundering','approval_reciprocity']` |
 | `closeDueCampaigns` | T18 | `upsertFindings` | — never reconciles |
 | `reflectRevocationOutcomes` | T20 | `upsertFindings` | — never reconciles |
-| `sweepLapsedExceptions` | T21 | `upsertFindings` | — never reconciles |
+| `verifyIncremental` | T10 Step 4 | `upsertFindings`, then `resolveAuditIntegrityFindings` | `['audit_chain_broken']`, and by construction: the resolver takes no `kinds` and can close no other kind |
+
+There is **no `sweepLapsedExceptions` row**, and there was one until this wave: it named a function that does not exist. Task 21's function is `sweepExceptions`, its `lapse()` puts the lapse on the existing `sod_violation` finding per §15 rule 3, and it calls neither `upsertFindings` nor `reconcileFindings` (Ruling G-13).
 
 `kinds` is `readonly FindingKind[]`, so a kind that does not exist is a compile error rather than a silent no-op, and an empty array resolves nothing at all.
+
+**`audit_chain_broken` is not in any row's `kinds` and must never be.** It is the one kind whose producer is not a snapshot build, so no caller in this table is authoritative for it, and the detect stage's `STANDING_KINDS` deliberately omits it. Putting it in `STANDING_KINDS` — which is what raising those findings under `coverage_gap` amounted to — hands the nightly build the power to close the audit integrity alarm with a snapshot that examined no audit events at all.
 
 **The signature that closes Ruling A-3's shape by construction.**
 
@@ -6716,12 +6816,14 @@ import {
   detectUnattributableHoldings,
   detectUnexplainedGains,
   reconcileFindings,
+  resolveAuditIntegrityFindings,
   resolveRemediationItem,
   sweepAcceptedFindings,
   upsertFindings,
   type DetectHolding,
   type FindingDraft,
 } from './finding-service.js';
+import { AUDIT_CHAIN_REF, AUDIT_CHECKPOINT_REF } from './types.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
 const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
@@ -6998,6 +7100,79 @@ describe('the lifecycle', () => {
     expect((await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow())).status).toBe('open');
   });
 
+  it('resolveAuditIntegrityFindings closes ONLY audit_chain_broken, and only on the evidence it was given', async () => {
+    // The third resolver, and the one with no snapshot behind it. It exists
+    // because `audit_chain_broken` is deliberately outside `STANDING_KINDS` —
+    // raising the audit integrity alarm under `coverage_gap` had the nightly
+    // detect stage close it with a snapshot that had read no audit events
+    // (C-a) — and a kind nothing sweeps is a kind nothing can ever clear
+    // unless its own producer clears it (Ruling G-12).
+    await upsertFindings(
+      tenantId,
+      [
+        draft({ kind: 'audit_chain_broken', subjectRefType: 'snapshot', subjectRefId: `${AUDIT_CHECKPOINT_REF}4` }),
+        draft({ kind: 'audit_chain_broken', subjectRefType: 'snapshot', subjectRefId: `${AUDIT_CHAIN_REF}2` }),
+        draft({ kind: 'stale_source', subjectRefType: 'source', subjectRefId: 'src-1' }),
+      ],
+      { now: NOW },
+    );
+
+    // No evidence at all: nothing closes. This is the arm that matters, because
+    // a resolver that closes on an empty argument is a whole-tenant sweep with
+    // extra steps.
+    expect(
+      (await resolveAuditIntegrityFindings(tenantId, {
+        trustedCheckpointSequence: null,
+        genesisWalkClean: false,
+      }, { now: NOW })).resolved,
+    ).toBe(0);
+
+    // A checkpoint at 4 that verifies does NOT close the finding about
+    // checkpoint 4 — only about checkpoints strictly before it. That is what
+    // stops a recovery closing the alarm it raised in the same run.
+    expect(
+      (await resolveAuditIntegrityFindings(tenantId, {
+        trustedCheckpointSequence: 4,
+        genesisWalkClean: false,
+      }, { now: NOW })).resolved,
+    ).toBe(0);
+
+    // A LATER trusted checkpoint closes the checkpoint finding and leaves the
+    // chain finding alone, because a clean incremental run said nothing about
+    // the range before its checkpoint.
+    expect(
+      (await resolveAuditIntegrityFindings(tenantId, {
+        trustedCheckpointSequence: 7,
+        genesisWalkClean: false,
+      }, { now: NOW })).resolved,
+    ).toBe(1);
+
+    const chain = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { subjectRefId: `${AUDIT_CHAIN_REF}2` } }),
+    );
+    expect(chain.status).toBe('open');
+
+    // A clean walk from genesis closes it, and resolves with NO snapshot — the
+    // one kind the CHECK constraint exempts.
+    expect(
+      (await resolveAuditIntegrityFindings(tenantId, {
+        trustedCheckpointSequence: 7,
+        genesisWalkClean: true,
+      }, { now: NOW })).resolved,
+    ).toBe(1);
+
+    const closed = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { subjectRefId: `${AUDIT_CHAIN_REF}2` } }),
+    );
+    expect(closed).toMatchObject({ status: 'resolved', resolvedBySnapshotId: null });
+
+    // And the unrelated standing finding was never touched by any of it.
+    const stale = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'stale_source' } }),
+    );
+    expect(stale.status).toBe('open');
+  });
+
   it('does not resurrect a finding an operator ACCEPTED', async () => {
     await upsertFindings(tenantId, [draft()], { now: NOW });
     const row = await withTenant(tenantId, (tx) => tx.governFinding.findFirstOrThrow());
@@ -7130,7 +7305,13 @@ Expected: FAIL — `Cannot find module './finding-service.js'`.
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import type { ClassifiedSource } from './freshness.js';
-import { raiseSeverity, type FindingKind, type Severity } from './types.js';
+import {
+  AUDIT_CHAIN_REF,
+  AUDIT_CHECKPOINT_REF,
+  raiseSeverity,
+  type FindingKind,
+  type Severity,
+} from './types.js';
 
 /** Bounded so a tenant with 40,000 findings does not write them in one transaction. */
 export const FINDING_BATCH = 200;
@@ -7538,6 +7719,85 @@ export async function reconcileFindings(
   return { opened, updated, resolved };
 }
 
+/**
+ * The third resolver, for the one kind that has no snapshot.
+ *
+ * `audit_chain_broken` is raised by `verifyIncremental` (Task 10) and nothing
+ * else. No snapshot build raises it and no snapshot build can show it gone, so
+ * it is deliberately absent from the detect stage's `STANDING_KINDS` and cannot
+ * be reached by `reconcileFindings` at all — which is the whole of C-a. For a
+ * while both findings were raised under `coverage_gap`, a standing kind, and
+ * the nightly build closed the audit integrity alarm every night with a
+ * snapshot that had examined no audit events. C1's defect, at the two sites
+ * C5's fix created.
+ *
+ * Closing them therefore has to happen HERE, from evidence a verification run
+ * has and a snapshot build does not. `resolvedBySnapshotId` stays null and the
+ * CHECK constraint exempts this kind by name (Task 1 Step 8); the row's
+ * `resolvedAt` and the `AuditChainCheck` written in the same run are the
+ * evidence, and `detail` is left exactly as it was raised so the finding still
+ * says what went wrong when somebody reads it later.
+ *
+ * NEITHER FACT CAN FIRE IN THE RUN THAT RAISED THE FINDING IT CLOSES. That is
+ * the property that makes this safe rather than a laundering step:
+ *
+ *  - `trustedCheckpointSequence` is the sequence of a head checkpoint that
+ *    VERIFIED. A run that refused its checkpoint passes `null`, so the
+ *    untrusted-checkpoint finding survives the run that raised it; it closes
+ *    only once a later, verifiable checkpoint exists, which under Ruling G-12
+ *    is what a clean genesis walk goes on to write. Only findings about
+ *    STRICTLY EARLIER checkpoints are closed, so a checkpoint that is still the
+ *    head keeps its finding.
+ *  - `genesisWalkClean` means the chain was walked from sequence 1 and held. An
+ *    incremental run that comes back clean has verified the segment AFTER a
+ *    checkpoint and has said nothing whatever about the range before it, so it
+ *    passes `false` and cannot close a break it never looked at.
+ *
+ * `accepted` is left alone, exactly as `reconcileFindings` leaves it.
+ */
+export async function resolveAuditIntegrityFindings(
+  tenantId: string,
+  evidence: { trustedCheckpointSequence: number | null; genesisWalkClean: boolean },
+  options: { now?: Date; batchSize?: number } = {},
+): Promise<{ resolved: number }> {
+  const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? FINDING_BATCH;
+
+  const open = await withTenant(tenantId, (tx) =>
+    tx.governFinding.findMany({
+      where: { kind: 'audit_chain_broken', status: { in: ['open', 'acknowledged'] } },
+      select: { id: true, subjectRefId: true },
+    }),
+  );
+
+  const closable = open.filter((finding) => {
+    if (finding.subjectRefId.startsWith(AUDIT_CHECKPOINT_REF)) {
+      if (evidence.trustedCheckpointSequence === null) return false;
+      const sequence = Number(finding.subjectRefId.slice(AUDIT_CHECKPOINT_REF.length));
+      // An unparseable reference closes nothing. Silently treating it as zero
+      // would close every checkpoint finding the moment one row is malformed.
+      return Number.isInteger(sequence) && sequence < evidence.trustedCheckpointSequence;
+    }
+    if (finding.subjectRefId.startsWith(AUDIT_CHAIN_REF)) return evidence.genesisWalkClean;
+    return false;
+  });
+
+  let resolved = 0;
+  for (const batch of chunk(closable.map((f) => f.id), batchSize)) {
+    await withTenant(tenantId, async (tx) => {
+      const result = await tx.governFinding.updateMany({
+        where: { id: { in: batch } },
+        // No `resolvedBySnapshotId`: there is no snapshot, and this is the one
+        // kind the constraint exempts. Every other kind still names one.
+        data: { status: 'resolved', resolvedAt: now },
+      });
+      resolved += result.count;
+    });
+  }
+
+  return { resolved };
+}
+
 export async function assignFinding(
   tenantId: string,
   actorUserId: string | null,
@@ -7765,9 +8025,21 @@ In `packages/core/src/govern/snapshot-service.ts`, after the `HoldingEvent` writ
     /**
      * The detect stage is authoritative for EXACTLY these six kinds and names
      * them, so the reconciliation cannot reach `unexplained_gain` (Task 10),
-     * `orphan_account` (Task 8A) or any campaign kind. The list is written out
-     * rather than derived from the drafts: a detector that legitimately
-     * produces zero drafts this run must still close last run's findings.
+     * `orphan_account` (Task 8A), `audit_chain_broken` (Task 10) or any
+     * campaign kind. The list is written out rather than derived from the
+     * drafts: a detector that legitimately produces zero drafts this run must
+     * still close last run's findings.
+     *
+     * `audit_chain_broken` MUST STAY OUT OF THIS LIST, and it is the reason the
+     * kind exists at all. The audit verifier's two `critical` findings were
+     * once raised under `coverage_gap` — a member here, whose only producer is
+     * `detectCoverageGaps` and which can only ever emit
+     * `subjectRefType: 'source'`. So this sweep, running nightly, resolved
+     * every audit integrity alarm with a snapshot that had read no audit events
+     * whatever. That is C1's defect reproduced at the two sites C5's fix
+     * created: the alarm switched off overnight, every night, by the thing that
+     * tidies up findings. Nothing in a snapshot build can show an audit chain
+     * break gone, so nothing in a snapshot build may close one.
      */
     const STANDING_KINDS: readonly FindingKind[] = [
       'unattributable_holding',
@@ -7820,7 +8092,7 @@ import type { FindingKind } from './types.js';
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm vitest run packages/core/src/govern/finding-service.test.ts packages/core/src/govern/snapshot-service.test.ts`
-Expected: PASS, 28 + 17 tests. (Three tests were added to the lifecycle block for the upsert/reconcile split: `upsertFindings RESOLVES NOTHING`, `reconcileFindings NEVER touches a kind it was not handed`, and the empty-`kinds` case.)
+Expected: PASS, 29 + 17 tests. (Three tests were added to the lifecycle block for the upsert/reconcile split: `upsertFindings RESOLVES NOTHING`, `reconcileFindings NEVER touches a kind it was not handed`, and the empty-`kinds` case; the second fix wave added a fourth, `resolveAuditIntegrityFindings closes ONLY audit_chain_broken`. Task 10 Step 6a appends one more to `snapshot-service.test.ts`, so that file's count rises to 18 when Task 10 lands — the two are dispatched separately and each states its own number.)
 
 - [ ] **Step 7: Export and typecheck**
 
@@ -7840,6 +8112,9 @@ Each reverted before the next; every one must produce a failure:
 5. In `reconcileFindings`, change the resolution to `deleteMany`. Expected: `reconcileFindings resolves a finding that stopped being observed, NAMING the snapshot` FAILS.
 5a. **In `reconcileFindings`, drop `kind: { in: [...kinds] }` from the `stillOpen` where-clause** — restoring the whole-tenant sweep this task exists to remove. Expected: `reconcileFindings NEVER touches a kind it was not handed` FAILS, because the `unattributable_holding` is closed by a call that only computed gains. **This is the mutation that proves C1 is fixed rather than described.**
 5b. In `reconcileFindings`, replace the `kinds` parameter with `new Set(drafts.map((d) => d.kind))`. Expected: `reconcileFindings with an EMPTY kinds array resolves nothing at all` still passes (it has no drafts either) but `reconcileFindings resolves a finding that stopped being observed` FAILS, because an empty draft list then names no kinds and closes nothing. This is the tempting simplification, and it is the reason the kinds are written out at every call site.
+5c. **In `resolveAuditIntegrityFindings`, replace `closable` with `open`** — close every row the query returned, dropping the per-reference evidence test. Expected: `resolveAuditIntegrityFindings closes ONLY audit_chain_broken` FAILS on the "does NOT close the finding about checkpoint 4" arm and on the chain finding surviving an incremental run. Those two arms are the whole of Ruling G-12's safety property: a run must not close the alarm it raised, and a clean incremental run must not close a break it never looked at.
+5d. **Drop BOTH the `kind: 'audit_chain_broken'` filter and the `closable` test**, leaving an `updateMany` over every open finding. Expected: the same test FAILS on `stale_source`, which a clean verification run has no business closing. This is C1 arriving by a third door — a resolver that closes what its caller did not evaluate — and the reason this function takes no `kinds` argument at all: the kind is a literal in the query, so there is nothing a caller could widen.
+5e. In `resolveAuditIntegrityFindings`, change the checkpoint comparison from `sequence < evidence.trustedCheckpointSequence` to `<=`. Expected: the same test FAILS on the "does NOT close the finding about checkpoint 4" arm, and Task 10's `RE-ESTABLISHES a checkpoint after a clean genesis walk` FAILS on `expect(stillOpen.status).toBe('open')`. In production the effect is that a run closes the `critical` finding it raised moments earlier, so nobody ever sees a forged checkpoint.
 6. In `sweepAcceptedFindings`, drop the `raiseSeverity` call. Expected: `lapses an acceptance back to open and RAISES its severity` FAILS.
 7. In `createRemediationItem`, throw on a duplicate instead of returning null. Expected: `creates one item and returns null rather than throwing` FAILS.
 
@@ -9119,10 +9394,11 @@ Govern is the subsystem that finally makes the hash chain load-bearing. Spec §1
 - Modify: `packages/core/src/audit/audit-service.ts` (export two functions, add nothing else)
 - Create: `packages/core/src/govern/audit-integrity.ts`
 - Test: `packages/core/src/govern/audit-integrity.test.ts`
-- Modify: `packages/core/src/govern/snapshot-service.ts` (cross-reference `HoldingEvent` to the audit log, then call `detectUnexplainedGains`), `packages/core/src/index.ts`
+- Modify: `packages/core/src/govern/snapshot-service.ts` (cross-reference `HoldingEvent` to the audit log, then call `detectUnexplainedGains`), `packages/core/src/govern/snapshot-service.test.ts` (Step 6a's C-a test, which needs both a real `buildSnapshot` and a real `verifyIncremental`), `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `currentTenant`; `recordEvent`, `GENESIS_HASH`, and the two newly exported primitives from `../audit/audit-service.js`; `upsertFindings`, `detectUnexplainedGains` from `./finding-service.js`; `usersWithPermission` from `../automate/notify.js`; `PERMISSIONS` from `../rbac/permissions.js`.
+- Consumes: `withTenant`, `type TenantClient` from `@syntra/db`; `currentTenant`; `recordEvent`, `GENESIS_HASH`, and the two newly exported primitives from `../audit/audit-service.js`; `upsertFindings`, `resolveAuditIntegrityFindings`, `detectUnexplainedGains` from `./finding-service.js`; `AUDIT_CHECKPOINT_REF`, `AUDIT_CHAIN_REF` from `./types.js`; `usersWithPermission` from `../automate/notify.js`; `PERMISSIONS` from `../rbac/permissions.js`.
+- **The two `critical` findings this task raises use `kind: 'audit_chain_broken'`, never `'coverage_gap'`.** `coverage_gap` is a member of the snapshot build's `STANDING_KINDS` and its only producer emits `subjectRefType: 'source'`, so raising them there had the nightly detect stage resolve the audit integrity alarm on the following build — C1's defect at the two sites C5's fix created (C-a). `audit_chain_broken` is absent from `STANDING_KINDS`, and this task closes it itself through `resolveAuditIntegrityFindings`, from evidence a snapshot build does not have.
 - Produces in `../audit/audit-service.js`:
   - `export function stableStringify(value: unknown): string` — **the existing private function, exported unchanged**
   - `export function auditEventHash(e: { tenantId: string; sequence: number; occurredAt: Date; actorUserId: string | null; action: string; targetType: string; targetId: string | null; outcome: 'success' | 'failure'; sourceIp: string | null; payload: Record<string, unknown>; prevHash: string }): string` — **the existing private `computeHash`, exported under a name that says what it hashes**
@@ -9219,6 +9495,7 @@ import { prisma, withTenant } from '@syntra/db';
 import { asDatabaseSuperuser, resetDatabase } from '@syntra/db/src/test-support.js';
 import { memoryTransport } from '../notify/notification-service.js';
 import { auditEventHash, recordEvent, stableStringify } from '../audit/audit-service.js';
+import { AUDIT_CHAIN_REF } from './types.js';
 import {
   anchorHead,
   fileAnchorSink,
@@ -9394,14 +9671,190 @@ describe('verifyIncremental', () => {
     const result = await verifyIncremental(tenantId, { now: NOW });
     expect(result.result).toBe('broken');
 
-    const finding = await withTenant(tenantId, (tx) =>
-      tx.governFinding.findFirstOrThrow({ where: { kind: 'coverage_gap' } }).catch(() => null),
-    );
     const critical = await withTenant(tenantId, (tx) =>
       tx.governFinding.findFirstOrThrow({ where: { severity: 'critical' } }),
     );
+    expect(critical.kind).toBe('audit_chain_broken');
+    expect(critical.subjectRefId).toBe(`${AUDIT_CHAIN_REF}2`);
     expect(critical.detail).toMatchObject({ brokenAtSequence: 2 });
-    expect(finding).toBeNull();
+
+    // C-a's regression guard, and the reason it is an assertion rather than a
+    // comment. Both integrity findings were once raised under `coverage_gap`,
+    // which IS a member of the snapshot build's `STANDING_KINDS`, so the next
+    // nightly build resolved them with a snapshot that had read no audit events
+    // at all. The kind is the fix; this line is what stops somebody un-fixing it
+    // by reaching for an existing kind.
+    //
+    // (An earlier form of this test looked up `coverage_gap` with
+    // `findFirstOrThrow(...).catch(() => null)` and asserted `toBeNull()` while
+    // the code raised exactly that kind — red against its own step. It now
+    // passes for the reason it claims to.)
+    const coverageGap = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirst({ where: { kind: 'coverage_gap' } }),
+    );
+    expect(coverageGap).toBeNull();
+  });
+
+  it('RE-ESTABLISHES a checkpoint after a clean genesis walk, so the refusal is not a trap', async () => {
+    // Ruling G-12. Before this, an untrusted checkpoint was permanent: the
+    // checkpoint write is unreachable while `result` is forced `broken`,
+    // `AuditCheckpoint` is append-only, and `verifyFull` writes no checkpoint —
+    // so the tenant walked from genesis on every run for the life of the system
+    // with a `critical` finding nothing could clear.
+    const signer = localFileCheckpointSigner('key-1', Buffer.alloc(32, 9));
+    await appendEvents(3);
+    await verifyIncremental(tenantId, { now: NOW, signer });
+    await asDatabaseSuperuser(
+      `UPDATE "AuditCheckpoint" SET signature = NULL, "keyId" = NULL WHERE "tenantId" = $1`,
+      [tenantId],
+    );
+
+    // The refusal is NOT softened: this run still reports broken and still
+    // raises the finding. What changes is that it leaves a way out.
+    const refused = await verifyIncremental(tenantId, { now: NOW, signer });
+    expect(refused.result).toBe('broken');
+    expect(refused.signatureState).toBe('unsigned_while_signer_configured');
+
+    const checkpoints = await withTenant(tenantId, (tx) =>
+      tx.auditCheckpoint.findMany({ orderBy: { sequence: 'asc' } }),
+    );
+    // Append-only preserved: the refused row is untouched and a LATER row
+    // supersedes it. `@@unique([tenantId, sequence])` is why the new one cannot
+    // sit at sequence 3, and why the audit event is appended first.
+    expect(checkpoints).toHaveLength(2);
+    expect(checkpoints[0]).toMatchObject({ sequence: 3, signature: null, keyId: null });
+    expect(checkpoints[1]!.sequence).toBeGreaterThan(3);
+    expect(checkpoints[1]!.keyId).toBe('key-1');
+
+    // And it says why, in the log the chain itself protects.
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({
+        where: { action: 'govern.audit.checkpoint_reestablished' },
+      }),
+    );
+    expect(event.payload).toMatchObject({
+      refusedCheckpointSequence: 3,
+      refusedSignatureState: 'unsigned_while_signer_configured',
+    });
+
+    // The finding SURVIVES the run that recovered. An alarm raised and cleared
+    // inside one run is an alarm nobody ever sees, and a forged checkpoint over
+    // a rewritten-but-self-consistent chain is detectable ONLY by this finding.
+    const stillOpen = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'audit_chain_broken' } }),
+    );
+    expect(stillOpen.status).toBe('open');
+
+    // It clears on the NEXT run, which is incremental again because the head
+    // checkpoint now verifies.
+    await appendEvents(2);
+    const recovered = await verifyIncremental(tenantId, { now: NOW, signer });
+    expect(recovered.result).toBe('valid');
+    expect(recovered.signatureState).toBe('signed_and_verified');
+    expect(recovered.fromSequence).toBeGreaterThan(1);
+
+    const closed = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'audit_chain_broken' } }),
+    );
+    expect(closed.status).toBe('resolved');
+    // The one kind that resolves without naming a snapshot. The CHECK
+    // constraint exempts it by name, because no snapshot build can show an
+    // audit chain break gone.
+    expect(closed.resolvedBySnapshotId).toBeNull();
+  });
+
+  it('writes NO new checkpoint when the head is BEHIND the refused one', async () => {
+    // Truncation. `recordEvent` assigns `(max(sequence) ?? 0) + 1`, so once the
+    // tail of the log is gone the next event reuses a sequence BELOW the
+    // refused checkpoint — and `AuditCheckpoint` is `@@unique([tenantId,
+    // sequence])`, so a row written there is either a constraint violation or,
+    // worse, a "later" row that is not later at all and leaves the refused
+    // checkpoint as head. A walk from genesis over a truncated log returns
+    // `valid` (nothing in the surviving prefix is wrong), which is exactly why
+    // the checkpoint that outranks it must keep its finding.
+    const signer = localFileCheckpointSigner('key-1', Buffer.alloc(32, 9));
+    await appendEvents(5);
+    await verifyIncremental(tenantId, { now: NOW, signer });
+    await asDatabaseSuperuser(
+      `DELETE FROM "AuditEvent" WHERE "tenantId" = $1 AND sequence > 3`,
+      [tenantId],
+    );
+    await asDatabaseSuperuser(
+      `UPDATE "AuditCheckpoint" SET signature = NULL, "keyId" = NULL WHERE "tenantId" = $1`,
+      [tenantId],
+    );
+
+    const result = await verifyIncremental(tenantId, { now: NOW, signer });
+    expect(result.result).toBe('broken');
+
+    const checkpoints = await withTenant(tenantId, (tx) =>
+      tx.auditCheckpoint.findMany({ orderBy: { sequence: 'asc' } }),
+    );
+    expect(checkpoints.map((c) => c.sequence)).toEqual([5]);
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'audit_chain_broken' } }),
+    );
+    expect(finding.status).toBe('open');
+  });
+
+  it('writes NO new checkpoint when the genesis walk ALSO fails', async () => {
+    // Recovery is gated on evidence, not on state. A refused checkpoint over a
+    // chain that does not hold gets no way out, which is the whole point.
+    const signer = localFileCheckpointSigner('key-1', Buffer.alloc(32, 9));
+    await appendEvents(4);
+    await verifyIncremental(tenantId, { now: NOW, signer });
+    await asDatabaseSuperuser(
+      `UPDATE "AuditCheckpoint" SET signature = NULL, "keyId" = NULL WHERE "tenantId" = $1`,
+      [tenantId],
+    );
+    await asDatabaseSuperuser(
+      `UPDATE "AuditEvent" SET action = 'tampered' WHERE "tenantId" = $1 AND sequence = 2`,
+      [tenantId],
+    );
+
+    const result = await verifyIncremental(tenantId, { now: NOW, signer });
+    expect(result.result).toBe('broken');
+
+    const checkpoints = await withTenant(tenantId, (tx) => tx.auditCheckpoint.findMany());
+    expect(checkpoints).toHaveLength(1);
+    const events = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'govern.audit.checkpoint_reestablished' } }),
+    );
+    expect(events).toEqual([]);
+  });
+
+  it('an INCREMENTAL clean run never closes a break it did not look at', async () => {
+    // The other half of the resolution rule. A run seeded from a trusted
+    // checkpoint verified the segment AFTER it and said nothing whatever about
+    // the range before, so it must not resolve an `audit-chain:*` finding.
+    await appendEvents(3);
+    await verifyIncremental(tenantId, { now: NOW });
+
+    await withTenant(tenantId, (tx) =>
+      tx.governFinding.create({
+        data: {
+          tenantId,
+          kind: 'audit_chain_broken',
+          severity: 'critical',
+          subjectRefType: 'snapshot',
+          subjectRefId: `${AUDIT_CHAIN_REF}2`,
+          detail: {},
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+        },
+      }),
+    );
+
+    await appendEvents(2);
+    const second = await verifyIncremental(tenantId, { now: NOW });
+    expect(second.fromSequence).toBe(4);
+    expect(second.result).toBe('valid');
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'audit_chain_broken' } }),
+    );
+    expect(finding.status).toBe('open');
   });
 
   it('writes NO checkpoint when the segment is broken', async () => {
@@ -9595,7 +10048,8 @@ import { join } from 'node:path';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { GENESIS_HASH, auditEventHash, recordEvent } from '../audit/audit-service.js';
 import { sendMessage, type Transport } from '../notify/notification-service.js';
-import { upsertFindings } from './finding-service.js';
+import { resolveAuditIntegrityFindings, upsertFindings } from './finding-service.js';
+import { AUDIT_CHAIN_REF, AUDIT_CHECKPOINT_REF } from './types.js';
 
 /**
  * The built `verifyChain` calls `findMany` with no bound and walks every event
@@ -9772,9 +10226,16 @@ export type SignatureState =
  *  - the row claims none while a signer IS configured -> this is exactly the
  *    forged checkpoint, and it is refused.
  *
- * Turning signing on for the first time therefore produces ONE finding and ONE
- * full walk, for the pre-existing unsigned checkpoint. That is correct and
- * cheap, and the finding says why.
+ * WHAT TURNING SIGNING ON FOR THE FIRST TIME ACTUALLY COSTS. The pre-existing
+ * unsigned checkpoint is refused, so that run raises one `critical` finding and
+ * walks from genesis. It does NOT do so forever: `verifyIncremental` treats a
+ * clean genesis walk as the evidence a checkpoint stands for and writes a new,
+ * signed one (Ruling G-12), so the run after it is incremental again and closes
+ * the finding. An earlier draft of this docstring said "ONE finding and ONE
+ * full walk" while the code could write no checkpoint at all in that state —
+ * which made it one per run, forever, on an append-only table nothing could
+ * repair. The sentence was reassurance the mechanism did not support, printed
+ * in three places; it is the mechanism that changed, not the sentence.
  */
 export async function checkpointTrust(
   checkpoint: { sequence: number; hash: string; signature: string | null; keyId: string | null },
@@ -9799,6 +10260,11 @@ const UNTRUSTED_CHECKPOINT_STATEMENT =
   'a checkpoint covering this range does not carry a valid signature, so the ' +
   'hash it offers as a starting point cannot be relied on and this run was ' +
   'restarted from genesis';
+
+const REESTABLISHED_CHECKPOINT_STATEMENT =
+  'the chain was walked in full from genesis and held, so a new checkpoint was ' +
+  'established at the current head; the refused checkpoint is left in place and ' +
+  'is superseded rather than rewritten';
 
 export async function verifyIncremental(
   tenantId: string,
@@ -9849,15 +10315,30 @@ export async function verifyIncremental(
     });
   });
 
+  // -- The two `critical` findings, both `audit_chain_broken` ----------------
+  //
+  // NOT `coverage_gap`, and the difference is the whole of C-a. `coverage_gap`
+  // is a member of the detect stage's `STANDING_KINDS`, whose only producer
+  // emits `subjectRefType: 'source'` -- so the nightly snapshot build's sweep
+  // resolved both of these findings on the run after they were raised, with
+  // `resolvedBySnapshotId` naming a snapshot that had read no audit events at
+  // all. C1's exact defect, at the two sites C5's fix created: the integrity
+  // alarm switched off overnight, every night, by the thing that tidies up
+  // findings. `audit_chain_broken` is deliberately absent from `STANDING_KINDS`
+  // and is closed only by `resolveAuditIntegrityFindings`, below.
+  //
+  // `upsertFindings`, never `reconcileFindings`: this caller has no snapshot to
+  // name, and a whole-tenant sweep from here would close every standing finding
+  // the nightly build opened (C1, the other direction).
   if (checkpoint !== null && !trust.seedable) {
     await upsertFindings(
       tenantId,
       [
         {
-          kind: 'coverage_gap',
+          kind: 'audit_chain_broken',
           severity: 'critical',
           subjectRefType: 'snapshot',
-          subjectRefId: `audit-checkpoint:${checkpoint.sequence}`,
+          subjectRefId: `${AUDIT_CHECKPOINT_REF}${checkpoint.sequence}`,
           detail: {
             checkpointSequence: checkpoint.sequence,
             signatureState: trust.state,
@@ -9870,43 +10351,17 @@ export async function verifyIncremental(
     );
   }
 
-  if (result.result === 'valid' && result.toSequence >= result.fromSequence) {
-    const head = await withTenant(tenantId, (tx) =>
-      tx.auditEvent.findFirst({ where: { sequence: result.toSequence } }),
-    );
-    if (head !== null) {
-      const payload = `${head.sequence}:${head.hash}`;
-      const signature = options.signer ? await options.signer.sign(payload) : null;
-      await withTenant(tenantId, (tx) =>
-        tx.auditCheckpoint.create({
-          data: {
-            tenantId,
-            sequence: head.sequence,
-            hash: head.hash,
-            verifiedAt: now,
-            signature,
-            keyId: options.signer?.keyId ?? null,
-          },
-        }),
-      );
-    }
-  }
-
   if (result.result === 'broken' && walked.result === 'broken') {
     // A failed verification is a `critical` finding, notified immediately and
     // NEVER digested, and it names the sequence.
-    //
-    // `upsertFindings`, never `reconcileFindings`: this caller is authoritative
-    // for one finding and a whole-tenant sweep from here would close every
-    // standing finding the nightly snapshot build opened (C1).
     await upsertFindings(
       tenantId,
       [
         {
-          kind: 'coverage_gap',
+          kind: 'audit_chain_broken',
           severity: 'critical',
           subjectRefType: 'snapshot',
-          subjectRefId: `audit-chain:${result.brokenAtSequence}`,
+          subjectRefId: `${AUDIT_CHAIN_REF}${result.brokenAtSequence}`,
           detail: {
             brokenAtSequence: result.brokenAtSequence,
             fromSequence: result.fromSequence,
@@ -9918,6 +10373,119 @@ export async function verifyIncremental(
       { now },
     );
   }
+
+  // -- The ordinary checkpoint ------------------------------------------------
+  // Reachable only when the seed was trusted (or there was none), because
+  // `result.result` is forced to `broken` otherwise.
+  if (result.result === 'valid' && result.toSequence >= result.fromSequence) {
+    const head = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirst({ where: { sequence: result.toSequence } }),
+    );
+    if (head !== null) {
+      const payload = `${head.sequence}:${head.hash}`;
+      const signature = signer === null ? null : await signer.sign(payload);
+      await withTenant(tenantId, (tx) =>
+        tx.auditCheckpoint.create({
+          data: {
+            tenantId,
+            sequence: head.sequence,
+            hash: head.hash,
+            verifiedAt: now,
+            signature,
+            keyId: signer?.keyId ?? null,
+          },
+        }),
+      );
+    }
+  }
+
+  // -- Recovery from an untrusted checkpoint (Ruling G-12) --------------------
+  //
+  // WITHOUT THIS, AN UNTRUSTED CHECKPOINT IS PERMANENT. `verifyIncremental` is
+  // the only production writer of `AuditCheckpoint` -- `verifyFull` writes only
+  // an `AuditChainCheck` -- the ordinary write above is unreachable while
+  // `result` is forced `broken`, and the table carries append-only RULEs
+  // (`DO INSTEAD NOTHING` on UPDATE and DELETE), so the offending row can never
+  // be removed or re-signed. A tenant that once wrote an unsigned checkpoint
+  // would walk from genesis on EVERY build for the life of the system, with a
+  // `critical` finding nothing could ever clear and a walk that grows without
+  // bound. That is not a safety property, it is a trap.
+  //
+  // A clean walk from genesis IS the evidence a checkpoint is supposed to stand
+  // for, so it may establish a new one. This concedes nothing: an attacker who
+  // can forge a clean genesis walk can forge the chain, which was already
+  // conceded when the walk was made the verification.
+  //
+  // APPEND-ONLY IS PRESERVED -- a later row supersedes and nothing is rewritten.
+  // The audit event is written FIRST on purpose, not incidentally:
+  // `AuditCheckpoint` is `@@unique([tenantId, sequence])`, so a second row at
+  // the refused checkpoint's own sequence is impossible. Appending the event
+  // moves the head past it, and the appended event chains from a head this run
+  // has just verified, so the chain through it holds by construction. The
+  // `head.sequence > checkpoint.sequence` guard is what makes the supersession
+  // real: a new row BELOW the refused one would leave the refused one as head
+  // and the trap in place.
+  if (checkpoint !== null && !trust.seedable && walked.result === 'valid') {
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null,
+        action: 'govern.audit.checkpoint_reestablished',
+        targetType: 'AuditCheckpoint',
+        targetId: null,
+        outcome: 'success',
+        sourceIp: null,
+        payload: {
+          refusedCheckpointSequence: checkpoint.sequence,
+          refusedSignatureState: trust.state,
+          verifiedFromSequence: walked.fromSequence,
+          verifiedToSequence: walked.toSequence,
+          statement: REESTABLISHED_CHECKPOINT_STATEMENT,
+        },
+      }),
+    );
+    const head = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirst({ orderBy: { sequence: 'desc' } }),
+    );
+    if (head !== null && head.sequence > checkpoint.sequence) {
+      const signature = signer === null ? null : await signer.sign(`${head.sequence}:${head.hash}`);
+      await withTenant(tenantId, (tx) =>
+        tx.auditCheckpoint.create({
+          data: {
+            tenantId,
+            sequence: head.sequence,
+            hash: head.hash,
+            verifiedAt: now,
+            signature,
+            keyId: signer?.keyId ?? null,
+          },
+        }),
+      );
+    }
+  }
+
+  // -- Closing what this run has evidence for, and nothing else ---------------
+  //
+  // `trustedCheckpointSequence` is the checkpoint this run SEEDED FROM and
+  // verified -- deliberately NOT the one the recovery above may have just
+  // written. A recovery must not close the `critical` finding it raised seconds
+  // earlier in the same run: the operator would never see it, and a forged
+  // checkpoint over a rewritten-but-self-consistent chain is detectable ONLY by
+  // that finding. So the alarm stands for one run and clears on the next, once
+  // a checkpoint that verifies is the head.
+  //
+  // `genesisWalkClean` requires a walk that started at 1 AND covered at least
+  // one event: a walk over an emptied table returns `valid` and proves nothing.
+  await resolveAuditIntegrityFindings(
+    tenantId,
+    {
+      trustedCheckpointSequence: trust.seedable && checkpoint !== null ? checkpoint.sequence : null,
+      genesisWalkClean:
+        walked.result === 'valid' &&
+        walked.fromSequence === 1 &&
+        walked.toSequence >= walked.fromSequence,
+    },
+    { now },
+  );
 
   return {
     ...result,
@@ -10087,11 +10655,19 @@ const CHECKPOINT_STATEMENTS: Readonly<Record<SignatureState | 'none', string>> =
     'The last checkpoint is UNSIGNED and no signing key is configured. Incremental verification ' +
     'therefore seeds from a hash held in the same database it is verifying: an actor with database ' +
     'write access can rewrite the chain, recompute the digests, insert a checkpoint, and every ' +
-    'later run will report valid. Configure a checkpoint signing key to raise that bar.',
+    'later run will report valid. Set GOVERN_CHECKPOINT_KEY to raise that bar.',
+  // The advice NAMES THE VARIABLE, because an earlier version said "configure a
+  // checkpoint signing key" while no configuration key for one existed and the
+  // scheduler passed `signer: null` on every run. Advice a deployer cannot act
+  // on is worse than no advice: it reads as a setting somebody forgot rather
+  // than as a feature nobody wired. Task 12 Step 4a adds the variable and Step 5
+  // passes it (H-e).
   unsigned_while_signer_configured:
     'The last checkpoint is UNSIGNED while a signing key IS configured. It was not seeded from and ' +
     'the chain was re-walked from genesis. This is what a forged checkpoint looks like; it is also ' +
-    'what the first run after signing is switched on looks like.',
+    'what the first run after signing is switched on looks like. In that second case the next run ' +
+    're-establishes a signed checkpoint from a clean genesis walk and this clears; if it does not ' +
+    'clear, the chain did not hold.',
   unknown_key:
     'The last checkpoint names a signing key this deployment does not hold. It was not seeded from ' +
     'and the chain was re-walked from genesis.',
@@ -10241,6 +10817,69 @@ In `packages/core/src/govern/snapshot-service.ts`, after the `HoldingEvent` writ
 
 and add `detectUnexplainedGains` and `reconcileFindings` to the `finding-service.js` import list at the head of the file. (`snapshot-service.ts` imports `reconcileLinkedFindings` from `./drift-link.js` for the detect stage, per Task 8A Step 4, and `reconcileFindings` directly for this one — the gain findings have no Provision counterpart.)
 
+- [ ] **Step 6a: Prove the integrity finding SURVIVES a snapshot build (C-a)**
+
+Neither Task 8's sweep nor Task 10's finding is wrong on its own; the defect
+exists only where they meet, so the test lives at the meeting point — the first
+file in which both a real `buildSnapshot` and a real `verifyIncremental` exist.
+
+Append to `packages/core/src/govern/snapshot-service.test.ts`, and add
+`recordEvent` from `../audit/audit-service.js`, `verifyIncremental` from
+`./audit-integrity.js` and `asDatabaseSuperuser` to its imports:
+
+```ts
+describe('the audit integrity finding and the nightly detect stage (C-a)', () => {
+  it('does NOT resolve an audit_chain_broken finding on the next snapshot build', async () => {
+    // C1's fix and C5's fix meet here. The detect stage sweeps STANDING_KINDS
+    // with the drafts it computed; `coverage_gap` is a member and its only
+    // producer emits `subjectRefType: 'source'`. While the audit verifier
+    // raised its two `critical` findings under `coverage_gap`, EVERY nightly
+    // build resolved them — `resolvedBySnapshotId` naming a snapshot that had
+    // read no audit events at all. Slice 1's headline integrity output went
+    // quiet overnight, exactly as its findings output did before C1.
+    //
+    // No individual finding asks this question, because each was verified
+    // against the world before the other existed (Ruling G-11).
+    await withTenant(tenantId, async (tx) => {
+      for (let i = 0; i < 5; i += 1) {
+        await recordEvent(tx, {
+          actorUserId: null,
+          action: `govern.test.event.${i}`,
+          targetType: 'Test',
+          targetId: null,
+          outcome: 'success',
+          sourceIp: null,
+          payload: { i },
+        });
+      }
+    });
+    await asDatabaseSuperuser(
+      `UPDATE "AuditEvent" SET action = 'tampered' WHERE "tenantId" = $1 AND sequence = 2`,
+      [tenantId],
+    );
+    await verifyIncremental(tenantId, { now: NOW });
+
+    const raised = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'audit_chain_broken' } }),
+    );
+    expect(raised.status).toBe('open');
+
+    // A whole, ordinary nightly build. It runs the detect stage and its sweep.
+    const built = await buildSnapshot(tenantId, {
+      now: NOW,
+      collect: async () => emptyCollection(),
+    });
+
+    const after = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findUniqueOrThrow({ where: { id: raised.id } }),
+    );
+    expect(after.status).toBe('open');
+    expect(after.resolvedBySnapshotId).toBeNull();
+    expect(after.resolvedBySnapshotId).not.toBe(built.snapshotId);
+  });
+});
+```
+
 - [ ] **Step 7: Run the tests**
 
 Run: `pnpm vitest run packages/core/src/govern/audit-integrity.test.ts packages/core/src/audit packages/core/src/govern/snapshot-service.test.ts`
@@ -10258,6 +10897,12 @@ Expected: exit 0.
 1. In `verifySegment`, remove the `e.prevHash !== expectedPrev` check. Expected: `reports the sequence where a DELETED event breaks its successor` FAILS.
 2. Remove the `recomputed !== e.hash` check. Expected: `reports the sequence where an ALTERED event stops reproducing its digest` FAILS.
 3. In `verifyIncremental`, write the checkpoint unconditionally. Expected: `writes NO checkpoint when the segment is broken` FAILS.
+3a. **In `verifyIncremental`, change both findings' `kind` back to `'coverage_gap'`.** Expected: `raises a CRITICAL finding when the chain does not hold` FAILS on `critical.kind`, **and** `does NOT resolve an audit_chain_broken finding on the next snapshot build` (Step 6a) FAILS because the nightly detect stage now closes it. That second failure is C-a itself, and it is the one that matters: the first is a spelling check, the second is the mechanism. **Task 12's `NOTIFIES the audit.read holders` also FAILS**, because `runVerifyJob` keys its notification on `kind: 'audit_chain_broken'` — so reverting the kind silences the alarm in the findings table AND in the mailbox, from one edit.
+3b. **Add `'audit_chain_broken'` to `STANDING_KINDS` in `snapshot-service.ts`** and leave the kind alone otherwise. Expected: Step 6a's test FAILS the same way. Both halves, because the fix is a pair — a kind that the sweep does not own — and either half alone restores the defect.
+3c. **In `verifyIncremental`, delete the whole re-establishment block** (Ruling G-12). Expected: `RE-ESTABLISHES a checkpoint after a clean genesis walk` FAILS on the checkpoint count, and its final assertions FAIL because the finding can never resolve. This is the mutation that proves an untrusted checkpoint is recoverable rather than permanent.
+3d. In the re-establishment block, drop the `head.sequence > checkpoint.sequence` guard. Expected: `writes NO new checkpoint when the head is BEHIND the refused one` FAILS — and it fails with a P2002 or a superseded-by-a-lower-row, both of which leave the refused checkpoint as head and the trap in place. The case is buildable because `recordEvent` assigns `(max(sequence) ?? 0) + 1`: truncate the tail of the log and the next event reuses a sequence below the checkpoint.
+3e. **In `resolveAuditIntegrityFindings`, pass `genesisWalkClean: walked.result === 'valid'`** — dropping the `fromSequence === 1` requirement. Expected: `an INCREMENTAL clean run never closes a break it did not look at` FAILS. A clean segment after a checkpoint says nothing about the range before it.
+3f. **In `verifyIncremental`, pass the newly written checkpoint's sequence as `trustedCheckpointSequence`** instead of the one it seeded from. Expected: `RE-ESTABLISHES a checkpoint after a clean genesis walk` FAILS on `expect(stillOpen.status).toBe('open')` — the run would close the `critical` finding it raised moments earlier, and nobody would ever see the forged checkpoint.
 4. In `verifyIncremental`, seed with `GENESIS_HASH` always instead of the checkpoint's hash. Expected: `verifies only the new segment next time` FAILS on `fromSequence`.
 4a. **In `verifyIncremental`, delete the `checkpointTrust` call and set `trust = { seedable: true, state: 'signed_and_verified' }`** — that is, restore the version that took the seed on trust. Expected: **both** `REFUSES to seed from a checkpoint whose hash was tampered with` and `REFUSES to seed from an UNSIGNED checkpoint while a signer is configured` FAIL. This is the mutation that proves `signer.verify` is called from production code and not only from a test; before this fix it was called in exactly one place in 21,933 lines, and that place was an assertion.
 4b. In `checkpointTrust`, return `{ seedable: true }` for the `keyId === null && signer !== null` arm. Expected: `REFUSES to seed from an UNSIGNED checkpoint while a signer is configured` FAILS.
@@ -10275,6 +10920,7 @@ git add packages/core/src/audit/audit-service.ts \
         packages/core/src/govern/audit-integrity.ts \
         packages/core/src/govern/audit-integrity.test.ts \
         packages/core/src/govern/snapshot-service.ts \
+        packages/core/src/govern/snapshot-service.test.ts \
         packages/core/src/index.ts
 git commit -m "feat(govern): incremental audit verification, checkpoints, signatures and anchors"
 ```
@@ -11853,10 +12499,10 @@ Spec §19, §23. Every scheduled job is a pg-boss job carrying `{ tenantId }`, b
 **Files:**
 - Create: `packages/core/src/govern/jobs.ts`
 - Test: `packages/core/src/govern/jobs.test.ts`, `packages/core/src/govern/transaction-budget.test.ts`
-- Modify: `packages/core/src/notify/templates/index.ts`, `apps/api/src/scheduler.ts`, `packages/core/src/index.ts`
+- Modify: `packages/core/src/notify/templates/index.ts`, `packages/core/src/automate/notify.ts` (Step 3a widens the outbox draft type to Govern's templates and adds one entry to `NEVER_DIGESTED`), `packages/core/src/config.ts` (the two optional Govern keys Step 4a adds), `apps/api/src/scheduler.ts`, `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `prisma`, `withTenant` from `@syntra/db`; `type Scheduler`; `type Transport`; `buildSnapshot`, `pruneSnapshots` from `./snapshot-service.js`; `verifyIncremental`, `anchorHead`, `type AnchorSink`, `type CheckpointSigner` from `./audit-integrity.js`; `refreshOrphanProposals` from `./orphan-service.js`; `sweepAcceptedFindings` from `./finding-service.js`; `governSettings` from `./settings-service.js`; `enqueueOutbox`, `usersWithPermission`, `displayNames` from `../automate/notify.js`; `PERMISSIONS` from `../rbac/permissions.js`.
+- Consumes: `prisma`, `withTenant` from `@syntra/db`; `type Scheduler`; `type Transport`; `buildSnapshot`, `pruneSnapshots` from `./snapshot-service.js`; `verifyIncremental`, `anchorHead`, `localFileCheckpointSigner`, `fileAnchorSink`, `mailAnchorSink`, `type AnchorSink`, `type CheckpointSigner` from `./audit-integrity.js` (**the last three are consumed by `apps/api/src/scheduler.ts` at Step 5; before this wave they had no production producer at all**); `refreshOrphanProposals` from `./orphan-service.js`; `sweepAcceptedFindings` from `./finding-service.js`; `governSettings` from `./settings-service.js`; `recordEvent` from `../audit/audit-service.js`; `enqueueOutbox`, `usersWithPermission`, `NEVER_DIGESTED`, `type OutboxTemplate` from `../automate/notify.js`; `PERMISSIONS` from `../rbac/permissions.js`. **Not `displayNames`:** `usersWithPermission` already returns a `displayName` on every `Recipient`, and this task has no person id to resolve. It was on this line and unused, along with `enqueueOutbox`, `usersWithPermission` and `PERMISSIONS` — four symbols listed for a producer that was never written. Step 4b writes it.
 - Produces (all in `./jobs.js`):
   - `const GOVERN_SNAPSHOT_JOB = 'govern.snapshot.build'`
   - `const GOVERN_PRUNE_JOB = 'govern.snapshot.prune'`
@@ -11873,7 +12519,7 @@ Spec §19, §23. Every scheduled job is a pg-boss job carrying `{ tenantId }`, b
   - `interface GovernJobOptions { now?: Date; publicUrl?: string; signer?: CheckpointSigner | null; anchorSink?: AnchorSink | null; batchSize?: number }`
   - `async function runSnapshotJob(payload: GovernJobPayload, options?: GovernJobOptions): Promise<{ snapshotId: string; holdingCount: number; orphanProposals: number }>`
   - `async function runPruneJob(payload: GovernJobPayload, options?: GovernJobOptions): Promise<{ pruned: number }>`
-  - `async function runVerifyJob(payload: GovernJobPayload, options?: GovernJobOptions): Promise<{ result: string }>`
+  - `async function runVerifyJob(payload: GovernJobPayload, options?: GovernJobOptions): Promise<{ result: string; notified: number }>` — **verifies, then notifies.** §17 says a `critical` finding is notified immediately and never digested; before Step 4b nothing in 27,000 lines sent `govern-finding-critical`, so that sentence was true of no code path.
   - `async function runAnchorJob(payload: GovernJobPayload, options?: GovernJobOptions): Promise<{ status: string }>`
   - `async function applyGovernSchedules(scheduler: Scheduler, tenantId: string, snapshotSchedule: string | null): Promise<void>`
   - `function registerGovernJobs(scheduler: Scheduler, options?: { transport?: Transport; signer?: CheckpointSigner | null; anchorSink?: AnchorSink | null; publicUrl?: string }): void`
@@ -11886,10 +12532,17 @@ Spec §19, §23. Every scheduled job is a pg-boss job carrying `{ tenantId }`, b
 `packages/core/src/govern/jobs.test.ts`:
 
 ```ts
+import { mkdtempSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
-import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { asDatabaseSuperuser, resetDatabase } from '@syntra/db/src/test-support.js';
 import type { Scheduler } from '../jobs/scheduler.js';
+import { recordEvent } from '../audit/audit-service.js';
+import { NEVER_DIGESTED } from '../automate/notify.js';
+import { PERMISSIONS } from '../rbac/permissions.js';
+import { fileAnchorSink, localFileCheckpointSigner } from './audit-integrity.js';
 import { TEMPLATES } from '../notify/templates/index.js';
 import {
   GOVERN_ANCHOR_JOB,
@@ -11913,12 +12566,22 @@ const fakeScheduler = () => {
   const scheduled: { name: string; cron: string; key: string | undefined }[] = [];
   const unscheduled: { name: string; key: string | undefined }[] = [];
   const registered: string[] = [];
+  // The HANDLER is kept, not only its name. A fake that discards it can prove a
+  // job was registered and can prove nothing about what it was registered WITH
+  // — which is the whole of H-e: `registerGovernJobs(scheduler)` registers all
+  // four handlers correctly and hands three of them nothing.
+  const handlers = new Map<string, (payload: unknown) => Promise<unknown>>();
   return {
     scheduled,
     unscheduled,
     registered,
+    handlers,
+    run: (name: string, payload: unknown) => handlers.get(name)!(payload),
     scheduler: {
-      register: (name: string) => { registered.push(name); },
+      register: (name: string, handler: (payload: never) => Promise<unknown>) => {
+        registered.push(name);
+        handlers.set(name, handler as (payload: unknown) => Promise<unknown>);
+      },
       start: async () => {},
       stop: async () => {},
       enqueue: async () => null,
@@ -12083,6 +12746,78 @@ In `packages/core/src/notify/templates/index.ts`, inside the `TEMPLATES` object,
   },
 ```
 
+- [ ] **Step 3a: Widen the outbox draft to Govern's templates, and make "never digested" a fact about the code**
+
+**Every `enqueueOutbox` call in this plan does not type-check without this step.**
+`OutboxDraft.template` is `AutomateTemplate = Extract<TemplateName,
+'automate-${string}'>` (Automate Task 5). Govern's seven templates are
+`govern-*`, so `Extract` excludes all of them and every one of this plan's nine
+call sites — Step 4b here, four in Task 18, two in Task 17, two in Task 21 — is
+TS2322 on `template`. The dependency table at the head of this plan already
+names `isDigestible` and `NEVER_DIGESTED` as consumed from that module; nothing
+consumed them, and the type they are built on could not admit a Govern row.
+
+This is cross-slice editing of the ordinary kind (Ruling G-3): Govern is
+dispatched after Automate merges, and Task 16 already edits
+`automate/eligibility.ts` and `automate/types.ts`. It is done **here**, in the
+first task that enqueues anything, so nothing after it repeats the problem.
+
+In `packages/core/src/automate/notify.ts`:
+
+```ts
+/**
+ * Every template the outbox can carry. `AutomateTemplate` stays as it is for
+ * Automate's own code; this is the wider one the OUTBOX is typed on, because
+ * the outbox is a shared table and Govern writes into it too.
+ *
+ * Written as an `Extract` over two prefixes rather than as `TemplateName`
+ * itself, deliberately: `welcome` and `password-reset` are sent directly by
+ * Core's own paths and must not become enqueueable by accident, so the prefixes
+ * remain the allow-list and a third subsystem has to add itself here on purpose.
+ */
+export type OutboxTemplate = Extract<
+  TemplateName,
+  `automate-${string}` | `govern-${string}`
+>;
+```
+
+then change three declarations to use it — and **only** these three:
+
+```ts
+export const NEVER_DIGESTED: readonly OutboxTemplate[] = [
+  'automate-fulfilment-failed',
+  'automate-partially-fulfilled',
+  'automate-awaiting-fulfilment-sla',
+  'automate-blocked-no-approver',
+  'automate-sweep-confirmation',
+  // Section 17: a `critical` governance finding is notified IMMEDIATELY and is
+  // never digested. That sentence is in the spec, in the template's own body
+  // ("It was sent the moment it was found") and in `verifyIncremental`'s
+  // comment — and until this entry existed it was enforced by none of them.
+  // The digest path is exactly where an urgent message silently rejoins the
+  // queue: `enqueueOutbox` writes `digest: true` for any digestible template
+  // whose recipient chose a daily summary, and an audit chain that does not
+  // hold, arriving in tomorrow morning's summary, is an audit chain nobody
+  // acted on today.
+  'govern-finding-critical',
+];
+
+export function isDigestible(template: OutboxTemplate): boolean {
+  return !NEVER_DIGESTED.includes(template);
+}
+
+export interface OutboxDraft {
+  template: OutboxTemplate;
+  // ... the other four fields unchanged
+}
+```
+
+`enqueueOutbox`'s body is unchanged: it already computes
+`digest: isDigestible(draft.template) && …`, so adding the entry to
+`NEVER_DIGESTED` is the whole enforcement. `runOutboxJob` already sends every
+`digest: false` row and casts `row.template as TemplateName`, so Govern's rows
+are delivered by Automate's sender with no change there either.
+
 - [ ] **Step 4: Write the jobs module**
 
 `packages/core/src/govern/jobs.ts`:
@@ -12178,15 +12913,20 @@ export async function runPruneJob(
   return { pruned: result.pruned };
 }
 
+// SUPERSEDED BY STEP 4b. Written here so this step's module is complete and
+// compiles on its own; Step 4b replaces the body with the version that notifies,
+// and there is exactly one `runVerifyJob` in the finished file. An implementer
+// who writes only this one leaves `govern-finding-critical` with no producer,
+// which is the state Step 4b exists to end.
 export async function runVerifyJob(
   payload: GovernJobPayload,
   options: GovernJobOptions = {},
-): Promise<{ result: string }> {
+): Promise<{ result: string; notified: number }> {
   const result = await verifyIncremental(payload.tenantId, {
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.signer === undefined ? {} : { signer: options.signer }),
   });
-  return { result: result.result };
+  return { result: result.result, notified: 0 };
 }
 
 export async function runAnchorJob(
@@ -12261,13 +13001,253 @@ export function registerGovernJobs(
     await runPruneJob(payload);
   });
   scheduler.register<GovernJobPayload>(GOVERN_VERIFY_JOB, async (payload) => {
-    await runVerifyJob(payload, { signer: options.signer ?? null });
+    // `publicUrl` as well as the signer: the verify job now NOTIFIES on a
+    // critical integrity finding (Step 4b), and `{{findingUrl}}` is the whole
+    // difference between an alarm somebody can act on and one that says
+    // something is wrong somewhere. Without it the link is `/admin/govern/...`
+    // in an email client, which resolves to nothing.
+    await runVerifyJob(payload, {
+      signer: options.signer ?? null,
+      ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
+    });
   });
   scheduler.register<GovernJobPayload>(GOVERN_ANCHOR_JOB, async (payload) => {
     await runAnchorJob(payload, { anchorSink: options.anchorSink ?? null });
   });
 }
 ```
+
+- [ ] **Step 4a: The configuration that PRODUCES the signer and the anchor sink**
+
+`localFileCheckpointSigner`, `fileAnchorSink` and `mailAnchorSink` all exist and,
+until this step, **none of them had a production producer** — every call was from
+a test or a mutation. A protection with no call site is the shape this programme
+has now paid for in every slice: present, reachable, and inert. §17's stated
+mitigation ("database access plus the signing key") would have been printed on
+the cover of every evidence bundle while `checkpointTrust` was handed `null` on
+every run, and the integrity screen would have advised operators to "configure a
+checkpoint signing key" against a system that had nowhere to put one.
+
+In `packages/core/src/config.ts`, add two **optional** keys to the schema:
+
+```ts
+  /**
+   * A base64 32-byte key that signs audit checkpoints, and the id it is known
+   * by. Optional, and deliberately so: a deployment that has not configured one
+   * is honest about what its verification is worth — `checkpointTrust` returns
+   * `unsigned_no_signer_configured` and `integrityStatus` says so on the screen
+   * in words. What is NOT acceptable is the state this key removes: the screen
+   * telling an operator to configure a signing key while no configuration key
+   * for one exists.
+   *
+   * Turning it on for the first time refuses the pre-existing unsigned
+   * checkpoint once, walks from genesis once, raises one `critical` finding and
+   * re-establishes a signed checkpoint (Ruling G-12). The finding clears on the
+   * following run.
+   */
+  GOVERN_CHECKPOINT_KEY: z
+    .string()
+    .refine(
+      (v) => Buffer.from(v, 'base64').length === 32,
+      'GOVERN_CHECKPOINT_KEY must be 32 bytes, base64 encoded',
+    )
+    .optional(),
+  GOVERN_CHECKPOINT_KEY_ID: z.string().min(1).default('govern-checkpoint-1'),
+  /**
+   * Where the weekly anchor receipt goes. A directory for a write-once volume,
+   * or an address. Neither configured means `runAnchorJob` returns
+   * `not_configured` and the integrity screen states, in words, that nothing
+   * protects against the operator — which is true, and is why the schema
+   * comment on `AuditAnchor` calls anchoring the only protection against them.
+   */
+  GOVERN_ANCHOR_DIR: z.string().min(1).optional(),
+  GOVERN_ANCHOR_EMAIL: z.string().email().optional(),
+```
+
+and to the `Config` interface and the returned object:
+`governCheckpointKey: Buffer | null`, `governCheckpointKeyId: string`,
+`governAnchorDir: string | null`, `governAnchorEmail: string | null`.
+
+**Both remain optional and the defaults are the honest ones.** Making the key
+required would fail every existing deployment's boot for a feature it has not
+asked for; the point of this step is that the switch exists and is wired, not
+that it is forced on.
+
+Add to `packages/core/src/config.test.ts` (or the existing config suite):
+
+```ts
+it('accepts a deployment with no Govern signing key and says so in the parsed shape', () => {
+  const config = loadConfig({ ...valid, GOVERN_CHECKPOINT_KEY: undefined });
+  expect(config.governCheckpointKey).toBeNull();
+});
+
+it('REFUSES a Govern signing key of the wrong length rather than silently truncating', () => {
+  expect(() =>
+    loadConfig({ ...valid, GOVERN_CHECKPOINT_KEY: Buffer.alloc(16).toString('base64') }),
+  ).toThrow(/GOVERN_CHECKPOINT_KEY must be 32 bytes/);
+});
+```
+
+- [ ] **Step 4b: The producer for `govern-finding-critical`**
+
+**`govern-finding-critical` had no producer.** The template is written at Step 3,
+`{{findingUrl}}` appears nowhere else in the plan, and a grep for the template
+name returns exactly one hit — its own definition. So section 17's *"a critical
+finding is notified immediately and never digested"*, which is also printed in
+the template's own body, was true of no code path. This task's Consumes line
+already carried `enqueueOutbox`, `usersWithPermission` and `PERMISSIONS`, all
+unused: symbols listed for a producer nobody wrote.
+
+It matters more after this wave than before it. C5 made the verifier refuse an
+untrusted seed, C-a gave its findings a kind the nightly sweep cannot close,
+H-b made the resulting state recoverable, and H-e wired a real signer so the
+refusal is reachable in a deployed system at all. **That is a hardened detector
+wired to a notification nobody sends** — the inert-control shape, one layer out
+from the one this slice has now fixed four times.
+
+Append to `packages/core/src/govern/jobs.ts`, and add
+`import { recordEvent } from '../audit/audit-service.js';`,
+`import { enqueueOutbox, usersWithPermission } from '../automate/notify.js';`
+and `import { PERMISSIONS } from '../rbac/permissions.js';` to its header:
+
+```ts
+/**
+ * The one plain-language sentence this finding is known by.
+ *
+ * It is the same sentence as `HEADLINE['audit_chain_broken']` on the findings
+ * console (Task 14), and the duplication is deliberate rather than missed: that
+ * map lives in `apps/web` and cannot be imported from `packages/core`. Every
+ * `var` a template renders is a NAME and never an id, so `audit_chain_broken`
+ * itself must not be what a recipient reads.
+ */
+const INTEGRITY_HEADLINE = 'The audit log cannot be shown to be intact';
+
+const NOBODY_TO_TELL =
+  'a critical audit-integrity finding was raised and no active user holds ' +
+  'audit.read, so nobody was notified; this is recorded rather than dropped ' +
+  'because a silent zero here is indistinguishable from a working notifier';
+
+/**
+ * Verify, then TELL SOMEBODY.
+ *
+ * Notification is keyed on the FINDING and not on `result.result`, for the same
+ * reason the finding is the record: a message derived from a second computation
+ * can disagree with the row an operator opens, and then two numbers describe
+ * one event.
+ *
+ * WHICH findings: `audit_chain_broken` and nothing else. Not "every critical
+ * finding" — the standing kinds are raised by the nightly snapshot build in
+ * bulk, are worked from the findings queue, and mailing every one of them
+ * immediately is how a queue becomes a filter rule.
+ *
+ * WHEN: on the transition INTO open, computed as a set difference across the
+ * verification rather than from a timestamp. A finding still open from last
+ * night is not re-sent — a `critical` alarm arriving every night at 04:00 for
+ * six months is an alarm somebody writes a mail rule for. A finding that was
+ * RESOLVED and has broken again is not in `before`, so it is sent again, which
+ * is correct: it is a new event. An `accepted` finding is in neither set and is
+ * never sent, because somebody already decided about it.
+ */
+export async function runVerifyJob(
+  payload: GovernJobPayload,
+  options: GovernJobOptions = {},
+): Promise<{ result: string; notified: number }> {
+  const now = options.now ?? new Date();
+
+  const before = new Set(
+    (
+      await withTenant(payload.tenantId, (tx) =>
+        tx.governFinding.findMany({
+          where: { kind: 'audit_chain_broken', status: { in: ['open', 'acknowledged'] } },
+          select: { id: true },
+        }),
+      )
+    ).map((f) => f.id),
+  );
+
+  const result = await verifyIncremental(payload.tenantId, {
+    now,
+    ...(options.signer === undefined ? {} : { signer: options.signer }),
+  });
+
+  const fresh = await withTenant(payload.tenantId, (tx) =>
+    tx.governFinding.findMany({
+      where: {
+        kind: 'audit_chain_broken',
+        status: { in: ['open', 'acknowledged'] },
+        // An EMPTY `notIn` excludes nothing, which is the behaviour wanted on
+        // the first run of a fresh tenant. Written as `notIn` rather than
+        // filtered in memory so the difference is computed by the database over
+        // the rows that exist now, not over a list read a moment earlier.
+        id: { notIn: [...before] },
+      },
+      select: { id: true, subjectRefId: true, detail: true },
+    }),
+  );
+
+  if (fresh.length === 0) return { result: result.result, notified: 0 };
+
+  const publicUrl = options.publicUrl ?? '';
+  const notified = await withTenant(payload.tenantId, async (tx) => {
+    const recipients = await usersWithPermission(tx, PERMISSIONS.AUDIT_READ);
+    if (recipients.length === 0) {
+      await recordEvent(tx, {
+        actorUserId: null,
+        action: 'govern.finding.critical_unnotified',
+        targetType: 'GovernFinding',
+        targetId: fresh[0]!.id,
+        outcome: 'failure',
+        sourceIp: null,
+        payload: {
+          findingCount: fresh.length,
+          permission: PERMISSIONS.AUDIT_READ,
+          statement: NOBODY_TO_TELL,
+        },
+      });
+      return 0;
+    }
+
+    return enqueueOutbox(
+      tx,
+      fresh.flatMap((finding) =>
+        recipients.map((recipient) => ({
+          // `NEVER_DIGESTED` carries this template (Step 3a), so `enqueueOutbox`
+          // writes `digest: false` whatever the recipient's preference says.
+          // The rule is enforced there, once, for every caller — not repeated
+          // here, where the next caller would forget it.
+          template: 'govern-finding-critical' as const,
+          to: recipient.email,
+          vars: {
+            displayName: recipient.displayName,
+            findingKind: INTEGRITY_HEADLINE,
+            summary: String(
+              (finding.detail as Record<string, unknown>)['statement'] ?? finding.subjectRefId,
+            ),
+            findingUrl: `${publicUrl}/admin/govern/findings/${finding.id}`,
+          },
+          requestId: null,
+          userId: recipient.userId,
+        })),
+      ),
+    );
+  });
+
+  return { result: result.result, notified };
+}
+```
+
+**Why `AUDIT_READ` and not `GOVERN_MANAGE`.** `PERMISSIONS.GOVERN_MANAGE` is
+produced by **Task 13**, which is dispatched after this one, so naming it here
+would be exactly the forward dependency the plan's own import walk exists to
+catch. `AUDIT_READ` already exists in `packages/core/src/rbac/permissions.ts`
+today, and it is the right audience on the merits rather than the convenient
+one: the message says the audit log cannot be shown to be intact, and whoever
+may read that log is who needs to know. A reviewer who prefers the finding-owner
+audience should say so; the change is then one constant, plus moving the four
+Govern permissions into this task.
+
+**This REPLACES the `runVerifyJob` written at Step 4.** One function, one
+definition; the earlier body is not left in the file beside it.
 
 - [ ] **Step 5: Wire the scheduler**
 
@@ -12276,8 +13256,56 @@ In `apps/api/src/scheduler.ts`, add `registerGovernJobs` and `applyGovernSchedul
 - in `startSyncScheduler`, after `registerKeyRotationJob(scheduler, provider);`:
 
 ```ts
-    registerGovernJobs(scheduler);
+    // EVERY option is passed. `registerGovernJobs(scheduler)` with no second
+    // argument compiles, runs, schedules all seven jobs and disables three
+    // things at once, saying nothing:
+    //
+    //  - no `signer`, so `checkpointTrust` is handed `null` on every production
+    //    run. C5's protection is correct, unskippable, mutation-guarded — and
+    //    unreachable, because the state it refuses (`unsigned_while_signer_
+    //    configured`, "exactly the forged checkpoint the attack inserts") needs
+    //    a signer to be configured before it can occur. §17's mitigation is
+    //    printed on every evidence bundle and inert in the shipped system.
+    //  - no `anchorSink`, so `runAnchorJob` returns `not_configured` forever and
+    //    §17's anchoring — which `AuditAnchor`'s own schema comment calls the
+    //    ONLY protection against the operator — never happens.
+    //  - no `publicUrl`, so it defaults to `''` and every reviewer reminder,
+    //    escalation and campaign-open notification carries a relative
+    //    `/govern/reviews?campaign=…` link. `config.publicUrl` is a REQUIRED
+    //    `z.string().url()` and is in scope two lines above.
+    //
+    // This is the "bounded exemption that was never bounded at the call site"
+    // shape, at the one call site that disables the slice's headline security
+    // control. The sibling registration above passes its dependency; so does
+    // this one.
+    registerGovernJobs(scheduler, {
+      publicUrl: config.publicUrl,
+      transport,
+      signer:
+        config.governCheckpointKey === null
+          ? null
+          : localFileCheckpointSigner(config.governCheckpointKeyId, config.governCheckpointKey),
+      anchorSink:
+        config.governAnchorDir !== null
+          ? fileAnchorSink(config.governAnchorDir)
+          : config.governAnchorEmail !== null
+            // The DEPLOYMENT's name, not a tenant's. `registerGovernJobs` runs
+            // once for the process and the handler serves every tenant, so a
+            // tenant name captured here would be on every other tenant's
+            // receipt. A receipt that names the wrong tenant is worse than one
+            // that names none; the payload names the tenant, and the anchor row
+            // records it.
+            ? mailAnchorSink(transport, config.governAnchorEmail, new URL(config.publicUrl).host)
+            : null,
+    });
 ```
+
+`localFileCheckpointSigner`, `fileAnchorSink` and `mailAnchorSink` join the
+`@syntra/core` import. `transport` is the SMTP transport this function already
+builds for the notify queue; if `startSyncScheduler` does not yet construct one,
+build it from `config.smtpUrl` here — the mail anchor sink and the reminder
+templates both need it, and Task 18 and Task 21 register handlers that read
+`options.transport` and `options.publicUrl`.
 
 - in `scheduleBackgroundWork`, after the signing-key loop and before the sources loop:
 
@@ -12300,6 +13328,227 @@ In `apps/api/src/scheduler.ts`, add `registerGovernJobs` and `applyGovernSchedul
 ```
 
 **Nothing in here may reject** — the surrounding function's whole contract is that an API which comes up with governance unscheduled is strictly better than one that does not come up at all.
+
+Then add to `packages/core/src/govern/jobs.test.ts`, using the `fakeScheduler`
+from Step 1 (which now keeps the handler, not only its name):
+
+```ts
+describe('what registerGovernJobs hands its handlers', () => {
+  it('passes the SIGNER through, so a checkpoint is written signed', async () => {
+    // The registration test, not the verifier test. `checkpointTrust` is
+    // correct, unskippable and mutation-guarded inside `verifyIncremental`;
+    // this is the separate assertion that a deployment ever hands it a key.
+    // Without it the protection is reachable only from a test — which is what
+    // it was, in 26,000 lines, at the one call site that matters.
+    const fake = fakeScheduler();
+    registerGovernJobs(fake.scheduler, {
+      signer: localFileCheckpointSigner('key-1', Buffer.alloc(32, 9)),
+    });
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null, action: 'govern.test', targetType: 'Test', targetId: null,
+        outcome: 'success', sourceIp: null, payload: {},
+      }),
+    );
+
+    await fake.run(GOVERN_VERIFY_JOB, governJobPayload(tenantId));
+
+    const checkpoint = await withTenant(tenantId, (tx) => tx.auditCheckpoint.findFirstOrThrow());
+    expect(checkpoint.keyId).toBe('key-1');
+    expect(checkpoint.signature).not.toBeNull();
+  });
+
+  it('passes the ANCHOR SINK through, so anchoring is not `not_configured` forever', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'syntra-anchor-'));
+    const fake = fakeScheduler();
+    registerGovernJobs(fake.scheduler, { anchorSink: fileAnchorSink(dir) });
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null, action: 'govern.test', targetType: 'Test', targetId: null,
+        outcome: 'success', sourceIp: null, payload: {},
+      }),
+    );
+
+    await fake.run(GOVERN_ANCHOR_JOB, governJobPayload(tenantId));
+
+    const row = await withTenant(tenantId, (tx) => tx.auditAnchor.findFirstOrThrow());
+    expect(row.status).toBe('anchored');
+    expect(readdirSync(dir)).toHaveLength(1);
+  });
+
+  it('writes an UNSIGNED checkpoint when no signer is configured, and says nothing false about it', async () => {
+    // The honest default, asserted so the two states are distinguishable. A
+    // deployment with no key is not broken; a deployment with a key that never
+    // reaches the verifier looks identical from here, and this pair is what
+    // tells them apart.
+    const fake = fakeScheduler();
+    registerGovernJobs(fake.scheduler);
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null, action: 'govern.test', targetType: 'Test', targetId: null,
+        outcome: 'success', sourceIp: null, payload: {},
+      }),
+    );
+
+    await fake.run(GOVERN_VERIFY_JOB, governJobPayload(tenantId));
+
+    const checkpoint = await withTenant(tenantId, (tx) => tx.auditCheckpoint.findFirstOrThrow());
+    expect(checkpoint.keyId).toBeNull();
+  });
+});
+
+describe('the critical-finding producer', () => {
+  // A hardened detector wired to a notification nobody sends is the same inert
+  // control one layer out. Section 17 says a `critical` finding is notified
+  // immediately and never digested; these are the assertions that make that a
+  // fact about the code rather than a sentence in a template.
+  const auditReader = async (over: { mode?: string } = {}) => {
+    const user = await withTenant(tenantId, async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          tenantId,
+          login: 'ingrid',
+          email: 'ingrid@example.test',
+          displayName: 'Ingrid Bakker',
+        },
+      });
+      const role = await tx.role.create({
+        data: { tenantId, name: 'Auditor', permissions: [PERMISSIONS.AUDIT_READ] },
+      });
+      await tx.roleAssignment.create({
+        data: { tenantId, roleId: role.id, userId: created.id },
+      });
+      if (over.mode !== undefined) {
+        await tx.notificationPreference.create({
+          data: { tenantId, userId: created.id, mode: over.mode },
+        });
+      }
+      return created;
+    });
+    return user;
+  };
+
+  const breakTheChain = async () => {
+    await withTenant(tenantId, async (tx) => {
+      for (let i = 0; i < 3; i += 1) {
+        await recordEvent(tx, {
+          actorUserId: null, action: `govern.test.${i}`, targetType: 'Test', targetId: null,
+          outcome: 'success', sourceIp: null, payload: { i },
+        });
+      }
+    });
+    await asDatabaseSuperuser(
+      `UPDATE "AuditEvent" SET action = 'tampered' WHERE "tenantId" = $1 AND sequence = 2`,
+      [tenantId],
+    );
+  };
+
+  it('NOTIFIES the audit.read holders, with a findingUrl they can open', async () => {
+    const user = await auditReader();
+    await breakTheChain();
+
+    const result = await runVerifyJob(governJobPayload(tenantId), {
+      now: NOW,
+      publicUrl: 'https://syntra.example.test',
+    });
+    expect(result.result).toBe('broken');
+    expect(result.notified).toBe(1);
+
+    const outbox = await withTenant(tenantId, (tx) => tx.notificationOutbox.findMany());
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]).toMatchObject({ template: 'govern-finding-critical', to: user.email });
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'audit_chain_broken' } }),
+    );
+    const vars = outbox[0]!.vars as Record<string, string>;
+    // ABSOLUTE, and pointing at the row. A relative link in an email client
+    // resolves to nothing, which is what `publicUrl` being unwired produced.
+    expect(vars['findingUrl']).toBe(
+      `https://syntra.example.test/admin/govern/findings/${finding.id}`,
+    );
+    // A name, never an id: nobody reading this should have to know the enum.
+    expect(vars['findingKind']).not.toMatch(/_/);
+    expect(vars['summary']).toContain('does not hold');
+  });
+
+  it('is NEVER digested, whatever the recipient chose', async () => {
+    // The digest path is exactly where an urgent message silently rejoins the
+    // queue: `enqueueOutbox` writes `digest: true` for any DIGESTIBLE template
+    // whose recipient asked for a daily summary, and `runOutboxJob` skips those
+    // rows. An audit chain that does not hold, arriving in tomorrow morning's
+    // summary, is an audit chain nobody acted on today.
+    await auditReader({ mode: 'daily' });
+    await breakTheChain();
+
+    await runVerifyJob(governJobPayload(tenantId), { now: NOW, publicUrl: 'https://x.test' });
+
+    const outbox = await withTenant(tenantId, (tx) => tx.notificationOutbox.findMany());
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]?.digest).toBe(false);
+    // And the rule is enforced in the shared list, once, rather than at this
+    // call site where the next caller would forget it.
+    expect(NEVER_DIGESTED).toContain('govern-finding-critical');
+  });
+
+  it('does NOT re-send a finding that is still open from the last run', async () => {
+    // A `critical` alarm that arrives every night at 04:00 for six months is an
+    // alarm somebody writes a mail rule for.
+    await auditReader();
+    await breakTheChain();
+
+    const first = await runVerifyJob(governJobPayload(tenantId), { now: NOW, publicUrl: 'https://x.test' });
+    const second = await runVerifyJob(governJobPayload(tenantId), { now: NOW, publicUrl: 'https://x.test' });
+    expect(first.notified).toBe(1);
+    expect(second.notified).toBe(0);
+
+    const outbox = await withTenant(tenantId, (tx) => tx.notificationOutbox.findMany());
+    expect(outbox).toHaveLength(1);
+  });
+
+  it('sends NOTHING for a critical finding that is not an integrity finding', async () => {
+    // The standing kinds are raised by the nightly snapshot build in bulk and
+    // are worked from the findings queue. Mailing every `critical` immediately
+    // is how a queue becomes a filter rule, and it is not what section 17 asks
+    // for.
+    await auditReader();
+    await withTenant(tenantId, (tx) =>
+      tx.governFinding.create({
+        data: {
+          tenantId, kind: 'stale_source', severity: 'critical',
+          subjectRefType: 'source', subjectRefId: 'src-1',
+          detail: {}, firstSeenAt: NOW, lastSeenAt: NOW,
+        },
+      }),
+    );
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null, action: 'govern.test', targetType: 'Test', targetId: null,
+        outcome: 'success', sourceIp: null, payload: {},
+      }),
+    );
+
+    const result = await runVerifyJob(governJobPayload(tenantId), { now: NOW, publicUrl: 'https://x.test' });
+    expect(result.result).toBe('valid');
+    expect(result.notified).toBe(0);
+    expect(await withTenant(tenantId, (tx) => tx.notificationOutbox.findMany())).toEqual([]);
+  });
+
+  it('RECORDS it rather than dropping it when nobody holds audit.read', async () => {
+    // A silent zero here is indistinguishable from a working notifier.
+    await breakTheChain();
+
+    const result = await runVerifyJob(governJobPayload(tenantId), { now: NOW, publicUrl: 'https://x.test' });
+    expect(result.notified).toBe(0);
+
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'govern.finding.critical_unnotified' } }),
+    );
+    expect(event.outcome).toBe('failure');
+    expect(event.payload).toMatchObject({ findingCount: 1, permission: 'audit.read' });
+  });
+});
+```
 
 - [ ] **Step 6: Write the transaction-budget test**
 
@@ -12508,15 +13757,15 @@ describe('the transaction budget — slice 2', () => {
 
 - [ ] **Step 7: Run the tests**
 
-Run: `pnpm vitest run packages/core/src/govern/jobs.test.ts packages/core/src/govern/transaction-budget.test.ts`
-Expected: PASS. The budget file is slow — the seed alone is 400 people — and its `beforeEach` and cases carry explicit 120-second timeouts.
+Run: `pnpm vitest run packages/core/src/govern/jobs.test.ts packages/core/src/govern/transaction-budget.test.ts packages/core/src/automate/notify.test.ts`
+Expected: PASS. **Automate's `notify.test.ts` is in the list because Step 3a edits `automate/notify.ts`** — widening a type and adding one entry to `NEVER_DIGESTED` — and a cross-slice edit whose own suite is never run is how the previous slice's regression arrived. The budget file is slow — the seed alone is 400 people — and its `beforeEach` and cases carry explicit 120-second timeouts.
 
 - [ ] **Step 8: Export and typecheck**
 
 Add `export * from './govern/jobs.js';` to `packages/core/src/index.ts`.
 
 Run: `pnpm exec tsc -b --force`
-Expected: exit 0.
+Expected: exit 0. **`packages/core/src/config.ts` is on this task's Modify list** (Step 4a) and the two new keys are optional, so no existing deployment's boot changes.
 
 - [ ] **Step 9: Mutation-test**
 
@@ -12526,6 +13775,14 @@ Expected: exit 0.
 4. In `buildSnapshot`, set the effective batch size to `Number.MAX_SAFE_INTEGER`. Expected: `builds a snapshot over the same tenant with no transaction over the budget` FAILS. **This is the mutation the budget test exists for**; run it once by hand and record the observed `slowest` in the commit message.
 5. Set `REVIEWER_BATCH` to `Number.MAX_SAFE_INTEGER`. Expected: `starts a 2,000-item campaign with no transaction over the budget` FAILS. Before the fix wave this constant was **exported by Task 18 and referenced by nothing** — a budget stored and never read, which no test could catch because there was no slice-2 budget test at all.
 6. Set `closeDueCampaigns`'s `batchSize` default to `Number.MAX_SAFE_INTEGER`. Expected: `closes a 2,000-item campaign with no transaction over the budget` FAILS.
+7. **In `registerGovernJobs`, drop `options.signer` from the `runVerifyJob` registration** — that is, restore `runVerifyJob(payload, {})`. Expected: `passes the SIGNER through, so a checkpoint is written signed` FAILS on `keyId`. **This is H-e's mutation, and it is deliberately at the REGISTRATION and not in the verifier.** `checkpointTrust` already has mutation 4a proving it cannot be skipped; what nothing proved was that a running deployment ever hands it a key. A protection that is correct, unskippable, mutation-guarded and never wired is the shape this programme has paid for in every slice.
+8. **In `apps/api/src/scheduler.ts`, revert the call to `registerGovernJobs(scheduler)` with no options.** Expected: `pnpm exec tsc -b --force` still exits 0 — **which is the finding.** Nothing fails, nothing warns, and three controls go dark at once: no signer, no anchor sink, and every notification link relative. Record it here rather than pretending a test catches it, and check the call site by reading it: the options object is the assertion.
+9. **Delete the notification block from `runVerifyJob` and return `notified: 0`.** Expected: `NOTIFIES the audit.read holders, with a findingUrl they can open` FAILS on the outbox count. This is the producer that did not exist: the template, the Consumes line and section 17's sentence were all in place, and nothing sent anything.
+10. **Remove `'govern-finding-critical'` from `NEVER_DIGESTED`.** Expected: `is NEVER digested, whatever the recipient chose` FAILS on `digest` — the row is written for tomorrow morning's summary and `runOutboxJob` skips it tonight. Note that **no type error and no other test** catches this: the digest rule is data, so the assertion has to be about the data.
+11. **Use the full `after` set instead of the `id: { notIn: [...before] }` difference.** Expected: `does NOT re-send a finding that is still open from the last run` FAILS with two rows. Every nightly run would re-send, which is how a `critical` alarm becomes a mail rule.
+12. **Drop `kind: 'audit_chain_broken'` from both finding queries in `runVerifyJob`.** Expected: `sends NOTHING for a critical finding that is not an integrity finding` FAILS. The nightly snapshot build raises the standing kinds in bulk; mailing each one immediately is not what section 17 asks for and is how the mailbox stops being read.
+13. **Replace the `recipients.length === 0` branch with `return 0`.** Expected: `RECORDS it rather than dropping it when nobody holds audit.read` FAILS. A tenant where nobody holds the permission is a configuration problem, and a silent zero is indistinguishable from a working notifier — the exact shape of the finding this step closes.
+14. **In `automate/notify.ts`, revert `OutboxDraft.template` to `AutomateTemplate`.** Expected: `pnpm exec tsc -b --force` FAILS with TS2322 at **nine** call sites — this task's producer, four in Task 18, two in Task 17 and two in Task 21 — because `Extract<TemplateName, 'automate-${string}'>` admits no `govern-*` name. Run it once and read the list: it is the proof that Step 3a is load-bearing for the whole slice and not only for this step.
 
 **Dispatch note.** The slice-2 half of `transaction-budget.test.ts` cannot run until Tasks 17-20 have landed. Write the slice-1 half here and **add the slice-2 `describe` block as the last step of Task 20**, which is the last of the four; Task 20 Step 8 runs the whole file. The mutations above belong to whichever task owns the constant.
 
@@ -12536,9 +13793,12 @@ git add packages/core/src/govern/jobs.ts \
         packages/core/src/govern/jobs.test.ts \
         packages/core/src/govern/transaction-budget.test.ts \
         packages/core/src/notify/templates/index.ts \
+        packages/core/src/automate/notify.ts \
+        packages/core/src/config.ts \
+        packages/core/src/config.test.ts \
         apps/api/src/scheduler.ts \
         packages/core/src/index.ts
-git commit -m "feat(govern): jobs, schedules, notification templates and the transaction budget"
+git commit -m "feat(govern): jobs, schedules, templates, the checkpoint signer and anchor configuration, and the transaction budget"
 ```
 
 ---
@@ -14068,7 +15328,11 @@ const HEADLINE: Record<string, string> = {
   sod_violation: 'One person holds both sides of a duty separation',
   sod_laundering: 'Two people approved each other into opposite sides of a rule',
   approval_reciprocity: 'Two people repeatedly decide for each other',
-  lapsed_exception: 'A risk acceptance expired and was not renewed',
+  // No `lapsed_exception` row: a lapse ages the violation's OWN `sod_violation`
+  // finding (section 15 rule 3, implemented by `lapse()`), so there is no
+  // second row to headline. A map entry for a kind nothing raises is a queue
+  // column that is always empty and always looks like a bug (Ruling G-13).
+  audit_chain_broken: 'The audit log cannot be shown to be intact',
   no_human_decision: 'Access granted by a workflow with no approver',
   unmergeable_actor: 'An account with no linked person is making decisions',
 };
@@ -14079,6 +15343,10 @@ const HEADLINE: Record<string, string> = {
  * has an explanation for.
  */
 const KIND_ORDER = [
+  // First, and above `unattributable_holding`, because it is the only finding
+  // that says the record itself may not be trustworthy. Everything below it is
+  // a question about access; this one is a question about the evidence.
+  'audit_chain_broken',
   'unattributable_holding',
   'unexplained_gain',
   'access_without_contract',
@@ -14089,7 +15357,6 @@ const KIND_ORDER = [
   'sod_violation',
   'privileged_uncertified',
   'no_human_decision',
-  'lapsed_exception',
   'coverage_gap',
   'unmergeable_actor',
   'campaign_low_coverage',
@@ -15896,7 +17163,7 @@ Spec §14. **`evaluateSodRules` and `sodImpact` are pure functions over plain va
 **`snapshot-service.ts` is NOT modified by this task.** The detect call lives in `jobs.ts`; see Step 6(d) and Task 7 Step 6's `CYCLE_FREE` assertion.
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `readableSnapshot` from `./readable.js`; `upsertFindings`, `reconcileFindings`, `type FindingDraft` from `./finding-service.js`; `type Severity`, `raiseSeverity`, `resourceKey`, `type ResourceKind`.
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `readableSnapshot` from `./readable.js`; `reconcileFindings`, `type FindingDraft` from `./finding-service.js` (**`reconcileFindings` only** — `sod-service.ts` calls no other finding writer, and the written-out header at Step 5 must match this line); `type Severity`, `raiseSeverity`, `resourceKey`, `type ResourceKind`.
 - Produces (in `./sod.js` — **pure**):
   - `interface FunctionResource { systemId: string; resourceKind: ResourceKind; resourceId: string }`
   - `interface SodFunction { functionId: string; name: string; resources: readonly FunctionResource[] }`
@@ -16336,7 +17603,12 @@ Expected: PASS, 12 tests.
 ```ts
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
-import { upsertFindings, type FindingDraft } from './finding-service.js';
+// `reconcileFindings`, not `upsertFindings`: `detectSodViolations` is
+// authoritative for the three SoD kinds and must close the ones that have gone.
+// It was missing from this header while the body at Step 6 called it -- TS2304
+// for anybody who copied the header verbatim (M-a). The Consumes line above has
+// always listed it.
+import { reconcileFindings, type FindingDraft } from './finding-service.js';
 import {
   evaluateSodRules,
   sodImpact,
@@ -17314,7 +18586,9 @@ Spec §8 rules 1 and 2, §11, §19. **A campaign cannot be started when any sour
 - Modify: `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `evaluateCondition`, `conditionSchema`, `type Condition`, `type ConditionFacts` from `../provision/condition.js`; `readableSnapshot`, `type ReadableSnapshot` from `./readable.js`; `buildSnapshot` from `./snapshot-service.js`; `checkSnapshotAge`, `checkSourceFreshness`, `type ClassifiedSource`; `governSettings`; `percentOf`, `known`, `type Tri`, `type ResourceKind`; `REVIEWER_BATCH`, `resolveItemReviewers` from `./reviewer-service.js` **(Task 18 — see the dispatch note below)**; `enqueueOutbox`, `displayNames`, `recipientsForPersons` from `../automate/notify.js`.
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `evaluateCondition`, `conditionSchema`, `type Condition`, `type ConditionFacts` from `../provision/condition.js`; `readableSnapshot`, `type ReadableSnapshot` from `./readable.js`; `buildSnapshot` from `./snapshot-service.js`; `checkSnapshotAge`, `checkSourceFreshness`, `type ClassifiedSource`; `governSettings`; `percentOf`, `known`, `type Tri`, `type ResourceKind`; `REVIEWER_BATCH`, `resolveItemReviewers` from `./reviewer-service.js` **(Task 18 — see the dispatch note below)**; `enqueueOutbox`, `displayNames`, `recipientsForPersons` from `../automate/notify.js`. **In the test file only: `recordDecision` from `./decision-service.js` (Task 19 — dispatched before this task), for Step 9a's re-base composition test.**
+
+**Dispatch order for slice 2's three campaign tasks, stated once and repeated in each: Task 19, then Task 18, then Task 17.** Task 18 imports `computeReviewQualitySignals` from Task 19 (§12's reviewer-quality section "is not hidden behind a toggle", so the signals are computed when a campaign closes rather than only when a test calls them); Task 17 imports `resolveItemReviewers` and `REVIEWER_BATCH` from Task 18. Task 19 imports nothing from either. The numbers are labels, not an order. **This task is the LAST of the three, so it is where the three cross-task verifications live (Step 9a).** Task 19 cannot run them: under this order neither `reviewer-service.ts` nor `campaign-service.ts` exists when Task 19 executes, and a `readFileSync` of a file that is not there throws `ENOENT` and fails the whole module, while a mutation of a file that is not there cannot be applied at all and reports success.
 - Produces (all in `./campaign-service.js`):
   - `const ITEM_BATCH = 500`
   - `interface CampaignScope { resourceKinds: ResourceKind[]; systemIds?: string[]; privilegedOnly?: boolean; orgUnitIds?: string[]; subjectCondition?: Condition; riskFlags?: string[] }`
@@ -18366,7 +19640,9 @@ export async function extendCampaign(
  * `HoldingCertification` projection in Task 19. An item that is NOT re-opened
  * must keep its projection row; rolling the projection back for every item of a
  * re-based campaign would make a certification that is still good read as never
- * made. Task 19 Step 9 tests the pair.
+ * made. Task 17 Step 9a tests the pair, calling BOTH functions for real; it
+ * is at Task 17 because that is the last of the three campaign tasks dispatched
+ * and the first point at which `rebaseCampaign` and `recordDecision` both exist.
  */
 export async function rebaseCampaign(
   tenantId: string,
@@ -18452,7 +19728,7 @@ export async function rebaseCampaign(
 - [ ] **Step 7: Run the tests**
 
 Run: `pnpm vitest run packages/core/src/govern/campaign-service.test.ts`
-Expected: PASS, 21 tests. **Task 18 must be complete first** — `resolveItemReviewers` and `REVIEWER_BATCH` are hard imports.
+Expected: PASS, 22 tests — 21, plus the re-base composition test Step 9a moves here from Task 19. **Task 18 must be complete first** — `resolveItemReviewers` and `REVIEWER_BATCH` are hard imports — and **Task 19 must be complete first** too, because Step 9a's test calls `recordDecision`.
 
 - [ ] **Step 8: Export and typecheck**
 
@@ -18475,6 +19751,81 @@ Expected: exit 0.
 10. In `holdingsInScope`, change the violation query's `lastSnapshotId` to a plain `where: { status: 'open' }` with no snapshot filter. Expected: nothing in this file fails, which is the point — add the case where a violation from an OLDER snapshot must NOT flag an item in the current one, and require it to fail.
 11. **Move `resolveItemReviewers` back inside the item-creation transaction.** Expected: `resolves reviewers in REVIEWER_BATCH transactions` FAILS, and Task 12's extended `transaction-budget.test.ts` FAILS on `startCampaign` over the 2,000-item seed.
 12. Drop `skipDuplicates: true` from the `createMany`. Expected: `generating twice over the same scope creates no duplicate item` FAILS with a P2002 on the new `@@unique`. Then also remove the `@@unique` from the schema: the same test FAILS with a count of 2, which is the version that ships duplicates silently and is the worse of the two failures.
+
+- [ ] **Step 9a: The three cross-task verifications the dispatch order moved here**
+
+**Why they are here.** The dispatch order is `19, 18, 17`, so Task 17 is the last
+of the three campaign tasks and the first point at which `decision-service.ts`
+(T19), `reviewer-service.ts` (T18) and `campaign-service.ts` (this task) all
+exist. Three verifications written into Task 19 reached forward into files that
+order has not yet created: under `19, 18, 17` they would have thrown `ENOENT`,
+failed a whole test module rather than an assertion, or — worse — been mutations
+nobody could apply, which report success. They are executed once, here.
+
+**(a) The re-base composition hazard, with both halves real.** Append to
+`packages/core/src/govern/campaign-service.test.ts`:
+
+```ts
+describe('the certification projection and the re-base composition hazard', () => {
+  it('keeps the projection for an item a re-base did NOT re-open', async () => {
+    // Two individually correct rules: "re-basing re-opens only what changed"
+    // (this task) and "the projection is rebuilt from decisions" (Task 19).
+    // Composed naively, a re-base rolls the projection back for items whose
+    // holding did not change, and a certification that is still good reads as
+    // never made.
+    //
+    // The version this replaces lived in `decision-service.test.ts` and
+    // SIMULATED the re-base with a `campaign.update`, so the mutation below
+    // could not have failed it. Here `rebaseCampaign` is called for real, and
+    // `recordDecision` is imported from Task 19, which is already dispatched.
+    const { itemId } = await seedCertifiedItem();
+    const before = await withTenant(tenantId, (tx) => tx.holdingCertification.findFirstOrThrow());
+
+    await rebaseCampaign(tenantId, actorUserId, campaignId, { now: NOW });
+
+    const after = await withTenant(tenantId, (tx) => tx.holdingCertification.findFirstOrThrow());
+    expect(after.lastCertifiedAt).toEqual(before.lastCertifiedAt);
+    expect(after.lastDecisionId).toBe(before.lastDecisionId);
+    // And the item itself was not re-opened, because its holding did not change.
+    const item = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
+    );
+    expect(item.status).toBe('certified');
+  });
+});
+```
+
+`seedCertifiedItem` is this file's existing item seed followed by a real
+`recordDecision(tenantId, { itemId, deciderPersonId, deciderUserId, decision:
+'certify', comment: null }, { now: NOW })` — the projection must be written by
+the function that writes it in production, not by hand.
+
+Then mutate: in `rebaseCampaign`, add
+`tx.holdingCertification.deleteMany({ where: { lastCampaignId: campaignId } })`.
+Expected: `keeps the projection for an item a re-base did NOT re-open` FAILS.
+**Neither function is wrong on its own; the defect exists only where they meet,
+which is why the test now lives at the meeting point rather than beside a
+simulation of it.**
+
+**(b) The `certified`-writer scan, against a file that is not its own.** Add
+`status: 'certified'` to a close path in `reviewer-service.ts` (T18). Expected:
+both `only the files in DECISION_ENTRY_POINTS WRITE status = certified` and
+`no Govern file contains a timeout or expiry that certifies` FAIL, run as
+`pnpm vitest run packages/core/src/govern/decision-service.test.ts`. Confirm it
+fails on the **write** pattern: `reviewer-service.ts` must not have to be added
+to `DECISION_ENTRY_POINTS` to make it pass, because doing that would permit it to
+write `certified` and the test would prove nothing.
+
+**(c) `needs_review` must be WRITTEN as well as consulted.** Remove
+`'needs_review'` from the `riskFlags` array in this task's `startCampaign`
+generation — **not** from Task 19's `HIGH_RISK_FLAGS`. Expected: this task's
+`writes needs_review and sod_violation into riskFlags` FAILS **and** Task 19's
+`REFUSES a high-risk item from the bulk action` FAILS for a `needsReview` grant.
+The earlier form of this mutation removed the flag from `HIGH_RISK_FLAGS` and
+passed, because the fixture supplied by hand a flag no production path wrote —
+the third instance in this plan of a test proving something production did not
+do. Mutation 8 above covers the first half alone; this case is what ties the two
+tasks together.
 
 - [ ] **Step 10: Commit**
 
@@ -20384,6 +21735,8 @@ Spec §12, §17, §23. **No transition into `certified` exists that is not cause
   - `async function computeReviewQualitySignals(tenantId: string, campaignId: string, now?: Date): Promise<number>`
   - `async function projectCertification(tx: TenantClient, itemId: string, decisionId: string, personId: string): Promise<void>`
 
+**Dispatch order for slice 2's three campaign tasks, stated once and repeated in each: Task 19, then Task 18, then Task 17.** Task 18 imports `computeReviewQualitySignals` from Task 19 (§12's reviewer-quality section "is not hidden behind a toggle", so the signals are computed when a campaign closes rather than only when a test calls them); Task 17 imports `resolveItemReviewers` and `REVIEWER_BATCH` from Task 18. Task 19 imports nothing from either. The numbers are labels, not an order. **This task is dispatched FIRST of the three and imports nothing from either of the others.** Nothing in it may read, `readFileSync`, mutate or run a test in `reviewer-service.ts` or `campaign-service.ts`: under this order those files do not exist yet. The three verifications that used to do so are **Task 17 Step 9a** — moved rather than guarded on the file's existence, because a structural test that quietly skips is the failure this task exists to prevent.
+
 **High-risk items are refused from a bulk action outright and must be decided one at a time with a mandatory comment.** The carve-outs are `unattributable`, `privileged`, `sod_violation`, a `stale` or `partial` source, and `needs_review` — Automate's mover flag, which "exists precisely so a campaign can consume it, and it is exactly the item a bulk certify must not sweep up".
 
 - [ ] **Step 1: Write the failing test**
@@ -20420,6 +21773,19 @@ const user: Record<string, string> = {};
 // (seed helpers identical in shape to reviewer-service.test.ts: seedPerson,
 // seedItem, and an `assign` helper writing a CampaignItemReviewer row.)
 
+/**
+ * A WRITE of the status, not the WORD.
+ *
+ * Defined once and used by both structural tests below, because the second test
+ * exists to prove this exact pattern is the narrow one. Building it inline in
+ * the scan and asserting about it somewhere else is how the two drift, and a
+ * scan whose regex nothing constrains is a scan that can be widened back to
+ * `/['"]certified['"]/` — at which point every legitimate READ of the status is
+ * an offender, and the cheapest fix is to add those files to
+ * `DECISION_ENTRY_POINTS`, which permits them to WRITE it.
+ */
+const CERTIFY_WRITE = /status:\s*['"]certified['"]/;
+
 describe('the structural tests that must fail if somebody forgets', () => {
   it('every transition into `certified` is caused by a CampaignDecision row', () => {
     // Exhaustive over the item state machine. This is the test that would fail
@@ -20447,7 +21813,7 @@ describe('the structural tests that must fail if somebody forgets', () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const offenders = readdirSync(dir)
       .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
-      .filter((f) => /status:\s*['"]certified['"]/.test(readFileSync(join(dir, f), 'utf8')))
+      .filter((f) => CERTIFY_WRITE.test(readFileSync(join(dir, f), 'utf8')))
       .filter((f) => !DECISION_ENTRY_POINTS.includes(f));
     expect(offenders).toEqual([]);
     // ONE entry. Growing this list is the failure mode, not the fix.
@@ -20455,13 +21821,31 @@ describe('the structural tests that must fail if somebody forgets', () => {
   });
 
   it('reading the status is still allowed, which is what makes the write test meaningful', () => {
-    // The negative half. If this ever fails it means the offender regex has been
-    // widened back to matching the word, and the write test above has silently
-    // become a test about vocabulary.
+    // The negative half: the scan must match a WRITE and not the WORD. If it is
+    // ever widened back to `/['"]certified['"]/`, the test above silently
+    // becomes a test about vocabulary.
+    //
+    // ASSERTED ON THE PATTERN, AND ON `decision-service.ts` ITSELF — never on a
+    // second file. The first attempt at this test read `reviewer-service.ts` and
+    // asserted it DID contain a quoted `'certified'`; H5's fix, in the same
+    // pass, had removed the last one (`closeDueCampaigns` now counts from
+    // `campaignDecision` and compares `decision === 'certify'`), so the test was
+    // red on arrival and the mutation behind it was inert. There is no Govern
+    // production file left that reads the status through a quoted literal, and a
+    // witness chosen today stops witnessing the moment somebody rewrites the one
+    // comparison it stands on. The pattern is the invariant; assert the
+    // invariant.
+    expect(CERTIFY_WRITE.test("if (item.status === 'certified') return;")).toBe(false);
+    expect(CERTIFY_WRITE.test('const done = items.filter((i) => i.status === "certified");')).toBe(
+      false,
+    );
+    expect(CERTIFY_WRITE.test("where: { status: 'certified' }")).toBe(true);
+    expect(CERTIFY_WRITE.test('data: { status: "certified" }')).toBe(true);
+
+    // And it must still match the one file that legitimately writes it, so the
+    // scan above cannot pass by matching nothing at all.
     const dir = dirname(fileURLToPath(import.meta.url));
-    const reviewer = readFileSync(join(dir, 'reviewer-service.ts'), 'utf8');
-    expect(reviewer).toMatch(/['"]certified['"]/);
-    expect(reviewer).not.toMatch(/status:\s*['"]certified['"]/);
+    expect(readFileSync(join(dir, 'decision-service.ts'), 'utf8')).toMatch(CERTIFY_WRITE);
   });
 
   it('no Govern file contains a timeout or expiry that certifies', () => {
@@ -20829,33 +22213,17 @@ describe('quality signals', () => {
     expect(second.openedAt).toEqual(NOW);
   });
 });
-
-describe('the certification projection and the re-base composition hazard', () => {
-  it('keeps the projection for an item a re-base did NOT re-open', async () => {
-    // Two individually correct rules: "re-basing re-opens only what changed"
-    // and "the projection is rebuilt from decisions". Composed naively, a
-    // re-base rolls the projection back for items whose holding did not change,
-    // and a certification that is still good reads as never made.
-    const itemId = await seedItem('Anna');
-    await assign(itemId, 'Jan');
-    await recordDecision(tenantId, {
-      itemId, deciderPersonId: person['Jan']!, deciderUserId: user['Jan']!,
-      decision: 'certify', comment: null,
-    }, { now: NOW });
-
-    const before = await withTenant(tenantId, (tx) => tx.holdingCertification.findFirstOrThrow());
-
-    // Simulate a re-base that keeps this item: its status stays `certified`.
-    await withTenant(tenantId, (tx) =>
-      tx.campaign.update({ where: { id: campaignId }, data: { rebasedFromSnapshotId: snapshotId } }),
-    );
-
-    const after = await withTenant(tenantId, (tx) => tx.holdingCertification.findFirstOrThrow());
-    expect(after.lastCertifiedAt).toEqual(before.lastCertifiedAt);
-    expect(after.lastDecisionId).toBe(before.lastDecisionId);
-  });
-});
 ```
+
+**The re-base composition hazard is NOT tested here, and this is where it used
+to be.** The version this replaces lived in this file and *simulated* the
+re-base with `tx.campaign.update({ data: { rebasedFromSnapshotId } })` — it never
+called `rebaseCampaign`, so the mutation that was supposed to guard it (adding a
+`holdingCertification.deleteMany` to `rebaseCampaign`) could not have failed it.
+`rebaseCampaign` is Task 17's, and under the dispatch order `19, 18, 17` it does
+not exist yet. The test moves to **Task 17 Step 9a**, where both halves are real:
+`recordDecision` from this task, already dispatched, and `rebaseCampaign` from
+that one.
 
 - [ ] **Step 2: Run it and watch it fail**
 
@@ -21569,7 +22937,7 @@ export async function computeReviewQualitySignals(
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm vitest run packages/core/src/govern/decision-service.test.ts`
-Expected: PASS, 24 tests. (The fix wave added the `certified`-read structural test, two quality-signal tests and the `openItem` persistence test.)
+Expected: PASS, 23 tests. (The first fix wave added the `certified`-read structural test, two quality-signal tests and the `openItem` persistence test; this one moved the re-base composition test to Task 17 Step 9a, where `rebaseCampaign` exists.)
 
 - [ ] **Step 7: Export and typecheck**
 
@@ -21580,31 +22948,24 @@ Expected: exit 0.
 
 - [ ] **Step 8: Mutation-test**
 
-Every one must produce a failure:
+Every one must produce a failure. **Every mutation in this list acts on a file
+this task has already created**, which is not a stylistic preference: under the
+dispatch order `19, 18, 17` neither `reviewer-service.ts` nor
+`campaign-service.ts` exists yet, and a mutation that cannot be applied is a
+mutation that reports success. The two that reached forward are now **Task 17
+Step 9a**.
 
 1. Add `{ from: 'pending', to: 'certified', causedBy: 'timeout' }` to `CERTIFYING_TRANSITIONS`. Expected: `every transition into \`certified\` is caused by a CampaignDecision row` FAILS. **This is the assertion that would catch a negative-confirmation setting.**
-2. Add `status: 'certified'` to a close path in `reviewer-service.ts`. Expected: both `only the files in DECISION_ENTRY_POINTS WRITE status = certified` and `no Govern file contains a timeout or expiry that certifies` FAIL. **Confirm it fails with the CORRECTED regex** — under the old `/['"]certified['"]/` it fails for the wrong reason, because `reviewer-service.ts` reads that status legitimately and was an offender on day one.
-2a. Change the offender regex back to `/['"]certified['"]/`. Expected: `only the files in DECISION_ENTRY_POINTS WRITE status = certified` FAILS immediately, naming `reviewer-service.ts`, `report-service.ts` and `campaign-service.ts` — and note that the cheapest way to make it pass again is to add those three to `DECISION_ENTRY_POINTS`, at which point the test permits them to WRITE `certified` and proves nothing. That is H16.
-3. **Remove `needs_review` from the `riskFlags` array in Task 17's `startCampaign` generation** — not from `HIGH_RISK_FLAGS`. Expected: `REFUSES a high-risk item from the bulk action` FAILS for a `needsReview` grant, and Task 17's `writes needs_review and sod_violation into riskFlags` FAILS too. **The old form of this mutation removed the flag from `HIGH_RISK_FLAGS` and passed**, because the test fixture supplied by hand a flag no production path wrote — the third instance in this plan of a test proving something production did not do.
-3a. Remove `'needs_review'` from `HIGH_RISK_FLAGS`. Expected: `REFUSES a high-risk item from the bulk action` FAILS. Both halves, because the flag has to be written AND consulted.
+2. **Widen `CERTIFY_WRITE` back to `/['"]certified['"]/`.** Expected: `reading the status is still allowed, which is what makes the write test meaningful` FAILS on its first assertion — the pattern now matches a read.
+   **This mutation is deliberately about the pattern and not about any file's current contents, because the version it replaces was inert.** That version expected the widened regex to name `reviewer-service.ts`, `report-service.ts` and `campaign-service.ts` as offenders. After H5's fix, none of the three contains a quoted `'certified'` at all — `closeDueCampaigns` counts from `campaignDecision` and compares `decision === 'certify'` — and the Task 17 hits are all in `campaign-service.test.ts`, which the scan excludes. So the widened regex would have found **no offenders**, the mutation would have passed, and H16's actual defect could be reintroduced undetected. Two fixes made in one pass, one silently invalidating the other's test (H16). The pattern assertion cannot go inert that way: it does not depend on what any file happens to contain today, and it does not depend on which tasks have been dispatched.
+3. Remove `'needs_review'` from `HIGH_RISK_FLAGS`. Expected: `REFUSES a high-risk item from the bulk action` FAILS. **The other half — that `startCampaign` actually WRITES the flag — is Task 17 Step 9's mutation 8 and Step 9a's cross-task case**, because `campaign-service.ts` does not exist under the dispatch order `19, 18, 17` at the time this step runs. The flag has to be written AND consulted, and each half is mutated in the task that owns it.
 4. In `isBulkCertifiable`, drop the `coverageStatus` check. Expected: the same test FAILS on the `partial` item.
 5. In `recordDecision`, allow a certification of a departed subject. Expected: `REFUSES a certification and moots the item instead` FAILS.
 6. In `recordDecision`, refuse a *revoke* on a departed subject too. Expected: `ALLOWS a revoke decision on a departed subject's item` FAILS. **Both directions, because refusing both is how a leaver's access becomes permanent.**
 7. In `bulkCertify`, write one audit event per item. Expected: `writes ONE audit event naming every item` FAILS.
 8. In `bulkCertify`, read the cap from the campaign rather than from settings. Expected: `caps at bulkCertifyLimit` FAILS once the campaign row has no such column — which it deliberately does not.
 
-- [ ] **Step 9: Verify the re-base composition explicitly**
-
-Run the pair together and read the assertion:
-
-```bash
-pnpm vitest run packages/core/src/govern/decision-service.test.ts -t "composition hazard"
-pnpm vitest run packages/core/src/govern/campaign-service.test.ts -t "re-basing"
-```
-
-Then mutate: in `rebaseCampaign`, add a `tx.holdingCertification.deleteMany({ where: { lastCampaignId: campaignId } })`. Expected: `keeps the projection for an item a re-base did NOT re-open` FAILS. **Neither function is wrong on its own; the defect only exists where they meet, which is why the test lives at the meeting point.**
-
-- [ ] **Step 10: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add packages/core/src/govern/decision-service.ts \
@@ -21612,6 +22973,13 @@ git add packages/core/src/govern/decision-service.ts \
         packages/core/src/index.ts
 git commit -m "feat(govern): decisions, bulk carve-outs, quality signals and the state-machine tests"
 ```
+
+**The re-base composition hazard and the two cross-task mutations are verified at
+Task 17 Step 9a**, the last of the three campaign tasks dispatched. They are not
+skipped and they are not guarded on a file's existence — a structural test that
+quietly skips is the failure H16 exists to prevent. They are executed once, at
+the point where `decision-service.ts`, `reviewer-service.ts` and
+`campaign-service.ts` all exist.
 
 ---
 ## Task 20: Revocation — the dispatch router, the batch guard, `RevocationOrder`, and Provision's plan stage
@@ -21634,7 +23002,7 @@ Spec §5, §13, Ruling G1. **A reviewer clicking revoke has not revoked anything
   - `interface RouteDecision { route: RevocationRoute; dispatchable: boolean; remediationKind: string | null; explanation: string; notRemoved: string[] }`
   - `const ROUTE_REMEDIATION_KIND: Readonly<Record<RevocationRoute, string | null>>`
   - `function routeRevocation(input: RouteInput): RouteDecision` — **no fall-through: the final line is `const exhaustive: never = input.resourceKind`, so a seventh `ResourceKind` is a compile error rather than a silent `revocation_order`.**
-- Produces (in `./revocation-guard.js` — **pure**):
+- Produces (in `./revocation-guard.js` — **pure**). **These three names collide in the barrel and are exported from `packages/core/src/index.ts` by enumeration and alias — `GovernGuardInput`, `GovernGuardVerdict`, `GovernGuardThresholds` — never by `export *`.** `sync/guard.ts` already exports `GuardInput` and `GuardVerdict` (index.ts:59) and the `provision/guard.js` block already re-exports `GuardThresholds` (index.ts:134); under TS2308 a second star export makes the barrel export **neither** side, silently. Third instance of the class Provision wrote two rulings about. Inside `govern/` the names stay as they are — the ambiguity exists only at the barrel. See Step 9.
   - `interface GuardThresholds { batchThresholdPercent: number; perResourceThresholdPercent: number; personPopulationDropPercent: number }`
   - `interface GuardInput { revocationsInBatch: number; holdingsInScope: number; revocationsByResource: ReadonlyMap<string, number>; holderCountByResource: ReadonlyMap<string, Tri<number>>; resourceNameById: ReadonlyMap<string, string>; thresholds: GuardThresholds; snapshotAgeDays: number; maxSnapshotAgeDays: number; staleSources: { sourceName: string; staleness: string; completeness: string }[]; personsWithActiveContract: number; previousPersonsWithActiveContract: number | null; hasEverApplied: boolean }`
   - `type GuardVerdict = { outcome: 'proceed' } | { outcome: 'requires_confirmation'; reasons: string[] } | { outcome: 'refused'; reasons: string[] }`
@@ -23957,12 +25325,79 @@ describe('reflectRevocationOutcomes — the vocabulary rule', () => {
 Run: `pnpm vitest run packages/core/src/govern/dispatch.test.ts packages/core/src/govern/revocation-guard.test.ts packages/core/src/govern/revocation-service.test.ts packages/core/src/provision`
 Expected: PASS. **The Provision suite must stay green** — `PlanInput` gained one array and `PlannedAction` one nullable field, and a broken Provision test means the plan-stage edit changed behaviour it should not have.
 
-- [ ] **Step 9: Export and typecheck**
+- [ ] **Step 9: Export and typecheck — TWO star exports and ONE enumerated block**
 
-Add three export lines to `packages/core/src/index.ts`, and add `RevocationOrderFacts` to the enumerated `provision/types.js` export block — **it is a barrel-only alias list and anything added to `provision/types.ts` must be hand-added there or it silently does not leave the package.**
+`packages/core/src/index.ts` gains **two** star exports and **one** enumerated,
+aliased block. Not three star exports: `revocation-guard.ts` collides on all
+three of its exported type names, and under TS2308 a duplicate star export makes
+the barrel export **neither** name — silently, with no error at the collision
+site. That would compile, pass every test in this task, and unexport Directory
+Sync's guard types on the way past.
+
+```ts
+export * from './govern/dispatch.js';
+export * from './govern/revocation-service.js';
+// Member by member, not `export *`, and for the third time in this codebase.
+// `revocation-guard.ts` exports `GuardInput`, `GuardVerdict` and
+// `GuardThresholds`. The live barrel already has all three:
+//   index.ts:59  `export * from './sync/guard.js'`  -> GuardInput, GuardVerdict
+//   index.ts:134 `export type { GuardThresholds } from './provision/guard.js'`
+// A star export here is TS2308 twice over plus a duplicate-export error, and
+// under TS2308 the barrel then exports NEITHER side of the ambiguous names.
+// Provision hit this exact class twice and wrote two rulings about it — the
+// `ContractFacts` collision (-> `ProvisionContractFacts`) and the guard
+// collision (-> `ProvisionGuardInput` / `ProvisionGuardVerdict`, with the
+// comment at index.ts:121-130 spelling out the consequence). `sync/`,
+// `provision/` and `govern/` name the same concepts; the ambiguity exists only
+// at the barrel, so the alias is at the barrel and the names inside
+// `govern/` stay what they are.
+export { evaluateRevocationGuard } from './govern/revocation-guard.js';
+export type {
+  GuardInput as GovernGuardInput,
+  GuardVerdict as GovernGuardVerdict,
+  GuardThresholds as GovernGuardThresholds,
+} from './govern/revocation-guard.js';
+```
+
+`evaluateRevocationGuard` is the module's only runtime export and does not
+collide, but it is enumerated here rather than left to a star export, because a
+module that is half-starred and half-enumerated is how the next name added to it
+silently fails to leave the package — which is the same defect one level along.
+
+**Before adding either star export, grep both new modules' exported names against
+the barrel** — `dispatch.ts` (`RevocationRoute`, `REVOCATION_ROUTES`,
+`DISPATCHABLE_ROUTES`, `ROUTE_REMEDIATION_KIND`, `RouteInput`, `RouteDecision`,
+`routeRevocation`) and `revocation-service.ts` (`computeRevocationBatch`,
+`skipDispatch`, `RevocationRefusedError`, `confirmRevocationBatch`,
+`reflectRevocationOutcomes`, `loadRevocationOrders`). None of them collides
+today; the grep is the step, not the result, because the failure is silent.
+
+Also add `RevocationOrderFacts` to the enumerated `provision/types.js` export
+block — **it is a barrel-only alias list and anything added to
+`provision/types.ts` must be hand-added there or it silently does not leave the
+package.**
 
 Run: `pnpm exec tsc -b --force`
 Expected: exit 0.
+
+**And prove the barrel actually exports them**, because TS2308 is the failure
+that does not raise an error at the site that caused it. Add to
+`packages/core/src/govern/revocation-guard.test.ts`:
+
+```ts
+import * as barrel from '../index.js';
+
+it('leaves BOTH guards reachable from the barrel', () => {
+  // The names are aliased, so Govern's arrive under their Govern names...
+  expect(barrel).toHaveProperty('evaluateRevocationGuard');
+  // ...and Directory Sync's and Provision's are still there, which is the half
+  // a duplicate star export would have removed without saying so.
+  expect(barrel).toHaveProperty('evaluateProvisionGuard');
+});
+```
+
+A type-only collision cannot be asserted at runtime, so the compile-time half is
+mutation 8 below.
 
 - [ ] **Step 10: Mutation-test the router and the guard**
 
@@ -23973,6 +25408,7 @@ Expected: exit 0.
 5. Add `'requires_change_rule'` to `DISPATCHABLE_ROUTES`. Expected: `never marks a requires_change route dispatchable` FAILS, and so does the `dispatchable` assertion in the route table.
 6. In the guard, treat an `unknown` holder count as `known(0)` and skip. Expected: add the case if absent — a resource whose count is unknown must force confirmation, not be waved through.
 7. In the guard, drop the `hasEverApplied` clause. Expected: the first-batch case FAILS. **Provision found this hole in Directory Sync's guard.**
+8. **Replace the enumerated `revocation-guard.js` block in `packages/core/src/index.ts` with `export * from './govern/revocation-guard.js';`.** Expected: `pnpm exec tsc -b --force` FAILS with **TS2308 on `GuardInput` and `GuardVerdict`** (against `sync/guard.js`) and a duplicate-export error on `GuardThresholds` (against the `provision/guard.js` alias block). Then, in a scratch file outside the package, `import type { GuardInput } from '@syntra/core'` and confirm the name resolves to **nothing** — that is the part that matters, because under TS2308 the barrel silently exports neither side and Directory Sync's guard types disappear from the public surface without anybody's build failing. This is the third instance of a collision Provision wrote two rulings about (H-d).
 8. In the guard, move the population-drop check into `reasons` rather than `refusals`. Expected: the population case FAILS on `outcome`.
 9. **In `confirmRevocationBatch`, delete the `governSettings.update` that writes `lastAppliedBatchAt` and `personsWithActiveContractAtLastBatch`.** Expected: `WRITES the population denominator, so the second batch can be refused for a collapse` FAILS — the second batch is `previewed` rather than `blocked`, because `previousPersonsWithActiveContract` is `null` and the refusal's guard condition never holds. **This is C2's second half: a guard that is present, reachable, reads a value nobody writes, and therefore always passes.**
 10. In `confirmRevocationBatch`, default `options.confirmed` to `true`. Expected: `refuses a batch that requiresConfirmation unless the caller says so explicitly` FAILS.
@@ -24010,8 +25446,9 @@ Spec §14 (the graph), §15 (exceptions). **Nothing in this task revokes anythin
 - Modify: `packages/core/src/govern/jobs.ts` (register `exception`), `packages/core/src/index.ts`
 
 **Interfaces:**
-- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `submitRequest`, `type SubmitOutcome` from `../automate/request-service.js`; `resolveStageApprovers`, `type StageSnapshot`, `type ResolutionSubject` from `../automate/approvers.js`; `usersWithPermission`, `recipientsForPersons`, `enqueueOutbox`, `displayNames` from `../automate/notify.js`; `PERMISSIONS` from `../rbac/permissions.js`; `governSettings` from `./settings-service.js`; `upsertFindings`, `createRemediationItem`, `type FindingDraft` from `./finding-service.js`; `raiseSeverity`, `type Severity` from `./types.js`; `readableSnapshot` from `./readable.js`; `evaluateSodRule` from `./sod.js`.
+- Consumes: `withTenant`, `type TenantClient`; `recordEvent`; `submitRequest`, `type SubmitOutcome` from `../automate/request-service.js`; `resolveStageApprovers`, `type StageSnapshot`, `type ResolutionSubject` from `../automate/approvers.js`; `usersWithPermission`, `recipientsForPersons`, `enqueueOutbox`, `displayNames` from `../automate/notify.js`; `PERMISSIONS` from `../rbac/permissions.js`; `governSettings` from `./settings-service.js`; `createRemediationItem`, `type FindingDraft` from `./finding-service.js`; `raiseSeverity`, `type Severity` from `./types.js`; `readableSnapshot` from `./readable.js`; `evaluateSodRule` from `./sod.js`.
   - **Not** `campaign-service.ts` or `decision-service.ts`. An exception is a risk acceptance, not a decision on a campaign item, and importing either would make `exception-service.ts` depend on a module that does not need to exist for it to work.
+  - **Not `upsertFindings` either, and this task raises no finding of its own.** `lapse()` ages the violation's EXISTING `sod_violation` finding — reopened at original severity, raised one step, `lapsedExceptionAt` and `lapsedExceptionReason` stamped into its `detail` — which is §15 rule 3 exactly. A `lapsed_exception` kind alongside it would put two Govern rows and two counts behind one problem, which is the precise thing Task 8A exists to prevent, so the kind is removed from `FINDING_KINDS` rather than given a producer (Ruling G-13). Task 8's caller table no longer carries a `sweepLapsedExceptions` row; the function was never named that and never existed.
 - Produces (in `./exception-service.js`):
   - `class ExceptionRefusedError extends Error { constructor(readonly code: 'no_end_date' | 'too_long' | 'beneficiary_is_approver' | 'blocked_no_approver' | 'missing_justification', message: string) }`
   - `async function requestSodException(tenantId, actorUserId, input): Promise<{ id: string; status: string }>`
@@ -26282,14 +27719,15 @@ Run against the spec with fresh eyes, per the writing-plans skill. **A self-revi
 | §14 The decision graph, three edge kinds, three patterns, three qualifications | T21 Steps 1–2 | written |
 | §15 Exceptions: required end date, cap, justification, compensating control | T15 Step 5, T21 Step 3 | written |
 | §15 Approved through Automate's workflow; the `govern.accept_risk` fallback | T21 Step 3, T22 Step 3 | written |
-| §15 Warnings, lapse, severity raised, nothing revoked, early contract lapse | T21 Step 3 (`sweepExceptions`, `lapse`) | written |
+| §15 Warnings, lapse, severity raised, nothing revoked, early contract lapse | T21 Step 3 (`sweepExceptions`, `lapse`) | written. **Rule 3 is implemented on the violation's OWN `sod_violation` finding and there is no `lapsed_exception` kind** — a second kind would be two rows for one problem, which is what T8A exists to prevent (Ruling G-13) |
 | §15 A refused exception revokes nothing | T21 Step 3 | written |
-| §16 One finding lifecycle; fifteen kinds; `accepted` needs an expiry | T2, T8, T1 Step 8 | written |
+| §16 One finding lifecycle; fifteen kinds; `accepted` needs an expiry | T2, T8, T1 Step 8 | written, **with two amendments to §16's kind table at T1 Step 13**: `lapsed_exception` removed (§15 rule 3 ages the violation's own finding — Ruling G-13) and `audit_chain_broken` added (§17's two integrity failures need a kind the nightly detect stage does not reconcile). Still fifteen |
 | §16 `RemediationItem` and its six kinds; chased | T1 Steps 6, 8; T8 | written |
 | §16 Orphan attribution: propose, claim, confirm, never automatic | T9 | written |
 | §16 Syntra account dormancy, labelled as exactly that | T11 Step 4a (`accountDormancy`), T14 person report | written, with the "not entitlement usage" caveat as a field and a mutation that removes it |
-| §17 Incremental verification, checkpoints, signatures, anchors, evidence packs | T10, T11 Step 6 | written |
+| §17 Incremental verification, checkpoints, signatures, anchors, evidence packs | T10, T11 Step 6, **T12 Steps 4a and 5** | written. The signer and the anchor sink are now **configured and passed** — `GOVERN_CHECKPOINT_KEY`, `GOVERN_ANCHOR_DIR`/`GOVERN_ANCHOR_EMAIL` — where `registerGovernJobs(scheduler)` previously handed the verifier `null` on every run and anchoring returned `not_configured` forever (H-e). An untrusted checkpoint is recoverable rather than permanent (Ruling G-12) |
 | §17 One audit event per bulk decision, not one per item | T19 Step 5 | written and tested |
+| §17 A `critical` finding is notified immediately and NEVER digested | **T12 Steps 3a and 4b** | written. `runVerifyJob` enqueues `govern-finding-critical` to the `audit.read` holders on the transition into open — not every run, and not for the standing kinds — and `NEVER_DIGESTED` carries the template, so `enqueueOutbox` writes `digest: false` whatever the recipient's preference says. Until this wave the template had **no producer at all**, so the sentence was true of no code path |
 | §17 What it cannot prove, printed on the cover | T11 Step 6 (`BUNDLE_LIMITATIONS`, seven statements) | written |
 | §18 Every table, every setting, the permissions | T1, T15, T13 Step 1 | written |
 | §19 The pipeline; the batching divergence; the accessor; the jobs | T6, T7, T12 | written |
@@ -26329,9 +27767,9 @@ Walked every Interfaces block against its consumers.
 - `AttributionDraft` (T4) — used in T7 and T11. **Checked: T11's `summariseAttributions` call maps `a.kind as AttributionDraft['kind']`, which is `AttributionKind` from T2.**
 - `DiffHolding` / `DiffRegion` (T5) — used in T7 only. **Checked: T7 Step 4's `toDiff` produces every field `DiffHolding` declares.**
 - `CollectedTenant` (T6) — used in T7's `BuildOptions.collect` seam and in T12. **Checked: T7's `emptyCollection` test helper sets all nine fields.**
-- `upsertFindings` / `reconcileFindings` (T8) — **the split the fix wave made for C1.** `upsertFindings(tenantId, drafts, options)` never resolves and takes no `snapshotId`; `reconcileFindings(tenantId, snapshotId, kinds, drafts, options)` resolves only within `kinds`. **Checked at every one of the seven call sites against the normative table at the head of Task 8**: T8 Step 5 (six standing kinds, rerouted through T8A), T8A, T9 (`['orphan_account']` via T8A), T10 Step 6 (`['unexplained_gain']`), T16 (three SoD kinds), T18 and T20 (`upsertFindings`, never reconciling).
+- `upsertFindings` / `reconcileFindings` (T8) — **the split the fix wave made for C1.** `upsertFindings(tenantId, drafts, options)` never resolves and takes no `snapshotId`; `reconcileFindings(tenantId, snapshotId, kinds, drafts, options)` resolves only within `kinds`. **Checked at every one of the seven call sites against the normative table at the head of Task 8**: T8 Step 5 (six standing kinds, rerouted through T8A), T8A, T9 (`['orphan_account']` via T8A), T10 Step 6 (`['unexplained_gain']`), T16 (three SoD kinds), T18 and T20 (`upsertFindings`, never reconciling), and T10 Step 4 (`upsertFindings` for the two audit findings). **There is no `sweepLapsedExceptions` row** — the table carried one for a function that never existed (M-b). A third resolver, `resolveAuditIntegrityFindings`, closes `audit_chain_broken` and only that kind; it is not in the table's `kinds` column because it takes no `kinds`, which is what makes it unable to close anything else.
 - `createRemediationItem` — **three parameters, `(tx, tenantId, input)`, everywhere: the Interfaces block, the three Task 8 Step 1 tests, and every call site in T8A, T9, T16, T18, T19, T20 and T21.** The wrong two-parameter form that infers a tenant from whatever row exists is described in prose at Task 8 Step 4 and **is not shipped as a compilable body**, because leaving the task's own TDD tests calling a superseded arity gives an implementer TS2554 on three lines and a choice between two fixes, one of which reverts the correction.
-- `FindingDraft.kind` — must be a `FindingKind` from T2. **Checked: T10's broken-chain and untrusted-checkpoint findings both use `'coverage_gap'`, which is in `FINDING_KINDS`. It is a slightly odd fit for an audit-chain break and a reviewer may prefer a sixteenth kind; the alternative is a kind that appears in no other code path.**
+- `FindingDraft.kind` — must be a `FindingKind` from T2. **Both of T10's `critical` findings use `'audit_chain_broken'`.** They used `'coverage_gap'`, and that was not a taste question: `coverage_gap` is in the detect stage's `STANDING_KINDS`, and its only producer emits `subjectRefType: 'source'`, so the nightly build's reconciliation resolved the audit integrity alarm every night with a snapshot that had read no audit events — C1's defect at the two sites C5's fix created (C-a). The new kind is **absent from `STANDING_KINDS`**, absent from every `kinds` argument in the caller table, and closed only by `resolveAuditIntegrityFindings` from evidence a snapshot build does not have. T10 Step 6a asserts the finding survives a real `buildSnapshot`, and mutations 3a and 3b restore each half of the defect and require that test to fail.
 - `readableSnapshot` (T7, in **`readable.ts`**) — used in T8A, T9, T11, T13, T16, T17, T20, T21. Same name and arity everywhere. **Checked at T16's `loadSodFacts` and T20's `computeRevocationBatch`. Every consumer imports it from `./readable.js`.**
 - `governSettings` (T11) — used in T12, T18, T19, T20, T21. **Checked: every caller passes a `tx`, which is what T11 declares.**
 - `GovernSettingsInput` (T11) — the fifteen named settings, with `_KeysCovered` and `_GovernSettingsBodyMatches` as `MutuallyAssignable` guards over the runtime list and the Zod schema. **Neither is a `z.ZodType<T>` annotation over a `z.lazy`, so both bite** (Ruling P21).
@@ -26346,7 +27784,7 @@ Walked every Interfaces block against its consumers.
 Walked every task's Consumes list against the tasks that precede it. **A forward import has stopped a dispatched task twice on this programme.**
 
 - Tasks 1–16 and 20–22 consume only what precedes them, once Task 8A is placed between 8 and 9. **Checked one by one.**
-- **Three tasks are dispatched out of numeric order: 19, then 18, then 17.** Task 18 consumes `computeReviewQualitySignals` from Task 19; Task 17 consumes `resolveItemReviewers` and `REVIEWER_BATCH` from Task 18. Task 19 consumes nothing from either. The note is at the head of all three Interfaces blocks.
+- **Three tasks are dispatched out of numeric order: 19, then 18, then 17.** Task 18 consumes `computeReviewQualitySignals` from Task 19; Task 17 consumes `resolveItemReviewers` and `REVIEWER_BATCH` from Task 18. Task 19 consumes nothing from either. The note is at the head of all three Interfaces blocks — it was previously at T18 and T17 and **absent from T19**, the one task the reorder actually moved. **The order also has to hold for VERIFICATIONS, not only imports.** Three of Task 19's — a `readFileSync` of `reviewer-service.ts`, a mutation of Task 17's `startCampaign`, and a run-and-mutate of `campaign-service.test.ts` — reached into files this order has not yet created. A forward *import* fails loudly; a forward *mutation* cannot be applied and reports success, which is worse. They are now **Task 17 Step 9a**, the last of the three (H-c).
 - **Task 8A is dispatched after Task 8 and before Task 9**, because Task 9's `orphan_account` findings must be raised through it.
 - **Both import cycles are removed, and both are asserted.** `sod-service.ts` ↔ `snapshot-service.ts` was found and removed during the plan's own review by moving the detect call into `jobs.ts`. `finding-service.ts` ↔ `snapshot-service.ts` was left named-but-unfixed and is now closed by Ruling G-6: **`readableSnapshot`, `SnapshotNotReadableError` and `ReadableSnapshot` live in `packages/core/src/govern/readable.ts`**, whose only relative import is `./freshness.js`. Task 7 Step 6's `boundaries.test.ts` asserts both directions and Step 9 mutations 8 and 9 prove the assertions bite. **A real import cycle is not a documentation problem.**
 
@@ -26355,10 +27793,11 @@ Walked every task's Consumes list against the tasks that precede it. **A forward
 The pre-flight review (`.superpowers/sdd/govern-plan-preflight.md`) found 6 Critical, 22 High and 13 Medium against the committed plan, and the fix wave that followed rewrote the sites named below. This list is what remains worth a second opinion.
 
 - **The two-loop `startCampaign` reads campaign items back by id cursor** rather than by the natural keys it just wrote, so a campaign whose scope changed between the two loops resolves reviewers for items the second loop can see and the first did not create. That is the right behaviour for a retry and a reviewer should confirm it is the intended one.
-- **`checkpointTrust` refuses to seed from an unsigned checkpoint when a signer is configured (C5).** The first run after signing is switched on therefore produces one `critical` finding and one full walk from genesis, for the pre-existing unsigned checkpoint. That is stated in the docstring and in the finding's text, and it is cheap — but it is a `critical` finding raised by a configuration change, and an operator should not be surprised by it.
+- **`checkpointTrust` refuses to seed from an unsigned checkpoint when a signer is configured (C5), and the refusal is RECOVERABLE (Ruling G-12).** The first run after signing is switched on raises one `critical` finding and walks from genesis for the pre-existing unsigned checkpoint; that run then re-establishes a signed checkpoint from its own clean genesis walk, so the run after it is incremental again and closes the finding. The earlier text — in the plan, the docstring and this list — said "ONE finding and ONE full walk" while the code could write no checkpoint at all in that state, and `AuditCheckpoint` is append-only: it was one per run, forever, with a genesis walk growing without bound. The sentence was reassurance the mechanism did not support; the mechanism is what changed. A reviewer should still press on the deliberate one-run delay: the finding is **not** closed by the run that raised it, because an alarm raised and cleared inside one run is one nobody sees, and a forged checkpoint over a self-consistent rewritten chain is detectable only by that finding.
+- **`registerGovernJobs` is now passed every option it takes (H-e), and `GOVERN_CHECKPOINT_KEY` / `GOVERN_ANCHOR_DIR` / `GOVERN_ANCHOR_EMAIL` are new optional configuration.** Before this, the single production call was `registerGovernJobs(scheduler)`: no signer, so C5's protection was unreachable in a deployed system and `localFileCheckpointSigner` had no producer; no anchor sink, so §17's anchoring — the only protection against the operator — never ran; and no `publicUrl`, so every reviewer notification link was relative while `config.publicUrl` was required and in scope two lines above. The keys stay **optional** on purpose: a deployment without one is honest about what its verification is worth, and the integrity screen says so in words. What is not acceptable, and was the state, is a screen advising an operator to configure a key that nothing could read.
 - **Task 8A writes `DriftFinding.status`.** `DriftFinding` is a Provision report row and is deliberately not on Global Constraint 2's forbidden list — it is not access-bearing, and §16 requires the closure to propagate. A reviewer who disagrees should say so **before** adding `driftFinding` to `FORBIDDEN`, because doing that satisfies §5 by breaking §16.
 - **`RevocationBatch.campaignId` is now NOT NULL (M4)** and the standalone partial index is gone. If a future SoD remediation wants a campaign-less batch, the column, the index and the writer arrive together.
-- **The `certified`-writer structural test matches `status:\s*'certified'` and not the bare word (H16).** `DECISION_ENTRY_POINTS` has exactly one entry and must stay that way: growing the list is how the test stops proving anything, so the second test asserts the list's contents directly.
+- **The `certified`-writer structural test matches `status:\s*'certified'` and not the bare word (H16), and the pattern is now a named constant the negative test asserts ABOUT.** `DECISION_ENTRY_POINTS` has exactly one entry and must stay that way: growing the list is how the test stops proving anything, so the second test asserts the list's contents directly. The negative half no longer stands on a witness file. It used to assert that `reviewer-service.ts` *did* contain a quoted `'certified'` — which H5's fix, in the same wave, had removed — so it was red on arrival and its mutation was inert. After H5 there is no Govern production file left that reads the status through a quoted literal, so a witness picked today stops witnessing the moment somebody rewrites the one comparison it stands on. The invariant is the pattern; the test asserts the pattern.
 - **`largestBurstMs` is new (M9)** and is the elapsed time across the longest run of consecutive decisions. §12 asks for it; nothing recorded it. The screen's column is relabelled to say what it measures.
 
 ---
