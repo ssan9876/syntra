@@ -1,0 +1,506 @@
+[
+  {
+    "id": "M01",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      if (!run.requiresConfirmation) {",
+    "replace": "      if (false) {",
+    "pattern": "refuses a run the guard refused OUTRIGHT, however it is confirmed",
+    "note": "the brief's gate: a tick overrides the guard's non-confirmable refusals"
+  },
+  {
+    "id": "M02",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    options.confirm === true &&",
+    "replace": "    true &&",
+    "pattern": "refuses a blocked run confirmed with no user, and one naming a user without confirming",
+    "note": "naming a user without confirming satisfies the gate"
+  },
+  {
+    "id": "M03",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    options.confirmedByUserId !== null &&",
+    "replace": "    true &&",
+    "pattern": "refuses a blocked run when a caller passes a null confirming user",
+    "note": "confirmedByUserId: null passes the gate -- the original hole"
+  },
+  {
+    "id": "M04",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "const APPLIABLE_RUN_STATUSES = ['previewed', 'blocked'] as const;",
+    "replace": "const APPLIABLE_RUN_STATUSES = ['previewed', 'blocked', 'applied', 'partially_applied', 'failed'] as const;",
+    "pattern": "refuses a run that is not awaiting an apply",
+    "note": "a terminal or superseded run can be applied again"
+  },
+  {
+    "id": "M05",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "        ...(confirmed ? { confirmedByUserId: options.confirmedByUserId } : {}),",
+    "replace": "        ...(false ? { confirmedByUserId: options.confirmedByUserId } : {}),",
+    "pattern": "applies a confirmed run and records the confirming user",
+    "note": "the confirming user is never recorded on the run"
+  },
+  {
+    "id": "M06",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      // which passes CI and fails in production.\n      orderBy: { sequence: 'asc' },",
+    "replace": "      // which passes CI and fails in production.\n      orderBy: { sequence: 'desc' },",
+    "pattern": "applies a confirmed run and records the confirming user",
+    "note": "the grant is attempted before the create it depends on"
+  },
+  {
+    "id": "M07",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "        ...(options.only === undefined ? {} : { id: { in: options.only } }),",
+    "replace": "        ...(options.only === undefined || options.only.length === 0\n          ? {}\n          : { id: { in: options.only } }),",
+    "pattern": "applies nothing at all when `only` names nothing",
+    "note": "an empty `only` applies the whole run -- the empty case is the universal case"
+  },
+  {
+    "id": "M08",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    if (action.requiresConfirmation && !confirmed) {",
+    "replace": "    if (false) {",
+    "pattern": "never auto-applies an action that requires confirmation",
+    "note": "a re-enable outside the window applies with no tick"
+  },
+  {
+    "id": "M09",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    if (action.requiresConfirmation && !confirmed) {",
+    "replace": "    if (action.requiresConfirmation) {",
+    "pattern": "applies the same action once it is confirmed",
+    "note": "a confirmed run never applies its confirmable actions"
+  },
+  {
+    "id": "M10",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  if ((SYNTRA_ONLY_ACTION_TYPES as readonly string[]).includes(action.actionType)) {",
+    "replace": "  if (false) {",
+    "pattern": "applies a person's second login when the first cannot be applied",
+    "note": "the two Syntra-directory actions are routed to a connector that has no such operation"
+  },
+  {
+    "id": "M11",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      outcome = await recordActionThrew(tenantId, action.id, actorUserId, cause);",
+    "replace": "      throw cause;",
+    "pattern": "applies the rest of a run when one connector action throws",
+    "note": "one throw abandons every later action in sequence order"
+  },
+  {
+    "id": "M12",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      data: { status: 'failed', message },",
+    "replace": "      data: { status: 'in_flight', message },",
+    "pattern": "applies the rest of a run when one connector action throws",
+    "note": "an action that threw is left in_flight, so the target needs adopting"
+  },
+  {
+    "id": "M13",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  if (action.accountId === null) return null;\n  return withTenant(tenantId, async (tx) => {\n    const account = await tx.targetAccount.findUnique({\n      where: { id: action.accountId! },\n    });",
+    "replace": "  return withTenant(tenantId, async (tx) => {\n    const account =\n      action.accountId === null\n        ? await tx.targetAccount.findFirst({\n            where: {\n              targetSystemId: options.targetSystemId,\n              personId: action.personId ?? undefined,\n            },\n          })\n        : await tx.targetAccount.findUnique({ where: { id: action.accountId } });",
+    "pattern": "never falls back to another person's account",
+    "note": "the brief verbatim: Prisma drops an undefined personId and returns a stranger's account"
+  },
+  {
+    "id": "M14",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  return `CN=${escapeDnValue(correlationKey)},${container}`;",
+    "replace": "  return `CN=${correlationKey},${container}`;",
+    "pattern": "escapes the correlation key it renders into a distinguished name",
+    "note": "Ruling P22: DN injection through the RDN half"
+  },
+  {
+    "id": "M15",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      if (correlationKey === '' || container === '') return null;",
+    "replace": "      if (correlationKey === '') return null;",
+    "pattern": "refuses an action it cannot express as a write operation",
+    "note": "a blank container renders CN=x, -- a malformed DN sent to the directory"
+  },
+  {
+    "id": "M16",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      const moving = container !== '' && container.toLowerCase() !== from.toLowerCase();",
+    "replace": "      const moving = container !== '';",
+    "pattern": "does not move an object when the container has not changed",
+    "note": "every update carries a DN, so the connector renames objects whose RDN is not CN=<sAMAccountName>"
+  },
+  {
+    "id": "M17",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "        .filter((h) => options.remit.has(h.entitlement.id) && h.entitlement.dn !== null)",
+    "replace": "        .filter((h) => h.entitlement.dn !== null)",
+    "pattern": "hands the archive only the entitlements Provision manages",
+    "note": "the archive strips a group no business rule names"
+  },
+  {
+    "id": "M18",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "                entitlementId: { in: meta.strippedEntitlementIds! },\n",
+    "replace": "",
+    "pattern": "hands the archive only the entitlements Provision manages",
+    "note": "Syntra records revoked a membership that is still at the target"
+  },
+  {
+    "id": "M19",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "            data: { status: 'disabled', disabledAt: now },",
+    "replace": "            data: { status: 'disabled' },",
+    "pattern": "records disabledAt whenever it records the status disabled",
+    "note": "Task 9's obligation: every later re-enable becomes confirmable, forever"
+  },
+  {
+    "id": "M20",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "            data: { status: 'active', disabledAt: null },",
+    "replace": "            data: { status: 'active' },",
+    "pattern": "clears disabledAt when it re-enables",
+    "note": "a stale disable date beside an active status, which the ladder reads"
+  },
+  {
+    "id": "M21",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "        throttledAttempts >= MAX_THROTTLED_ATTEMPTS ||",
+    "replace": "        false ||",
+    "pattern": "gives up on a throttle whose retryAfterMs is not a usable number",
+    "note": "only the wait budget bounds the loop, and a zero retryAfterMs does not advance it"
+  },
+  {
+    "id": "M22",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "        throttledForMs + wait > THROTTLE_BUDGET_MS",
+    "replace": "        false",
+    "pattern": "stops waiting when the target asks for more patience than the budget allows",
+    "note": "a target asking for a minute each time gets twenty of them"
+  },
+  {
+    "id": "M23",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    retryAfterMs > 0",
+    "replace": "    retryAfterMs >= 0",
+    "pattern": "gives up on a throttle whose retryAfterMs is not a usable number",
+    "note": "a zero wait is honoured, so the budget never advances"
+  },
+  {
+    "id": "M24",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    Number.isFinite(retryAfterMs) &&",
+    "replace": "    true &&",
+    "pattern": "gives up on a throttle whose retryAfterMs is not a number at all",
+    "note": "NaN defeats the budget comparison from the other side"
+  },
+  {
+    "id": "M25",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  const base = Math.min(1000 * 2 ** (attempt - 1), MAX_BACKOFF_MS);",
+    "replace": "  const base = 1000 * 2 ** (attempt - 1);",
+    "pattern": "stops growing at a ceiling rather than reaching infinity",
+    "note": "sleep(Infinity) -- a run that never finishes and never says why"
+  },
+  {
+    "id": "M26",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  return Math.round(base * (1 + jitter() * 0.25));",
+    "replace": "  return Math.round(base * (1 + jitter() * 0.5));",
+    "pattern": "grows exponentially and adds jitter",
+    "note": "the jitter fraction"
+  },
+  {
+    "id": "M27",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    if (result.ok) {\n      attempts = attempt;\n      break;\n    }",
+    "replace": "    if (result.ok) {\n      break;\n    }",
+    "pattern": "retries a transient failure within the run and succeeds",
+    "note": "the successful call is not counted, so the column under-reports"
+  },
+  {
+    "id": "M28",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    if (attempts >= options.maxAttempts) break;",
+    "replace": "    if (attempts > options.maxAttempts) break;",
+    "pattern": "honours a maxAttempts the administrator lowered",
+    "note": "one more call than the administrator allowed"
+  },
+  {
+    "id": "M29",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    if (attempts >= options.maxAttempts) break;",
+    "replace": "    if (attempts >= 3) break;",
+    "pattern": "leaves an action pending_retry when it exhausts maxAttempts",
+    "note": "maxAttempts hardcoded rather than read from the target"
+  },
+  {
+    "id": "M30",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    if (result.ok && operation.op === 'create_account' && result.anchor === undefined) {",
+    "replace": "    if (false) {",
+    "pattern": "retries a create the target reported successful without an anchor",
+    "note": "an account Syntra can never address again, recorded as done"
+  },
+  {
+    "id": "M31",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "              status: 'active',\n              statusReason: null,\n              createdActionId: actionId,",
+    "replace": "              status: 'active',\n              statusReason: null,",
+    "pattern": "writes the anchor back onto the account after a create",
+    "note": "the account no longer records the action that created it"
+  },
+  {
+    "id": "M32",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "            if (held === null) {",
+    "replace": "            if (true) {",
+    "pattern": "does not record a second holding when a grant is applied twice",
+    "note": "a duplicate AccountEntitlement row nothing ever reconciles"
+  },
+  {
+    "id": "M33",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    else if (isRetryable(result.failure)) {",
+    "replace": "    else if (false) {",
+    "pattern": "leaves an action pending_retry when it exhausts maxAttempts",
+    "note": "an exhausted retryable failure is recorded failed, so the next run does not pick it up"
+  },
+  {
+    "id": "M34",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    else if (result.failure === 'conflict') status = 'conflict';",
+    "replace": "    else if (result.failure === 'rejected') status = 'conflict';",
+    "pattern": "marks a conflict as conflict and puts the account in conflict",
+    "note": "a conflict is recorded as an ordinary failure"
+  },
+  {
+    "id": "M35",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    if (status === 'conflict' && meta.accountId) {",
+    "replace": "    if (false) {",
+    "pattern": "marks a conflict as conflict and puts the account in conflict",
+    "note": "the account is left looking usable while somebody else holds its name"
+  },
+  {
+    "id": "M36",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      await putSecret(\n        tx,",
+    "replace": "      await Promise.resolve(\n        tx,",
+    "pattern": "seals the initial password into the vault and never writes it anywhere else",
+    "note": "Ruling P12: the credential is generated, written to the directory and dropped"
+  },
+  {
+    "id": "M37",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "        data: { status: 'in_flight' },",
+    "replace": "        data: { status: 'proposed' },",
+    "pattern": "never puts a network call inside a transaction",
+    "note": "the in-flight marker that makes the gap between the write and its record observable"
+  },
+  {
+    "id": "M38",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "        action: 'provision.action.intent',",
+    "replace": "        action: 'provision.action.result',",
+    "pattern": "writes an intent event before the call and a result event after it",
+    "note": "an audit log that cannot distinguish 'we never tried' from 'we tried and never found out'"
+  },
+  {
+    "id": "M39",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "        payload: { actionType: action.actionType, attempt },",
+    "replace": "        payload: { actionType: action.actionType, attempt: 1 },",
+    "pattern": "writes one intent event per attempt, not one per action",
+    "note": "the attempt number on the intent event"
+  },
+  {
+    "id": "M40",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      correlationKey: (record.attributes.sAMAccountName?.[0] ?? '').toLowerCase(),",
+    "replace": "      correlationKey: record.attributes.sAMAccountName?.[0] ?? '',",
+    "pattern": "adopts a landed create whose correlation key the target folded",
+    "note": "a landed write reads as one that did not land, and the next run creates a second object"
+  },
+  {
+    "id": "M41",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "              o.provenance.some((value) => value.includes(action.id)),",
+    "replace": "              true,",
+    "pattern": "never adopts an object that does not carry this action's marker",
+    "note": "anybody able to create an object in the target is handed an existing person's account"
+  },
+  {
+    "id": "M42",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  if (prepared.actions.length === 0) return 0;",
+    "replace": "  if (false) return 0;",
+    "pattern": "reads nothing at all when nothing is in flight",
+    "note": "every preview of every target reads the whole directory a second time"
+  },
+  {
+    "id": "M43",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    const status = remaining === 0 && anyFailed === 0 ? 'applied' : 'partially_applied';",
+    "replace": "    const status = remaining === 0 ? 'applied' : 'partially_applied';",
+    "pattern": "applies the rest of a run when one connector action throws",
+    "note": "a run that did nothing it was asked to reports success"
+  },
+  {
+    "id": "M44",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "    if (status === 'applied' || applied > 0) {",
+    "replace": "    if (false) {",
+    "pattern": "applies a confirmed run and records the confirming user",
+    "note": "hasEverApplied never becomes true, so the guard stays on its first-run refusal forever"
+  },
+  {
+    "id": "M45",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "      where: { runId, status: 'proposed' },",
+    "replace": "      where: { runId, status: 'failed' },",
+    "pattern": "applies nothing at all when `only` names nothing",
+    "note": "the skipped count"
+  },
+  {
+    "id": "M46",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  if (policy.requireSymbol !== false) classes.push(SYMBOL);",
+    "replace": "  if (policy.requireSymbol === true) classes.push(SYMBOL);",
+    "pattern": "honours the policy rather than a hardcoded shape",
+    "note": "a class the policy asked for by default is dropped"
+  },
+  {
+    "id": "M47",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  if (policy.requireSymbol !== false) classes.push(SYMBOL);",
+    "replace": "  if (true) classes.push(SYMBOL);",
+    "pattern": "omits a class the policy switches off",
+    "note": "the policy's own switch is ignored"
+  },
+  {
+    "id": "M48",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  if (classes.length === 0) classes.push(UPPER, LOWER, DIGIT);",
+    "replace": "  if (false) classes.push(UPPER, LOWER, DIGIT);",
+    "pattern": "still produces a password when the policy requires no class at all",
+    "note": "randomInt(0) throws, so the create fails on a policy the schema accepts"
+  },
+  {
+    "id": "M49",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  const length = Math.max(16, Math.min(128, policy.length ?? 24));",
+    "replace": "  const length = Math.min(128, policy.length ?? 24);",
+    "pattern": "will not produce a password shorter than sixteen characters",
+    "note": "the floor and the ceiling on the generated length"
+  },
+  {
+    "id": "M50",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  for (let i = chars.length - 1; i > 0; i -= 1) {\n    const j = randomInt(i + 1);\n    [chars[i], chars[j]] = [chars[j]!, chars[i]!];\n  }",
+    "replace": "  for (let i = chars.length - 1; i > 0; i -= 1) {\n    const j = i;\n    [chars[i], chars[j]] = [chars[j]!, chars[i]!];\n  }",
+    "pattern": "shuffles, so the class of each position is not fixed",
+    "note": "the first four characters are always upper, lower, digit, symbol in that order"
+  },
+  {
+    "id": "M51",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  const resolveInFlight =\n    options.resolveInFlight ??\n    ((id: string) =>\n      resolveInFlightActions(tenantId, provider, id, {\n        ...(options.connector === undefined ? {} : { connector: options.connector }),\n      }));",
+    "replace": "  const resolveInFlight = options.resolveInFlight ?? (async () => 0);",
+    "pattern": "resolves in flight through the production path with no option passed",
+    "note": "the seam Task 13 left open is still a no-op on the production path"
+  },
+  {
+    "id": "M52",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "              statusReason:\n                'created by an apply that was interrupted before its initial password could be sealed; the password must be reset before this account can be used',",
+    "replace": "              statusReason: null,",
+    "pattern": "says plainly that the adopted account's initial password was lost",
+    "note": "an account nobody can sign in to, with nothing recorded saying why"
+  },
+  {
+    "id": "M53",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "          credentialSealed: landed === undefined ? null : false,",
+    "replace": "          credentialSealed: true,",
+    "pattern": "says plainly that the adopted account's initial password was lost",
+    "note": "the audit trail claims a credential was sealed that was lost with the process"
+  },
+  {
+    "id": "M54",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "  for await (const record of connector.read(prepared.config as never)) {",
+    "replace": "  for await (const record of connector.read(prepared.config as never)) {\n    void 0;",
+    "pattern": "reads the target once however many actions are in flight",
+    "note": "control mutant: a no-op inside the read loop, expected SURVIVED"
+  },
+  {
+    "id": "M55",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "            data: { state: 'revoked', revokedAt: now },\n          });\n        }\n        break;\n    }",
+    "replace": "            data: { state: 'held', revokedAt: now },\n          });\n        }\n        break;\n    }",
+    "pattern": "revokes a holding through the inventory when the revoke lands",
+    "note": "a revocation that landed at the target is still recorded held"
+  },
+  {
+    "id": "M56",
+    "file": "packages/core/src/provision/apply.ts",
+    "test": "packages/core/src/provision/apply.test.ts",
+    "find": "            data: { status: 'archived' },",
+    "replace": "            data: { status: 'active' },",
+    "pattern": "does not record an archive that the target refused",
+    "note": "control on the archive status write; the refused case must not reach it at all"
+  }
+]

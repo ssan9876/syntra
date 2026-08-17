@@ -1240,11 +1240,13 @@ export async function resolveInFlightActions(
               'resolved after an interrupted apply: the write had landed, but the initial password it generated was lost with the process and could not be sealed',
           },
         });
+        // By id, never by correlation key. Phase 7 fills `accountId` for every
+        // action it writes, and a lookup on the key would have to decide what
+        // case to compare in — a question with two wrong answers, since
+        // PostgreSQL compares exactly and the directory does not.
         const account =
           action.accountId === null
-            ? await tx.targetAccount.findFirst({
-                where: { targetSystemId, correlationKey: key },
-              })
+            ? null
             : await tx.targetAccount.findUnique({ where: { id: action.accountId } });
         if (account) {
           await tx.targetAccount.update({

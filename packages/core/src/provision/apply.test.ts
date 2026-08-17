@@ -316,6 +316,37 @@ describe('generateInitialPassword', () => {
     );
     expect(seen.size).toBe(50);
   });
+
+  it('shuffles, so the class of each position is not fixed', () => {
+    // One character from each required class, then fill, then shuffle. Without
+    // the shuffle the first four characters are always upper, lower, digit,
+    // symbol in that order -- which is 12 of a 24-character password's entropy
+    // given away to anybody who has ever seen one of them.
+    const firsts = new Set(
+      Array.from({ length: 60 }, () => generateInitialPassword({ length: 24 })[0]!),
+    );
+    expect([...firsts].some((c) => !/[A-Z]/.test(c))).toBe(true);
+  });
+
+  it('will not produce a password shorter than sixteen characters', () => {
+    expect(generateInitialPassword({ length: 4 })).toHaveLength(16);
+    expect(generateInitialPassword({ length: 1024 })).toHaveLength(128);
+  });
+
+  it('still produces a password when the policy requires no class at all', () => {
+    // Every flag off leaves no alphabet to draw from: `chars` starts empty,
+    // `alphabet` is the empty string, and `randomInt(0)` throws a RangeError.
+    // A policy naming no character class is not one this function can honour,
+    // and the safe reading of it is not "no password".
+    const password = generateInitialPassword({
+      requireUpper: false,
+      requireLower: false,
+      requireDigit: false,
+      requireSymbol: false,
+    });
+    expect(password).toHaveLength(24);
+    expect(password).toMatch(/^[A-Za-z0-9]+$/);
+  });
 });
 
 describe('applyProvisionRun', () => {
@@ -431,6 +462,12 @@ describe('applyProvisionRun', () => {
     // The confirming user, by id. The previous version asserted this was null
     // -- which certified the hole instead of catching it.
     expect(run.confirmedByUserId).toBe(confirmedByUserId);
+    // `hasEverApplied` on the target, which is what takes the guard off its
+    // first-run refusal and puts every threshold axis into play.
+    const system = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(system.lastAppliedRunAt).not.toBeNull();
   });
 
   it('writes the anchor back onto the account after a create', async () => {
@@ -440,6 +477,10 @@ describe('applyProvisionRun', () => {
     );
     expect(account.anchor).toMatch(/^fake-anchor-/);
     expect(account.status).toBe('active');
+    // The action that made it, so a later run can tell an object Provision
+    // created from one it merely found.
+    expect(account.createdActionId).not.toBeNull();
+    expect(account.lastReconciledAt).not.toBeNull();
   });
 
   it('records the holding with its origin and granting rule', async () => {
@@ -726,8 +767,66 @@ describe('applyProvisionRun', () => {
       },
     });
     expect(result.pendingRetry).toBe(1);
-    expect(waits.length).toBeLessThan(100);
+    // Bounded by the COUNT. With only the wait budget the fallback backoff is
+    // about a second, so this loop would run ninety-odd times -- terminating,
+    // but a hundred connector calls and a hundred audit rows for one action.
+    expect(waits.length).toBeLessThan(30);
     expect(waits.every((w) => Number.isFinite(w) && w > 0)).toBe(true);
+  });
+
+  it('gives up on a throttle whose retryAfterMs is not a number at all', async () => {
+    // `NaN` defeats the budget from the other side: `throttledForMs + NaN >
+    // budget` is false forever, so the accumulated total never trips and
+    // `sleep(NaN)` returns at once.
+    const waits: number[] = [];
+    target.program('create_account', {
+      failTimes: Infinity,
+      failure: 'throttled',
+      retryAfterMs: Number.NaN,
+    });
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: target as never,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    expect(result.pendingRetry).toBe(1);
+    expect(waits.length).toBeLessThan(30);
+    expect(waits.every((w) => Number.isFinite(w) && w > 0)).toBe(true);
+  });
+
+  it('stops waiting when the target asks for more patience than the budget allows', async () => {
+    // The other bound, and the one the count cannot supply: a target that asks
+    // for a minute each time would get twenty minutes of an apply's life for
+    // one action, with every later action -- the disables, the revocations,
+    // the archives -- waiting behind it.
+    const waits: number[] = [];
+    target.program('create_account', {
+      failTimes: Infinity,
+      failure: 'throttled',
+      retryAfterMs: 60_000,
+    });
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: target as never,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    expect(result.pendingRetry).toBe(1);
+    // Two waits of a minute reach the budget; a third would pass it.
+    expect(waits).toEqual([60_000, 60_000]);
   });
 
   it('never puts a network call inside a transaction', async () => {
@@ -966,6 +1065,10 @@ describe('applyProvisionRun: one bad action does not discard the rest', () => {
       sleep: noSleep,
     });
     expect(result.failed).toBe(2);
+    // Not `applied`: every action reached a terminal state, and two of them
+    // failed. A run that counts only what is left over reports success for a
+    // run that did nothing it was asked to.
+    expect(result.status).toBe('partially_applied');
     const actions = await actionsOf(run.id);
     // Both reached a terminal state; neither was left in_flight, which is the
     // state that makes a target need adopting.
@@ -1184,6 +1287,103 @@ describe('applyProvisionRun: the leaver ladder', () => {
   });
 });
 
+describe('applyProvisionRun: the confirmation gate on one action', () => {
+  /**
+   * An unblocked run, so `confirm` can be left off and the per-action gate is
+   * the only thing in the way.
+   *
+   * Every first run is blocked -- no denominator can say anything about one --
+   * so `lastAppliedRunAt` is set to take the guard off that branch. The only
+   * action is an `enable_account`, which is in the additive, idempotent,
+   * deliberately unguarded class and trips no threshold.
+   */
+  const unblockedReenable = async () => {
+    const { accountId, anchor } = await seedLeaver('Bea', 'Vos', 'bea.vos', {
+      endDate: day('2027-01-01'),
+      // Already holding Finance, and Syntra already records the grant, so the
+      // plan proposes no `grant_entitlement` and the re-enable is the ONLY
+      // action in the run. Otherwise the unconfirmable grant applies and
+      // `applied` is 1 whether the confirmation gate works or not.
+      holds: ['guid-finance'],
+    });
+    await withTenant(tenantId, async (tx) => {
+      await tx.accountEntitlement.create({
+        data: { tenantId, accountId, entitlementId, origin: 'rule' },
+      });
+      await tx.targetAccount.update({
+        where: { id: accountId },
+        // Disabled far outside `reenableWithoutConfirmationDays`, which is
+        // what makes the re-enable confirmable: months of accumulated
+        // entitlements come back with the login.
+        data: { status: 'disabled', disabledAt: day('2026-01-01') },
+      });
+      await tx.targetSystem.update({
+        where: { id: targetId },
+        data: { lastAppliedRunAt: day('2026-06-01') },
+      });
+    });
+    await target.write({ domain: 'acme.test' } as never, {
+      op: 'disable_account',
+      actionId: 'seed-disable',
+      anchor,
+      reason: 'seeded',
+    });
+    await leaversOnly();
+    return { accountId, anchor };
+  };
+
+  it('never auto-applies an action that requires confirmation', async () => {
+    const { accountId, anchor } = await unblockedReenable();
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    expect(run.status).toBe('previewed');
+    const enable = (await actionsOf(run.id)).find(
+      (a) => a.actionType === 'enable_account',
+    )!;
+    expect(enable.requiresConfirmation).toBe(true);
+
+    // No `confirm`, which is what the scheduler passes: it never confirms
+    // anything.
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      connector: target as never,
+      sleep: noSleep,
+    });
+    expect(result.applied).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect((await actionsOf(run.id)).find((a) => a.id === enable.id)!.status).toBe(
+      'proposed',
+    );
+    expect(target.objects.get(anchor)!.enabled).toBe(false);
+    const account = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findUniqueOrThrow({ where: { id: accountId } }),
+    );
+    expect(account.status).toBe('disabled');
+  });
+
+  it('applies the same action once it is confirmed', async () => {
+    const { accountId, anchor } = await unblockedReenable();
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: target as never,
+      sleep: noSleep,
+    });
+    expect(result.applied).toBe(1);
+    expect(target.objects.get(anchor)!.enabled).toBe(true);
+    const account = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findUniqueOrThrow({ where: { id: accountId } }),
+    );
+    expect(account.status).toBe('active');
+    expect(account.disabledAt).toBeNull();
+  });
+});
+
 describe('applyProvisionRun: what it reads for an action', () => {
   it('never falls back to another person\'s account', async () => {
     // `personId: action.personId ?? undefined` is dropped by Prisma when it is
@@ -1276,6 +1476,39 @@ describe('applyProvisionRun: what it reads for an action', () => {
     expect(update).toBeDefined();
     expect(update!.attributes.distinguishedName).toBeUndefined();
     expect(target.objects.get(anchor)!.dn).toBe(`CN=bea.vos,${USERS}`);
+  });
+
+  it('does not record a second holding when a grant is applied twice', async () => {
+    // There is no unique index over (accountId, entitlementId), so a grant
+    // applied against a holding Syntra already records held writes a duplicate
+    // row nothing ever reconciles -- and the guard's per-entitlement axis and
+    // the drift report both count rows.
+    const { runId } = await previewAndApply();
+    const grant = (await actionsOf(runId)).find(
+      (a) => a.actionType === 'grant_entitlement',
+    )!;
+    await withTenant(tenantId, async (tx) => {
+      await tx.provisionAction.update({
+        where: { id: grant.id },
+        data: { status: 'proposed' },
+      });
+      await tx.provisionRun.update({
+        where: { id: runId },
+        data: { status: 'previewed' },
+      });
+    });
+    const result = await applyProvisionRun(tenantId, provider, runId, {
+      only: [grant.id],
+      confirm: true,
+      confirmedByUserId: await withTenant(tenantId, async (tx) =>
+        (await tx.user.findFirstOrThrow({ where: { login: 'reviewer' } })).id,
+      ),
+      connector: target as never,
+      sleep: noSleep,
+    });
+    expect(result.applied).toBe(1);
+    const holdings = await withTenant(tenantId, (tx) => tx.accountEntitlement.findMany({}));
+    expect(holdings).toHaveLength(1);
   });
 
   it('retries a create the target reported successful without an anchor', async () => {
