@@ -177,7 +177,9 @@ export function BusinessRulesPage() {
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<null | 'save' | 'impact' | 'delete'>(null);
+  const [busy, setBusy] = useState<
+    null | 'save' | 'impact' | 'delete' | 'refresh'
+  >(null);
 
   const reload = () => {
     void api<{ rules: StoredRule[] }>(`/api/admin/targets/${id}/rules`)
@@ -251,6 +253,36 @@ export function BusinessRulesPage() {
     }
   }
 
+  /**
+   * Reads the target's grantable groups into the catalog.
+   *
+   * Without a control for this the catalog can only ever be filled by a
+   * scheduled run, so a target created this minute offers no entitlements at
+   * all and no rule can name one — the page would say "refresh it from the
+   * target" and give nobody a way to.
+   */
+  async function onRefresh() {
+    setBusy('refresh');
+    setProblem(null);
+    setNotice(null);
+    try {
+      const result = await api<{ present: number; missing: number }>(
+        `/api/admin/targets/${id}/entitlements/refresh`,
+        { method: 'POST' },
+      );
+      setNotice(
+        `${result.present} entitlement${result.present === 1 ? '' : 's'} read ` +
+          `from the target; ${result.missing} previously known ` +
+          `${result.missing === 1 ? 'is' : 'are'} no longer there.`,
+      );
+      reload();
+    } catch (cause) {
+      fail(cause, 'The entitlement catalog could not be refreshed.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function onDelete(ruleId: string) {
     setBusy('delete');
     setProblem(null);
@@ -272,6 +304,15 @@ export function BusinessRulesPage() {
       <PageHeader
         title="Business rules"
         description="Who gets an account in this target, and which entitlements come with it."
+        actions={
+          <Button
+            onClick={onRefresh}
+            loading={busy === 'refresh'}
+            disabled={!!busy}
+          >
+            Refresh entitlement catalog
+          </Button>
+        }
       />
 
       <div className="space-y-6">
@@ -412,7 +453,8 @@ export function BusinessRulesPage() {
               {entitlements.length === 0 ? (
                 <p className="text-muted">
                   This target&apos;s entitlement catalog is empty. Refresh it
-                  from the target before a rule can name anything.
+                  from the target, with the button at the top of this page,
+                  before a rule can name anything.
                 </p>
               ) : (
                 <div className="space-y-2">

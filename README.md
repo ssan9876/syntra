@@ -144,6 +144,30 @@ same URL, Vite is listening on IPv6 only: `localhost` resolves to `::1` on
 recent Node, while Chromium maps `*.localhost` to `127.0.0.1`. Start the web
 server with `vite --host 127.0.0.1`.
 
+### Provisioning integration tests need a privileged Docker host
+
+The Active Directory target connector is tested against a real Samba domain
+controller (`nowsci/samba-domain:20260801025201`, pinned). That container
+**must** run with `--privileged`: Samba's provisioning sets NT ACLs on the
+sysvol filesystem and exits 255 without it. This is true for a self-hosted
+runner and for GitHub Actions' standard Linux runners; it is **not** guaranteed
+on more locked-down or sandboxed CI.
+
+```bash
+pnpm samba:up && pnpm samba:wait   # 12-20s to first LDAPS bind
+pnpm vitest run packages/connectors/src/ad packages/core/src/provision
+```
+
+Everything Provision does over LDAP is encrypted. This container refuses even
+a plain simple bind (`StrongAuthRequiredError: BindSimple: Transport encryption
+required`), which is stricter than the OpenLDAP container, so any fixture
+shared between the two must default to LDAPS or StartTLS. The certificate is
+self-signed, so tests set `rejectUnauthorized: false` deliberately.
+
+The domain controller answers plain LDAP on **1390**, not 1389: the OpenLDAP
+container in the same compose file already publishes 1389, and a fixture aimed
+there gets its refusals from the wrong server.
+
 **An OpenLDAP container started before the TLS tests existed has to be
 recreated:** `docker compose -f infra/docker-compose.yml up -d openldap`. The
 image's default `LDAP_TLS_VERIFY_CLIENT` is `demand`, which requires a client

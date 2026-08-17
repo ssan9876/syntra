@@ -1,0 +1,353 @@
+import { expect, test, type Page } from '@playwright/test';
+import { Client } from 'ldapts';
+import { Client as PgClient } from 'pg';
+
+const ADMIN = process.env.SEED_ADMIN_PASSWORD;
+
+test.beforeAll(() => {
+  if (!ADMIN) {
+    throw new Error(
+      'SEED_ADMIN_PASSWORD must be set to the value the database was seeded with',
+    );
+  }
+});
+
+async function signIn(page: Page, login: string, password: string) {
+  await page.goto('/login');
+  await page.getByLabel('Login').fill(login);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
+}
+
+/** Re-authenticates into an administrative session on the way to `path`. */
+async function elevateTo(page: Page, path: string, password: string) {
+  await page.goto(path);
+  await expect(
+    page.getByRole('heading', { name: /confirm your password/i }),
+  ).toBeVisible();
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Continue' }).click();
+}
+
+/**
+ * Every identifier carries a per-run stamp, as `sync.spec.ts` does, so this
+ * suite can run twice without an intervening `pnpm db:reset`: `TargetSystem`
+ * has a unique `(tenantId, name)` and the second run would otherwise fail on
+ * the constraint rather than on anything it was testing.
+ */
+const STAMP = Date.now();
+const SAMBA_URL = process.env.SAMBA_LDAPS_URL ?? 'ldaps://localhost:1637';
+const BASE_DN = process.env.SAMBA_BASE_DN ?? 'DC=syntra,DC=test';
+const BIND_DN =
+  process.env.SAMBA_BIND_DN ?? 'CN=Administrator,CN=Users,DC=syntra,DC=test';
+const BIND_PASSWORD = process.env.SAMBA_BIND_PASSWORD ?? 'Syntra!Passw0rd';
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  'postgresql://syntra_app:syntra_app@localhost:5432/syntra';
+
+const OU_DN = `OU=E2EProv${STAMP},${BASE_DN}`;
+const GROUPS_DN = `OU=E2EProvGroups${STAMP},${BASE_DN}`;
+const ARCHIVE_DN = `OU=E2EProvArchive${STAMP},${BASE_DN}`;
+const GROUP_CN = `E2EFinance${STAMP}`;
+const GROUP_DN = `CN=${GROUP_CN},${GROUPS_DN}`;
+const TARGET_NAME = `E2E Samba ${STAMP}`;
+const DEPARTMENT = `E2EFin${STAMP}`;
+const GIVEN_NAME = 'Anna';
+const FAMILY_NAME = `Novak${STAMP}`;
+const PERSON_NAME = `${GIVEN_NAME} ${FAMILY_NAME}`;
+const ACCOUNT_NAME = `anna.novak${STAMP}`;
+const RULE_NAME = `E2E Finance ${STAMP}`;
+
+async function ldapClient(): Promise<Client> {
+  // The container's certificate is self-signed, and it refuses a plain simple
+  // bind outright, so both of these are deliberate rather than convenient.
+  const client = new Client({
+    url: SAMBA_URL,
+    tlsOptions: { rejectUnauthorized: false },
+    connectTimeout: 10_000,
+  });
+  await client.bind(BIND_DN, BIND_PASSWORD);
+  return client;
+}
+
+/** The DNs actually added, so a setup that fails halfway removes what it made. */
+const added: string[] = [];
+
+async function removeLdapFixture(): Promise<void> {
+  const client = await ldapClient();
+  try {
+    // Deepest first: a non-leaf delete is refused, and one failure must not
+    // stop the rest from being attempted.
+    for (const dn of [...added].reverse()) {
+      await client.del(dn).catch(() => undefined);
+    }
+    // Whatever the run itself created under the test OU. Provision never
+    // deletes, so the accounts it made are still there and the OU cannot go
+    // until they do.
+    const { searchEntries } = await client
+      .search(OU_DN, { scope: 'sub', filter: '(objectClass=*)', attributes: ['dn'] })
+      .catch(() => ({ searchEntries: [] as { dn: string }[] }));
+    for (const entry of searchEntries
+      .map((e) => e.dn)
+      .sort((a, b) => b.length - a.length)) {
+      await client.del(entry).catch(() => undefined);
+    }
+    added.length = 0;
+  } finally {
+    await client.unbind().catch(() => undefined);
+  }
+}
+
+/**
+ * The rows this run created, removed as `sync.spec.ts` removes its own.
+ *
+ * Connected as `syntra_app`, never as a superuser, with the tenant bound
+ * first, so row-level security applies exactly as it would in a request.
+ *
+ * A person and a contract are inserted here rather than added to the shared
+ * seed: the seed is every developer's dev database and every other browser
+ * test's fixture, and a person who exists only for one provisioning spec does
+ * not belong in it. Stamped, so two runs do not collide.
+ */
+async function withDatabase<T>(
+  work: (client: PgClient, tenantId: string) => Promise<T>,
+): Promise<T | undefined> {
+  const client = new PgClient({ connectionString: DATABASE_URL });
+  await client.connect();
+  try {
+    const tenant = await client.query<{ id: string }>(
+      'SELECT id FROM "Tenant" WHERE slug = $1',
+      ['acme'],
+    );
+    const tenantId = tenant.rows[0]?.id;
+    if (!tenantId) return undefined;
+    await client.query("SELECT set_config('app.current_tenant', $1, false)", [
+      tenantId,
+    ]);
+    return await work(client, tenantId);
+  } finally {
+    await client.end();
+  }
+}
+
+async function addPerson(): Promise<void> {
+  await withDatabase(async (client, tenantId) => {
+    const person = await client.query<{ id: string }>(
+      'INSERT INTO "Person" ("id", "tenantId", "givenName", "familyName", "businessEmail", "updatedAt")' +
+        " VALUES (gen_random_uuid(), $1, $2, $3, $4, now()) RETURNING id",
+      [tenantId, GIVEN_NAME, FAMILY_NAME, `anna.novak${STAMP}@acme.localhost`],
+    );
+    await client.query(
+      'INSERT INTO "Contract" ("id", "tenantId", "personId", "sequence", "isPrimary", "startDate", "jobTitle", "department")' +
+        " VALUES (gen_random_uuid(), $1, $2, 1, true, DATE '2020-01-01', 'Analyst', $3)",
+      [tenantId, person.rows[0]!.id, DEPARTMENT],
+    );
+  });
+}
+
+async function removeDatabaseFixture(): Promise<void> {
+  await withDatabase(async (client) => {
+    const targets = await client.query<{ id: string }>(
+      'SELECT id FROM "TargetSystem" WHERE name LIKE $1',
+      ['E2E Samba %'],
+    );
+    for (const target of targets.rows) {
+      // DriftFinding names a target with no relation behind the column, so it
+      // does not cascade with the target the way the runs, rules, catalog and
+      // accounts do.
+      await client.query('DELETE FROM "DriftFinding" WHERE "targetSystemId" = $1', [
+        target.id,
+      ]);
+      await client.query('DELETE FROM "TargetSystem" WHERE id = $1', [target.id]);
+      await client.query('DELETE FROM "Secret" WHERE name LIKE $1', [
+        `target.${target.id}.%`,
+      ]);
+    }
+    await client.query('DELETE FROM "Person" WHERE "familyName" LIKE $1', [
+      'Novak%',
+    ]);
+  });
+}
+
+test.beforeAll(async () => {
+  await removeDatabaseFixture();
+  const client = await ldapClient();
+  try {
+    const add = async (dn: string, attributes: Record<string, string | string[]>) => {
+      await client.add(dn, attributes);
+      added.push(dn);
+    };
+    try {
+      for (const [dn, ou] of [
+        [OU_DN, `E2EProv${STAMP}`],
+        [GROUPS_DN, `E2EProvGroups${STAMP}`],
+        [ARCHIVE_DN, `E2EProvArchive${STAMP}`],
+      ] as const) {
+        await add(dn, { objectClass: ['top', 'organizationalUnit'], ou });
+      }
+      await add(GROUP_DN, {
+        objectClass: ['top', 'group'],
+        sAMAccountName: GROUP_CN,
+      });
+    } catch (cause) {
+      await client.unbind().catch(() => undefined);
+      await removeLdapFixture();
+      throw cause;
+    }
+  } finally {
+    await client.unbind().catch(() => undefined);
+  }
+  await addPerson();
+});
+
+test.afterAll(async () => {
+  await removeLdapFixture();
+  await removeDatabaseFixture();
+});
+
+/**
+ * The whole path, through the console, with no API call standing in for a
+ * control that does not exist.
+ *
+ * Everything this test reaches for is a real control on a real page: if a
+ * screen were missing, the step would fail rather than be quietly replaced by
+ * an HTTP request the product does not offer anybody.
+ */
+test('configure a target, write a rule, review a run, apply part of it', async ({
+  page,
+}) => {
+  // A run is enqueued and performed by a background worker against a real
+  // domain controller, so this is minutes rather than the 60s default.
+  test.setTimeout(300_000);
+
+  await signIn(page, 'admin', ADMIN!);
+  await elevateTo(page, '/admin/targets', ADMIN!);
+  await expect(page.getByRole('heading', { name: 'Target systems' })).toBeVisible();
+
+  // A fresh install has no targets, and the empty state says what a target is
+  // rather than showing an empty table.
+  await expect(page.getByText('No target systems yet')).toBeVisible();
+
+  await page.getByRole('link', { name: 'New target' }).click();
+  await expect(page.getByRole('heading', { name: 'New target' })).toBeVisible();
+
+  await page.getByLabel('Name', { exact: true }).fill(TARGET_NAME);
+  await page.getByLabel('URL', { exact: true }).fill(SAMBA_URL);
+  await page.getByLabel('Transport').selectOption('ldaps');
+  await page.getByLabel(/Verify the directory server/).uncheck();
+  await page.getByLabel('Bind DN').fill(BIND_DN);
+  await page.getByLabel('Bind password').fill(BIND_PASSWORD);
+  await page.getByLabel('Base DN').fill(OU_DN);
+  await page.getByLabel('Entitlement search base').fill(GROUPS_DN);
+  await page.getByLabel('Archive container').fill(ARCHIVE_DN);
+
+  await page.getByRole('button', { name: 'Test connection' }).click();
+  const report = page.locator('section', {
+    has: page.getByRole('heading', { name: 'Connection test' }),
+  });
+  await expect(report).toBeVisible();
+  await expect(report).toContainText('Connected');
+
+  // Finding M20, and the reason this list exists. The bind can create users
+  // in the base DN, so that right is `granted` — and the OU is empty, so
+  // there is no account to read `modifyUser` from and the connector says so
+  // rather than assuming. An `unverified` right renders as its own thing,
+  // never as a quiet approval.
+  await expect(report).toContainText('Create accounts');
+  await expect(report.getByText('granted').first()).toBeVisible();
+  await expect(report.getByText('Could not check').first()).toBeVisible();
+
+  await page.getByRole('button', { name: 'Create target' }).click();
+  await expect(page).toHaveURL(/\/admin\/targets\/[0-9a-f-]{36}$/);
+
+  // Additive by default, and visible on the target's own screen (Ruling P2).
+  await expect(page.getByLabel('Enforcement mode')).toHaveValue('additive');
+
+  await page.getByRole('link', { name: 'Account profile' }).click();
+  await expect(page.getByRole('heading', { name: 'Account profile' })).toBeVisible();
+  await page
+    .getByLabel('Account name template')
+    .fill('%person.givenName%.%person.familyName%');
+  await page.getByLabel('Container template').fill(OU_DN);
+  await page.getByLabel('Fallback container').fill(OU_DN);
+  await page.getByLabel('Person').selectOption({ label: PERSON_NAME });
+  await page.getByRole('button', { name: 'Preview' }).click();
+  // The name the run would actually create, before anything is written.
+  await expect(page.getByText(ACCOUNT_NAME)).toBeVisible();
+  await page.getByRole('button', { name: 'Save profile' }).click();
+  await expect(page.getByText('Saved.')).toBeVisible();
+
+  await page.goBack();
+  await page.getByRole('link', { name: 'Business rules' }).click();
+  await expect(page.getByRole('heading', { name: 'Business rules' })).toBeVisible();
+
+  // The catalog has to be read before a rule can name anything in it, and
+  // there has to be a control for that or the page tells somebody to do
+  // something the console cannot do.
+  await page.getByRole('button', { name: 'Refresh entitlement catalog' }).click();
+  await expect(page.getByText(/entitlement.*read from the target/i)).toBeVisible();
+
+  await page.getByLabel('Name', { exact: true }).fill(RULE_NAME);
+  await page.getByLabel('Field').selectOption('contract.department');
+  await page.getByLabel('Test').selectOption('equals');
+  await page.getByLabel('Value').fill(DEPARTMENT);
+  await page.getByLabel(GROUP_CN).check();
+
+  await page.getByRole('button', { name: 'Preview impact' }).click();
+  const impact = page.locator('p', { hasText: 'This rule matches' });
+  await expect(impact).toContainText(/matches\s*1\s*of/);
+  await page.getByRole('button', { name: 'Save rule' }).click();
+  await expect(page.getByText('Saved.')).toBeVisible();
+
+  await page.goBack();
+  await page.getByRole('link', { name: 'Runs' }).click();
+  await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
+  await page.getByRole('button', { name: 'Run now' }).click();
+
+  // Enqueued, not performed in the request: the row appears when the worker
+  // picks the job up.
+  const firstRun = page.getByRole('link', { name: /\d/ }).first();
+  await expect(firstRun).toBeVisible({ timeout: 120_000 });
+  await firstRun.click();
+  await expect(page.getByRole('heading', { name: 'Run detail' })).toBeVisible();
+
+  // A first run is always blocked pending confirmation: every population has
+  // a denominator of zero, so no threshold can say anything about it.
+  await expect(page.getByText('This run is blocked')).toBeVisible();
+  await expect(page.getByText(/never had a run applied/)).toBeVisible();
+
+  // Apply part of it: untick the grant, apply the create.
+  const grant = page.getByRole('checkbox', {
+    name: `Apply grant_entitlement for ${PERSON_NAME}`,
+  });
+  await grant.uncheck();
+  await page
+    .getByLabel('I have read the numbers above and want to apply this run anyway')
+    .check();
+  await page.getByRole('button', { name: /Apply 1 action/ }).click();
+  await expect(page.getByText(/now partially_applied/)).toBeVisible({
+    timeout: 60_000,
+  });
+
+  // Then the rest. What was left out is still proposed, so a partial apply is
+  // a pause rather than a discard.
+  await page
+    .getByLabel('I have read the numbers above and want to apply this run anyway')
+    .check();
+  await page.getByRole('button', { name: /Apply 1 action/ }).click();
+  await expect(page.getByText(/now applied/)).toBeVisible({ timeout: 60_000 });
+
+  // And the question everybody asks.
+  await page.goto('/admin/people');
+  await page.getByRole('link', { name: PERSON_NAME }).click();
+  await page
+    .getByRole('link', { name: 'Why does this person hold what they hold?' })
+    .click();
+  await expect(
+    page.getByRole('heading', { name: 'Why does this person hold this?' }),
+  ).toBeVisible();
+  await expect(page.getByText(TARGET_NAME)).toBeVisible();
+  await expect(page.getByRole('cell', { name: GROUP_CN })).toBeVisible();
+  await expect(page.getByRole('cell', { name: RULE_NAME })).toBeVisible();
+});
