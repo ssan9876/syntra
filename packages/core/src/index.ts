@@ -117,3 +117,21 @@ export type {
 export * from './provision/desired.js';
 export * from './provision/reconcile.js';
 export * from './provision/plan.js';
+// Member by member, not `export *`, and for the same reason as
+// `provision/types.js` above: `sync/guard.js` already exports `GuardInput`
+// and `GuardVerdict`. A star export of both is TS2308 twice over, and the
+// barrel then exports neither name at all — the guard would compile, pass its
+// own tests, and be unreachable from outside the package.
+//
+// The names are aliased rather than renamed at the source, because inside
+// `provision/` there is only one guard and `GuardInput` is what it is called;
+// the ambiguity exists only at the barrel.
+export {
+  GUARDED_ACTION_TYPES,
+  evaluateProvisionGuard,
+} from './provision/guard.js';
+export type {
+  GuardThresholds,
+  GuardInput as ProvisionGuardInput,
+  GuardVerdict as ProvisionGuardVerdict,
+} from './provision/guard.js';
