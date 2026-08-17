@@ -141,3 +141,10 @@ export type {
 // NEITHER side silently. Nothing in these two modules collides today.
 export * from './provision/target-service.js';
 export * from './provision/entitlement-service.js';
+// Grepped as well: `previewProvisionRun`, `ProvisionRunInFlightError`,
+// `PreviewProvisionRunOptions` and `ProvisionRunSummary` appear nowhere else in
+// the workspace. `sync/run-service.js` exports `previewRun`, which is a
+// different name -- the collision that has bitten this slice twice is two
+// modules choosing the SAME name, and under TS2308 the barrel then exports
+// neither.
+export * from './provision/run-service.js';
