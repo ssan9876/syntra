@@ -2,19 +2,23 @@ import type { FastifyBaseLogger } from 'fastify';
 import { prisma, withTenant } from '@syntra/db';
 import {
   applySourceSchedule,
+  applyTargetSchedule,
   createScheduler,
   localMasterKeyProvider,
   registerKeyRotationJob,
+  registerProvisionJobs,
   registerSyncJobs,
   scheduleKeyRotation,
+  smtpTransport,
   type Config,
   type Scheduler,
+  type Transport,
 } from '@syntra/core';
 
 /**
  * Reconciles the scheduler against every tenant: one signing-key rotation
- * apiece, and every directory source, with enabled cron-bearing sources
- * scheduled and the rest unscheduled.
+ * apiece, every directory source, and every provisioning target, with the
+ * enabled cron-bearing ones scheduled and the rest unscheduled.
  *
  * This runs once at process startup, not inside a request, so there is no
  * ambient tenant to scope the lookup to. It reads `Tenant` directly -- the
@@ -25,11 +29,12 @@ import {
  *
  * Nothing in here may reject. The tenant listing itself can fail (a
  * transient database hiccup at boot is enough), and so can the per-tenant
- * source lookup or an individual `schedule()` call (a malformed cron
- * expression). Every one of those is logged and treated as "schedule
+ * source or target lookup, or an individual `schedule()` call (a malformed
+ * cron expression). Every one of those is logged and treated as "schedule
  * nothing for this piece" rather than allowed to propagate -- an API that
  * comes up with sync unscheduled is strictly better than one that does not
- * come up at all.
+ * come up at all. The three loops are independent for the same reason: a
+ * provisioning read that fails must not cost the tenant its directory sync.
  *
  * Takes the `Scheduler` rather than constructing one, so it can be
  * exercised directly against a fake in tests without standing up pg-boss.
@@ -94,6 +99,43 @@ export async function scheduleBackgroundWork(
       }
     }
   }
+
+  for (const tenant of tenants) {
+    let targets;
+    try {
+      // Every target, not only the eligible ones -- the same reasoning the
+      // source loop above records. pg-boss keeps its schedules in the
+      // database, so a target disabled or unscheduled while this process was
+      // down still has a schedule row waiting for it; reading the whole list
+      // lets `applyTargetSchedule` remove those as well as add the rest, which
+      // is the difference between reconciling and appending.
+      targets = await withTenant(tenant.id, (tx) =>
+        tx.targetSystem.findMany({
+          select: { id: true, schedule: true, enabled: true },
+        }),
+      );
+    } catch (cause) {
+      logger.error(
+        { err: cause, tenantId: tenant.id },
+        'failed to load provisioning targets for scheduling',
+      );
+      continue;
+    }
+
+    for (const target of targets) {
+      try {
+        await applyTargetSchedule(scheduler, tenant.id, target);
+      } catch (cause) {
+        // Logged, never rethrown. This whole function is "log and do nothing
+        // for this piece": an API that comes up with provisioning unscheduled
+        // is strictly better than one that does not come up.
+        logger.error(
+          { err: cause, tenantId: tenant.id, targetSystemId: target.id },
+          'failed to schedule provisioning target',
+        );
+      }
+    }
+  }
 }
 
 /**
@@ -117,13 +159,23 @@ export async function startSyncScheduler(
   config: Config,
   logger: FastifyBaseLogger,
   create: (databaseUrl: string) => Scheduler = createScheduler,
+  options: { transport?: Transport } = {},
 ): Promise<Scheduler | null> {
   let scheduler: Scheduler;
   try {
     scheduler = create(config.databaseUrl);
     const provider = localMasterKeyProvider(config.masterKey);
+    // Built the same way `buildApp` builds it, and a seam for the same reason:
+    // so a test can hand in the memory transport rather than putting mail on
+    // the wire. Not optional at the registration below -- an unattended
+    // `autoApply` provisioning run creates accounts, and one registered with
+    // no transport seals every initial password into the vault and sends it to
+    // nobody, which is Ruling P12 reintroduced on the one path where nobody is
+    // watching.
+    const transport = options.transport ?? smtpTransport(config.smtpUrl);
     registerSyncJobs(scheduler, provider);
     registerKeyRotationJob(scheduler, provider);
+    registerProvisionJobs(scheduler, provider, transport);
     await scheduler.start();
   } catch (cause) {
     logger.error(

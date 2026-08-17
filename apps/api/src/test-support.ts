@@ -15,6 +15,8 @@ export interface ScheduleCall {
 export interface FakeScheduler extends Scheduler {
   scheduled: ScheduleCall[];
   unscheduled: { name: string; key: string | undefined }[];
+  /** Queue names a handler was registered for, in registration order. */
+  registered: string[];
 }
 
 /**
@@ -27,26 +29,37 @@ export interface FakeScheduler extends Scheduler {
  * that watched only `scheduled` would pass while a disabled source kept
  * firing.
  *
- * Sources whose id appears in `failSourceIds` reject, to exercise the "one bad
- * source does not stop the rest" path.
+ * Sources -- and provisioning targets -- whose id appears in `failIds` reject,
+ * to exercise the "one bad source does not stop the rest" path. Both kinds are
+ * read out of the payload, because the provisioning queue carries a
+ * `targetSystemId` where the sync queue carries a `sourceId`, and a fake that
+ * only knew about one of them would make the target loop's failure path
+ * untestable while looking exactly like a fake that covered it.
  */
 export function createFakeScheduler(
-  failSourceIds: Set<string> = new Set(),
+  failIds: Set<string> = new Set(),
 ): FakeScheduler {
   const scheduled: ScheduleCall[] = [];
   const unscheduled: { name: string; key: string | undefined }[] = [];
+  const registered: string[] = [];
 
   return {
     scheduled,
     unscheduled,
-    register: () => {},
+    registered,
+    register: (name) => {
+      registered.push(name);
+    },
     start: async () => {},
     stop: async () => {},
     enqueue: async () => null,
     schedule: async (name, cron, data, key) => {
-      const sourceId = (data as { sourceId?: string } | undefined)?.sourceId;
-      if (sourceId && failSourceIds.has(sourceId)) {
-        throw new Error(`schedule failed for source ${sourceId}`);
+      const payload = data as
+        | { sourceId?: string; targetSystemId?: string }
+        | undefined;
+      const failing = payload?.sourceId ?? payload?.targetSystemId;
+      if (failing && failIds.has(failing)) {
+        throw new Error(`schedule failed for ${failing}`);
       }
       scheduled.push({ name, cron, data, key });
     },

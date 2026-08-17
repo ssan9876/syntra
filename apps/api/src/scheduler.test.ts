@@ -5,8 +5,11 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import {
   KEY_ROTATION_CRON,
   KEY_ROTATION_JOB,
+  PROVISION_JOB,
   SYNC_JOB,
   keyRotationScheduleKey,
+  memoryTransport,
+  provisionScheduleKey,
   syncScheduleKey,
   type Config,
 } from '@syntra/core';
@@ -55,6 +58,29 @@ async function createDirectorySource(
   );
 }
 
+async function createTargetSystem(
+  tenantId: string,
+  overrides: { schedule?: string | null; enabled?: boolean } = {},
+) {
+  // `'schedule' in overrides`, for the reason `createDirectorySource` records.
+  const schedule: string | null =
+    'schedule' in overrides ? (overrides.schedule ?? null) : '0 2 * * *';
+  return withTenant(tenantId, (tx) =>
+    tx.targetSystem.create({
+      data: {
+        tenantId,
+        name: `target-${Math.random().toString(36).slice(2)}`,
+        // `target_system_encrypted_transport` is a CHECK on the JSON: a target
+        // that says nothing about its transport is refused outright.
+        config: { url: 'ldaps://dc.acme.test:636', tlsMode: 'ldaps' },
+        secretName: 'unused',
+        schedule,
+        enabled: overrides.enabled ?? true,
+      },
+    }),
+  );
+}
+
 beforeEach(async () => {
   await resetDatabase();
 });
@@ -72,6 +98,10 @@ afterEach(() => {
  */
 const syncSchedules = (scheduler: ReturnType<typeof createFakeScheduler>) =>
   scheduler.scheduled.filter((c) => c.name === SYNC_JOB);
+
+/** Only the provisioning schedules, for the same reason. */
+const provisionSchedules = (scheduler: ReturnType<typeof createFakeScheduler>) =>
+  scheduler.scheduled.filter((c) => c.name === PROVISION_JOB);
 
 describe('scheduleBackgroundWork', () => {
   it('schedules an enabled, cron-bearing source in each of two tenants, each with its own tenantId', async () => {
@@ -191,13 +221,150 @@ describe('scheduleBackgroundWork', () => {
     const tenant = await createTenant('Acme', 'acme');
     await createDirectorySource(tenant.id);
 
-    vi.spyOn(prisma.tenant, 'findMany').mockRejectedValueOnce(new Error('connection reset'));
+    // Saved and put back by hand, NOT `vi.spyOn` plus `restoreAllMocks`.
+    // Vitest's restore leaves `prisma.tenant.findMany` undefined on Prisma's
+    // model delegate, so every later test in this file got
+    // `findMany is not a function` and quietly scheduled nothing -- passing,
+    // because the assertions that survived it were about what was NOT
+    // scheduled. Task 16's target tests are the first ones here that assert
+    // something WAS, and they are what made it visible.
+    const original = prisma.tenant.findMany;
+    prisma.tenant.findMany = (() => {
+      throw new Error('connection reset');
+    }) as typeof prisma.tenant.findMany;
 
     const scheduler = createFakeScheduler();
 
-    await expect(scheduleBackgroundWork(scheduler, createFakeLogger())).resolves.toBeUndefined();
+    try {
+      await expect(
+        scheduleBackgroundWork(scheduler, createFakeLogger()),
+      ).resolves.toBeUndefined();
+    } finally {
+      prisma.tenant.findMany = original;
+    }
 
     expect(scheduler.scheduled).toHaveLength(0);
+  });
+});
+
+describe('scheduleBackgroundWork - provisioning targets', () => {
+  it('schedules an enabled, cron-bearing target in each of two tenants under its own key', async () => {
+    const tenantA = await createTenant('A', 'tenant-a');
+    const tenantB = await createTenant('B', 'tenant-b');
+    const targetA = await createTargetSystem(tenantA.id, { schedule: '0 1 * * *' });
+    const targetB = await createTargetSystem(tenantB.id, { schedule: '0 2 * * *' });
+
+    const scheduler = createFakeScheduler();
+    await scheduleBackgroundWork(scheduler, createFakeLogger());
+
+    expect(provisionSchedules(scheduler)).toHaveLength(2);
+    const byTarget = new Map(
+      provisionSchedules(scheduler).map((c) => [
+        (c.data as { targetSystemId: string }).targetSystemId,
+        c,
+      ]),
+    );
+
+    const callA = byTarget.get(targetA.id);
+    expect(callA).toBeDefined();
+    expect(callA!.cron).toBe('0 1 * * *');
+    expect(callA!.data).toEqual({ tenantId: tenantA.id, targetSystemId: targetA.id });
+    // The lesson every directory source once taught by sharing `key: ''`:
+    // pg-boss keys on (queue, key), so two schedules with the same key are one
+    // row and only the last target in the last tenant ever runs.
+    expect(callA!.key).toBe(provisionScheduleKey(tenantA.id, targetA.id));
+
+    const callB = byTarget.get(targetB.id);
+    expect(callB).toBeDefined();
+    expect(callB!.key).toBe(provisionScheduleKey(tenantB.id, targetB.id));
+
+    expect(new Set(provisionSchedules(scheduler).map((c) => c.key)).size).toBe(2);
+  });
+
+  it('unschedules a target that is no longer eligible, rather than merely skipping it', async () => {
+    const tenant = await createTenant('Acme', 'acme');
+    const disabled = await createTargetSystem(tenant.id, { enabled: false });
+    const manual = await createTargetSystem(tenant.id, { schedule: null });
+
+    const scheduler = createFakeScheduler();
+    await scheduleBackgroundWork(scheduler, createFakeLogger());
+
+    expect(provisionSchedules(scheduler)).toEqual([]);
+    const keys = scheduler.unscheduled
+      .filter((c) => c.name === PROVISION_JOB)
+      .map((c) => c.key)
+      .sort();
+    expect(keys).toEqual(
+      [
+        provisionScheduleKey(tenant.id, disabled.id),
+        provisionScheduleKey(tenant.id, manual.id),
+      ].sort(),
+    );
+  });
+
+  it('keeps scheduling the remaining targets when one schedule() call throws', async () => {
+    const tenant = await createTenant('Acme', 'acme');
+    const bad = await createTargetSystem(tenant.id, { schedule: '* * * * *' });
+    const good = await createTargetSystem(tenant.id, { schedule: '0 3 * * *' });
+
+    const scheduler = createFakeScheduler(new Set([bad.id]));
+
+    await expect(
+      scheduleBackgroundWork(scheduler, createFakeLogger()),
+    ).resolves.toBeUndefined();
+
+    expect(provisionSchedules(scheduler)).toHaveLength(1);
+    expect(
+      (provisionSchedules(scheduler)[0]!.data as { targetSystemId: string })
+        .targetSystemId,
+    ).toBe(good.id);
+  });
+
+  it('still schedules the sources when the target read fails, and resolves', async () => {
+    // "Log and do nothing for this piece". The three loops are independent: a
+    // provisioning read that fails must not cost the tenant its directory
+    // sync, and an API that comes up with provisioning unscheduled is strictly
+    // better than one that does not come up at all.
+    const tenant = await createTenant('Acme', 'acme');
+    const source = await createDirectorySource(tenant.id, { schedule: '0 4 * * *' });
+    await createTargetSystem(tenant.id);
+
+    // The sources read is the first transaction of the run and the targets
+    // read is the second, so failing only the second breaks exactly the loop
+    // this test is about. Saved and restored by hand for the reason the
+    // tenant-listing test above records.
+    const original = prisma.$transaction;
+    let calls = 0;
+    prisma.$transaction = ((...args: unknown[]) => {
+      calls += 1;
+      if (calls === 2) return Promise.reject(new Error('connection reset'));
+      return (original as (...a: unknown[]) => unknown).apply(prisma, args);
+    }) as typeof prisma.$transaction;
+
+    const scheduler = createFakeScheduler();
+    try {
+      await expect(
+        scheduleBackgroundWork(scheduler, createFakeLogger()),
+      ).resolves.toBeUndefined();
+    } finally {
+      prisma.$transaction = original;
+    }
+
+    expect(provisionSchedules(scheduler)).toEqual([]);
+    expect(
+      syncSchedules(scheduler).map((c) => (c.data as { sourceId: string }).sourceId),
+    ).toEqual([source.id]);
+  });
+
+  it('schedules nothing at all for a tenant with no targets', async () => {
+    // The empty case is the universal case on this slice, four defects over.
+    await createTenant('Acme', 'acme');
+    const scheduler = createFakeScheduler();
+    await expect(
+      scheduleBackgroundWork(scheduler, createFakeLogger()),
+    ).resolves.toBeUndefined();
+    expect(provisionSchedules(scheduler)).toEqual([]);
+    expect(scheduler.unscheduled.filter((c) => c.name === PROVISION_JOB)).toEqual([]);
   });
 });
 
@@ -205,6 +372,7 @@ describe('startSyncScheduler', () => {
   const config = {
     databaseUrl: process.env.DATABASE_URL ?? '',
     masterKey: Buffer.alloc(32, 7),
+    smtpUrl: 'smtp://localhost:1025',
   } as unknown as Config;
 
   it('resolves with null rather than rejecting when the scheduler cannot start', async () => {
@@ -240,5 +408,17 @@ describe('startSyncScheduler', () => {
 
     expect(started).toBe(true);
     expect(result).toBe(scheduler);
+  });
+
+  it('registers the provisioning queue alongside sync and key rotation', async () => {
+    // Ruling P16. A queue with a schedule and no handler is a schedule that
+    // fires into nothing: pg-boss has a row, the target carries a cron
+    // expression on its screen, and no run ever happens.
+    const scheduler = createFakeScheduler();
+    await startSyncScheduler(config, createFakeLogger(), () => scheduler, {
+      transport: memoryTransport(),
+    });
+    expect(scheduler.registered).toContain(PROVISION_JOB);
+    expect(scheduler.registered).toContain(SYNC_JOB);
   });
 });
