@@ -164,3 +164,13 @@ export * from './provision/syntra-user.js';
 // modules choosing the SAME name, and under TS2308 the barrel then exports
 // neither.
 export * from './provision/apply.js';
+// Grepped workspace-wide before adding, as the five lines above were: none of
+// `PROVISION_JOB`, `ProvisionJobPayload`, `provisionJobPayload`,
+// `provisionScheduleKey`, `SchedulableTarget`, `applyTargetSchedule`,
+// `removeTargetSchedule`, `runProvisionJob`, `registerProvisionJobs`,
+// `RunProvisionJobOptions` or `STALE_RUN_MS` appears anywhere else in the
+// workspace. `sync/jobs.js` exports `SYNC_JOB`, `syncScheduleKey`,
+// `applySourceSchedule` and `registerSyncJobs` -- different names for the same
+// concepts, which is the collision that has bitten this slice twice; under
+// TS2308 the barrel would then export NEITHER side, silently.
+export * from './provision/jobs.js';

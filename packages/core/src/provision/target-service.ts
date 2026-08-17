@@ -10,7 +10,9 @@ import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { deleteSecret, getSecret, putSecret } from '../vault/vault-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
+import type { Scheduler } from '../jobs/scheduler.js';
 import { conditionSchema, type Condition } from './condition.js';
+import { applyTargetSchedule, removeTargetSchedule } from './jobs.js';
 import type { GuardThresholds } from './guard.js';
 import type { LadderSettings } from './types.js';
 
@@ -224,13 +226,14 @@ export async function createTarget(
   provider: MasterKeyProvider,
   actorUserId: string | null,
   input: CreateTargetInput,
+  scheduler?: Scheduler,
 ): Promise<{ id: string }> {
   // Parsed outside the transaction. A schema failure is a validation error,
   // not a rolled-back write.
   const config = adTargetConfigSchema.parse(input.config);
   const scalars = createScalarsSchema.parse(input);
 
-  return withTenant(tenantId, async (tx) => {
+  const created = await withTenant(tenantId, async (tx) => {
     const bound = await currentTenant(tx);
     const target = await tx.targetSystem.create({
       data: {
@@ -270,6 +273,20 @@ export async function createTarget(
 
     return { id: target.id };
   });
+
+  // Reconciled OUTSIDE the transaction. pg-boss writes to its own tables on
+  // its own connection: a schedule write inside this transaction would neither
+  // roll back with it nor be covered by it. Reconciled from the PARSED
+  // scalars, which are exactly what the row above was written from, and never
+  // from `input`.
+  if (scheduler) {
+    await applyTargetSchedule(scheduler, tenantId, {
+      id: created.id,
+      schedule: scalars.schedule ?? null,
+      enabled: scalars.enabled ?? true,
+    });
+  }
+  return created;
 }
 
 export interface UpdateTargetInput extends Partial<CreateTargetInput> {
@@ -286,6 +303,7 @@ export async function updateTarget(
   actorUserId: string | null,
   targetId: string,
   input: UpdateTargetInput,
+  scheduler?: Scheduler,
 ): Promise<void> {
   const config =
     input.config === undefined ? undefined : adTargetConfigSchema.parse(input.config);
@@ -313,7 +331,7 @@ export async function updateTarget(
   });
   const thresholds = pickThresholds(input.thresholds);
 
-  await withTenant(tenantId, async (tx) => {
+  const after = await withTenant(tenantId, async (tx) => {
     const before = await tx.targetSystem.findUnique({ where: { id: targetId } });
     if (!before) throw new TargetNotFoundError(targetId);
 
@@ -403,7 +421,26 @@ export async function updateTarget(
         credentialReplaced: scalars.bindPassword !== undefined,
       },
     });
+
+    // Read AFTER the update, and from the row rather than from the request
+    // body: an update that only sets `enabled: false` says nothing about the
+    // cron expression, and one that only clears the cron expression says
+    // nothing about `enabled`. Reconciling from the input alone leaves the old
+    // schedule firing at a target the administrator just stopped.
+    return tx.targetSystem.findUniqueOrThrow({
+      where: { id: targetId },
+      select: { schedule: true, enabled: true },
+    });
   });
+
+  // Outside the transaction, for the reason `createTarget` records.
+  if (scheduler) {
+    await applyTargetSchedule(scheduler, tenantId, {
+      id: targetId,
+      schedule: after.schedule,
+      enabled: after.enabled,
+    });
+  }
 }
 
 export async function deleteTarget(
@@ -411,8 +448,9 @@ export async function deleteTarget(
   actorUserId: string | null,
   targetId: string,
   confirm: boolean,
+  scheduler?: Scheduler,
 ): Promise<{ ok: boolean; counts?: Record<string, number> }> {
-  return withTenant(tenantId, async (tx) => {
+  const result = await withTenant(tenantId, async (tx) => {
     // Read before the counts, so a request naming a target that is not there
     // fails as "no such target" rather than reporting three convincing zeroes
     // and, on `confirm: true`, a Prisma P2025 from two statements further on.
@@ -444,6 +482,17 @@ export async function deleteTarget(
     });
     return { ok: true };
   });
+
+  // Only when the delete actually happened: `confirm: false` reports the
+  // counts and deletes nothing, and unscheduling there would stop a target
+  // that still exists, from a request that was a question rather than an
+  // instruction. A schedule left behind after a real delete fires for ever at
+  // a target that is not there, and the handler's `findUnique` returns null
+  // every time -- a job failing silently on a timer nobody remembers setting.
+  if (result.ok && scheduler) {
+    await removeTargetSchedule(scheduler, tenantId, targetId);
+  }
+  return result;
 }
 
 /**
