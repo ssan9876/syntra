@@ -1,0 +1,542 @@
+[
+  {
+    "id": "M01",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "if (sourceId === null) return { claimed: 0, conflicts: 0 };",
+    "replace": "if (sourceId === undefined) return { claimed: 0, conflicts: 0 };",
+    "pattern": "claims nothing when the target has no paired source",
+    "note": "the paired-source guard: expected EQUIVALENT, the SQL is null-safe on its own"
+  },
+  {
+    "id": "M02",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "AND a.\"anchor\" <> ''\n        AND u.\"sourceAnchor\" = a.\"anchor\"",
+    "replace": "AND a.\"anchor\" <> 'x'\n        AND u.\"sourceAnchor\" = a.\"anchor\"",
+    "pattern": "claims nothing on an empty anchor",
+    "note": "an empty anchor joins to an empty sourceAnchor and hands a login to a stranger"
+  },
+  {
+    "id": "M03",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "AND a.\"anchor\" <> ''\n        AND u.\"personId\" IS NOT NULL",
+    "replace": "AND a.\"anchor\" <> 'x'\n        AND u.\"personId\" IS NOT NULL",
+    "pattern": "reports no conflict for an empty anchor either",
+    "note": "the same empty anchor, on the conflict scan"
+  },
+  {
+    "id": "M04",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "AND u.\"personId\" IS NULL",
+    "replace": "AND u.\"personId\" IS NOT NULL",
+    "pattern": "leaves a user already linked to a different person and reports drift",
+    "note": "the claim overwrites a link somebody else established"
+  },
+  {
+    "id": "M05",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "AND u.\"sourceId\" = ${sourceId}::uuid\n        AND a.\"anchor\" IS NOT NULL\n        AND a.\"anchor\" <> ''\n        AND u.\"sourceAnchor\" = a.\"anchor\"",
+    "replace": "AND u.\"sourceId\" IS NOT NULL\n        AND a.\"anchor\" IS NOT NULL\n        AND a.\"anchor\" <> ''\n        AND u.\"sourceAnchor\" = a.\"anchor\"",
+    "pattern": "ignores a user on a different directory source",
+    "note": "the claim reaches a user another source owns"
+  },
+  {
+    "id": "M06",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "AND a.\"targetSystemId\" = ${targetSystemId}::uuid\n        AND u.\"sourceId\" = ${sourceId}::uuid\n        AND a.\"anchor\" IS NOT NULL\n        AND a.\"anchor\" <> ''\n        AND u.\"sourceAnchor\" = a.\"anchor\"",
+    "replace": "AND a.\"targetSystemId\" IS NOT NULL\n        AND u.\"sourceId\" = ${sourceId}::uuid\n        AND a.\"anchor\" IS NOT NULL\n        AND a.\"anchor\" <> ''\n        AND u.\"sourceAnchor\" = a.\"anchor\"",
+    "pattern": "ignores an account belonging to another target system",
+    "note": "the claim reaches another target’s accounts"
+  },
+  {
+    "id": "M07",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "WHERE u.\"tenantId\" = ${bound}::uuid\n        AND a.\"tenantId\" = ${bound}::uuid\n        AND a.\"targetSystemId\" = ${targetSystemId}::uuid\n        AND u.\"sourceId\" = ${sourceId}::uuid\n        AND a.\"anchor\" IS NOT NULL\n        AND a.\"anchor\" <> ''\n        AND u.\"sourceAnchor\"",
+    "replace": "WHERE u.\"tenantId\" IS NOT NULL\n        AND a.\"tenantId\" IS NOT NULL\n        AND a.\"targetSystemId\" = ${targetSystemId}::uuid\n        AND u.\"sourceId\" = ${sourceId}::uuid\n        AND a.\"anchor\" IS NOT NULL\n        AND a.\"anchor\" <> ''\n        AND u.\"sourceAnchor\"",
+    "pattern": "links a user to the person whose account carries the same anchor",
+    "note": "the explicit tenant predicates: expected EQUIVALENT under forced RLS"
+  },
+  {
+    "id": "M08",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "AND u.\"personId\" <> a.\"personId\"",
+    "replace": "AND u.\"personId\" = a.\"personId\"",
+    "pattern": "links a user to the person whose account carries the same anchor",
+    "note": "every correctly linked user is reported as a conflict"
+  },
+  {
+    "id": "M09",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "if (conflicts.length > 0) {",
+    "replace": "if (conflicts.length > 1) {",
+    "pattern": "leaves a user already linked to a different person and reports drift",
+    "note": "a single conflict is never written down"
+  },
+  {
+    "id": "M10",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "if (claimed > 0 || conflicts.length > 0) {",
+    "replace": "if (claimed > 0 && conflicts.length > 0) {",
+    "pattern": "records the claim in the audit chain",
+    "note": "a claim with no conflict leaves no trail"
+  },
+  {
+    "id": "M11",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "if (claimed > 0 || conflicts.length > 0) {",
+    "replace": "if (claimed >= 0 || conflicts.length > 0) {",
+    "pattern": "writes no audit event when it changed nothing",
+    "note": "an event per call, saying nothing changed"
+  },
+  {
+    "id": "M12",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "payload: { claimed, conflicts: conflicts.length, sourceId },",
+    "replace": "payload: { claimed: 0, conflicts: conflicts.length, sourceId },",
+    "pattern": "records the claim in the audit chain",
+    "note": "the event under-reports what it did"
+  },
+  {
+    "id": "M13",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        targetId: targetSystemId,",
+    "replace": "        targetId: null,",
+    "pattern": "records the claim in the audit chain",
+    "note": "the event names no target"
+  },
+  {
+    "id": "M14",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        targetType: 'TargetSystem',",
+    "replace": "        targetType: 'DirectorySource',",
+    "pattern": "records the claim in the audit chain",
+    "note": "the event names the wrong kind of subject"
+  },
+  {
+    "id": "M15",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        action: 'provision.users.claimed',",
+    "replace": "        action: 'provision.users.linked',",
+    "pattern": "records the claim in the audit chain",
+    "note": "the event is filed under a name nothing reads"
+  },
+  {
+    "id": "M16",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "return { claimed, conflicts: conflicts.length };",
+    "replace": "return { claimed: conflicts.length, conflicts: claimed };",
+    "pattern": "leaves a user already linked to a different person and reports drift",
+    "note": "the two counts are swapped"
+  },
+  {
+    "id": "M17",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "orderBy: { startedAt: 'desc' },",
+    "replace": "orderBy: { startedAt: 'asc' },",
+    "pattern": "attributes the finding to the most recent run",
+    "note": "the finding is attributed to the oldest run instead of the newest"
+  },
+  {
+    "id": "M18",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "runId: run?.id ?? null,",
+    "replace": "runId: null,",
+    "pattern": "attributes the finding to the most recent run",
+    "note": "the finding never names a run"
+  },
+  {
+    "id": "M19",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "export const SYNTRA_USER_LINK_SUBJECT = 'syntra_user_link';",
+    "replace": "export const SYNTRA_USER_LINK_SUBJECT = 'unexpected_status';",
+    "pattern": "leaves a user already linked to a different person and reports drift",
+    "note": "the subject that keeps this finding apart from reconcile’s"
+  },
+  {
+    "id": "M20",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      SYNTRA_USER_LINK_SUBJECT,\n    ),",
+    "replace": "      null,\n    ),",
+    "pattern": "does not overwrite reconcile account-status drift",
+    "note": "the two findings key on one row and overwrite each other"
+  },
+  {
+    "id": "M21",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      'unexpected_status',\n      conflict.accountId,",
+    "replace": "      'missing_grant',\n      conflict.accountId,",
+    "pattern": "does not overwrite reconcile account-status drift",
+    "note": "the fingerprint does not agree with the kind that is stored"
+  },
+  {
+    "id": "M22",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      conflict.accountId,\n      null,\n      SYNTRA_USER_LINK_SUBJECT,",
+    "replace": "      conflict.userId,\n      null,\n      SYNTRA_USER_LINK_SUBJECT,",
+    "pattern": "does not overwrite reconcile account-status drift",
+    "note": "the fingerprint identifies the wrong subject"
+  },
+  {
+    "id": "M23",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        kind: 'unexpected_status',\n        detail: d.detail as never,",
+    "replace": "        kind: 'orphan_account',\n        detail: d.detail as never,",
+    "pattern": "leaves a user already linked to a different person and reports drift",
+    "note": "the finding is filed as a kind it is not"
+  },
+  {
+    "id": "M24",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "accountId: d.conflict.accountId,",
+    "replace": "accountId: null,",
+    "pattern": "carries the user and both persons in the finding detail",
+    "note": "the finding does not say which account"
+  },
+  {
+    "id": "M25",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        subjectAnchor: null,",
+    "replace": "        subjectAnchor: d.conflict.userId,",
+    "pattern": "carries the user and both persons in the finding detail",
+    "note": "a user id in the column meant for a target-side anchor"
+  },
+  {
+    "id": "M26",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "if (fresh.length > 0) {",
+    "replace": "if (fresh.length > 1) {",
+    "pattern": "leaves a user already linked to a different person and reports drift",
+    "note": "a lone new finding is never inserted"
+  },
+  {
+    "id": "M27",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      lastSeenAt: seenAt,\n      // Only when there is one.",
+    "replace": "      // Only when there is one.",
+    "pattern": "re-observes a standing conflict",
+    "note": "a standing finding is never restamped, so it ages out while still true"
+  },
+  {
+    "id": "M28",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    where: { targetSystemId, fingerprint: { in: fingerprints } },\n    select: { fingerprint: true, detail: true },",
+    "replace": "    where: { targetSystemId, fingerprint: { in: [] } },\n    select: { fingerprint: true, detail: true },",
+    "pattern": "updates the detail when the conflicting link moves to a third person",
+    "note": "nothing is ever read as existing, so nothing is ever refreshed"
+  },
+  {
+    "id": "M29",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    if (before === undefined) continue;",
+    "replace": "    if (before !== undefined) continue;",
+    "pattern": "updates the detail when the conflicting link moves to a third person",
+    "note": "the refresh loop runs over exactly the wrong half"
+  },
+  {
+    "id": "M30",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    if (sameDetail(before.detail, d.detail)) continue;",
+    "replace": "    if (!sameDetail(before.detail, d.detail)) continue;",
+    "pattern": "updates the detail when the conflicting link moves to a third person",
+    "note": "the saving is inverted: it rewrites what is unchanged and skips what moved"
+  },
+  {
+    "id": "M31",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    before.reason === fresh.reason &&",
+    "replace": "    true &&",
+    "pattern": "refreshes a finding whose stored detail is stale in its wording alone",
+    "note": "a comparison that checks fewer fields than the write sets"
+  },
+  {
+    "id": "M32",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    before.userId === fresh.userId &&",
+    "replace": "    true &&",
+    "pattern": "updates the detail when a different login carries the same anchor",
+    "note": "a comparison that checks fewer fields than the write sets"
+  },
+  {
+    "id": "M33",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    before.linkedPersonId === fresh.linkedPersonId &&",
+    "replace": "    true &&",
+    "pattern": "updates the detail when the conflicting link moves to a third person",
+    "note": "a comparison that checks fewer fields than the write sets"
+  },
+  {
+    "id": "M34",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    before.accountPersonId === fresh.accountPersonId",
+    "replace": "    true",
+    "pattern": "updates the detail when the account itself moves to another person",
+    "note": "a comparison that checks fewer fields than the write sets"
+  },
+  {
+    "id": "M35",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "  if (stored === null || typeof stored !== 'object' || Array.isArray(stored)) {\n    return false;\n  }",
+    "replace": "  if (Array.isArray(stored)) {\n    return false;\n  }",
+    "pattern": "replaces a stored detail that is not an object at all",
+    "note": "a JSON null in the column becomes a TypeError"
+  },
+  {
+    "id": "M36",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    if (action === null) throw new ProvisionActionNotFoundError(actionId);",
+    "replace": "    if (action === undefined) throw new ProvisionActionNotFoundError(actionId);",
+    "pattern": "names the action it cannot find",
+    "note": "a missing action fails as a TypeError instead of by name"
+  },
+  {
+    "id": "M37",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    if (!(SYNTRA_ONLY_ACTION_TYPES as readonly string[]).includes(action.actionType)) {",
+    "replace": "    if (![].includes(action.actionType as never)) {",
+    "pattern": "refuses an action type that is not one of the two",
+    "note": "a mis-routed disable_account turns a leaver’s login back ON"
+  },
+  {
+    "id": "M38",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry'];",
+    "replace": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight'];",
+    "pattern": "applies an action left pending_retry",
+    "note": "a retry can never be finished"
+  },
+  {
+    "id": "M39",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry'];",
+    "replace": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry', 'superseded'];",
+    "pattern": "refuses a reactivation a later run superseded",
+    "note": "a reversed decision is re-run and hands a leaver their login back"
+  },
+  {
+    "id": "M40",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry'];",
+    "replace": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry', 'applied'];",
+    "pattern": "refuses to apply an action a second time",
+    "note": "one action, two results in the chain"
+  },
+  {
+    "id": "M41",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry'];",
+    "replace": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry', 'skipped'];",
+    "pattern": "refuses an action that was skipped",
+    "note": "an action somebody decided against is applied anyway"
+  },
+  {
+    "id": "M42",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    if (!APPLICABLE_ACTION_STATUSES.includes(action.status)) {",
+    "replace": "    if (![].includes(action.status as never)) {",
+    "pattern": "refuses to apply an action a second time",
+    "note": "no status is ever refused"
+  },
+  {
+    "id": "M43",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    if (typeof userId !== 'string' || userId === '') {",
+    "replace": "    if (userId === undefined || userId === '') {",
+    "pattern": "refuses a user id that is not a string",
+    "note": "a number out of the jsonb column reaches Prisma as a where it cannot handle"
+  },
+  {
+    "id": "M44",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    if (typeof userId !== 'string' || userId === '') {",
+    "replace": "    if (typeof userId !== 'string') {",
+    "pattern": "refuses an empty user id",
+    "note": "the empty value again: a lookup that finds nothing rather than an error saying why"
+  },
+  {
+    "id": "M45",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    if (user === null) throw new SyntraUserNotFoundError(actionId, userId);",
+    "replace": "    if (user === undefined) throw new SyntraUserNotFoundError(actionId, userId);",
+    "pattern": "names the user it cannot find",
+    "note": "an unfindable login fails as P2025 rather than by name"
+  },
+  {
+    "id": "M46",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      action.actionType === 'deactivate_syntra_user' ? 'inactive' : 'active';",
+    "replace": "      action.actionType === 'deactivate_syntra_user' ? 'active' : 'inactive';",
+    "pattern": "deactivates the user and writes the audit event in the same transaction",
+    "note": "the deactivation activates"
+  },
+  {
+    "id": "M47",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      action.actionType === 'deactivate_syntra_user' ? 'inactive' : 'active';",
+    "replace": "      ((action.after ?? {}) as { status?: string }).status ?? 'active';",
+    "pattern": "deactivates on the action type even when the payload says otherwise",
+    "note": "the payload decides instead of the action type"
+  },
+  {
+    "id": "M48",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "    await tx.user.update({ where: { id: userId }, data: { status } });",
+    "replace": "    await tx.user.update({ where: { id: userId }, data: {} });",
+    "pattern": "deactivates the user and writes the audit event in the same transaction",
+    "note": "the action is marked applied and the login is untouched"
+  },
+  {
+    "id": "M49",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        status: 'applied',\n        appliedAt: new Date(),",
+    "replace": "        status: 'proposed',\n        appliedAt: new Date(),",
+    "pattern": "deactivates the user and writes the audit event in the same transaction",
+    "note": "the action never reaches a terminal state and the run never finishes"
+  },
+  {
+    "id": "M50",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        appliedAt: new Date(),",
+    "replace": "        appliedAt: null,",
+    "pattern": "deactivates the user and writes the audit event in the same transaction",
+    "note": "no record of when it was applied"
+  },
+  {
+    "id": "M51",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        attempts: { increment: 1 },",
+    "replace": "        attempts: 1,",
+    "pattern": "applies an action left pending_retry",
+    "note": "a column that says 1 after three tries"
+  },
+  {
+    "id": "M52",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      actorUserId,\n      action: 'provision.action.result',",
+    "replace": "      actorUserId: null,\n      action: 'provision.action.result',",
+    "pattern": "records the actor, the previous status and the new one",
+    "note": "the chain does not say who did it"
+  },
+  {
+    "id": "M53",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      action: 'provision.action.result',",
+    "replace": "      action: 'provision.action.applied',",
+    "pattern": "deactivates the user and writes the audit event in the same transaction",
+    "note": "the event is filed under a name the run detail does not read"
+  },
+  {
+    "id": "M54",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      targetType: 'ProvisionAction',",
+    "replace": "      targetType: 'User',",
+    "pattern": "records the actor, the previous status and the new one",
+    "note": "the event names the wrong kind of subject"
+  },
+  {
+    "id": "M55",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "      outcome: 'success',\n      sourceIp: null,\n      payload: {\n        actionType: action.actionType,",
+    "replace": "      outcome: 'failure',\n      sourceIp: null,\n      payload: {\n        actionType: action.actionType,",
+    "pattern": "records the actor, the previous status and the new one",
+    "note": "a committed write recorded as a failure"
+  },
+  {
+    "id": "M56",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "        previousStatus: user.status,",
+    "replace": "        previousStatus: status,",
+    "pattern": "records the actor, the previous status and the new one",
+    "note": "the event cannot say whether anything actually changed"
+  },
+  {
+    "id": "M57",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "  if (sourceId === null) return false;",
+    "replace": "  if (sourceId === undefined) return false;",
+    "pattern": "does nothing when there is no paired source",
+    "note": "a sync enqueued for a source that does not exist"
+  },
+  {
+    "id": "M58",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "  return jobId !== null;",
+    "replace": "  return true;",
+    "pattern": "reports false when the queue declined the job",
+    "note": "a sync reported as enqueued that the queue declined"
+  },
+  {
+    "id": "M59",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "syncJobPayload(tenantId, sourceId)",
+    "replace": "syncJobPayload(sourceId, tenantId)",
+    "pattern": "enqueues a run of the paired directory source",
+    "note": "the payload names the tenant as the source"
+  },
+  {
+    "id": "M60",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "scheduler.enqueue(SYNC_JOB, syncJobPayload(tenantId, sourceId))",
+    "replace": "scheduler.enqueue('sync.other', syncJobPayload(tenantId, sourceId))",
+    "pattern": "enqueues a run of the paired directory source",
+    "note": "the job goes to a queue with no handler"
+  }
+]

@@ -390,6 +390,7 @@ describe('claimSyntraUsers', () => {
     );
     expect(events).toHaveLength(1);
     expect(events[0]!.targetId).toBe(targetId);
+    expect(events[0]!.targetType).toBe('TargetSystem');
     expect(events[0]!.payload).toMatchObject({ claimed: 1, conflicts: 0, sourceId });
   });
 
@@ -523,9 +524,125 @@ describe('claimSyntraUsers', () => {
     // "How long has this been wrong" is the question that makes a drift list
     // actionable, so the first sighting is never restamped.
     expect(findings[0]!.firstSeenAt.getTime()).toBe(first.firstSeenAt.getTime());
-    expect(findings[0]!.lastSeenAt.getTime()).toBeGreaterThanOrEqual(
+    // And stamped, so "still true as of now" is a fact the dashboard can age
+    // a finding out on.
+    expect(findings[0]!.lastSeenAt.getTime()).toBeGreaterThan(
       first.lastSeenAt.getTime(),
     );
+  });
+
+  it('refreshes a finding whose stored detail is stale in its wording alone', async () => {
+    const account = await seedAccount();
+    const other = await withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Bo', familyName: 'Lind' } }),
+    );
+    const user = await seedUser({ personId: other.id });
+    // What an earlier release wrote: the same three ids, a different sentence.
+    await withTenant(tenantId, (tx) =>
+      tx.driftFinding.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          accountId: account.id,
+          kind: 'unexpected_status',
+          detail: {
+            reason: 'linked to somebody else',
+            userId: user.id,
+            linkedPersonId: other.id,
+            accountPersonId: personId,
+          },
+          fingerprint: driftFingerprint(
+            'unexpected_status',
+            account.id,
+            null,
+            'syntra_user_link',
+          ),
+        },
+      }),
+    );
+
+    await claimSyntraUsers(tenantId, targetId);
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.driftFinding.findFirstOrThrow({}),
+    );
+    expect((finding.detail as { reason: string }).reason).not.toBe(
+      'linked to somebody else',
+    );
+  });
+
+  it('updates the detail when the account itself moves to another person', async () => {
+    const account = await seedAccount();
+    const bo = await withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Bo', familyName: 'Lind' } }),
+    );
+    await seedUser({ personId: bo.id });
+    await claimSyntraUsers(tenantId, targetId);
+
+    const cas = await withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Cas', familyName: 'Berg' } }),
+    );
+    await withTenant(tenantId, (tx) =>
+      tx.targetAccount.update({ where: { id: account.id }, data: { personId: cas.id } }),
+    );
+    await claimSyntraUsers(tenantId, targetId);
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.driftFinding.findFirstOrThrow({}),
+    );
+    // Only this field moved: the user and the person it is linked to did not.
+    expect(finding.detail).toMatchObject({
+      linkedPersonId: bo.id,
+      accountPersonId: cas.id,
+    });
+  });
+
+  it('updates the detail when a different login carries the same anchor', async () => {
+    await seedAccount();
+    const bo = await withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Bo', familyName: 'Lind' } }),
+    );
+    const first = await seedUser({ personId: bo.id });
+    await claimSyntraUsers(tenantId, targetId);
+
+    await withTenant(tenantId, (tx) => tx.user.delete({ where: { id: first.id } }));
+    const second = await seedUser({
+      login: 'anna.novak.2',
+      email: 'anna2@acme.test',
+      personId: bo.id,
+    });
+    await claimSyntraUsers(tenantId, targetId);
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.driftFinding.findFirstOrThrow({}),
+    );
+    // Only the user moved: both persons are the same as before.
+    expect(finding.detail).toMatchObject({
+      userId: second.id,
+      linkedPersonId: bo.id,
+      accountPersonId: personId,
+    });
+  });
+
+  it('replaces a stored detail that is not an object at all', async () => {
+    const account = await seedAccount();
+    const other = await withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Bo', familyName: 'Lind' } }),
+    );
+    await seedUser({ personId: other.id });
+    await claimSyntraUsers(tenantId, targetId);
+    // A JSON null in a NOT NULL jsonb column: legal, and reading a field off
+    // it is a TypeError rather than a comparison that says "not the same".
+    await withTenant(tenantId, (tx) =>
+      tx.$executeRaw`UPDATE "DriftFinding" SET "detail" = 'null'::jsonb WHERE "accountId" = ${account.id}::uuid`,
+    );
+
+    await claimSyntraUsers(tenantId, targetId);
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.driftFinding.findFirstOrThrow({}),
+    );
+    expect(finding.detail).toMatchObject({ accountPersonId: personId });
   });
 
   it('updates the detail when the conflicting link moves to a third person', async () => {
@@ -636,6 +753,7 @@ describe('applySyntraUserAction', () => {
       tx.provisionAction.findUniqueOrThrow({ where: { id: actionId } }),
     );
     expect(action.status).toBe('applied');
+    expect(action.appliedAt).not.toBeNull();
 
     const events = await withTenant(tenantId, (tx) =>
       tx.auditEvent.findMany({ where: { targetId: actionId } }),
@@ -815,6 +933,7 @@ describe('applySyntraUserAction', () => {
     );
     expect(event.actorUserId).toBe(actor.id);
     expect(event.targetType).toBe('ProvisionAction');
+    expect(event.outcome).toBe('success');
     expect(event.payload).toMatchObject({
       actionType: 'deactivate_syntra_user',
       userId,
