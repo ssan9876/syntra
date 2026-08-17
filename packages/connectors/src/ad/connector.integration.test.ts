@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Attribute, Change, Client } from 'ldapts';
+import { normaliseAnchor } from '../ldap/anchor.js';
 import { adTargetConnector } from './connector.js';
 // A plain module. Importing `samba.smoke.test.js` would register its hooks and
 // its five tests inside THIS file's collection and run them again -- and they
@@ -116,10 +117,16 @@ describe('adTargetConnector — test and discovery', () => {
     // reported alongside them, and from nowhere else. They are unpaged and the
     // server caps them, so they are an "is anything there" signal for a
     // connection test and never a denominator for the guard.
+    //
+    // One account and TWO groups, deliberately: with one of each the two
+    // numbers are interchangeable and a connector that swapped them would be
+    // indistinguishable from one that did not. The mutation pass found exactly
+    // that against the symmetric fixture.
     await adTargetConnector.write(config, createOp('count-1', 'sam.count'));
-    await addGroup('Counted', 'Counted');
+    await addGroup('CountedOne', 'CountedOne');
+    await addGroup('CountedTwo', 'CountedTwo');
     const result = await adTargetConnector.test(config);
-    expect(result.sampleCounts).toEqual({ user: 1, group: 1, orgUnit: 0 });
+    expect(result.sampleCounts).toEqual({ user: 1, group: 2, orgUnit: 0 });
   });
 
   it('enumerates groups as entitlements keyed on objectGUID', async () => {
@@ -316,6 +323,67 @@ describe('adTargetConnector — test and discovery', () => {
     expect(stillListed).toHaveLength(1);
   });
 
+  it('reports denied, not granted, for a right the bind genuinely lacks', async () => {
+    // The whole point of section 18. Bound as an ordinary account rather than
+    // as Administrator, Samba answers `allowedChildClassesEffective` and
+    // `allowedAttributesEffective` with ZERO values while the schema twins
+    // still hold 69 and 391 -- so the server has spoken, and what it said is
+    // no. Against the admin bind every right is granted, which is why nothing
+    // else in this file can tell `denied` apart from `granted`.
+    const lowDn = `CN=low.priv,${testOu}`;
+    await adTargetConnector.write(config, {
+      ...createOp('rights-3', 'low.priv'),
+      attributes: {
+        ...createOp('rights-3', 'low.priv').attributes,
+        distinguishedName: [lowDn],
+      },
+    });
+    await addGroup('LowPrivGroup', 'LowPrivGroup');
+    const result = await adTargetConnector.test({
+      ...config,
+      bindDn: lowDn,
+      bindPassword: INITIAL_PASSWORD,
+    });
+    expect(result.ok).toBe(true);
+    const statuses = result.rights!.map((r) => r.status);
+    expect(statuses).toContain('denied');
+    expect(statuses).not.toContain('granted');
+    const denied = result.rights!.find((r) => r.status === 'denied')!;
+    expect(denied.detail).toContain('this bind cannot perform this operation');
+  });
+
+  it('reports unverified against a server that does not publish effective rights', async () => {
+    // OpenLDAP, which implements neither constructed attribute. It answers the
+    // request with an empty key all the same -- ldapts echoes every REQUESTED
+    // attribute name back whether the server holds it or not, confirmed by
+    // asking both containers for `notARealAttributeAtAll` and getting the key
+    // back -- so "the key is missing" is NOT the signal, and reading it that
+    // way reports all four rights `denied`: "this bind cannot perform this
+    // operation and the first apply that needs it will fail", which is false.
+    // The schema twin `allowedChildClasses` is the discriminator: 69 values on
+    // Samba for any bind, zero on OpenLDAP.
+    const result = await adTargetConnector.test({
+      url: process.env.LDAPS_URL ?? 'ldaps://localhost:1636',
+      tlsMode: 'ldaps',
+      rejectUnauthorized: false,
+      bindDn: 'cn=admin,dc=acme,dc=test',
+      bindPassword: 'adminpassword',
+      baseDn: 'dc=acme,dc=test',
+      entitlementSearchBase: 'dc=acme,dc=test',
+      archiveContainer: 'dc=acme,dc=test',
+      accountFilter: '(objectClass=person)',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.rights!.map((r) => r.status)).toEqual([
+      'unverified',
+      'unverified',
+      'unverified',
+      'unverified',
+    ]);
+    expect(result.rights![0]!.detail).toContain('does not publish effective rights');
+    expect(result.message).toContain('4 of 4 write rights not confirmed');
+  });
+
   it('describes the schema from what the target actually holds', async () => {
     await adTargetConnector.write(config, createOp('schema-1', 'sky.demir'));
     const schema = await adTargetConnector.discoverSchema(config);
@@ -371,6 +439,63 @@ describe('adTargetConnector — create_account, which is three writes', () => {
     const result = await adTargetConnector.write(config, { ...op, attributes });
     expect(result.ok).toBe(true);
     expect(await readUac(`CN=ned.blok,${testOu}`)).toBe(512);
+  });
+
+  it('honours the distinguished name it was given, over the fallback', async () => {
+    // Into a sub-OU, so the supplied DN and the `CN=<key>,<baseDn>` fallback
+    // are DIFFERENT strings. Every other create in this file supplies a DN
+    // that happens to equal the fallback exactly, which makes a connector that
+    // ignores the parameter indistinguishable from one that honours it -- the
+    // mutation pass found it, and it is the same shape as the Task 2 fixture
+    // that agreed with its own bug.
+    const subOu = `OU=Placed,${testOu}`;
+    await admin.add(subOu, { objectClass: ['top', 'organizationalUnit'] });
+    const op = createOp('dn-2', 'placed.person');
+    const result = await adTargetConnector.write(config, {
+      ...op,
+      attributes: { ...op.attributes, distinguishedName: [`CN=placed.person,${subOu}`] },
+    });
+    expect(result.ok).toBe(true);
+    const { searchEntries } = await admin.search(testOu, {
+      scope: 'sub',
+      filter: '(sAMAccountName=placed.person)',
+      attributes: ['distinguishedName'],
+    });
+    expect(String(searchEntries[0]!.distinguishedName)).toBe(`CN=placed.person,${subOu}`);
+  });
+
+  it('adopts an account that has since been moved into a sub-container', async () => {
+    // The correlation-key lookup is a SUBTREE search. Scoped to one level it
+    // finds nothing here, the create is issued again, and the server refuses it
+    // with `already in use` -- so a person an administrator tidied into a
+    // sub-OU becomes a permanent conflict that no retry can clear.
+    const subOu = `OU=Moved,${testOu}`;
+    await admin.add(subOu, { objectClass: ['top', 'organizationalUnit'] });
+    const created = await adTargetConnector.write(config, createOp('dn-3', 'moved.person'));
+    await admin.modifyDN(`CN=moved.person,${testOu}`, `CN=moved.person,${subOu}`);
+    const retry = await adTargetConnector.write(config, createOp('dn-3', 'moved.person'));
+    expect(retry.ok).toBe(true);
+    expect(retry.message).toContain('adopted');
+    expect(retry.anchor).toBe(created.anchor);
+  });
+
+  it('escapes the correlation key it puts in a filter, so a wildcard matches nothing', async () => {
+    // `ab*` is refused by Active Directory as a sAMAccountName -- but the
+    // LOOKUP runs first, and unescaped it becomes `(sAMAccountName=ab*)`, a
+    // substring match that finds the unrelated `abc` and answers `conflict`.
+    // Escaped, nothing matches, the add is issued, and the server refuses the
+    // character itself: `rejected`, which is the truthful answer.
+    await adTargetConnector.write(config, createOp('esc-1', 'abc'));
+    const clash = await adTargetConnector.write(config, {
+      ...createOp('esc-2', 'ab*'),
+      attributes: {
+        ...createOp('esc-2', 'ab*').attributes,
+        distinguishedName: [`CN=abstar,${testOu}`],
+      },
+    });
+    expect(clash.ok).toBe(false);
+    expect(clash.failure).toBe('rejected');
+    expect(clash.message).toMatch(/invalid|character/i);
   });
 
   it('leaves a pre-hire created and disabled', async () => {
@@ -558,6 +683,56 @@ describe('adTargetConnector — the account lifecycle', () => {
     expect(result.ok).toBe(false);
     expect(result.failure).toBe('not_found');
     expect(await readUac(`CN=zoe.kappe,${testOu}`)).toBe(512);
+  });
+
+  it('will not resolve an anchor that belongs to a group rather than an account', async () => {
+    // The scoped objectGUID filter is conjoined with `accountFilter`. Without
+    // that, a group's objectGUID handed in as an anchor resolves to the GROUP,
+    // and `disable_account` then writes `userAccountControl` onto it -- an
+    // operation aimed at a person landing on an object that is not one.
+    const groupDn = `CN=AnchorGroup,${testOu}`;
+    await admin.add(groupDn, {
+      objectClass: ['top', 'group'],
+      sAMAccountName: 'AnchorGroup',
+    });
+    const { searchEntries } = await admin.search(groupDn, {
+      scope: 'base',
+      filter: '(objectClass=*)',
+      attributes: ['objectGUID'],
+    });
+    const groupAnchor = normaliseAnchor(
+      'objectGUID',
+      searchEntries[0]!.objectGUID as unknown as Buffer,
+    );
+    const result = await adTargetConnector.write(config, {
+      op: 'disable_account',
+      actionId: 'anchor-group',
+      anchor: groupAnchor,
+      reason: 'left',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.failure).toBe('not_found');
+  });
+
+  it('does not move an account whose target DN differs only in case', async () => {
+    // Samba ACCEPTS a modifyDN that only re-cases the RDN and rewrites the
+    // stored DN, so an exact comparison here renames the object on every run,
+    // forever, over a difference that means nothing in a directory that folds
+    // case. Measured against the container, not assumed.
+    const anchor = await anchorFor('life-3d', 'cas.eson');
+    const result = await adTargetConnector.write(config, {
+      op: 'update_account',
+      actionId: 'life-3d-u',
+      anchor,
+      attributes: { distinguishedName: [`cn=CAS.ESON,${testOu.toLowerCase()}`] },
+    });
+    expect(result.ok).toBe(true);
+    const { searchEntries } = await admin.search(testOu, {
+      scope: 'sub',
+      filter: '(sAMAccountName=cas.eson)',
+      attributes: ['distinguishedName'],
+    });
+    expect(String(searchEntries[0]!.distinguishedName)).toBe(`CN=cas.eson,${testOu}`);
   });
 
   it('updates the managed attributes in place', async () => {
@@ -1008,6 +1183,23 @@ describe('adTargetConnector — entitlements', () => {
     expect(result.ok).toBe(false);
     expect(result.failure).toBe('rejected');
     expect(result.message).toContain('primary group');
+  });
+
+  it('resolves an entitlement id exactly, never case-insensitively', async () => {
+    // Same rule as the account anchor and for the same reason: an opaque
+    // objectGUID, not a DN. Folding it here would let a mis-transcribed
+    // configuration value grant or revoke a real group.
+    const { anchor, entitlementId } = await setup();
+    const upper = entitlementId.toUpperCase();
+    expect(upper).not.toBe(entitlementId);
+    const result = await adTargetConnector.write(config, {
+      op: 'grant_entitlement',
+      actionId: 'g-6',
+      anchor,
+      entitlementId: upper,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.failure).toBe('not_found');
   });
 
   it('rejects a GRANT of a configured primary group too', async () => {

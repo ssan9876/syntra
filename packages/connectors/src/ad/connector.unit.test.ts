@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  attributeOf,
   classifyLdapError,
   encodeUnicodePwd,
   escapeDnValue,
   escapeFilterValue,
   guidFilterValue,
+  isAlreadyInRequestedState,
   provenanceActionId,
   provenanceValue,
   splitDn,
@@ -364,7 +366,6 @@ describe('adTargetConfigSchema', () => {
     // An empty archiveContainer would move archived accounts to the RDN alone,
     // and an empty baseDn would search -- and write into -- the whole domain.
     for (const field of [
-      'url',
       'bindDn',
       'baseDn',
       'entitlementSearchBase',
@@ -372,5 +373,88 @@ describe('adTargetConfigSchema', () => {
     ] as const) {
       expect(adTargetConfigSchema.safeParse({ ...base, [field]: '' }).success).toBe(false);
     }
+  });
+
+  it('requires a URL, and refuses it for being empty rather than for the mode', () => {
+    // Split out of the loop above, which asserted this for the wrong reason: an
+    // empty url is not an `ldaps://` url, so with the fixture's `tlsMode:
+    // 'ldaps'` the superRefine refuses it whether or not `url` has a `min(1)`
+    // at all. The mutation pass caught it -- removing `min(1)` from `url` left
+    // the suite green. A test that passes for a reason other than the one it
+    // names is the same defect as a missing test.
+    expect(
+      adTargetConfigSchema.safeParse({
+        ...base,
+        url: '',
+        tlsMode: 'starttls' as const,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('attributeOf', () => {
+  it('matches the attribute name case-insensitively', () => {
+    // RFC 4512: attribute NAMES are case-insensitive, and directories disagree
+    // about how they spell them back. `samaccountname` and `sAMAccountName`
+    // are one attribute, and reading the provenance marker or the
+    // userAccountControl through an exact match would silently find nothing --
+    // which reads as "no marker", so an adoptable account becomes a conflict,
+    // and as "no userAccountControl", so a disable resets every other flag.
+    const entry = { SAMACCOUNTNAME: ['anna.novak'], Info: 'syntra-provision action=a' };
+    expect(attributeOf(entry, 'sAMAccountName')).toBe('anna.novak');
+    expect(attributeOf(entry, 'info')).toBe('syntra-provision action=a');
+  });
+
+  it('takes the first value of a multi-valued attribute', () => {
+    expect(attributeOf({ cn: ['first', 'second'] }, 'cn')).toBe('first');
+  });
+
+  it('reads a scalar the server did not wrap in an array', () => {
+    expect(attributeOf({ cn: 'plain' }, 'cn')).toBe('plain');
+  });
+
+  it('reports undefined for an absent attribute and for an empty one', () => {
+    // Not the empty string: `''` would compare equal to a real empty value and
+    // silence the `?? UAC_NORMAL_ENABLED` fallbacks that depend on this.
+    expect(attributeOf({}, 'cn')).toBeUndefined();
+    expect(attributeOf({ cn: [] }, 'cn')).toBeUndefined();
+    expect(attributeOf({ cn: null }, 'cn')).toBeUndefined();
+  });
+});
+
+describe('isAlreadyInRequestedState', () => {
+  it('reads the ldapts error CLASS, with no help from the message', () => {
+    // The message is deliberately empty here. Samba puts the phrase in its
+    // diagnostic as well, so an implementation reading only the message passes
+    // every integration test in this package and then turns both of these into
+    // permanent, non-retryable failures against a directory that words its
+    // errors differently.
+    expect(isAlreadyInRequestedState('grant_entitlement', named('AttributeOrValueExistsError'))).toBe(true);
+    expect(isAlreadyInRequestedState('revoke_entitlement', named('NoSuchAttributeError'))).toBe(true);
+  });
+
+  it('reads the server diagnostic too, when that is where the phrase is', () => {
+    expect(
+      isAlreadyInRequestedState('grant_entitlement', named('Error', 'value already exists')),
+    ).toBe(true);
+    expect(
+      isAlreadyInRequestedState('revoke_entitlement', named('Error', 'no such attribute')),
+    ).toBe(true);
+  });
+
+  it('does not read one operation as the other', () => {
+    // A revoke that failed because the VALUE already exists is not a revoke
+    // that succeeded, and a grant that failed with `NoSuchAttribute` means the
+    // group is gone rather than that the person is already in it. Crossing
+    // them reports success over a write that did not happen.
+    expect(isAlreadyInRequestedState('revoke_entitlement', named('AttributeOrValueExistsError'))).toBe(false);
+    expect(isAlreadyInRequestedState('grant_entitlement', named('NoSuchAttributeError'))).toBe(false);
+  });
+
+  it('says no to every other failure', () => {
+    expect(isAlreadyInRequestedState('grant_entitlement', named('NoSuchObjectError'))).toBe(false);
+    expect(isAlreadyInRequestedState('revoke_entitlement', named('InsufficientAccessError'))).toBe(false);
+    expect(isAlreadyInRequestedState('grant_entitlement', 'a bare string')).toBe(false);
+    expect(isAlreadyInRequestedState('revoke_entitlement', undefined)).toBe(false);
   });
 });

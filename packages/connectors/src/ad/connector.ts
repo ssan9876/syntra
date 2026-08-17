@@ -255,7 +255,7 @@ export function guidFilterValue(anchor: string): string | undefined {
  * Attribute *names* fold case (RFC 4512) and attribute *values* do not. This
  * is the name side; every value comparison in this module is exact.
  */
-function attributeOf(
+export function attributeOf(
   entry: Record<string, unknown>,
   name: string,
 ): string | undefined {
@@ -531,6 +531,36 @@ async function groupDnFor(
   return undefined;
 }
 
+/**
+ * Whether a failed membership write means the membership was already in the
+ * state that was asked for.
+ *
+ * Granting a held entitlement and revoking an unheld one are set operations
+ * and therefore successes, not errors. That property is what makes retry free
+ * for those two, everywhere.
+ *
+ * A pure function rather than an inline block, because the discriminating
+ * signal is `cause.name` -- the ldapts error CLASS,
+ * `AttributeOrValueExistsError` and `NoSuchAttributeError` -- and not the
+ * server's diagnostic message, and only a unit test can prove that. Samba
+ * happens to put the phrase in the message as well, so an implementation that
+ * reads the message alone passes every integration test in this file and then
+ * turns both cases into permanent, non-retryable failures against a directory
+ * that words its errors differently.
+ */
+export function isAlreadyInRequestedState(
+  op: 'grant_entitlement' | 'revoke_entitlement',
+  cause: unknown,
+): boolean {
+  const name = cause instanceof Error ? cause.name : '';
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const text = `${name} ${message}`.toLowerCase();
+  if (op === 'grant_entitlement') {
+    return text.includes('attributeorvalueexists') || text.includes('already exists');
+  }
+  return text.includes('nosuchattribute') || text.includes('no such attribute');
+}
+
 /** Every member DN of a group, walking range windows when AD truncates. */
 export async function readGroupMembers(
   rawConfig: Config,
@@ -551,12 +581,44 @@ export async function readGroupMembers(
   }
 }
 
+/** Every value of an attribute, or undefined when the key is not there at all. */
+function valuesOf(
+  entry: Record<string, unknown>,
+  name: string,
+): string[] | undefined {
+  const key = Object.keys(entry).find((k) => k.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : toArray(entry[key]);
+}
+
 /**
  * Reads one constructed attribute and reports whether it says a right is held.
  *
- * Three outcomes, and the third is the point. The attribute absent from the
- * response means the server does not publish effective rights, which is NOT
- * the same as the right being granted and must never be reported as one.
+ * Three outcomes, and the third is the point: a server that does not publish
+ * effective rights cannot be read as having granted them.
+ *
+ * **An absent key is not the signal for that**, which is a measured
+ * correction to the plan rather than a preference. ldapts echoes every
+ * REQUESTED attribute name back as an empty-valued key whether the server
+ * holds it or not -- confirmed against both containers by asking each of them
+ * for `notARealAttributeAtAll` and getting the key back -- so the plan's
+ * `key === undefined` test never fires, and an OpenLDAP target would have had
+ * all four rights reported `denied`: "this bind cannot perform this operation
+ * and the first apply that needs it will fail", which is a false statement
+ * where `unverified` is a true one.
+ *
+ * The discriminator is the SCHEMA twin of the same constructed attribute --
+ * `allowedChildClasses` beside `allowedChildClassesEffective` -- which
+ * describes what the object class permits rather than what this bind may do.
+ * Measured:
+ *
+ * | bind                | schema | effective | verdict      |
+ * | ------------------- | -----: | --------: | ------------ |
+ * | Samba Administrator |     69 |        69 | `granted`    |
+ * | Samba unprivileged  |     69 |         0 | `denied`     |
+ * | OpenLDAP admin      |      0 |         0 | `unverified` |
+ *
+ * An empty schema list means the server does not implement these attributes,
+ * so it has said nothing about this right at all.
  */
 async function effectiveRight(
   client: Client,
@@ -569,24 +631,24 @@ async function effectiveRight(
   if (dn === undefined) {
     return { right, status: 'unverified', detail: absentDetail };
   }
+  const schemaAttribute = attribute.replace(/Effective$/, '');
   try {
     const { searchEntries } = await client.search(dn, {
       scope: 'base',
       filter: '(objectClass=*)',
-      attributes: [attribute],
+      attributes: [attribute, schemaAttribute],
     });
     const entry = (searchEntries[0] ?? {}) as Record<string, unknown>;
-    const key = Object.keys(entry).find((k) => k.toLowerCase() === attribute.toLowerCase());
-    if (key === undefined) {
+    const effective = valuesOf(entry, attribute);
+    const schema = valuesOf(entry, schemaAttribute);
+    if (effective === undefined || schema === undefined || schema.length === 0) {
       return {
         right,
         status: 'unverified',
-        detail: `${dn} did not return ${attribute}; this server does not publish effective rights`,
+        detail: `${dn} returned no ${schemaAttribute}, so this server does not publish effective rights and has said nothing about this one`,
       };
     }
-    const held = toArray(entry[key]).some(
-      (value) => value.toLowerCase() === wanted.toLowerCase(),
-    );
+    const held = effective.some((value) => value.toLowerCase() === wanted.toLowerCase());
     return {
       right,
       status: held ? 'granted' : 'denied',
@@ -1011,32 +1073,19 @@ export const adTargetConnector: TargetConnector<Config> = {
               ]),
             );
           } catch (cause) {
-            // Set operations: granting a held entitlement and revoking an
-            // unheld one are both successes, not errors. That property is what
-            // makes retry free for these two, everywhere.
-            //
-            // ldapts carries the discriminating signal in `cause.name` -- the
-            // error class, `AttributeOrValueExistsError` and
-            // `NoSuchAttributeError` -- and NOT in the server's diagnostic
-            // message. Matching the message alone matches nothing: both cases
-            // fall through to `classifyLdapError`'s `rejected` default and
-            // become permanent, non-retryable failures.
-            const name = cause instanceof Error ? cause.name : '';
-            const text = `${name} ${
-              cause instanceof Error ? cause.message : String(cause)
-            }`.toLowerCase();
-            if (
-              (op.op === 'grant_entitlement' &&
-                (text.includes('attributeorvalueexists') ||
-                  text.includes('already exists'))) ||
-              (op.op === 'revoke_entitlement' &&
-                (text.includes('nosuchattribute') || text.includes('no such attribute')))
-            ) {
+            // A set operation, so the write that finds the membership already
+            // as asked is a success. See `isAlreadyInRequestedState` for why
+            // that decision is a unit-testable function and not four lines
+            // here.
+            if (isAlreadyInRequestedState(op.op, cause)) {
               return { ok: true, message: 'already in the requested state' };
             }
             return {
               ok: false,
-              message: cause instanceof Error ? `${name}: ${cause.message}` : String(cause),
+              message:
+                cause instanceof Error
+                  ? `${cause.name}: ${cause.message}`
+                  : String(cause),
               failure: classifyLdapError(cause),
             };
           }
