@@ -523,6 +523,35 @@ describe('adTargetConnector — create_account, which is three writes', () => {
     expect(String(searchEntries[0]!.info)).toContain('action-3');
   });
 
+  it('keeps the marker when an attribute template writes to the same attribute', async () => {
+    // `op.attributes` used to be spread LAST into `client.add`, so a profile
+    // whose template writes `info` overwrote the marker outright. One failed
+    // password write afterwards then made the create a permanent `conflict`,
+    // because nothing could recognise the object as ours -- and this is the
+    // adoption path proving it can.
+    const op = createOp('action-3b', 'ida.roos');
+    const templated = {
+      ...op,
+      attributes: { ...op.attributes, info: ['Contractor, ends 2027-01-01'] },
+    };
+    expect((await adTargetConnector.write(config, templated)).ok).toBe(true);
+
+    const { searchEntries } = await admin.search(`CN=ida.roos,${testOu}`, {
+      scope: 'base',
+      filter: '(objectClass=*)',
+      attributes: ['info'],
+    });
+    const info = String(searchEntries[0]!.info);
+    // Both. Neither side wins: the marker is machine-readable inside the
+    // administrator's own text, which is why it is parsed at a token boundary.
+    expect(info).toContain('action-3b');
+    expect(info).toContain('Contractor, ends 2027-01-01');
+
+    const retry = await adTargetConnector.write(config, templated);
+    expect(retry.ok).toBe(true);
+    expect(retry.message).toContain('adopted');
+  });
+
   it('adopts its own account on retry rather than creating a second', async () => {
     await adTargetConnector.write(config, createOp('action-4', 'dee.olsen'));
     const retry = await adTargetConnector.write(config, createOp('action-4', 'dee.olsen'));
@@ -619,7 +648,13 @@ describe('adTargetConnector — the account lifecycle', () => {
       filter: '(objectClass=*)',
       attributes: ['info'],
     });
-    expect(String(searchEntries[0]!.info)).toContain('contract ended 2026-06-15');
+    const info = String(searchEntries[0]!.info);
+    expect(info).toContain('contract ended 2026-06-15');
+    // The disable used to `replace` the literal `info` with the reason alone,
+    // which destroyed whatever an administrator had in Notes and, by default,
+    // destroyed the provenance marker with it -- on exactly the accounts a
+    // later run may still need to recognise as Syntra's.
+    expect(info).toContain('life-1');
   });
 
   it('sets the disable bit without resetting the flags an administrator set', async () => {

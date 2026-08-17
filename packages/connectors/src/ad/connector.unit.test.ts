@@ -7,10 +7,15 @@ import {
   escapeFilterValue,
   guidBytes,
   isAlreadyInRequestedState,
-  provenanceActionId,
-  provenanceValue,
   splitDn,
 } from './connector.js';
+import {
+  provenanceActionId,
+  provenanceValue,
+  readProvenanceActionId,
+  withProvenanceMarker,
+  withProvenanceNote,
+} from './provenance.js';
 import { adTargetConfigSchema } from './config.js';
 import { normaliseAnchor } from '../ldap/anchor.js';
 
@@ -282,6 +287,97 @@ describe('the provenance marker', () => {
 
   it('does not accept the prefix glued to the end of another word', () => {
     expect(provenanceActionId('notsyntra-provision action=act-9')).toBeUndefined();
+  });
+
+  it('refuses to write an id it could not read back', () => {
+    // `provenanceActionId` stops at the first space, so a marker built from
+    // an id containing one reads back as a DIFFERENT id -- silently, and only
+    // once an interrupted create has to be resolved. The round trip is the
+    // whole guarantee of this pair, so the format refuses rather than
+    // producing a marker that breaks it.
+    expect(() => provenanceValue('act 9')).toThrow(/whitespace/);
+    expect(() => provenanceValue('')).toThrow();
+  });
+});
+
+describe('readProvenanceActionId', () => {
+  it('reads the configured attribute, not the literal info', () => {
+    const attributes = {
+      info: ['syntra-provision action=wrong'],
+      extensionAttribute7: ['syntra-provision action=right'],
+    };
+    expect(readProvenanceActionId(attributes, 'extensionAttribute7')).toBe('right');
+  });
+
+  it('folds the case of the attribute name, because LDAP does', () => {
+    // The server chooses the spelling it returns. A deployment nominating
+    // `extensionAttribute7` and a server answering `extensionattribute7`
+    // must not read as an account Syntra never created.
+    expect(readProvenanceActionId({ INFO: 'syntra-provision action=a1' }, 'info')).toBe(
+      'a1',
+    );
+  });
+
+  it('looks past a value that carries no marker', () => {
+    expect(
+      readProvenanceActionId(
+        { info: ['left by an administrator', 'syntra-provision action=a2'] },
+        'info',
+      ),
+    ).toBe('a2');
+  });
+
+  it('answers undefined for an attribute the object does not hold', () => {
+    expect(readProvenanceActionId({ cn: ['Anna'] }, 'info')).toBeUndefined();
+    expect(readProvenanceActionId({ info: [] }, 'info')).toBeUndefined();
+  });
+});
+
+describe('composing the provenance attribute', () => {
+  it('keeps what a template asked for and still carries the marker', () => {
+    // `op.attributes` used to be spread LAST into `client.add`, so a target
+    // whose attribute template writes `info` overwrote the marker outright.
+    // One failed password write afterwards then made the create a permanent
+    // conflict, because nothing could recognise the object as ours.
+    const value = withProvenanceMarker('Contractor, ends 2027-01-01', 'act-4');
+    expect(provenanceActionId(value)).toBe('act-4');
+    expect(value).toContain('Contractor, ends 2027-01-01');
+  });
+
+  it('never names two actions, however many times it is composed', () => {
+    const once = withProvenanceMarker('notes', 'act-4');
+    const twice = withProvenanceMarker(once, 'act-4');
+    expect(twice.match(/syntra-provision action=/g)).toHaveLength(1);
+    expect(provenanceActionId(twice)).toBe('act-4');
+    expect(twice).toContain('notes');
+  });
+
+  it('keeps the marker and the administrator note when a disable writes a reason', () => {
+    // The `replace` on the literal `info` destroyed both. An account the
+    // ladder disabled is exactly one a later run may still need to recognise.
+    const created = withProvenanceMarker('Desk 4B, key returned', 'act-4');
+    const disabled = withProvenanceNote(created, 'leaver: contract ended');
+
+    expect(provenanceActionId(disabled)).toBe('act-4');
+    expect(disabled).toContain('Desk 4B, key returned');
+    expect(disabled).toContain('[syntra] leaver: contract ended');
+  });
+
+  it('replaces a previous reason rather than accumulating them', () => {
+    const first = withProvenanceNote(withProvenanceMarker(undefined, 'act-4'), 'first');
+    const second = withProvenanceNote(first, 'second');
+
+    expect(second.match(/\[syntra\]/g)).toHaveLength(1);
+    expect(second).toContain('[syntra] second');
+    expect(second).not.toContain('first');
+    expect(provenanceActionId(second)).toBe('act-4');
+  });
+
+  it('writes the marker alone when there is nothing to keep', () => {
+    expect(withProvenanceMarker(undefined, 'act-4')).toBe(
+      'syntra-provision action=act-4',
+    );
+    expect(withProvenanceMarker('', 'act-4')).toBe('syntra-provision action=act-4');
   });
 });
 

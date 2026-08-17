@@ -9,6 +9,11 @@ import {
 import type { Filter } from 'ldapts';
 import { normaliseAnchor } from '../ldap/anchor.js';
 import { RANGE_STEP, readRangedAttribute } from '../ldap/range.js';
+import {
+  readProvenanceActionId,
+  withProvenanceMarker,
+  withProvenanceNote,
+} from './provenance.js';
 import { CONNECTOR_ACTION_TYPES } from '../types.js';
 import type {
   ConnectionResult,
@@ -420,38 +425,17 @@ function anchorOf(config: Resolved, entry: Record<string, unknown>): string {
   );
 }
 
-const PROVENANCE_PREFIX = 'syntra-provision action=';
-
-/** The provenance value written into the configured attribute on a create. */
-export function provenanceValue(actionId: string): string {
-  return `${PROVENANCE_PREFIX}${actionId}`;
-}
-
-/**
- * The action id a provenance marker names, or undefined.
- *
- * Parsed and compared whole, never `marker.includes(actionId)`. A substring
- * test adopts the account created by action `abc-10` while replaying action
- * `abc-1` -- which is the one outcome the marker exists to prevent, handing
- * one person's account to another. Ids are cuids in production and a
- * prefix collision is unlikely; "unlikely" is not the guarantee this check is
- * supposed to carry.
- */
-export function provenanceActionId(marker: string): string | undefined {
-  const match = new RegExp(`(?:^|\\s)${PROVENANCE_PREFIX}(\\S+)`).exec(marker);
-  return match?.[1];
-}
-
 async function createAccount(
   client: Client,
   config: Resolved,
   op: Extract<WriteOperation, { op: 'create_account' }>,
 ): Promise<WriteResult> {
-  // The provenance marker makes a non-idempotent create safe to retry.
+  // The provenance marker makes a non-idempotent create safe to retry. The
+  // format lives in ./provenance.ts because `@syntra/core`'s apply loop reads
+  // back what this writes, from another package.
   const existing = await findByCorrelationKey(client, config, op.correlationKey);
   if (existing) {
-    const marker = attributeOf(existing.entry, config.provenanceAttribute) ?? '';
-    if (provenanceActionId(marker) === op.actionId) {
+    if (readProvenanceActionId(existing.entry, config.provenanceAttribute) === op.actionId) {
       // Our own previous attempt succeeded and we lost the answer.
       return {
         ok: true,
@@ -473,6 +457,32 @@ async function createAccount(
     op.attributes.distinguishedName?.[0] ??
     `CN=${escapeDnValue(op.correlationKey)},${config.baseDn}`;
 
+  // What an account profile's attribute templates asked for, less the keys
+  // this function owns. `op.attributes` used to be spread LAST, over all four
+  // of them, which is a template winning an argument it should not have been
+  // in:
+  //
+  // - `distinguishedName` is the DN, not an attribute, and is applied above.
+  // - `userAccountControl` is the disabled bit that makes step 1 safe. A
+  //   template setting it enables an account whose password has not been
+  //   written yet, which is the exact window the two-step create exists to
+  //   close.
+  // - `sAMAccountName` is the correlation key every later lookup resolves
+  //   this object by, including the adoption path at the top of this function.
+  // - the provenance attribute is MERGED rather than dropped, below.
+  const owned = new Set(
+    ['distinguishedName', 'userAccountControl', 'sAMAccountName', config.provenanceAttribute].map(
+      (key) => key.toLowerCase(),
+    ),
+  );
+  const templated = Object.entries(op.attributes).filter(
+    ([key]) => !owned.has(key.toLowerCase()),
+  );
+  const templatedProvenance = Object.entries(op.attributes)
+    .filter(([key]) => key.toLowerCase() === config.provenanceAttribute.toLowerCase())
+    .flatMap(([, values]) => (Array.isArray(values) ? values : [values]))
+    .join('\n');
+
   try {
     // Step 1: add the object, disabled. An account that exists and is enabled
     // before its password is set is a window nobody asked for.
@@ -480,9 +490,15 @@ async function createAccount(
       objectClass: ['top', 'person', 'organizationalPerson', 'user'],
       sAMAccountName: op.correlationKey,
       userAccountControl: String(UAC_NORMAL_DISABLED),
-      [config.provenanceAttribute]: provenanceValue(op.actionId),
-      ...Object.fromEntries(
-        Object.entries(op.attributes).filter(([key]) => key !== 'distinguishedName'),
+      ...Object.fromEntries(templated),
+      // Last, and merged with whatever a template wanted in the same
+      // attribute rather than either side winning. A target whose template
+      // writes `info` used to overwrite the marker outright; one failed
+      // password write afterwards then made the create a permanent
+      // `conflict`, because nothing could recognise the object as ours.
+      [config.provenanceAttribute]: withProvenanceMarker(
+        templatedProvenance === '' ? undefined : templatedProvenance,
+        op.actionId,
       ),
     });
   } catch (cause) {
@@ -1048,9 +1064,18 @@ export const adTargetConnector: TargetConnector<Config> = {
           await setDisableBit(client, found.dn, found.entry, false);
           return { ok: true, message: 'enabled' };
         case 'disable_account':
+          // `config.provenanceAttribute`, not the literal `info`, and the
+          // reason is MERGED into what the attribute already held rather than
+          // replacing it. A `replace` of `info` destroyed whatever an
+          // administrator had in Notes and, by default, destroyed the
+          // provenance marker with it -- on exactly the accounts a later run
+          // may still need to recognise as Syntra's.
           await setDisableBit(client, found.dn, found.entry, true, {
-            attribute: 'info',
-            value: `[syntra] ${op.reason}`,
+            attribute: config.provenanceAttribute,
+            value: withProvenanceNote(
+              valuesOf(found.entry, config.provenanceAttribute)?.join('\n'),
+              op.reason,
+            ),
           });
           return { ok: true, message: 'disabled' };
         case 'archive_account': {
