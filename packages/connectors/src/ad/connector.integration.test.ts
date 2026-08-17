@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Attribute, Change, Client } from 'ldapts';
 import { normaliseAnchor } from '../ldap/anchor.js';
 import { adTargetConnector } from './connector.js';
+import { objectSidRid } from './sid.js';
 // A plain module. Importing `samba.smoke.test.js` would register its hooks and
 // its five tests inside THIS file's collection and run them again -- and they
 // are not idempotent.
@@ -1256,6 +1257,82 @@ describe('adTargetConnector — entitlements', () => {
         })
       ).ok,
     ).toBe(true);
+  });
+
+  it('refuses a revoke against the account\'s own primary group rather than reporting it done', async () => {
+    // The worst outcome available here, and the one this used to produce.
+    //
+    // A user's primary group does not hold them in `member`, so `delete
+    // member` is refused with `noSuchAttribute` -- the same error the
+    // directory gives for a person who was genuinely not in the group. Read
+    // as "already in the requested state", Syntra records the revoke as done,
+    // the person keeps the access, and reconcile never raises it because
+    // Syntra believes it acted.
+    //
+    // `primaryGroupExternalIds` was meant to keep these out of the catalog,
+    // but it defaults to [] and nothing ever derives it -- and it could not
+    // work anyway, because which group is primary is a property of the USER
+    // and not of the target.
+    const { anchor, entitlementId } = await setup();
+    const groupDn = `CN=Payments,${groupsOu}`;
+    const userDn = `CN=lee.tran,${testOu}`;
+
+    // Active Directory only accepts a primaryGroupID naming a group the
+    // account is already in, and moves that membership OUT of `member` when
+    // it takes it -- which is exactly why the revoke below answers
+    // noSuchAttribute.
+    await admin.modify(
+      groupDn,
+      new Change({
+        operation: 'add',
+        modification: new Attribute({ type: 'member', values: [userDn] }),
+      }),
+    );
+    const { searchEntries } = await admin.search(groupDn, {
+      scope: 'base',
+      filter: '(objectClass=*)',
+      attributes: ['objectSid'],
+      explicitBufferAttributes: ['objectSid'],
+    });
+    const rid = objectSidRid(searchEntries[0]!.objectSid);
+    expect(rid).toBeDefined();
+    await admin.modify(
+      userDn,
+      new Change({
+        operation: 'replace',
+        modification: new Attribute({
+          type: 'primaryGroupID',
+          values: [String(rid)],
+        }),
+      }),
+    );
+
+    // Measured, and not what the review predicted. The directory answers this
+    // with UnwillingToPerformError (0x35) "Attribute member already deleted",
+    // NOT with noSuchAttribute -- it keeps 0x10 for the other case, a group
+    // the account was never in, which the test above pins as a success. So
+    // the false success the review described was not reachable: 0x35 is not
+    // `isAlreadyInRequestedState`, and this already returned ok: false. What
+    // it returned was the raw ldapts text, which names no cause an operator
+    // could act on.
+    //
+    // The guarantee is asserted here rather than the error code, because the
+    // code is this implementation's choice and the guarantee is not.
+    const result = await adTargetConnector.write(config, {
+      op: 'revoke_entitlement',
+      actionId: 'r-primary',
+      anchor,
+      entitlementId,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failure).toBe('rejected');
+    expect(result.message).not.toMatch(/already in the requested state/i);
+    expect(result.message).toMatch(/primary group/i);
+
+    // And the access really did survive the write, which is what makes
+    // reporting it done the worst outcome available here.
+    expect(await readAttribute(userDn, 'primaryGroupID')).toBe(String(rid));
   });
 
   it('answers not_found for an entitlement the target does not offer', async () => {

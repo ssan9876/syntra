@@ -6,4 +6,5 @@ export * from './ldap/range.js';
 export * from './ad/uac.js';
 export * from './ad/config.js';
 export * from './ad/provenance.js';
+export * from './ad/sid.js';
 export * from './ad/connector.js';

@@ -14,6 +14,7 @@ import {
   withProvenanceMarker,
   withProvenanceNote,
 } from './provenance.js';
+import { objectSidRid } from './sid.js';
 import { CONNECTOR_ACTION_TYPES } from '../types.js';
 import type {
   ConnectionResult,
@@ -324,6 +325,12 @@ function writeAttributes(config: Resolved): string[] {
     'dn',
     'userAccountControl',
     'sAMAccountName',
+    // The RID of the group Active Directory holds as this account's PRIMARY
+    // group. Primary membership is not in the group's `member` attribute, so
+    // a revoke against it writes nothing and the directory answers
+    // `noSuchAttribute` -- which is otherwise indistinguishable from "this
+    // person was not in the group anyway". See the entitlement write path.
+    'primaryGroupID',
     config.provenanceAttribute,
     config.anchorAttribute,
   ];
@@ -581,7 +588,7 @@ async function setDisableBit(
 }
 
 /**
- * The DN of a group, by objectGUID.
+ * The DN of a group, by objectGUID, with the RID of its objectSid.
  *
  * A paged search of `entitlementSearchBase` per grant or revoke. Deliberately
  * left as a scan where `findByAnchor` was narrowed: the entitlement search base
@@ -590,24 +597,97 @@ async function setDisableBit(
  * with the same fallback. Recorded as a known cost rather than optimised on
  * speculation -- if a domain's group count makes it hurt, the fix is
  * `guidFilterValue` here too, with the scan kept behind it.
+ *
+ * `objectSid` costs nothing here -- the search is already being made -- and is
+ * what lets the caller tell a group that is somebody's PRIMARY group from one
+ * that is not. `rid` is undefined when the server returned no usable
+ * `objectSid`, which the caller must read as "not established", never as "not
+ * the primary group".
  */
 async function groupDnFor(
   client: Client,
   config: Resolved,
   externalId: string,
-): Promise<string | undefined> {
+): Promise<{ dn: string; rid: number | undefined } | undefined> {
   const { searchEntries } = await client.search(config.entitlementSearchBase, {
     scope: 'sub',
     filter: config.groupFilter,
-    attributes: ['dn', config.anchorAttribute],
+    attributes: ['dn', 'objectSid', config.anchorAttribute],
+    // A SID is bytes. ldapts decodes an attribute as text whenever the bytes
+    // happen to be valid UTF-8, so without this the same group comes back as
+    // a Buffer or as a string depending on its own SID.
+    explicitBufferAttributes: ['objectSid'],
     paged: { pageSize: config.pageSize },
   });
   for (const raw of searchEntries as unknown as Record<string, unknown>[]) {
     // Exact, for the same reason as `findByAnchor`: an opaque identifier, not
     // a DN.
-    if (anchorOf(config, raw) === externalId) return String(raw.dn);
+    if (anchorOf(config, raw) === externalId) {
+      return { dn: String(raw.dn), rid: objectSidRid(raw.objectSid) };
+    }
   }
   return undefined;
+}
+
+/**
+ * The RID of the group at `dn`, or undefined if it could not be established.
+ *
+ * The by-DN counterpart of the lookup above, for `archive_account`, which is
+ * handed entitlement DNs rather than external ids. One extra base search, and
+ * only on the path where a `delete member` came back `noSuchAttribute` -- so
+ * it is paid on the rare ambiguous case and never on the ordinary one.
+ */
+async function groupRidForDn(client: Client, dn: string): Promise<number | undefined> {
+  try {
+    const { searchEntries } = await client.search(dn, {
+      scope: 'base',
+      filter: '(objectClass=*)',
+      attributes: ['objectSid'],
+      explicitBufferAttributes: ['objectSid'],
+    });
+    const raw = searchEntries[0] as unknown as Record<string, unknown> | undefined;
+    return raw ? objectSidRid(raw.objectSid) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The RID of the group Active Directory holds as this account's primary one.
+ *
+ * `primaryGroupID` on the USER, because primary membership is not recorded on
+ * the group at all.
+ */
+export function primaryGroupRid(entry: Record<string, unknown>): number | undefined {
+  const raw = attributeOf(entry, 'primaryGroupID');
+  if (raw === undefined) return undefined;
+  const rid = Number(raw);
+  return Number.isInteger(rid) && rid >= 0 ? rid : undefined;
+}
+
+/**
+ * Whether `groupRid` names this account's primary group, with "cannot tell"
+ * as an answer distinct from "no".
+ *
+ * The three cases are not symmetrical:
+ *
+ * - The account carries no `primaryGroupID` at all. Then it has no primary
+ *   group and no group can be it. `not-primary`, and this is the honest
+ *   answer for a directory that has no such concept rather than a guess.
+ * - It carries one and the group's RID could not be read. The question is
+ *   open, and the caller must refuse rather than assume, because the
+ *   assumption that costs something is "no": it is the one that reports a
+ *   revoke that did not happen as one that did.
+ * - Both are known. Compare them.
+ */
+export function primaryGroupVerdict(
+  entry: Record<string, unknown>,
+  groupRid: number | undefined,
+): 'primary' | 'not-primary' | 'unknown' {
+  const primary = primaryGroupRid(entry);
+  if (primary === undefined) return 'not-primary';
+  if (groupRid === undefined) return 'unknown';
+  return primary === groupRid ? 'primary' : 'not-primary';
 }
 
 /**
@@ -627,6 +707,36 @@ async function groupDnFor(
  * turns both cases into permanent, non-retryable failures against a directory
  * that words its errors differently.
  */
+/**
+ * Whether the directory refused a membership write without changing anything,
+ * as opposed to failing partway or refusing for a reason of its own.
+ *
+ * The two codes it covers are the two an AD-shaped server answers when the
+ * value it was asked to remove is not in `member`:
+ *
+ * - `noSuchAttribute` (0x10) -- the account was never in the group.
+ * - `unwillingToPerform` (0x35) -- measured: what Samba answers for a delete
+ *   against the account's PRIMARY group, whose membership is not held in
+ *   `member` at all.
+ *
+ * They are not interchangeable, and the caller distinguishes them. What they
+ * share is that the directory is in the state it was in before the write,
+ * which is what makes the primary-group question worth asking; an
+ * `insufficientAccess` or a dropped connection is an access or a transport
+ * problem and must keep saying so.
+ */
+function refusedWithoutWriting(cause: unknown): boolean {
+  const name = cause instanceof Error ? cause.name : '';
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const text = `${name} ${message}`.toLowerCase();
+  return (
+    text.includes('nosuchattribute') ||
+    text.includes('no such attribute') ||
+    text.includes('unwillingtoperform') ||
+    text.includes('unwilling to perform')
+  );
+}
+
 export function isAlreadyInRequestedState(
   op: 'grant_entitlement' | 'revoke_entitlement',
   cause: unknown,
@@ -1099,9 +1209,39 @@ export const adTargetConnector: TargetConnector<Config> = {
               const text = `${name} ${
                 cause instanceof Error ? cause.message : String(cause)
               }`.toLowerCase();
-              // Already not a member. A set operation, and a success.
-              if (text.includes('nosuchattribute') || text.includes('no such attribute')) {
-                continue;
+              // The same two refusals as the entitlement write path, and the
+              // same reasoning. `noSuchAttribute` means the account was never
+              // in the group, which for a set operation is a success and is
+              // the `continue` below. Its PRIMARY group is not held in
+              // `member` either, so a delete against that one also changes
+              // nothing -- and continuing past it would move the object to
+              // the archive container and report the archive done over an
+              // entitlement it did not strip.
+              const alreadyGone =
+                text.includes('nosuchattribute') || text.includes('no such attribute');
+              if (refusedWithoutWriting(cause)) {
+                // One extra base search, on the refusal path only, because
+                // archive is handed entitlement DNs rather than external ids
+                // and so has no RID in hand.
+                const verdict = primaryGroupVerdict(
+                  found.entry,
+                  await groupRidForDn(client, groupDn),
+                );
+                if (verdict === 'primary') {
+                  return {
+                    ok: false,
+                    message: `the account was disabled, but ${groupDn} is its primary group: that membership is not held in \`member\` and cannot be removed by writing to it, so the account has not been moved to the archive container`,
+                    failure: 'rejected',
+                  };
+                }
+                if (alreadyGone && verdict === 'not-primary') continue;
+                if (alreadyGone) {
+                  return {
+                    ok: false,
+                    message: `the account was disabled, but the directory refused to remove its membership of ${groupDn} as "no such attribute" and whether that group is its primary group could not be established because the group returned no objectSid, so the account has not been moved to the archive container`,
+                    failure: 'transient',
+                  };
+                }
               }
               // NOT swallowed. `.catch(() => undefined)` here reported a
               // successful archive over an account that still holds the access
@@ -1143,8 +1283,8 @@ export const adTargetConnector: TargetConnector<Config> = {
               failure: 'rejected',
             };
           }
-          const groupDn = await groupDnFor(client, config, op.entitlementId);
-          if (!groupDn) {
+          const group = await groupDnFor(client, config, op.entitlementId);
+          if (!group) {
             return {
               ok: false,
               message: `no group at ${op.entitlementId}`,
@@ -1155,17 +1295,84 @@ export const adTargetConnector: TargetConnector<Config> = {
             // A single-value modification, never a replace of the whole
             // attribute: a replace turns a lost race into a mass revocation.
             await client.modify(
-              groupDn,
+              group.dn,
               change(op.op === 'grant_entitlement' ? 'add' : 'delete', 'member', [
                 found.dn,
               ]),
             );
           } catch (cause) {
+            // Two shapes of refusal, and they mean opposite things.
+            //
+            // Measured against the Samba AD domain controller this suite runs
+            // against, by setting an account's `primaryGroupID` to a group's
+            // RID and then asking for both:
+            //
+            //   revoke of a group the account was never in
+            //     -> NoSuchAttributeError, 0x10. The value is not in `member`
+            //        and the account does not hold the access. A set
+            //        operation, and a success.
+            //   revoke of the account's PRIMARY group
+            //     -> UnwillingToPerformError, 0x35, "Attribute member already
+            //        deleted". Primary membership is not held in `member` at
+            //        all -- the directory moves the DN out of `member` the
+            //        moment `primaryGroupID` names the group -- so the write
+            //        removes nothing and the access survives it.
+            //
+            // The directory tells them apart itself, which is why this is not
+            // the false success the review expected to find: 0x35 is not
+            // `isAlreadyInRequestedState`, so the second case already returned
+            // ok: false. What it returned was the raw ldapts message, which
+            // tells an operator nothing about why the revoke is impossible.
+            //
+            // The verdict is consulted anyway, and BEFORE the set-operation
+            // test, because "which error code did this directory choose" is
+            // not what the guarantee should rest on. `primaryGroupID` on the
+            // account against the RID of the group's `objectSid` is the fact
+            // itself, and it is already in hand: both were read by searches
+            // this write had to make regardless.
+            //
+            // `primaryGroupExternalIds` cannot cover this. It defaults to []
+            // and nothing derives it -- but even populated it is a
+            // target-wide list, and which group is primary is a property of
+            // the ACCOUNT. Two people in one target have two different
+            // primary groups.
+            //
+            // Only consulted for a refusal that changed nothing. An
+            // `insufficientAccess` against the primary group is still an
+            // access problem and must keep saying so.
+            const verdict =
+              op.op === 'revoke_entitlement' && refusedWithoutWriting(cause)
+                ? primaryGroupVerdict(found.entry, group.rid)
+                : 'not-primary';
+            if (verdict === 'primary') {
+              return {
+                ok: false,
+                message:
+                  "this entitlement is this account's primary group: primary group membership is not held in `member` and cannot be removed by writing to it, so the revoke did not happen. Move the account to a different primary group first, or exclude this group from the catalog with primaryGroupExternalIds",
+                failure: 'rejected',
+              };
+            }
             // A set operation, so the write that finds the membership already
             // as asked is a success. See `isAlreadyInRequestedState` for why
             // that decision is a unit-testable function and not four lines
             // here.
             if (isAlreadyInRequestedState(op.op, cause)) {
+              if (verdict === 'unknown') {
+                // The account has a primary group and the directory did not
+                // return the group's objectSid, so whether this revoke was
+                // refused because the access was already gone or because it
+                // cannot be removed this way is not established -- and
+                // "already in the requested state" is only true with evidence
+                // that the state is the one that was wanted. Transient rather
+                // than rejected: a readable objectSid is the ordinary case
+                // and this is a gap in what was read, not a refusal.
+                return {
+                  ok: false,
+                  message:
+                    'the directory refused the revoke as "no such attribute", and whether this entitlement is this account\'s primary group could not be established because the group returned no objectSid; the revoke cannot be reported as done',
+                  failure: 'transient',
+                };
+              }
               return { ok: true, message: 'already in the requested state' };
             }
             return {

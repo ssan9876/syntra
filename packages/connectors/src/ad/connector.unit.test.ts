@@ -7,8 +7,10 @@ import {
   escapeFilterValue,
   guidBytes,
   isAlreadyInRequestedState,
+  primaryGroupVerdict,
   splitDn,
 } from './connector.js';
+import { objectSidRid } from './sid.js';
 import {
   provenanceActionId,
   provenanceValue,
@@ -297,6 +299,78 @@ describe('the provenance marker', () => {
     // producing a marker that breaks it.
     expect(() => provenanceValue('act 9')).toThrow(/whitespace/);
     expect(() => provenanceValue('')).toThrow();
+  });
+});
+
+describe('objectSidRid', () => {
+  // revision 1, 5 sub-authorities, authority 5, then 21-1-2-3-513 little-endian.
+  const sid = Buffer.concat([
+    Buffer.from([0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05]),
+    (() => {
+      const tail = Buffer.alloc(20);
+      for (const [index, value] of [21, 1, 2, 3, 513].entries()) {
+        tail.writeUInt32LE(value, index * 4);
+      }
+      return tail;
+    })(),
+  ]);
+
+  it('reads the last sub-authority out of the raw bytes', () => {
+    // Only the RID. A user's `primaryGroupID` holds that number and nothing
+    // else, so it is the only part of the SID that can be compared with it.
+    expect(objectSidRid(sid)).toBe(513);
+  });
+
+  it('takes the first value when the attribute arrives as an array', () => {
+    expect(objectSidRid([sid])).toBe(513);
+  });
+
+  it('reads the text form as well, for a directory that renders it', () => {
+    expect(objectSidRid('S-1-5-21-1004336348-1177238915-682003330-513')).toBe(513);
+  });
+
+  it('answers undefined rather than a wrong number for anything else', () => {
+    // "Not established" has to be its own answer: the caller treats it as
+    // "cannot tell", and a zero or a NaN here would be read as "not the
+    // primary group", which is the assumption that costs something.
+    expect(objectSidRid(undefined)).toBeUndefined();
+    expect(objectSidRid('')).toBeUndefined();
+    expect(objectSidRid(Buffer.from([0x01, 0x05]))).toBeUndefined();
+    // A count claiming more sub-authorities than the buffer holds.
+    expect(
+      objectSidRid(Buffer.from([0x01, 0x09, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0])),
+    ).toBeUndefined();
+  });
+});
+
+describe('primaryGroupVerdict', () => {
+  it('says primary when the account\'s primaryGroupID is the group\'s RID', () => {
+    expect(primaryGroupVerdict({ primaryGroupID: '9768' }, 9768)).toBe('primary');
+  });
+
+  it('says not-primary for any other group', () => {
+    expect(primaryGroupVerdict({ primaryGroupID: '9768' }, 513)).toBe('not-primary');
+  });
+
+  it('says not-primary when the account has no primary group at all', () => {
+    // Not "unknown". An object with no primaryGroupID has no primary group,
+    // so no group can be it -- which is the honest answer for a directory
+    // with no such concept rather than a guess about one.
+    expect(primaryGroupVerdict({ cn: ['Anna'] }, 513)).toBe('not-primary');
+  });
+
+  it('says unknown when the group returned no usable objectSid', () => {
+    // The account HAS a primary group and the group's RID could not be read,
+    // so the question is open. The caller must refuse rather than assume,
+    // because the assumption that costs something is "no": it is the one that
+    // reports a revoke that did not happen as one that did.
+    expect(primaryGroupVerdict({ primaryGroupID: '9768' }, undefined)).toBe('unknown');
+  });
+
+  it('does not read a non-numeric primaryGroupID as a group', () => {
+    expect(primaryGroupVerdict({ primaryGroupID: 'not a number' }, 513)).toBe(
+      'not-primary',
+    );
   });
 });
 
