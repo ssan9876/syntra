@@ -4,11 +4,21 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { BusinessRulesPage } from './BusinessRulesPage.js';
 
-const json = (body: unknown) =>
-  new Response(JSON.stringify(body), {
-    status: 200,
+const json = (body: unknown, status = 200) =>
+  new Response(status === 204 ? null : JSON.stringify(body), {
+    status,
     headers: { 'content-type': 'application/json' },
   });
+
+const RULE = {
+  id: 'r1',
+  name: 'Finance staff',
+  description: null,
+  condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+  grantsAccount: true,
+  enabled: true,
+  entitlements: [{ entitlementId: 'e1' }],
+};
 
 const ENTITLEMENT = {
   id: 'e1',
@@ -29,16 +39,29 @@ function mockFetch(options: {
   rules?: unknown[];
   entitlements?: unknown[];
   impact?: unknown;
+  impactFails?: boolean;
+  enforcementMode?: 'additive' | 'authoritative';
 }) {
   const rules = options.rules ?? [];
   const entitlements = options.entitlements ?? [ENTITLEMENT];
   const impact = options.impact ?? IMPACT;
   return vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     const path = String(input);
-    if (path.endsWith('/rules/impact')) return Promise.resolve(json(impact));
+    if (path.endsWith('/rules/impact'))
+      return Promise.resolve(
+        options.impactFails
+          ? json({ title: 'Internal Server Error', status: 500 }, 500)
+          : json(impact),
+      );
     if (path.endsWith('/entitlements'))
       return Promise.resolve(json({ entitlements }));
     if (path.endsWith('/rules')) return Promise.resolve(json({ rules }));
+    // The target itself. This screen's standing reassurance is only true under
+    // one of the two enforcement modes, so it has to read which one this is.
+    if (/\/targets\/[^/]+$/.test(path))
+      return Promise.resolve(
+        json({ enforcementMode: options.enforcementMode ?? 'additive' }),
+      );
     return Promise.resolve(json({}));
   });
 }
@@ -161,6 +184,107 @@ describe('BusinessRulesPage', () => {
     expect(
       screen.getByRole('button', { name: 'Refresh entitlement catalog' }),
     ).toBeVisible();
+  });
+
+  it('does not promise that adding a rule never removes access on an authoritative target', async () => {
+    // `remitFor` is every entitlement named by an enabled rule for this target,
+    // and under `authoritative` `reconcile.ts` proposes revoking an in-remit
+    // entitlement from every holder Provision did not grant it to. So naming a
+    // group in a new rule is exactly what takes it away from everybody holding
+    // it for another reason.
+    mockFetch({ enforcementMode: 'authoritative' });
+    renderPage();
+
+    expect(
+      await screen.findByText(/adding a rule can also remove access/),
+    ).toBeVisible();
+    expect(screen.queryByText(/never removes access/)).toBeNull();
+  });
+
+  it('still says a rule only adds on an additive target', async () => {
+    mockFetch({ enforcementMode: 'additive' });
+    renderPage();
+
+    expect(
+      await screen.findByText(/adding a rule never removes access/),
+    ).toBeVisible();
+  });
+
+  it('will not delete a rule without saying what the delete revokes', async () => {
+    // The next run revokes every entitlement this rule ever granted:
+    // `reconcile.ts` keeps a holding Provision granted inside `heldWithinRemit`
+    // even once the rule that asked for it is gone. This screen already had the
+    // warning and showed it on the *edit* path, which is the less destructive
+    // of the two.
+    const fetchMock = mockFetch({
+      rules: [RULE],
+      impact: { ...IMPACT, wouldGrant: 0, wouldRevoke: 12 },
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText(/12 holdings would be/)).toBeVisible();
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'DELETE',
+      ),
+    ).toBe(false);
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Delete this rule' }),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'DELETE',
+      ),
+    ).toBe(true);
+  });
+
+  it('asks the impact endpoint what this rule alone granted', async () => {
+    // Modelled as "this rule grants nothing": `previewRuleImpact` counts a
+    // holding it granted as revoked once the rule stops naming its entitlement,
+    // so an empty `entitlementIds` is exactly the set the delete gives up.
+    const fetchMock = mockFetch({ rules: [RULE] });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    await screen.findByText(/holdings would be taken away|holding would be taken away/);
+
+    const body = bodyOfLastPost(fetchMock, '/rules/impact');
+    expect(body.id).toBe('r1');
+    expect(body.entitlementIds).toEqual([]);
+    expect(body.condition).toEqual(RULE.condition);
+  });
+
+  it('still asks before deleting when the impact could not be worked out', async () => {
+    // Not knowing the number is a reason to be more careful, not a reason to
+    // skip the question.
+    const fetchMock = mockFetch({ rules: [RULE], impactFails: true });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    expect(
+      await screen.findByText(/without a number behind it/),
+    ).toBeVisible();
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'DELETE',
+      ),
+    ).toBe(false);
+  });
+
+  it('claims nothing about this target before the server has answered', async () => {
+    // The first paint used to assert that the target had no rules and an empty
+    // entitlement catalog, and invite an LDAP refresh nobody needed.
+    mockFetch({ rules: [RULE] });
+    renderPage();
+
+    expect(screen.queryByText('No rules yet')).toBeNull();
+    expect(screen.queryByText(/entitlement catalog is empty/)).toBeNull();
+
+    expect(await screen.findByText('Finance staff')).toBeVisible();
   });
 
   it('loads a stored rule back into the editor, entitlements and all', async () => {

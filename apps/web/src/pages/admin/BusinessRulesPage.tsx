@@ -8,10 +8,11 @@ import {
   Field,
   Panel,
   Select,
+  SkeletonRows,
   Status,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
-import { fieldErrors } from './hooks.js';
+import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
 interface Entitlement {
@@ -38,6 +39,36 @@ interface Impact {
   wouldRevoke: number;
   sample: { personId: string; displayName: string }[];
 }
+
+/** The one field of the target this screen's copy depends on. */
+interface Target {
+  enforcementMode: 'additive' | 'authoritative';
+}
+
+/**
+ * A rule about to be deleted, and what deleting it would cost.
+ *
+ * Deleting is modelled as "this rule grants nothing": `previewRuleImpact` reads
+ * `mine` — every live holding carrying `grantedByRuleId` — and counts a holding
+ * as revoked when the rule no longer names its entitlement, so an empty
+ * `entitlementIds` makes `wouldRevoke` exactly the set the delete gives up.
+ * That is the same endpoint the edit path already uses, pointed at the more
+ * destructive action rather than the less.
+ */
+interface Pending {
+  rule: StoredRule;
+  impact: Impact | null;
+  impactProblem: string | null;
+}
+
+const deletionOf = (rule: StoredRule) => ({
+  id: rule.id,
+  name: rule.name,
+  condition: rule.condition,
+  grantsAccount: false,
+  enabled: false,
+  entitlementIds: [],
+});
 
 /** The closed field set from `condition.ts`. Anything else is refused. */
 const FIELDS = [
@@ -180,18 +211,40 @@ export function BusinessRulesPage() {
   const [busy, setBusy] = useState<
     null | 'save' | 'impact' | 'delete' | 'refresh'
   >(null);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [loading, setLoading] = useState(true);
 
+  // Ruling P2's mode decides whether the standing reassurance below is true, so
+  // this screen has to know it rather than assume the gentler of the two.
+  const { data: target } = useApiResource<Target>(`/api/admin/targets/${id}`);
+  const authoritative = target?.enforcementMode === 'authoritative';
+
+  /**
+   * Both reads, and a loading gate over them.
+   *
+   * Without the gate the first paint claimed this target had no rules at all
+   * and an empty entitlement catalog, and invited an LDAP refresh the
+   * administrator did not need — three assertions about the server made before
+   * the server had said anything.
+   */
   const reload = () => {
-    void api<{ rules: StoredRule[] }>(`/api/admin/targets/${id}/rules`)
-      .then((body) => setRules(body.rules))
-      .catch(() => setProblem('The rules for this target could not be loaded.'));
-    void api<{ entitlements: Entitlement[] }>(
-      `/api/admin/targets/${id}/entitlements`,
-    )
-      .then((body) => setEntitlements(body.entitlements))
-      .catch(() =>
-        setProblem('The entitlement catalog for this target could not be read.'),
-      );
+    setLoading(true);
+    void Promise.allSettled([
+      api<{ rules: StoredRule[] }>(`/api/admin/targets/${id}/rules`)
+        .then((body) => setRules(body.rules))
+        .catch(() =>
+          setProblem('The rules for this target could not be loaded.'),
+        ),
+      api<{ entitlements: Entitlement[] }>(
+        `/api/admin/targets/${id}/entitlements`,
+      )
+        .then((body) => setEntitlements(body.entitlements))
+        .catch(() =>
+          setProblem(
+            'The entitlement catalog for this target could not be read.',
+          ),
+        ),
+    ]).then(() => setLoading(false));
   };
   useEffect(reload, [id]);
 
@@ -283,12 +336,50 @@ export function BusinessRulesPage() {
     }
   }
 
+  /**
+   * Asks what deleting this rule costs, then asks the administrator.
+   *
+   * The delete used to be one unconfirmed click, while the next run revokes
+   * every entitlement the rule ever granted — `reconcile.ts` keeps a holding
+   * Provision granted inside `heldWithinRemit` even after the rule that asked
+   * for it is gone, precisely so that deleting a rule does not strand its
+   * grants, and the planner then differences it away. The *edit* path on this
+   * same screen already warned about exactly this. The warning was on the less
+   * destructive action.
+   */
+  async function onAskDelete(rule: StoredRule) {
+    setBusy('delete');
+    setProblem(null);
+    setPending({ rule, impact: null, impactProblem: null });
+    try {
+      const impact = await api<Impact>(
+        `/api/admin/targets/${id}/rules/impact`,
+        { method: 'POST', body: JSON.stringify(deletionOf(rule)) },
+      );
+      setPending({ rule, impact, impactProblem: null });
+    } catch (cause) {
+      // Still a confirmation, and a louder one: not knowing the number is a
+      // reason to be more careful, not a reason to skip the question.
+      setPending({
+        rule,
+        impact: null,
+        impactProblem:
+          cause instanceof ApiError
+            ? (cause.problem.detail ?? cause.problem.title)
+            : 'The impact of deleting this rule could not be previewed.',
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function onDelete(ruleId: string) {
     setBusy('delete');
     setProblem(null);
     try {
       await api(`/api/admin/rules/${ruleId}`, { method: 'DELETE' });
       if (draft.id === ruleId) setDraft(BLANK);
+      setPending(null);
       reload();
     } catch (cause) {
       fail(cause, 'The rule could not be deleted.');
@@ -324,21 +415,88 @@ export function BusinessRulesPage() {
           </Alert>
         )}
 
-        <Alert tone="info">
+        {/*
+          The union half is true under both modes. The reassurance is not.
+          `remitFor` is every entitlement named by an ENABLED rule for this
+          target, and under `authoritative` `reconcile.ts` proposes revoking an
+          in-remit entitlement from every holder Provision did not grant it to.
+          So on an authoritative target, naming a group in a new rule is what
+          takes it away from everybody who holds it for some other reason —
+          which is the opposite of what a permanent banner saying "adding a rule
+          never removes access" prepares somebody for.
+        */}
+        <Alert tone={authoritative ? 'warning' : 'info'}>
           A rule is evaluated against each of a person&apos;s active contracts
           independently and the results are unioned, so a person holding two jobs
-          gets what either job grants. Adding a rule never removes access.
+          gets what either job grants.{' '}
+          {authoritative
+            ? 'This target is authoritative, so adding a rule can also remove access: naming an entitlement brings it into Provision’s remit, and the next run proposes revoking it from everybody holding it that Provision did not grant it to. Preview the impact before saving.'
+            : 'This target is additive, so adding a rule never removes access: Provision revokes only what it granted, and anything else it finds is reported as drift and left alone.'}
         </Alert>
 
+        {pending && (
+          <Alert
+            tone="danger"
+            title={`Delete “${pending.rule.name}”?`}
+          >
+            <p>
+              Deleting a rule does not only stop it granting. The next run
+              revokes every entitlement this rule granted, from everybody it
+              granted it to — a grant Provision made stays Provision&apos;s to
+              take back even once the rule that asked for it is gone.
+            </p>
+            {pending.impact && (
+              // One string rather than numbers wrapped in `<strong>`: this is
+              // the sentence somebody has to read before pressing a red button,
+              // and it must be findable as one sentence.
+              <p className="mt-2 font-semibold">
+                {`${pending.impact.wouldRevoke} holding${
+                  pending.impact.wouldRevoke === 1 ? '' : 's'
+                } would be taken away, from the ${
+                  pending.impact.matchedPersons
+                } of ${pending.impact.totalPersons} persons this rule matches.`}
+              </p>
+            )}
+            {pending.impactProblem && (
+              <p className="mt-2">
+                What that would cost could not be worked out —{' '}
+                {pending.impactProblem} — so this is being asked without a
+                number behind it.
+              </p>
+            )}
+            {pending.rule.grantsAccount && (
+              <p className="mt-2">
+                This rule also grants an account. Anybody it matches who is
+                matched by no other account-granting rule walks the
+                deprovisioning ladder on the next run.
+              </p>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                variant="danger"
+                onClick={() => onDelete(pending.rule.id)}
+                loading={busy === 'delete'}
+                disabled={!!busy}
+              >
+                Delete this rule
+              </Button>
+              <Button onClick={() => setPending(null)} disabled={!!busy}>
+                Keep it
+              </Button>
+            </div>
+          </Alert>
+        )}
+
         <Panel title="Rules">
-          {rules.length === 0 ? (
+          {loading && <SkeletonRows rows={3} cols={2} />}
+          {!loading && rules.length === 0 ? (
             <div className="p-6">
               <Empty title="No rules yet">
                 Until a rule matches somebody, this target proposes nothing at
                 all.
               </Empty>
             </div>
-          ) : (
+          ) : loading ? null : (
             <ul>
               {rules.map((rule) => (
                 <li
@@ -366,7 +524,7 @@ export function BusinessRulesPage() {
                     <Button
                       size="sm"
                       variant="danger"
-                      onClick={() => onDelete(rule.id)}
+                      onClick={() => onAskDelete(rule)}
                       disabled={!!busy}
                     >
                       Delete
@@ -450,7 +608,12 @@ export function BusinessRulesPage() {
               <legend className="px-1 font-medium text-ink">
                 Entitlements granted
               </legend>
-              {entitlements.length === 0 ? (
+              {loading ? (
+                // Never "the catalog is empty" before the catalog has been
+                // read: that sentence sends somebody to press a button that
+                // talks to a domain controller for no reason.
+                <p className="text-muted">Reading the entitlement catalog…</p>
+              ) : entitlements.length === 0 ? (
                 <p className="text-muted">
                   This target&apos;s entitlement catalog is empty. Refresh it
                   from the target, with the button at the top of this page,
