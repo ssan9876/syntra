@@ -1050,3 +1050,178 @@ describe('the guard at the call site', () => {
     noWritesAtTarget();
   });
 });
+
+/**
+ * Ruling P29 — a person with two Syntra logins.
+ *
+ * `identity/person-service.ts` documents the case in as many words: "One
+ * person may hold several accounts: an everyday login and an admin one." The
+ * planner was handed a `Map` keyed on `personId`, which holds one value per
+ * key, so the second login never reached it and was never proposed for
+ * deactivation — not on the departure run and not on any run afterwards,
+ * because nothing re-examines a login no action ever names. The admin login
+ * was as likely to be the survivor as the everyday one.
+ *
+ * These read through `previewProvisionRun`, not through `planActions`, because
+ * the defect was in the read and the grouping rather than in the planning.
+ */
+describe('previewProvisionRun — every linked Syntra login (Ruling P29)', () => {
+  /** A paired directory source, and this target paired to it. */
+  async function pairSource() {
+    return withTenant(tenantId, async (tx) => {
+      const source = await tx.directorySource.create({
+        data: { tenantId, name: 'Acme AD read', config: {}, secretName: 'source/bind' },
+      });
+      await tx.targetSystem.update({
+        where: { id: targetId },
+        data: { pairedDirectorySourceId: source.id },
+      });
+      return source.id;
+    });
+  }
+
+  /** A Syntra login already claimed for this person. */
+  async function seedLogin(sourceId: string, personId: string, login: string, status = 'active') {
+    return withTenant(tenantId, async (tx) =>
+      (
+        await tx.user.create({
+          data: {
+            tenantId,
+            login,
+            email: `${login}@acme.test`,
+            displayName: login,
+            status,
+            sourceId,
+            sourceAnchor: `anchor-${login}`,
+            personId,
+          },
+        })
+      ).id,
+    );
+  }
+
+  /** A departed person with an account at the target, ready to be deprovisioned. */
+  async function departedWithAccount() {
+    const personId = await seedPerson('Anna', 'Novak', day('2026-06-01'));
+    const anchor = await seedObject('anna.novak');
+    await seedKnownAccount(personId, anchor, 'anna.novak');
+    await markApplied();
+    return personId;
+  }
+
+  const deactivations = async (runId: string) =>
+    (await actionsOf(runId)).filter((a) => a.actionType === 'deactivate_syntra_user');
+
+  it('proposes a deactivation for BOTH of a leaver’s logins', async () => {
+    const sourceId = await pairSource();
+    const personId = await departedWithAccount();
+    const everydayId = await seedLogin(sourceId, personId, 'anna.novak');
+    const adminId = await seedLogin(sourceId, personId, 'zz.admin.anna');
+
+    const run = await preview();
+    const proposed = await deactivations(run.id);
+    // Two actions, one per login, each naming its own user. Against a Map
+    // keyed on personId this is one action, and the login it omits keeps a
+    // live Syntra-held password for good.
+    expect(proposed.map((a) => (a.after as { userId: string }).userId).sort()).toEqual(
+      [everydayId, adminId].sort(),
+    );
+    expect(proposed.every((a) => a.personId === personId)).toBe(true);
+    // Distinct action rows: `applySyntraUserAction` resolves exactly one user
+    // from one action id, so two logins need two rows and two sequence numbers.
+    expect(new Set(proposed.map((a) => a.id)).size).toBe(2);
+    expect(new Set(proposed.map((a) => a.sequence)).size).toBe(2);
+  });
+
+  it('orders the two deactivations the same way on two runs over the same data', async () => {
+    // The read is ordered by `login`, which is `@@unique([tenantId, login])`
+    // and therefore a total order. `createdAt` could not do this: both rows
+    // could be written by one `createMany`, and PostgreSQL's now() is
+    // transaction start time.
+    const sourceId = await pairSource();
+    const personId = await departedWithAccount();
+    await seedLogin(sourceId, personId, 'zz.admin.anna');
+    await seedLogin(sourceId, personId, 'anna.novak');
+
+    const first = await deactivations((await preview()).id);
+    const second = await deactivations((await preview()).id);
+    const ids = (rows: typeof first) => rows.map((a) => (a.after as { userId: string }).userId);
+    expect(ids(first)).toEqual(ids(second));
+    expect(first.map((a) => a.sequence)).toEqual(second.map((a) => a.sequence));
+    // And the order is the ORDER BY, not the heap order. Seeded admin-first on
+    // purpose: an unordered read returns insertion order here, which is the
+    // reverse of this, so a test that only compared two runs to each other
+    // would pass with no ORDER BY at all.
+    const logins = await withTenant(tenantId, (tx) =>
+      tx.user.findMany({ where: { id: { in: ids(first) } }, select: { id: true, login: true } }),
+    );
+    const loginById = new Map(logins.map((u) => [u.id, u.login]));
+    expect(ids(first).map((id) => loginById.get(id))).toEqual([
+      'anna.novak',
+      'zz.admin.anna',
+    ]);
+  });
+
+  it('deactivates only the login that is still active', async () => {
+    const sourceId = await pairSource();
+    const personId = await departedWithAccount();
+    const everydayId = await seedLogin(sourceId, personId, 'anna.novak');
+    await seedLogin(sourceId, personId, 'zz.admin.anna', 'inactive');
+
+    const proposed = await deactivations((await preview()).id);
+    expect(proposed.map((a) => (a.after as { userId: string }).userId)).toEqual([everydayId]);
+  });
+
+  it('proposes nothing for a leaver with no linked login at all', async () => {
+    // The empty case, which is the universal one: a target whose paired source
+    // has not run yet has claimed nobody.
+    await pairSource();
+    await departedWithAccount();
+    expect(await deactivations((await preview()).id)).toEqual([]);
+  });
+
+  it('keeps one person’s logins away from another’s', async () => {
+    const sourceId = await pairSource();
+    const annaId = await departedWithAccount();
+    const boId = await seedPerson('Bo', 'Lind', day('2026-06-01'));
+    const boAnchor = await seedObject('bo.lind');
+    await seedKnownAccount(boId, boAnchor, 'bo.lind');
+    const annaEveryday = await seedLogin(sourceId, annaId, 'anna.novak');
+    const annaAdmin = await seedLogin(sourceId, annaId, 'zz.admin.anna');
+    const boLogin = await seedLogin(sourceId, boId, 'bo.lind');
+
+    const proposed = await deactivations((await preview()).id);
+    const byPerson = new Map<string, string[]>();
+    for (const a of proposed) {
+      const list = byPerson.get(a.personId!) ?? [];
+      list.push((a.after as { userId: string }).userId);
+      byPerson.set(a.personId!, list);
+    }
+    expect([...(byPerson.get(annaId) ?? [])].sort()).toEqual(
+      [annaEveryday, annaAdmin].sort(),
+    );
+    expect(byPerson.get(boId)).toEqual([boLogin]);
+  });
+
+  it('leaves a login linked to nobody alone', async () => {
+    // A service account. `personId` is null and it belongs to no departure.
+    const sourceId = await pairSource();
+    const personId = await departedWithAccount();
+    const everydayId = await seedLogin(sourceId, personId, 'anna.novak');
+    await withTenant(tenantId, (tx) =>
+      tx.user.create({
+        data: {
+          tenantId,
+          login: 'svc.backup',
+          email: 'svc@acme.test',
+          displayName: 'svc',
+          sourceId,
+          sourceAnchor: 'anchor-svc',
+        },
+      }),
+    );
+
+    const proposed = await deactivations((await preview()).id);
+    expect(proposed.map((a) => (a.after as { userId: string }).userId)).toEqual([everydayId]);
+  });
+});

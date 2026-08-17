@@ -22,6 +22,7 @@ import type {
   KnownAccount,
   PersonFacts,
   RuleFacts,
+  SyntraUserFacts,
   TargetObject,
 } from './types.js';
 
@@ -470,6 +471,17 @@ export async function previewProvisionRun(
       const users = await tx.user.findMany({
         where: { personId: { not: null } },
         select: { id: true, personId: true, status: true },
+        // ORDERED, and by `login`. A person may hold several logins and each
+        // one now produces its own action, so an unordered read numbers the
+        // same two `deactivate_syntra_user` actions differently on two runs
+        // over identical data — and `ProvisionAction.sequence` is that index.
+        // `createdAt` is no help: Directory Sync writes a source's users in
+        // one `createMany` and PostgreSQL's `now()` is transaction start time,
+        // so every one of them carries an identical timestamp. `login` is
+        // `@@unique([tenantId, login])`, which makes it a TOTAL order inside
+        // the tenant this transaction is bound to — no tiebreak needed, and no
+        // second column read for one.
+        orderBy: { login: 'asc' },
       });
       const previous = await tx.provisionRun.findFirst({
         where: { targetSystemId, status: { in: ['applied', 'partially_applied'] } },
@@ -623,15 +635,42 @@ export async function previewProvisionRun(
       enforcementMode: prepared.target.enforcementMode as 'additive' | 'authoritative',
     });
 
+    /**
+     * Every linked login, GROUPED by person rather than keyed on them.
+     *
+     * `new Map(users.map((u) => [u.personId, u]))` keeps the last value written
+     * for each key, so a person holding two logins arrived at the planner as
+     * one, and the other was never proposed for deactivation on their
+     * departure — nor on any later run, because nothing re-examines a login no
+     * action ever names. `person-service.ts` documents that exact case, "an
+     * everyday login and an admin one", and which of the two survived was
+     * whichever this read returned last. Ruling P29.
+     *
+     * No source filter, deliberately. This read has never had one — the field's
+     * old comment said "owned by the paired directory source" and did not
+     * describe the query — and adding one now would be the change that makes a
+     * login linked by hand, or carried by a second source, survive its holder's
+     * departure. Narrowing a deprovisioning read is how access outlives
+     * employment; this subsystem has found six other routes to that and does
+     * not add a seventh for tidiness.
+     */
+    const syntraUserByPerson = new Map<string, SyntraUserFacts[]>();
+    for (const user of snapshot.users) {
+      // Excluded by the `where` above as well. Kept because it is what narrows
+      // `personId` from `string | null` to `string`, and because a grouping
+      // keyed on null would put every service account in one bucket.
+      if (user.personId === null) continue;
+      const facts = { id: user.id, status: user.status };
+      const linked = syntraUserByPerson.get(user.personId);
+      if (linked === undefined) syntraUserByPerson.set(user.personId, [facts]);
+      else linked.push(facts);
+    }
+
     const actions = planActions({
       desired,
       actual: reconciled.actual,
       contractsByPerson,
-      syntraUserByPerson: new Map(
-        snapshot.users
-          .filter((u) => u.personId !== null)
-          .map((u) => [u.personId!, { id: u.id, status: u.status }]),
-      ),
+      syntraUserByPerson,
       pairedDirectorySource: prepared.target.pairedDirectorySourceId !== null,
       ladder: {
         entitlementRevocationDelayDays: prepared.target.entitlementRevocationDelayDays,

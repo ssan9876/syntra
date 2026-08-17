@@ -45,6 +45,19 @@ export interface ContractFacts {
   fte: number | null;
 }
 
+/**
+ * One Syntra login, flattened to what the planner decides with: which login it
+ * is, and whether it is live.
+ *
+ * A person may hold several — `person-service.ts` documents the case in as many
+ * words, "an everyday login and an admin one" — which is why the planner is
+ * handed a list of these per person rather than one.
+ */
+export interface SyntraUserFacts {
+  id: string;
+  status: string;
+}
+
 export interface RuleFacts {
   id: string;
   name: string;

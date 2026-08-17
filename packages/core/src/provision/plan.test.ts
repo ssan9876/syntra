@@ -497,7 +497,7 @@ describe('planActions — the Syntra user', () => {
         }),
       ],
       contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-15') })]]]),
-      syntraUserByPerson: new Map([['person-1', { id: 'user-1', status: 'active' }]]),
+      syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'active' }]]]),
       pairedDirectorySource: true,
     });
     expect(types(actions)).toEqual([
@@ -523,7 +523,7 @@ describe('planActions — the Syntra user', () => {
         }),
       ],
       contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-15') })]]]),
-      syntraUserByPerson: new Map([['person-1', { id: 'user-1', status: 'active' }]]),
+      syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'active' }]]]),
       pairedDirectorySource: false,
     });
     expect(types(actions)).not.toContain('deactivate_syntra_user');
@@ -543,7 +543,7 @@ describe('planActions — the Syntra user', () => {
           }),
         ],
       ]),
-      syntraUserByPerson: new Map([['person-1', { id: 'user-1', status: 'inactive' }]]),
+      syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'inactive' }]]]),
       pairedDirectorySource: true,
     });
     expect(types(actions)).toEqual([
@@ -698,7 +698,7 @@ describe('planActions — Ruling P23: an unresolvable rule must not keep a leave
     expect(
       types(
         poisoned({
-          syntraUserByPerson: new Map([['person-1', { id: 'user-1', status: 'active' }]]),
+          syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'active' }]]]),
           pairedDirectorySource: true,
         }),
       ),
@@ -761,7 +761,7 @@ describe('planActions — the paired Syntra user follows the departure, not the 
         ],
       ]),
       contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-01') })]]]),
-      syntraUserByPerson: new Map([['person-1', { id: 'user-1', status: 'active' }]]),
+      syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'active' }]]]),
       pairedDirectorySource: true,
     });
 
@@ -829,11 +829,339 @@ describe('planActions — the paired Syntra user follows the departure, not the 
             }),
           ],
           contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-01') })]]]),
-          syntraUserByPerson: new Map([['person-1', { id: 'user-1', status: 'inactive' }]]),
+          syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'inactive' }]]]),
           pairedDirectorySource: true,
         }),
       ),
     ).toEqual(['revoke_entitlement', 'disable_account']);
+  });
+});
+
+describe('planActions — a person with two Syntra logins (Ruling P29)', () => {
+  // "One person may hold several accounts: an everyday login and an admin
+  // one" — `identity/person-service.ts`, in as many words. `syntraUserByPerson`
+  // was a Map keyed on personId, which holds one value per key, so the second
+  // login was silently dropped on the way into the planner and was never
+  // proposed for deactivation on any run, ever.
+  const everyday = { id: 'user-everyday', status: 'active' };
+  const admin = { id: 'user-admin', status: 'active' };
+
+  const departedWith = (logins: { id: string; status: string }[]) =>
+    plan({
+      desired: [
+        desired({
+          account: {
+            required: false,
+            attributes: {},
+            container: '',
+            enabledNow: false,
+            correlationKey: null,
+          },
+          entitlements: new Set(),
+          attribution: new Map(),
+        }),
+      ],
+      actual: new Map([
+        ['person-1', actual({ heldEntitlements: new Set(), heldWithinRemit: new Set() })],
+      ]),
+      contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-01') })]]]),
+      syntraUserByPerson: new Map([['person-1', logins]]),
+      pairedDirectorySource: true,
+    });
+
+  const userIds = (actions: ReturnType<typeof plan>, type: string) =>
+    actions
+      .filter((a) => a.actionType === type)
+      .map((a) => (a.after as { userId: string }).userId);
+
+  it('proposes a deactivation for BOTH logins on departure', () => {
+    // The defect, stated as an assertion: against a Map-valued input this
+    // returns one deactivation, and the login it leaves behind stays live
+    // forever, because nothing re-examines a login no action ever names.
+    const actions = departedWith([everyday, admin]);
+    expect(types(actions)).toEqual([
+      'disable_account',
+      'deactivate_syntra_user',
+      'deactivate_syntra_user',
+    ]);
+  });
+
+  it('names WHICH login each deactivation is for', () => {
+    // `applySyntraUserAction` takes an action id and resolves exactly one user
+    // from `after.userId`, so two actions carrying the same id would deactivate
+    // one login twice and the other never — the defect with an extra row.
+    const actions = departedWith([everyday, admin]);
+    expect(userIds(actions, 'deactivate_syntra_user')).toEqual([
+      'user-everyday',
+      'user-admin',
+    ]);
+    expect(
+      actions
+        .filter((a) => a.actionType === 'deactivate_syntra_user')
+        .map((a) => a.before),
+    ).toEqual([{ status: 'active' }, { status: 'active' }]);
+  });
+
+  it('does not lose the admin login when it is read first', () => {
+    // Order-independent. The Map kept the LAST value written, so a fixture that
+    // only ever listed the admin login second could not tell a fix from the bug.
+    expect(userIds(departedWith([admin, everyday]), 'deactivate_syntra_user')).toEqual([
+      'user-admin',
+      'user-everyday',
+    ]);
+  });
+
+  it('keeps the caller order, because the index becomes ProvisionAction.sequence', () => {
+    expect(userIds(departedWith([admin, everyday]), 'deactivate_syntra_user')).not.toEqual(
+      userIds(departedWith([everyday, admin]), 'deactivate_syntra_user'),
+    );
+  });
+
+  it('proposes a deactivation for each of five logins', () => {
+    const many = ['a', 'b', 'c', 'd', 'e'].map((n) => ({
+      id: `user-${n}`,
+      status: 'active',
+    }));
+    expect(userIds(departedWith(many), 'deactivate_syntra_user')).toEqual(
+      many.map((u) => u.id),
+    );
+  });
+
+  it('deactivates only the live logins, leaving an already-inactive one alone', () => {
+    const actions = departedWith([everyday, { id: 'user-admin', status: 'inactive' }]);
+    expect(userIds(actions, 'deactivate_syntra_user')).toEqual(['user-everyday']);
+  });
+
+  it('proposes nothing for a person with NO linked login', () => {
+    // The empty case is the universal case: at a target whose paired source has
+    // not run yet nobody has a Syntra login, and an empty list must behave
+    // exactly like an absent key.
+    expect(types(departedWith([]))).toEqual(['disable_account']);
+  });
+
+  it('proposes nothing for a person absent from the map entirely', () => {
+    expect(
+      types(
+        plan({
+          desired: [
+            desired({
+              account: {
+                required: false,
+                attributes: {},
+                container: '',
+                enabledNow: false,
+                correlationKey: null,
+              },
+              entitlements: new Set(),
+              attribution: new Map(),
+            }),
+          ],
+          actual: new Map([
+            [
+              'person-1',
+              actual({ heldEntitlements: new Set(), heldWithinRemit: new Set() }),
+            ],
+          ]),
+          contractsByPerson: new Map([
+            ['person-1', [contract({ endDate: day('2026-06-01') })]],
+          ]),
+          syntraUserByPerson: new Map(),
+          pairedDirectorySource: true,
+        }),
+      ),
+    ).toEqual(['disable_account']);
+  });
+
+  it('proposes nothing for either login when the target has no paired source', () => {
+    expect(
+      types(
+        plan({
+          desired: [
+            desired({
+              account: {
+                required: false,
+                attributes: {},
+                container: '',
+                enabledNow: false,
+                correlationKey: null,
+              },
+              entitlements: new Set(),
+              attribution: new Map(),
+            }),
+          ],
+          actual: new Map([
+            [
+              'person-1',
+              actual({ heldEntitlements: new Set(), heldWithinRemit: new Set() }),
+            ],
+          ]),
+          contractsByPerson: new Map([
+            ['person-1', [contract({ endDate: day('2026-06-01') })]],
+          ]),
+          syntraUserByPerson: new Map([['person-1', [everyday, admin]]]),
+          pairedDirectorySource: false,
+        }),
+      ),
+    ).toEqual(['disable_account']);
+  });
+
+  it('takes both logins from a leaver whose account was already disabled by hand', () => {
+    // Route three and Ruling P29 in one fixture: the deactivations follow the
+    // departure rather than the disable write, and there are two of them.
+    const actions = plan({
+      desired: [
+        desired({
+          account: {
+            required: false,
+            attributes: {},
+            container: '',
+            enabledNow: false,
+            correlationKey: null,
+          },
+          entitlements: new Set(),
+          attribution: new Map(),
+        }),
+      ],
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            status: 'disabled',
+            enabledAtTarget: false,
+            disabledAt: day('2026-06-01'),
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+      contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-01') })]]]),
+      syntraUserByPerson: new Map([['person-1', [everyday, admin]]]),
+      pairedDirectorySource: true,
+    });
+    expect(types(actions)).toEqual([
+      'deactivate_syntra_user',
+      'deactivate_syntra_user',
+    ]);
+    expect(userIds(actions, 'deactivate_syntra_user')).toEqual([
+      'user-everyday',
+      'user-admin',
+    ]);
+  });
+
+  it('gives a returner every one of their logins back', () => {
+    // The other direction of the same list. Reactivating only one would strand
+    // the other inactive with nothing that ever looks at it again — the same
+    // never-re-examined shape, pointed the harmless way.
+    const actions = plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            status: 'disabled',
+            enabledAtTarget: false,
+            disabledAt: day('2026-06-12'),
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+      syntraUserByPerson: new Map([
+        [
+          'person-1',
+          [
+            { id: 'user-everyday', status: 'inactive' },
+            { id: 'user-admin', status: 'inactive' },
+          ],
+        ],
+      ]),
+      pairedDirectorySource: true,
+    });
+    expect(types(actions)).toEqual([
+      'enable_account',
+      'reactivate_syntra_user',
+      'reactivate_syntra_user',
+      'grant_entitlement',
+    ]);
+    expect(userIds(actions, 'reactivate_syntra_user')).toEqual([
+      'user-everyday',
+      'user-admin',
+    ]);
+  });
+
+  it('gives back only the login that is not already active', () => {
+    const actions = plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            status: 'disabled',
+            enabledAtTarget: false,
+            disabledAt: day('2026-06-12'),
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+      syntraUserByPerson: new Map([
+        [
+          'person-1',
+          [
+            { id: 'user-everyday', status: 'active' },
+            { id: 'user-admin', status: 'inactive' },
+          ],
+        ],
+      ]),
+      pairedDirectorySource: true,
+    });
+    expect(userIds(actions, 'reactivate_syntra_user')).toEqual(['user-admin']);
+  });
+
+  it('keeps one person’s logins away from another’s', () => {
+    // Two leavers, one of them holding two logins. A grouping that appended to
+    // the wrong bucket would deactivate a stranger’s login, which is the
+    // failure `claimSyntraUsers` refuses to create in the first place.
+    const leaver = (id: string) =>
+      desired({
+        personId: id,
+        account: {
+          required: false,
+          attributes: {},
+          container: '',
+          enabledNow: false,
+          correlationKey: null,
+        },
+        entitlements: new Set(),
+        attribution: new Map(),
+      });
+    const actions = plan({
+      desired: [leaver('person-1'), leaver('person-2')],
+      actual: new Map([
+        ['person-1', actual({ heldEntitlements: new Set(), heldWithinRemit: new Set() })],
+        [
+          'person-2',
+          actual({
+            personId: 'person-2',
+            accountId: 'account-2',
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+      contractsByPerson: new Map([
+        ['person-1', [contract({ endDate: day('2026-06-01') })]],
+        ['person-2', [contract({ endDate: day('2026-06-01') })]],
+      ]),
+      syntraUserByPerson: new Map([
+        ['person-1', [everyday, admin]],
+        ['person-2', [{ id: 'user-bo', status: 'active' }]],
+      ]),
+      pairedDirectorySource: true,
+    });
+    expect(userIds(actions, 'deactivate_syntra_user')).toEqual([
+      'user-everyday',
+      'user-admin',
+      'user-bo',
+    ]);
   });
 });
 
@@ -1248,7 +1576,7 @@ describe('planActions — the Syntra user, closely', () => {
           }),
         ],
       ]),
-      syntraUserByPerson: new Map(user ? [['person-1', user]] : []),
+      syntraUserByPerson: new Map(user ? [['person-1', [user]]] : []),
       pairedDirectorySource,
     });
 
@@ -1290,7 +1618,7 @@ describe('planActions — the Syntra user, closely', () => {
             ['person-1', actual({ heldEntitlements: new Set(), heldWithinRemit: new Set() })],
           ]),
           contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-12') })]]]),
-          syntraUserByPerson: new Map([['person-1', { id: 'user-1', status: 'active' }]]),
+          syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'active' }]]]),
           pairedDirectorySource: true,
           ladder: { ...ladder, disableGraceDays: 30, entitlementRevocationDelayDays: 30 },
         }),

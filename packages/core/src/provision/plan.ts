@@ -7,6 +7,7 @@ import type {
   DesiredState,
   LadderSettings,
   PlannedAction,
+  SyntraUserFacts,
 } from './types.js';
 
 /**
@@ -51,8 +52,33 @@ export interface PlanInput {
   desired: DesiredState[];
   actual: Map<string, ActualState>;
   contractsByPerson: ReadonlyMap<string, ContractFacts[]>;
-  /** The Syntra User owned by the paired directory source, when there is one. */
-  syntraUserByPerson: ReadonlyMap<string, { id: string; status: string }>;
+  /**
+   * EVERY Syntra login linked to a person, keyed on `personId`.
+   *
+   * A list per person, not one login, and that is the whole point of the
+   * shape. A `ReadonlyMap<string, SyntraUserFacts>` holds exactly one value
+   * per key, so the second login read for a person overwrote the first and the
+   * plan could only ever name one of them — while `person-service.ts`
+   * documents the two-login case in as many words, "an everyday login and an
+   * admin one". On departure the overwritten login was never proposed for
+   * deactivation, and it does not self-correct: nothing re-examines a login no
+   * action ever names, so a departed person kept it for good, with its
+   * Syntra-held password. Which of the two survived was whichever the read
+   * happened to return last, so the admin login was as likely as the everyday
+   * one. Ruling P29.
+   *
+   * An array rather than a `Map<userId, …>` per person: nothing here looks a
+   * login up by id, both directions iterate the whole set, and an array
+   * preserves the CALLER's order — which matters because each login now
+   * produces its own action, and an action's index in the returned array
+   * becomes `ProvisionAction.sequence`. Two runs over the same data must
+   * number the same actions the same way.
+   *
+   * Absent and empty say the same thing and both are ordinary rather than
+   * exceptional: a person with no Syntra login at all is the common case at a
+   * target whose paired source has not run yet. Neither proposes anything.
+   */
+  syntraUserByPerson: ReadonlyMap<string, readonly SyntraUserFacts[]>;
   pairedDirectorySource: boolean;
   ladder: LadderSettings;
   now: Date;
@@ -150,6 +176,14 @@ export function planActions(input: PlanInput): PlannedAction[] {
 
     const personId = state.personId;
     const accountId = current.accountId;
+    // Resolved once, for both directions, so the paired-source gate and the
+    // empty case are each written down in exactly one place. `?? []` is the
+    // person who has no Syntra login — the ordinary case, not the exception —
+    // and it makes both loops below do nothing without a null test of their
+    // own.
+    const syntraUsers: readonly SyntraUserFacts[] = input.pairedDirectorySource
+      ? (input.syntraUserByPerson.get(personId) ?? [])
+      : [];
     const contracts = input.contractsByPerson.get(personId) ?? [];
     const endDate = latestContractEnd(contracts);
     // A departure is contracts that all ended. A person still holding an
@@ -334,8 +368,17 @@ export function planActions(input: PlanInput): PlannedAction[] {
           // below, which follows the departure. The asymmetry is deliberate:
           // failing to give a login back is an inconvenience, and failing to
           // take one away is the defect this whole subsystem exists to prevent.
-          const user = input.syntraUserByPerson.get(personId);
-          if (input.pairedDirectorySource && user && user.status !== 'active') {
+          //
+          // One action per login, over ALL of them. A returner with an
+          // everyday login and an admin one has both taken away by the
+          // departure branch below, so giving only one back would strand the
+          // other inactive with nothing that ever looks at it again — the same
+          // never-re-examined shape as the defect this list exists to fix,
+          // pointed the harmless way. Each action names its own login in
+          // `after.userId`, because `applySyntraUserAction` resolves exactly
+          // one user from that field.
+          for (const user of syntraUsers) {
+            if (user.status === 'active') continue;
             push('reactivate_syntra_user', {
               accountId,
               before: { status: user.status },
@@ -435,8 +478,15 @@ export function planActions(input: PlanInput): PlannedAction[] {
         // the likeliest shape there is — keeps a live Syntra login with a
         // Syntra-held password, because the one write that was already done
         // silently cancelled the one that was not.
-        const user = input.syntraUserByPerson.get(personId);
-        if (input.pairedDirectorySource && user && user.status === 'active') {
+        //
+        // EVERY linked login, one action each. A `Map` keyed on `personId`
+        // carried one, so a leaver with an everyday login and an admin one
+        // lost only whichever the read returned last and kept the other
+        // forever (Ruling P29). Each action names its login in `after.userId`
+        // — `applySyntraUserAction` resolves exactly one user from it, so a
+        // single action cannot stand for two logins however it is worded.
+        for (const user of syntraUsers) {
+          if (user.status !== 'active') continue;
           push('deactivate_syntra_user', {
             accountId,
             before: { status: user.status },
