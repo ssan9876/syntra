@@ -703,6 +703,64 @@ describe('claimSyntraUsers', () => {
   it('refuses a target that does not exist', async () => {
     await expect(claimSyntraUsers(tenantId, randomUUID())).rejects.toThrow();
   });
+
+  it('cannot reach another tenant that happens to hold the same anchor', async () => {
+    // The claim and the conflict scan are raw SQL. Both spell their tenant
+    // predicates out AND rely on the forced `tenant_isolation` policy, and a
+    // join written in SQL is exactly where a reviewer should want a fixture
+    // rather than an argument. Two tenants, one anchor string, one claim.
+    const beta = await prisma.tenant.create({ data: { name: 'Beta', slug: 'beta' } });
+    const foreign = await withTenant(beta.id, async (tx) => {
+      const source = await tx.directorySource.create({
+        data: { tenantId: beta.id, name: 'Beta read', config: {}, secretName: 'b/src' },
+      });
+      const target = await tx.targetSystem.create({
+        data: {
+          tenantId: beta.id,
+          name: 'Beta write',
+          config: { tlsMode: 'ldaps', url: 'ldaps://dc.beta.test:636' },
+          secretName: 'b/target',
+          pairedDirectorySourceId: source.id,
+        },
+      });
+      const person = await tx.person.create({
+        data: { tenantId: beta.id, givenName: 'Bea', familyName: 'Torg' },
+      });
+      await tx.targetAccount.create({
+        data: {
+          tenantId: beta.id,
+          targetSystemId: target.id,
+          personId: person.id,
+          anchor: 'guid-anna',
+          correlationKey: 'bea.torg',
+          status: 'active',
+        },
+      });
+      const user = await tx.user.create({
+        data: {
+          tenantId: beta.id,
+          login: 'bea.torg',
+          email: 'bea@beta.test',
+          displayName: 'Bea Torg',
+          sourceId: source.id,
+          sourceAnchor: 'guid-anna',
+        },
+      });
+      return { userId: user.id };
+    });
+
+    await seedAccount();
+    await seedUser();
+    expect(await claimSyntraUsers(tenantId, targetId)).toEqual({
+      claimed: 1,
+      conflicts: 0,
+    });
+
+    const untouched = await withTenant(beta.id, (tx) =>
+      tx.user.findUniqueOrThrow({ where: { id: foreign.userId } }),
+    );
+    expect(untouched.personId).toBeNull();
+  });
 });
 
 describe('applySyntraUserAction', () => {

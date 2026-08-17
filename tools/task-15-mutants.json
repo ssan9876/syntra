@@ -159,10 +159,19 @@
     "find": "runId: run?.id ?? null,",
     "replace": "runId: null,",
     "pattern": "attributes the finding to the most recent run",
-    "note": "the finding never names a run"
+    "note": "the create-side run id: expected EQUIVALENT, the updateMany below restates it"
   },
   {
     "id": "M19",
+    "file": "packages/core/src/provision/syntra-user.ts",
+    "test": "packages/core/src/provision/syntra-user.test.ts",
+    "find": "...(run === null ? {} : { runId: run.id }),",
+    "replace": "...(run === null ? {} : { runId: null }),",
+    "pattern": "attributes the finding to the most recent run",
+    "note": "the stamp erases the run that observed the finding"
+  },
+  {
+    "id": "M20",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "export const SYNTRA_USER_LINK_SUBJECT = 'syntra_user_link';",
@@ -171,7 +180,7 @@
     "note": "the subject that keeps this finding apart from reconcile’s"
   },
   {
-    "id": "M20",
+    "id": "M21",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      SYNTRA_USER_LINK_SUBJECT,\n    ),",
@@ -180,7 +189,7 @@
     "note": "the two findings key on one row and overwrite each other"
   },
   {
-    "id": "M21",
+    "id": "M22",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      'unexpected_status',\n      conflict.accountId,",
@@ -189,7 +198,7 @@
     "note": "the fingerprint does not agree with the kind that is stored"
   },
   {
-    "id": "M22",
+    "id": "M23",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      conflict.accountId,\n      null,\n      SYNTRA_USER_LINK_SUBJECT,",
@@ -198,7 +207,7 @@
     "note": "the fingerprint identifies the wrong subject"
   },
   {
-    "id": "M23",
+    "id": "M24",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "        kind: 'unexpected_status',\n        detail: d.detail as never,",
@@ -207,7 +216,7 @@
     "note": "the finding is filed as a kind it is not"
   },
   {
-    "id": "M24",
+    "id": "M25",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "accountId: d.conflict.accountId,",
@@ -216,7 +225,7 @@
     "note": "the finding does not say which account"
   },
   {
-    "id": "M25",
+    "id": "M26",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "        subjectAnchor: null,",
@@ -225,7 +234,7 @@
     "note": "a user id in the column meant for a target-side anchor"
   },
   {
-    "id": "M26",
+    "id": "M27",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "if (fresh.length > 0) {",
@@ -234,7 +243,7 @@
     "note": "a lone new finding is never inserted"
   },
   {
-    "id": "M27",
+    "id": "M28",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      lastSeenAt: seenAt,\n      // Only when there is one.",
@@ -243,7 +252,7 @@
     "note": "a standing finding is never restamped, so it ages out while still true"
   },
   {
-    "id": "M28",
+    "id": "M29",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    where: { targetSystemId, fingerprint: { in: fingerprints } },\n    select: { fingerprint: true, detail: true },",
@@ -252,7 +261,7 @@
     "note": "nothing is ever read as existing, so nothing is ever refreshed"
   },
   {
-    "id": "M29",
+    "id": "M30",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    if (before === undefined) continue;",
@@ -261,7 +270,7 @@
     "note": "the refresh loop runs over exactly the wrong half"
   },
   {
-    "id": "M30",
+    "id": "M31",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    if (sameDetail(before.detail, d.detail)) continue;",
@@ -270,7 +279,7 @@
     "note": "the saving is inverted: it rewrites what is unchanged and skips what moved"
   },
   {
-    "id": "M31",
+    "id": "M32",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    before.reason === fresh.reason &&",
@@ -279,7 +288,7 @@
     "note": "a comparison that checks fewer fields than the write sets"
   },
   {
-    "id": "M32",
+    "id": "M33",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    before.userId === fresh.userId &&",
@@ -288,7 +297,7 @@
     "note": "a comparison that checks fewer fields than the write sets"
   },
   {
-    "id": "M33",
+    "id": "M34",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    before.linkedPersonId === fresh.linkedPersonId &&",
@@ -297,7 +306,7 @@
     "note": "a comparison that checks fewer fields than the write sets"
   },
   {
-    "id": "M34",
+    "id": "M35",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    before.accountPersonId === fresh.accountPersonId",
@@ -306,7 +315,7 @@
     "note": "a comparison that checks fewer fields than the write sets"
   },
   {
-    "id": "M35",
+    "id": "M36",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "  if (stored === null || typeof stored !== 'object' || Array.isArray(stored)) {\n    return false;\n  }",
@@ -315,7 +324,7 @@
     "note": "a JSON null in the column becomes a TypeError"
   },
   {
-    "id": "M36",
+    "id": "M37",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    if (action === null) throw new ProvisionActionNotFoundError(actionId);",
@@ -324,16 +333,16 @@
     "note": "a missing action fails as a TypeError instead of by name"
   },
   {
-    "id": "M37",
+    "id": "M38",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    if (!(SYNTRA_ONLY_ACTION_TYPES as readonly string[]).includes(action.actionType)) {",
-    "replace": "    if (![].includes(action.actionType as never)) {",
+    "replace": "    if (false) {",
     "pattern": "refuses an action type that is not one of the two",
     "note": "a mis-routed disable_account turns a leaver’s login back ON"
   },
   {
-    "id": "M38",
+    "id": "M39",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry'];",
@@ -342,7 +351,7 @@
     "note": "a retry can never be finished"
   },
   {
-    "id": "M39",
+    "id": "M40",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry'];",
@@ -351,7 +360,7 @@
     "note": "a reversed decision is re-run and hands a leaver their login back"
   },
   {
-    "id": "M40",
+    "id": "M41",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry'];",
@@ -360,7 +369,7 @@
     "note": "one action, two results in the chain"
   },
   {
-    "id": "M41",
+    "id": "M42",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "const APPLICABLE_ACTION_STATUSES = ['proposed', 'in_flight', 'pending_retry'];",
@@ -369,16 +378,16 @@
     "note": "an action somebody decided against is applied anyway"
   },
   {
-    "id": "M42",
+    "id": "M43",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    if (!APPLICABLE_ACTION_STATUSES.includes(action.status)) {",
-    "replace": "    if (![].includes(action.status as never)) {",
+    "replace": "    if (false) {",
     "pattern": "refuses to apply an action a second time",
     "note": "no status is ever refused"
   },
   {
-    "id": "M43",
+    "id": "M44",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    if (typeof userId !== 'string' || userId === '') {",
@@ -387,7 +396,7 @@
     "note": "a number out of the jsonb column reaches Prisma as a where it cannot handle"
   },
   {
-    "id": "M44",
+    "id": "M45",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    if (typeof userId !== 'string' || userId === '') {",
@@ -396,7 +405,7 @@
     "note": "the empty value again: a lookup that finds nothing rather than an error saying why"
   },
   {
-    "id": "M45",
+    "id": "M46",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    if (user === null) throw new SyntraUserNotFoundError(actionId, userId);",
@@ -405,7 +414,7 @@
     "note": "an unfindable login fails as P2025 rather than by name"
   },
   {
-    "id": "M46",
+    "id": "M47",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      action.actionType === 'deactivate_syntra_user' ? 'inactive' : 'active';",
@@ -414,7 +423,7 @@
     "note": "the deactivation activates"
   },
   {
-    "id": "M47",
+    "id": "M48",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      action.actionType === 'deactivate_syntra_user' ? 'inactive' : 'active';",
@@ -423,7 +432,7 @@
     "note": "the payload decides instead of the action type"
   },
   {
-    "id": "M48",
+    "id": "M49",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "    await tx.user.update({ where: { id: userId }, data: { status } });",
@@ -432,7 +441,7 @@
     "note": "the action is marked applied and the login is untouched"
   },
   {
-    "id": "M49",
+    "id": "M50",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "        status: 'applied',\n        appliedAt: new Date(),",
@@ -441,7 +450,7 @@
     "note": "the action never reaches a terminal state and the run never finishes"
   },
   {
-    "id": "M50",
+    "id": "M51",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "        appliedAt: new Date(),",
@@ -450,7 +459,7 @@
     "note": "no record of when it was applied"
   },
   {
-    "id": "M51",
+    "id": "M52",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "        attempts: { increment: 1 },",
@@ -459,7 +468,7 @@
     "note": "a column that says 1 after three tries"
   },
   {
-    "id": "M52",
+    "id": "M53",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      actorUserId,\n      action: 'provision.action.result',",
@@ -468,7 +477,7 @@
     "note": "the chain does not say who did it"
   },
   {
-    "id": "M53",
+    "id": "M54",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      action: 'provision.action.result',",
@@ -477,7 +486,7 @@
     "note": "the event is filed under a name the run detail does not read"
   },
   {
-    "id": "M54",
+    "id": "M55",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      targetType: 'ProvisionAction',",
@@ -486,7 +495,7 @@
     "note": "the event names the wrong kind of subject"
   },
   {
-    "id": "M55",
+    "id": "M56",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "      outcome: 'success',\n      sourceIp: null,\n      payload: {\n        actionType: action.actionType,",
@@ -495,7 +504,7 @@
     "note": "a committed write recorded as a failure"
   },
   {
-    "id": "M56",
+    "id": "M57",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "        previousStatus: user.status,",
@@ -504,7 +513,7 @@
     "note": "the event cannot say whether anything actually changed"
   },
   {
-    "id": "M57",
+    "id": "M58",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "  if (sourceId === null) return false;",
@@ -513,7 +522,7 @@
     "note": "a sync enqueued for a source that does not exist"
   },
   {
-    "id": "M58",
+    "id": "M59",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "  return jobId !== null;",
@@ -522,7 +531,7 @@
     "note": "a sync reported as enqueued that the queue declined"
   },
   {
-    "id": "M59",
+    "id": "M60",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "syncJobPayload(tenantId, sourceId)",
@@ -531,7 +540,7 @@
     "note": "the payload names the tenant as the source"
   },
   {
-    "id": "M60",
+    "id": "M61",
     "file": "packages/core/src/provision/syntra-user.ts",
     "test": "packages/core/src/provision/syntra-user.test.ts",
     "find": "scheduler.enqueue(SYNC_JOB, syncJobPayload(tenantId, sourceId))",
