@@ -36,7 +36,11 @@ async function elevateTo(page: Page, path: string, password: string) {
  * has a unique `(tenantId, name)` and the second run would otherwise fail on
  * the constraint rather than on anything it was testing.
  */
-const STAMP = Date.now();
+// Base 36, not the raw milliseconds: `sAMAccountName` is capped at 20
+// characters (`SAM_ACCOUNT_NAME_MAX_LENGTH`), and a 13-digit stamp pushes
+// `anna.novak<stamp>` to 23 and gets it truncated — so the assertion below
+// would be checking a name the generator never produces.
+const STAMP = Date.now().toString(36);
 const SAMBA_URL = process.env.SAMBA_LDAPS_URL ?? 'ldaps://localhost:1637';
 const BASE_DN = process.env.SAMBA_BASE_DN ?? 'DC=syntra,DC=test';
 const BIND_DN =
