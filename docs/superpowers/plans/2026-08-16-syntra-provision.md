@@ -12026,6 +12026,17 @@ export async function previewProvisionRun(
        */
       const accountIdByPerson = new Map<string, string>();
       for (const state of desired) {
+        // RULING P23 — CORRECTION TO THIS LINE. `state.unprocessable` is no
+        // longer a blanket skip. It carries a scope, and at `grants` scope the
+        // person's ACCOUNT decision is sound: only their entitlement set is
+        // unknown. Skipping them here reserves no row, so no account is ever
+        // created, so somebody who should have an account silently never gets
+        // one because a rule names an entitlement that was deleted.
+        //
+        // Use `unprocessableScope` (Task 8, `reconcile.ts`) and skip only the
+        // scopes that genuinely poison the account decision. Tasks 8 and 9 both
+        // shipped this same blanket skip from their briefs and both implementers
+        // caught it; this is the third site and the last one in the plan.
         if (state.unprocessable || state.notYetStarted) continue;
         if (!state.account?.required) continue;
         if (state.account.correlationKey === null) continue;
