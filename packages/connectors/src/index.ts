@@ -3,3 +3,6 @@ export * from './ldap/config.js';
 export * from './ldap/connector.js';
 export * from './ldap/anchor.js';
 export * from './ldap/range.js';
+export * from './ad/uac.js';
+export * from './ad/config.js';
+export * from './ad/connector.js';
