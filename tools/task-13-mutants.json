@@ -1,0 +1,425 @@
+[
+  {
+    "id": "M01",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "const NON_TERMINAL = ['running', 'previewed', 'blocked', 'applying'] as const;",
+    "replace": "const NON_TERMINAL = ['running', 'previewed', 'blocked'] as const;",
+    "pattern": "adopts a run left non-terminal",
+    "note": "the index covers applying and the adoption does not"
+  },
+  {
+    "id": "M02",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      where: { targetSystemId, status: 'running' },",
+    "replace": "      where: { targetSystemId, status: 'never' },",
+    "pattern": "adopts a run left non-terminal",
+    "note": "a run left running is never demoted"
+  },
+  {
+    "id": "M03",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      where: { targetSystemId, status: { in: ['previewed', 'blocked'] } },",
+    "replace": "      where: { targetSystemId, status: { in: ['previewed'] } },",
+    "pattern": "supersedes a previous run still proposed",
+    "note": "a blocked run is never demoted"
+  },
+  {
+    "id": "M04",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      data: { status: 'superseded' },",
+    "replace": "      data: { status: 'proposed' },",
+    "pattern": "supersedes a previous run still proposed",
+    "note": "the older plan stays proposed alongside the newer one"
+  },
+  {
+    "id": "M05",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      (cause as { code?: string }).code === 'P2002'",
+    "replace": "      (cause as { code?: string }).code === 'P2003'",
+    "pattern": "names the run that lost the race",
+    "note": "the race surfaces as an opaque Prisma error"
+  },
+  {
+    "id": "M06",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "  if (stale.length > 0) {",
+    "replace": "  if (stale.length > 99) {",
+    "pattern": "resolves a crashed run in-flight actions",
+    "note": "in-flight actions are never resolved"
+  },
+  {
+    "id": "M07",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          status: 'partially_applied',",
+    "replace": "          status: 'failed',",
+    "pattern": "adopts a run left non-terminal",
+    "note": "a run that may have landed writes is called failed"
+  },
+  {
+    "id": "M08",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      const enabled = Number.isFinite(uac) && isEnabled(uac);",
+    "replace": "      const enabled = uacRaw === '512';",
+    "pattern": "reads enabled from the disable bit",
+    "note": "the brief's equality with 512"
+  },
+  {
+    "id": "M09",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      const enabled = Number.isFinite(uac) && isEnabled(uac);",
+    "replace": "      const enabled = Number.isFinite(uac) && !isEnabled(uac);",
+    "pattern": "reads enabled from the disable bit",
+    "note": "the disable bit read backwards"
+  },
+  {
+    "id": "M10",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        correlationKey: first(record, 'sAMAccountName') ?? '',",
+    "replace": "        correlationKey: record.attributes.sAMAccountName?.[0] ?? '',",
+    "pattern": "reads attributes whose names the directory folded to lower case",
+    "note": "sAMAccountName read case-sensitively"
+  },
+  {
+    "id": "M11",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      const uacRaw = first(record, 'userAccountControl');",
+    "replace": "      const uacRaw = record.attributes.userAccountControl?.[0];",
+    "pattern": "reads attributes whose names the directory folded to lower case",
+    "note": "userAccountControl read case-sensitively"
+  },
+  {
+    "id": "M12",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        entitlementIds: valuesOf(record, 'memberOf')",
+    "replace": "        entitlementIds: (record.attributes.memberOf ?? [])",
+    "pattern": "reads attributes whose names the directory folded to lower case",
+    "note": "memberOf read case-sensitively"
+  },
+  {
+    "id": "M13",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          .map((dn) => dnToEntitlementId.get(dn.toLowerCase()))",
+    "replace": "          .map((dn) => externalIdToEntitlementId.get(dn))",
+    "pattern": "maps membership from distinguished names",
+    "note": "membership keyed on externalId instead of DN"
+  },
+  {
+    "id": "M14",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      if (row.dn !== null) dnToEntitlementId.set(row.dn.toLowerCase(), row.id);",
+    "replace": "      void row;",
+    "pattern": "resolves membership from the last DN Syntra saw",
+    "note": "the stored-DN fallback is dropped"
+  },
+  {
+    "id": "M15",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      if (id === undefined || !prepared.remit.has(id)) continue;",
+    "replace": "      if (id === undefined) continue;",
+    "pattern": "leaves an unreadable group this run never probed alone",
+    "note": "every group in the domain is probed"
+  },
+  {
+    "id": "M16",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        readableEntitlementIds.add(id);",
+    "replace": "        void id;",
+    "pattern": "promotes a group back to present only once it has been read again",
+    "note": "a group read cleanly is never promoted back"
+  },
+  {
+    "id": "M17",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        unreadableEntitlementIds.add(id);",
+    "replace": "        void id;",
+    "pattern": "marks a group whose membership cannot be read unreadable",
+    "note": "a failed membership read is treated as a clean one"
+  },
+  {
+    "id": "M18",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      existingContainers.add(container.dn.toLowerCase());",
+    "replace": "      void container;",
+    "pattern": "proposes a create on a first run against a genuinely empty target",
+    "note": "containers are never read, so every person is container_missing"
+  },
+  {
+    "id": "M19",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        holdersAtTarget.set(entitlementId, (holdersAtTarget.get(entitlementId) ?? 0) + 1);",
+    "replace": "        holdersAtTarget.set(entitlementId, 1);",
+    "pattern": "counts holders from the target",
+    "note": "every entitlement reports one holder"
+  },
+  {
+    "id": "M20",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        takenKeys.add(generatedKey);",
+    "replace": "        void generatedKey;",
+    "pattern": "gives two people with the same name two different logins",
+    "note": "generated keys are not accumulated across the loop"
+  },
+  {
+    "id": "M21",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      ...objects.map((o) => o.correlationKey),",
+    "replace": "      ...([] as string[]),",
+    "pattern": "avoids a login an account at the target already holds",
+    "note": "the target's own inventory is left out of the taken set"
+  },
+  {
+    "id": "M22",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        unreadableEntitlementIds.has(e.id)\n          ? ('unreadable' as const)\n          : (e.status as 'present' | 'missing' | 'unreadable'),",
+    "replace": "        e.status as 'present' | 'missing' | 'unreadable',",
+    "pattern": "marks a group whose membership cannot be read unreadable",
+    "note": "this run's probe is not merged over the stored status"
+  },
+  {
+    "id": "M23",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      accountsAtTarget: objects.length,",
+    "replace": "      accountsAtTarget: objects.length + 100,",
+    "pattern": "blocks a run over the create threshold",
+    "note": "the create denominator is inflated"
+  },
+  {
+    "id": "M24",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        hasEverApplied: prepared.target.lastAppliedRunAt !== null,",
+    "replace": "        hasEverApplied: true,",
+    "pattern": "proposes a create and a grant on a first run",
+    "note": "a first run is not treated as one"
+  },
+  {
+    "id": "M25",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      const status = verdict.blocked ? 'blocked' : 'previewed';",
+    "replace": "      const status = 'previewed';",
+    "pattern": "proposes a create and a grant on a first run",
+    "note": "the guard's verdict is not recorded"
+  },
+  {
+    "id": "M26",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          requiresConfirmation: verdict.blocked ? verdict.requiresConfirmation : false,",
+    "replace": "          requiresConfirmation: false,",
+    "pattern": "proposes a create and a grant on a first run",
+    "note": "a confirmable refusal is recorded as needing none"
+  },
+  {
+    "id": "M27",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      const blockedReason = verdict.blocked ? verdict.reasons.join('; ') : null;",
+    "replace": "      const blockedReason = null;",
+    "pattern": "refuses outright when the target returns nothing",
+    "note": "the reason for a refusal is dropped"
+  },
+  {
+    "id": "M28",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        if (reconciled.extraUnprocessable.has(state.personId)) return false;",
+    "replace": "        if (reconciled.extraUnprocessable.has('nobody')) return false;",
+    "pattern": "reserves no account for a person reconciliation refused",
+    "note": "a person the planner cannot name still gets a login reserved"
+  },
+  {
+    "id": "M29",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        const scope = state.unprocessable\n          ? unprocessableScope(state.unprocessable.kind)\n          : null;\n        if (scope === 'all') return false;",
+    "replace": "        if (state.unprocessable) return false;",
+    "pattern": "writes a ProvisionException naming a person with no contracts",
+    "note": "Ruling P23's blanket skip -- expected EQUIVALENT, see the report"
+  },
+  {
+    "id": "M30",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "            status: 'pending',",
+    "replace": "            status: 'active',",
+    "pattern": "proposes a create and a grant on a first run",
+    "note": "a reservation claims the account exists"
+  },
+  {
+    "id": "M31",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          sequence: index,",
+    "replace": "          sequence: 0,",
+    "pattern": "proposes a create and a grant on a first run",
+    "note": "the plan's order is not preserved through the write"
+  },
+  {
+    "id": "M32",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          accountId:\n            a.accountId ??\n            (a.personId === null ? null : (accountIdByPerson.get(a.personId) ?? null)),",
+    "replace": "          accountId: a.accountId,",
+    "pattern": "proposes a create and a grant on a first run",
+    "note": "a create carries no account for the apply to find"
+  },
+  {
+    "id": "M33",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        const existing = await tx.driftFinding.findMany({\n          where: { targetSystemId, fingerprint: { in: fingerprints } },",
+    "replace": "        const existing = await tx.driftFinding.findMany({\n          where: { targetSystemId, fingerprint: { in: [] } },",
+    "pattern": "keeps firstSeenAt and follows the detail",
+    "note": "a persisting finding is never recognised as one"
+  },
+  {
+    "id": "M34",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          data: { runId: run.id, lastSeenAt: seenAt },",
+    "replace": "          data: { lastSeenAt: seenAt },",
+    "pattern": "keeps firstSeenAt and follows the detail",
+    "note": "a finding still points at the run that first saw it"
+  },
+  {
+    "id": "M35",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          if (\n            before.subjectAnchor === finding.subjectAnchor &&\n            stableJson(before.detail) === stableJson(finding.detail)\n          ) {\n            continue;\n          }",
+    "replace": "          continue;",
+    "pattern": "keeps firstSeenAt and follows the detail",
+    "note": "a changed detail is never written"
+  },
+  {
+    "id": "M36",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          data: { status: 'unreadable' },",
+    "replace": "          data: { status: 'present' },",
+    "pattern": "marks a group whose membership cannot be read unreadable",
+    "note": "the probe verdict is never written down"
+  },
+  {
+    "id": "M37",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      if (readableEntitlementIds.size > 0) {\n        await tx.entitlement.updateMany({\n          where: {\n            targetSystemId,\n            status: 'unreadable',\n            id: { in: [...readableEntitlementIds] },\n          },\n          data: { status: 'present' },\n        });\n      }",
+    "replace": "      await tx.entitlement.updateMany({\n        where: {\n          targetSystemId,\n          status: 'unreadable',\n          id: { notIn: [...unreadableEntitlementIds] },\n        },\n        data: { status: 'present' },\n      });",
+    "pattern": "leaves an unreadable group this run never probed alone",
+    "note": "the brief's notIn: [] promotion, which matches every row"
+  },
+  {
+    "id": "M38",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        if (holders === entitlement.holderCount) continue;",
+    "replace": "        continue;",
+    "pattern": "counts holders from the target",
+    "note": "the holder count is never written"
+  },
+  {
+    "id": "M39",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          createAccountCount: counts('create_account'),",
+    "replace": "          createAccountCount: 0,",
+    "pattern": "records the counts on the run",
+    "note": "the create count is not counted"
+  },
+  {
+    "id": "M40",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          entitlementsReadFromTarget: catalog.length,",
+    "replace": "          entitlementsReadFromTarget: snapshot.entitlements.length,",
+    "pattern": "records the counts on the run",
+    "note": "Syntra's own catalog size reported as the target's read"
+  },
+  {
+    "id": "M41",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          accountsReadFromTarget: objects.length,",
+    "replace": "          accountsReadFromTarget: 0,",
+    "pattern": "counts holders from the target",
+    "note": "the accounts read from the target are not counted"
+  },
+  {
+    "id": "M42",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          personsEvaluated: snapshot.persons.length,\n          personsWithActiveContract,",
+    "replace": "          personsEvaluated: 0,\n          personsWithActiveContract: 0,",
+    "pattern": "records the counts on the run",
+    "note": "the population counts are not recorded"
+  },
+  {
+    "id": "M43",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "      await tx.targetSystem.update({\n        where: { id: targetSystemId },\n        data: { lastRunAt: new Date() },\n      });",
+    "replace": "      void targetSystemId;",
+    "pattern": "records the counts on the run",
+    "note": "the target never records that a run happened"
+  },
+  {
+    "id": "M44",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        action: 'provision.run.preview',",
+    "replace": "        action: 'provision.run.other',",
+    "pattern": "audits the preview",
+    "note": "the audit event is filed under another action"
+  },
+  {
+    "id": "M45",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "        data: {\n          status: 'failed',\n          finishedAt: new Date(),\n          error: cause instanceof Error ? cause.message : String(cause),\n        },",
+    "replace": "        data: {\n          status: 'previewed',\n          finishedAt: new Date(),\n          error: cause instanceof Error ? cause.message : String(cause),\n        },",
+    "pattern": "marks the run failed and writes no plan",
+    "note": "a run that gave out is recorded as a plan somebody may apply"
+  },
+  {
+    "id": "M46",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          revokeEntitlementCount: counts('revoke_entitlement'),",
+    "replace": "          revokeEntitlementCount: 0,",
+    "pattern": "counts holders from the target",
+    "note": "the revoke count is not counted"
+  },
+  {
+    "id": "M47",
+    "file": "packages/core/src/provision/run-service.ts",
+    "test": "packages/core/src/provision/run-service.test.ts",
+    "find": "          grantEntitlementCount: counts('grant_entitlement'),",
+    "replace": "          grantEntitlementCount: 0,",
+    "pattern": "records the counts on the run",
+    "note": "the grant count is not counted"
+  }
+]

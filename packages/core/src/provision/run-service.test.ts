@@ -6,6 +6,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 // production code is a fake that will eventually be reached — and the package
 // declares an `exports` map, so the root import the brief specified does not
 // resolve at all.
+import type { SourceRecord } from '@syntra/connectors';
 import { FakeTarget } from '@syntra/connectors/testing';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import {
@@ -105,16 +106,13 @@ async function seedKnownAccount(
 }
 
 /**
- * The same target, reporting a `userAccountControl` of its own.
+ * The same target, with every record it returns passed through `map`.
  *
  * A delegating object rather than a spread of the instance: every connector
  * member lives on `FakeTarget.prototype`, so `{ ...target }` carries none of
- * them. And it has to be an override on `read` rather than an attribute
- * written onto the seeded object, because `FakeTarget.read` writes
- * `userAccountControl` after spreading the object's own attributes and would
- * overwrite it.
+ * them at all.
  */
-const withUserAccountControl = (value: string) => ({
+const mapping = (map: (record: SourceRecord) => SourceRecord) => ({
   test: (c: never) => target.test(c),
   discoverSchema: (c: never) => target.discoverSchema(c),
   listEntitlements: (c: never) => target.listEntitlements(c),
@@ -123,14 +121,42 @@ const withUserAccountControl = (value: string) => ({
     target.readEntitlementMembers(c, dn),
   write: (c: never, op: never) => target.write(c, op),
   read: async function* (c: never) {
-    for await (const record of target.read(c)) {
-      yield {
-        ...record,
-        attributes: { ...record.attributes, userAccountControl: [value] },
-      };
-    }
+    for await (const record of target.read(c)) yield map(record);
   },
 });
+
+/**
+ * A `userAccountControl` of the caller's choosing.
+ *
+ * It has to be an override on `read` rather than an attribute written onto the
+ * seeded object, because `FakeTarget.read` writes `userAccountControl` AFTER
+ * spreading the object's own attributes and would overwrite it.
+ */
+const withUserAccountControl = (value: string) =>
+  mapping((record) => ({
+    ...record,
+    attributes: { ...record.attributes, userAccountControl: [value] },
+  }));
+
+/**
+ * A directory that echoes attribute names back in lower case.
+ *
+ * Which is a thing directories do: RFC 4512 makes attribute names
+ * case-insensitive and servers differ on the case they return. `FakeTarget`
+ * emits exactly the case the consumer expects, so nothing built on it alone
+ * can tell a case-sensitive property read from a folded lookup -- Ruling P8,
+ * one level up.
+ */
+const withFoldedAttributeNames = () =>
+  mapping((record) => ({
+    ...record,
+    attributes: Object.fromEntries(
+      Object.entries(record.attributes).map(([key, values]) => [
+        key.toLowerCase(),
+        values,
+      ]),
+    ),
+  }));
 
 const markApplied = () =>
   withTenant(tenantId, (tx) =>
@@ -354,6 +380,24 @@ describe('previewProvisionRun', () => {
     expect(findings.map((f) => f.kind)).not.toContain('missing_grant');
   });
 
+  it('resolves membership from the last DN Syntra saw when the catalog misses it', async () => {
+    // The stored `dn` is seeded into the map first and the live catalog read
+    // overwrites it, so a group this run's read did not return is still
+    // resolvable. Without the seed one flaky catalog read turns every managed
+    // holding into `missing_grant` drift and re-proposes the whole
+    // population's grants.
+    const personId = await seedPerson('Anna', 'Novak', null);
+    const anchor = await seedObject('anna.novak', { holdsFinance: true });
+    await seedKnownAccount(personId, anchor, 'anna.novak', { holdsFinance: true });
+    await markApplied();
+    target.entitlements.length = 0;
+
+    const run = await preview();
+    expect(await actionsOf(run.id)).toEqual([]);
+    const findings = await withTenant(tenantId, (tx) => tx.driftFinding.findMany());
+    expect(findings.map((f) => f.kind)).not.toContain('missing_grant');
+  });
+
   it('reads enabled from the disable bit, never from equality with 512', async () => {
     // 66048 is an ordinary enabled account whose password does not expire.
     // `userAccountControl === '512'` reads it as DISABLED, which proposes an
@@ -385,6 +429,49 @@ describe('previewProvisionRun', () => {
     expect((await actionsOf(disabledRun.id)).map((a) => a.actionType)).toContain(
       'enable_account',
     );
+  });
+
+  it('avoids a login an account at the target already holds', async () => {
+    // `takenCorrelationKeys` is seeded from BOTH Syntra's own rows and the
+    // target's inventory. Dropping the target half generates `anna.novak` for
+    // somebody else's existing account: Syntra holds no row for a foreign
+    // object, so the reservation succeeds, and the create then fails at the
+    // directory as a conflict -- on every run, forever.
+    target.seedForeignObject('anna.novak');
+    await seedPerson('Anna', 'Novak', null);
+    await preview();
+    const account = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findFirstOrThrow({}),
+    );
+    expect(account.correlationKey).toBe('anna.novak2');
+  });
+
+  it('reads attributes whose names the directory folded to lower case', async () => {
+    // Three case-sensitive property reads in one test. Anna is settled at the
+    // target, so `memberOf` resolving proves itself by the absence of a grant
+    // and `userAccountControl` resolving by the absence of an enable; Bea's
+    // login proves `sAMAccountName` resolved, because the name she would
+    // otherwise be given belongs to an account the directory already holds.
+    const personId = await seedPerson('Anna', 'Novak', null);
+    const anchor = await seedObject('anna.novak', { holdsFinance: true });
+    await seedKnownAccount(personId, anchor, 'anna.novak', { holdsFinance: true });
+    target.seedForeignObject('bea.olsen');
+    await seedPerson('Bea', 'Olsen', null);
+    await markApplied();
+
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: withFoldedAttributeNames() as never,
+    });
+    const actions = await actionsOf(run.id);
+    expect(actions.map((a) => a.actionType)).toEqual([
+      'create_account',
+      'grant_entitlement',
+    ]);
+    const bea = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findFirstOrThrow({ where: { status: 'pending' } }),
+    );
+    expect(bea.correlationKey).toBe('bea.olsen2');
   });
 
   it('marks a group whose membership cannot be read unreadable, and freezes the rule naming it', async () => {
@@ -536,6 +623,21 @@ describe('previewProvisionRun', () => {
 
   it('records the counts on the run', async () => {
     await seedPerson('Anna', 'Novak', null);
+    // A second entitlement Syntra holds and the target does not offer, so
+    // `entitlementsReadFromTarget` cannot be satisfied by Syntra's own catalog
+    // size -- which is a different number, about a different thing, that the
+    // column would report without anybody noticing.
+    await withTenant(tenantId, (tx) =>
+      tx.entitlement.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          externalId: 'guid-ghost',
+          type: 'group',
+          displayName: 'Ghost',
+        },
+      }),
+    );
     const run = await preview();
     const row = await withTenant(tenantId, (tx) =>
       tx.provisionRun.findUniqueOrThrow({ where: { id: run.id } }),
@@ -546,7 +648,11 @@ describe('previewProvisionRun', () => {
     expect(row.grantEntitlementCount).toBe(1);
     // Read FROM THE TARGET, not from Syntra's own catalog.
     expect(row.entitlementsReadFromTarget).toBe(1);
-    expect(row.accountsReadFromTarget).toBe(0);
+
+    const targetRow = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(targetRow.lastRunAt).not.toBeNull();
   });
 
   it('writes a ProvisionException naming a person with no contracts', async () => {
@@ -870,6 +976,12 @@ describe('the guard at the call site', () => {
       tx.entitlement.findUniqueOrThrow({ where: { id: entitlementId } }),
     );
     expect(entitlement.holderCount).toBe(3);
+
+    const row = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findUniqueOrThrow({ where: { id: run.id } }),
+    );
+    expect(row.accountsReadFromTarget).toBe(3);
+    expect(row.revokeEntitlementCount).toBe(1);
   });
 
   it('blocks a revocation that empties a group of most of its holders', async () => {
