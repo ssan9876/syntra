@@ -95,13 +95,22 @@ export * from './provision/names.js';
 //
 // Anything added to `provision/types.js` must be added here too.
 export type {
+  AccountStatus,
+  ActualState,
   Attribution,
   ContractFacts as ProvisionContractFacts,
   DesiredAccount,
   DesiredState,
+  DraftDriftFinding,
+  DriftKind,
+  EnforcementMode,
+  KnownAccount,
+  KnownHolding,
   PersonFacts,
   ProfileFacts,
   RuleFacts,
+  TargetObject,
   UnprocessableKind,
 } from './provision/types.js';
 export * from './provision/desired.js';
+export * from './provision/reconcile.js';

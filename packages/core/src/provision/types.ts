@@ -133,3 +133,101 @@ export interface DesiredState {
    */
   unprocessable: { kind: UnprocessableKind; message: string } | null;
 }
+
+export type EnforcementMode = 'additive' | 'authoritative';
+
+export type DriftKind =
+  | 'unmanaged_entitlement'
+  | 'missing_grant'
+  | 'orphan_account'
+  | 'account_missing_at_target'
+  | 'unexpected_status';
+
+export type AccountStatus =
+  | 'pending'
+  | 'active'
+  | 'disabled'
+  | 'archived'
+  | 'missing_at_target'
+  | 'conflict';
+
+/** One account as the target returned it. */
+export interface TargetObject {
+  anchor: string;
+  correlationKey: string;
+  dn: string;
+  enabled: boolean;
+  /** The tenant id and originating actionId Provision wrote when it created this. */
+  provenance: string | null;
+  /** Entitlement ids (Syntra's, resolved from externalIds), not externalIds. */
+  entitlementIds: string[];
+  /**
+   * False when the connector saw the object but could not read it in full — a
+   * range walk that could not finish. Every person whose account this is
+   * becomes unprocessable rather than being diffed against half a truth.
+   */
+  readComplete: boolean;
+}
+
+export interface KnownHolding {
+  entitlementId: string;
+  origin: 'rule' | 'manual' | 'discovered';
+  grantedByRuleId: string | null;
+}
+
+/** One account as Syntra believes it to be. */
+export interface KnownAccount {
+  id: string;
+  personId: string;
+  anchor: string | null;
+  correlationKey: string;
+  status: AccountStatus;
+  disabledAt: Date | null;
+  lastAppliedAttributes: Record<string, string[]>;
+  holdings: KnownHolding[];
+}
+
+export interface ActualState {
+  personId: string;
+  accountId: string | null;
+  anchor: string | null;
+  correlationKey: string | null;
+  status: AccountStatus | 'absent';
+  existsAtTarget: boolean;
+  enabledAtTarget: boolean;
+  disabledAt: Date | null;
+  dn: string | null;
+  attributes: Record<string, string[]>;
+  /** Everything the target holds for this account. */
+  heldEntitlements: Set<string>;
+  /**
+   * The subset the planner is allowed to act on: what the target holds, inside
+   * Provision's remit, that Provision either granted itself or -- under
+   * `authoritative` only -- has been told to take charge of.
+   *
+   * This is the set `planActions` differences against, in BOTH directions:
+   * anything in it and not desired is revoked, anything desired and not in it
+   * is granted. Membership therefore means "revocable", which is why an
+   * unmanaged entitlement is kept OUT of it under `additive` and put IN it
+   * under `authoritative`, and why an entitlement no business rule names is
+   * kept out under both.
+   *
+   * "Provision manages this target" and "Provision manages every group in this
+   * target" are different claims, and only the first is ever true.
+   */
+  heldWithinRemit: Set<string>;
+}
+
+export interface DraftDriftFinding {
+  kind: DriftKind;
+  accountId: string | null;
+  /** A Syntra Entitlement id, or null. Never a target anchor: the column is @db.Uuid. */
+  entitlementId: string | null;
+  /**
+   * The target's own identifier for the object a finding is about, when
+   * Syntra holds no row for it -- an orphan account.
+   */
+  subjectAnchor: string | null;
+  detail: Record<string, unknown>;
+  fingerprint: string;
+}
