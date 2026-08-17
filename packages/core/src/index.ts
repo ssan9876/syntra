@@ -135,3 +135,9 @@ export type {
   GuardInput as ProvisionGuardInput,
   GuardVerdict as ProvisionGuardVerdict,
 } from './provision/guard.js';
+// Grepped for every exported name against the existing barrel before adding
+// these two lines: `ContractFacts` (Task 7) and `GuardInput`/`GuardVerdict`
+// (Task 10) both collided with `sync/`, and under TS2308 the barrel exports
+// NEITHER side silently. Nothing in these two modules collides today.
+export * from './provision/target-service.js';
+export * from './provision/entitlement-service.js';
