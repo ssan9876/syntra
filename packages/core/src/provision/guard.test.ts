@@ -215,9 +215,12 @@ describe('evaluateProvisionGuard — the second axis, per entitlement', () => {
   });
 
   it('blocks just over the per-entitlement threshold', () => {
-    expect(guard({ actions: many('revoke_entitlement', 46, 'ent-a') })).toMatchObject({
-      blocked: true,
-    });
+    const verdict = guard({ actions: many('revoke_entitlement', 46, 'ent-a') });
+    expect(verdict).toMatchObject({ blocked: true });
+    // Asserted on an asymmetric pair. The brief's only message assertion was
+    // "90 of 90", which reads the same in either direction and so could not
+    // tell the count from the denominator.
+    expect(reasonsOf(verdict)[0]).toContain('from 46 of 90 holders (51.1%)');
   });
 
   it('trips the global axis without the per-entitlement axis', () => {
@@ -343,12 +346,17 @@ describe('evaluateProvisionGuard — a denominator of zero is "cannot evaluate",
   });
 
   it('refuses a holder count that is not a count', () => {
-    const verdict = guard({
-      actions: many('revoke_entitlement', 5, 'ent-a'),
-      holderCountByEntitlement: new Map([['ent-a', Number.NaN]]),
-    });
-    expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
-    expect(reasonsOf(verdict)[0]).toContain('cannot evaluate');
+    for (const holders of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      const verdict = guard({
+        actions: many('revoke_entitlement', 5, 'ent-a'),
+        holderCountByEntitlement: new Map([['ent-a', holders]]),
+      });
+      expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
+      expect(reasonsOf(verdict)[0]).toContain('cannot evaluate');
+    }
+    // An infinite denominator is the one that does not announce itself: NaN
+    // makes every comparison false, but Infinity makes every share 0.0% and
+    // reads, at every call site, as a run well inside its thresholds.
   });
 
   it('refuses disables when the target reports no active accounts', () => {
@@ -357,6 +365,9 @@ describe('evaluateProvisionGuard — a denominator of zero is "cannot evaluate",
       activeAccountsAtTarget: 0,
     });
     expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
+    // One reason, not two: the axis stops at the refusal rather than going on
+    // to divide by zero and report a share of Infinity% as well.
+    expect(reasonsOf(verdict)).toHaveLength(1);
     expect(reasonsOf(verdict)[0]).toContain('cannot evaluate');
     expect(reasonsOf(verdict)[0]).toContain('active accounts');
   });
@@ -571,6 +582,144 @@ describe('evaluateProvisionGuard — the person population axis', () => {
   });
 });
 
+describe('evaluateProvisionGuard — each axis divides by its own denominator', () => {
+  // Every population below is given a denominator that differs from every
+  // other one, so a population wired to the wrong input field changes the
+  // verdict rather than the arithmetic agreeing by coincidence. The default
+  // fixture has 1000 accounts, 1000 active accounts and 1000 linked Syntra
+  // users, which makes four of the five axes indistinguishable.
+  it('measures disables against the active accounts, not against all of them', () => {
+    // 51 of 500 active is 10.2% and blocks; 51 of 1000 accounts is 5.1% and
+    // would not.
+    const verdict = guard({
+      actions: many('disable_account', 51),
+      accountsAtTarget: 1000,
+      activeAccountsAtTarget: 500,
+    });
+    expect(verdict).toMatchObject({ blocked: true });
+    expect(reasonsOf(verdict)[0]).toContain('disable 51 of 500 active accounts');
+  });
+
+  it('measures creates against all accounts, not against the active ones', () => {
+    // 150 of 1000 accounts is 15% and passes; 150 of 100 active accounts
+    // would be 150%.
+    expect(
+      guard({
+        actions: many('create_account', 150),
+        accountsAtTarget: 1000,
+        activeAccountsAtTarget: 100,
+      }),
+    ).toEqual({ blocked: false });
+  });
+
+  it('measures archives against all accounts, and says so', () => {
+    const verdict = guard({
+      actions: many('archive_account', 21),
+      accountsAtTarget: 1000,
+      activeAccountsAtTarget: 100,
+    });
+    expect(reasonsOf(verdict)[0]).toContain('would archive 21 of 1000 accounts');
+  });
+
+  it('measures Syntra user deactivations against the linked users', () => {
+    const verdict = guard({
+      actions: many('deactivate_syntra_user', 51),
+      activeSyntraUsersLinked: 500,
+    });
+    expect(verdict).toMatchObject({ blocked: true });
+    expect(reasonsOf(verdict)[0]).toContain(
+      'deactivate 51 of 500 active Syntra users linked to this target',
+    );
+  });
+
+  it('reports the share to one decimal place', () => {
+    // 201 of 1000 is 20.1%. Rounded to whole percent it reads "20%", which is
+    // the threshold it is above.
+    const verdict = guard({ actions: many('create_account', 201) });
+    expect(reasonsOf(verdict)[0]).toContain('(20.1%)');
+    expect(reasonsOf(verdict)[0]).toContain('above the 20% threshold');
+  });
+
+  it('never counts a grant against the per-entitlement revocation axis', () => {
+    // 5000 grants of an entitlement 90 people hold. Counted as revocations
+    // this is 5555% of its holders; it is a grant, so it is nothing at all.
+    expect(
+      guard({
+        actions: many('grant_entitlement', 5000, 'ent-a'),
+        holderCountByEntitlement: new Map([['ent-a', 90]]),
+      }),
+    ).toEqual({ blocked: false });
+  });
+});
+
+describe('evaluateProvisionGuard — every input it divides by is checked', () => {
+  // The per-key lists in guard.ts are the kind of thing a later edit shortens
+  // by one line. Each key below has a case that goes red if its check is
+  // dropped, so the lists cannot silently stop covering a field.
+  const thresholdKeys: (keyof GuardThresholds)[] = [
+    'createAccountThresholdPercent',
+    'disableAccountThresholdPercent',
+    'archiveAccountThresholdPercent',
+    'revokeEntitlementThresholdPercent',
+    'deactivateSyntraUserThresholdPercent',
+    'perEntitlementThresholdPercent',
+    'personPopulationDropPercent',
+  ];
+
+  for (const key of thresholdKeys) {
+    it(`refuses a run whose ${key} is not a percentage`, () => {
+      const verdict = guard({ thresholds: { ...thresholds, [key]: Number.NaN } });
+      expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
+      expect(reasonsOf(verdict)[0]).toContain(key);
+    });
+  }
+
+  const countKeys = [
+    'accountsAtTarget',
+    'activeAccountsAtTarget',
+    'entitlementHoldingsAtTarget',
+    'activeSyntraUsersLinked',
+    'personsWithActiveContract',
+    'previousPersonsWithActiveContract',
+  ] as const;
+
+  for (const key of countKeys) {
+    it(`refuses a run whose ${key} is not a count`, () => {
+      // Infinity as well as NaN. A NaN denominator makes every comparison
+      // false; an infinite one makes every share 0.0%, which is worse,
+      // because it produces a guard that reports a comfortable pass.
+      for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+        const verdict = guard({ [key]: value });
+        expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
+        expect(reasonsOf(verdict)[0]).toContain(key);
+      }
+    });
+  }
+
+  it('refuses on the input before it reaches any other refusal', () => {
+    // A target that returned nothing AND a threshold that cannot be compared
+    // against. Only the input refusal is reported: the guard stops before it
+    // computes anything, so nothing downstream can depend on a number it has
+    // already decided it cannot use.
+    const verdict = guard({
+      accountsAtTarget: 0,
+      thresholds: { ...thresholds, createAccountThresholdPercent: Number.NaN },
+    });
+    const reasons = reasonsOf(verdict);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('createAccountThresholdPercent');
+  });
+
+  it('reports every unusable input at once rather than the first', () => {
+    const verdict = guard({
+      accountsAtTarget: Number.NaN,
+      activeSyntraUsersLinked: -1,
+      thresholds: { ...thresholds, perEntitlementThresholdPercent: 101 },
+    });
+    expect(reasonsOf(verdict)).toHaveLength(3);
+  });
+});
+
 describe('evaluateProvisionGuard — the action types it does and does not guard', () => {
   it('guards exactly the five consequential types', () => {
     // Exhaustive by construction: adding a member to ProvisionActionType makes
@@ -634,10 +783,22 @@ describe('evaluateProvisionGuard — autoApply does not enter into it', () => {
   });
 
   it('does not mutate its input', () => {
-    const actions = many('revoke_entitlement', 90, 'ent-a');
-    const holders = new Map([['ent-a', 90]]);
+    // The plan is read again after the verdict — rendered, stored, and
+    // applied if somebody confirms — so a guard that decrements a denominator
+    // as it counts, or sorts the actions where it stands, changes what is
+    // applied. The action list is deliberately mixed and out of order so an
+    // in-place sort shows up as well as a resize.
+    const holders = new Map([
+      ['ent-a', 90],
+      ['ent-b', 40],
+    ]);
     const input: GuardInput = {
-      actions,
+      actions: [
+        ...many('revoke_entitlement', 46, 'ent-a'),
+        ...many('create_account', 3),
+        ...many('revoke_entitlement', 2, 'ent-b'),
+        ...many('archive_account', 1),
+      ],
       thresholds: { ...thresholds },
       accountsAtTarget: 1000,
       activeAccountsAtTarget: 1000,
@@ -649,10 +810,21 @@ describe('evaluateProvisionGuard — autoApply does not enter into it', () => {
       previousPersonsWithActiveContract: 1180,
       hasEverApplied: true,
     };
+    const snapshot = JSON.stringify({
+      actions: input.actions,
+      thresholds: input.thresholds,
+      holders: [...holders],
+      names: [...input.entitlementNameById],
+    });
     evaluateProvisionGuard(input);
-    expect(input.actions).toHaveLength(90);
-    expect(holders.get('ent-a')).toBe(90);
-    expect(input.thresholds).toEqual(thresholds);
+    expect(
+      JSON.stringify({
+        actions: input.actions,
+        thresholds: input.thresholds,
+        holders: [...holders],
+        names: [...input.entitlementNameById],
+      }),
+    ).toBe(snapshot);
   });
 
   it('returns a passing verdict carrying nothing else', () => {
