@@ -1,6 +1,15 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Alert, Button, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Check,
+  Field,
+  Panel,
+  Select,
+  SkeletonRows,
+  Status,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -834,94 +843,6 @@ function Discovered({ title, values }: { title: string; values: string[] }) {
     <div>
       <h3 className="font-medium text-ink">{title}</h3>
       <p className="mt-1 text-muted">{values.join(', ')}</p>
-    </div>
-  );
-}
-
-function Select({
-  label,
-  value,
-  onChange,
-  options,
-  hint,
-  error,
-  className = '',
-}: {
-  label: string;
-  value: string;
-  onChange(value: string): void;
-  options: { value: string; label: string }[];
-  hint?: string;
-  error?: string;
-  className?: string;
-}) {
-  const id = useId();
-  return (
-    <div className={className}>
-      <label htmlFor={id} className="mb-1.5 block font-medium text-ink">
-        {label}
-      </label>
-      <select
-        id={id}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
-        className={[
-          'h-9 w-full rounded-control border bg-bg px-3 text-ink',
-          'transition-colors duration-150',
-          error
-            ? 'border-danger'
-            : 'border-border-subtle hover:border-border-strong',
-        ].join(' ')}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-      {hint && !error && (
-        <p id={`${id}-hint`} className="mt-1.5 text-sm text-muted">
-          {hint}
-        </p>
-      )}
-      {error && (
-        <p id={`${id}-error`} className="mt-1.5 text-sm text-danger">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function Check({
-  checked,
-  onChange,
-  label,
-  hint,
-  className = '',
-}: {
-  checked: boolean;
-  onChange(value: boolean): void;
-  label: ReactNode;
-  hint?: string;
-  className?: string;
-}) {
-  return (
-    <div className={className}>
-      <label className="flex items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          className="mt-1 size-4 shrink-0 accent-primary"
-        />
-        <span>
-          <span className="font-medium text-ink">{label}</span>
-          {hint && <span className="mt-0.5 block text-sm text-muted">{hint}</span>}
-        </span>
-      </label>
     </div>
   );
 }
