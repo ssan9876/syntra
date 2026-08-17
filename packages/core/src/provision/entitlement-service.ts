@@ -18,23 +18,30 @@ import { targetWithCredential } from './target-service.js';
  * ever true — so a group no rule mentions is never revoked, in either
  * enforcement mode.
  *
- * Rules are counted whether or not they are `enabled`. That is a deliberate
- * choice and it is visible in exactly one place: under `authoritative`,
- * `reconcile.ts` proposes revoking an in-remit entitlement the target holds
- * and Provision never granted. Narrowing the remit to enabled rules would make
- * disabling a rule quietly stop that; widening it, as here, means the remit is
- * a statement about what an administrator has configured this target to care
- * about rather than about what is switched on this minute. Entitlements
- * Provision itself granted are revoked regardless of the remit — `reconcile`
- * treats a recorded grant as its own to keep converging — so the two readings
- * differ only over holdings Provision never made.
+ * **A disabled rule's entitlements are out of remit (Ruling P27).** Task 12
+ * kept the wider reading, pinned it with a test, and asked for a ruling before
+ * Task 13; the ruling came back the other way and this is where it lands. The
+ * difference is visible in exactly one place: under `authoritative`,
+ * `reconcile.ts` proposes revoking an in-remit entitlement the target holds and
+ * Provision never granted. Counting a disabled rule would mean that **disabling
+ * a rule broadens what Provision deletes**, which is the opposite of what
+ * anyone expects from switching something off and the wrong direction for a
+ * destructive action. Those holdings become unmanaged instead: left alone and
+ * reported as drift, per Ruling P2 — "I saw this and left it", never "I did not
+ * look".
+ *
+ * Entitlements Provision itself granted are revoked regardless of the remit —
+ * `reconcile` treats a recorded grant as its own to keep converging — so the
+ * two readings differ only over holdings Provision never made. Cost if wrong:
+ * an entitlement an administrator wanted removed is reported rather than
+ * revoked, visibly, until they re-enable the rule or revoke it by hand.
  */
 export async function remitFor(
   tx: TenantClient,
   targetId: string,
 ): Promise<Set<string>> {
   const joins = await tx.ruleEntitlement.findMany({
-    where: { rule: { targetSystemId: targetId } },
+    where: { rule: { targetSystemId: targetId, enabled: true } },
     select: { entitlementId: true },
   });
   return new Set(joins.map((j) => j.entitlementId));

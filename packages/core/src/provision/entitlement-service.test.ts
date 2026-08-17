@@ -482,19 +482,37 @@ describe('remitFor', () => {
     expect([...theirRemit]).toEqual([theirs]);
   });
 
-  it('counts a disabled rule’s entitlements as in remit', async () => {
-    // Pinned rather than assumed. Narrowing the remit to enabled rules would
-    // make disabling a rule quietly stop `authoritative` from proposing to
-    // revoke holdings Provision never granted; widening it, as here, means the
-    // remit says what an administrator configured this target to care about
-    // rather than what is switched on this minute. Entitlements Provision
-    // itself granted are revoked regardless of the remit, so the two readings
-    // differ only over holdings Provision never made. Flagged for review; this
-    // test is here so a change of mind is a deliberate one.
+  it('leaves a disabled rule’s entitlements out of remit', async () => {
+    // Ruling P27, decided after Task 12 flagged it. Counting a disabled rule
+    // would mean that DISABLING a rule broadens what Provision deletes under
+    // `authoritative` -- the opposite of what switching something off means,
+    // and the wrong direction for a destructive action. Those holdings become
+    // unmanaged instead: reported as drift and left alone. Entitlements
+    // Provision itself granted are revoked regardless of the remit, so the two
+    // readings differ only over holdings Provision never made.
     const finance = await entitlement(targetId, 'guid-finance');
     await upsertBusinessRule(tenantId, null, targetId, {
       ...rule,
       enabled: false,
+      entitlementIds: [finance],
+    });
+    const remit = await withTenant(tenantId, (tx) => remitFor(tx, targetId));
+    expect(remit.size).toBe(0);
+  });
+
+  it('keeps an entitlement a second, enabled rule also names', async () => {
+    // The narrowing is per rule, not per entitlement. A group two rules grant
+    // stays in remit while either of them is on, or disabling one rule would
+    // silently narrow what the other one manages.
+    const finance = await entitlement(targetId, 'guid-finance');
+    await upsertBusinessRule(tenantId, null, targetId, {
+      ...rule,
+      enabled: false,
+      entitlementIds: [finance],
+    });
+    await upsertBusinessRule(tenantId, null, targetId, {
+      ...rule,
+      name: 'Finance contractors',
       entitlementIds: [finance],
     });
     const remit = await withTenant(tenantId, (tx) => remitFor(tx, targetId));
