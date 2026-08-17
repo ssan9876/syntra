@@ -216,7 +216,13 @@ export function planActions(input: PlanInput): PlannedAction[] {
         continue;
       }
 
-      if (!current.existsAtTarget && current.status !== 'disabled') {
+      // Nothing at the target, and not the vanished case handled above: an
+      // account row whose anchor is null, so the target holds no object of
+      // ours to update, enable or rename. Create is the only convergent
+      // answer whatever Syntra recorded the row's status as -- the
+      // alternative, an update against an object that is not there, cannot
+      // succeed at any connector.
+      if (!current.existsAtTarget) {
         push('create_account', {
           after: {
             correlationKey: state.account.correlationKey,
@@ -350,7 +356,13 @@ export function planActions(input: PlanInput): PlannedAction[] {
     const revocationDue =
       !departed || due(addDays(endDate!, ladder.entitlementRevocationDelayDays), now);
 
-    if (revocationDue && !grantsFrozen) {
+    // Deliberately NOT guarded by `grantsFrozen`, unlike the grants above.
+    // At `grants` scope `reconcile` leaves `heldWithinRemit` empty, so this
+    // loop has nothing to do today; a second guard here would mean that the
+    // day somebody makes the remit non-empty for a leaver -- which is the
+    // letter of Ruling P23 -- the revocations silently do not happen. A guard
+    // whose failure direction is "more access persists" is not a safety net.
+    if (revocationDue) {
       for (const entitlementId of current.heldWithinRemit) {
         if (state.entitlements.has(entitlementId)) continue;
         push('revoke_entitlement', {
@@ -384,7 +396,9 @@ export function planActions(input: PlanInput): PlannedAction[] {
         : true;
 
       if (disableDue) {
-        if (current.existsAtTarget && current.enabledAtTarget) {
+        // `enabledAtTarget` is false whenever there is no object at the
+        // target, so this covers both "already disabled" and "not there".
+        if (current.enabledAtTarget) {
           const late =
             departed && daysBetween(addDays(endDate!, ladder.disableGraceDays), now) > 0;
           push('disable_account', {

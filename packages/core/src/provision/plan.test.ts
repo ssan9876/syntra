@@ -1123,3 +1123,300 @@ describe('planActions — the order the run is applied in', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Written during the mutation pass: every test below killed a mutant that
+// survived everything above it.
+// ---------------------------------------------------------------------------
+
+describe('planActions — the update diff, closely', () => {
+  const withDesired = (
+    attributes: Record<string, string[]>,
+    container = 'OU=Finance,OU=Users,DC=acme,DC=test',
+  ) =>
+    plan({
+      desired: [
+        desired({
+          account: {
+            required: true,
+            attributes,
+            container,
+            enabledNow: true,
+            correlationKey: 'anna.novak',
+          },
+        }),
+      ],
+    });
+
+  it('proposes an update when a VALUE differs only in case', () => {
+    // The other half of the folding rule: names are folded, values are not.
+    // Folding both makes `ANNA NOVAK` and `Anna Novak` the same desired state
+    // and the template's answer never reaches the directory.
+    expect(types(withDesired({ displayName: ['ANNA NOVAK'] }))).toEqual([
+      'update_account',
+    ]);
+  });
+
+  it('proposes an update for an attribute the account does not have yet', () => {
+    // The comparison has to walk the union of both sides. Walking only the
+    // actual side misses every attribute newly added to the profile.
+    expect(
+      types(withDesired({ displayName: ['Anna Novak'], department: ['Finance'] })),
+    ).toEqual(['update_account']);
+  });
+
+  it('proposes an update for an attribute the account has and the profile no longer sets', () => {
+    // And the other direction: walking only the desired side leaves a
+    // withdrawn attribute in place forever.
+    expect(
+      types(
+        plan({
+          desired: [
+            desired({
+              account: {
+                required: true,
+                attributes: {},
+                container: 'OU=Finance,OU=Users,DC=acme,DC=test',
+                enabledNow: true,
+                correlationKey: 'anna.novak',
+              },
+            }),
+          ],
+        }),
+      ),
+    ).toEqual(['update_account']);
+  });
+
+  it('proposes no update when the container differs only in case', () => {
+    // A DN is case-insensitive at the target, and the case a connector returns
+    // is the directory's, not the profile's.
+    expect(
+      types(
+        plan({
+          actual: new Map([
+            [
+              'person-1',
+              actual({ dn: 'CN=Anna Novak,ou=finance,ou=users,dc=acme,dc=test' }),
+            ],
+          ]),
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('creates rather than updates when Syntra holds a disabled account the target does not have', () => {
+    // An account row with no anchor: there is no object at the target to
+    // update, enable or rename, whatever status the row carries. An update
+    // against an object that is not there cannot succeed at any connector.
+    const actions = plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            anchor: null,
+            status: 'disabled',
+            existsAtTarget: false,
+            enabledAtTarget: false,
+            disabledAt: day('2026-06-12'),
+            dn: null,
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+    });
+    expect(types(actions)).toEqual(['create_account', 'grant_entitlement']);
+    expect(actions[0]!.after).toMatchObject({ enabled: true });
+  });
+});
+
+describe('planActions — the Syntra user, closely', () => {
+  const rehireWith = (
+    user: { id: string; status: string } | null,
+    pairedDirectorySource: boolean,
+  ) =>
+    plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            status: 'disabled',
+            enabledAtTarget: false,
+            disabledAt: day('2026-06-12'),
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+      syntraUserByPerson: new Map(user ? [['person-1', user]] : []),
+      pairedDirectorySource,
+    });
+
+  it('proposes no reactivation when the target has no paired source', () => {
+    expect(types(rehireWith({ id: 'user-1', status: 'inactive' }, false))).toEqual([
+      'enable_account',
+      'grant_entitlement',
+    ]);
+  });
+
+  it('proposes no reactivation for a Syntra user who is already active', () => {
+    expect(types(rehireWith({ id: 'user-1', status: 'active' }, true))).toEqual([
+      'enable_account',
+      'grant_entitlement',
+    ]);
+  });
+
+  it('does not deactivate the Syntra user of a leaver still inside their grace period', () => {
+    // The deactivation follows the departure, but it follows the DUE
+    // departure. Detaching it from the disable must not detach it from the
+    // ladder, or the grace period stops meaning anything.
+    expect(
+      types(
+        plan({
+          desired: [
+            desired({
+              account: {
+                required: false,
+                attributes: {},
+                container: '',
+                enabledNow: false,
+                correlationKey: null,
+              },
+              entitlements: new Set(),
+              attribution: new Map(),
+            }),
+          ],
+          actual: new Map([
+            ['person-1', actual({ heldEntitlements: new Set(), heldWithinRemit: new Set() })],
+          ]),
+          contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-06-12') })]]]),
+          syntraUserByPerson: new Map([['person-1', { id: 'user-1', status: 'active' }]]),
+          pairedDirectorySource: true,
+          ladder: { ...ladder, disableGraceDays: 30, entitlementRevocationDelayDays: 30 },
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('planActions — the archive, closely', () => {
+  const archivable = (over: Partial<Parameters<typeof planActions>[0]> = {}) =>
+    plan({
+      desired: [
+        desired({
+          account: {
+            required: false,
+            attributes: {},
+            container: '',
+            enabledNow: false,
+            correlationKey: null,
+          },
+          entitlements: new Set(),
+          attribution: new Map(),
+        }),
+      ],
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            enabledAtTarget: false,
+            status: 'disabled',
+            disabledAt: day('2026-01-08'),
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+      contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-01-01') })]]]),
+      ladder: { ...ladder, disableGraceDays: 7, archiveAfterDays: 30 },
+      ...over,
+    });
+
+  it('archives a disabled leaver once the timer has elapsed', () => {
+    expect(types(archivable())).toEqual(['archive_account']);
+  });
+
+  it('does not archive an account that is not at the target', () => {
+    // There is nothing there to move. Proposing it produces an action that can
+    // only fail at the connector.
+    expect(
+      types(
+        archivable({
+          actual: new Map([
+            [
+              'person-1',
+              actual({
+                status: 'missing_at_target',
+                existsAtTarget: false,
+                enabledAtTarget: false,
+                heldEntitlements: new Set(),
+                heldWithinRemit: new Set(),
+              }),
+            ],
+          ]),
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('never archives a mover, who has no departure date to measure from', () => {
+    // `archiveAfterDays` is measured from the contract end date, and a mover
+    // does not have one. This is the branch that would read it off a null.
+    expect(
+      types(
+        archivable({
+          contractsByPerson: new Map([['person-1', [contract()]]]),
+          actual: new Map([
+            ['person-1', actual({ heldEntitlements: new Set(), heldWithinRemit: new Set() })],
+          ]),
+        }),
+      ),
+    ).toEqual(['disable_account']);
+  });
+});
+
+describe('planActions — the guards that hold when something upstream changes', () => {
+  it('proposes nothing for a person the reconciliation produced no actual state for', () => {
+    // `reconcile` omits a person whose account it could not diff safely at
+    // all. The planner has nothing to compare against, so it proposes nothing
+    // rather than treating an absent entry as an empty target.
+    expect(
+      types(plan({ desired: [desired()], actual: new Map() })),
+    ).toEqual([]);
+  });
+
+  it('grants nothing from the desired set of a person whose grants are poisoned', () => {
+    // Unreachable through `desiredState` today, which returns an empty set
+    // with an `unresolvable_rule` verdict. It pins the guard rather than a
+    // path: the empty set is empty for want of an answer, so anything that
+    // ever puts entitlements in it must not cause them to be granted. The
+    // revocation loop deliberately carries no such guard -- a guard whose
+    // failure direction is "more access persists" is not a safety net -- so
+    // the revocation this fixture's remit implies is still proposed, and that
+    // asymmetry is the point of the test.
+    expect(
+      types(
+        plan({
+          desired: [
+            desired({
+              account: {
+                required: true,
+                attributes: { displayName: ['Anna Novak'] },
+                container: 'OU=Finance,OU=Users,DC=acme,DC=test',
+                enabledNow: true,
+                correlationKey: 'anna.novak',
+              },
+              entitlements: new Set(['ent-facilities']),
+              attribution: new Map(),
+              unprocessable: {
+                kind: 'unresolvable_rule',
+                message: 'a rule names an entitlement missing from the catalog',
+              },
+            }),
+          ],
+          contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-01-01') })]]]),
+        }),
+      ),
+    ).toEqual(['revoke_entitlement']);
+  });
+});
