@@ -685,7 +685,25 @@ const attributeTemplatesSchema = z
     z.string().max(64).regex(LDAP_ATTRIBUTE_NAME, {
       message: 'not an LDAP attribute name',
     }),
-    z.string().max(1024),
+    /**
+     * Non-blank, which every other template field on this schema already is.
+     *
+     * A blank template renders `{ ok: true, value: '' }` — no reference is
+     * missing, because there is no reference — and `desiredState` writes `['']`
+     * into the desired attributes. Active Directory refuses a zero-length
+     * value, so the `update_account` fails; a failed action does not update
+     * `lastAppliedAttributes`, so the next run computes the same difference and
+     * proposes the same failing write, for that person and every other person
+     * the profile applies to, on every run, for ever. An attribute a profile
+     * does not want written is one the profile does not name.
+     */
+    z
+      .string()
+      .max(1024)
+      .refine((template) => template.trim() !== '', {
+        message:
+          'an attribute template may not be blank: it would write a zero-length value, which the directory refuses on every run',
+      }),
   )
   .superRefine((templates, ctx) => {
     if (Object.keys(templates).length > 64) {

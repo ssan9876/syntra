@@ -321,28 +321,55 @@ export function desiredState(input: DesiredStateInput): DesiredState {
     };
   }
 
-  // A rule naming an entitlement that is missing or unreadable is unresolvable
-  // AS A WHOLE, for every person it would have been evaluated against.
-  for (const rule of rules) {
-    if (!rule.enabled) continue;
-    for (const entitlementId of rule.entitlementIds) {
-      const status = input.entitlementStatus.get(entitlementId) ?? 'missing';
-      if (status !== 'present') {
-        return {
-          ...empty,
-          unprocessable: {
-            kind: 'unresolvable_rule',
-            message: `the rule "${rule.name}" names entitlement ${entitlementId}, which is ${status} in the target catalog; the rule cannot be resolved and produces no desired state`,
-          },
-        };
-      }
-    }
-  }
-
   const activeNow = activeOn(contracts, now);
   // Every contract in force at any point between now and the horizon.
   const activeInWindow = activeBetween(contracts, now, horizon);
   const windowEnd = now.getTime() > horizon.getTime() ? now : horizon;
+
+  /**
+   * A rule naming an entitlement that is missing or unreadable is unresolvable
+   * — for the persons it would have been evaluated FOR, and for nobody else.
+   *
+   * This used to return before the conditions were evaluated at all, so ONE
+   * entitlement deleted from the target froze `grants` for every person in the
+   * tenant: a rule affecting three people in one department stopped every
+   * joiner, every mover and every grant everywhere. `unresolvable_rule` is
+   * scoped to `grants` precisely because it is a narrow failure, and applying
+   * it to the whole population is the same over-reach in a different place —
+   * an entitlement Provision cannot resolve for the Finance rule says nothing
+   * about somebody in Facilities.
+   *
+   * Matched over `activeInWindow`, which is the wider of the two contract sets
+   * the rules are read against: `accountGrantedBy` uses it and the entitlement
+   * loop below uses `activeNow`, a subset. Anybody a rule could reach either
+   * way is covered.
+   *
+   * `!== false` and not `=== true`: `evaluateCondition` can answer `undefined`
+   * for a condition it does not recognise, and "we could not tell whether this
+   * rule reaches this person" must not read as "it does not". Being
+   * unprocessable freezes this person's grants and leaves their existing
+   * access alone, which is the direction to fail in.
+   */
+  for (const rule of rules) {
+    if (!rule.enabled) continue;
+    const unresolvable = rule.entitlementIds.find(
+      (id) => (input.entitlementStatus.get(id) ?? 'missing') !== 'present',
+    );
+    if (unresolvable === undefined) continue;
+    const reaches = activeInWindow.some(
+      (contract) =>
+        evaluateCondition(rule.condition, conditionFacts(person, contract)) !== false,
+    );
+    if (!reaches) continue;
+    const status = input.entitlementStatus.get(unresolvable) ?? 'missing';
+    return {
+      ...empty,
+      unprocessable: {
+        kind: 'unresolvable_rule',
+        message: `the rule "${rule.name}" names entitlement ${unresolvable}, which is ${status} in the target catalog; the rule cannot be resolved for this person and produces no desired state`,
+      },
+    };
+  }
 
   /**
    * Contracts exist and every one of them starts after the window.
@@ -412,6 +439,25 @@ export function desiredState(input: DesiredStateInput): DesiredState {
         unprocessable: {
           kind: 'template_unresolvable',
           message: `the account profile template for "${name}" references ${rendered.missing.join(', ')}, which resolves to nothing for this person`,
+        },
+      };
+    }
+    // A template with no reference in it at all renders `ok: true` with an
+    // EMPTY value — nothing was missing, because nothing was asked for — and
+    // `['']` is a zero-length attribute value, which Active Directory refuses.
+    // The action fails, a failed action leaves `lastAppliedAttributes`
+    // untouched, and the next run computes the same difference and proposes
+    // the same failing write, for ever. `accountProfileSchema` refuses a blank
+    // template at the write boundary; this is the backstop for a profile row
+    // written before that check existed or by some other route, and it fails
+    // the way the container check below fails — closed and loudly, rather than
+    // by writing something the directory will reject on every run.
+    if (rendered.value.trim() === '') {
+      return {
+        ...empty,
+        unprocessable: {
+          kind: 'template_unresolvable',
+          message: `the account profile template for "${name}" renders an empty value, which is not a value the directory accepts; an attribute a profile does not want written is one it does not name`,
         },
       };
     }

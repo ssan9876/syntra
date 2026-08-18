@@ -366,6 +366,23 @@ describe('accountProfileSchema', () => {
         }).success,
       ).toBe(false);
     });
+
+    it('refuses a blank template, which would write a zero-length value', () => {
+      // The only template field on this schema that had no lower bound. A
+      // blank one renders `{ ok: true, value: '' }` — nothing is missing,
+      // because nothing was asked for — and `['']` is a zero-length attribute
+      // value, which Active Directory refuses. The `update_account` fails, a
+      // failed action leaves `lastAppliedAttributes` untouched, and the next
+      // run proposes the identical failing write, for every person the profile
+      // applies to, for ever.
+      for (const blank of ['', ' ', '	']) {
+        const parsed = accountProfileSchema.safeParse({
+          ...validProfile,
+          attributeTemplates: { displayName: blank },
+        });
+        expect([blank, parsed.success]).toEqual([blank, false]);
+      }
+    });
   });
 
   describe('initial password policy', () => {

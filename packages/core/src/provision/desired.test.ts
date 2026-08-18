@@ -606,7 +606,7 @@ describe('desiredState — persons Provision cannot process', () => {
     );
   });
 
-  it('makes every person unprocessable when a rule names a missing entitlement', () => {
+  it('makes a person the rule reaches unprocessable when it names a missing entitlement', () => {
     // The WHOLE rule is unresolvable, not just that entitlement. Evaluating it
     // without the missing one produces a desired set that lacks it, and the
     // diff then proposes revoking it from everybody who holds it.
@@ -617,9 +617,33 @@ describe('desiredState — persons Provision cannot process', () => {
     expect(result.unprocessable).toEqual({
       kind: 'unresolvable_rule',
       message:
-        'the rule "Finance staff" names entitlement ent-finance, which is missing in the target catalog; the rule cannot be resolved and produces no desired state',
+        'the rule "Finance staff" names entitlement ent-finance, which is missing in the target catalog; the rule cannot be resolved for this person and produces no desired state',
     });
     expect(result.account).toBeNull();
+  });
+
+  it('leaves a person the rule does NOT reach processable', () => {
+    /**
+     * The blast radius, which used to be the whole tenant. The check returned
+     * before any condition was evaluated, so one entitlement deleted from the
+     * target froze `grants` for every person in it: a rule affecting three
+     * people in Finance stopped every joiner, every mover and every grant
+     * everywhere. `unresolvable_rule` is scoped to `grants` precisely because
+     * it is a narrow failure; applying it to everybody is the same over-reach
+     * one level up.
+     *
+     * This person is in Facilities. The Finance rule cannot reach them, and
+     * whether its entitlement exists says nothing about their access.
+     */
+    const status = new Map<string, 'present' | 'missing' | 'unreadable'>([
+      ['ent-finance', 'missing'],
+    ]);
+    const result = evaluate([contract({ department: 'Facilities' })], [financeRule], {
+      entitlementStatus: status,
+    });
+    expect(result.unprocessable).toBeNull();
+    expect(result.account).not.toBeNull();
+    expect([...result.entitlements]).toEqual([]);
   });
 
   it('makes every person unprocessable when a rule names an unreadable entitlement', () => {
@@ -629,6 +653,30 @@ describe('desiredState — persons Provision cannot process', () => {
     const result = evaluate([contract()], [financeRule], { entitlementStatus: status });
     expect(result.unprocessable?.kind).toBe('unresolvable_rule');
     expect(result.unprocessable?.message).toContain('unreadable');
+  });
+
+  it('refuses a blank attribute template rather than writing a zero-length value', () => {
+    /**
+     * A template with no reference in it renders `{ ok: true, value: '' }` —
+     * nothing was missing, because nothing was asked for — so the old code
+     * wrote `['']` into the desired attributes. Active Directory refuses a
+     * zero-length value, so the `update_account` fails; a failed action leaves
+     * `lastAppliedAttributes` untouched, so the next run computes the same
+     * difference and proposes the same failing write, for that person and
+     * every other person the profile applies to, on every run, for ever.
+     */
+    const result = evaluate([contract()], [financeRule], {
+      profile: { ...profile, attributeTemplates: { title: '', displayName: '%person.givenName%' } },
+    });
+    expect(result.unprocessable?.kind).toBe('template_unresolvable');
+    expect(result.unprocessable?.message).toContain('empty value');
+  });
+
+  it('refuses a whitespace-only attribute template for the same reason', () => {
+    const result = evaluate([contract()], [financeRule], {
+      profile: { ...profile, attributeTemplates: { title: '   ' } },
+    });
+    expect(result.unprocessable?.kind).toBe('template_unresolvable');
   });
 
   it('treats an entitlement absent from the catalog entirely as missing', () => {
