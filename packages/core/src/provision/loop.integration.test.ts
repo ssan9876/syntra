@@ -9,6 +9,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 // `@syntra/connectors/testing` and not a deep `src/ad/...` path: the package
 // declares an `exports` map, and an `exports` map denies every unlisted
 // subpath (TS2307).
+import { isEnabled } from '@syntra/connectors';
 import {
   connectAsSambaAdmin,
   purgeSubtree,
@@ -217,11 +218,35 @@ describe('the whole loop against a real domain controller', () => {
       const second = await previewProvisionRun(tenantId, provider, targetId, {
         now: day('2026-06-16'),
       });
-      const actions = await withTenant(tenantId, (tx) =>
-        tx.provisionAction.findMany({ where: { runId: second.id } }),
+      /**
+       * Convergence — asserted as the STATE a converged run reaches, not as an
+       * empty list.
+       *
+       * An empty action list is also what a run produces when the person has
+       * become unprocessable: an unresolvable rule, a container that is not
+       * there, an account the reconciler refused. That is the failure this
+       * case most needs to distinguish from success, and `toEqual([])` cannot.
+       * So: the person was evaluated, they hold an active contract, nothing
+       * about them was unprocessable, the target was read and returned the
+       * account, and only then is there nothing to do.
+       */
+      const secondRow = await withTenant(tenantId, (tx) =>
+        tx.provisionRun.findUniqueOrThrow({
+          where: { id: second.id },
+          include: { actions: true, exceptions: true },
+        }),
       );
-      // Convergence. A second run over an unchanged world proposes nothing.
-      expect(actions).toEqual([]);
+      expect(secondRow.status).toBe('previewed');
+      // The tester and their six bystanders, all still holding an active
+      // contract and none of them unprocessable.
+      expect(secondRow.personsEvaluated).toBe(7);
+      expect(secondRow.personsWithActiveContract).toBe(7);
+      expect(secondRow.personsUnprocessable).toBe(0);
+      expect(secondRow.exceptions).toEqual([]);
+      // The target was read and answered. A run that could not read it reports
+      // zero here and proposes nothing for that reason.
+      expect(secondRow.accountsReadFromTarget).toBe(1);
+      expect(secondRow.actions).toEqual([]);
     },
     180_000,
   );
@@ -271,6 +296,27 @@ describe('the whole loop against a real domain controller', () => {
       // Their old login and their old files, which is what everybody expects.
       expect(after[0]!.anchor).toBe(first!.anchor);
       expect(after[0]!.status).toBe('active');
+
+      /**
+       * And the DOMAIN CONTROLLER agrees, which is the whole reason this file
+       * runs against a real one.
+       *
+       * Every other case here reads `memberOf` or the ACCOUNTDISABLE bit back
+       * off the live directory; this one asserted only against Syntra's own
+       * row, so it passed with the object still sitting at 514 — a rehire that
+       * re-enabled nobody, recorded as a rehire that worked.
+       *
+       * `isEnabled` and not `=== '512'`: an ordinary enabled account whose
+       * password does not expire is 66048, and every account an administrator
+       * has ever touched is something other than 512. That equality is the
+       * mistake `uac.ts` exists to prevent, and asserting it here would make
+       * this test pass only against a directory nobody has used.
+       */
+      const { searchEntries } = await searchFor(after[0]!.correlationKey);
+      expect(searchEntries).toHaveLength(1);
+      expect(isEnabled(Number(searchEntries[0]!.userAccountControl))).toBe(true);
+      // The access came back with the login, at the target.
+      expect(String(searchEntries[0]!.memberOf ?? '')).toContain('LoopFinance');
     },
     180_000,
   );
