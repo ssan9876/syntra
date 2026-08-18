@@ -622,19 +622,45 @@ export async function targetWithCredential(
  * Directory Sync arrived at after a security review, adopted here at the
  * start rather than after.
  */
+const testScalarsSchema = z.object({
+  /**
+   * `.min(1)`, and this is the one function in this file that puts a credential
+   * on a socket.
+   *
+   * An empty string is not an absent value. `''` is not `undefined`, so it
+   * skipped the borrow, the transport comparison and the vault read entirely,
+   * and went to the directory as `client.bind(bindDn, '')` — a simple bind with
+   * a name and a zero-length password, which RFC 4513 §5.1.2 calls an
+   * *unauthenticated authentication mechanism* and which OpenLDAP and Samba
+   * answer with `success` and an anonymous authorization. The connector's
+   * roll-up returns `ok: true` whenever the bind succeeded, so the caller was
+   * told "Connected; 4 of 4 write rights not confirmed" — which reads as a
+   * reachable target with a permissions problem rather than as a credential
+   * that never authenticated at all.
+   *
+   * Validated here rather than left to `testTargetRequestSchema`, for the
+   * reason `createScalarsSchema` states two hundred lines up: the route is not
+   * the only caller a service is entitled to expect, and this is the only
+   * exported function in the file that was trusting one.
+   */
+  bindPassword: z.string().min(1).max(1024).optional(),
+  borrowFromTargetId: z.string().uuid().optional(),
+});
+
 export async function testTargetConfiguration(
   tenantId: string,
   provider: MasterKeyProvider,
   input: { config: unknown; bindPassword?: string; borrowFromTargetId?: string },
 ): Promise<ConnectionResult> {
   const config = adTargetConfigSchema.parse(input.config);
+  const scalars = testScalarsSchema.parse(input);
 
-  let bindPassword = input.bindPassword;
+  let bindPassword = scalars.bindPassword;
   if (bindPassword === undefined) {
-    if (input.borrowFromTargetId === undefined) {
+    if (scalars.borrowFromTargetId === undefined) {
       return { ok: false, message: 'no credential supplied and none to borrow' };
     }
-    const borrowFromTargetId = input.borrowFromTargetId;
+    const borrowFromTargetId = scalars.borrowFromTargetId;
     const saved = await withTenant(tenantId, async (tx) => {
       const target = await tx.targetSystem.findUnique({
         where: { id: borrowFromTargetId },

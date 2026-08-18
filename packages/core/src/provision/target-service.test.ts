@@ -601,6 +601,37 @@ describe('testTargetConfiguration', () => {
     timeoutMs: 1000,
   };
 
+  it('refuses an empty bind password rather than binding anonymously', async () => {
+    // An empty string is not an absent value, and this is the third place on
+    // this branch where treating them as one cost something. `''` is not
+    // `undefined`, so it skipped the borrow, the transport comparison and the
+    // vault read, and reached the directory as `client.bind(bindDn, '')` --
+    // RFC 4513 §5.1.2's *unauthenticated authentication mechanism*, which
+    // OpenLDAP and Samba answer with `success` and an anonymous authorization.
+    // The connector reports `ok: true` for any successful bind, so the caller
+    // was told the target was reachable with a rights problem, not that the
+    // credential never authenticated.
+    //
+    // The message is asserted rather than `toThrow()`: `testTargetRequestSchema`
+    // refuses this over HTTP already, and the point of the check here is that
+    // the service refuses it for the callers the route does not speak for.
+    await expect(
+      testTargetConfiguration(tenantId, provider, { config, bindPassword: '' }),
+    ).rejects.toThrow(/at least 1 character/);
+  });
+
+  it('refuses a borrow target that is not a uuid', async () => {
+    // The other unvalidated scalar. A non-uuid reached
+    // `tx.targetSystem.findUnique` and came back as a driver error, which the
+    // route turns into a 500.
+    await expect(
+      testTargetConfiguration(tenantId, provider, {
+        config,
+        borrowFromTargetId: 'the head office one',
+      }),
+    ).rejects.toThrow(/Invalid uuid/);
+  });
+
   it('refuses when no credential was supplied and none was named', async () => {
     const result = await testTargetConfiguration(tenantId, provider, { config });
     expect(result.ok).toBe(false);
@@ -1254,15 +1285,61 @@ describe('the gaps the mutation pass found', () => {
     // the TLS mode against the URL scheme, and merging a fragment over a
     // stored blob would let a half-configuration reach the connector with the
     // checks having passed on the fragment alone.
+    //
+    // The assertions on the first update are NOT what proves that. Replace and
+    // merge produce identical results for a key the incoming object sets, so
+    // this test used to pass unchanged against
+    // `{ config: { ...(before.config as object), ...config } }` -- verified by
+    // making that edit and running it. The distinguishing case is a key the
+    // second update OMITS, and that is the second half below.
     const { id } = await create();
     await updateTarget(tenantId, provider, null, id, {
-      config: { ...config, baseDn: 'OU=Staff,DC=acme,DC=test', pageSize: 250 },
+      config: {
+        ...config,
+        baseDn: 'OU=Staff,DC=acme,DC=test',
+        pageSize: 250,
+        primaryGroupExternalIds: ['guid-domain-users'],
+      },
     });
+    const first = await withTenant(tenantId, (tx) =>
+      targetWithCredential(tx, provider, id),
+    );
+    expect(first?.baseDn).toBe('OU=Staff,DC=acme,DC=test');
+    expect(first?.pageSize).toBe(250);
+    expect(first?.primaryGroupExternalIds).toEqual(['guid-domain-users']);
+
+    // The same six required fields again and nothing else. Under a merge,
+    // `pageSize` stays 250 and the primary group survives; under a replace,
+    // both revert to what `adTargetConfigSchema` resolves for a config that
+    // does not mention them.
+    await updateTarget(tenantId, provider, null, id, { config });
     const loaded = await withTenant(tenantId, (tx) =>
       targetWithCredential(tx, provider, id),
     );
-    expect(loaded?.baseDn).toBe('OU=Staff,DC=acme,DC=test');
-    expect(loaded?.pageSize).toBe(250);
+    expect(loaded?.pageSize).toBe(1000);
+    expect(loaded?.primaryGroupExternalIds).toEqual([]);
+    // Worth stating, because nothing else records it: this is the production
+    // behaviour, not an artefact of the test. An update that omits an optional
+    // config key silently reverts that key to its default, so a caller
+    // PATCHing only the required fields to correct a URL also resets the
+    // account filter and the primary groups.
+    expect(loaded?.accountFilter).toBe('(&(objectCategory=person)(objectClass=user))');
+  });
+
+  it('refuses a configuration fragment rather than merging it over the stored one', async () => {
+    // The other half of "replaced, never merged", and the half the omitted-key
+    // assertions above cannot reach. `updateTarget` parses the incoming config
+    // before it writes, and every optional key in `adTargetConfigSchema` has a
+    // default -- so the parsed object is total, and merging THAT over the
+    // stored blob is indistinguishable from replacing it. What is
+    // distinguishable is merging the RAW body: under that, this fragment
+    // completes itself from the stored row and saves, and a configuration
+    // nobody validated as a whole reaches the connector. Under a replace it is
+    // six missing required fields and a validation error.
+    const { id } = await create();
+    await expect(
+      updateTarget(tenantId, provider, null, id, { config: { pageSize: 250 } }),
+    ).rejects.toThrow(/Required/);
   });
 
   it('refuses an update that would put the configuration in the clear', async () => {
@@ -1346,7 +1423,14 @@ describe('the second gaps the mutation pass found', () => {
     expect(row.autoApply).toBe(true);
   });
 
-  it('resolves the defaults again on an update that replaces the config', async () => {
+  it('resolves the configuration defaults into the column on an update', async () => {
+    // Named for what it checks. It used to be called "...on an update that
+    // replaces the config", but both of its assertions -- a key the update
+    // sets and a default a merge over an already-defaulted blob also yields --
+    // hold under a merge too. The replacement semantics are pinned by
+    // 'replaces the configuration whole on an update' above, which omits a key
+    // on the second write; this one pins that the stored column is the
+    // RESOLVED config rather than what arrived.
     const { id } = await create();
     await updateTarget(tenantId, provider, null, id, {
       config: { ...config, pageSize: 250 },
