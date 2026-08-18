@@ -9,6 +9,13 @@ import { EnrolFactor } from './pages/EnrolFactor.js';
 import { Security } from './pages/Security.js';
 import { ForgotPassword } from './pages/ForgotPassword.js';
 import { ResetPassword } from './pages/ResetPassword.js';
+import { CatalogPage } from './pages/automate/CatalogPage.js';
+import { RequestFormPage } from './pages/automate/RequestFormPage.js';
+import { MyRequestsPage } from './pages/automate/MyRequestsPage.js';
+import { RequestDetailPage } from './pages/automate/RequestDetailPage.js';
+import { MyAccessPage } from './pages/automate/MyAccessPage.js';
+import { MyApprovalsPage } from './pages/automate/MyApprovalsPage.js';
+import { ManagedResourcesPage } from './pages/automate/ManagedResourcesPage.js';
 
 /**
  * The console is a separate chunk behind a guard, so a portal-only session
@@ -83,6 +90,62 @@ export function AppRoutes() {
         element={
           <RequireSession scope="portal">
             <Security />
+          </RequireSession>
+        }
+      />
+      <Route
+        path="/catalog"
+        element={
+          <RequireSession scope="portal">
+            <CatalogPage />
+          </RequireSession>
+        }
+      />
+      <Route
+        path="/catalog/:id"
+        element={
+          <RequireSession scope="portal">
+            <RequestFormPage />
+          </RequireSession>
+        }
+      />
+      <Route
+        path="/requests"
+        element={
+          <RequireSession scope="portal">
+            <MyRequestsPage />
+          </RequireSession>
+        }
+      />
+      <Route
+        path="/requests/:id"
+        element={
+          <RequireSession scope="portal">
+            <RequestDetailPage />
+          </RequireSession>
+        }
+      />
+      <Route
+        path="/access"
+        element={
+          <RequireSession scope="portal">
+            <MyAccessPage />
+          </RequireSession>
+        }
+      />
+      <Route
+        path="/approvals"
+        element={
+          <RequireSession scope="portal">
+            <MyApprovalsPage />
+          </RequireSession>
+        }
+      />
+      <Route
+        path="/managed"
+        element={
+          <RequireSession scope="portal">
+            <ManagedResourcesPage />
           </RequireSession>
         }
       />
