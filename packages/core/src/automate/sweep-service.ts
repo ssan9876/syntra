@@ -807,7 +807,11 @@ export async function applyExpirySweep(
                   : names.get(`product:${action.productId}`)) ?? resourceName,
               resourceList: resourceName,
               endsAt: grant.endsAt?.toDateString() ?? '',
-              lastContractEnd: action.message,
+              // `SweepAction.message` is nullable and `OutboxDraft.vars` is
+              // `Record<string, string>`, so a null here is a type error --
+              // and, if it had been cast away, a template rendering the word
+              // "null" at the reader.
+              lastContractEnd: action.message ?? '',
               stillHeldNote:
                 stillHeld > 0
                   ? 'You still hold this through your role, so nothing has changed for you in practice.'
