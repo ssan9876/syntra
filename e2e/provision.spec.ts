@@ -311,8 +311,29 @@ test('configure a target, write a rule, review a run, apply part of it', async (
 
   // Enqueued, not performed in the request: the row appears when the worker
   // picks the job up.
-  const firstRun = page.getByRole('link', { name: /\d/ }).first();
-  await expect(firstRun).toBeVisible({ timeout: 120_000 });
+  //
+  // Pressed for, not merely waited for. `ProvisionRunsPage` polls at
+  // `POLL_MS = 2000` for `POLL_LIMIT = 10` attempts and then **stops on
+  // purpose** — a page that spins for ever is a page that lies about what it
+  // knows — and leaves a Refresh button behind. A bare 120 s wait therefore
+  // spends 100 s of it waiting on a poll that is no longer running, and then
+  // fails for a reason that has nothing to do with the worker.
+  //
+  // Scoped to the runs table, too. The old locator was
+  // `getByRole('link', { name: /\d/ }).first()` over the WHOLE page, which any
+  // navigation link containing a digit can satisfy — including one in the
+  // shell above the table.
+  const firstRun = page
+    .getByRole('table')
+    .locator('tbody tr')
+    .first()
+    .getByRole('link');
+  await expect(async () => {
+    if ((await firstRun.count()) === 0) {
+      await page.getByRole('button', { name: 'Refresh' }).click();
+    }
+    await expect(firstRun).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 120_000 });
   await firstRun.click();
   await expect(page.getByRole('heading', { name: 'Run detail' })).toBeVisible();
 
