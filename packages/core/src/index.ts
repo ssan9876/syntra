@@ -203,3 +203,11 @@ export type {
   ProfilePreview,
   RuleImpact as ProvisionRuleImpact,
 } from './provision/explain.js';
+
+// Automate — the request catalog, its approval chains, and the grants they
+// produce. Every name below was grepped workspace-wide before being exported
+// through this barrel: two modules exporting one name through one barrel makes
+// TypeScript export NEITHER, silently (TS2308), which this repo has been bitten
+// by four times.
+export * from './automate/types.js';
+export * from './automate/audience.js';
