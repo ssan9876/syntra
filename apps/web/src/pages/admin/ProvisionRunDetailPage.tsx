@@ -515,8 +515,8 @@ export function ProvisionRunDetailPage() {
                   The guard refused it for a reason no confirmation answers, so
                   there is no Apply here: the server refuses the request
                   outright, whatever is ticked. Put right what the reasons above
-                  name, then run this target again — the next run works the plan
-                  out afresh.
+                  name; the next run supersedes this one and works the plan out
+                  afresh, and it does not wait for a staleness window to do it.
                 </>
               ) : superseded ? (
                 <>

@@ -255,8 +255,8 @@ function skipAdvice(reason: string | null): string {
     return (
       'There is nothing to review here: a run was still going when this ' +
       'schedule fired. It clears when that run finishes — or six hours after ' +
-      'the run started, when a later run treats it as the wreckage of a ' +
-      'process that died and adopts it.'
+      'that run last showed any sign of progress, when a later run treats it ' +
+      'as the wreckage of a process that died and adopts it.'
     );
   }
   return (
