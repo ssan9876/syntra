@@ -211,3 +211,5 @@ export type {
 // by four times.
 export * from './automate/types.js';
 export * from './automate/audience.js';
+export * from './automate/form.js';
+export * from './automate/duration.js';
