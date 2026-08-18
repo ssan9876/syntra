@@ -609,6 +609,108 @@ describe('planActions — the Syntra user', () => {
   });
 });
 
+describe('planActions — the login comes back with employment, not with a write', () => {
+  const rehired = (over: Partial<ReturnType<typeof actual>>) =>
+    plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({ heldEntitlements: new Set(), heldWithinRemit: new Set(), ...over }),
+        ],
+      ]),
+      syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'inactive' }]]]),
+      pairedDirectorySource: true,
+    });
+
+  it('reactivates the login of a rehire whose account vanished from the target', () => {
+    /**
+     * `reactivate_syntra_user` lived inside the `enable_account` branch, which
+     * is inside the `existsAtTarget` arm. A rehire whose target object had
+     * been deleted takes the CREATE arm instead — a confirmable recreate — and
+     * their logins were never reactivated at all.
+     *
+     * It does not self-correct either: once the account is recreated the next
+     * run finds it enabled at the target, so the enable branch is never
+     * re-entered, and the login stays `inactive` for ever with nothing that
+     * ever looks at it again. A departed person's login being handed back late
+     * is an inconvenience; a returning person's login never coming back is a
+     * support call nobody can close.
+     */
+    const actions = rehired({
+      status: 'missing_at_target',
+      existsAtTarget: false,
+      enabledAtTarget: false,
+    });
+    expect(types(actions)).toEqual(['create_account', 'reactivate_syntra_user']);
+    expect(actions[1]!.after).toEqual({ status: 'active', userId: 'user-1' });
+  });
+
+  it('reactivates the login of a rehire whose account row is still pending', () => {
+    // The other arm with no object at the target: a reserved row with a null
+    // anchor. Also a create, also never re-entered.
+    const actions = rehired({
+      accountId: 'account-1',
+      anchor: null,
+      status: 'pending',
+      existsAtTarget: false,
+      enabledAtTarget: false,
+      dn: null,
+      attributes: {},
+    });
+    // The grant rides along because the reserved row holds nothing yet, which
+    // is the ordinary joiner shape and not what this case is about.
+    expect(types(actions)).toEqual([
+      'create_account',
+      'reactivate_syntra_user',
+      'grant_entitlement',
+    ]);
+  });
+
+  it('reactivates a login left inactive beside an account somebody re-enabled by hand', () => {
+    // No enable action is proposed, because the account is already enabled at
+    // the target — and under the old placement that meant the login was never
+    // given back. The person is employed and their account is required; that
+    // is the whole condition.
+    const actions = rehired({ status: 'active', enabledAtTarget: true });
+    expect(types(actions)).toEqual(['reactivate_syntra_user', 'grant_entitlement']);
+  });
+
+  it('does not hand a login back to a pre-hire whose account is not yet enabled', () => {
+    // `enabledNow` is the gate, so a pre-hire created disabled ahead of their
+    // start date gets nothing back early.
+    const actions = plan({
+      desired: [
+        desired({
+          account: {
+            required: true,
+            attributes: { displayName: ['Anna Novak'] },
+            container: 'OU=Finance,OU=Users,DC=acme,DC=test',
+            enabledNow: false,
+            correlationKey: 'anna.novak',
+          },
+          entitlements: new Set(),
+          attribution: new Map(),
+        }),
+      ],
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            status: 'disabled',
+            enabledAtTarget: false,
+            disabledAt: day('2026-06-12'),
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+      syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'inactive' }]]]),
+      pairedDirectorySource: true,
+    });
+    expect(types(actions)).toEqual([]);
+  });
+});
+
 describe('planActions — taking a distinguished name apart', () => {
   it('does not propose a move for an account whose CN contains an escaped comma', () => {
     /**

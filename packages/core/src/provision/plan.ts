@@ -237,6 +237,46 @@ export function planActions(input: PlanInput): PlannedAction[] {
     };
 
     if (state.account?.required) {
+      /**
+       * The Syntra logins come back with EMPLOYMENT, not with one particular
+       * write at the target.
+       *
+       * This used to live inside the `enable_account` branch, which is inside
+       * the `existsAtTarget` arm — so a rehire whose target object had been
+       * deleted, or whose account row was still `pending` with a null anchor,
+       * took the create arm instead and their logins were never reactivated at
+       * all. And it does not self-correct: the next run finds the account
+       * enabled at the target, so the enable branch is never re-entered, and
+       * the login stays `inactive` for ever with nothing that ever looks at it
+       * again. The same shape reached the same way by an administrator who
+       * re-enabled the account by hand before the run.
+       *
+       * Gated on `enabledNow` rather than on any write, so a pre-hire whose
+       * account exists but should not yet be usable gets nothing back early.
+       *
+       * The asymmetry with the deactivation below is deliberate and unchanged:
+       * that one follows the DEPARTURE rather than the disable write, because
+       * failing to give a login back is an inconvenience and failing to take
+       * one away is the defect this whole subsystem exists to prevent.
+       *
+       * One action per login, over ALL of them. A returner with an everyday
+       * login and an admin one has both taken away by the departure branch, so
+       * giving only one back would strand the other inactive — the same
+       * never-re-examined shape as the defect that list exists to fix, pointed
+       * the harmless way. Each action names its own login in `after.userId`,
+       * because `applySyntraUserAction` resolves exactly one user from it.
+       */
+      if (state.account.enabledNow) {
+        for (const user of syntraUsers) {
+          if (user.status === 'active') continue;
+          push('reactivate_syntra_user', {
+            accountId,
+            before: { status: user.status },
+            after: { status: 'active', userId: user.id },
+          });
+        }
+      }
+
       if (current.status === 'missing_at_target') {
         // Recreating a vanished account is confirmable, never automatic.
         push('create_account', {
@@ -367,28 +407,6 @@ export function planActions(input: PlanInput): PlannedAction[] {
                   }
                 : {}),
           });
-
-          // Reactivation follows the enable WRITE, unlike the deactivation
-          // below, which follows the departure. The asymmetry is deliberate:
-          // failing to give a login back is an inconvenience, and failing to
-          // take one away is the defect this whole subsystem exists to prevent.
-          //
-          // One action per login, over ALL of them. A returner with an
-          // everyday login and an admin one has both taken away by the
-          // departure branch below, so giving only one back would strand the
-          // other inactive with nothing that ever looks at it again — the same
-          // never-re-examined shape as the defect this list exists to fix,
-          // pointed the harmless way. Each action names its own login in
-          // `after.userId`, because `applySyntraUserAction` resolves exactly
-          // one user from that field.
-          for (const user of syntraUsers) {
-            if (user.status === 'active') continue;
-            push('reactivate_syntra_user', {
-              accountId,
-              before: { status: user.status },
-              after: { status: 'active', userId: user.id },
-            });
-          }
         }
       }
 
