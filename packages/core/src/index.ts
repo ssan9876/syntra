@@ -217,3 +217,5 @@ export * from './automate/approvers.js';
 export * from './automate/notify.js';
 export * from './automate/catalog-service.js';
 export * from './automate/workflow-service.js';
+export * from './automate/eligibility.js';
+export * from './automate/fulfil.js';
