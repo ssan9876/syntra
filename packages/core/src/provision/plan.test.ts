@@ -318,6 +318,61 @@ describe('planActions — the leaver and the grace ladder', () => {
     expect(types(actions)).not.toContain('archive_account');
   });
 
+  it('runs the timers from the end of the contract that ENDED, across a gap', () => {
+    /**
+     * The gap between two fixed-term contracts, and the reason the ladder does
+     * not ask for "the last date on any contract".
+     *
+     * A person holds a contract that ended on 31 January and another running
+     * from 1 June to 31 May the following year; today is 1 March, in the gap.
+     * Nothing is open-ended, so the maximum end date across every contract is
+     * 2027-05-31 — fifteen months in the FUTURE. Read that way the person is
+     * departed and every timer measures from a date that has not arrived, so
+     * not one rung of the ladder ever fires: no revocation, no disable, no
+     * archive. `planActions` proposes nothing and `reconcile` reports nothing,
+     * so they keep an enabled account and every entitlement for the whole gap,
+     * silently, on both halves. Route nine to access outliving employment.
+     */
+    const actions = planActions({
+      desired: [
+        desired({
+          account: {
+            required: false,
+            attributes: {},
+            container: '',
+            enabledNow: false,
+            correlationKey: null,
+          },
+          entitlements: new Set(),
+          attribution: new Map(),
+        }),
+      ],
+      actual: new Map([['person-1', actual()]]),
+      contractsByPerson: new Map([
+        [
+          'person-1',
+          [
+            contract({ id: 'ended', endDate: day('2026-01-31') }),
+            contract({
+              id: 'future',
+              sequence: 2,
+              startDate: day('2026-06-01'),
+              endDate: day('2027-05-31'),
+            }),
+          ],
+        ],
+      ]),
+      syntraUserByPerson: new Map(),
+      pairedDirectorySource: false,
+      ladder,
+      now: day('2026-03-01'),
+    });
+    expect(types(actions)).toEqual(['revoke_entitlement', 'disable_account']);
+    // Anchored to the contract that ended, so the lateness is measured from
+    // 31 January rather than reported as "not due for another year".
+    expect(actions[1]!.message).toContain('2026-01-31');
+  });
+
   it('runs the timers from the LATER of two contract end dates', () => {
     // A person whose second contract ran three months longer left three
     // months later. Anchoring to the first deprovisions somebody still employed.
@@ -556,8 +611,8 @@ describe('planActions — the Syntra user', () => {
 
 describe('planActions — the person who has not started', () => {
   it('proposes nothing at all for a future joiner who already holds an account', () => {
-    // The case that made this a Ruling. Their contracts are open-ended, so
-    // `latestContractEnd` is null, so `departed` is false, so the mover branch
+    // The case that made this a Ruling. None of their contracts has started,
+    // so `departureDate` is null, so `departed` is false, so the mover branch
     // takes `disableDue = true` unconditionally: an immediate revoke of
     // everything they hold and an immediate disable, carrying the message "the
     // person is still employed, so there is no departure date to measure a
@@ -1275,12 +1330,21 @@ describe('planActions — a re-enable whose disable date is unknown', () => {
 });
 
 describe('planActions — the immediate disable must not claim employment it cannot see', () => {
-  it('names the real reason for somebody between contracts', () => {
-    // An ended contract beside a future open-ended one: `latestContractEnd` is
-    // null because one contract is open-ended, so `departed` is false and the
-    // disable is immediate -- correctly. But the brief's message told the
-    // administrator reading it that "the person is still employed", which is
-    // exactly the sentence this slice must never assert without evidence.
+  it('names the real reason for a pre-hire whose account is not required', () => {
+    /**
+     * The live case for the third message: a person whose only contract starts
+     * inside the pre-hire window, so `desiredState` does NOT mark them
+     * `notYetStarted`, but nothing of theirs has started as of `now`. No
+     * contract is in force today and none has an end date, so there is no
+     * departure date and no grace period to measure — and the message must not
+     * tell the administrator reading it that "the person is still employed",
+     * which is the sentence this slice must never assert without evidence.
+     *
+     * This case used to be written as an ended contract beside a future
+     * open-ended one. That is a gap, `departureDate` now dates it from the
+     * contract that ended, and the ladder owns those people — see the leaver
+     * describe above.
+     */
     const actions = plan({
       desired: [
         desired({
@@ -1296,13 +1360,7 @@ describe('planActions — the immediate disable must not claim employment it can
         }),
       ],
       contractsByPerson: new Map([
-        [
-          'person-1',
-          [
-            contract({ id: 'ended', endDate: day('2026-01-01') }),
-            contract({ id: 'future', sequence: 2, startDate: day('2026-09-01') }),
-          ],
-        ],
+        ['person-1', [contract({ id: 'pre-hire', startDate: day('2026-06-18') })]],
       ]),
     });
     expect(types(actions)).toEqual(['revoke_entitlement', 'disable_account']);

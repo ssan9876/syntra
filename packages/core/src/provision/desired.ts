@@ -79,19 +79,52 @@ export function activeOn(contracts: ContractFacts[], on: Date): ContractFacts[] 
 }
 
 /**
- * The latest end date across every contract — the day the person stopped being
- * employed at all, which is what the whole deprovisioning ladder is measured
- * from. A person whose second contract ran three months longer left three
- * months later.
+ * The day this person stopped being employed, as at `on`, or null if they
+ * have not.
  *
- * Null when any contract is open-ended (they have not left) or there are none.
+ * **Not "the latest end date on any contract".** That is what this used to
+ * compute, and it is a different question with the same answer only in the
+ * simple case. Take a person holding contract A which ended on 31 January and
+ * contract B which runs from 1 June to 31 May the following year, and ask on
+ * 1 March. Nothing is open-ended, so the maximum end date is fifteen months in
+ * the FUTURE — the ladder reads them as departed and then measures every timer
+ * from a date that has not arrived, so the revocation is not due, the disable
+ * is not due and the archive is not due. Not one step fires for the whole gap.
+ * `planActions` proposes nothing, `reconcile` reports nothing, and they keep
+ * an enabled account and every entitlement until June. Both halves silent.
+ *
+ * The old docstring's escape — "null when any contract is open-ended (they
+ * have not left)" — was an assumption about the data, not a fact about it: it
+ * holds for fixed-term-to-permanent and fails for fixed-term-to-fixed-term.
+ *
+ * So the answer is taken over the contracts that HAVE STARTED, and only those:
+ *
+ * - Any started contract that is open-ended means they have not stopped. Null.
+ * - Otherwise, the latest end date among the started ones. A person whose
+ *   second contract ran three months longer left three months later, and that
+ *   part was always right.
+ * - No contract has started: null. That is somebody with no contracts at all,
+ *   or a pre-hire, and `desiredState` answers both of those elsewhere.
+ *   Inventing a departure date for them would be inventing data.
+ *
+ * A contract that has not started is deliberately invisible here whether it is
+ * fixed-term or open-ended, so the two shapes of the same gap are read the
+ * same way. A person whose next engagement begins in September did not stop
+ * being employed on a different day because that engagement happens to be
+ * permanent.
+ *
+ * A future end date is still a departure date. Somebody employed today on a
+ * fixed-term contract ending next month has stopped-being-employed scheduled,
+ * and the ladder anchors to it rather than treating them as a mover and
+ * disabling them now — which is what the timers are for.
  */
-export function latestContractEnd(contracts: ContractFacts[]): Date | null {
-  if (contracts.length === 0) return null;
-  if (contracts.some((c) => c.endDate === null)) return null;
-  return contracts.reduce<Date>(
+export function departureDate(contracts: ContractFacts[], on: Date): Date | null {
+  const started = contracts.filter((c) => c.startDate.getTime() <= on.getTime());
+  if (started.length === 0) return null;
+  if (started.some((c) => c.endDate === null)) return null;
+  return started.reduce<Date>(
     (latest, c) => (c.endDate!.getTime() > latest.getTime() ? c.endDate! : latest),
-    contracts[0]!.endDate!,
+    started[0]!.endDate!,
   );
 }
 
@@ -316,7 +349,7 @@ export function desiredState(input: DesiredStateInput): DesiredState {
    *
    * A third state beside "should have something" and "should have nothing",
    * and it has to be carried out of here because it is not recoverable
-   * downstream: their contracts are open-ended, so `latestContractEnd` is
+   * downstream: none of their contracts has started, so `departureDate` is
    * null, so the planner sees no departure date and treats them as a mover --
    * which means an immediate revoke of everything they hold and an immediate
    * disable, for somebody who has not started (Ruling P10).

@@ -5,7 +5,7 @@ import {
   activeBetween,
   activeOn,
   desiredState,
-  latestContractEnd,
+  departureDate,
   personDisplayName,
   resolveMappingContract,
 } from './desired.js';
@@ -147,29 +147,96 @@ describe('activeBetween', () => {
   });
 });
 
-describe('latestContractEnd', () => {
-  it('takes the later of two end dates', () => {
+describe('departureDate', () => {
+  const ON = day('2026-08-01');
+
+  it('takes the later of two contracts that have both ended', () => {
     // A person whose second contract ran three months longer left three
     // months later. Anchoring the ladder to the first end date deprovisions
     // somebody who is still employed.
-    const end = latestContractEnd([
-      contract({ id: 'a', endDate: day('2026-03-31') }),
-      contract({ id: 'b', endDate: day('2026-06-30') }),
-    ]);
+    const end = departureDate(
+      [
+        contract({ id: 'a', endDate: day('2026-03-31') }),
+        contract({ id: 'b', endDate: day('2026-06-30') }),
+      ],
+      ON,
+    );
     expect(end).toEqual(day('2026-06-30'));
   });
 
-  it('returns null when any contract is open-ended', () => {
+  it('returns null while a started contract is open-ended', () => {
     expect(
-      latestContractEnd([
-        contract({ id: 'a', endDate: day('2026-03-31') }),
-        contract({ id: 'b', endDate: null }),
-      ]),
+      departureDate(
+        [
+          contract({ id: 'a', endDate: day('2026-03-31') }),
+          contract({ id: 'b', endDate: null }),
+        ],
+        ON,
+      ),
     ).toBeNull();
   });
 
-  it('returns null for no contracts', () => {
-    expect(latestContractEnd([])).toBeNull();
+  it('keeps a future end date, because a scheduled departure is still one', () => {
+    // Somebody employed today on a fixed-term contract that ends next month
+    // has stopped-being-employed scheduled. The ladder anchors to it and waits
+    // rather than reading them as a mover and disabling them now.
+    expect(
+      departureDate([contract({ id: 'a', endDate: day('2026-09-30') })], ON),
+    ).toEqual(day('2026-09-30'));
+  });
+
+  it('ignores a contract that has not started, however far ahead it ends', () => {
+    /**
+     * The gap between two FIXED-TERM contracts, which is the case the old
+     * "latest end date on any contract" reading got wrong and the old
+     * docstring's escape hatch did not cover. Nothing here is open-ended, so
+     * the maximum end date is 2027-05-31 — fifteen months ahead — and every
+     * ladder timer measured from it falls due in 2027. Not one step fires
+     * during the gap: no revocation, no disable, no archive, and no drift
+     * finding either, because the person is not left in a state anything
+     * reports. They keep an enabled account and every entitlement until June.
+     */
+    expect(
+      departureDate(
+        [
+          contract({ id: 'ended', endDate: day('2026-01-31') }),
+          contract({
+            id: 'future',
+            sequence: 2,
+            startDate: day('2026-09-01'),
+            endDate: day('2027-05-31'),
+          }),
+        ],
+        day('2026-03-01'),
+      ),
+    ).toEqual(day('2026-01-31'));
+  });
+
+  it('reads the same gap the same way when the future contract is open-ended', () => {
+    // The two shapes of the same gap. Answering them differently is what the
+    // old reading did, and there is no sense in which somebody between an
+    // ended contract and a permanent one that starts in September stopped
+    // being employed on a different day than if it were fixed-term.
+    expect(
+      departureDate(
+        [
+          contract({ id: 'ended', endDate: day('2026-01-31') }),
+          contract({ id: 'future', sequence: 2, startDate: day('2026-09-01') }),
+        ],
+        day('2026-03-01'),
+      ),
+    ).toEqual(day('2026-01-31'));
+  });
+
+  it('returns null for no contracts, and for only-future ones', () => {
+    // Neither is a departure. `desiredState` answers both elsewhere — an
+    // incomplete record is unprocessable and a future joiner is
+    // `notYetStarted` — and inventing a date for either would be inventing
+    // data.
+    expect(departureDate([], ON)).toBeNull();
+    expect(
+      departureDate([contract({ id: 'a', startDate: day('2026-09-01') })], ON),
+    ).toBeNull();
   });
 });
 
@@ -472,13 +539,25 @@ describe('desiredState — the pre-hire horizon', () => {
   });
 
   it('does not mark somebody with one ended and one future contract as not yet started', () => {
-    // They have a departure date. The ladder owns them, and the future
-    // contract is what the next run will act on when it starts.
-    const result = evaluate([
-      contract({ id: 'past', endDate: day('2026-05-31') }),
-      contract({ id: 'future', sequence: 2, startDate: day('2026-09-01') }),
-    ]);
-    expect(result.notYetStarted).toBe(false);
+    // They have a departure date — the end of the contract that ENDED, which
+    // `departureDate` answers whether or not the future one is open-ended. The
+    // fixture used to leave the future contract open-ended while the comment
+    // claimed a departure date, and under the old maximum-end-date reading there
+    // was none: the case passed for a reason other than the one it stated. Now
+    // it is asserted rather than described, and in both shapes.
+    const ended = contract({ id: 'past', endDate: day('2026-05-31') });
+    const openEnded = contract({ id: 'future', sequence: 2, startDate: day('2026-09-01') });
+    const fixedTerm = contract({
+      id: 'future',
+      sequence: 2,
+      startDate: day('2026-09-01'),
+      endDate: day('2027-08-31'),
+    });
+    for (const future of [openEnded, fixedTerm]) {
+      const result = evaluate([ended, future]);
+      expect(result.notYetStarted).toBe(false);
+      expect(departureDate([ended, future], NOW)).toEqual(day('2026-05-31'));
+    }
   });
 
   it('enables the account and grants entitlements on the start date', () => {

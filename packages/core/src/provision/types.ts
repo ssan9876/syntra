@@ -130,8 +130,8 @@ export interface DesiredState {
    * A THIRD state, not a shade of the other two. `account.required === false`
    * is equally true of a leaver, and the two need opposite treatment: a
    * leaver's contracts have ended, so the ladder has a date to measure from; a
-   * future joiner's are open-ended, `latestContractEnd` returns null, and the
-   * planner reads that as "still employed, no departure date" and disables
+   * future joiner's have not started, `departureDate` returns null, and the
+   * planner reads that as "no departure date" and disables
    * them and revokes everything on the spot -- to somebody who starts in six
    * weeks. Spec section 8: an account belonging to somebody whose contract has
    * not started is a question, not an instruction. Nothing is proposed, and it

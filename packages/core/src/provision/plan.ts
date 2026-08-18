@@ -1,5 +1,5 @@
 import type { ProvisionActionType } from '@syntra/connectors';
-import { activeOn, latestContractEnd } from './desired.js';
+import { activeOn, departureDate } from './desired.js';
 import { unprocessableScope } from './reconcile.js';
 import type {
   ActualState,
@@ -166,9 +166,9 @@ export function planActions(input: PlanInput): PlannedAction[] {
     // account belonging to somebody whose contract has not started is a
     // question, not an instruction (spec section 8).
     //
-    // This cannot be inferred from anything else here. Their contracts are
-    // open-ended, so `latestContractEnd` returns null, so `departed` is false,
-    // so the branch below reads them as a mover and disables them today.
+    // This cannot be inferred from anything else here. They have no ended
+    // contract, so `departureDate` returns null, so `departed` is false, so
+    // the branch below reads them as a mover and disables them today.
     if (state.notYetStarted) continue;
 
     const current = input.actual.get(state.personId);
@@ -185,14 +185,18 @@ export function planActions(input: PlanInput): PlannedAction[] {
       ? (input.syntraUserByPerson.get(personId) ?? [])
       : [];
     const contracts = input.contractsByPerson.get(personId) ?? [];
-    const endDate = latestContractEnd(contracts);
-    // A departure is contracts that all ended. A person still holding an
-    // active contract has no departure date, and inventing one would be
-    // inventing data.
+    const endDate = departureDate(contracts, now);
+    // A departure is having stopped being employed, and `endDate` is the day
+    // it happened — which during a gap between two fixed-term contracts is the
+    // end of the one that just ended, NOT the end of one that has not started.
+    // Reading it as the maximum end date across every contract put every
+    // ladder timer fifteen months in the future for exactly that person, so
+    // not one step ever fired and they kept an enabled account and every
+    // entitlement for the whole gap.
     const departed = endDate !== null;
     // Not the same question as `departed`, and only ever used to say WHY.
-    // Somebody between an ended contract and one that starts in September has
-    // no departure date (one contract is open-ended) and is not employed
+    // Somebody whose only other contract is open-ended and starts in September
+    // has no ENDED contract to date a departure from, and is not employed
     // today either.
     const employedNow = activeOn(contracts, now).length > 0;
 
