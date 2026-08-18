@@ -107,8 +107,31 @@ export async function removeTargetSchedule(
  */
 const NON_TERMINAL = ['running', 'previewed', 'blocked', 'applying'] as const;
 
-/** The two that mean "a person has been asked something and has not answered". */
-const AWAITING_REVIEW: readonly string[] = ['previewed', 'blocked'];
+/**
+ * Whether this run is a question somebody has been asked and has not answered.
+ *
+ * **Not the status alone.** `blocked` covers two different refusals and only
+ * one of them is a question. A run blocked with `requiresConfirmation: true`
+ * is a plan over a threshold, waiting for a person to read the numbers and
+ * decide — superseding it every night would make the review screen a thing
+ * people stop opening. A run blocked with `requiresConfirmation: false` was
+ * refused outright: `applyProvisionRun` throws
+ * `ProvisionRunNotConfirmableError` for it unconditionally, no route applies
+ * it, and there is nothing an administrator could usefully confirm. Nobody can
+ * decide anything about it, so it is not awaiting a decision.
+ *
+ * Treating those two alike is what wedged a target permanently. All five of
+ * the guard's non-confirmable refusals — an unreachable target, a collapsed
+ * person population, an axis with no denominator — are transient conditions
+ * the administrator goes and fixes. They fix the cause, and then the dead run
+ * blocks every later scheduled run for ever while `consecutiveSkippedRuns`
+ * counts up, because it can neither be applied nor superseded. Recovery took
+ * database surgery.
+ */
+function awaitingDecision(run: { status: string; requiresConfirmation: boolean }): boolean {
+  if (run.status === 'previewed') return true;
+  return run.status === 'blocked' && run.requiresConfirmation;
+}
 
 /**
  * How long a `running` or `applying` run may sit before it is treated as the
@@ -131,10 +154,14 @@ const AWAITING_REVIEW: readonly string[] = ['previewed', 'blocked'];
  * been measured doing and shorter than the interval at which a nightly
  * schedule would notice.
  *
- * It applies **only** to `running` and `applying`. A `previewed` or `blocked`
- * run is somebody's outstanding decision, not wreckage: ageing one out would
- * silently supersede a plan a person was asked to approve, which is the whole
- * reason the skip rule exists.
+ * It applies **only** to `running` and `applying`. A `previewed` run, and a
+ * `blocked` run that requires confirmation, is somebody's outstanding
+ * decision rather than wreckage: ageing one out would silently supersede a
+ * plan a person was asked to approve, which is the whole reason the skip rule
+ * exists. A `blocked` run that does NOT require confirmation is neither —
+ * see `awaitingDecision`, which supersedes it without waiting for this
+ * interval at all, because no elapsed time makes an unconfirmable refusal
+ * into something a person can act on.
  */
 export const STALE_RUN_MS = 6 * 60 * 60 * 1000;
 
@@ -212,6 +239,11 @@ async function recordSkip(
  * people stop opening. Without the counter, a target that has silently skipped
  * for a fortnight looks exactly like one running cleanly.
  *
+ * A run the guard refused **outright** is the exception, and it is not an
+ * exception to the skip rule so much as a case that was never inside it: it is
+ * superseded rather than skipped, because nobody has been asked anything about
+ * it and no route can apply it. See `awaitingDecision`.
+ *
  * The guard is not advisory here either. A blocked run does not apply, and
  * `autoApply` does not override it — an unattended schedule is exactly the
  * case it exists for. Note what is **not** passed to the apply: no `confirm`
@@ -250,17 +282,30 @@ export async function runProvisionJob(
     });
 
     if (inFlight) {
-      const awaitingReview = AWAITING_REVIEW.includes(inFlight.status);
-      const ageMs = Date.now() - inFlight.startedAt.getTime();
+      const awaitingReview = awaitingDecision(inFlight);
+      // `lastProgressAt`, falling back to `startedAt` for a row written before
+      // that column existed. `startedAt` alone is stamped at preview and never
+      // restamped, so a run previewed at T and confirmed at T+7h entered
+      // `applying` looking six hours abandoned the instant it started writing
+      // to the domain controller — and the next scheduled job adopted it,
+      // superseding its unreached actions while they were being written and
+      // starting a second run against a half-mutated directory.
+      const aliveAt = inFlight.lastProgressAt ?? inFlight.startedAt;
+      const ageMs = Date.now() - aliveAt.getTime();
       // Wreckage, not work: the process that owned this run is not coming
       // back, and `previewProvisionRun` adopts it. Never for a run awaiting a
-      // human decision, however old.
-      const abandoned = !awaitingReview && ageMs >= STALE_RUN_MS;
+      // human decision, however old — but immediately for one refused
+      // outright, which is not work in progress either and which no amount of
+      // waiting turns into something a person can act on.
+      const refusedOutright =
+        inFlight.status === 'blocked' && !inFlight.requiresConfirmation;
+      const abandoned =
+        !awaitingReview && (refusedOutright || ageMs >= STALE_RUN_MS);
 
       if (!abandoned) {
         const reason = awaitingReview
           ? `a run from ${inFlight.startedAt.toISOString()} is awaiting review (${inFlight.status}), so this scheduled run did not start`
-          : `a run from ${inFlight.startedAt.toISOString()} is still in progress (${inFlight.status}), so this scheduled run did not start`;
+          : `a run from ${aliveAt.toISOString()} is still in progress (${inFlight.status}), so this scheduled run did not start`;
         await tx.targetSystem.update({
           where: { id: payload.targetSystemId },
           data: {

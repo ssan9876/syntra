@@ -751,6 +751,114 @@ describe('runProvisionJob — a crashed run must not brick the schedule', () => 
     expect(row.consecutiveSkippedRuns).toBe(1);
   });
 
+  it('supersedes a blocked run nobody can confirm, however young it is', async () => {
+    /**
+     * The wedge. A run the guard refused OUTRIGHT — `requiresConfirmation`
+     * false — cannot be applied (`applyProvisionRun` throws
+     * `ProvisionRunNotConfirmableError` for it unconditionally), cannot be
+     * discarded by any route, and used to count as "awaiting review", which
+     * meant it was never superseded either. All five of those refusals are
+     * conditions the administrator goes and fixes; they fixed the cause and
+     * then could not re-run. Nobody has been asked anything about this run, so
+     * it is not somebody's outstanding decision and the next run adopts it.
+     */
+    const wedged = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          status: 'blocked',
+          requiresConfirmation: false,
+          blockedReason: 'the target returned no accounts at all',
+          // Minutes old, not hours: no elapsed time turns an unconfirmable
+          // refusal into something a person can act on, so it does not wait
+          // for the staleness window either.
+          startedAt: new Date(Date.now() - 60_000),
+        },
+      }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      { connector: target as never },
+    );
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findMany({ orderBy: { startedAt: 'asc' } }),
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.id).toBe(wedged.id);
+    expect(rows[0]!.status).toBe('failed');
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(row.consecutiveSkippedRuns).toBe(0);
+  });
+
+  it('does not adopt an `applying` run that is still showing signs of life', async () => {
+    /**
+     * `startedAt` is stamped at preview and never restamped, so a run
+     * previewed at T and confirmed at T+7h enters `applying` already older
+     * than the staleness window. Measured from that column, the next scheduled
+     * job declares a LIVE apply abandoned, marks its unreached actions
+     * superseded while they are being written to the domain controller, and
+     * starts a second run against a half-mutated directory. `lastProgressAt`
+     * is the column that answers when this run last showed a sign of life.
+     */
+    await withTenant(tenantId, (tx) =>
+      tx.provisionRun.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          status: 'applying',
+          startedAt: new Date(Date.now() - STALE_RUN_MS * 2),
+          lastProgressAt: new Date(Date.now() - 30_000),
+        },
+      }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      { connector: target as never },
+    );
+    const rows = await withTenant(tenantId, (tx) => tx.provisionRun.findMany());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('applying');
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(row.consecutiveSkippedRuns).toBe(1);
+  });
+
+  it('still adopts an `applying` run whose last sign of life is old', async () => {
+    // The other direction of the same column: a heartbeat that stopped is a
+    // process that died, and the run has to be adoptable or one crash mid-apply
+    // bricks the target for ever.
+    await withTenant(tenantId, (tx) =>
+      tx.provisionRun.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          status: 'applying',
+          startedAt: new Date(Date.now() - STALE_RUN_MS * 2),
+          lastProgressAt: new Date(Date.now() - STALE_RUN_MS - 60_000),
+        },
+      }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      { connector: target as never },
+    );
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findMany({ orderBy: { startedAt: 'asc' } }),
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.status).toBe('partially_applied');
+  });
+
   it('says in the skip reason how long the run has been in progress', async () => {
     const startedAt = new Date(Date.now() - 90_000);
     await withTenant(tenantId, (tx) =>

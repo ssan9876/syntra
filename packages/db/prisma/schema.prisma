@@ -1264,6 +1264,18 @@ model ProvisionRun {
   status         String       @default("running")
   startedAt      DateTime     @default(now())
   finishedAt     DateTime?
+  /// When this run last showed a sign of life, which is NOT when it started.
+  ///
+  /// `startedAt` is stamped once, at preview, and answers "when was this plan
+  /// computed" — a question the review screen needs and the staleness check
+  /// does not. A run previewed at T and confirmed at T+7h enters `applying`
+  /// still carrying `startedAt = T`, and a staleness check measured from that
+  /// column declares a live apply abandoned and adopts it out from under the
+  /// process writing to the domain controller. Stamped when the run is
+  /// created, when it enters `applying`, and periodically while it applies.
+  /// Null on rows written before this column existed; readers fall back to
+  /// `startedAt`, which is what they used before.
+  lastProgressAt DateTime?
 
   createAccountCount        Int @default(0)
   updateAccountCount        Int @default(0)

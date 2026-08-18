@@ -178,7 +178,17 @@ async function adoptStaleRunsAndStart(
     return await withTenant(tenantId, async (tx) => {
       const bound = await currentTenant(tx);
       return tx.provisionRun.create({
-        data: { tenantId: bound, targetSystemId, status: 'running' },
+        // `lastProgressAt` alongside `startedAt`, and they are not the same
+        // question. `startedAt` is when this plan was computed and never
+        // moves; `lastProgressAt` is when the run last showed a sign of life,
+        // which the apply restamps on its phase transition and while it works.
+        // The staleness check reads the second one.
+        data: {
+          tenantId: bound,
+          targetSystemId,
+          status: 'running',
+          lastProgressAt: new Date(),
+        },
       });
     });
   } catch (cause) {

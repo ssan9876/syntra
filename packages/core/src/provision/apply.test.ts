@@ -470,6 +470,85 @@ describe('applyProvisionRun', () => {
     expect(system.lastAppliedRunAt).not.toBeNull();
   });
 
+  it('does not call a target applied when the run applied nothing', async () => {
+    /**
+     * A run that applied ZERO actions reaches `applied` — nothing remained and
+     * nothing failed, which is exactly what an empty plan looks like — and
+     * stamping `lastAppliedRunAt` for it flips `hasEverApplied` on a target
+     * nothing has ever been written to. The guard then leaves its confirmable
+     * first-run branch for the NON-confirmable empty-target refusal, and on a
+     * still-empty target that refusal can never clear itself: no run can
+     * apply, so no run can put an account there. That is the wedge, reached
+     * without a single write.
+     */
+    await leaversOnly();
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    expect(run.requiresConfirmation).toBe(true);
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: target as never,
+      now: NOW,
+      sleep: noSleep,
+    });
+    expect(result.status).toBe('applied');
+    expect(result.applied).toBe(0);
+
+    const system = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(system.lastAppliedRunAt).toBeNull();
+
+    // And therefore the next run is still the confirmable first-run branch,
+    // not the refusal nothing could ever clear.
+    const next = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    expect(next.requiresConfirmation).toBe(true);
+  });
+
+  it('stamps the apply phase transition so a live apply is not adopted', async () => {
+    // `startedAt` belongs to the preview and never moves. Without a column
+    // that says when the run last showed a sign of life, a run previewed at T
+    // and confirmed at T+7h enters `applying` already older than
+    // `STALE_RUN_MS`, and the next scheduled job adopts it mid-write.
+    const before = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const created = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findUniqueOrThrow({ where: { id: before.id } }),
+    );
+    await withTenant(tenantId, (tx) =>
+      tx.provisionRun.update({
+        where: { id: before.id },
+        data: {
+          startedAt: new Date(NOW.getTime() - 86_400_000),
+          lastProgressAt: new Date(NOW.getTime() - 86_400_000),
+        },
+      }),
+    );
+    await applyProvisionRun(tenantId, provider, before.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: target as never,
+      now: NOW,
+      sleep: noSleep,
+    });
+    const after = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findUniqueOrThrow({ where: { id: before.id } }),
+    );
+    // The preview's own stamp, kept: the plan really was computed then.
+    expect(after.startedAt.getTime()).toBeLessThan(created.startedAt.getTime());
+    expect(after.lastProgressAt!.getTime()).toBeGreaterThan(
+      after.startedAt.getTime(),
+    );
+  });
+
   it('writes the anchor back onto the account after a create', async () => {
     await previewAndApply();
     const account = await withTenant(tenantId, (tx) =>

@@ -62,6 +62,17 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const THROTTLE_BUDGET_MS = 120_000;
 const MAX_THROTTLED_ATTEMPTS = 20;
 
+/**
+ * How often an apply in progress restamps `ProvisionRun.lastProgressAt`.
+ *
+ * Well under `STALE_RUN_MS`, and coarse enough that a run of four thousand
+ * actions writes a handful of rows rather than four thousand. It is a sign of
+ * life, not a progress bar: the only reader is the scheduled job's staleness
+ * check, which is asking whether the process that owns this run is still
+ * alive.
+ */
+const HEARTBEAT_MS = 60_000;
+
 export interface InitialPasswordPolicy {
   length?: number;
   requireUpper?: boolean;
@@ -442,6 +453,14 @@ export async function applyProvisionRun(
       where: { id: runId },
       data: {
         status: 'applying',
+        // The phase transition, stamped. `startedAt` belongs to the preview
+        // and answers "when was this plan computed"; overloading it here would
+        // make the run's own history unreadable and would still leave the
+        // staleness check asking the wrong question. A run previewed at T and
+        // confirmed at T+7h is not six hours abandoned — it is one second into
+        // writing to a domain controller, and the next scheduled job used to
+        // adopt it and start a second run against the same objects.
+        lastProgressAt: new Date(),
         // Recorded only when somebody actually confirmed. Writing whatever
         // arrived would put a null in the column on an unconfirmed apply and
         // read as "confirmed by nobody" rather than "not confirmed".
@@ -478,6 +497,7 @@ export async function applyProvisionRun(
   let applied = 0;
   let failed = 0;
   let pendingRetry = 0;
+  let heartbeatAt = Date.now();
 
   for (const action of actions) {
     if (action.requiresConfirmation && !confirmed) {
@@ -485,6 +505,23 @@ export async function applyProvisionRun(
       // account. Never auto-applied, and never unlocked by a caller that
       // merely passed the parameter.
       continue;
+    }
+
+    // The heartbeat, at most once a minute, in a transaction of its own that
+    // holds nothing. The transition stamp above is enough only while an apply
+    // is shorter than STALE_RUN_MS; a run with four thousand creates on a slow
+    // directory is not, and the staleness check has to keep answering "when
+    // did this run last show a sign of life" rather than "when did it begin".
+    // One small UPDATE per minute of applying is not a cost worth optimising
+    // against a second process writing to the same objects.
+    if (Date.now() - heartbeatAt >= HEARTBEAT_MS) {
+      heartbeatAt = Date.now();
+      await withTenant(tenantId, (tx) =>
+        tx.provisionRun.update({
+          where: { id: runId },
+          data: { lastProgressAt: new Date() },
+        }),
+      );
     }
 
     let outcome: 'applied' | 'failed' | 'pending_retry' | 'conflict';
@@ -528,7 +565,18 @@ export async function applyProvisionRun(
       where: { id: runId },
       data: { status, finishedAt: new Date() },
     });
-    if (status === 'applied' || applied > 0) {
+    // `applied > 0`, and NOT `status === 'applied'` as well.
+    //
+    // A run that applied nothing reaches `applied` — no action remained and
+    // none failed, which is exactly what an empty plan looks like — and
+    // stamping `lastAppliedRunAt` for it flips `hasEverApplied` on a target
+    // nothing has ever been written to. The guard then leaves its confirmable
+    // first-run branch for the NON-confirmable empty-target refusal, which on
+    // a still-empty target can never clear itself: no run can apply, so no run
+    // can put an account there, so the refusal holds for ever. The column
+    // means "a run has written something at this target", and a run that wrote
+    // nothing has not.
+    if (applied > 0) {
       await tx.targetSystem.update({
         where: { id: prepared.run.targetSystemId },
         data: { lastAppliedRunAt: new Date() },
