@@ -188,6 +188,193 @@ describe('TargetDetailPage', () => {
     expect(screen.queryByText(/did not start/i)).toBeNull();
   });
 
+  it('gives an in-progress skip different advice from one awaiting review', async () => {
+    // `jobs.ts` writes both, and they call for different things: one has a plan
+    // somebody must decide about, and the other has nothing to review at all
+    // and clears on its own — after six hours at the latest, when a later run
+    // adopts the row as the wreckage of a dead process.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json(
+        target({
+          consecutiveSkippedRuns: 2,
+          lastSkipReason:
+            'a run from 2026-08-01T03:00:00.000Z is still in progress (running), so this scheduled run did not start',
+        }),
+      ),
+    );
+
+    renderExisting();
+
+    expect(
+      await screen.findByText(/There is nothing to review here/),
+    ).toBeVisible();
+    expect(screen.queryByText(/Review the outstanding run/)).toBeNull();
+    expect(
+      screen.queryByRole('link', { name: 'Go to the runs for this target' }),
+    ).toBeNull();
+  });
+
+  it('sends a skip awaiting review to the run that is blocking it', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json(
+        target({
+          consecutiveSkippedRuns: 2,
+          lastSkipReason:
+            'a run from 2026-08-01T03:00:00.000Z is awaiting review (blocked), so this scheduled run did not start',
+        }),
+      ),
+    );
+
+    renderExisting();
+
+    expect(
+      await screen.findByText(/Review the outstanding run/),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('link', { name: 'Go to the runs for this target' }),
+    ).toBeVisible();
+  });
+
+  it('says nothing needs doing when two runs simply raced', async () => {
+    // `recordSkip` on `ProvisionRunInFlightError`: the partial unique index
+    // refused the second run between the skip check and the create.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json(
+        target({
+          consecutiveSkippedRuns: 1,
+          lastSkipReason:
+            'another run for target t1 is already in progress; this one did not start',
+        }),
+      ),
+    );
+
+    renderExisting();
+
+    expect(await screen.findByText(/Two runs raced for this target/)).toBeVisible();
+    expect(screen.queryByText(/Review the outstanding run/)).toBeNull();
+  });
+
+  it('keeps the thresholds somebody typed when the create’s follow-up PATCH is refused', async () => {
+    // The ladder and the thresholds are not on the create schema, so they are
+    // saved by a second request. When that one is refused the target exists and
+    // those numbers do not — and navigating to the new target refetched it and
+    // rebuilt the form from the STORED defaults, discarding exactly the numbers
+    // the administrator was about to be asked to correct.
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const path = String(input);
+      if (init?.method === 'POST') return Promise.resolve(json({ id: 't1' }));
+      if (init?.method === 'PATCH') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              title: 'Validation failed',
+              status: 400,
+              errors: [
+                {
+                  path: 'thresholds.createAccountThresholdPercent',
+                  message: 'must be between 0 and 100',
+                },
+              ],
+            }),
+            { status: 400, headers: { 'content-type': 'application/json' } },
+          ) as never,
+        );
+      }
+      // The refetch the navigate causes: stored defaults, not what was typed.
+      return Promise.resolve(json(target()));
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/admin/targets/new']}>
+        <Routes>
+          <Route path="/admin/targets/new" element={<TargetDetailPage />} />
+          <Route path="/admin/targets/:id" element={<TargetDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const threshold = await screen.findByLabelText('Accounts created');
+    await userEvent.clear(threshold);
+    await userEvent.type(threshold, '77');
+    await userEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    expect(
+      await screen.findByText(/The target was created, but its deprovisioning/),
+    ).toBeVisible();
+    // 77, not the 20 the stored target carries.
+    expect(screen.getByLabelText('Accounts created')).toHaveValue('77');
+    // And the mechanism, not just the symptom: the page did not read the
+    // target back, because reading it back is what overwrote the form.
+    const reads = (
+      fetchMock.mock.calls as [unknown, RequestInit | undefined][]
+    ).filter(
+      ([input, init]) =>
+        String(input).endsWith('/api/admin/targets/t1') && init?.method === undefined,
+    );
+    expect(reads).toHaveLength(0);
+  });
+
+  it('saves rather than creating a second target after a refused follow-up PATCH', async () => {
+    // The target exists. A second Create here would make another one.
+    let patched = 0;
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation((input, init) => {
+        if (init?.method === 'POST') return Promise.resolve(json({ id: 't1' }));
+        if (init?.method === 'PATCH') {
+          patched += 1;
+          return patched === 1
+            ? Promise.resolve(
+                new Response(
+                  JSON.stringify({
+                    title: 'Validation failed',
+                    status: 400,
+                    errors: [
+                      {
+                        path: 'thresholds.createAccountThresholdPercent',
+                        message: 'must be between 0 and 100',
+                      },
+                    ],
+                  }),
+                  { status: 400, headers: { 'content-type': 'application/json' } },
+                ) as never,
+              )
+            : Promise.resolve(json(null));
+        }
+        return Promise.resolve(json(target()));
+      });
+
+    render(
+      <MemoryRouter initialEntries={['/admin/targets/new']}>
+        <Routes>
+          <Route path="/admin/targets/new" element={<TargetDetailPage />} />
+          <Route path="/admin/targets/:id" element={<TargetDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const threshold = await screen.findByLabelText('Accounts created');
+    await userEvent.clear(threshold);
+    await userEvent.type(threshold, '77');
+    await userEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await screen.findByText(/The target was created, but its deprovisioning/);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: /create target/i }),
+    ).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const posts = (
+      fetchMock.mock.calls as [unknown, RequestInit | undefined][]
+    ).filter(([, init]) => init?.method === 'POST');
+    // One POST for the create; the connection test is the only other POST this
+    // page makes and it was not pressed.
+    expect(posts).toHaveLength(1);
+    expect(patched).toBe(2);
+  });
+
   it('never puts the stored bind password back in the form', async () => {
     // The API does not return it and this page must not invent a placeholder
     // that would be sent back as a new password on the next save.

@@ -216,6 +216,55 @@ const THRESHOLDS = [
 const text = (value: unknown, fallback = '') =>
   typeof value === 'string' ? value : fallback;
 
+/**
+ * What to do about a skipped schedule, per the reason that was actually
+ * recorded.
+ *
+ * `jobs.ts` writes three distinct reasons and they call for three different
+ * things, so one sentence covering all of them is wrong for at least two:
+ *
+ * - `…is awaiting review (previewed|blocked)…` — there is a plan somebody has
+ *   been asked to decide about. Reviewing it is what clears this.
+ * - `…is still in progress (running|applying)…` — there is nothing to review.
+ *   It clears when the run finishes, or after `STALE_RUN_MS`, at which point
+ *   `previewProvisionRun` treats the row as the wreckage of a dead process and
+ *   adopts it.
+ * - `another run for target … is already in progress; this one did not start`
+ *   — `recordSkip` on `ProvisionRunInFlightError`: two runs raced between the
+ *   skip check and the create, and the partial unique index refused the second.
+ *
+ * Matched on the phrases `jobs.ts` and `run-service.ts` compose, not on the
+ * status in the brackets, because the reason string is what the API returns and
+ * the status is embedded in it.
+ */
+function skipAdvice(reason: string | null): string {
+  if (reason !== null && reason.includes('is awaiting review')) {
+    return (
+      'A scheduled run does not start while a run is awaiting review, so that ' +
+      'the plan somebody was asked to approve is not superseded every night. ' +
+      'Review the outstanding run and this clears on the next schedule.'
+    );
+  }
+  if (reason !== null && reason.includes('already in progress')) {
+    return (
+      'Two runs raced for this target and the second did not start. There is ' +
+      'nothing to review and nothing to do: the next schedule runs normally.'
+    );
+  }
+  if (reason !== null && reason.includes('is still in progress')) {
+    return (
+      'There is nothing to review here: a run was still going when this ' +
+      'schedule fired. It clears when that run finishes — or six hours after ' +
+      'the run started, when a later run treats it as the wreckage of a ' +
+      'process that died and adopts it.'
+    );
+  }
+  return (
+    'A scheduled run did not start. The reason was not recorded, so the runs ' +
+    'for this target are the place to look.'
+  );
+}
+
 function formFrom(target: Target): Form {
   const config = target.config ?? {};
   const url = text(config.url, BLANK.url);
@@ -266,11 +315,31 @@ function formFrom(target: Target): Form {
 
 export function TargetDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const isNew = id === undefined;
   const navigate = useNavigate();
 
+  /**
+   * The target this form is editing when the URL does not yet name one.
+   *
+   * The create is two requests: a POST that the create schema accepts, then a
+   * PATCH carrying the deprovisioning ladder and the safety thresholds, which
+   * are not on that schema. When the PATCH is refused the target EXISTS and
+   * those numbers do not — and the old code navigated to the new target's route
+   * anyway, which refetched it and rebuilt the form from the stored defaults,
+   * discarding the very numbers the administrator was being asked to correct.
+   *
+   * So the navigate happens on success only. On a refusal the page stays put,
+   * remembers the id, and turns into the editor for it: same boxes, same
+   * values, and a Save that PATCHes rather than a Create that would make a
+   * second target.
+   */
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const targetId = id ?? createdId;
+  const isNew = targetId === null;
+
+  // Keyed on the ROUTE id, never on `createdId`: a read here would overwrite
+  // the form with what the refused PATCH failed to store.
   const { data, error, loading, reload } = useApiResource<Target>(
-    isNew ? null : `/api/admin/targets/${id}`,
+    id === undefined ? null : `/api/admin/targets/${id}`,
   );
 
   const [form, setForm] = useState<Form>(BLANK);
@@ -393,7 +462,7 @@ export function TargetDetailPage() {
             // named and the server reads its own vault entry: the browser is
             // never handed the stored password to send back.
             ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
-            ...(isNew ? {} : { borrowFromTargetId: id }),
+            ...(targetId === null ? {} : { borrowFromTargetId: targetId }),
           }),
         }),
       );
@@ -454,16 +523,21 @@ export function TargetDetailPage() {
           });
           navigate(`/admin/targets/${created.id}`, { replace: true });
         } catch (cause) {
-          navigate(`/admin/targets/${created.id}`, { replace: true });
-          fail(
-            cause,
-            'The target was created but its ladder and thresholds were refused.',
+          // No navigate. Said whether or not the refusal named fields: "the
+          // target exists" is the fact that decides what to do next, and
+          // `fail` puts the field-level messages on their own controls.
+          setCreatedId(created.id);
+          setNotice(
+            'The target was created, but its deprovisioning ladder and safety ' +
+              'thresholds were refused and are not saved. What you typed is ' +
+              'still in the boxes below — correct it and press Save.',
           );
+          fail(cause, 'The ladder and thresholds were refused.');
         }
         return;
       }
 
-      await api(`/api/admin/targets/${id}`, {
+      await api(`/api/admin/targets/${targetId}`, {
         method: 'PATCH',
         body: JSON.stringify({
           name: form.name.trim(),
@@ -488,6 +562,13 @@ export function TargetDetailPage() {
       });
       setForm((current) => ({ ...current, bindPassword: '' }));
       setNotice('Saved.');
+      // The URL catches up once the target and the form agree. Until then the
+      // page deliberately stayed on `/new` so a refetch could not overwrite
+      // what had not been stored yet.
+      if (id === undefined && createdId !== null) {
+        navigate(`/admin/targets/${createdId}`, { replace: true });
+        return;
+      }
       reload();
     } catch (cause) {
       fail(cause, 'The target could not be saved.');
@@ -557,10 +638,17 @@ export function TargetDetailPage() {
             } did not start`}
           >
             <p>{data.lastSkipReason}</p>
-            <p className="mt-2">
-              A scheduled run does not start while a run is awaiting review.
-              Review the outstanding run and this clears on the next schedule.
-            </p>
+            <p className="mt-2">{skipAdvice(data.lastSkipReason)}</p>
+            {(data.lastSkipReason ?? '').includes('is awaiting review') && (
+              <p className="mt-2">
+                <Link
+                  to={`/admin/targets/${targetId}/runs`}
+                  className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+                >
+                  Go to the runs for this target
+                </Link>
+              </p>
+            )}
           </Alert>
         )}
 
@@ -661,7 +749,7 @@ export function TargetDetailPage() {
               <li>
                 <Link
                   className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
-                  to={`/admin/targets/${id}/profile`}
+                  to={`/admin/targets/${targetId}/profile`}
                 >
                   Account profile
                 </Link>
@@ -673,7 +761,7 @@ export function TargetDetailPage() {
               <li>
                 <Link
                   className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
-                  to={`/admin/targets/${id}/rules`}
+                  to={`/admin/targets/${targetId}/rules`}
                 >
                   Business rules
                 </Link>
@@ -684,7 +772,7 @@ export function TargetDetailPage() {
               <li>
                 <Link
                   className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
-                  to={`/admin/targets/${id}/runs`}
+                  to={`/admin/targets/${targetId}/runs`}
                 >
                   Runs
                 </Link>
