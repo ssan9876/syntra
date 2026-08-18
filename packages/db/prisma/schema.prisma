@@ -307,6 +307,13 @@ model DirectorySource {
   groups   Group[]
   orgUnits OrgUnit[]
 
+  /// Targets paired to this source, so provisioning can read the accounts it
+  /// writes back out of Syntra. `SetNull` on the far side, for the reasons
+  /// `TargetSystem.pairedDirectorySourceId` records; `deleteSource` clears
+  /// them explicitly as well, so the unpairing is an act of the code and not
+  /// only of the schema.
+  pairedTargets TargetSystem[]
+
   @@unique([tenantId, name])
   @@index([tenantId])
 }
@@ -998,7 +1005,32 @@ model TargetSystem {
   /// The directory source that reads this same system back into Syntra. When
   /// set, account status propagates inward (spec §4) and a successful apply
   /// enqueues a run of it.
-  pairedDirectorySourceId String? @db.Uuid
+  ///
+  /// The foreign key is what makes "set" mean something. Without it the column
+  /// held any uuid at all, and `claimSyntraUsers` gates on `!== null` — so a
+  /// source deleted out from under a paired target left the gate that exists to
+  /// fail closed passing on a value that named nothing, a claim that matched
+  /// zero rows, and a leaver who kept their Syntra login for good. Non-null and
+  /// valid are different questions and this column answered only the first.
+  ///
+  /// `SetNull`, not the `Restrict` the three `DirectorySource` relations below
+  /// carry, and the difference is what the pointer *is*. `User.sourceId` names
+  /// the directory that keeps that account current: dropping it silently would
+  /// turn a directory-owned account into a locally managed one, which is data
+  /// loss wearing a tidier face. This is a configuration pointer — clearing it
+  /// destroys nothing the target row does not still hold, it is restored by one
+  /// PATCH, and an unpaired target fails closed at `syntra-user.ts:125` and
+  /// reports `pairedDirectorySource: false` on every run summary, so the state
+  /// is honest and visible where the provisioning administrator looks.
+  ///
+  /// `Restrict` was the other candidate and was rejected for a second reason as
+  /// well: referential triggers bypass row-level security, but `deleteSource`'s
+  /// releasing statements cannot. A target in ANOTHER tenant pointing here —
+  /// reachable on any install predating this constraint, since a bare uuid was
+  /// accepted — would block the delete with a P2003 that no tenant-scoped
+  /// statement could ever clear. `SetNull` cannot strand a source that way.
+  pairedDirectorySourceId String?          @db.Uuid
+  pairedDirectorySource   DirectorySource? @relation(fields: [pairedDirectorySourceId], references: [id], onDelete: SetNull)
 
   schedule  String?
   autoApply Boolean @default(false)
@@ -1065,6 +1097,9 @@ model TargetSystem {
 
   @@unique([tenantId, name])
   @@index([tenantId])
+  /// The referencing side of the foreign key. `ON DELETE SET NULL` scans this
+  /// column for every source deletion, and `deleteSource` filters on it too.
+  @@index([pairedDirectorySourceId])
 }
 
 /// One per target. Rules answer *whether* somebody gets an account; the

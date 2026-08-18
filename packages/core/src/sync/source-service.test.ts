@@ -310,6 +310,61 @@ describe('deleteSource', () => {
     expect(await withTenant(tenantId, (tx) => tx.secret.count())).toBe(0);
   });
 
+  it('clears the pairing of every target that named it', async () => {
+    // The pointer this function did not release. A target paired to a deleted
+    // source kept its id, and `claimSyntraUsers` gates on that column being
+    // non-null -- so the gate that exists to fail closed passed on a value
+    // naming nothing, the claim matched no users, and no leaver on that target
+    // ever lost their Syntra login again, with the console still rendering the
+    // pairing as intact.
+    //
+    // Two targets, and only one of them paired to the source being deleted: a
+    // statement missing its `where` clears both, and with one target that is
+    // indistinguishable from the right answer.
+    //
+    // Stated plainly, because the name would otherwise overclaim: the outcome
+    // asserted here is produced by the `updateMany` in `deleteSource` AND by
+    // the `ON DELETE SET NULL` behind it, and this test cannot tell which one
+    // did it. That is deliberate -- the point of having both is that the end
+    // state does not depend on which is present -- so what this pins is the
+    // end state, not the mechanism.
+    const source = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, input),
+    );
+    const other = await withTenant(tenantId, (tx) =>
+      createSource(tx, provider, { ...input, name: 'Branch AD' }),
+    );
+    const targets = await withTenant(tenantId, async (tx) => [
+      await tx.targetSystem.create({
+        data: {
+          tenantId,
+          name: 'Acme AD',
+          // `target_system_encrypted_transport` refuses a config that says
+          // nothing about its transport, so the fixture says it.
+          config: { tlsMode: 'ldaps' },
+          secretName: 'target/a/bind',
+          pairedDirectorySourceId: source.id,
+        },
+      }),
+      await tx.targetSystem.create({
+        data: {
+          tenantId,
+          name: 'Branch AD target',
+          config: { tlsMode: 'ldaps' },
+          secretName: 'target/b/bind',
+          pairedDirectorySourceId: other.id,
+        },
+      }),
+    ]);
+
+    await withTenant(tenantId, (tx) => deleteSource(tx, source.id, { confirm: true }));
+
+    const rows = await withTenant(tenantId, (tx) => tx.targetSystem.findMany());
+    const byId = new Map(rows.map((r) => [r.id, r.pairedDirectorySourceId]));
+    expect(byId.get(targets[0]!.id)).toBeNull();
+    expect(byId.get(targets[1]!.id)).toBe(other.id);
+  });
+
   it('reports a source that does not exist rather than throwing', async () => {
     const missing = await withTenant(tenantId, (tx) =>
       deleteSource(tx, '00000000-0000-0000-0000-000000000000'),

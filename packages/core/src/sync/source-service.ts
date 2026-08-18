@@ -198,6 +198,10 @@ export class SourceOwnsObjectsError extends Error {
  * Attribute mappings, runs and changes cascade with the row. They describe the
  * source itself and mean nothing without it, unlike the accounts, which stay.
  *
+ * Any provisioning target paired to the source is unpaired as well, and that is
+ * a fourth thing this function releases rather than a fifth thing it destroys:
+ * see the statement itself for why it is not counted into the confirmation.
+ *
  * ## The transaction budget
  *
  * The caller runs all of this in one `withTenant`, which is
@@ -261,6 +265,33 @@ export async function deleteSource(
   await tx.user.updateMany({ where: { sourceId: id }, data: detach });
   await tx.group.updateMany({ where: { sourceId: id }, data: detach });
   await tx.orgUnit.updateMany({ where: { sourceId: id }, data: detach });
+
+  // The fourth pointer, and the one this function did not have. A target paired
+  // to this source went on holding its id after the row was gone, and every
+  // reader of that column asks only whether it is non-null: `claimSyntraUsers`
+  // let a uuid naming nothing through the gate that exists to fail closed,
+  // matched no users, and left every leaver on that target holding their Syntra
+  // login — with the console still rendering the pairing as intact. An anchor
+  // that names a source which no longer exists identifies nothing, and the same
+  // is true of a pairing.
+  //
+  // Unlike the three above, this is not a released row. Nothing is deactivated
+  // and nothing is lost: the target keeps provisioning outward, the pairing is
+  // restored by one PATCH, and until it is, the target fails closed on the
+  // claim and reports `pairedDirectorySource: false` on every run summary. That
+  // is why it is not counted into `OwnedObjectCounts` and does not raise
+  // `SourceOwnsObjectsError` — the confirmation gate exists for the access this
+  // delete revokes, and unpairing revokes none.
+  //
+  // The foreign key added in 20260822000000_target_paired_source_fk nulls this
+  // column too, so the statement is not what makes the pointer honest — it is
+  // what makes the unpairing an act of this function, in this transaction,
+  // observable to a test that does not have to reason about which constraint is
+  // installed on the database in front of it.
+  await tx.targetSystem.updateMany({
+    where: { pairedDirectorySourceId: id },
+    data: { pairedDirectorySourceId: null },
+  });
 
   // The bind password goes with the source that used it. A credential nothing
   // can reach is a credential nobody is watching.

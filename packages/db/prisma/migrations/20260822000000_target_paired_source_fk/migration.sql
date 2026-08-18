@@ -1,0 +1,73 @@
+-- Gives TargetSystem.pairedDirectorySourceId the foreign key it never had.
+--
+-- The column is the one cross-model pointer in the provisioning schema with no
+-- `@relation` behind it, and it is the one with teeth. `claimSyntraUsers` gates
+-- on `pairedDirectorySourceId !== null` — the gate that is supposed to fail
+-- closed — so a uuid that names nothing walks straight through it, joins
+-- against a source that does not exist, matches zero rows, returns the same
+-- `{ claimed: 0, conflicts: 0 }` a healthy fully-claimed target returns, and
+-- writes no audit event because it changed nothing. Every Syntra login on that
+-- target stays `personId IS NULL` for good, and no leaver on it ever loses
+-- their login again. Non-null and valid are different questions; until now the
+-- column could only answer the first.
+--
+-- Reachable two ways without any hand-editing of data: delete a directory
+-- source that a target is paired to (nothing detached this pointer, unlike
+-- User, Group and OrgUnit), or PATCH a target with any well-formed uuid at all.
+--
+-- ## Why SET NULL and not RESTRICT
+--
+-- 20260815030000_source_directory_fk chose RESTRICT for User, Group and OrgUnit
+-- and gave the reason: silently turning a directory-owned account into a
+-- locally managed one is the same loss wearing a tidier face. That reasoning
+-- does not carry over. Those columns name the directory that keeps a real
+-- account current; this one is a configuration pointer, and clearing it
+-- destroys nothing the target row does not still hold. An unpaired target is
+-- restored by one PATCH, fails closed on the claim, and reports
+-- `pairedDirectorySource: false` on every run summary — visible where the
+-- provisioning administrator actually looks, rather than a uuid that renders
+-- convincingly and means nothing.
+--
+-- RESTRICT would also have created a state with no way out. Referential
+-- triggers bypass row-level security; `deleteSource`'s releasing statements
+-- cannot, because every one of them runs under FORCE ROW LEVEL SECURITY with
+-- `app.current_tenant` bound. A target in another tenant pointing at this
+-- source — reachable on any install created before this migration, since a
+-- bare uuid was accepted — would refuse the delete with a P2003 that no
+-- tenant-scoped statement could ever clear, on a constraint whose purpose is to
+-- prevent a dangling pointer rather than to strand the row it points at.
+--
+-- `deleteSource` (packages/core/src/sync/source-service.ts) clears paired
+-- targets explicitly as well, in the same transaction as the delete. Not
+-- redundant: the explicit statement is what makes the unpairing true of the
+-- code path and testable there, and this constraint is the backstop that makes
+-- it true of the data — the same division 20260820000000_provision_targets
+-- draws between the ladder validation and its CHECK.
+--
+-- ## Why NOT VALID
+--
+-- The same reason 20260815030000_source_directory_fk gives, and here it is not
+-- hypothetical: an install carrying a target paired to a deleted source is
+-- exactly the state this constraint exists to prevent, and a validating ADD
+-- CONSTRAINT would fail outright on precisely the databases that need it most.
+-- The repair UPDATE is not available either — a migration binds no tenant, so
+-- `app.current_tenant` is NULL, the policy is neither true nor false, and the
+-- statement matches zero rows in every tenant while reporting success.
+--
+-- NOT VALID skips only the initial scan. Both triggers are installed from this
+-- moment: an INSERT or UPDATE naming a source that does not exist is refused,
+-- and deleting a source nulls the pointers to it. A pre-existing dangling row
+-- survives, and is visible to
+--   SELECT id FROM "TargetSystem" t WHERE t."pairedDirectorySourceId" IS NOT NULL
+--     AND NOT EXISTS (
+--       SELECT 1 FROM "DirectorySource" s WHERE s.id = t."pairedDirectorySourceId");
+-- run per tenant with app.current_tenant bound. Re-pair or clear anything it
+-- returns, then ALTER TABLE ... VALIDATE CONSTRAINT to close the gap for good.
+
+-- CreateIndex
+-- The referencing side of the key. ON DELETE SET NULL scans this column on
+-- every source deletion, and deleteSource filters on it.
+CREATE INDEX "TargetSystem_pairedDirectorySourceId_idx" ON "TargetSystem"("pairedDirectorySourceId");
+
+-- AddForeignKey
+ALTER TABLE "TargetSystem" ADD CONSTRAINT "TargetSystem_pairedDirectorySourceId_fkey" FOREIGN KEY ("pairedDirectorySourceId") REFERENCES "DirectorySource"("id") ON DELETE SET NULL ON UPDATE CASCADE NOT VALID;

@@ -47,6 +47,32 @@ export class BusinessRuleNotFoundError extends Error {
   }
 }
 
+/**
+ * A pairing that names a directory source this tenant does not have.
+ *
+ * `pairedDirectorySourceId` used to be validated as "is a uuid" and nothing
+ * more, and every reader of it — `claimSyntraUsers`, `enqueuePairedSync`, the
+ * run summary's `pairedDirectorySource` flag — asks only whether it is
+ * non-null. A well-formed uuid that names nothing therefore passed the gate
+ * that exists to fail closed, claimed zero logins, reported the same summary a
+ * healthy target reports, and left every leaver on the target holding their
+ * Syntra login. Non-null and valid are different questions.
+ *
+ * The foreign key added in 20260822000000_target_paired_source_fk is the
+ * backstop; this read is what turns a mistyped id into a message. It is also
+ * the only half of the pair that can enforce the *tenant*: the key references
+ * `DirectorySource(id)` alone, so another tenant's source satisfies it, while
+ * this read runs under the bound tenant's row-level security and cannot see
+ * one. The distinction is not a refinement — a cross-tenant pairing is a target
+ * whose inward status propagation reads somebody else's directory.
+ */
+export class PairedDirectorySourceNotFoundError extends Error {
+  constructor(readonly sourceId: string) {
+    super(`no such directory source to pair with: ${sourceId}`);
+    this.name = 'PairedDirectorySourceNotFoundError';
+  }
+}
+
 export class DriftFindingNotFoundError extends Error {
   constructor(readonly findingId: string) {
     super(`no such drift finding: ${findingId}`);
@@ -251,6 +277,24 @@ function assertLadder(ladder: {
   }
 }
 
+/**
+ * Refuses a pairing that names no directory source this tenant can see.
+ *
+ * Run inside the writing transaction, so what is checked is what is written
+ * against rather than what was true a moment earlier; the foreign key catches
+ * the source deleted in the remaining gap. `undefined` means the caller said
+ * nothing about the pairing and `null` means they cleared it — neither names
+ * anything, so neither is read.
+ */
+async function assertPairedSourceExists(
+  tx: TenantClient,
+  sourceId: string | null | undefined,
+): Promise<void> {
+  if (sourceId === undefined || sourceId === null) return;
+  const source = await tx.directorySource.findUnique({ where: { id: sourceId } });
+  if (!source) throw new PairedDirectorySourceNotFoundError(sourceId);
+}
+
 export async function createTarget(
   tenantId: string,
   provider: MasterKeyProvider,
@@ -265,6 +309,7 @@ export async function createTarget(
 
   const created = await withTenant(tenantId, async (tx) => {
     const bound = await currentTenant(tx);
+    await assertPairedSourceExists(tx, scalars.pairedDirectorySourceId);
     const target = await tx.targetSystem.create({
       data: {
         tenantId: bound,
@@ -364,6 +409,7 @@ export async function updateTarget(
   const after = await withTenant(tenantId, async (tx) => {
     const before = await tx.targetSystem.findUnique({ where: { id: targetId } });
     if (!before) throw new TargetNotFoundError(targetId);
+    await assertPairedSourceExists(tx, scalars.pairedDirectorySourceId);
 
     const ladder = {
       entitlementRevocationDelayDays:

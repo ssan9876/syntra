@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
@@ -1066,6 +1067,115 @@ describe('the gaps the mutation pass found', () => {
       tx.targetSystem.findUniqueOrThrow({ where: { id: created.id } }),
     );
     expect(row.pairedDirectorySourceId).toBe(source.id);
+  });
+
+  it('refuses a pairing that names a directory source this tenant does not have', async () => {
+    // A uuid is not a source. Every reader of this column asks only whether it
+    // is non-null -- `claimSyntraUsers`, `enqueuePairedSync`, the run summary's
+    // `pairedDirectorySource` flag -- so a well-formed id naming nothing passes
+    // the gate that exists to fail closed, claims zero logins, and reports the
+    // same result a healthy target reports. The message is asserted, not just
+    // "it threw": the foreign key refuses this too, and the difference between
+    // the check and its absence is a 400 an editor can highlight versus a 500
+    // with a constraint name in it.
+    await expect(
+      createTarget(tenantId, provider, null, {
+        name: 'Paired',
+        config,
+        bindPassword: 'x',
+        pairedDirectorySourceId: randomUUID(),
+      }),
+    ).rejects.toThrow(/no such directory source to pair with/);
+  });
+
+  it('refuses a pairing with another tenant’s directory source', async () => {
+    // The half the foreign key cannot do. It references `DirectorySource(id)`
+    // alone, so another tenant's source satisfies it perfectly; only a read
+    // under the bound tenant's row-level security can tell them apart. A
+    // cross-tenant pairing is a target whose inward status propagation reads
+    // somebody else's directory.
+    const other = await prisma.tenant.create({ data: { name: 'Other', slug: 'other' } });
+    const theirs = await withTenant(other.id, (tx) =>
+      tx.directorySource.create({
+        data: {
+          tenantId: other.id,
+          name: 'Their AD',
+          type: 'ldap',
+          config: {},
+          secretName: 'source/theirs',
+        },
+      }),
+    );
+    await expect(
+      createTarget(tenantId, provider, null, {
+        name: 'Paired',
+        config,
+        bindPassword: 'x',
+        pairedDirectorySourceId: theirs.id,
+      }),
+    ).rejects.toThrow(/no such directory source to pair with/);
+  });
+
+  it('leaves an existing pairing alone when an update names a source that is not there', async () => {
+    const source = await withTenant(tenantId, (tx) =>
+      tx.directorySource.create({
+        data: {
+          tenantId,
+          name: 'Head office AD',
+          type: 'ldap',
+          config: {},
+          secretName: 'source/x',
+        },
+      }),
+    );
+    const created = await createTarget(tenantId, provider, null, {
+      name: 'Paired',
+      config,
+      bindPassword: 'x',
+      pairedDirectorySourceId: source.id,
+    });
+    await expect(
+      updateTarget(tenantId, provider, null, created.id, {
+        pairedDirectorySourceId: randomUUID(),
+      }),
+    ).rejects.toThrow(/no such directory source to pair with/);
+    // The refusal has to take the whole transaction with it. A target left
+    // pointing at nothing is the state this check exists to prevent, and one
+    // repointed at nothing by a rejected request is the same state arrived at
+    // more confusingly.
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: created.id } }),
+    );
+    expect(row.pairedDirectorySourceId).toBe(source.id);
+  });
+
+  it('still accepts an update that clears the pairing', async () => {
+    // `null` names nothing on purpose, and must not be read as a source that
+    // does not exist. Unpairing is how a target is taken off a directory.
+    const source = await withTenant(tenantId, (tx) =>
+      tx.directorySource.create({
+        data: {
+          tenantId,
+          name: 'Head office AD',
+          type: 'ldap',
+          config: {},
+          secretName: 'source/x',
+        },
+      }),
+    );
+    const created = await createTarget(tenantId, provider, null, {
+      name: 'Paired',
+      config,
+      bindPassword: 'x',
+      pairedDirectorySourceId: source.id,
+    });
+    await updateTarget(tenantId, provider, null, created.id, {
+      pairedDirectorySourceId: null,
+    });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: created.id } }),
+    );
+    expect(row.pairedDirectorySourceId).toBeNull();
   });
 
   it('stores the schedule an update sets and clears it with null', async () => {

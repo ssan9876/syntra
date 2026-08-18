@@ -7,6 +7,7 @@ import {
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
+  PairedDirectorySourceNotFoundError,
   TargetNotFoundError,
   createTarget,
   deleteTarget,
@@ -131,13 +132,32 @@ export async function registerAdminTargetRoutes(
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request, reply) => {
       const body = createTargetRequestSchema.parse(request.body);
-      const created = await createTarget(
-        request.tenantId,
-        provider,
-        request.session.userId,
-        defined(body),
-        scheduler(),
-      );
+      let created;
+      try {
+        created = await createTarget(
+          request.tenantId,
+          provider,
+          request.session.userId,
+          defined(body),
+          scheduler(),
+        );
+      } catch (cause) {
+        // 400, not 404: the request names a target that does not exist yet and
+        // a source that does not exist at all, and the second is a field an
+        // editor can highlight. Unhandled it would be a bare 500 — which is
+        // how a mistyped pairing used to look only if you were lucky, since
+        // before the existence read it looked like a 201.
+        if (cause instanceof PairedDirectorySourceNotFoundError) {
+          throw new ProblemError(
+            400,
+            'invalid-paired-source',
+            'No such directory source',
+            cause.message,
+            { errors: [{ path: 'pairedDirectorySourceId', message: cause.message }] },
+          );
+        }
+        throw cause;
+      }
       // `{ id }`, which is all `createTarget` returns. The row carries only
       // the secret's NAME; the credential is in the vault and is never echoed.
       return reply.code(201).send(created);
@@ -172,6 +192,18 @@ export async function registerAdminTargetRoutes(
       } catch (cause) {
         if (cause instanceof TargetNotFoundError) {
           throw new ProblemError(404, 'not-found', 'Target not found');
+        }
+        if (cause instanceof PairedDirectorySourceNotFoundError) {
+          // The target exists; the source it was asked to pair with does not.
+          // A 404 here would read as "no such target" and send an
+          // administrator looking in the wrong place.
+          throw new ProblemError(
+            400,
+            'invalid-paired-source',
+            'No such directory source',
+            cause.message,
+            { errors: [{ path: 'pairedDirectorySourceId', message: cause.message }] },
+          );
         }
         throw cause;
       }
