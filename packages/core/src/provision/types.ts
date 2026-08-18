@@ -92,6 +92,8 @@ export interface Attribution {
 export type UnprocessableKind =
   | 'no_contracts'
   | 'unresolvable_rule'
+  /** A grant named an entitlement the target catalog does not hold. */
+  | 'unresolvable_grant'
   | 'template_unresolvable'
   | 'container_missing'
   | 'name_generation_exhausted'
@@ -123,6 +125,19 @@ export interface DesiredState {
   account: DesiredAccount | null;
   entitlements: Set<string>;
   attribution: Map<string, Attribution[]>;
+  /**
+   * Entitlement id to the grants that put it in the set. Empty for anything a
+   * rule alone produced; both maps carry an entry for anything held for both
+   * reasons, which is the row of spec section 10's matrix where neither is
+   * redundant -- they end independently.
+   */
+  grantAttribution: Map<string, GrantAttribution[]>;
+  /**
+   * Grants left OUT of the set because the entitlement they name is not
+   * `present` in the target catalog. Never empty silently: phase 7 turns each
+   * of these into a `ProvisionException`.
+   */
+  grantExceptions: GrantException[];
   /**
    * This person holds contracts and every one of them starts after the
    * horizon: they have not started yet.
@@ -186,8 +201,14 @@ export interface TargetObject {
 
 export interface KnownHolding {
   entitlementId: string;
-  origin: 'rule' | 'manual' | 'discovered';
+  /**
+   * 'request' means an approved AccessRequest put it into desired state. One
+   * value for both grant origins -- a delegated administrator's act is an
+   * AccessRequest too -- and `grantedByRequestId` says which.
+   */
+  origin: 'rule' | 'request' | 'manual' | 'discovered';
   grantedByRuleId: string | null;
+  grantedByRequestId: string | null;
 }
 
 /** One account as Syntra believes it to be. */
@@ -265,10 +286,67 @@ export interface PlannedAction {
   after: Record<string, unknown> | null;
   attributedRuleIds: string[];
   /**
+   * The AccessGrant rows that caused this action, when a request did.
+   * Alongside `attributedRuleIds`, never instead of it: an entitlement held
+   * for both reasons carries both, because the two end independently.
+   */
+  attributedGrantIds: string[];
+  /**
    * True for a rename, a re-enable outside the window, and a re-create of a
    * vanished account. These need an explicit tick even in a run the guard did
    * not block.
    */
   requiresConfirmation: boolean;
   message: string | null;
+}
+
+/**
+ * An AccessGrant, flattened to what desired state needs.
+ *
+ * The caller hands in every `pending`/`active` grant for the target; the
+ * WINDOW filter and the employment gate are applied inside `desiredState`,
+ * deliberately, because both are properties of this function's answer and not
+ * of the caller's query. `endsAt` travels so the attribution can say "until
+ * 30 June" without a second read, and so the window filter has something to
+ * compare.
+ */
+export interface GrantFacts {
+  grantId: string;
+  requestId: string | null;
+  entitlementId: string;
+  startsAt: Date;
+  endsAt: Date | null;
+}
+
+/**
+ * A grant that could not be put into desired state, and why.
+ *
+ * NOT an `unprocessable` person. A rule is authored by an administrator for a
+ * population, so a rule naming a missing entitlement means the administrator's
+ * intent cannot be evaluated at all and the safe answer is "this person gets
+ * no actions". A grant is one person's approved request, and dropping their
+ * whole desired state because of it would revoke everything else they hold.
+ * So the grant is skipped and named, and the run carries a
+ * `ProvisionException` for it — visible, per-person, working-list shaped,
+ * exactly as Provision already does for the rule case.
+ */
+export interface GrantException {
+  grantId: string;
+  entitlementId: string;
+  message: string;
+}
+
+/**
+ * Why somebody holds something because they asked for it.
+ *
+ * A SEPARATE map from `attribution` rather than a second member of it.
+ * `Attribution` is read as `{ ruleId, ruleName, contractId }` by four modules
+ * in this package; retagging it into a discriminated union means rewriting all
+ * four. This carries the same information additively, and "why does this
+ * person hold this?" answers from the two maps together.
+ */
+export interface GrantAttribution {
+  grantId: string;
+  requestId: string | null;
+  endsAt: Date | null;
 }

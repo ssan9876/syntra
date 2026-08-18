@@ -38,6 +38,8 @@ const desired = (over: Partial<DesiredState> = {}): DesiredState => ({
     correlationKey: 'anna.novak',
   },
   entitlements: new Set(['ent-finance']),
+  grantAttribution: new Map(),
+  grantExceptions: [],
   attribution: new Map([
     [
       'ent-finance',

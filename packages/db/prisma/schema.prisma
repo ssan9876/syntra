@@ -1425,9 +1425,15 @@ model ProvisionException {
   personId       String       @db.Uuid
   person         Person       @relation(fields: [personId], references: [id], onDelete: Restrict)
   targetSystemId String       @db.Uuid
-  /// 'no_contracts' | 'unresolvable_rule' | 'template_unresolvable'
-  /// | 'container_missing' | 'name_generation_exhausted'
-  /// | 'target_read_incomplete' | 'account_conflict'
+  /// 'no_contracts' | 'unresolvable_rule' | 'unresolvable_grant'
+  /// | 'template_unresolvable' | 'container_missing'
+  /// | 'name_generation_exhausted' | 'target_read_incomplete'
+  /// | 'account_conflict'
+  ///
+  /// `unresolvable_grant` is the one that is NOT a person-level refusal: the
+  /// grant is skipped and named, and the person's other access is untouched.
+  /// Comment-only — this column has no check constraint and a `///` produces
+  /// no DDL, so no migration follows from adding a value here.
   kind    String
   message String
 

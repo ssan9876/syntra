@@ -92,6 +92,11 @@ const evaluate = (
     person,
     contracts,
     rules,
+    // Widened deliberately rather than made optional with a default: `grants`
+    // optional is exactly the shape that would let `run-service.ts` forget to
+    // pass it and produce a plan that silently revokes every requested
+    // entitlement in the tenant.
+    grants: [],
     profile,
     entitlementStatus: present,
     existingCorrelationKey: null,
@@ -593,6 +598,7 @@ describe('desiredState — persons Provision cannot process', () => {
       person: { ...person, givenName: '  ', familyName: '' },
       contracts: [],
       rules: [financeRule],
+      grants: [],
       profile,
       entitlementStatus: present,
       existingCorrelationKey: null,
@@ -710,6 +716,7 @@ describe('desiredState — persons Provision cannot process', () => {
       person: { ...person, businessEmail: null },
       contracts: [contract()],
       rules: [financeRule],
+      grants: [],
       profile,
       entitlementStatus: present,
       existingCorrelationKey: null,

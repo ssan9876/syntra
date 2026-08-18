@@ -6,6 +6,9 @@ import type {
   ContractFacts,
   DesiredAccount,
   DesiredState,
+  GrantAttribution,
+  GrantException,
+  GrantFacts,
   PersonFacts,
   ProfileFacts,
   RuleFacts,
@@ -15,6 +18,12 @@ export interface DesiredStateInput {
   person: PersonFacts;
   contracts: ContractFacts[];
   rules: RuleFacts[];
+  /**
+   * The subject's grants for THIS target whose window can cover `now`. The
+   * caller filters by target and status; this function applies the window and
+   * the employment gate and then unions.
+   */
+  grants: GrantFacts[];
   profile: ProfileFacts;
   /** The target's catalog. A rule naming anything but `present` is unresolvable. */
   entitlementStatus: ReadonlyMap<string, 'present' | 'missing' | 'unreadable'>;
@@ -304,6 +313,8 @@ export function desiredState(input: DesiredStateInput): DesiredState {
     account: null,
     entitlements: new Set<string>(),
     attribution: new Map<string, Attribution[]>(),
+    grantAttribution: new Map<string, GrantAttribution[]>(),
+    grantExceptions: [],
     notYetStarted: false,
     unprocessable: null,
   };
@@ -389,10 +400,67 @@ export function desiredState(input: DesiredStateInput): DesiredState {
   const entitlements = new Set<string>();
   const attribution = new Map<string, Attribution[]>();
 
+  // A grant says what an ACTIVE person may ADDITIONALLY have. It must never
+  // be evidence that somebody is still employed.
+  //
+  // `activeInWindow.length === 0` is the whole of this gate and it is not
+  // defensive. It is the SAME contract set the account decision below is taken
+  // over, deliberately: a person the account decision treats as gone is a
+  // person the grant gate treats as gone. `planActions` gates
+  // `disable_account`, `deactivate_syntra_user` and `archive_account` on
+  // `!state.account?.required`, and a `permanent` grant has `endsAt: null`, so
+  // its window covers `now` forever. Ungated, a departed person holding any
+  // live grant is never disabled, never deactivated and never archived -- and
+  // the requested entitlement is kept too, because it goes back into
+  // `entitlements` and the revoke loop skips anything still desired. A feature
+  // added to GRANT access would have silently disabled the mechanism that
+  // REMOVES it, and it would have looked like it worked, because the grants
+  // apply correctly and nobody watches for an absence.
+  //
+  // Automate's sweep lapsing these grants on the contract end date is not a
+  // substitute: the sweep and the run are independent jobs with no ordering,
+  // a sweep that trips either guard axis sits unapplied, and a sweep can sit
+  // `blocked` waiting for a human. None of those may keep a leaver's account
+  // alive in the meantime.
+  const grantsInWindow =
+    activeInWindow.length === 0
+      ? []
+      : input.grants.filter(
+          (grant) =>
+            grant.startsAt <= input.now &&
+            (grant.endsAt === null || input.now < grant.endsAt),
+        );
+
+  // A grant naming an entitlement the catalog does not hold is skipped and
+  // named, not proposed. Proposing it produces a `grant_entitlement` against
+  // a group that is not there, which fails `not_found` every night forever
+  // with nothing recording why; making the PERSON unprocessable for it -- the
+  // answer the rule pre-check above gives -- would revoke everything else
+  // they hold over one request.
+  const grantExceptions: GrantException[] = [];
+  const grantsInForce = grantsInWindow.filter((grant) => {
+    const status = input.entitlementStatus.get(grant.entitlementId) ?? 'missing';
+    if (status === 'present') return true;
+    grantExceptions.push({
+      grantId: grant.grantId,
+      entitlementId: grant.entitlementId,
+      message: `grant ${grant.grantId} names entitlement ${grant.entitlementId}, which is ${status} in the target catalog; it is left out of desired state rather than planned against a group that is not there`,
+    });
+    return false;
+  });
+
   // Whether an account is required is decided over the whole pre-hire window,
   // so a pre-hire's account exists before their start date and somebody whose
   // contract ends inside the window keeps theirs until it does.
-  const accountRequired = accountGrantedBy(rules, person, activeInWindow);
+  const accountRequiredFromRules = accountGrantedBy(rules, person, activeInWindow);
+
+  // A group membership without an account is not a thing a directory can
+  // hold. Somebody whose only claim on this target is a request grant still
+  // needs an account to hold it, or the grant action is planned against an
+  // account nothing created and fails `not_found` every night. The employment
+  // gate above is what stops this reading as "still employed", and the union
+  // is taken AFTER it so it cannot bypass the gate.
+  const accountRequired = accountRequiredFromRules || grantsInForce.length > 0;
 
   // Which entitlements are held is decided at `now`, so a pre-hire holds
   // nothing until the day they start. This is the security property the two
@@ -410,6 +478,21 @@ export function desiredState(input: DesiredStateInput): DesiredState {
     }
   }
 
+  // The union. The entitlement set is what the rules produce PLUS what the
+  // grants name, and the two attributions are kept apart so each can end
+  // without taking the other with it (spec section 10's matrix).
+  const grantAttribution = new Map<string, GrantAttribution[]>();
+  for (const grant of grantsInForce) {
+    entitlements.add(grant.entitlementId);
+    const existing = grantAttribution.get(grant.entitlementId) ?? [];
+    existing.push({
+      grantId: grant.grantId,
+      requestId: grant.requestId,
+      endsAt: grant.endsAt,
+    });
+    grantAttribution.set(grant.entitlementId, existing);
+  }
+
   if (!accountRequired) {
     // No account is required. This covers a leaver (every contract ended), a
     // mover whose target is no longer theirs, and a future joiner. The first
@@ -421,6 +504,12 @@ export function desiredState(input: DesiredStateInput): DesiredState {
       account: emptyAccount(),
       entitlements,
       attribution,
+      // A leaver reaches here with both empty by construction -- the gate
+      // emptied `grantsInWindow`. An ACTIVE person with no rule-granted
+      // account and one unresolvable grant also reaches here, carrying an
+      // exception that must not be dropped.
+      grantAttribution,
+      grantExceptions,
       notYetStarted,
     };
   }
@@ -570,6 +659,8 @@ export function desiredState(input: DesiredStateInput): DesiredState {
     },
     entitlements,
     attribution,
+    grantAttribution,
+    grantExceptions,
     // An account is required, so by construction a contract is in force
     // somewhere in the window and this person has started or is about to.
     notYetStarted: false,

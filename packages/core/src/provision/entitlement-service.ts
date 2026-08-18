@@ -48,6 +48,49 @@ export async function remitFor(
 }
 
 /**
+ * Entitlements on this target that a LIVE AccessGrant names.
+ *
+ * Deliberately NOT unioned into `remitFor`. The remit is the tenant-wide set
+ * `reconcile` classifies EVERY account's holdings against, and one person's
+ * approved request must not change what five hundred other people's holdings
+ * mean: nobody has ever requested "Stats", no rule names it, five hundred
+ * people hold it by hand, and Anna's approved request would reclassify all
+ * five hundred at once as `unmanaged_entitlement` with
+ * `proposedForRevocation` under `authoritative`. Provision's per-entitlement
+ * guard axis would make that run confirmable rather than silent, but a run
+ * that suddenly wants to revoke five hundred holdings because one person
+ * asked for something is not a review a human can do usefully.
+ *
+ * The revocation path does not need it either: `reconcile` puts an
+ * entitlement into `heldWithinRemit` unconditionally when Provision granted
+ * it, before the remit is consulted, so a requested entitlement that leaves
+ * desired state is differenced out and revoked whether or not it is in remit.
+ *
+ * This set is for the two consumers that are PER ACCOUNT and where the
+ * omission is a real defect: `apply.ts`'s `archive_account` strip list, which
+ * would otherwise leave a requested membership on an archived account, and
+ * `run-service.ts`'s unreadable-membership probe, which would otherwise never
+ * look at the groups requests put people into.
+ *
+ * `expired`, `lapsed` and `revoked` are excluded, so the set narrows again
+ * when the last grant ends.
+ */
+export async function grantedEntitlementsFor(
+  tx: TenantClient,
+  targetId: string,
+): Promise<Set<string>> {
+  const granted = await tx.accessGrant.findMany({
+    where: {
+      targetSystemId: targetId,
+      resourceType: 'entitlement',
+      status: { in: ['scheduled', 'pending', 'active'] },
+    },
+    select: { resourceId: true },
+  });
+  return new Set(granted.map((g) => g.resourceId));
+}
+
+/**
  * Thrown when a catalog read identified nothing and the catalog is not empty.
  *
  * See `refreshEntitlements`. Carries the count it declined to condemn so the

@@ -18,6 +18,8 @@ const desired = (over: Partial<DesiredState> = {}): DesiredState => ({
     correlationKey: 'anna.novak',
   },
   entitlements: new Set(['ent-finance']),
+  grantAttribution: new Map(),
+  grantExceptions: [],
   attribution: new Map(),
   notYetStarted: false,
   unprocessable: null,
@@ -47,7 +49,12 @@ const known = (over: Partial<KnownAccount> = {}): KnownAccount => ({
   disabledAt: null,
   lastAppliedAttributes: { displayName: ['Anna Novak'] },
   holdings: [
-    { entitlementId: 'ent-finance', origin: 'rule', grantedByRuleId: 'rule-finance' },
+    {
+      entitlementId: 'ent-finance',
+      origin: 'rule',
+      grantedByRuleId: 'rule-finance',
+      grantedByRequestId: null,
+    },
   ],
   ...over,
 });
@@ -260,7 +267,14 @@ describe('reconcile — the four outcomes', () => {
       const output = run({
         known: [
           known({
-            holdings: [{ entitlementId: 'ent-finance', origin, grantedByRuleId: null }],
+            holdings: [
+              {
+                entitlementId: 'ent-finance',
+                origin,
+                grantedByRuleId: null,
+                grantedByRequestId: null,
+              },
+            ],
           }),
         ],
       });
@@ -288,8 +302,18 @@ describe('reconcile — the four outcomes', () => {
       known: [
         known({
           holdings: [
-            { entitlementId: 'ent-finance', origin: 'rule', grantedByRuleId: 'rule-finance' },
-            { entitlementId: 'ent-teaching', origin: 'rule', grantedByRuleId: 'rule-teaching' },
+            {
+              entitlementId: 'ent-finance',
+              origin: 'rule',
+              grantedByRuleId: 'rule-finance',
+              grantedByRequestId: null,
+            },
+            {
+              entitlementId: 'ent-teaching',
+              origin: 'rule',
+              grantedByRuleId: 'rule-teaching',
+              grantedByRequestId: null,
+            },
           ],
         }),
       ],

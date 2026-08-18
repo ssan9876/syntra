@@ -15,7 +15,7 @@ import { queueMessage } from '../notify/delivery.js';
 import type { Transport } from '../notify/notification-service.js';
 import { putSecret } from '../vault/vault-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
-import { remitFor } from './entitlement-service.js';
+import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
 // Core's own, from the module that owns DN rendering in this package
 // (Ruling P22). `@syntra/connectors` carries a byte-identical local copy
 // because it sits below core in the dependency graph; there is no reason for
@@ -499,6 +499,11 @@ export async function applyProvisionRun(
     // names, in both enforcement modes. The archive's strip list is filtered
     // through this.
     const remit = await remitFor(tx, run.targetSystemId);
+    // Beside the remit, never merged into it. Archive strips what Provision
+    // manages for THIS account, which includes anything a live grant put
+    // there; because the filter is per account, widening it here reclassifies
+    // nobody else's holdings. See `grantedEntitlementsFor`.
+    const grantedEntitlements = await grantedEntitlementsFor(tx, run.targetSystemId);
 
     await tx.provisionRun.update({
       where: { id: runId },
@@ -518,7 +523,7 @@ export async function applyProvisionRun(
         ...(confirmed ? { confirmedByUserId: options.confirmedByUserId } : {}),
       },
     });
-    return { run, target, config, profile, remit };
+    return { run, target, config, profile, remit, grantedEntitlements };
   });
 
   const actions = await withTenant(tenantId, (tx) =>
@@ -589,6 +594,7 @@ export async function applyProvisionRun(
         maxAttempts: prepared.target.maxAttempts,
         targetSystemId: prepared.run.targetSystemId,
         remit: prepared.remit,
+        grantedEntitlements: prepared.grantedEntitlements,
         profile: prepared.profile,
         actorUserId,
         sleep,
@@ -677,6 +683,12 @@ interface ApplyOneOptions {
   maxAttempts: number;
   targetSystemId: string;
   remit: ReadonlySet<string>;
+  /**
+   * Entitlements a live grant names on this target. Read beside the remit and
+   * never merged into it: the remit is tenant-wide and the archive strip is
+   * per account. See `grantedEntitlementsFor`.
+   */
+  grantedEntitlements: ReadonlySet<string>;
   profile: { initialPasswordPolicy: unknown; initialPasswordDelivery: string } | null;
   actorUserId: string | null;
   sleep: (ms: number) => Promise<void>;
@@ -979,7 +991,16 @@ async function readActionContext(
       correlationKey: account.correlationKey,
       entitlementExternalId: entitlement?.externalId ?? null,
       managed: holdings
-        .filter((h) => options.remit.has(h.entitlement.id) && h.entitlement.dn !== null)
+        // Archive strips what Provision manages for THIS account, which
+        // includes anything a live grant put there. Without the second term a
+        // requested membership survives on an archived account -- access that
+        // outlives employment by the shortest possible route.
+        .filter(
+          (h) =>
+            (options.remit.has(h.entitlement.id) ||
+              options.grantedEntitlements.has(h.entitlement.id)) &&
+            h.entitlement.dn !== null,
+        )
         .map((h) => ({ entitlementId: h.entitlement.id, dn: h.entitlement.dn! })),
     };
   });
@@ -1211,13 +1232,30 @@ async function finish(
               select: { id: true },
             });
             if (held === null) {
+              // The origin is decided by what CAUSED the action, not by a
+              // default. `origin` separates convergence from drift and is not
+              // derivable after the fact, which is why Provision records it at
+              // the moment of the grant -- and a request grant recorded as
+              // `rule` would answer "why does this person hold this?" with a
+              // rule that does not name it.
+              const requestId =
+                action.grantId === null
+                  ? null
+                  : ((
+                      await tx.accessGrant.findUnique({
+                        where: { id: action.grantId },
+                        select: { requestId: true },
+                      })
+                    )?.requestId ?? null);
+
               await tx.accountEntitlement.create({
                 data: {
                   tenantId: action.tenantId,
                   accountId: meta.accountId,
                   entitlementId: meta.entitlementId,
-                  origin: 'rule',
+                  origin: action.grantId === null ? 'rule' : 'request',
                   grantedByRuleId: action.attributedRuleIds[0] ?? null,
+                  grantedByRequestId: requestId,
                 },
               });
             }

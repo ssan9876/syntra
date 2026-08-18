@@ -15,12 +15,13 @@ import { evaluateProvisionGuard } from './guard.js';
 import { planActions } from './plan.js';
 import { reconcile, unprocessableScope } from './reconcile.js';
 import { conditionSchema } from './condition.js';
-import { remitFor } from './entitlement-service.js';
+import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
 import { targetWithCredential } from './target-service.js';
 import type {
   ContractFacts,
   DesiredState,
   DraftDriftFinding,
+  GrantFacts,
   KnownAccount,
   PersonFacts,
   RuleFacts,
@@ -438,11 +439,16 @@ export async function previewProvisionRun(
       // truncated membership, and probing every group in a domain would be an
       // arbitrary number of extra round trips.
       const remit = await remitFor(tx, targetSystemId);
+      // Separate from the remit, and NOT unioned into it. See the docstring
+      // on `grantedEntitlementsFor`: the remit is tenant-wide and one
+      // person's approved request must not reclassify everybody else's
+      // holdings. This set has exactly one consumer here -- the probe below.
+      const grantedEntitlements = await grantedEntitlementsFor(tx, targetSystemId);
       const entitlementRows = await tx.entitlement.findMany({
         where: { targetSystemId },
         select: { id: true, externalId: true, dn: true },
       });
-      return { target, config, profile, remit, entitlementRows };
+      return { target, config, profile, remit, grantedEntitlements, entitlementRows };
     });
 
     // Phase 4. The slow, network-bound part, holding no database connection.
@@ -523,7 +529,16 @@ export async function previewProvisionRun(
     const readableEntitlementIds = new Set<string>();
     for (const entitlement of catalog) {
       const id = externalIdToEntitlementId.get(entitlement.externalId);
-      if (id === undefined || !prepared.remit.has(id)) continue;
+      // A group nothing manages cannot be probed usefully; a group a live
+      // grant names IS managed, per account, even though it is outside the
+      // tenant-wide remit. `prepared.remit` is passed to `reconcile`
+      // UNCHANGED -- see the docstring on `grantedEntitlementsFor`.
+      if (
+        id === undefined ||
+        !(prepared.remit.has(id) || prepared.grantedEntitlements.has(id))
+      ) {
+        continue;
+      }
       try {
         await connector.readEntitlementMembers(config, entitlement.dn);
         readableEntitlementIds.add(id);
@@ -651,6 +666,24 @@ export async function previewProvisionRun(
         // second column read for one.
         orderBy: { login: 'asc' },
       });
+      const grants = await tx.accessGrant.findMany({
+        where: {
+          targetSystemId,
+          resourceType: 'entitlement',
+          // Only grants whose window can cover `now`. `scheduled` is excluded
+          // here as well as by the date filter in `desiredState`, so a run
+          // never even loads a grant that confers nothing.
+          status: { in: ['pending', 'active'] },
+        },
+        select: {
+          id: true,
+          requestId: true,
+          subjectPersonId: true,
+          resourceId: true,
+          startsAt: true,
+          endsAt: true,
+        },
+      });
       const previous = await tx.provisionRun.findFirst({
         where: { targetSystemId, status: { in: ['applied', 'partially_applied'] } },
         orderBy: { startedAt: 'desc' },
@@ -661,6 +694,7 @@ export async function previewProvisionRun(
         entitlements,
         accounts,
         users,
+        grants,
         previousPersons: previous?.personsWithActiveContract ?? null,
         hasEverApplied: prepared.target.lastAppliedRunAt !== null,
       };
@@ -741,6 +775,21 @@ export async function previewProvisionRun(
     const desired: DesiredState[] = [];
     const contractsByPerson = new Map<string, ContractFacts[]>();
 
+    // Indexed ONCE, outside the loop. A per-person query here would be one
+    // round trip per person against a 5000 ms transaction budget.
+    const grantsByPerson = new Map<string, GrantFacts[]>();
+    for (const grant of snapshot.grants) {
+      const list = grantsByPerson.get(grant.subjectPersonId) ?? [];
+      list.push({
+        grantId: grant.id,
+        requestId: grant.requestId,
+        entitlementId: grant.resourceId,
+        startsAt: grant.startsAt,
+        endsAt: grant.endsAt,
+      });
+      grantsByPerson.set(grant.subjectPersonId, list);
+    }
+
     for (const person of snapshot.persons) {
       const contracts: ContractFacts[] = person.contracts.map((c) => ({
         id: c.id,
@@ -773,6 +822,7 @@ export async function previewProvisionRun(
         person: facts,
         contracts,
         rules: ruleFacts,
+        grants: grantsByPerson.get(person.id) ?? [],
         profile: {
           correlationKeyTemplate: prepared.profile.correlationKeyTemplate,
           maxUniquenessAttempts: prepared.profile.maxUniquenessAttempts,
@@ -805,8 +855,9 @@ export async function previewProvisionRun(
       lastAppliedAttributes: (a.lastAppliedAttributes ?? {}) as Record<string, string[]>,
       holdings: a.entitlements.map((h) => ({
         entitlementId: h.entitlementId,
-        origin: h.origin as 'rule' | 'manual' | 'discovered',
+        origin: h.origin as 'rule' | 'request' | 'manual' | 'discovered',
         grantedByRuleId: h.grantedByRuleId,
+        grantedByRequestId: h.grantedByRequestId,
       })),
     }));
 
@@ -932,6 +983,18 @@ export async function previewProvisionRun(
       ...desired
         .filter((d) => d.unprocessable !== null)
         .map((d) => ({ personId: d.personId, ...d.unprocessable! })),
+      // A grant that named an entitlement the catalog does not hold. Skipped
+      // by `desiredState` rather than made unprocessable -- one bad request
+      // must not revoke everything else the person holds -- and surfaced here
+      // so somebody works it down. The alternative is a request that was
+      // approved, produced no action, and said nothing.
+      ...desired.flatMap((d) =>
+        d.grantExceptions.map((g) => ({
+          personId: d.personId,
+          kind: 'unresolvable_grant' as const,
+          message: g.message,
+        })),
+      ),
       ...[...reconciled.extraUnprocessable].map(([personId, value]) => ({
         personId,
         ...value,
@@ -1072,6 +1135,14 @@ export async function previewProvisionRun(
           before: (a.before ?? undefined) as never,
           after: (a.after ?? undefined) as never,
           attributedRuleIds: a.attributedRuleIds,
+          // Exactly one grant, or none. A person holding one entitlement
+          // through two grants is possible only through the extension path,
+          // where the superseding grant replaces the old one before the run --
+          // so a second id here would mean the supersession did not happen,
+          // and writing an arbitrary one of the two would attach the outcome
+          // to the wrong request.
+          grantId:
+            a.attributedGrantIds.length === 1 ? a.attributedGrantIds[0]! : null,
           requiresConfirmation: a.requiresConfirmation,
           message: a.message,
           // `planActions` already returned these sorted by ACTION_ORDER, and

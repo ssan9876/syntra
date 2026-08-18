@@ -43,6 +43,17 @@ export interface PersonAccessEntitlement {
   grantedByRuleId: string | null;
   grantedByRuleName: string | null;
   /**
+   * The AccessGrant behind an `origin: 'request'` holding, and when it ends.
+   *
+   * Null for everything a rule, an administrator or the target itself put
+   * there. This is the other half of "why does this person hold this": a rule
+   * and a contract, a request and its approver, or both -- the two
+   * attributions are independent and end independently.
+   */
+  grantId: string | null;
+  requestId: string | null;
+  grantEndsAt: Date | null;
+  /**
    * The stamp no longer accounts for this holding: the rule it names has been
    * deleted, disabled, or edited to stop naming this entitlement — or the
    * holding says `origin: 'rule'` and carries no stamp at all. `currentRules`
@@ -278,6 +289,31 @@ export async function explainPersonAccess(
         return [rule.id, contract];
       }),
     );
+    /**
+     * Every live grant this person holds, read ONCE.
+     *
+     * The plan's Step 9 wrote this as a `findFirst` inside the per-holding
+     * map, which is one round trip per holding inside `withTenant`'s 5000 ms
+     * budget -- the exact shape Global Constraint 2 forbids, and the map is
+     * synchronous besides. Keyed on `entitlementId` because that is what the
+     * holding has; `requestId` is carried on the holding itself and is what
+     * ties the two together.
+     */
+    const grantRows = await tx.accessGrant.findMany({
+      where: { subjectPersonId: personId, resourceType: 'entitlement' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, resourceId: true, requestId: true, endsAt: true },
+    });
+    const grantByEntitlementAndRequest = new Map<string, { id: string; endsAt: Date | null }>();
+    for (const row of grantRows) {
+      // `orderBy createdAt desc` and first-wins: the newest grant for this
+      // (entitlement, request) pair is the one in force.
+      const key = `${row.resourceId}:${row.requestId ?? ''}`;
+      if (!grantByEntitlementAndRequest.has(key)) {
+        grantByEntitlementAndRequest.set(key, { id: row.id, endsAt: row.endsAt });
+      }
+    }
+
     const attribution = (rule: { id: string; name: string }) => {
       const contract = contractByRule.get(rule.id) ?? null;
       return {
@@ -348,6 +384,19 @@ export async function explainPersonAccess(
             contractDescription: contract === null ? null : describeContract(contract),
             grantedByRuleId: holding.grantedByRuleId,
             grantedByRuleName: stamped?.name ?? null,
+            grantId:
+              holding.grantedByRequestId === null
+                ? null
+                : (grantByEntitlementAndRequest.get(
+                    `${holding.entitlementId}:${holding.grantedByRequestId}`,
+                  )?.id ?? null),
+            requestId: holding.grantedByRequestId,
+            grantEndsAt:
+              holding.grantedByRequestId === null
+                ? null
+                : (grantByEntitlementAndRequest.get(
+                    `${holding.entitlementId}:${holding.grantedByRequestId}`,
+                  )?.endsAt ?? null),
             attributionStale: holding.origin === 'rule' && !stampLives,
             currentRules: asking.map(attribution),
           };

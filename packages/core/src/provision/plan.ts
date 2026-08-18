@@ -230,6 +230,12 @@ export function planActions(input: PlanInput): PlannedAction[] {
         before: null,
         after: null,
         attributedRuleIds: [],
+        // Defaulted here, overridden only by `grant_entitlement`.
+        // `revoke_entitlement` keeps it EMPTY deliberately: by the time a
+        // revocation is proposed the grant has already left the union, so
+        // there is no live grant to attribute it to. Reflection finds the
+        // removal by its `SweepAction` instead.
+        attributedGrantIds: [],
         requiresConfirmation: false,
         message: null,
         ...over,
@@ -422,6 +428,9 @@ export function planActions(input: PlanInput): PlannedAction[] {
             entitlementId,
             after: { held: true },
             attributedRuleIds: attributedFor(entitlementId),
+            attributedGrantIds: (state.grantAttribution.get(entitlementId) ?? []).map(
+              (a) => a.grantId,
+            ),
           });
         }
       }

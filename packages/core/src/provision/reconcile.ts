@@ -59,6 +59,27 @@ export function unprocessableScope(kind: UnprocessableKind): UnprocessableScope 
     // the entitlement decisions are the ones that are poisoned.
     case 'unresolvable_rule':
       return 'grants';
+    /**
+     * A grant naming an entitlement the catalog does not hold.
+     *
+     * **This value never reaches this function**, and that is the design
+     * rather than an oversight: `desiredState` does not set `unprocessable`
+     * for it. It records a `GrantException` and carries on, because a grant is
+     * ONE person's approved request and freezing their whole desired state
+     * over it would revoke everything else they hold — the opposite of what a
+     * rule's failure warrants, where an administrator's intent for a whole
+     * population could not be evaluated. Phase 7 turns the exception into a
+     * `ProvisionException` row so it is a working-list item rather than a
+     * silence.
+     *
+     * It is classified anyway because the exhaustiveness check below is what
+     * makes a kind added without a decision a compile error — and it answers
+     * `grants`, the narrower of the two, so that if some future path ever does
+     * route it here, the blast radius is the entitlement decisions and not the
+     * person's whole account.
+     */
+    case 'unresolvable_grant':
+      return 'grants';
     // An incomplete HR record, a template or a name that could not be
     // produced, a container that is not there, a half-read object, and an
     // account somebody else may own. Each of these makes the ACCOUNT decision
@@ -298,18 +319,36 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
 
     for (const entitlementId of heldAtTarget) {
       const inRemit = input.remit.has(entitlementId);
-      // `origin === 'rule'`, because "Provision granted this" is what the
-      // branch below claims and what `heldWithinRemit` means. A `manual` or
-      // `discovered` holding is one Provision recorded but did not grant, and
-      // counting it here makes it revocable under `additive` — contradicting
-      // this module's own rule that an unmanaged entitlement is kept OUT of
-      // `heldWithinRemit` under that mode, and `types.ts`'s definition of the
-      // set. Latent today only because `apply.ts` writes `origin: 'rule'` at
-      // the one site that creates these rows: a defect held shut by an
-      // unrelated constant, which is not the same as a defect that is not
-      // there.
+      // `rule` OR `request`, because both are grants PROVISION MADE, and
+      // "Provision granted this" is what the branch below claims and what
+      // `heldWithinRemit` means. A `manual` or `discovered` holding is one
+      // Provision recorded but did not grant, and counting it here would make
+      // it revocable under `additive` — contradicting this module's own rule
+      // that an unmanaged entitlement is kept OUT of `heldWithinRemit` under
+      // that mode, and `types.ts`'s definition of the set.
+      //
+      // This line used to read `h.origin === 'rule'` alone, under a comment
+      // saying it was "latent today only because `apply.ts` writes
+      // `origin: 'rule'` at the one site that creates these rows: a defect
+      // held shut by an unrelated constant, which is not the same as a defect
+      // that is not there." Automate removed that constant — `apply.ts` now
+      // writes `'request'` for a holding an approved request caused — and the
+      // defect came live in three places at once, all caught by
+      // `automate/desired-union.test.ts`:
+      //
+      //   - a requested holding was reported as DRIFT under `authoritative`,
+      //     when Syntra did not merely see it, it caused it and can name who
+      //     approved it;
+      //   - a requested holding a rule ALSO granted stopped being differenced
+      //     out when both terms went away, so no revocation was proposed;
+      //   - and the one that matters: **a leaver kept the entitlement their
+      //     request had granted**, because it never entered `heldWithinRemit`
+      //     and so was never revoked. Access outliving employment, by the
+      //     twelfth distinct route found on this programme.
       const granted = account?.holdings.some(
-        (h) => h.entitlementId === entitlementId && h.origin === 'rule',
+        (h) =>
+          h.entitlementId === entitlementId &&
+          (h.origin === 'rule' || h.origin === 'request'),
       );
 
       if (granted) {

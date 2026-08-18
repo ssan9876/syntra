@@ -19,6 +19,7 @@ const action = (
   before: null,
   after: null,
   attributedRuleIds: [],
+  attributedGrantIds: [],
   requiresConfirmation: false,
   message: null,
 });
