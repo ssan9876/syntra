@@ -6,10 +6,12 @@ import {
   idParam,
 } from '@syntra/contracts';
 import {
+  DriftFindingNotFoundError,
   PERMISSIONS,
   PROVISION_JOB,
   ProvisionRunNotAppliableError,
   ProvisionRunNotConfirmableError,
+  acknowledgeDriftFinding,
   applyProvisionRun,
   claimSyntraUsers,
   enqueuePairedSync,
@@ -283,18 +285,23 @@ export async function registerAdminProvisionRunRoutes(
     async (request, reply) => {
       const { id: findingId } = idParam.parse(request.params);
       const body = acknowledgeDriftRequestSchema.parse(request.body);
-      // `updateMany` rather than `update`: a `findingId` that is not there —
-      // or belongs to another tenant, where RLS makes those the same thing —
-      // raises Prisma's P2025 out of `update`, which the error handler can
-      // only report as a bare 500.
-      const { count } = await request.db((tx) =>
-        tx.driftFinding.updateMany({
-          where: { id: findingId },
-          data: { status: body.status },
-        }),
-      );
-      if (count === 0) {
-        throw new ProblemError(404, 'not-found', 'Drift finding not found');
+      // Through the audited core service, like every other write in this
+      // package. This route used to write `driftFinding.updateMany` itself
+      // with no audit entry at all — and acknowledging a finding is exactly
+      // the action an auditor needs recorded: a human saying "this account
+      // holds access Syntra never granted, and that is fine".
+      try {
+        await acknowledgeDriftFinding(
+          request.tenantId,
+          request.session.userId,
+          findingId,
+          body.status,
+        );
+      } catch (cause) {
+        if (cause instanceof DriftFindingNotFoundError) {
+          throw new ProblemError(404, 'not-found', 'Drift finding not found');
+        }
+        throw cause;
       }
       return reply.code(204).send();
     },

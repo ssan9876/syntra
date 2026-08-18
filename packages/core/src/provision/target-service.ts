@@ -47,6 +47,13 @@ export class BusinessRuleNotFoundError extends Error {
   }
 }
 
+export class DriftFindingNotFoundError extends Error {
+  constructor(readonly findingId: string) {
+    super(`no such drift finding: ${findingId}`);
+    this.name = 'DriftFindingNotFoundError';
+  }
+}
+
 /**
  * A rule edited through the wrong target's endpoint, or naming an entitlement
  * another target owns.
@@ -940,6 +947,62 @@ export async function deleteBusinessRule(
       outcome: 'success',
       sourceIp: null,
       payload: { name: rule.name, targetSystemId: rule.targetSystemId },
+    });
+  });
+}
+
+/**
+ * Acknowledges or resolves one drift finding, and records who did it.
+ *
+ * **Audited, which is the whole reason this is a service and not four lines in
+ * a route.** Acknowledging a finding is a person saying "this account holds
+ * access Syntra never granted, and that is fine" — precisely the decision an
+ * auditor needs a name against, and the only write in this package that used
+ * to happen with no audit entry at all. Every other write here delegates to an
+ * audited service, and the route now does too.
+ *
+ * The payload names the field that changed and the transition, and carries
+ * neither `detail` nor `subjectAnchor`: the finding's own row holds those, and
+ * the audit log is not the second place a target's object names should live.
+ *
+ * `findUnique` and a typed error rather than `updateMany` and a count. Row
+ * Level Security makes another tenant's finding invisible, so a null here is
+ * "not there" in both senses, and the route turns it into a 404 — which is
+ * what the route's `updateMany` was reaching for. `update` after the read is
+ * safe for the same reason the read was: both are inside one transaction.
+ */
+export async function acknowledgeDriftFinding(
+  tenantId: string,
+  actorUserId: string | null,
+  findingId: string,
+  status: 'acknowledged' | 'resolved',
+): Promise<void> {
+  await withTenant(tenantId, async (tx) => {
+    const finding = await tx.driftFinding.findUnique({ where: { id: findingId } });
+    if (!finding) throw new DriftFindingNotFoundError(findingId);
+
+    // Nothing changed, so nothing is recorded: an audit trail whose rows
+    // include re-acknowledgements of what was already acknowledged is one
+    // nobody can read the decisions out of.
+    if (finding.status === status) return;
+
+    await tx.driftFinding.update({
+      where: { id: findingId },
+      data: { status },
+    });
+    await recordEvent(tx, {
+      actorUserId,
+      action: 'provision.drift.acknowledge',
+      targetType: 'DriftFinding',
+      targetId: findingId,
+      outcome: 'success',
+      sourceIp: null,
+      payload: {
+        targetSystemId: finding.targetSystemId,
+        kind: finding.kind,
+        changed: ['status'],
+        status: { from: finding.status, to: status },
+      },
     });
   });
 }

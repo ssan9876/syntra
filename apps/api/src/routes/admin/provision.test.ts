@@ -731,6 +731,26 @@ describe('run detail and drift', () => {
       (await get(`/api/admin/targets/${targetId}/drift?status=open`, cookie)).json()
         .findings,
     ).toEqual([]);
+
+    // And it is audited. Acknowledging a finding is a person saying "this
+    // account holds access Syntra never granted, and that is fine", which is
+    // exactly the decision an auditor needs a name against — and this route
+    // used to be the only write in the package with no audit entry at all.
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'provision.drift.acknowledge' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.actorUserId).not.toBeNull();
+    expect(events[0]!.targetId).toBe(findingId);
+    expect(events[0]!.payload).toMatchObject({
+      changed: ['status'],
+      status: { from: 'open', to: 'acknowledged' },
+      kind: 'unmanaged_entitlement',
+    });
+    // The finding's own detail is not copied into the audit log: the row holds
+    // it, and this is not the second place a target's object names should live.
+    expect(events[0]!.payload).not.toHaveProperty('detail');
+    expect(events[0]!.payload).not.toHaveProperty('subjectAnchor');
   });
 
   it('answers 404 for a drift finding that is not there, not 500', async () => {
