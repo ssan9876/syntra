@@ -4,13 +4,12 @@ import {
   first,
   isEnabled,
   type DiscoveredEntitlement,
-  type SourceRecord,
   type TargetConnector,
 } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
-import { resolveInFlightActions } from './apply.js';
+import { resolveInFlightActions, valuesOf } from './apply.js';
 import { desiredState } from './desired.js';
 import { evaluateProvisionGuard } from './guard.js';
 import { planActions } from './plan.js';
@@ -55,25 +54,6 @@ export class ProvisionRunInFlightError extends Error {
  * adopts, which bricks the target on the first crash in that state.
  */
 const NON_TERMINAL = ['running', 'previewed', 'blocked', 'applying'] as const;
-
-/**
- * Every attribute value the target returned under this name, matched
- * case-insensitively.
- *
- * LDAP attribute names are case-insensitive (RFC 4512) and servers differ on
- * the case they echo back, so `record.attributes.memberOf` is a lookup that
- * works against one directory and silently returns nothing against the next —
- * and "this account holds no groups" is not a value this subsystem may guess
- * at. `first()` from `@syntra/connectors` is the single-value half of the same
- * fold; this is the multi-value half, which that function cannot express.
- */
-function valuesOf(record: SourceRecord, attribute: string): string[] {
-  const wanted = attribute.toLowerCase();
-  for (const [key, values] of Object.entries(record.attributes)) {
-    if (key.toLowerCase() === wanted) return values;
-  }
-  return [];
-}
 
 /**
  * A JSON rendering with sorted keys, so two objects that say the same thing

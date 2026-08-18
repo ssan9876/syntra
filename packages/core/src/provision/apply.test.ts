@@ -6,9 +6,9 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 // production code is a fake that will eventually be reached -- and the package
 // declares an `exports` map, so the root import the brief specified does not
 // resolve at all.
-import type { WriteOperation, WriteResult } from '@syntra/connectors';
+import { provenanceValue, type WriteOperation, type WriteResult } from '@syntra/connectors';
 import { FakeTarget } from '@syntra/connectors/testing';
-import { localMasterKeyProvider } from '../vault/master-key.js';
+import { localMasterKeyProvider, type MasterKeyProvider } from '../vault/master-key.js';
 import { getSecret } from '../vault/vault-service.js';
 import {
   createTarget,
@@ -984,32 +984,23 @@ describe('applyProvisionRun', () => {
      * not know whether this landed", and `resolveInFlightActions` is what
      * resolves it against the target on the next run.
      */
-    const landsThenLosesTheAnswer = {
-      test: (c: never) => target.test(c),
-      discoverSchema: (c: never) => target.discoverSchema(c),
-      listEntitlements: (c: never) => target.listEntitlements(c),
-      listContainers: (c: never) => target.listContainers(c),
-      readEntitlementMembers: (c: never, dn: string) =>
-        target.readEntitlementMembers(c, dn),
-      read: (c: never) => target.read(c),
-      write: async (c: never, operation: WriteOperation) => {
-        const answer = await target.write(c, operation as never);
-        if (operation.op === 'create_account') {
-          throw new Error(
-            'Transaction API error: Transaction not found (P2028)',
-          );
-        }
-        return answer;
-      },
-    };
     const run = await previewProvisionRun(tenantId, provider, targetId, {
       now: NOW,
-      connector: landsThenLosesTheAnswer as never,
+      connector: target as never,
     });
-    const result = await applyProvisionRun(tenantId, provider, run.id, {
+    // The finish transaction fails, and the account is already at the target.
+    // Sealing the initial password is a step-3 write and the one this apply
+    // does through `MasterKeyProvider` — which exists so a KMS provider can be
+    // dropped in, and a KMS that is briefly unavailable is exactly the shape
+    // of failure being modelled here.
+    const sealFails: MasterKeyProvider = {
+      wrap: () => Promise.reject(new Error('the key service is unavailable')),
+      unwrap: (wrapped) => provider.unwrap(wrapped),
+    };
+    const result = await applyProvisionRun(tenantId, sealFails, run.id, {
       confirm: true,
       confirmedByUserId: await seedConfirmingUser(),
-      connector: landsThenLosesTheAnswer as never,
+      connector: target as never,
       now: NOW,
       sleep: noSleep,
     });
@@ -1020,7 +1011,11 @@ describe('applyProvisionRun', () => {
     expect(create.status).toBe('in_flight');
     expect(create.message).toMatch(/whether it landed at the target is unknown/);
     expect(result.inFlight).toBe(1);
-    expect(result.failed).toBe(0);
+    // The grant behind it fails, and that is right: the create's anchor was
+    // never written, so there is no object to add to a group. It is counted as
+    // `failed` because it really did fail; the create is counted apart from it
+    // because nobody knows whether the create did.
+    expect(result.failed).toBe(1);
     // It really did land, which is the whole point: the object is there and
     // carries this action's provenance, so the next run adopts it rather than
     // creating a second one.
@@ -1028,35 +1023,6 @@ describe('applyProvisionRun', () => {
     // And the run is not called `applied`, because an action nobody resolved
     // is not an action that finished.
     expect(result.status).toBe('partially_applied');
-  });
-
-  it('records the actions it deferred for want of confirmation', async () => {
-    // Ruling P4. `skipped` used to be computed, returned and discarded, and on
-    // an unattended `autoApply` run that is the whole of "the target looks
-    // healthy and is doing nothing".
-    const run = await previewProvisionRun(tenantId, provider, targetId, {
-      now: NOW,
-      connector: target as never,
-    });
-    const create = (await actionsOf(run.id)).find(
-      (a) => a.actionType === 'create_account',
-    )!;
-    await withTenant(tenantId, (tx) =>
-      tx.provisionAction.update({
-        where: { id: create.id },
-        data: { requiresConfirmation: true },
-      }),
-    );
-    // Applied without a confirmation, which is what a schedule does.
-    const result = await applyProvisionRun(tenantId, provider, run.id, {
-      connector: target as never,
-      now: NOW,
-      sleep: noSleep,
-    });
-    expect(result.deferred).toBe(1);
-    const after = (await actionsOf(run.id)).find((a) => a.id === create.id)!;
-    expect(after.status).toBe('proposed');
-    expect(after.message).toMatch(/requires an explicit confirmation/);
   });
 
   it('escapes the correlation key it renders into a distinguished name', async () => {
@@ -1558,6 +1524,32 @@ describe('applyProvisionRun: the confirmation gate on one action', () => {
     expect(account.status).toBe('disabled');
   });
 
+  it('records what it deferred rather than dropping it silently', async () => {
+    // Ruling P4. The count was computed, returned and discarded, and on the
+    // unattended `autoApply` path — which is exactly the path that never
+    // confirms anything — a deferral nobody records is how a target looks
+    // healthy while doing nothing. The action says why on the run's own
+    // screen, and the run's audit event says how many.
+    await unblockedReenable();
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const enable = (await actionsOf(run.id)).find(
+      (a) => a.actionType === 'enable_account',
+    )!;
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      connector: target as never,
+      sleep: noSleep,
+    });
+    expect(result.deferred).toBe(1);
+    expect(
+      (await actionsOf(run.id)).find((a) => a.id === enable.id)!.message,
+    ).toMatch(/requires an explicit confirmation/);
+    const events = await eventsOf('provision.run.apply');
+    expect((events.at(-1)!.payload as { deferred?: number }).deferred).toBe(1);
+  });
+
   it('applies the same action once it is confirmed', async () => {
     const { accountId, anchor } = await unblockedReenable();
     const run = await previewProvisionRun(tenantId, provider, targetId, {
@@ -1879,6 +1871,91 @@ describe('resolveInFlightActions', () => {
       tx.targetAccount.findFirstOrThrow({}),
     );
     expect(account.anchor).toBeNull();
+  });
+
+  it('reads the marker from the attribute the target is configured to use', async () => {
+    /**
+     * Three faults in one line, all of them ending in a permanent `conflict`.
+     *
+     * `record.attributes.info` hardcodes the DEFAULT provenance attribute —
+     * `adTargetConfigSchema` lets a tenant set another, and `createAccount`
+     * writes the marker into whatever it says — and reads it by case-sensitive
+     * property access, when LDAP attribute names are case-insensitive and
+     * servers differ on the case they echo back. Then it matched by SUBSTRING,
+     * which `provenanceActionId` forbids in as many words: it adopts the
+     * account created by `<id>X` while replaying `<id>`.
+     *
+     * The reader is hand-rolled because it is the target's ANSWER that is
+     * under test, and the marker is built with the connector's own
+     * `provenanceValue`, which is the function that writes it in production.
+     */
+    await updateTarget(tenantId, provider, null, targetId, {
+      config: { ...config, provenanceAttribute: 'extensionAttribute1' },
+    } as never);
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const createId = (await actionsOf(run.id)).find(
+      (a) => a.actionType === 'create_account',
+    )!.id;
+    await withTenant(tenantId, (tx) =>
+      tx.provisionAction.update({
+        where: { id: createId },
+        data: { status: 'in_flight' },
+      }),
+    );
+
+    const answering = (marker: string) => ({
+      test: (c: never) => target.test(c),
+      discoverSchema: (c: never) => target.discoverSchema(c),
+      listEntitlements: (c: never) => target.listEntitlements(c),
+      listContainers: (c: never) => target.listContainers(c),
+      readEntitlementMembers: (c: never, dn: string) =>
+        target.readEntitlementMembers(c, dn),
+      write: (c: never, op: WriteOperation) => target.write(c, op as never),
+      read: async function* () {
+        yield {
+          anchor: 'anchor-configured-attribute',
+          objectType: 'user',
+          dn: `CN=anna.novak,${USERS}`,
+          attributes: {
+            // Echoed in a case the code did not write, as a real directory may.
+            SAMAccountName: ['anna.novak'],
+            userAccountControl: ['512'],
+            ExtensionAttribute1: [marker],
+          },
+        };
+      },
+    });
+
+    // A marker whose action id merely CONTAINS this action's id. Ids are uuids
+    // in production so this cannot arise by accident, which is exactly why a
+    // substring test survives review: it is wrong in a way no fixture happens
+    // to produce.
+    await resolveInFlightActions(tenantId, provider, targetId, {
+      connector: answering(provenanceValue(`${createId}X`)) as never,
+    });
+    expect((await actionsOf(run.id)).find((a) => a.id === createId)!.status).toBe(
+      'proposed',
+    );
+
+    await withTenant(tenantId, (tx) =>
+      tx.provisionAction.update({
+        where: { id: createId },
+        data: { status: 'in_flight' },
+      }),
+    );
+    await resolveInFlightActions(tenantId, provider, targetId, {
+      connector: answering(provenanceValue(createId)) as never,
+    });
+    expect((await actionsOf(run.id)).find((a) => a.id === createId)!.status).toBe(
+      'applied',
+    );
+    const account = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findFirstOrThrow({}),
+    );
+    expect(account.anchor).toBe('anchor-configured-attribute');
   });
 
   it('reads the target once however many actions are in flight', async () => {

@@ -3,7 +3,9 @@ import { withTenant, type TenantClient } from '@syntra/db';
 import {
   adTargetConnector,
   isRetryable,
+  provenanceActionId,
   SYNTRA_ONLY_ACTION_TYPES,
+  type SourceRecord,
   type TargetConnector,
   type WriteOperation,
   type WriteResult,
@@ -233,6 +235,29 @@ const asAttributes = (value: unknown): Record<string, string[]> =>
     : (value as Record<string, string[]>);
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+/**
+ * Every attribute value the target returned under this name, matched
+ * case-insensitively.
+ *
+ * LDAP attribute names are case-insensitive (RFC 4512) and servers differ on
+ * the case they echo back, so `record.attributes.info` is a lookup that works
+ * against one directory and silently returns nothing against the next — and
+ * "this object carries no provenance marker" is not a value this subsystem may
+ * guess at, because the answer to it is whether a create landed. `first()`
+ * from `@syntra/connectors` is the single-value half of the same fold; this is
+ * the multi-value half, which that function cannot express.
+ *
+ * Exported so `run-service.ts` reads target attributes the same way. Two folds
+ * that must agree is a fold that eventually does not.
+ */
+export function valuesOf(record: SourceRecord, attribute: string): string[] {
+  const wanted = attribute.toLowerCase();
+  for (const [key, values] of Object.entries(record.attributes)) {
+    if (key.toLowerCase() === wanted) return values;
+  }
+  return [];
+}
 
 /**
  * The distinguished name an object is to be placed at.
@@ -663,15 +688,13 @@ type ActionOutcome =
 /**
  * One action, all three steps.
  *
- * Throws only what the caller records as failed, and it stops throwing the
- * moment the intent has been committed. **A failure to RECORD an action is not
- * the same event as a failure to PERFORM it.** Once step 1 has committed, the
- * action is `in_flight` and the write either has happened or is about to; a
- * throw out of step 2 or step 3 — a socket that hung up, Prisma's P2028 on the
- * finish transaction — leaves the outcome genuinely unknown. Recording
- * `failed` there is a claim, and on a create it is a wrong one: the account
- * landed at the target, and `failed` loses its anchor and its sealed password,
- * so every later run re-proposes the create into a permanent `conflict`.
+ * Throws only what the caller records as failed. **A failure to RECORD an
+ * action is not the same event as a failure to PERFORM it**, and step 3 is
+ * where the two used to be collapsed: a throw out of the finish transaction —
+ * Prisma's P2028 is the ordinary one — was recorded as `failed` even though
+ * the connector had already answered and the account had already landed at the
+ * target. `failed` loses its anchor and its sealed password, and every later
+ * run re-proposes the create into a permanent `conflict`.
  *
  * `in_flight` is the state that exists for "we do not know whether this
  * landed", and `resolveInFlightActions` is the machinery that asks the target
@@ -726,91 +749,97 @@ async function applyOneAction(
   let result: WriteResult;
   let throttledForMs = 0;
   let throttledAttempts = 0;
-  // Flipped by step 1's commit and never back. Everything after that point is
-  // inside the honest gap between Syntra and the target.
-  let intentCommitted = false;
 
-  try {
-    for (;;) {
-      const attempt = attempts + 1;
+for (;;) {
+    const attempt = attempts + 1;
 
-      // Step 1: mark in_flight and record the INTENT, committed before the call.
-      // This is what makes the gap observable.
-      await withTenant(tenantId, async (tx) => {
-        await tx.provisionAction.update({
-          where: { id: action.id },
-          data: { status: 'in_flight' },
-        });
-        await recordEvent(tx, {
-          actorUserId: options.actorUserId,
-          action: 'provision.action.intent',
-          targetType: 'ProvisionAction',
-          targetId: action.id,
-          outcome: 'success',
-          sourceIp: null,
-          payload: { actionType: action.actionType, attempt },
-        });
+    // Step 1: mark in_flight and record the INTENT, committed before the call.
+    // This is what makes the gap observable.
+    await withTenant(tenantId, async (tx) => {
+      await tx.provisionAction.update({
+        where: { id: action.id },
+        data: { status: 'in_flight' },
       });
-      intentCommitted = true;
+      await recordEvent(tx, {
+        actorUserId: options.actorUserId,
+        action: 'provision.action.intent',
+        targetType: 'ProvisionAction',
+        targetId: action.id,
+        outcome: 'success',
+        sourceIp: null,
+        payload: { actionType: action.actionType, attempt },
+      });
+    });
 
-      // Step 2: the connector call. No transaction. No connection held.
-      result = await options.connector.write(options.config as never, operation);
+    // Step 2: the connector call. No transaction. No connection held.
+    result = await options.connector.write(options.config as never, operation);
 
-      if (result.ok && operation.op === 'create_account' && result.anchor === undefined) {
-        // A create with no anchor is an object Syntra can never address again:
-        // the next run cannot match it to the row it reserved, proposes another
-        // create, and the connector answers `conflict` — permanently, because
-        // the object carries a different action's provenance marker. Retried
-        // rather than recorded: the connector's own adopt-by-provenance path
-        // returns the anchor once the directory catches up.
-        result = {
-          ok: false,
-          message:
-            'the target reported the account was created and returned no anchor for it, so Syntra cannot address the object again',
-          failure: 'transient',
-        };
-      }
-
-      if (result.ok) {
-        attempts = attempt;
-        break;
-      }
-
-      if (result.failure === 'throttled') {
-        // Not counted against maxAttempts: a throttle is the target asking for
-        // patience, not the operation being wrong. Bounded all the same — see
-        // THROTTLE_BUDGET_MS.
-        const wait = throttleWait(result.retryAfterMs, attempt);
-        throttledAttempts += 1;
-        if (
-          throttledAttempts >= MAX_THROTTLED_ATTEMPTS ||
-          throttledForMs + wait > THROTTLE_BUDGET_MS
-        ) {
-          attempts = attempt;
-          // A retryable failure, so `finish` records `pending_retry`: the action
-          // is not wrong, the target is busy, and the next run for this target
-          // picks it up provided the plan still wants it.
-          result = {
-            ok: false,
-            message: `the target throttled this action ${throttledAttempts} times over ${Math.round(
-              throttledForMs / 1000,
-            )}s and did not accept it; the next run for this target picks it up`,
-            failure: 'transient',
-          };
-          break;
-        }
-        throttledForMs += wait;
-        await options.sleep(wait);
-        continue;
-      }
-
-      attempts = attempt;
-      if (!isRetryable(result.failure)) break;
-      if (attempts >= options.maxAttempts) break;
-      await options.sleep(backoffMs(attempts));
+    if (result.ok && operation.op === 'create_account' && result.anchor === undefined) {
+      // A create with no anchor is an object Syntra can never address again:
+      // the next run cannot match it to the row it reserved, proposes another
+      // create, and the connector answers `conflict` — permanently, because
+      // the object carries a different action's provenance marker. Retried
+      // rather than recorded: the connector's own adopt-by-provenance path
+      // returns the anchor once the directory catches up.
+      result = {
+        ok: false,
+        message:
+          'the target reported the account was created and returned no anchor for it, so Syntra cannot address the object again',
+        failure: 'transient',
+      };
     }
 
-    // Step 3: the outcome, the state change and the RESULT event, together.
+    if (result.ok) {
+      attempts = attempt;
+      break;
+    }
+
+    if (result.failure === 'throttled') {
+      // Not counted against maxAttempts: a throttle is the target asking for
+      // patience, not the operation being wrong. Bounded all the same — see
+      // THROTTLE_BUDGET_MS.
+      const wait = throttleWait(result.retryAfterMs, attempt);
+      throttledAttempts += 1;
+      if (
+        throttledAttempts >= MAX_THROTTLED_ATTEMPTS ||
+        throttledForMs + wait > THROTTLE_BUDGET_MS
+      ) {
+        attempts = attempt;
+        // A retryable failure, so `finish` records `pending_retry`: the action
+        // is not wrong, the target is busy, and the next run for this target
+        // picks it up provided the plan still wants it.
+        result = {
+          ok: false,
+          message: `the target throttled this action ${throttledAttempts} times over ${Math.round(
+            throttledForMs / 1000,
+          )}s and did not accept it; the next run for this target picks it up`,
+          failure: 'transient',
+        };
+        break;
+      }
+      throttledForMs += wait;
+      await options.sleep(wait);
+      continue;
+    }
+
+    attempts = attempt;
+    if (!isRetryable(result.failure)) break;
+    if (attempts >= options.maxAttempts) break;
+    await options.sleep(backoffMs(attempts));
+  }
+
+  // Step 3: the outcome, the state change and the RESULT event, together.
+  //
+  // Wrapped, and ONLY this call. The connector has been asked to perform the
+  // operation and has answered; everything left is bookkeeping, and a throw
+  // out of bookkeeping — Prisma's P2028 on this transaction is the ordinary
+  // one — says nothing about what happened at the target. Recording `failed`
+  // there discards a landed create's anchor and its sealed password, and every
+  // later run re-proposes the create into a permanent `conflict`. The two
+  // `finish` calls above are deliberately outside this: they are reached
+  // before step 1 commits and before any connector call, so a throw from
+  // either really does mean nothing was attempted.
+  try {
     return await finish(tenantId, action.id, result, {
       attempts,
       accountId: context.accountId,
@@ -833,14 +862,13 @@ async function applyOneAction(
         : {}),
     });
   } catch (cause) {
-    // Nothing was attempted, so the caller's `failed` is the honest answer.
-    if (!intentCommitted) throw cause;
     return recordActionUnresolved(tenantId, action.id, options.actorUserId, cause);
   }
 }
 
 /**
- * An action whose apply threw AFTER its intent was committed.
+ * An action whose OUTCOME could not be recorded, after the connector was asked
+ * to perform it.
  *
  * Left `in_flight` — deliberately, and this is the one place in the apply that
  * leaves a row non-terminal on purpose. The write may have landed; the next
@@ -953,14 +981,16 @@ async function readActionContext(
 }
 
 /**
- * An action whose apply threw **before its intent was committed**.
+ * An action whose apply threw outside step 3.
  *
- * Marked failed so the run can carry on. Nothing was attempted at the target:
- * the throw came from resolving the action's context, from expressing it as a
- * write operation, or from `applySyntraUserAction`, which touches no connector
- * at all. A throw from after step 1's commit goes to `recordActionUnresolved`
- * instead and is left `in_flight`, because then the answer is genuinely not
- * known.
+ * Marked failed so the run can carry on, and the throw really is the answer
+ * here. A connector does not signal an operational failure by throwing —
+ * `adTargetConnector.write` catches everything and returns a `WriteResult`
+ * (`ad/connector.ts`, the outer `catch` around the whole switch) — so a throw
+ * out of step 2 is a connector that does not honour its contract, not a socket
+ * whose answer was lost. A throw out of step 3, where the operation HAS been
+ * performed and only the recording failed, goes to `recordActionUnresolved`
+ * instead and is left `in_flight`.
  */
 async function recordActionThrew(
   tenantId: string,
@@ -1369,6 +1399,19 @@ export async function resolveInFlightActions(
 
   if (prepared.actions.length === 0) return 0;
 
+  /**
+   * The attribute this target actually keeps the provenance marker in.
+   *
+   * `adTargetConfigSchema` defaults `provenanceAttribute` to `info` and lets a
+   * tenant set anything else — and `createAccount` writes the marker into
+   * whatever it says. Reading a hardcoded `info` back therefore finds nothing
+   * on any target configured otherwise, so a landed create is never adopted:
+   * permanent `conflict`, by a different route to the same place.
+   */
+  const provenanceAttribute =
+    (prepared.config as { provenanceAttribute?: string } | null)?.provenanceAttribute ??
+    'info';
+
   // ONCE, outside any transaction, before the loop. Reading the whole target
   // per in-flight action means a process that died with forty actions in
   // flight reads the entire directory forty times, and every one of those
@@ -1381,8 +1424,8 @@ export async function resolveInFlightActions(
       // and PostgreSQL does not, so an exact comparison reads a write that
       // landed as one that did not — and the next run then creates a second
       // object and lands in `conflict`. Fifth case defect on this programme.
-      correlationKey: (record.attributes.sAMAccountName?.[0] ?? '').toLowerCase(),
-      provenance: record.attributes.info ?? [],
+      correlationKey: (valuesOf(record, 'sAMAccountName')[0] ?? '').toLowerCase(),
+      provenance: valuesOf(record, provenanceAttribute),
     });
   }
 
@@ -1399,7 +1442,15 @@ export async function resolveInFlightActions(
         ? objects.find(
             (o) =>
               o.correlationKey === key &&
-              o.provenance.some((value) => value.includes(action.id)),
+              // PARSED AND COMPARED WHOLE, with the connector's own parser.
+              // `value.includes(action.id)` adopts the account created by
+              // action `abc-10` while replaying action `abc-1`, which is the
+              // one outcome the marker exists to prevent — handing one
+              // person's account to another — and `provenanceActionId` says so
+              // in as many words. Their parser and not a second one: the
+              // format is written in `@syntra/connectors` and must be read
+              // there too, or the two drift and nothing notices.
+              o.provenance.some((value) => provenanceActionId(value) === action.id),
           )
         : undefined;
 
