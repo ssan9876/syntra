@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
-import { AppShell } from '../../components/AppShell.js';
-import { ApiError, api } from '../../session/api.js';
-import { useApiResource } from '../../session/use-api-resource.js';
+import { useState } from "react";
+import { Alert, Button, Empty, Field, Panel, SkeletonRows } from "@syntra/ui";
+import { AppShell } from "../../components/AppShell.js";
+import { ApiError, api } from "../../session/api.js";
+import { useApiResource } from "../../session/use-api-resource.js";
 
 interface Managed {
   delegationId: string;
@@ -21,27 +21,32 @@ interface Member {
 
 function ResourcePanel({ resource }: { resource: Managed }) {
   const path = `/api/portal/automate/managed-resources/${resource.resourceType}/${resource.resourceId}/members`;
-  const { data, error, loading, reload } = useApiResource<{ members: Member[] }>(path);
-  const [personId, setPersonId] = useState('');
+  const { data, error, loading, reload } = useApiResource<{
+    members: Member[];
+  }>(path);
+  const [personId, setPersonId] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const act = async (action: 'grant' | 'revoke', subjectPersonIds: string[]) => {
+  const act = async (
+    action: "grant" | "revoke",
+    subjectPersonIds: string[],
+  ) => {
     setBusy(true);
     setProblem(null);
     try {
       await api(
         `/api/portal/automate/managed-resources/${resource.resourceType}/${resource.resourceId}/${action}`,
         {
-          method: 'POST',
+          method: "POST",
           body: JSON.stringify({
             subjectPersonIds,
-            justification: 'managed from the portal',
+            justification: "managed from the portal",
             durationDays: null,
           }),
         },
       );
-      setPersonId('');
+      setPersonId("");
       reload();
     } catch (cause) {
       // "That person is outside the audience for this resource" and "ask an
@@ -50,7 +55,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong.',
+          : "Something went wrong.",
       );
     } finally {
       setBusy(false);
@@ -58,7 +63,10 @@ function ResourcePanel({ resource }: { resource: Managed }) {
   };
 
   return (
-    <Panel title={resource.resourceId} description={`You manage this ${resource.resourceType}`}>
+    <Panel
+      title={resource.resourceId}
+      description={`You manage this ${resource.resourceType}`}
+    >
       <div className="space-y-3 p-4">
         {error && <Alert tone="danger">{error}</Alert>}
         {problem && <Alert tone="warning">{problem}</Alert>}
@@ -66,10 +74,17 @@ function ResourcePanel({ resource }: { resource: Managed }) {
         {!loading && (
           <ul className="divide-y divide-border-subtle">
             {(data?.members ?? []).map((member) => (
-              <li key={member.id} className="flex items-center justify-between py-2">
+              <li
+                key={member.id}
+                className="flex items-center justify-between py-2"
+              >
                 <span className="text-ink">{member.subjectPersonId}</span>
-                {resource.capabilities.includes('revoke') && (
-                  <Button size="sm" loading={busy} onClick={() => act('revoke', [member.subjectPersonId])}>
+                {resource.capabilities.includes("revoke") && (
+                  <Button
+                    size="sm"
+                    loading={busy}
+                    onClick={() => act("revoke", [member.subjectPersonId])}
+                  >
                     Remove
                   </Button>
                 )}
@@ -77,12 +92,20 @@ function ResourcePanel({ resource }: { resource: Managed }) {
             ))}
           </ul>
         )}
-        {resource.capabilities.includes('grant') && (
+        {resource.capabilities.includes("grant") && (
           <div className="flex items-end gap-2">
             <div className="flex-1">
-              <Field label="Add somebody (person id)" value={personId} onChange={setPersonId} />
+              <Field
+                label="Add somebody (person id)"
+                value={personId}
+                onChange={setPersonId}
+              />
             </div>
-            <Button variant="primary" loading={busy} onClick={() => act('grant', [personId])}>
+            <Button
+              variant="primary"
+              loading={busy}
+              onClick={() => act("grant", [personId])}
+            >
               Add
             </Button>
           </div>
@@ -94,7 +117,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
 
 export function ManagedResourcesPage() {
   const { data, error, loading } = useApiResource<{ resources: Managed[] }>(
-    '/api/portal/automate/managed-resources',
+    "/api/portal/automate/managed-resources",
   );
 
   return (
@@ -102,8 +125,8 @@ export function ManagedResourcesPage() {
       <div className="mx-auto w-full max-w-3xl px-6 py-8">
         <h1 className="text-lg font-semibold text-ink">Resources you manage</h1>
         <p className="mt-1 text-muted">
-          Adding and removing people here records a request in your name, exactly as if it
-          had gone through the catalog.
+          Adding and removing people here records a request in your name,
+          exactly as if it had gone through the catalog.
         </p>
         {error && <Alert tone="danger">{error}</Alert>}
         <div className="mt-6 space-y-6">
@@ -114,8 +137,8 @@ export function ManagedResourcesPage() {
           )}
           {!loading && (data?.resources ?? []).length === 0 && (
             <Empty title="You do not manage anything yet">
-              An administrator delegates a specific group or application to you, and it
-              appears here.
+              An administrator delegates a specific group or application to you,
+              and it appears here.
             </Empty>
           )}
           {!loading &&

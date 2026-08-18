@@ -5,10 +5,16 @@ export interface FieldProps
   label: string;
   value: string;
   onChange(value: string): void;
-  hint?: string;
-  error?: string;
+  // `| undefined` on each, deliberately. `exactOptionalPropertyTypes` is on
+  // repo-wide, and every caller computes these from a lookup --
+  // `error={errors.name}` off a `Record<string, string>` is `string |
+  // undefined` -- so without it the ordinary usage is a type error and the
+  // call sites grow conditional spreads for a value the component is happy to
+  // receive. Widening here permits strictly more and changes no behaviour.
+  hint?: string | undefined;
+  error?: string | undefined;
   /** Marks the control invalid without repeating a message shown elsewhere. */
-  invalid?: boolean;
+  invalid?: boolean | undefined;
 }
 
 export function Field({

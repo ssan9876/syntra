@@ -23,6 +23,13 @@ import { BusinessRulesPage } from './BusinessRulesPage.js';
 import { ProvisionRunsPage } from './ProvisionRunsPage.js';
 import { ProvisionRunDetailPage } from './ProvisionRunDetailPage.js';
 import { PersonAccessPage } from './PersonAccessPage.js';
+import { ProductsPage } from './ProductsPage.js';
+import { ProductEditorPage } from './ProductEditorPage.js';
+import { WorkflowEditorPage } from './WorkflowEditorPage.js';
+import { RequestQueuePage } from './RequestQueuePage.js';
+import { RequestDetailAdminPage } from './RequestDetailAdminPage.js';
+import { SweepsPage } from './SweepsPage.js';
+import { SweepDetailPage } from './SweepDetailPage.js';
 
 interface NavItem {
   to: string;
@@ -41,6 +48,10 @@ const NAV: NavItem[] = [
   { to: '/admin/sources', label: 'Directory sources', permission: 'sync.read' },
   { to: '/admin/sync-runs', label: 'Sync runs', permission: 'sync.read' },
   { to: '/admin/targets', label: 'Target systems', permission: 'provision.read' },
+  { to: '/admin/automate/products', label: 'Catalog', permission: 'automate.read' },
+  { to: '/admin/automate/workflows', label: 'Approval workflows', permission: 'automate.read' },
+  { to: '/admin/automate/requests', label: 'Requests', permission: 'automate.read' },
+  { to: '/admin/automate/sweeps', label: 'Expiry sweeps', permission: 'automate.read' },
   { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
   { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
 ];
@@ -108,6 +119,16 @@ export function AdminApp() {
               path="targets/:id/runs/:runId"
               element={<ProvisionRunDetailPage />}
             />
+            <Route path="automate/products" element={<ProductsPage />} />
+            {/* Before the parametric route, so "new" is a page rather than an
+                id that will 404 on its way to the editor. */}
+            <Route path="automate/products/new" element={<ProductEditorPage />} />
+            <Route path="automate/products/:id" element={<ProductEditorPage />} />
+            <Route path="automate/workflows" element={<WorkflowEditorPage />} />
+            <Route path="automate/requests" element={<RequestQueuePage />} />
+            <Route path="automate/requests/:id" element={<RequestDetailAdminPage />} />
+            <Route path="automate/sweeps" element={<SweepsPage />} />
+            <Route path="automate/sweeps/:id" element={<SweepDetailPage />} />
             <Route path="applications" element={<ApplicationsPage />} />
             <Route path="applications/:id" element={<ApplicationDetailPage />} />
             <Route path="policy" element={<PoliciesPage />} />

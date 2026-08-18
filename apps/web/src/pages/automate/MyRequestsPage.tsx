@@ -1,8 +1,8 @@
-import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
-import { AppShell } from '../../components/AppShell.js';
-import { useApiResource } from '../../session/use-api-resource.js';
-import { REQUEST_LABEL, REQUEST_TONE, when } from './status.js';
+import { Link } from "react-router-dom";
+import { Alert, Empty, Panel, SkeletonRows, Status } from "@syntra/ui";
+import { AppShell } from "../../components/AppShell.js";
+import { useApiResource } from "../../session/use-api-resource.js";
+import { REQUEST_LABEL, REQUEST_TONE, when } from "./status.js";
 
 interface RequestRow {
   id: string;
@@ -14,7 +14,7 @@ interface RequestRow {
 
 export function MyRequestsPage() {
   const { data, error, loading } = useApiResource<{ requests: RequestRow[] }>(
-    '/api/portal/automate/requests',
+    "/api/portal/automate/requests",
   );
 
   return (
@@ -28,24 +28,33 @@ export function MyRequestsPage() {
             {!loading && (data?.requests ?? []).length === 0 && (
               <div className="p-6">
                 <Empty title="You have not asked for anything yet">
-                  Anything you request appears here with where it is and who it is with.
+                  Anything you request appears here with where it is and who it
+                  is with.
                 </Empty>
               </div>
             )}
             {!loading && (data?.requests ?? []).length > 0 && (
               <ul className="divide-y divide-border-subtle">
                 {data!.requests.map((row) => (
-                  <li key={row.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                  <li
+                    key={row.id}
+                    className="flex items-center justify-between gap-4 px-4 py-3"
+                  >
                     <div>
-                      <Link to={`/requests/${row.id}`} className="font-medium text-ink hover:text-primary">
-                        {row.product?.name ?? 'Requested access'}
+                      <Link
+                        to={`/requests/${row.id}`}
+                        className="font-medium text-ink hover:text-primary"
+                      >
+                        {row.product?.name ?? "Requested access"}
                       </Link>
-                      <p className="text-sm text-muted">Asked on {when(row.submittedAt)}</p>
+                      <p className="text-sm text-muted">
+                        Asked on {when(row.submittedAt)}
+                      </p>
                       {row.statusReason && (
                         <p className="text-sm text-muted">{row.statusReason}</p>
                       )}
                     </div>
-                    <Status tone={REQUEST_TONE[row.status] ?? 'neutral'}>
+                    <Status tone={REQUEST_TONE[row.status] ?? "neutral"}>
                       {REQUEST_LABEL[row.status] ?? row.status}
                     </Status>
                   </li>
