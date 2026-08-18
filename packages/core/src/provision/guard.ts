@@ -468,6 +468,13 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
     };
   }
 
-  if (tripped.length === 0) return { blocked: false };
-  return { blocked: true, requiresConfirmation: true, reasons: tripped };
+  // `unmeasurable` is deliberately included rather than dropped. It can only
+  // hold the create axis against a target reporting no accounts at all, and
+  // `accountsAtTarget === 0 && hasEverApplied` has already refused outright
+  // above — so on this path it is empty. Reported anyway, because a reason
+  // computed and then discarded is how a control comes to be switched off by
+  // an edit nobody notices.
+  const reasons = [...tripped, ...unmeasurable];
+  if (reasons.length === 0) return { blocked: false };
+  return { blocked: true, requiresConfirmation: true, reasons };
 }
