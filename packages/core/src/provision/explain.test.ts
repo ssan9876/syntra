@@ -233,6 +233,175 @@ describe('explainPersonAccess', () => {
       accounts: [],
     });
   });
+
+  // --- the recorded reason, checked against the rules as they stand ---
+
+  /** Edits the seeded rule, leaving its condition alone. */
+  const editSeededRule = (over: { entitlementIds?: string[]; enabled?: boolean }) =>
+    upsertBusinessRule(tenantId, null, targetId, {
+      id: ruleId,
+      name: 'Finance staff',
+      condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+      grantsAccount: true,
+      enabled: true,
+      entitlementIds: [entitlementId],
+      ...over,
+    });
+
+  /** A second rule that also asks for the seeded entitlement. */
+  const secondRule = () =>
+    upsertBusinessRule(tenantId, null, targetId, {
+      name: 'Finance analysts',
+      condition: { field: 'contract.jobTitle', op: 'equals', value: 'Analyst' },
+      grantsAccount: true,
+      enabled: true,
+      entitlementIds: [entitlementId],
+    });
+
+  it('confirms the recorded rule still grants it, and says so', async () => {
+    await seedHolding();
+    const holding = (await explainPersonAccess(tenantId, personId)).accounts[0]!
+      .entitlements[0]!;
+    expect(holding.attributionStale).toBe(false);
+    expect(holding.grantedByRuleId).toBe(ruleId);
+    expect(holding.currentRules.map((r) => r.ruleName)).toEqual(['Finance staff']);
+  });
+
+  it('names the rule that grants it now, not the one that granted it in January', async () => {
+    // January: R1 grants Alice Finance-RW, stamped R1. March: an administrator
+    // drops Finance-RW from R1 -- its condition untouched, still matching her
+    // -- and creates R2, which grants it. The holding is not rewritten,
+    // because `apply.ts` skips the create when a live holding exists. The page
+    // read "origin: rule -- rule: Finance staff", which is complete, plausible
+    // and false: R1 has not granted it since March, and R2, which actually
+    // holds the access in place, was never named. Revoke R1 on that page and
+    // Alice keeps the access.
+    await seedHolding();
+    await editSeededRule({ entitlementIds: [] });
+    await secondRule();
+
+    const holding = (await explainPersonAccess(tenantId, personId)).accounts[0]!
+      .entitlements[0]!;
+    expect(holding.ruleName).toBe('Finance analysts');
+    expect(holding.contractDescription).toContain('Analyst');
+    expect(holding.attributionStale).toBe(true);
+    // The stamp is still reported -- as history, which is what it is.
+    expect(holding.grantedByRuleId).toBe(ruleId);
+    expect(holding.grantedByRuleName).toBe('Finance staff');
+    expect(holding.currentRules.map((r) => r.ruleName)).toEqual(['Finance analysts']);
+  });
+
+  it('names no rule at all when nothing asks for the entitlement any more', async () => {
+    // The other half: the stamp is dead and nothing replaced it. Naming the
+    // dead rule would be the same falsehood; naming nothing is true, and it
+    // says the next run will revoke this.
+    await seedHolding();
+    await editSeededRule({ entitlementIds: [] });
+
+    const holding = (await explainPersonAccess(tenantId, personId)).accounts[0]!
+      .entitlements[0]!;
+    expect(holding.ruleId).toBeNull();
+    expect(holding.ruleName).toBeNull();
+    expect(holding.contractId).toBeNull();
+    expect(holding.attributionStale).toBe(true);
+    expect(holding.currentRules).toEqual([]);
+  });
+
+  it('does not credit a disabled rule with granting anything', async () => {
+    // `desiredState` skips a disabled rule and Ruling P27 takes its
+    // entitlements out of the remit, so it is not why anybody holds anything.
+    await seedHolding();
+    await editSeededRule({ enabled: false });
+
+    const holding = (await explainPersonAccess(tenantId, personId)).accounts[0]!
+      .entitlements[0]!;
+    expect(holding.ruleName).toBeNull();
+    expect(holding.attributionStale).toBe(true);
+    expect(holding.currentRules).toEqual([]);
+  });
+
+  it('names the surviving rule when the recorded one has been deleted', async () => {
+    // The multi-attribution case, which needs no edit at all: two rules
+    // attribute one grant, `attributedRuleIds[0]` records one and discards the
+    // other. Delete the recorded one -- `grantedByRuleId` carries no foreign
+    // key, so the stamp dangles -- and the page used to read `origin: 'rule'`
+    // beside `ruleId: null`: granted by a rule, no rule, while the surviving
+    // rule held the access in place, unnamed.
+    await seedHolding();
+    await secondRule();
+    await withTenant(tenantId, (tx) => tx.businessRule.delete({ where: { id: ruleId } }));
+
+    const holding = (await explainPersonAccess(tenantId, personId)).accounts[0]!
+      .entitlements[0]!;
+    expect(holding.origin).toBe('rule');
+    expect(holding.ruleName).toBe('Finance analysts');
+    expect(holding.grantedByRuleId).toBe(ruleId);
+    expect(holding.grantedByRuleName).toBeNull();
+    expect(holding.attributionStale).toBe(true);
+  });
+
+  it('lists every rule that currently asks for the entitlement', async () => {
+    // "Show every rule that currently asks for it": revoking one of two and
+    // expecting the access to go is exactly the mistake a single name invites.
+    await seedHolding();
+    await secondRule();
+
+    const holding = (await explainPersonAccess(tenantId, personId)).accounts[0]!
+      .entitlements[0]!;
+    expect(holding.currentRules.map((r) => r.ruleName)).toEqual([
+      'Finance analysts',
+      'Finance staff',
+    ]);
+    // Each with the contract that satisfies IT, not the first contract found.
+    expect(holding.currentRules.every((r) => r.contractId !== null)).toBe(true);
+    expect(holding.attributionStale).toBe(false);
+  });
+
+  it('does not attribute a discovered holding to a rule that would also grant it', async () => {
+    // `origin` says a rule is not why this is here. The live set still names
+    // the rule that asks for it, which is the useful half, but the answer to
+    // "why does this person have this" stays "somebody put them in the group".
+    await seedHolding({ origin: 'discovered', grantedByRuleId: null });
+    const holding = (await explainPersonAccess(tenantId, personId)).accounts[0]!
+      .entitlements[0]!;
+    expect(holding.ruleId).toBeNull();
+    expect(holding.attributionStale).toBe(false);
+    expect(holding.currentRules.map((r) => r.ruleName)).toEqual(['Finance staff']);
+  });
+
+  it('ignores a rule that names the entitlement at another target', async () => {
+    const otherTargetId = (
+      await createTarget(tenantId, provider, null, {
+        name: 'Other AD',
+        config,
+        bindPassword: 'secret',
+      })
+    ).id;
+    // The SAME entitlement row, named by a rule belonging to another target:
+    // a rule cannot grant access at a target it does not manage, and
+    // `upsertBusinessRule` refuses the pairing, so this is written directly.
+    await seedHolding();
+    await editSeededRule({ entitlementIds: [] });
+    await withTenant(tenantId, async (tx) => {
+      const rule = await tx.businessRule.create({
+        data: {
+          tenantId,
+          targetSystemId: otherTargetId,
+          name: 'Someone else’s rule',
+          condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+          enabled: true,
+        },
+      });
+      await tx.ruleEntitlement.create({
+        data: { tenantId, ruleId: rule.id, entitlementId },
+      });
+    });
+
+    const holding = (await explainPersonAccess(tenantId, personId)).accounts[0]!
+      .entitlements[0]!;
+    expect(holding.currentRules).toEqual([]);
+    expect(holding.ruleName).toBeNull();
+  });
 });
 
 describe('previewRuleImpact', () => {

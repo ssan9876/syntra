@@ -20,10 +20,48 @@ export interface PersonAccessEntitlement {
   entitlementId: string;
   displayName: string;
   origin: string;
+  /**
+   * The rule this holding is attributed to **as verified against the rules as
+   * they stand now** — never a rule that no longer asks for this entitlement.
+   *
+   * The recorded stamp when the rule still names the entitlement and is still
+   * enabled; otherwise, for a holding whose origin is `rule`, the first rule
+   * that currently does ask for it; otherwise null. See `currentRules` for the
+   * whole live set and `grantedByRuleId` for the stamp itself.
+   */
   ruleId: string | null;
   ruleName: string | null;
   contractId: string | null;
   contractDescription: string | null;
+  /**
+   * What `apply.ts` stamped on the holding at the moment of the grant:
+   * `attributedRuleIds[0]`, the first of possibly several attributing rules,
+   * never updated afterwards and left dangling when that rule is deleted.
+   * History, and useful as history — but not an answer to "why does this
+   * person have this **now**".
+   */
+  grantedByRuleId: string | null;
+  grantedByRuleName: string | null;
+  /**
+   * The stamp no longer accounts for this holding: the rule it names has been
+   * deleted, disabled, or edited to stop naming this entitlement — or the
+   * holding says `origin: 'rule'` and carries no stamp at all. `currentRules`
+   * is then the only true answer, and an empty `currentRules` beside a true
+   * `attributionStale` means nothing asks for this access any more.
+   */
+  attributionStale: boolean;
+  /**
+   * Every enabled rule on this account's target that names this entitlement
+   * **and** matches an active contract of this person today: the live reason
+   * the access is in place, resolved the way `desiredState` resolves it rather
+   * than read off a stamp.
+   */
+  currentRules: {
+    ruleId: string;
+    ruleName: string;
+    contractId: string | null;
+    contractDescription: string | null;
+  }[];
 }
 
 export interface PersonAccess {
@@ -78,6 +116,40 @@ function contractFacts(
  * the fact if the reason is not recorded at the time — which is why
  * `AccountEntitlement.origin` and `grantedByRuleId` are written at the moment
  * of the grant rather than derived later.
+ *
+ * **Recorded is not the same as still true, and this page has to say which.**
+ * `grantedByRuleId` is written exactly once, at `apply.ts`, as
+ * `attributedRuleIds[0]` — the first of possibly several attributing rules —
+ * and nothing ever updates it: the create is skipped entirely when a live
+ * holding already exists, so a later rule taking the holding over never
+ * restamps it, and deleting the stamped rule leaves the column dangling
+ * (`grantedByRuleId` carries no foreign key). So an answer read off that
+ * column alone is plausible, complete, and can be false in the only part that
+ * matters:
+ *
+ * - January: `R1` ("Finance staff") grants Alice `Finance-RW`, stamped `R1`.
+ * - March: an administrator drops `Finance-RW` from `R1` — its condition
+ *   untouched, still matching Alice — and creates `R2`, which grants it. The
+ *   holding is not rewritten, because it is already held.
+ * - The page said *"Finance-RW — origin: rule — rule: Finance staff"*. `R1`
+ *   has not granted it since March, and `R2`, which actually holds the access
+ *   in place, was never named. Revoke `R1` on that page and Alice keeps it.
+ *
+ * So the stamp is intersected against the rule's **current** `RuleEntitlement`
+ * rows before it is presented, and the live attribution is resolved the way
+ * `desiredState` resolves it: every enabled rule on that account's target that
+ * names the entitlement and matches an active contract. `ruleId` never names a
+ * rule that does not currently ask for this; `attributionStale` says when the
+ * stamp stopped accounting for it; `currentRules` names all of them, which is
+ * also the multi-attribution case — two rules attributing one grant, of which
+ * `attributedRuleIds[0]` recorded one and discarded the other, so deleting the
+ * recorded one used to render `origin: 'rule'` beside `ruleId: null`:
+ * "granted by a rule, no rule".
+ *
+ * The rules read is bounded and stays inside the transaction: the stamped
+ * rules, plus the enabled rules that name one of the entitlements THIS PERSON
+ * holds. It follows the number of rules an administrator wrote for those
+ * entitlements, never the size of the directory.
  */
 export async function explainPersonAccess(
   tenantId: string,
@@ -107,13 +179,50 @@ export async function explainPersonAccess(
         ),
       ),
     ];
-    const rules =
-      // `{ in: [] }` is a query that returns nothing and still costs a round
-      // trip; more to the point, the empty case is where this slice keeps
-      // finding defects, so it is written out rather than left to Prisma.
-      ruleIds.length === 0
+    // The entitlements this person actually holds, and the targets they hold
+    // them at: the bound on the live-attribution read below.
+    const heldEntitlementIds = [
+      ...new Set(accounts.flatMap((a) => a.entitlements.map((h) => h.entitlementId))),
+    ];
+    const targetIds = [...new Set(accounts.map((a) => a.targetSystemId))];
+
+    /**
+     * Two questions, one read: which rules are STAMPED on these holdings, and
+     * which rules currently ASK for them.
+     *
+     * `{ in: [] }` is a query that returns nothing and still costs a round
+     * trip; more to the point, the empty case is where this slice keeps
+     * finding defects, so it is written out rather than left to Prisma — and
+     * an `OR: []` matches every row, which here would read every rule in the
+     * tenant.
+     */
+    const ruleFilters = [
+      ...(ruleIds.length === 0 ? [] : [{ id: { in: ruleIds } }]),
+      ...(heldEntitlementIds.length === 0
         ? []
-        : await tx.businessRule.findMany({ where: { id: { in: ruleIds } } });
+        : [
+            {
+              enabled: true,
+              targetSystemId: { in: targetIds },
+              entitlements: { some: { entitlementId: { in: heldEntitlementIds } } },
+            },
+          ]),
+    ];
+    const rules =
+      ruleFilters.length === 0
+        ? []
+        : await tx.businessRule.findMany({
+            where: { OR: ruleFilters },
+            include: { entitlements: { select: { entitlementId: true } } },
+            // Total and stable: `currentRules` is a list on a screen and two
+            // reads of the same data must order it the same way. `name` is not
+            // unique, so the id breaks the tie.
+            orderBy: [{ name: 'asc' }, { id: 'asc' }],
+          });
+    /** Which entitlements each rule names TODAY. */
+    const namedByRule = new Map(
+      rules.map((r) => [r.id, new Set(r.entitlements.map((j) => j.entitlementId))]),
+    );
 
     /**
      * Parsed, not cast.
@@ -151,6 +260,34 @@ export async function explainPersonAccess(
       now,
     );
 
+    /**
+     * Which contract satisfies each rule, resolved once per rule rather than
+     * once per holding: the first active one whose facts the rule's condition
+     * accepts. `null` means no active contract satisfies it — or that the
+     * condition could not be parsed, which is withheld rather than guessed.
+     */
+    const contractByRule = new Map(
+      rules.map((rule) => {
+        const condition = conditionById.get(rule.id) ?? null;
+        const contract =
+          condition === null
+            ? null
+            : (active.find((c) =>
+                evaluateCondition(condition, contractFacts(c, person?.status ?? 'active')),
+              ) ?? null);
+        return [rule.id, contract];
+      }),
+    );
+    const attribution = (rule: { id: string; name: string }) => {
+      const contract = contractByRule.get(rule.id) ?? null;
+      return {
+        ruleId: rule.id,
+        ruleName: rule.name,
+        contractId: contract?.id ?? null,
+        contractDescription: contract === null ? null : describeContract(contract),
+      };
+    };
+
     return {
       personId,
       accounts: accounts.map((account) => ({
@@ -160,27 +297,59 @@ export async function explainPersonAccess(
         status: account.status,
         anchor: account.anchor,
         entitlements: account.entitlements.map((holding) => {
-          const rule =
+          const stamped =
             holding.grantedByRuleId === null
               ? null
               : (ruleById.get(holding.grantedByRuleId) ?? null);
-          const condition = rule === null ? null : (conditionById.get(rule.id) ?? null);
-          // Which contract satisfied the rule: the first active one whose
-          // facts the rule's condition accepts.
-          const contract =
-            condition === null
-              ? null
-              : (active.find((c) =>
-                  evaluateCondition(condition, contractFacts(c, person?.status ?? 'active')),
-                ) ?? null);
+          // The stamp still accounts for this holding only if the rule it
+          // names exists, is enabled, and STILL NAMES this entitlement. A
+          // disabled rule grants nothing (`desiredState` skips it), and a rule
+          // edited to drop the entitlement stopped asking for it on the day of
+          // the edit — neither is an answer to "why does this person have this
+          // now".
+          const stampLives =
+            stamped !== null &&
+            stamped.enabled &&
+            (namedByRule.get(stamped.id)?.has(holding.entitlementId) ?? false);
+          // Every rule that currently asks for this entitlement FOR THIS
+          // PERSON: names it, is enabled, belongs to this account's target,
+          // and matches an active contract.
+          const asking = rules.filter(
+            (rule) =>
+              rule.enabled &&
+              rule.targetSystemId === account.targetSystemId &&
+              (namedByRule.get(rule.id)?.has(holding.entitlementId) ?? false) &&
+              (contractByRule.get(rule.id) ?? null) !== null,
+          );
+          /**
+           * The answer presented as the reason.
+           *
+           * The stamp when it still holds; otherwise — and only for a holding
+           * that claims a rule put it there — the first rule that currently
+           * does ask for it, so that "granted by a rule, no rule" is answered
+           * with the rule that is actually holding the access in place. A
+           * `manual` or `discovered` holding gets no rule here however many
+           * rules would also ask for it: its origin says a rule is not why it
+           * is there, and `currentRules` carries the rest.
+           */
+          const shown = stampLives
+            ? stamped
+            : holding.origin === 'rule'
+              ? (asking[0] ?? null)
+              : null;
+          const contract = shown === null ? null : (contractByRule.get(shown.id) ?? null);
           return {
             entitlementId: holding.entitlement.id,
             displayName: holding.entitlement.displayName,
             origin: holding.origin,
-            ruleId: rule?.id ?? null,
-            ruleName: rule?.name ?? null,
+            ruleId: shown?.id ?? null,
+            ruleName: shown?.name ?? null,
             contractId: contract?.id ?? null,
             contractDescription: contract === null ? null : describeContract(contract),
+            grantedByRuleId: holding.grantedByRuleId,
+            grantedByRuleName: stamped?.name ?? null,
+            attributionStale: holding.origin === 'rule' && !stampLives,
+            currentRules: asking.map(attribution),
           };
         }),
       })),
