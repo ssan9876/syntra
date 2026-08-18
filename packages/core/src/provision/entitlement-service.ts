@@ -48,18 +48,35 @@ export async function remitFor(
 }
 
 /**
- * Thrown when a catalog read returned nothing and the catalog is not empty.
+ * Thrown when a catalog read identified nothing and the catalog is not empty.
  *
  * See `refreshEntitlements`. Carries the count it declined to condemn so the
- * caller can say how big the refusal was.
+ * caller can say how big the refusal was, and the number of groups that came
+ * back **unidentifiable** — read, but carrying no anchor to key them on.
+ *
+ * The two cases are one refusal because they are one failure: Syntra cannot
+ * name a single entitlement of this target, so it must not conclude that the
+ * ones it knows are gone. They carry different messages because the thing to
+ * go and fix is different — a search base in the first case, an
+ * `anchorAttribute` or the bind's read rights in the second.
  */
 export class EmptyEntitlementReadError extends Error {
-  constructor(readonly known: number) {
+  constructor(
+    readonly known: number,
+    readonly unidentifiable = 0,
+  ) {
     super(
-      `the target returned no entitlements at all while Syntra holds ${known} for it; ` +
-        'refusing to mark the whole catalog missing, because a mistyped ' +
-        'entitlementSearchBase and a domain whose every group was deleted look ' +
-        'identical from here and only one of them is a thing that happens',
+      unidentifiable === 0
+        ? `the target returned no entitlements at all while Syntra holds ${known} for it; ` +
+            'refusing to mark the whole catalog missing, because a mistyped ' +
+            'entitlementSearchBase and a domain whose every group was deleted look ' +
+            'identical from here and only one of them is a thing that happens'
+        : `the target returned ${unidentifiable} entitlements and Syntra could identify ` +
+            `none of them — every one came back with a blank anchor — while Syntra holds ` +
+            `${known} for it; refusing to mark the whole catalog missing, because an ` +
+            'anchorAttribute the group objects do not carry and a bind without read ' +
+            'access to the one they do carry both look exactly like this, and Active ' +
+            'Directory omits an attribute it will not show you rather than saying so',
     );
     this.name = 'EmptyEntitlementReadError';
   }
@@ -94,7 +111,7 @@ export async function refreshEntitlements(
   actorUserId: string | null,
   targetId: string,
   connector: EntitlementReader = adTargetConnector,
-): Promise<{ present: number; missing: number }> {
+): Promise<{ present: number; missing: number; unidentifiable: number }> {
   // Phase 1: read the configuration out, then close the transaction.
   const config = await withTenant(tenantId, (tx) =>
     targetWithCredential(tx, provider, targetId),
@@ -112,6 +129,50 @@ export async function refreshEntitlements(
     const bound = await currentTenant(tx);
     const now = new Date();
     const seen = new Set<string>();
+
+    /**
+     * The identifiable groups, keyed by anchor — and the count of the ones
+     * that carried no anchor at all.
+     *
+     * Built BEFORE the refusal below, because "how many groups came back" and
+     * "how many of them can Syntra name" are different numbers and only the
+     * second one is the guard's input.
+     *
+     * `anchorOf` in the AD connector is `String(source ?? '')`, so a group
+     * whose anchor attribute is absent yields the EMPTY STRING rather than
+     * `undefined`, and the connector yields it regardless. Left in, every such
+     * group collapses onto one `byExternalId` entry, one row is inserted with
+     * `externalId: ''` — `@@unique([tenantId, targetSystemId, externalId])`
+     * makes it exactly one — and the sweep at the bottom of this function
+     * marks every REAL entitlement of the target `missing`, which makes every
+     * rule naming one unresolvable and every person those rules touch
+     * unprocessable for grants. The audit event says `outcome: 'success'`.
+     *
+     * This is the same value the rest of this subsystem already refuses:
+     * `syntra-user.ts` writes `a."anchor" IS NOT NULL AND a."anchor" <> ''`
+     * because a blank anchor joining to everything is the same defect as a
+     * blank `contains` matching every person, and the connector refuses a
+     * non-exact anchor rather than widening. This was the one consumer that
+     * accepted a blank one.
+     *
+     * Skipped rather than substituted: there is no key to invent for a group
+     * whose identity the target did not report, and a synthesised one (the DN,
+     * the name) would be a second identity for an object that already has one
+     * — which is how the next refresh, after the read right is restored,
+     * inserts every group a second time.
+     */
+    const byExternalId = new Map<string, DiscoveredEntitlement>();
+    let unidentifiable = 0;
+    for (const entitlement of discovered) {
+      if (entitlement.externalId === '') {
+        unidentifiable += 1;
+        continue;
+      }
+      // Last wins. The map is also what makes a target that returns the same
+      // group twice in one page walk one row rather than two writes.
+      byExternalId.set(entitlement.externalId, entitlement);
+      seen.add(entitlement.externalId);
+    }
 
     /**
      * An empty read does not condemn a whole catalog.
@@ -132,12 +193,22 @@ export async function refreshEntitlements(
      * A first refresh against a target Syntra knows no entitlements for is
      * untouched — nothing is condemned, because there is nothing to condemn —
      * so the ordinary path through this function is unaffected.
+     *
+     * Keyed on `seen.size`, not on `discovered.length`. "The target returned
+     * nothing" and "the target returned five thousand groups and Syntra could
+     * identify none of them" reach this sweep by the same route and do the
+     * same damage, so they refuse together; `discovered.length === 0` alone
+     * left the second one one step to the side of the guard. A read that
+     * identified even one group is NOT refused here, which is the same
+     * judgement the guard already made about a partial read: this function
+     * cannot tell a half-read catalog from a half-deleted one, and only the
+     * total loss of identification is unambiguous.
      */
-    if (discovered.length === 0) {
+    if (seen.size === 0) {
       const known = await tx.entitlement.count({
         where: { targetSystemId: targetId },
       });
-      if (known > 0) throw new EmptyEntitlementReadError(known);
+      if (known > 0) throw new EmptyEntitlementReadError(known, unidentifiable);
     }
 
     /**
@@ -161,14 +232,6 @@ export async function refreshEntitlements(
      * sweep — five, plus one update per group whose metadata actually changed,
      * which on a directory that did not change is none.
      */
-    const byExternalId = new Map<string, DiscoveredEntitlement>();
-    for (const entitlement of discovered) {
-      // Last wins. The map is also what makes a target that returns the same
-      // group twice in one page walk one row rather than two writes.
-      byExternalId.set(entitlement.externalId, entitlement);
-      seen.add(entitlement.externalId);
-    }
-
     const knownRows = await tx.entitlement.findMany({
       where: { targetSystemId: targetId },
       select: {
@@ -279,9 +342,15 @@ export async function refreshEntitlements(
       targetId,
       outcome: 'success',
       sourceIp: null,
-      payload: { present, missing: missing.count },
+      // Reported even when it is zero, and reported on the path that did NOT
+      // refuse. A read where most groups are anchorless and a few are not
+      // passes the guard above — correctly, since one identified group means
+      // the read is not a total loss — and then marks the rest `missing`. That
+      // is the shape an administrator has to be able to see afterwards, so the
+      // number is in the chain rather than only in an exception nobody got.
+      payload: { present, missing: missing.count, unidentifiable },
     });
 
-    return { present, missing: missing.count };
+    return { present, missing: missing.count, unidentifiable };
   });
 }

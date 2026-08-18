@@ -39,6 +39,21 @@ const reader = (items: DiscoveredEntitlement[]) => ({
   },
 });
 
+/**
+ * One group as the connector yields it — INCLUDING the anchorless shape.
+ *
+ * `group('', 'Finance')` is not a contrived input. `anchorOf`
+ * (`packages/connectors/src/ad/connector.ts`) is
+ * `normaliseAnchor(attr, Buffer.isBuffer(source) ? source : String(source ?? ''))`,
+ * so a group whose anchor attribute is absent from the entry yields the EMPTY
+ * STRING and `listEntitlements` yields the group anyway — with its `cn` and
+ * `description` intact, because Active Directory omits an attribute the bind
+ * cannot read rather than failing the search. An `anchorAttribute` the group
+ * objects do not carry (it is administrator-settable and unvalidated) does the
+ * same thing to every group at once. Until this comment was written every test
+ * here passed a real id, so the whole empty-case block rested on `reader([])`
+ * and the blank-anchor case had never been executed.
+ */
 const group = (
   externalId: string,
   displayName: string,
@@ -78,7 +93,7 @@ describe('refreshEntitlements', () => {
       reader([group('guid-1', 'Finance'), group('guid-2', 'Sales')]),
     );
 
-    expect(result).toEqual({ present: 2, missing: 0 });
+    expect(result).toEqual({ present: 2, missing: 0, unidentifiable: 0 });
     const rows = await entitlements();
     expect(rows.map((r) => [r.externalId, r.displayName, r.dn, r.status])).toEqual([
       ['guid-1', 'Finance', 'CN=Finance,OU=Groups,DC=acme,DC=test', 'present'],
@@ -160,7 +175,7 @@ describe('refreshEntitlements', () => {
       reader([group('guid-1', 'Finance')]),
     );
 
-    expect(result).toEqual({ present: 1, missing: 1 });
+    expect(result).toEqual({ present: 1, missing: 1, unidentifiable: 0 });
     const rows = await entitlements();
     expect(rows.map((r) => [r.externalId, r.status])).toEqual([
       ['guid-1', 'present'],
@@ -224,7 +239,7 @@ describe('refreshEntitlements', () => {
 
     // Not counted as missing either: it is in the catalog, it just could not
     // be read through.
-    expect(result).toEqual({ present: 1, missing: 0 });
+    expect(result).toEqual({ present: 1, missing: 0, unidentifiable: 0 });
     const rows = await entitlements();
     expect(rows[0]!.status).toBe('unreadable');
   });
@@ -296,7 +311,137 @@ describe('refreshEntitlements', () => {
       targetId,
       reader([]),
     );
-    expect(result).toEqual({ present: 0, missing: 0 });
+    expect(result).toEqual({ present: 0, missing: 0, unidentifiable: 0 });
+  });
+
+  it('refuses a read whose every group came back with a blank anchor', async () => {
+    // The empty-read guard one step to the side. `anchorOf` is
+    // `String(source ?? '')`, so a group whose anchor attribute is absent
+    // yields the EMPTY STRING and is still yielded — an `anchorAttribute` the
+    // group objects do not carry (it is administrator-settable and
+    // unvalidated) or a delegated bind without read access on `objectGUID`
+    // for the groups container does it, and AD omits an unreadable attribute
+    // rather than erroring. Every one of them then collapses onto a single
+    // `externalId: ''` row and the sweep marks the whole real catalog
+    // `missing`, with an audit event saying `outcome: 'success'`.
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance'), group('guid-2', 'Sales')]),
+    );
+
+    await expect(
+      refreshEntitlements(
+        tenantId,
+        provider,
+        null,
+        targetId,
+        reader([group('', 'Finance'), group('', 'Sales'), group('', 'Ops')]),
+      ),
+    ).rejects.toBeInstanceOf(EmptyEntitlementReadError);
+
+    const rows = await entitlements();
+    // Nothing condemned, and no blank-anchored row inserted alongside them.
+    expect(rows.map((r) => [r.externalId, r.status])).toEqual([
+      ['guid-1', 'present'],
+      ['guid-2', 'present'],
+    ]);
+  });
+
+  it('says how many groups it could not identify, and does not say the read was empty', async () => {
+    // "The target returned nothing" and "the target returned three groups and
+    // Syntra could name none of them" are the same refusal and different
+    // repairs: a search base in the first case, an anchorAttribute or the
+    // bind's read rights in the second. A message naming the wrong one sends
+    // an administrator to the wrong screen.
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance')]),
+    );
+    const thrown = await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('', 'Finance'), group('', 'Sales'), group('', 'Ops')]),
+    ).then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+
+    expect(thrown).toBeInstanceOf(EmptyEntitlementReadError);
+    const error = thrown as EmptyEntitlementReadError;
+    expect(error.unidentifiable).toBe(3);
+    expect(error.known).toBe(1);
+    expect(error.message).toContain('blank anchor');
+    expect(error.message).not.toContain('no entitlements at all');
+  });
+
+  it('skips a blank-anchored group without condemning the ones it could identify', async () => {
+    // A partial loss: one group's anchor is readable and the rest are not.
+    // This is NOT refused — one identified group means the read is not a total
+    // loss, and this function cannot tell a half-read catalog from a
+    // half-deleted one — so the count has to be visible instead, on the path
+    // that carried on.
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance'), group('guid-2', 'Sales')]),
+    );
+    const result = await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance'), group('', 'Sales')]),
+    );
+
+    expect(result).toEqual({ present: 1, missing: 1, unidentifiable: 1 });
+    const rows = await entitlements();
+    // No `externalId: ''` row: a group whose identity the target did not
+    // report has no key to invent, and a synthesised one would be a second
+    // identity for an object that already has one.
+    expect(rows.map((r) => r.externalId)).toEqual(['guid-1', 'guid-2']);
+  });
+
+  it('writes the unidentified count into the audit event', async () => {
+    await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('guid-1', 'Finance'), group('', 'Sales')]),
+    );
+    const events = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findMany({
+        where: { action: 'provision.entitlements.refresh' },
+        orderBy: { sequence: 'asc' },
+      }),
+    );
+    expect(events.map((e) => e.payload)).toEqual([
+      { present: 1, missing: 0, unidentifiable: 1 },
+    ]);
+  });
+
+  it('accepts a blank-anchored read against a target that has no catalog yet', async () => {
+    // The first-refresh case, left alone exactly as the empty read is: there
+    // is nothing to condemn, so there is nothing to refuse.
+    const result = await refreshEntitlements(
+      tenantId,
+      provider,
+      null,
+      targetId,
+      reader([group('', 'Finance')]),
+    );
+    expect(result).toEqual({ present: 0, missing: 0, unidentifiable: 1 });
+    expect(await entitlements()).toEqual([]);
   });
 
   it('leaves another target’s catalog alone', async () => {
@@ -365,8 +510,8 @@ describe('refreshEntitlements', () => {
       }),
     );
     expect(events.map((e) => e.payload)).toEqual([
-      { present: 2, missing: 0 },
-      { present: 1, missing: 1 },
+      { present: 2, missing: 0, unidentifiable: 0 },
+      { present: 1, missing: 1, unidentifiable: 0 },
     ]);
     expect(events[0]!.targetId).toBe(targetId);
   });
@@ -558,7 +703,7 @@ describe('the gaps the mutation pass found', () => {
       targetId,
       reader([]),
     );
-    expect(result).toEqual({ present: 0, missing: 0 });
+    expect(result).toEqual({ present: 0, missing: 0, unidentifiable: 0 });
   });
 
   it('does not recount an entitlement that was already missing', async () => {
@@ -581,7 +726,7 @@ describe('the gaps the mutation pass found', () => {
         targetId,
         reader([group('guid-1', 'Finance')]),
       ),
-    ).toEqual({ present: 1, missing: 1 });
+    ).toEqual({ present: 1, missing: 1, unidentifiable: 0 });
     expect(
       await refreshEntitlements(
         tenantId,
@@ -590,7 +735,7 @@ describe('the gaps the mutation pass found', () => {
         targetId,
         reader([group('guid-1', 'Finance')]),
       ),
-    ).toEqual({ present: 1, missing: 0 });
+    ).toEqual({ present: 1, missing: 0, unidentifiable: 0 });
   });
 
   it('records the type the target reported', async () => {
@@ -708,12 +853,12 @@ describe('the batched catalog write', () => {
     );
     expect(
       await refreshEntitlements(tenantId, provider, null, targetId, reader(many)),
-    ).toEqual({ present: 400, missing: 0 });
+    ).toEqual({ present: 400, missing: 0, unidentifiable: 0 });
 
     // And the second pass, where nothing changed, must not rewrite them.
     expect(
       await refreshEntitlements(tenantId, provider, null, targetId, reader(many)),
-    ).toEqual({ present: 400, missing: 0 });
+    ).toEqual({ present: 400, missing: 0, unidentifiable: 0 });
     expect(await entitlements()).toHaveLength(400);
   });
 });
