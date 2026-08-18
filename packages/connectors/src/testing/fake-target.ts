@@ -1,3 +1,8 @@
+import {
+  provenanceActionId,
+  withProvenanceMarker,
+  withProvenanceNote,
+} from '../ad/provenance.js';
 import { splitDn } from '../ldap/dn.js';
 import type {
   ConnectionResult,
@@ -12,6 +17,16 @@ import type {
 
 export interface FakeTargetConfig {
   domain: string;
+  /**
+   * Where this target holds the provenance marker, as `adTargetConfigSchema`
+   * calls it and with the same default.
+   *
+   * Optional so that every existing `{ domain }` still constructs, but it is
+   * READ: a fake that only ever answers under `info` cannot exercise a
+   * consumer that resolves the configured name, which is exactly the defect
+   * such a consumer has.
+   */
+  provenanceAttribute?: string;
 }
 
 /** How the next N calls of one operation should behave. */
@@ -36,7 +51,18 @@ interface FakeObject {
   attributes: Record<string, string[]>;
   enabled: boolean;
   archived: boolean;
-  /** The actionId that created it, or null for an object Syntra never made. */
+  /**
+   * The whole value of the provenance attribute, exactly as a directory holds
+   * it -- `syntra-provision action=<id>`, plus any `[syntra]` disable note and
+   * anything an administrator wrote beside them. Null for an object Syntra
+   * never made.
+   *
+   * The MARKER, not the bare action id. This used to store `op.actionId` on
+   * its own, which no connector ever writes, so `provenanceActionId` answered
+   * undefined for every object the fake created and only core's substring
+   * match made the tests pass. Composed and read with the same pair the real
+   * connector uses so the two cannot drift again.
+   */
   provenance: string | null;
 }
 
@@ -64,6 +90,21 @@ const REDACTED = '[redacted by FakeTarget]';
  * bugs; a fake looser than it invents them.
  */
 const foldKey = (key: string): string => key.toLowerCase();
+
+/** Whatever an attribute template asked to put in the provenance attribute. */
+const templatedProvenance = (
+  attributes: Record<string, string[]>,
+  provenanceAttribute: string,
+): string | undefined => {
+  const values = Object.entries(attributes)
+    .filter(([key]) => foldKey(key) === foldKey(provenanceAttribute))
+    .flatMap(([, value]) => value);
+  return values.length === 0 ? undefined : values.join('\n');
+};
+
+/** The provenance attribute this target holds, defaulted as the real one is. */
+const provenanceAttributeOf = (config: FakeTargetConfig): string =>
+  config.provenanceAttribute ?? 'info';
 
 /**
  * An in-memory TargetConnector with programmable failures.
@@ -138,18 +179,30 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
     return { objectClasses: ['user', 'group'], attributes: ['displayName'] };
   }
 
-  async *read(_config: FakeTargetConfig): AsyncIterable<SourceRecord> {
+  async *read(config: FakeTargetConfig): AsyncIterable<SourceRecord> {
     if (this.returnsNothing) return;
+    const provenanceAttribute = provenanceAttributeOf(config);
     for (const object of this.objects.values()) {
       yield {
         anchor: object.anchor,
         objectType: 'user',
         dn: object.dn,
         attributes: {
-          ...object.attributes,
+          // Any same-named key an attribute template left behind is dropped
+          // first: a directory holds ONE value for this attribute, and the
+          // marker was merged into `provenance` when the object was created.
+          ...Object.fromEntries(
+            Object.entries(object.attributes).filter(
+              ([key]) => foldKey(key) !== foldKey(provenanceAttribute),
+            ),
+          ),
           sAMAccountName: [object.correlationKey],
           userAccountControl: [object.enabled ? '512' : '514'],
-          info: object.provenance ? [object.provenance] : [],
+          // The CONFIGURED name, and the whole marker under it -- which is
+          // what adTargetConnector writes. This answered under a hardcoded
+          // `info`, so a consumer resolving the configured attribute could
+          // never be exercised against it.
+          [provenanceAttribute]: object.provenance ? [object.provenance] : [],
           // DNs. Ruling P8: where the real system returns DNs, so does this.
           memberOf: [...(this.holdings.get(object.anchor) ?? [])],
         },
@@ -187,7 +240,7 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
   }
 
   async write(
-    _config: FakeTargetConfig,
+    config: FakeTargetConfig,
     op: WriteOperation,
   ): Promise<WriteResult> {
     // A COPY with the password taken out, not the operation object itself.
@@ -206,7 +259,7 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
 
     if (outcome?.loseResponseTimes) {
       outcome.loseResponseTimes -= 1;
-      this.perform(op);
+      this.perform(op, provenanceAttributeOf(config));
       // The write landed. The caller is told it did not, which is exactly the
       // state a lost response leaves the run in.
       return { ok: false, message: 'connection reset after write', failure: 'transient' };
@@ -225,10 +278,10 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
       };
     }
 
-    return this.perform(op);
+    return this.perform(op, provenanceAttributeOf(config));
   }
 
-  private perform(op: WriteOperation): WriteResult {
+  private perform(op: WriteOperation, provenanceAttribute: string): WriteResult {
     switch (op.op) {
       case 'create_account': {
         const existing = [...this.objects.values()].find(
@@ -237,7 +290,10 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
         if (existing) {
           // Present, carrying THIS actionId -- our own previous attempt
           // succeeded and we lost the answer. Adopt it.
-          if (existing.provenance === op.actionId) {
+          // Parsed out of the marker, never compared against the bare id and
+          // never a substring test -- the same rule the real connector's
+          // adopt path follows, through the same function.
+          if (provenanceActionId(existing.provenance ?? '') === op.actionId) {
             return {
               ok: true,
               message: 'adopted the account this action already created',
@@ -265,11 +321,22 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
             op.attributes.distinguishedName?.[0] ??
             `CN=${op.correlationKey},${this.containers[0] ?? DEFAULT_CONTAINER}`,
           attributes: Object.fromEntries(
-            Object.entries(op.attributes).filter(([key]) => key !== 'distinguishedName'),
+            Object.entries(op.attributes).filter(
+              ([key]) =>
+                key !== 'distinguishedName' &&
+                foldKey(key) !== foldKey(provenanceAttribute),
+            ),
           ),
           enabled: op.enabled,
           archived: false,
-          provenance: op.actionId,
+          // `provenanceValue(op.actionId)` by way of `withProvenanceMarker`,
+          // which is what adTargetConnector writes -- merged with whatever an
+          // attribute template asked for in the same attribute, exactly as the
+          // real one merges it, rather than either side winning.
+          provenance: withProvenanceMarker(
+            templatedProvenance(op.attributes, provenanceAttribute),
+            op.actionId,
+          ),
         });
         return { ok: true, message: 'created', anchor };
       }
@@ -297,7 +364,12 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
         const object = this.objects.get(op.anchor);
         if (!object) return this.gone(op.anchor);
         object.enabled = false;
-        object.attributes = { ...object.attributes, info: [op.reason] };
+        // Merged into the provenance attribute, keeping the marker, because
+        // that is what the real connector does. It used to `replace` a
+        // hardcoded `info` with the reason alone -- which destroyed the
+        // marker, and was F-A-2 on the real one. A fake that still destroys it
+        // cannot show that the real one stopped.
+        object.provenance = withProvenanceNote(object.provenance ?? undefined, op.reason);
         return { ok: true, message: 'disabled' };
       }
       case 'archive_account': {

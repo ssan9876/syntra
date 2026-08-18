@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isRetryable, type WriteOperation } from '../types.js';
 import { FakeTarget } from './fake-target.js';
+import { readProvenanceActionId } from '../ad/provenance.js';
 
 const config = { domain: 'acme.test' };
 const USERS = 'OU=Users,DC=acme,DC=test';
@@ -367,9 +368,10 @@ describe('FakeTarget: the rest of the target-connector surface', () => {
       reason: 'left the organisation',
     });
     expect(target.objects.get(anchor)!.enabled).toBe(false);
-    expect(target.objects.get(anchor)!.attributes.info).toEqual([
-      'left the organisation',
-    ]);
+    // In the provenance attribute, beside the marker, and not in a hardcoded
+    // `attributes.info` that replaced it -- because that is what the real
+    // connector does. The case above pins the marker surviving.
+    expect(target.objects.get(anchor)!.provenance).toContain('left the organisation');
     const records = [];
     for await (const record of target.read(config)) records.push(record);
     // Still there, and still readable. Disable is the whole safety argument for
@@ -442,6 +444,68 @@ describe('FakeTarget: the rest of the target-connector surface', () => {
     // it lets a leak through the action and audit rows pass unnoticed, which
     // is the one thing this test exists to prevent.
     expect(JSON.stringify(target.calls)).not.toContain('fake-initial-password');
+  });
+
+  it('writes the provenance marker in the format the real connector emits', async () => {
+    // The fake stored the BARE action id and read it back out under `info`,
+    // while adTargetConnector writes `provenanceValue(op.actionId)`. So
+    // `provenanceActionId` -- and therefore `readProvenanceActionId`, which
+    // core uses to resolve in-flight actions after an interrupted apply --
+    // answered undefined for every object the fake ever created.
+    //
+    // It went unnoticed because core matched with `.includes(action.id)`, a
+    // substring test that happens to accept both formats. The suite passed,
+    // exercised the path fully, and proved nothing about the real connector:
+    // the same shape as the range fixtures that omitted the key ldapts always
+    // injects. A fake must emit what the real system WRITES, not what the
+    // consumer happens to read.
+    const target = seeded();
+    await target.write(config, create('act-1', 'a.novak'));
+
+    const records = [];
+    for await (const record of target.read(config)) records.push(record);
+
+    expect(readProvenanceActionId(records[0]!.attributes, 'info')).toBe('act-1');
+  });
+
+  it('answers under the configured provenance attribute, not always info', async () => {
+    // A target may nominate an extensionAttribute. A fake that only ever
+    // answers under `info` cannot exercise a consumer that reads the
+    // configured name -- which is exactly the defect it should be able to
+    // catch.
+    const target = seeded();
+    const elsewhere = { domain: 'acme.test', provenanceAttribute: 'extensionAttribute7' };
+    await target.write(elsewhere, create('act-1', 'a.novak'));
+
+    const records = [];
+    for await (const record of target.read(elsewhere)) records.push(record);
+
+    expect(records[0]!.attributes.info).toBeUndefined();
+    expect(
+      readProvenanceActionId(records[0]!.attributes, 'extensionAttribute7'),
+    ).toBe('act-1');
+  });
+
+  it('keeps the marker when a disable writes its reason, as the real connector does', async () => {
+    // adTargetConnector merges the reason into the provenance attribute and
+    // keeps the marker; it used to `replace` the attribute and destroy it,
+    // which was F-A-2. A fake that still destroys it cannot show that the
+    // real one stopped.
+    const target = seeded();
+    const anchor = (await target.write(config, create('act-1', 'a.novak'))).anchor!;
+    await target.write(config, {
+      op: 'disable_account',
+      actionId: 'act-2',
+      anchor,
+      reason: 'left the organisation',
+    });
+
+    const records = [];
+    for await (const record of target.read(config)) records.push(record);
+    const info = records[0]!.attributes.info!.join(' ');
+
+    expect(readProvenanceActionId(records[0]!.attributes, 'info')).toBe('act-1');
+    expect(info).toContain('left the organisation');
   });
 
   it('correlates account names the way Active Directory does, case-folded', async () => {
