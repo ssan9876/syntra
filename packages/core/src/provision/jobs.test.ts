@@ -1056,3 +1056,141 @@ describe('registerProvisionJobs — what the registration passes, and what arriv
     });
   });
 });
+
+describe('runProvisionJob — claiming the Syntra login', () => {
+  const previewed = async () => ({
+    id: 'run-1',
+    status: 'previewed',
+    requiresConfirmation: false,
+    blockedReason: null,
+  });
+
+  /**
+   * A leaver's login, unclaimed: a `User` the paired source created, carrying
+   * the same anchor as the person's `TargetAccount` and no `personId`.
+   */
+  const seedUnclaimedLogin = async () => {
+    return withTenant(tenantId, async (tx) => {
+      const source = await tx.directorySource.create({
+        data: {
+          tenantId,
+          name: 'Acme AD source',
+          type: 'ldap',
+          config: {},
+          secretName: 'src',
+        },
+      });
+      await tx.targetSystem.update({
+        where: { id: targetId },
+        data: { pairedDirectorySourceId: source.id },
+      });
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Anna', familyName: 'Novak' },
+      });
+      await tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          personId: person.id,
+          correlationKey: 'novak',
+          status: 'disabled',
+          anchor: 'guid-anna',
+        },
+      });
+      const user = await tx.user.create({
+        data: {
+          tenantId,
+          login: 'anna.novak',
+          email: 'anna@acme.test',
+          displayName: 'Anna Novak',
+          sourceId: source.id,
+          sourceAnchor: 'guid-anna',
+        },
+      });
+      return { personId: person.id, userId: user.id };
+    });
+  };
+
+  const personIdOf = (userId: string) =>
+    withTenant(tenantId, async (tx) =>
+      (await tx.user.findUniqueOrThrow({ where: { id: userId } })).personId,
+    );
+
+  it('claims before the plan is computed, so this run can see the login', async () => {
+    // `previewProvisionRun` reads logins with `personId: { not: null }`, so a
+    // login claimed AFTER the plan is a login the plan could not propose
+    // deactivating. This asserts the ordering, not merely the outcome.
+    const seeded = await seedUnclaimedLogin();
+    let personIdAtPreviewTime: string | null = null;
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      {
+        preview: (async () => {
+          personIdAtPreviewTime = await personIdOf(seeded.userId);
+          return previewed();
+        }) as never,
+      },
+    );
+    expect(personIdAtPreviewTime).toBe(seeded.personId);
+  });
+
+  it('claims on a run that applies nothing at all', async () => {
+    // The whole failure: a converged target proposes nothing, so `applied` is
+    // 0, so the claim the gate hung on never ran — and a departed person whose
+    // account an administrator had already disabled by hand keeps an active
+    // Syntra login with a Syntra-held password for good, because nothing about
+    // them ever changes again and no later run produces an action either.
+    const seeded = await seedUnclaimedLogin();
+    await withTenant(tenantId, (tx) =>
+      tx.targetSystem.update({ where: { id: targetId }, data: { autoApply: true } }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      {
+        preview: previewed as never,
+        apply: (async () => ({
+          status: 'applied',
+          applied: 0,
+          failed: 0,
+          pendingRetry: 0,
+          inFlight: 0,
+          deferred: 0,
+          skipped: 0,
+        })) as never,
+      },
+    );
+    expect(await personIdOf(seeded.userId)).toBe(seeded.personId);
+  });
+
+  it('claims on a run that never applies, because autoApply is off', async () => {
+    const seeded = await seedUnclaimedLogin();
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      { preview: previewed as never },
+    );
+    expect(await personIdOf(seeded.userId)).toBe(seeded.personId);
+  });
+
+  it('does not claim for a target that is switched off', async () => {
+    // A disabled target does not run, and a run that does not start does no
+    // maintenance either: the claim is the run's first step, not a step beside
+    // it.
+    const seeded = await seedUnclaimedLogin();
+    await withTenant(tenantId, (tx) =>
+      tx.targetSystem.update({ where: { id: targetId }, data: { enabled: false } }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      { preview: previewed as never },
+    );
+    expect(await personIdOf(seeded.userId)).toBeNull();
+  });
+});

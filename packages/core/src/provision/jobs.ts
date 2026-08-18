@@ -344,6 +344,48 @@ export async function runProvisionJob(
 
   if (!decision.proceed) return;
 
+  /**
+   * The claim runs BEFORE the plan is computed, and unconditionally.
+   *
+   * Linking a Syntra login to its person is maintenance of a link, not a
+   * consequence of a write, and wiring it as one made it unreachable on
+   * exactly the target that needs it. Both call sites used to be gated on
+   * `result.applied > 0`, and `User.personId` has no other automatic writer:
+   * `previewProvisionRun` reads logins with `personId: { not: null }`, so an
+   * unclaimed login is invisible to the planner and `planActions` can never
+   * propose `deactivate_syntra_user` for it. A leaver whose account an
+   * administrator had already disabled by hand therefore plans zero actions,
+   * applies nothing, is never claimed — and nothing about a departed person
+   * ever changes again, so no later run produces an action either. The person
+   * keeps an active Syntra login, with a Syntra-held password, permanently.
+   * That is the hole `plan.ts`'s "follows the DEPARTURE, not the disable
+   * write" restructuring closed one layer up, defeated one layer down.
+   *
+   * Here rather than after the apply, because after the apply is structurally
+   * too EARLY as well as too late: Provision creates the account in the
+   * target, and the Syntra `User` for it does not exist until the paired
+   * source next syncs — which is what `enqueuePairedSync` below asks for. A
+   * claim placed after an apply therefore always runs before the user it
+   * would claim exists. Placed here it makes the login visible to this run's
+   * own planner, and to every later one.
+   *
+   * Cost, on a target with a large user table: one `UPDATE ... FROM` and one
+   * `SELECT`, both already written as single bounded statements rather than a
+   * loop, and both joining `User` to `TargetAccount` on the anchor — which
+   * `@@unique([tenantId, sourceId, sourceAnchor])` indexes on the user side
+   * and `@@index([targetSystemId, status])` narrows on the account side, so
+   * the work follows THIS target's account count and not the directory's.
+   * They are two statements in a `withTenant` of their own, opened and closed
+   * before the run's first transaction: nothing here is added to any existing
+   * transaction budget. It is also the least loaded moment in a run — no
+   * connector is open and no snapshot is held.
+   *
+   * Not swallowed. A claim that cannot be written is a run whose plan would be
+   * computed against links it failed to establish, which is the failure this
+   * whole comment is about; the job fails and pg-boss retries it.
+   */
+  await claimSyntraUsers(payload.tenantId, payload.targetSystemId);
+
   let run;
   try {
     run = await preview(payload.tenantId, provider, payload.targetSystemId, {
@@ -392,9 +434,11 @@ export async function runProvisionJob(
       );
     }
     if (result.applied > 0) {
-      await claimSyntraUsers(payload.tenantId, payload.targetSystemId);
       // A freshly provisioned person cannot sign in until the next directory
-      // sync; this is the cheap mitigation.
+      // sync; this is the cheap mitigation. The claim that used to sit beside
+      // this line has moved to the top of the run: it cannot see a user this
+      // sync has not created yet, so gating it on a write was gating it on the
+      // one thing it never depended on.
       await enqueuePairedSync(scheduler, payload.tenantId, payload.targetSystemId);
     }
   }

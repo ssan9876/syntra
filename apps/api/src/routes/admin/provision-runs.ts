@@ -13,7 +13,6 @@ import {
   ProvisionRunNotConfirmableError,
   acknowledgeDriftFinding,
   applyProvisionRun,
-  claimSyntraUsers,
   enqueuePairedSync,
   localMasterKeyProvider,
   provisionJobPayload,
@@ -126,8 +125,8 @@ export async function registerAdminProvisionRunRoutes(
         });
         // Named through this target or not at all: the run id alone would let
         // target A's URL return target B's run, and the same confusion in the
-        // apply below would claim logins and enqueue a paired sync against the
-        // wrong target entirely.
+        // apply below would enqueue a paired sync against the wrong target
+        // entirely.
         if (!run || run.targetSystemId !== id) {
           throw new ProblemError(404, 'not-found', 'Run not found');
         }
@@ -245,8 +244,14 @@ export async function registerAdminProvisionRunRoutes(
         throw cause;
       }
 
+      // No `claimSyntraUsers` here any more. Claiming a login is maintenance
+      // of a link and belongs at the start of a run — `runProvisionJob` does
+      // it before the plan is computed — rather than after a write that may
+      // never happen. Gated on `applied > 0` it never ran for the target that
+      // needs it most, the converged one whose leaver was disabled by hand;
+      // and after an apply it runs before the paired sync below has created
+      // the user it would claim, so it could not have helped this run either.
       if (result.applied > 0) {
-        await claimSyntraUsers(request.tenantId, id);
         const scheduler = options.scheduler?.();
         if (scheduler) await enqueuePairedSync(scheduler, request.tenantId, id);
       }
