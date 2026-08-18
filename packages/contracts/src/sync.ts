@@ -18,8 +18,14 @@ import { z } from 'zod';
  * `strict: false` — so this accepts precisely what the scheduler accepts:
  * neither a stricter dialect that rejects a working expression, nor a looser
  * one that lets a broken one through.
+ *
+ * Exported because Provision schedules its targets through the same pg-boss
+ * and had the same hole: `schedule` was `z.string()` at both of its
+ * boundaries, so a malformed expression committed, audited as a success and
+ * then threw out of the scheduler. One validator, not two that can disagree
+ * about what the scheduler accepts.
  */
-const cronExpression = z
+export const cronExpression = z
   .string()
   .min(1)
   .max(128)

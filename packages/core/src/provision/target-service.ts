@@ -10,6 +10,7 @@ import {
   MAX_CONDITION_DEPTH,
   MAX_CONDITION_NODES,
   conditionBoundsProblem,
+  cronExpression,
 } from '@syntra/contracts';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
@@ -143,7 +144,20 @@ const createScalarsSchema = z.object({
   type: z.enum(TARGET_TYPES).default('activeDirectory'),
   bindPassword: z.string().min(1),
   pairedDirectorySourceId: z.string().uuid().nullable().optional(),
-  schedule: z.string().max(200).nullable().optional(),
+  /**
+   * Directory Sync's validator, imported rather than restated.
+   *
+   * `z.string().max(200)` accepted any string at all, so a malformed cron
+   * expression committed to the row and audited as a success, and only then
+   * threw out of `applyTargetSchedule` -- after `withTenant` had returned,
+   * so on a create the target and its vault entry exist, the caller gets a
+   * 500 and never learns the id, and the retry hits
+   * `@@unique([tenantId, name])`. Parsed exactly the way pg-boss parses it
+   * (same library, same `tz`, same `strict`), so this accepts precisely what
+   * the scheduler accepts. The bound drops from 200 to the shared 128, which
+   * no cron expression comes near.
+   */
+  schedule: cronExpression.nullable().optional(),
   autoApply: z.boolean().optional(),
   enabled: z.boolean().optional(),
   enforcementMode: z.enum(ENFORCEMENT_MODES).optional(),

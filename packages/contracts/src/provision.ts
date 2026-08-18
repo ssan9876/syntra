@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { cronExpression } from './sync.js';
 
 export const enforcementModeSchema = z.enum(['additive', 'authoritative']);
 
@@ -61,7 +62,26 @@ export const createTargetRequestSchema = z
     config: targetConfigSchema,
     bindPassword: z.string().min(1).max(1024),
     pairedDirectorySourceId: z.string().uuid().nullable().optional(),
-    schedule: z.string().nullable().optional(),
+    /**
+     * The same validator Directory Sync uses, because it is the same pg-boss.
+     *
+     * `z.string()` accepted `0 2 * *` -- four fields, the ordinary typo --
+     * which commits, audits as a success and only then throws out of
+     * `boss.schedule`, leaving the stored schedule and the firing schedule
+     * permanently disagreeing with a bare 500 as the only signal. The
+     * direction that costs access is a target that had no schedule before:
+     * the row now claims a nightly run, nothing ever fires, and because no
+     * run starts there is no `consecutiveSkippedRuns` and no
+     * `lastSkipReason` either -- none of the Ruling P4 signals that exist to
+     * make a target which has stopped running look different from one running
+     * cleanly.
+     *
+     * `null` clears the schedule and is how a target is made manual-only.
+     * The empty string is not a third option: it is not a cron expression,
+     * and `.min(1)` refuses it here rather than letting it mean `null` by
+     * accident somewhere further down.
+     */
+    schedule: cronExpression.nullable().optional(),
     autoApply: z.boolean().optional(),
     enabled: z.boolean().optional(),
     enforcementMode: enforcementModeSchema.optional(),

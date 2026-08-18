@@ -1198,6 +1198,57 @@ describe('the gaps the mutation pass found', () => {
     ).toBeNull();
   });
 
+  it('refuses a malformed cron expression rather than committing it', async () => {
+    // The ordinary typo: four fields, not five. It used to commit, audit as a
+    // success and only then throw out of pg-boss, leaving the stored schedule
+    // and the firing schedule permanently disagreeing -- and where the target
+    // had no schedule before, leaving one that never fires at all, which
+    // produces no run, therefore no `consecutiveSkippedRuns` and no
+    // `lastSkipReason`: a target that has stopped running looks exactly like
+    // one running cleanly.
+    const { id } = await create();
+    await expect(
+      updateTarget(tenantId, provider, null, id, { schedule: '0 2 * *' }),
+    ).rejects.toThrow(/not a cron expression the scheduler can use/);
+
+    // And it took the whole transaction with it. A row carrying a schedule the
+    // scheduler refused is the divergence this check exists to prevent.
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(row.schedule).toBeNull();
+  });
+
+  it('refuses a malformed cron expression on a create, before the row exists', async () => {
+    // The create is the worse half: the target and its vault entry commit, the
+    // 500 arrives instead of the id, and the retry hits
+    // `@@unique([tenantId, name])` -- so the administrator cannot create the
+    // target, is not told one exists, and the one that does has a schedule
+    // that will never fire.
+    await expect(
+      createTarget(tenantId, provider, null, {
+        name: 'Nightly',
+        config,
+        bindPassword: 'x',
+        schedule: 'every night at two',
+      }),
+    ).rejects.toThrow(/not a cron expression the scheduler can use/);
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findMany({ where: { name: 'Nightly' } }),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('refuses the empty string as a schedule, which is not how a schedule is cleared', async () => {
+    // An empty string is not an absent value. `null` clears the schedule;
+    // `''` is a cron expression nobody wrote, and letting it mean `null` by
+    // accident is the same conflation as a blank anchor matching everything.
+    const { id } = await create();
+    await expect(
+      updateTarget(tenantId, provider, null, id, { schedule: '' }),
+    ).rejects.toThrow();
+  });
+
   it('replaces the configuration whole on an update', async () => {
     // Replaced, never merged: the schema resolves defaults and cross-checks
     // the TLS mode against the URL scheme, and merging a fragment over a
