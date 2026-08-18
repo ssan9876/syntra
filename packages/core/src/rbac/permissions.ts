@@ -19,6 +19,30 @@ export const PERMISSIONS = {
   POLICY_READ: 'policy.read',
   POLICY_MANAGE: 'policy.manage',
   /**
+   * The request queue, the catalog as an administrator sees it, the grants and
+   * the sweeps.
+   */
+  AUTOMATE_READ: 'automate.read',
+  /**
+   * Creating and editing products, workflows, resource owners and delegations;
+   * confirming a sweep; deciding a `blocked_no_approver` request.
+   */
+  AUTOMATE_MANAGE: 'automate.manage',
+  /** Submitting for somebody who is neither you nor your report. */
+  AUTOMATE_REQUEST_ON_BEHALF: 'automate.request_on_behalf',
+  /*
+   * There is deliberately no `automate.approve`. Approval authority comes from
+   * RESOLUTION -- being the manager, the owner, the named person, a delegate --
+   * and never from a permission. A permission that conferred it would be a
+   * tenant-wide right to approve anything, held by whoever holds the admin
+   * role, which is the opposite of what an approval chain is for.
+   *
+   * Requesting for YOURSELF needs no permission either. Every portal user may
+   * open the catalog; what they see there is the audience decision. A
+   * permission in front of it would make an unconfigured tenant's catalog
+   * empty for a second, unrelated reason, and nobody would know which.
+   */
+  /**
    * Reading who holds what, and why.
    *
    * Run history, drift, exceptions and the person-access view. Separate from

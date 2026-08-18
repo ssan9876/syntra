@@ -214,3 +214,4 @@ export * from './automate/audience.js';
 export * from './automate/form.js';
 export * from './automate/duration.js';
 export * from './automate/approvers.js';
+export * from './automate/notify.js';
