@@ -374,6 +374,26 @@ export const RULE_IMPACT_SAMPLE_SIZE = 25;
  *
  * A rule whose blast radius is only visible after it is saved is a rule that
  * gets saved and then discovered.
+ *
+ * **`wouldRevoke` counts what `plan.ts` and `reconcile.ts` will actually do**,
+ * which is three conditions and not one:
+ *
+ * 1. the holding must be REVOCABLE — `reconcile` builds `heldWithinRemit` from
+ *    `origin === 'rule'` holdings, plus unmanaged in-remit ones under
+ *    `authoritative` only, so a group a directory administrator added by hand
+ *    is never revoked under `additive` and must not be counted there;
+ * 2. no OTHER enabled rule may still desire it for that person —
+ *    `planActions` skips anything still in `state.entitlements`, so `R1`
+ *    narrowed to nobody while `R2` still grants `E1` to Sales revokes the
+ *    Finance holdings and nothing else;
+ * 3. this rule must not still desire it — including the case where this edit
+ *    switches the rule off, which desires nothing at all.
+ *
+ * Counting on the entitlement id alone reported "revokes 340" for an edit that
+ * revokes twelve, and counted holdings the mode forbids touching. The
+ * fix beside it — reading `mine` by `grantedByRuleId` so that emptying the
+ * entitlement list reports revoking everything rather than nothing — is still
+ * here and still necessary; this is the populated case next to it.
  */
 export async function previewRuleImpact(
   tenantId: string,
@@ -403,23 +423,85 @@ export async function previewRuleImpact(
     const persons = await tx.person.findMany({ include: { contracts: true } });
 
     /**
+     * The target's enforcement mode, and every OTHER enabled rule on it.
+     *
+     * Both are inputs to what the planner will actually do, and neither was
+     * read before. Bounded: one row, and one row per business rule an
+     * administrator wrote for this target — never a person or a holding.
+     */
+    const target = await tx.targetSystem.findUniqueOrThrow({
+      where: { id: targetSystemId },
+      select: { enforcementMode: true },
+    });
+    const otherRuleRows = await tx.businessRule.findMany({
+      where: {
+        targetSystemId,
+        enabled: true,
+        ...(ruleId === undefined ? {} : { id: { not: ruleId } }),
+      },
+      include: { entitlements: { select: { entitlementId: true } } },
+    });
+    /**
+     * The other rules' conditions, PARSED.
+     *
+     * A condition this version cannot read means this rule's population cannot
+     * be computed, so it is treated as desiring nothing — which makes the
+     * preview count MORE revocations, not fewer. That is the safe direction
+     * for a screen whose job is to warn: a preview that under-reports says an
+     * edit takes nothing away while it takes access away. The run itself
+     * refuses outright on the same input (`run-service.ts`), so nothing is
+     * silently planned off this reading.
+     */
+    const otherRules = otherRuleRows.map((r) => {
+      const parsed = conditionSchema.safeParse(r.condition);
+      return {
+        condition: parsed.success ? parsed.data : null,
+        entitlementIds: r.entitlements.map((j) => j.entitlementId),
+      };
+    });
+
+    /**
+     * The entitlements the rule names in the DATABASE today, which is not the
+     * same set as the ones it is being edited to name.
+     *
+     * `mine` below finds a holding by its `grantedByRuleId` stamp, and that
+     * stamp is `attributedRuleIds[0]` — so a holding this rule genuinely
+     * granted can carry a DIFFERENT rule's id, and that rule may since have
+     * been deleted. Preview an edit dropping such an entitlement and neither
+     * read covered it: it is off the new list, and the dangling stamp is not
+     * this rule's id. The preview said the edit takes nothing away, while the
+     * holding is `origin: 'rule'`, therefore inside `heldWithinRemit`,
+     * therefore revoked by the very next run.
+     */
+    const storedEntitlementIds =
+      ruleId === undefined
+        ? []
+        : (await tx.ruleEntitlement.findMany({ where: { ruleId } })).map(
+            (j) => j.entitlementId,
+          );
+
+    /**
      * Two reads, because the empty case here is not the harmless one.
      *
-     * `named` is every live holding of the entitlements this rule WOULD grant;
-     * `mine` is every live holding this rule HAS granted. A rule edited to
-     * name fewer entitlements — or none at all — revokes the ones it dropped,
-     * and computing revocations only from the named set reports that as
-     * "revokes 0" precisely when it revokes everything. That is the
+     * `named` is every live holding of the entitlements this edit is ABOUT —
+     * the ones the rule would grant, plus the ones it names today and may be
+     * dropping; `mine` is every live holding this rule HAS granted. A rule
+     * edited to name fewer entitlements — or none at all — revokes the ones it
+     * dropped, and computing revocations only from the named set reports that
+     * as "revokes 0" precisely when it revokes everything. That is the
      * empty-set-is-the-universal-set defect this slice has now found five
      * times, and emptying an entitlement list is the one-click way to hit it.
      */
+    const affectedEntitlementIds = [
+      ...new Set([...entitlementIds, ...storedEntitlementIds]),
+    ];
     const named =
-      entitlementIds.length === 0
+      affectedEntitlementIds.length === 0
         ? []
         : await tx.accountEntitlement.findMany({
             where: {
               state: 'held',
-              entitlementId: { in: entitlementIds },
+              entitlementId: { in: affectedEntitlementIds },
               account: { targetSystemId },
             },
             include: { account: { select: { personId: true } } },
@@ -436,7 +518,26 @@ export async function previewRuleImpact(
             include: { account: { select: { personId: true } } },
           });
 
+    const wanted = new Set(entitlementIds);
+    // A disabled rule desires nothing: `desiredState` skips it and its
+    // entitlements leave the remit (Ruling P27). Previewing the edit that
+    // switches a rule off has to say so, in both directions.
+    const grants = rule.enabled ? wanted : new Set<string>();
+
+    /**
+     * What each person would still be DESIRED to hold after this edit, by any
+     * enabled rule on this target — this one included.
+     *
+     * `planActions` revokes `heldWithinRemit` minus `state.entitlements`, and
+     * `state.entitlements` is the union over every enabled rule, so an
+     * entitlement another rule still asks for is not revoked however this one
+     * is narrowed. Without this the preview counted a holding as a revocation
+     * on the strength of its entitlement id alone: `R1` granting `E1` to
+     * Finance and `R2` granting `E1` to Sales, narrowing `R1` to match nobody
+     * reported "revokes 340" for an edit that revokes twelve.
+     */
     const matched: { personId: string; displayName: string }[] = [];
+    const desiredByPerson = new Map<string, Set<string>>();
     for (const person of persons) {
       const contracts: ContractFacts[] = person.contracts.map((c) => ({
         id: c.id,
@@ -451,7 +552,8 @@ export async function previewRuleImpact(
         location: c.location,
         fte: c.fte === null ? null : Number(c.fte),
       }));
-      const hit = activeOn(contracts, now).some((c) =>
+      const activeContracts = activeOn(contracts, now);
+      const hit = activeContracts.some((c) =>
         evaluateCondition(condition, contractFacts(c, person.status)),
       );
       if (hit) {
@@ -461,28 +563,64 @@ export async function previewRuleImpact(
           displayName: personDisplayName(person),
         });
       }
+      const desired = new Set<string>(hit ? grants : []);
+      for (const other of otherRules) {
+        if (other.condition === null) continue;
+        const matches = activeContracts.some((c) =>
+          evaluateCondition(other.condition!, contractFacts(c, person.status)),
+        );
+        if (!matches) continue;
+        for (const entitlementId of other.entitlementIds) desired.add(entitlementId);
+      }
+      desiredByPerson.set(person.id, desired);
     }
 
     const matchedIds = new Set(matched.map((m) => m.personId));
-    const wanted = new Set(entitlementIds);
+
+    /**
+     * The remit as it would stand after this edit: every entitlement named by
+     * an enabled rule on this target. `reconcile` puts an UNMANAGED holding
+     * into `heldWithinRemit` only under `authoritative` and only inside the
+     * remit; under `additive` it is deliberately kept out and never revoked.
+     */
+    const remit = new Set<string>(grants);
+    for (const other of otherRules) {
+      for (const entitlementId of other.entitlementIds) remit.add(entitlementId);
+    }
+    const authoritative = target.enforcementMode === 'authoritative';
+    /**
+     * Whether the planner is allowed to take this holding away at all.
+     *
+     * `reconcile` builds `heldWithinRemit` — the set `planActions` differences
+     * against — from holdings whose `origin` is `'rule'` (Provision granted
+     * it, so it keeps converging even if the rule that asked has been deleted)
+     * plus, under `authoritative` ONLY, unmanaged in-remit ones. A holding a
+     * directory administrator added by hand is never revoked under `additive`,
+     * and this preview used to count it anyway.
+     */
+    const revocable = (holding: { origin: string; entitlementId: string }) =>
+      holding.origin === 'rule' ||
+      (authoritative && remit.has(holding.entitlementId));
 
     // Deduplicated by holding id: a holding this rule granted, of an
     // entitlement it still names, held by somebody it no longer matches, is
     // one revocation and appears in both reads.
     const revoked = new Set<string>();
-    for (const holding of named) {
-      if (!matchedIds.has(holding.account.personId)) revoked.add(holding.id);
-    }
-    for (const holding of mine) {
-      if (
-        !wanted.has(holding.entitlementId) ||
-        !matchedIds.has(holding.account.personId)
-      ) {
-        revoked.add(holding.id);
+    for (const holding of [...named, ...mine]) {
+      if (!revocable(holding)) continue;
+      if (desiredByPerson.get(holding.account.personId)?.has(holding.entitlementId)) {
+        continue;
       }
+      revoked.add(holding.id);
     }
 
-    const alreadyHeld = named.filter((h) => matchedIds.has(h.account.personId)).length;
+    // Only holdings of the entitlements this rule WOULD grant, held by
+    // somebody it matches. `named` also covers the entitlements the rule is
+    // dropping, and counting those as already held would depress the grant
+    // count by the size of the edit.
+    const alreadyHeld = named.filter(
+      (h) => matchedIds.has(h.account.personId) && wanted.has(h.entitlementId),
+    ).length;
 
     return {
       matchedPersons: matched.length,
@@ -491,7 +629,7 @@ export async function previewRuleImpact(
       // nothing in the schema forbids two live holdings of one entitlement on
       // one account — a negative "would grant" on a review screen is worse
       // than a conservative zero.
-      wouldGrant: Math.max(0, matched.length * entitlementIds.length - alreadyHeld),
+      wouldGrant: Math.max(0, matched.length * grants.size - alreadyHeld),
       wouldRevoke: revoked.size,
       sample: matched.slice(0, RULE_IMPACT_SAMPLE_SIZE),
     };

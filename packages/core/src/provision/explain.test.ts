@@ -609,6 +609,175 @@ describe('previewRuleImpact', () => {
     ).rejects.toThrow();
   });
 
+  // --- what the planner will actually revoke ---
+
+  /** Bo Lind, with an account at this target and one holding of the seeded entitlement. */
+  const seedBoHolding = (over: Record<string, unknown> = {}) =>
+    withTenant(tenantId, async (tx) => {
+      const bo = await tx.person.findFirstOrThrow({ where: { givenName: 'Bo' } });
+      const account = await tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          personId: bo.id,
+          correlationKey: 'bo.lind',
+          status: 'active',
+        },
+      });
+      const holding = await tx.accountEntitlement.create({
+        data: { tenantId, accountId: account.id, entitlementId, origin: 'rule', ...over },
+      });
+      return { personId: bo.id, holdingId: holding.id };
+    });
+
+  /** Narrows the seeded rule to match nobody, without changing what it names. */
+  const narrowedToNobody = {
+    id: undefined as string | undefined,
+    name: 'Finance staff',
+    condition: { field: 'contract.jobTitle', op: 'equals', value: 'Controller' } as never,
+    grantsAccount: true,
+    enabled: true,
+    entitlementIds: [] as string[],
+  };
+
+  it('does not count a holding another rule still grants', async () => {
+    // `R1` grants `E1` to Finance, `R2` grants `E1` to Facilities. Narrowing
+    // `R1` to match nobody revokes the Finance holdings and nothing else:
+    // `planActions` skips any entitlement still in `state.entitlements`, which
+    // is the union over every enabled rule. Counting on the entitlement id
+    // alone said "revokes 340" for an edit that revokes twelve.
+    await seedHolding();
+    const bo = await seedBoHolding();
+    const r2 = await upsertBusinessRule(tenantId, null, targetId, {
+      name: 'Facilities staff',
+      condition: { field: 'contract.department', op: 'equals', value: 'Facilities' },
+      grantsAccount: true,
+      enabled: true,
+      entitlementIds: [entitlementId],
+    });
+    await withTenant(tenantId, (tx) =>
+      tx.accountEntitlement.update({
+        where: { id: bo.holdingId },
+        data: { grantedByRuleId: r2.id },
+      }),
+    );
+
+    const impact = await previewRuleImpact(
+      tenantId,
+      targetId,
+      { ...narrowedToNobody, id: ruleId, entitlementIds: [entitlementId] },
+      NOW,
+    );
+    expect(impact.matchedPersons).toBe(0);
+    // Anna's, and not Bo's.
+    expect(impact.wouldRevoke).toBe(1);
+  });
+
+  it('does not count a hand-made holding under additive enforcement', async () => {
+    // `reconcile` records a holding Provision did not grant as
+    // `unmanaged_entitlement` and, under `additive`, deliberately keeps it OUT
+    // of `heldWithinRemit`: it is never revoked in that mode. Counting it as a
+    // revocation promises an administrator a tidy-up that will not happen.
+    await seedHolding();
+    await seedBoHolding({ origin: 'discovered', grantedByRuleId: null });
+
+    const impact = await previewRuleImpact(
+      tenantId,
+      targetId,
+      { ...narrowedToNobody, id: ruleId, entitlementIds: [entitlementId] },
+      NOW,
+    );
+    expect(impact.wouldRevoke).toBe(1);
+  });
+
+  it('counts a hand-made in-remit holding under authoritative enforcement', async () => {
+    // The same fixture and the other mode: `authoritative` says take charge of
+    // the entitlements the rules name, so `reconcile` puts the unmanaged
+    // in-remit holding INTO `heldWithinRemit` and the run does revoke it.
+    await seedHolding();
+    await seedBoHolding({ origin: 'discovered', grantedByRuleId: null });
+    await withTenant(tenantId, (tx) =>
+      tx.targetSystem.update({
+        where: { id: targetId },
+        data: { enforcementMode: 'authoritative' },
+      }),
+    );
+
+    const impact = await previewRuleImpact(
+      tenantId,
+      targetId,
+      { ...narrowedToNobody, id: ruleId, entitlementIds: [entitlementId] },
+      NOW,
+    );
+    expect(impact.wouldRevoke).toBe(2);
+  });
+
+  it('counts a holding whose stamp names a rule that has been deleted', async () => {
+    // The under-report, and the direction that matters more. `apply.ts` stamps
+    // `attributedRuleIds[0]`, so a holding this rule granted can carry another
+    // rule's id -- and that rule may since have been deleted, leaving the
+    // stamp dangling. Preview an edit dropping the entitlement: it is off the
+    // new list so the named read missed it, and the stamp is not this rule's
+    // id so the `mine` read missed it too -- while the holding is
+    // `origin: 'rule'`, therefore inside `heldWithinRemit`, therefore revoked
+    // by the very next run. The preview said the edit takes nothing away.
+    const seeded = await seedHolding();
+    const ghost = await upsertBusinessRule(tenantId, null, targetId, {
+      name: 'Deleted rule',
+      condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+      grantsAccount: true,
+      enabled: true,
+      entitlementIds: [entitlementId],
+    });
+    await withTenant(tenantId, async (tx) => {
+      await tx.accountEntitlement.update({
+        where: { id: seeded.holdingId },
+        data: { grantedByRuleId: ghost.id },
+      });
+      await tx.businessRule.delete({ where: { id: ghost.id } });
+    });
+
+    const impact = await previewRuleImpact(
+      tenantId,
+      targetId,
+      {
+        id: ruleId,
+        name: 'Finance staff',
+        // The condition still matches Anna; the entitlement is being dropped.
+        condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+        grantsAccount: true,
+        enabled: true,
+        entitlementIds: [],
+      },
+      NOW,
+    );
+    expect(impact.matchedPersons).toBe(1);
+    expect(impact.wouldRevoke).toBe(1);
+  });
+
+  it('counts everything the rule granted when the edit switches it off', async () => {
+    // A disabled rule desires nothing: `desiredState` skips it, so every
+    // holding it is the only reason for is revoked. Reporting the grant count
+    // of a rule that will grant nothing would be the same untruth the other
+    // way up.
+    await seedHolding();
+    const impact = await previewRuleImpact(
+      tenantId,
+      targetId,
+      {
+        id: ruleId,
+        name: 'Finance staff',
+        condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+        grantsAccount: true,
+        enabled: false,
+        entitlementIds: [entitlementId],
+      },
+      NOW,
+    );
+    expect(impact.wouldGrant).toBe(0);
+    expect(impact.wouldRevoke).toBe(1);
+  });
+
   it('refuses a condition nested past the cap, rather than previewing it', async () => {
     let condition: unknown = { field: 'contract.department', op: 'isNotEmpty' };
     for (let i = 0; i < 40; i += 1) condition = { not: condition };
