@@ -896,11 +896,23 @@ export function TargetDetailPage() {
               {...mark(key)}
             />
           ))}
+          {/*
+            No count and no list. `guard.ts` returns
+            `requiresConfirmation: false` from three places covering five
+            distinct classes — a threshold or a count that is not a number, no
+            persons on an active contract at all, a collapsed person
+            population, a target that returned no accounts, and any axis whose
+            denominator is missing — so "two of the guard's refusals" was wrong
+            about three of them, and any list written here goes on being wrong
+            as the guard grows. The distinction is what is stable.
+          */}
           <p className="text-muted sm:col-span-2">
-            Two of the guard&apos;s refusals cannot be confirmed away: a target
-            that returned no accounts at all, and a person population that
-            collapsed. An empty target and an unreachable one look identical,
-            and a collapsed population is the signature of a broken feed.
+            A run held only for being over one of these thresholds can be
+            applied by somebody who has read the numbers. A run the guard
+            refused because it could not compute the number at all cannot be
+            confirmed away by anybody: there is no number for a tick to mean
+            &ldquo;I have read&rdquo; about. Which of the two a run is, and
+            why, is on the run&apos;s own screen.
           </p>
         </Panel>
       </div>

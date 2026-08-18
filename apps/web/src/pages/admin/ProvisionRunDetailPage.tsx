@@ -40,6 +40,14 @@ interface Run {
   status: string;
   startedAt: string;
   blockedReason: string | null;
+  /**
+   * Why a `failed` run failed. Spec section 14's status list has no
+   * `superseded`, so a run a later run stepped over is recorded `failed` with
+   * `error: 'superseded by a later run'` (`run-service.ts`,
+   * `adoptStaleRunsAndStart`). The runs list already reads it; this page did
+   * not, and explained a superseded run as one that had been partly applied.
+   */
+  error: string | null;
   requiresConfirmation: boolean;
   personsEvaluated: number;
   personsUnprocessable: number;
@@ -224,6 +232,22 @@ export function ProvisionRunDetailPage() {
     run.requiresConfirmation ||
     run.actions.some((a) => selected.has(a.id) && a.requiresConfirmation);
 
+  /**
+   * A blocked run the guard marked non-confirmable is refused OUTRIGHT.
+   *
+   * `apply.ts` throws `ProvisionRunNotConfirmableError` for
+   * `status === 'blocked' && !requiresConfirmation` before it looks at
+   * anything else, and `provision-runs.ts` answers 409 `run-unconfirmable` on
+   * the same condition. There is no body — no `only`, no `confirm` — that
+   * makes that request succeed, so an enabled Apply button here is a button
+   * whose only outcome is an error, on the one screen whose job is to say what
+   * the engine will do.
+   */
+  const unconfirmable = run.status === 'blocked' && !run.requiresConfirmation;
+  const appliable = APPLIABLE.includes(run.status) && !unconfirmable;
+  const superseded =
+    run.status === 'failed' && (run.error ?? '').startsWith('superseded');
+
   const tabs: [Tab, string][] = [
     ['person', 'By person'],
     ['type', 'By type'],
@@ -262,10 +286,24 @@ export function ProvisionRunDetailPage() {
                 ))}
             </ul>
             {!run.requiresConfirmation && (
+              /*
+               * No enumeration. `guard.ts` returns
+               * `requiresConfirmation: false` from three places covering five
+               * distinct classes of refusal — a threshold or a count that is
+               * not a number, no persons holding an active contract at all, a
+               * collapsed person population, a target that returned no
+               * accounts, and any axis whose denominator is missing — and a
+               * screen that names two of them is wrong about the other three
+               * and goes on being wrong as the guard grows. The principle is
+               * stable; the list is not, and the reasons above are the run's
+               * own.
+               */
               <p className="mt-3">
-                This one cannot be confirmed away. An empty target and an
-                unreachable one look identical, and a collapsed person
-                population is the signature of a broken feed.
+                This one cannot be confirmed away. A tick means &ldquo;I have
+                read the numbers and want this anyway&rdquo;, and the guard
+                refused this run because it could not compute a number for
+                anybody to have read. The reasons above say which check
+                refused it.
               </p>
             )}
           </Alert>
@@ -465,18 +503,44 @@ export function ProvisionRunDetailPage() {
           </Panel>
         )}
 
-        {run.actions.length > 0 && !APPLIABLE.includes(run.status) && (
-          <Panel title="Nothing further to apply">
+        {run.actions.length > 0 && !appliable && (
+          <Panel
+            title={
+              unconfirmable ? 'This run cannot be applied' : 'Nothing further to apply'
+            }
+          >
             <p className="p-4 text-muted">
-              This run is <strong className="font-semibold">{run.status}</strong>
-              . Applying part of a run ends it: anything left unticked was not
-              written, and the next run works out afresh what is still needed
-              rather than replaying a plan that has gone stale.
+              {unconfirmable ? (
+                <>
+                  The guard refused it for a reason no confirmation answers, so
+                  there is no Apply here: the server refuses the request
+                  outright, whatever is ticked. Put right what the reasons above
+                  name, then run this target again — the next run works the plan
+                  out afresh.
+                </>
+              ) : superseded ? (
+                <>
+                  A later run superseded this one, and its still-proposed
+                  actions were marked superseded rather than applied. Two
+                  overlapping plans against one target can interleave a
+                  revocation from the older behind a grant from the newer,
+                  producing a state neither plan described. Whatever is still
+                  needed is in the newer run.
+                </>
+              ) : (
+                <>
+                  This run is{' '}
+                  <strong className="font-semibold">{run.status}</strong>.
+                  Applying part of a run ends it: anything left unticked was not
+                  written, and the next run works out afresh what is still
+                  needed rather than replaying a plan that has gone stale.
+                </>
+              )}
             </p>
           </Panel>
         )}
 
-        {run.actions.length > 0 && APPLIABLE.includes(run.status) && (
+        {run.actions.length > 0 && appliable && (
           <Panel title="Apply">
             <div className="space-y-4 p-4">
               {needsConfirmation && run.requiresConfirmation && (

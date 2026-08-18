@@ -27,6 +27,7 @@ const run = (overrides: Record<string, unknown> = {}) => ({
   status: 'previewed',
   startedAt: '2026-08-01T03:00:00.000Z',
   blockedReason: null,
+  error: null,
   requiresConfirmation: false,
   personsEvaluated: 4,
   personsUnprocessable: 0,
@@ -118,11 +119,15 @@ describe('ProvisionRunDetailPage', () => {
     ).toBeVisible();
   });
 
-  it('offers no confirmation at all for a block that cannot be confirmed away', async () => {
-    // The guard's most important property: some refusals cannot be waved
-    // through. A tick rendered here would be a tick the server refuses, and
-    // an administrator would read the refusal as a bug rather than as the
-    // control working.
+  it('offers no apply at all for a block that cannot be confirmed away', async () => {
+    // This fixture is the one the defect shipped under. The previous version of
+    // this test rendered exactly it and asserted only that the confirmation
+    // CHECKBOX was absent — it never looked at the Apply button sitting right
+    // there, enabled, sending a request `apply.ts` refuses outright with
+    // `ProvisionRunNotConfirmableError` and `provision-runs.ts` answers 409
+    // `run-unconfirmable` to. There is no body that makes it succeed: no
+    // `only`, no `confirm`. The button was the defect; the checkbox was its
+    // neighbour.
     mockFetch(
       run({
         status: 'blocked',
@@ -139,6 +144,71 @@ describe('ProvisionRunDetailPage', () => {
         'I have read the numbers above and want to apply this run anyway',
       ),
     ).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Apply/ })).toBeNull();
+    expect(screen.getByText('This run cannot be applied')).toBeVisible();
+  });
+
+  it('still offers the apply for a block that CAN be confirmed away', async () => {
+    // The other half. A screen that refuses every blocked run is a screen that
+    // makes the guard useless for the case it was built for: a real cohort
+    // departure has to be processable by somebody who has read the numbers.
+    mockFetch(
+      run({
+        status: 'blocked',
+        requiresConfirmation: true,
+        blockedReason: 'would disable 9 of 20 accounts (45.0%), above the 10% threshold',
+      }),
+    );
+    renderPage();
+
+    expect(await screen.findByText('This run is blocked')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Apply 1 action' })).toBeVisible();
+    expect(screen.queryByText('This run cannot be applied')).toBeNull();
+  });
+
+  it('does not name every non-confirmable refusal, having named only two of five', async () => {
+    // `guard.ts` returns `requiresConfirmation: false` from three places
+    // covering five classes: a threshold or count that is not a number, no
+    // persons on an active contract at all, a collapsed person population, a
+    // target that returned no accounts, and any axis whose denominator is
+    // missing. This screen used to explain all of them as one of two.
+    mockFetch(
+      run({
+        status: 'blocked',
+        requiresConfirmation: false,
+        blockedReason:
+          'cannot evaluate the revoke axis: the plan would revoke 4 entitlement holdings while the target inventory reports none at all, so the plan and the denominator did not come from the same read',
+      }),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByText(/cannot evaluate the revoke axis/),
+    ).toBeVisible();
+    // The old copy explained this run as an empty target or a broken HR feed.
+    expect(
+      screen.queryByText(/An empty target and an unreachable one/),
+    ).toBeNull();
+    expect(
+      screen.queryByText(/signature of a broken feed/),
+    ).toBeNull();
+  });
+
+  it('explains a superseded run as superseded, not as one partly applied', async () => {
+    // Spec section 14's status list has no `superseded`, so `run-service.ts`
+    // records it as `failed` with an explanatory `error`. The runs list already
+    // maps this; the detail page told the reader that applying part of a run
+    // ends it, which is not what happened to this one at all.
+    mockFetch(
+      run({ status: 'failed', error: 'superseded by a later run' }),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByText(/A later run superseded this one/),
+    ).toBeVisible();
+    expect(screen.queryByText(/Applying part of a run ends it/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Apply/ })).toBeNull();
   });
 
   it('says a run that proposes nothing proposes nothing', async () => {
