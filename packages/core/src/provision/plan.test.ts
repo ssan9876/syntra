@@ -609,6 +609,55 @@ describe('planActions — the Syntra user', () => {
   });
 });
 
+describe('planActions — taking a distinguished name apart', () => {
+  it('does not propose a move for an account whose CN contains an escaped comma', () => {
+    /**
+     * `CN=Novak\, Anna,OU=Finance,…` is an ordinary Active Directory account,
+     * and one Provision meets constantly because it correlates accounts
+     * administrators created by hand. Split at the first comma — which is the
+     * ESCAPED one — the container reads ` Anna,OU=Finance,…`, differs from the
+     * container the profile renders, and an `update_account` is proposed
+     * carrying a move. `toWriteOperation` then hands the connector
+     * `CN=<sAMAccountName>,<container>`, `modifyDN` fires, and the object is
+     * silently RENAMED from `Novak\, Anna` — the unconfirmed rename that
+     * `rename_account` is opt-in and always-confirmable to prevent, arriving
+     * from underneath it, on every run forever because the real container
+     * never comes to match.
+     *
+     * The attributes are left equal to the desired ones so that the ONLY thing
+     * that could propose an `update_account` here is the container comparison.
+     */
+    const actions = plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            dn: 'CN=Novak\\, Anna,OU=Finance,OU=Users,DC=acme,DC=test',
+          }),
+        ],
+      ]),
+    });
+    expect(types(actions)).toEqual([]);
+  });
+
+  it('still proposes the move when the container genuinely differs', () => {
+    // The other direction, so the case above is not passing because the
+    // comparison was switched off.
+    const actions = plan({
+      actual: new Map([
+        [
+          'person-1',
+          actual({ dn: 'CN=Novak\\, Anna,OU=Facilities,OU=Users,DC=acme,DC=test' }),
+        ],
+      ]),
+    });
+    expect(types(actions)).toEqual(['update_account']);
+    expect(actions[0]!.before).toMatchObject({
+      container: 'OU=Facilities,OU=Users,DC=acme,DC=test',
+    });
+  });
+});
+
 describe('planActions — the person who has not started', () => {
   it('proposes nothing at all for a future joiner who already holds an account', () => {
     // The case that made this a Ruling. None of their contracts has started,

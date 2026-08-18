@@ -1,4 +1,4 @@
-import type { ProvisionActionType } from '@syntra/connectors';
+import { splitDn, type ProvisionActionType } from '@syntra/connectors';
 import { activeOn, departureDate } from './desired.js';
 import { unprocessableScope } from './reconcile.js';
 import type {
@@ -528,9 +528,31 @@ export function planActions(input: PlanInput): PlannedAction[] {
     .map((entry) => entry.action);
 }
 
-/** The container part of a DN — everything after the first comma. */
+/**
+ * The container part of a DN — the parent of the first RDN.
+ *
+ * `splitDn` from `@syntra/connectors`, and NOT `dn.indexOf(',')`, which is
+ * what this used to do. `CN=Novak\, Anna,OU=Staff,…` is an entirely ordinary
+ * Active Directory account — and one Provision meets constantly, because it
+ * correlates accounts administrators created by hand — and the first comma in
+ * it is the ESCAPED one. Splitting there yields the container
+ * ` Anna,OU=Staff,…`, which differs from the container the profile renders, so
+ * `containerChanged` is true, so an `update_account` is proposed carrying a
+ * move, so `toWriteOperation` hands the connector
+ * `CN=<sAMAccountName>,<container>` and `modifyDN` silently RENAMES the object
+ * from `Novak\, Anna`. That is exactly the unconfirmed rename `rename_account`
+ * is opt-in and always-confirmable to prevent, arriving underneath it — and it
+ * would repeat on every run, because the object's real container never
+ * matches.
+ *
+ * Imported rather than restated: this is the fourth place in this repository
+ * that needed to take a DN apart, and `@syntra/connectors` — which core
+ * already depends on — is where the correct one lives.
+ */
 function containerOf(state: ActualState): string | null {
   if (state.dn === null) return null;
-  const comma = state.dn.indexOf(',');
-  return comma === -1 ? null : state.dn.slice(comma + 1);
+  const { parent } = splitDn(state.dn);
+  // A DN with no comma at all names no container, which is what the caller's
+  // null means. `splitDn` reports the empty string for it.
+  return parent === '' ? null : parent;
 }
