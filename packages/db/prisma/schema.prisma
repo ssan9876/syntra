@@ -1207,6 +1207,10 @@ model Entitlement {
   status         String   @default("present")
   /// Current holders, the denominator of the per-entitlement guard axis.
   holderCount    Int      @default(0)
+  /// Whether this entitlement may be named by a catalog product. False by
+  /// default, so a target's catalog can be published without publishing every
+  /// group in the domain.
+  requestable    Boolean  @default(false)
   lastSeenAt     DateTime?
 
   createdAt DateTime @default(now())
@@ -1274,10 +1278,15 @@ model AccountEntitlement {
   /// the target by the same reasoning.
   entitlement   Entitlement   @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
   /// 'rule' — Provision granted it because a rule said so.
+  /// 'request' — an approved AccessRequest put it into desired state. ONE
+  ///   value covers both grant origins: a delegated administrator's act is an
+  ///   AccessRequest too, so `grantedByRequestId` answers which kind it was
+  ///   without a second enum value that would mean the same thing here.
   /// 'manual' — an administrator linked it in Syntra deliberately.
   /// 'discovered' — the target already held it when Provision first looked.
   origin        String
   grantedByRuleId String? @db.Uuid
+  grantedByRequestId String? @db.Uuid
   grantedAt     DateTime  @default(now())
   revokedAt     DateTime?
   /// 'held' | 'revoked'
@@ -1365,6 +1374,11 @@ model ProvisionAction {
   /// unanswerable afterwards, and "why does this person hold this?" is the
   /// most-asked question of any provisioning product.
   attributedRuleIds String[] @default([])
+  /// The AccessGrant this action is applying or removing, when one caused it.
+  /// A bare column and not a relation: Automate's reflection pass reads it,
+  /// and a foreign key would make deleting a grant fail on the history of
+  /// what was done about it.
+  grantId       String?  @db.Uuid
   /// The order this action is applied in, from ACTION_ORDER (spec section 14:
   /// within a person, create then attribute updates then grants then
   /// revocations then disable then archive).
@@ -1396,6 +1410,7 @@ model ProvisionAction {
   @@index([runId, sequence])
   @@index([tenantId])
   @@index([personId])
+  @@index([tenantId, grantId])
 }
 
 /// A person Provision could not fully evaluate for a target. Deliberately a
@@ -1462,4 +1477,585 @@ model DriftFinding {
   @@unique([tenantId, targetSystemId, fingerprint])
   @@index([tenantId])
   @@index([targetSystemId, status])
+}
+
+/// One row per tenant, holding every number the Automate design names, so
+/// that none of them is a constant compiled into the code. Two of the columns
+/// are not settings at all: `lastAppliedSweepAt` and
+/// `personsWithActiveContractAtLastSweep` are the denominator the
+/// population-collapse refusal compares against, and they are STORED rather
+/// than recomputed for the same reason Provision stores `lastAppliedRunAt` —
+/// the comparison is against the last state somebody accepted, not against
+/// the last state observed.
+///
+/// MAX_MANAGER_DEPTH is deliberately not here. It is a cycle-termination
+/// constant, not a policy, and a tenant that could raise it could hang its
+/// own approvals.
+model AutomateSettings {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @unique @db.Uuid
+
+  sweepSchedule                   String? @default("0 2 * * *")
+  sweepThresholdPercent           Int     @default(10)
+  perProductSweepThresholdPercent Int     @default(50)
+  personPopulationDropPercent     Int     @default(20)
+  fulfilmentSlaHours              Int     @default(24)
+  /// Days before `endsAt` that the holder and the original approver are told.
+  expiryWarningDays               Int[]   @default([7, 1])
+  /// For an `application` or `localGroup` grant, which has no target system
+  /// to inherit a pre-hire horizon from. Two horizons rather than one is not
+  /// duplication: a domain that needs an account three weeks early does not
+  /// imply a portal tile three weeks early.
+  preHireHorizonDays              Int     @default(14)
+  maxDelegationDays               Int     @default(90)
+  maxApprovers                    Int     @default(10)
+  delegatedBulkLimit              Int     @default(25)
+
+  lastAppliedSweepAt                   DateTime?
+  personsWithActiveContractAtLastSweep Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+/// One thing a person may ask for. `audienceCondition` NULL means visible to
+/// NOBODY — the safe reading of an unconfigured access control — and a
+/// product genuinely meant for everybody says so with `{ "all": [] }`.
+model Product {
+  id                  String  @id @default(uuid()) @db.Uuid
+  tenantId            String  @db.Uuid
+  name                String
+  slug                String
+  description         String?
+  category            String?
+  iconUrl             String?
+  /// Free text on the request form: where a tenant explains what the thing is.
+  requestInstructions String?
+  /// 'targetEntitlement' | 'application' | 'localGroup'
+  kind                String
+  /// The audience expression. NULL MEANS NOBODY. This cannot be enforced in
+  /// SQL, only in the resolver, which is why Task 6 has a test for it and the
+  /// catalog editor says so.
+  audienceCondition   Json?
+  workflowId          String  @db.Uuid
+  workflow            ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Restrict)
+  /// The typed request form, a list of fields from a closed set.
+  formSchema          Json    @default("[]")
+  /// 'permanent' | 'fixed' | 'requesterChoice'
+  durationMode        String  @default("permanent")
+  defaultDurationDays Int?
+  maxDurationDays     Int?
+  ownerPersonId       String? @db.Uuid
+  ownerGroupId        String? @db.Uuid
+  /// 'draft' | 'active' | 'retired'. Never hard-deleted while any grant or
+  /// request references it.
+  status              String  @default("draft")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  grants   ProductGrant[]
+  requests AccessRequest[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+/// One resource a product grants. A product granting several is a bundle,
+/// requested, approved and fulfilled as a set, with per-resource outcomes
+/// recorded per RequestItem.
+model ProductGrant {
+  id        String  @id @default(uuid()) @db.Uuid
+  tenantId  String  @db.Uuid
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  /// 'entitlement' | 'application' | 'group'
+  resourceType   String
+  resourceId     String  @db.Uuid
+  /// Set for 'entitlement', null otherwise. Every entitlement grant in one
+  /// bundle must name the SAME target, so one Provision run fulfils the whole
+  /// thing; Task 6 refuses a save that mixes two.
+  targetSystemId String? @db.Uuid
+  /// For a resourcePicker form: the requester chooses among the optional ones.
+  optional       Boolean @default(false)
+
+  @@unique([tenantId, productId, resourceType, resourceId])
+  @@index([tenantId])
+  @@index([productId])
+}
+
+/// An ordered list of stages. A workflow with ZERO stages grants immediately —
+/// not a flag, not a special case; the empty list is the mechanism.
+model ApprovalWorkflow {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String  @db.Uuid
+  name        String
+  description String?
+  enabled     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stages   ApprovalStage[]
+  products Product[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model ApprovalStage {
+  id         String           @id @default(uuid()) @db.Uuid
+  tenantId   String           @db.Uuid
+  workflowId String           @db.Uuid
+  workflow   ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  sequence   Int
+  name       String
+  /// 'manager' | 'managerChain' | 'productOwner' | 'resourceOwner' | 'role'
+  /// | 'group' | 'person'
+  selector   String
+  /// { depth?, roleId?, groupId?, personId? }
+  selectorConfig Json @default("{}")
+  /// 'any' (first decision decides) | 'all' (every resolved approver)
+  quorum     String @default("any")
+  /// Required when selector is manager, managerChain or resourceOwner: the
+  /// three that legitimately resolve to nobody. Enforced by a check
+  /// constraint as well as at save time, because discovering it at 3am on
+  /// somebody's request is the failure this exists to prevent.
+  fallbackSelector String?
+  fallbackConfig   Json    @default("{}")
+  slaHours   Int    @default(48)
+  /// 'remind' (default) | 'escalate' | 'expire'. THERE IS NO VALUE THAT
+  /// APPROVES. Approval by inattention is a privilege grant nobody made.
+  onTimeout  String @default("remind")
+  escalationSelector String?
+  escalationConfig   Json    @default("{}")
+  /// Required when onTimeout is 'expire'.
+  expiryHours Int?
+
+  @@unique([workflowId, sequence])
+  @@index([tenantId])
+}
+
+/// The ask. An AccessRequest is the ask; an AccessGrant is the holding. They
+/// have separate lifecycles, and conflating them is what makes "what happens
+/// when the date arrives" unanswerable.
+model AccessRequest {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  /// Null for a delegated administrative act, which has no catalog entry.
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
+  subjectPersonId  String @db.Uuid
+  requestedByUserId String @db.Uuid
+  /// The person behind requestedByUserId, resolved at submission so the
+  /// self-approval subtraction has a person to subtract without re-reading
+  /// the User row at every stage. Null when the submitting account is not
+  /// linked to a person.
+  requestedByPersonId String? @db.Uuid
+  /// 'catalog' | 'delegated_admin'
+  origin        String @default("catalog")
+  /// Set for a delegated act, which names its resource directly.
+  resourceType  String?
+  resourceId    String? @db.Uuid
+  justification String?
+  formValues    Json    @default("{}")
+  requestedDurationDays Int?
+  /// The grant this request would replace, for an extension. Task 9 sets
+  /// `supersededByGrantId` on the old grant when the new one lands, so a
+  /// naive implementation cannot expire the old one, revoke at the target and
+  /// re-grant an hour later.
+  replacesGrantId String? @db.Uuid
+  /// pending_approval | blocked_no_approver | approved | awaiting_fulfilment
+  /// | fulfilled | partially_fulfilled | fulfilment_failed | rejected
+  /// | cancelled | expired
+  status       String @default("pending_approval")
+  statusReason String?
+  submittedAt  DateTime  @default(now())
+  decidedAt    DateTime?
+  fulfilledAt  DateTime?
+  /// When this request entered awaiting_fulfilment, so the fulfilment SLA has
+  /// something to measure from that `submittedAt` cannot supply.
+  dispatchedAt DateTime?
+
+  items RequestItem[]
+  steps ApprovalStep[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, subjectPersonId])
+}
+
+/// The snapshot of what was asked for, written at submission. Editing the
+/// product afterwards changes nothing about this request — the same principle
+/// as Directory Sync's materialized SyncChange and Provision's
+/// ProvisionAction: what was reviewed is what is applied, literally.
+model RequestItem {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @db.Uuid
+  requestId String        @db.Uuid
+  request   AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  resourceType   String
+  resourceId     String  @db.Uuid
+  targetSystemId String? @db.Uuid
+  /// 'pending' | 'dispatched' | 'fulfilled' | 'failed' | 'skipped'
+  status  String @default("pending")
+  /// The Provision action that is applying this. A bare column, not a
+  /// relation: the action is Provision's row and cascading from it would
+  /// delete the record of what happened when a run is cleaned up.
+  provisionActionId String? @db.Uuid
+  grantId String? @db.Uuid
+  message String?
+
+  @@unique([requestId, resourceType, resourceId])
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+/// One per workflow stage, instantiated at submission carrying the whole
+/// stage as it stood, so a workflow edited afterwards cannot change what an
+/// approver's signature meant.
+model ApprovalStep {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @db.Uuid
+  requestId String        @db.Uuid
+  request   AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sequence  Int
+  stageSnapshot Json
+  /// 'waiting' | 'open' | 'approved' | 'rejected' | 'skipped'
+  status    String    @default("waiting")
+  openedAt  DateTime?
+  closedAt  DateTime?
+  slaDueAt  DateTime?
+  escalatedAt DateTime?
+  /// When the last reminder went out, so the daily cadence after 100% of the
+  /// SLA is a cadence and not a message per tick.
+  lastRemindedAt DateTime?
+
+  approvers ApprovalStepApprover[]
+  decisions ApprovalDecision[]
+
+  @@unique([requestId, sequence])
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+/// The MATERIALIZED resolved set. This is what makes "who was this with, on
+/// the Tuesday it was sitting there" answerable a year later rather than
+/// recomputable against a directory that has since moved.
+model ApprovalStepApprover {
+  id       String       @id @default(uuid()) @db.Uuid
+  tenantId String       @db.Uuid
+  stepId   String       @db.Uuid
+  step     ApprovalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  personId String       @db.Uuid
+  /// 'selector' | 'delegate' | 'escalation' | 'fallback'
+  via      String
+  /// The delegator, when via is 'delegate'.
+  onBehalfOfPersonId String? @db.Uuid
+  addedAt  DateTime @default(now())
+
+  /// One row per person per step. A person resolved both by the selector and
+  /// as somebody's delegate is one approver, not two — which is also what
+  /// makes an `all` quorum countable.
+  @@unique([stepId, personId])
+  @@index([tenantId])
+}
+
+/// Append-only in the same sense as the audit log: never updated, never
+/// deleted. A reversal is a new row with its own reason. The migration adds
+/// the two PostgreSQL rules that make that true of the data rather than true
+/// of the one code path that happens to respect it.
+model ApprovalDecision {
+  id       String       @id @default(uuid()) @db.Uuid
+  tenantId String       @db.Uuid
+  stepId   String       @db.Uuid
+  step     ApprovalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  personId String       @db.Uuid
+  /// The account the decision was made from, so a decision can be tied to a
+  /// session as well as to a person.
+  userId   String?      @db.Uuid
+  /// 'approve' | 'reject'
+  decision String
+  /// Required on a reject. A refusal with no reason is an unanswerable
+  /// support call and a request the person will simply raise again.
+  comment  String?
+  /// An approver may SHORTEN a duration when deciding. Never lengthen it.
+  shortenedToDays Int?
+  /// 'selector' | 'delegate' | 'escalation' | 'fallback' | 'administrator'
+  via      String
+  onBehalfOfPersonId String? @db.Uuid
+  decidedAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([stepId])
+}
+
+/// Adds an approver; never replaces one. Depth 1, end date required.
+model ApprovalDelegation {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @db.Uuid
+  delegatorPersonId  String    @db.Uuid
+  delegatePersonId   String    @db.Uuid
+  /// Optional restriction to one product category.
+  category           String?
+  startsAt           DateTime
+  endsAt             DateTime
+  createdByUserId    String?   @db.Uuid
+  revokedAt          DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, delegatorPersonId])
+}
+
+/// The holding. Its status is about the access, not about the ask.
+///
+///   scheduled — startsAt is in the future; confers NOTHING until then.
+///   pending   — in force, dispatched, not yet confirmed applied at the target.
+///   active    — confirmed held.
+///   expired   — endsAt passed.
+///   lapsed    — the subject's contracts all ended.
+///   revoked   — handed back, or withdrawn by an owner or administrator.
+///
+/// Desired state includes `pending` and `active` — grants whose window covers
+/// now. A scheduled grant never confers access before its start date, which
+/// mirrors Provision's split between the horizon deciding that an account
+/// exists and `now` deciding that it holds anything.
+model AccessGrant {
+  id              String  @id @default(uuid()) @db.Uuid
+  tenantId        String  @db.Uuid
+  subjectPersonId String  @db.Uuid
+  resourceType    String
+  resourceId      String  @db.Uuid
+  targetSystemId  String? @db.Uuid
+  /// 'request' | 'delegated_admin'
+  origin          String  @default("request")
+  requestId       String? @db.Uuid
+  /// Denormalised from the request so the sweep can group by product without
+  /// a join through a nullable request, and so a grant survives a request
+  /// whose product was later retired.
+  productId       String? @db.Uuid
+  startsAt        DateTime
+  endsAt          DateTime?
+  status          String  @default("pending")
+  statusReason    String?
+  /// Set the FIRST time a sweep observes that the subject no longer satisfies
+  /// the product's audience. A flag, not a removal: it changes nothing about
+  /// what the person holds, so the sweep guard does not count it and the
+  /// review screen cannot skip it.
+  needsReview     Boolean @default(false)
+  reviewReason    String?
+  reviewedAt      DateTime?
+  /// The grant that replaced this one when an extension was approved before
+  /// the original expired, so no removal is produced and there is no outage.
+  supersededByGrantId String? @db.Uuid
+  /// The person who approved the request this grant came from, so the expiry
+  /// warning and the lapse notice can reach them without walking the steps.
+  /// Populated by `fulfilRequest` from the last `approve` decision on the
+  /// request; null for a delegated administrative grant, which has no stages.
+  approvedByPersonId  String? @db.Uuid
+  /// The ids of the `AppAssignment` / `GroupMembership` rows THIS grant wrote.
+  /// Ending a grant deletes these rows and no others. Spec section 5's safety
+  /// argument for Automate writing those two tables at all is that each has
+  /// exactly one other writer; deleting by (applicationId, userId) breaks it
+  /// in the other direction, removing a membership an administrator added by
+  /// hand and reporting it as a grant that lapsed. Empty for an
+  /// `entitlement` grant, which writes nothing directly.
+  writtenRowIds       String[] @default([])
+
+  createdAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  @@index([tenantId])
+  /// The read desiredState performs, per person.
+  @@index([tenantId, subjectPersonId, status])
+  /// The read the sweep performs.
+  @@index([tenantId, endsAt])
+  @@index([tenantId, productId, status])
+}
+
+/// Who owns a resource, for the resourceOwner selector. Deliberately a
+/// separate table rather than a column on Entitlement, Application and Group,
+/// because two of those three are owned by other subsystems and adding a
+/// column to a table another subsystem rewrites every night is how a boundary
+/// erodes.
+model ResourceOwner {
+  id            String  @id @default(uuid()) @db.Uuid
+  tenantId      String  @db.Uuid
+  resourceType  String
+  resourceId    String  @db.Uuid
+  ownerPersonId String? @db.Uuid
+  ownerGroupId  String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, resourceType, resourceId])
+  @@index([tenantId])
+}
+
+/// A team lead who may add and remove members of ONE resource they own, from
+/// the portal, with no administrative session. Scope is per resource, never
+/// per type: there is no "manage all groups" delegation; that is a role, and
+/// roles live in the console.
+model ResourceDelegation {
+  id               String  @id @default(uuid()) @db.Uuid
+  tenantId         String  @db.Uuid
+  resourceType     String
+  resourceId       String  @db.Uuid
+  delegatePersonId String? @db.Uuid
+  delegateGroupId  String? @db.Uuid
+  /// Subset of ['view_members','approve','grant','revoke'].
+  capabilities     String[]
+  /// Applies where the resource is not reachable through a product whose
+  /// condition would apply. Without an audience rule of some kind, delegation
+  /// is a hole underneath the catalog's visibility model.
+  audienceCondition Json?
+  startsAt         DateTime
+  endsAt           DateTime?
+  createdByUserId  String?  @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, resourceType, resourceId])
+}
+
+/// A run, in exactly the idiom Directory Sync and Provision established: it
+/// computes, writes down one row per proposed removal, and stops.
+model ExpirySweep {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  /// 'running' | 'previewed' | 'blocked' | 'applying' | 'applied'
+  /// | 'partially_applied' | 'failed' | 'superseded'
+  ///
+  /// `superseded` is TERMINAL, and it exists so that the partial unique index
+  /// below cannot brick a tenant. A sweep left `blocked`, `previewed` and
+  /// unconfirmed, or `running`/`applying` by a crashed process would otherwise
+  /// occupy the one-non-terminal slot forever and every future
+  /// `previewExpirySweep` would raise P2002 — a system that silently stops
+  /// removing access while continuing to grant it. Task 13 supersedes a stale
+  /// row at the head of the preview, in the same transaction as the create.
+  status   String @default("running")
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  expireCount Int @default(0)
+  lapseCount  Int @default(0)
+  /// Grants flagged for review. Counted separately and NOT by the guard: a
+  /// flag changes nothing about what anybody holds.
+  reviewFlagCount Int @default(0)
+
+  personsWithActiveContract Int @default(0)
+  personsUnprocessable      Int @default(0)
+  /// Active application and localGroup grants in the tenant: the denominator
+  /// of the internal-removal axis. Provision's guard covers the target half.
+  internalGrantsInTenant    Int @default(0)
+
+  requiresConfirmation Boolean @default(false)
+  blockedReason        String?
+  confirmedByUserId    String? @db.Uuid
+  error                String?
+
+  actions    SweepAction[]
+  exceptions SweepException[]
+
+  @@index([tenantId])
+  @@index([tenantId, startedAt])
+}
+
+model SweepAction {
+  id       String      @id @default(uuid()) @db.Uuid
+  tenantId String      @db.Uuid
+  sweepId  String      @db.Uuid
+  sweep    ExpirySweep @relation(fields: [sweepId], references: [id], onDelete: Cascade)
+  grantId  String      @db.Uuid
+  /// 'expire' | 'lapse'
+  kind     String
+  productId       String? @db.Uuid
+  subjectPersonId String  @db.Uuid
+  resourceType    String
+  resourceId      String  @db.Uuid
+  targetSystemId  String? @db.Uuid
+  /// 'proposed' | 'dispatched' | 'applied' | 'skipped' | 'failed'
+  status   String @default("proposed")
+  provisionActionId String? @db.Uuid
+  message  String?
+
+  /// How the apply loop reads it. Directory Sync indexed its equivalent on
+  /// (runId, changeType) and then queried by status; do not repeat that.
+  @@index([sweepId, status])
+  @@index([tenantId])
+}
+
+/// The person with no contracts at all, BY NAME. A person the system cannot
+/// understand must produce no actions, never empty desired state.
+model SweepException {
+  id       String      @id @default(uuid()) @db.Uuid
+  tenantId String      @db.Uuid
+  sweepId  String      @db.Uuid
+  sweep    ExpirySweep @relation(fields: [sweepId], references: [id], onDelete: Cascade)
+  personId String      @db.Uuid
+  /// 'no_contracts' | 'not_yet_started'
+  ///
+  /// Exactly the two `classifySweep` emits. A third value nothing produces
+  /// reads to a later maintainer as a case somebody forgot to handle.
+  kind     String
+  message  String
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([sweepId])
+}
+
+/// Rendered inside the transaction, sent by a job afterwards. Not ceremony:
+/// "the approver says they never got the mail" is the most common support
+/// question a request system produces, and without a row it is unanswerable.
+model NotificationOutbox {
+  id        String  @id @default(uuid()) @db.Uuid
+  tenantId  String  @db.Uuid
+  template  String
+  to        String
+  vars      Json    @default("{}")
+  requestId String? @db.Uuid
+  /// Who it was for, so a per-user digest preference can be honoured and a
+  /// failure can be reported against somebody.
+  userId    String? @db.Uuid
+  attempts  Int     @default(0)
+  lastError String?
+  sentAt    DateTime?
+  /// Withheld until the daily digest runs, for a recipient who chose one.
+  /// Failures, blocks and confirmations are never digested regardless of
+  /// preference, so this is false on those rows whatever the preference says.
+  digest    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  /// The sender's read: unsent rows, oldest first.
+  @@index([tenantId, sentAt, createdAt])
+}
+
+model NotificationPreference {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  userId   String @db.Uuid
+  /// 'immediate' | 'daily'
+  mode     String @default("immediate")
+
+  updatedAt DateTime @updatedAt
+
+  /// `userId` alone, deliberately, and inconsistently with every other table
+  /// here. `User` is tenant-scoped, so a user id already determines a tenant
+  /// and `[tenantId, userId]` would constrain nothing extra — and
+  /// `enqueueOutbox` reads this table by `userId: { in: [...] }`, which is
+  /// the only access path there is. Noted rather than made uniform, because
+  /// changing it would change that read for no behaviour.
+  @@unique([userId])
+  @@index([tenantId])
 }
