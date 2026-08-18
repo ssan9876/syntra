@@ -57,12 +57,52 @@ export type GuardVerdict =
    */
   | { blocked: true; requiresConfirmation: boolean; reasons: string[] };
 
+const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+/**
+ * Whether this planned `update_account` carries a CONTAINER MOVE.
+ *
+ * The definition lives here, in the control, and `apply.ts` imports it for the
+ * decision that actually issues the `modifyDN` — one predicate, so what the
+ * guard counts and what the connector does cannot come apart. An empty desired
+ * container is not a move: `toWriteOperation` omits the distinguished name
+ * entirely for it, and the connector moves nothing it was not handed a DN for.
+ * Compared case-insensitively, because distinguished names are.
+ */
+export function movesContainer(
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown> | null,
+): boolean {
+  const to = text(after?.container);
+  const from = text(before?.container);
+  return to !== '' && to.toLowerCase() !== from.toLowerCase();
+}
+
 interface Population {
+  /** The action type this population counts, and what makes it consequential. */
   actionType: ProvisionActionType;
   verb: string;
   noun: string;
   total(input: GuardInput): number;
   threshold(t: GuardThresholds): number;
+  /**
+   * Narrows the population past the action type. Absent, every action of that
+   * type counts — which is right for the four types whose whole meaning is the
+   * consequential one, and wrong for `update_account`, which carries both an
+   * attribute write and a container move in one row.
+   */
+  matches?(action: PlannedAction): boolean;
+  /**
+   * True where a denominator of zero is a state the world can legitimately be
+   * in rather than evidence that the plan and the inventory came from
+   * different reads.
+   *
+   * Only the create axis. Every other action here addresses an object that
+   * already exists at the target, so proposing one against an inventory
+   * reporting none at all is incoherent however new the target is; a create
+   * against an empty directory is the ordinary first run.
+   */
+  emptyTargetIsExpected?: boolean;
 }
 
 /**
@@ -75,10 +115,19 @@ interface Population {
  * wrong group filter could empty every group in a tenant while sailing under
  * the user threshold.
  *
- * Absent from this list, deliberately: update_account, enable_account,
- * grant_entitlement, rename_account and reactivate_syntra_user. They are
- * additive or corrective, and a mass grant, while undesirable, is visible in
- * the plan and reversible by the next run.
+ * Absent from this list, deliberately: enable_account, grant_entitlement,
+ * rename_account and reactivate_syntra_user. They are additive or corrective,
+ * and a mass grant, while undesirable, is visible in the plan and reversible
+ * by the next run.
+ *
+ * `update_account` is HALF absent. An action's risk follows what it does at
+ * the target, not what its name suggests, and this one carries two different
+ * operations in one row: an attribute write, which is corrective and belongs
+ * with the four above, and a CONTAINER MOVE, which `apply.ts` turns into a
+ * `modifyDN` — the same LDAP operation as the archive and the rename, both of
+ * which are controlled. A changed `containerTemplate` proposes an
+ * `update_account` for every account in the tenant, and every one of them
+ * moves. So the move is its own population and the attribute write is not.
  */
 const POPULATIONS: Population[] = [
   {
@@ -87,6 +136,7 @@ const POPULATIONS: Population[] = [
     noun: 'accounts',
     total: (i) => i.accountsAtTarget,
     threshold: (t) => t.createAccountThresholdPercent,
+    emptyTargetIsExpected: true,
   },
   {
     actionType: 'disable_account',
@@ -101,6 +151,21 @@ const POPULATIONS: Population[] = [
     noun: 'accounts',
     total: (i) => i.accountsAtTarget,
     threshold: (t) => t.archiveAccountThresholdPercent,
+  },
+  {
+    actionType: 'update_account',
+    verb: 'move',
+    noun: 'accounts to a different container',
+    total: (i) => i.accountsAtTarget,
+    // The archive's threshold, and not a new one, because there is no separate
+    // setting and this is the same operation the archive performs: `modifyDN`
+    // against the account object. `TargetSystem` would need a column and
+    // `@syntra/contracts` a field to expose a `moveAccountThresholdPercent`,
+    // and a threshold nothing can configure is worse than a borrowed one that
+    // is documented. Named in the reason text so nobody has to guess which
+    // number they are being shown.
+    threshold: (t) => t.archiveAccountThresholdPercent,
+    matches: (a) => movesContainer(a.before, a.after),
   },
   {
     actionType: 'revoke_entitlement',
@@ -227,28 +292,23 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
   }
 
   // An empty target and an unreachable one look identical from here.
+  //
+  // The message names no count, because there is no count here worth naming.
+  // It used to report `activeAccountsAtTarget` as what "Syntra holds" — but
+  // that number is read FROM THE TARGET in the same pass as
+  // `accountsAtTarget` (`run-service.ts`: `objects.filter((o) => o.enabled)`),
+  // so inside this branch it is structurally zero and the sentence read "while
+  // Syntra holds 0 for it". `GuardInput` carries no count of what Syntra
+  // records for this target, so the honest thing is to say what IS known: a
+  // run has applied here before, and now the target returns nothing.
   if (input.accountsAtTarget === 0 && input.hasEverApplied) {
     hard.push(
-      `the target returned no accounts at all while Syntra holds ${input.activeAccountsAtTarget} for it; an empty target and an unreachable one look identical, and the safe reading is the second`,
+      'the target returned no accounts at all, and a run has been applied against it before, so it is not a target that was simply never populated; an empty target and an unreachable one look identical from here, and the safe reading is the second',
     );
   }
 
   if (hard.length > 0) {
     return { blocked: true, requiresConfirmation: false, reasons: hard };
-  }
-
-  // A first run has a denominator of zero for every population, so no
-  // percentage can say anything about it. Directory Sync's guard skips a
-  // population with no denominator, which is right for a sync and not right
-  // for a first mass create.
-  if (!input.hasEverApplied) {
-    return {
-      blocked: true,
-      requiresConfirmation: true,
-      reasons: [
-        'this target has never had a run applied, so every population has a denominator of zero and no threshold can say anything about it',
-      ],
-    };
   }
 
   /**
@@ -259,10 +319,21 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
    */
   const cannotEvaluate: string[] = [];
   const tripped: string[] = [];
+  /**
+   * Axes a FIRST run genuinely cannot measure, reported as part of the
+   * first-run confirmation rather than as a refusal.
+   *
+   * Only the create axis reaches this, and only against a target holding
+   * nothing at all — which is the ordinary first run and not a sign that
+   * anything came apart.
+   */
+  const unmeasurable: string[] = [];
 
   for (const population of POPULATIONS) {
     const count = input.actions.filter(
-      (a) => a.actionType === population.actionType,
+      (a) =>
+        a.actionType === population.actionType &&
+        (population.matches === undefined || population.matches(a)),
     ).length;
     // Nothing proposed on this axis. The genuinely empty case: a target with
     // no linked Syntra users and no deactivations in the plan is not a run
@@ -270,6 +341,17 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
     if (count === 0) continue;
 
     const total = population.total(input);
+    if (total === 0 && population.emptyTargetIsExpected) {
+      // A create against a directory holding nothing. There is no percentage
+      // to compute and nothing has gone wrong; the first-run confirmation
+      // below is where an administrator sees it.
+      unmeasurable.push(
+        `the ${population.verb} axis has no denominator on this run: the target holds no accounts at all, so the ${population.threshold(
+          input.thresholds,
+        )}% threshold cannot be applied to the ${count} ${population.noun} this run would ${population.verb}`,
+      );
+      continue;
+    }
     if (total === 0) {
       // The plan proposes work on a population the inventory says is empty.
       // The two came from the same read, so one of them is wrong, and the
@@ -352,6 +434,37 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
       blocked: true,
       requiresConfirmation: false,
       reasons: [...cannotEvaluate, ...tripped],
+    };
+  }
+
+  /**
+   * A first run is confirmed by a person whatever the thresholds say — and it
+   * now says what the thresholds SAID.
+   *
+   * The early return this replaces stated that "a first run has a denominator
+   * of zero for every population". That is false for every axis except the
+   * create axis against an empty directory: `accountsAtTarget`,
+   * `activeAccountsAtTarget` and `entitlementHoldingsAtTarget` are all read
+   * from the target in phase 4 and know nothing about whether Syntra has
+   * applied here before, and `activeSyntraUsersLinked` is Syntra's own user
+   * table, which Directory Sync fills independently of this target. A first
+   * run against an existing 4,000-account directory has a perfectly good
+   * denominator of 4,000 on four of the five.
+   *
+   * The live exposure was `archive`, the destructive axis: a first run
+   * proposing to archive all 4,000 accounts got a confirmation whose only
+   * stated reason was that no threshold could say anything — when the
+   * threshold could have said 100%.
+   */
+  if (!input.hasEverApplied) {
+    return {
+      blocked: true,
+      requiresConfirmation: true,
+      reasons: [
+        'this target has never had a run applied, so the first run is confirmed by a person whatever the thresholds say',
+        ...tripped,
+        ...unmeasurable,
+      ],
     };
   }
 

@@ -69,11 +69,18 @@ describe('evaluateProvisionGuard — the unconditional refusals', () => {
       accountsAtTarget: 0,
       actions: many('create_account', 5),
     });
+    // `activeAccountsAtTarget` is deliberately left at the fixture's 1000 and
+    // deliberately NOT asserted on: the call site reads it from the same
+    // target pass as `accountsAtTarget`
+    // (`run-service.ts`: `objects.filter((o) => o.enabled)`), so inside this
+    // branch it is structurally zero and no state the caller can produce puts
+    // 1000 there. The message used to report it as what "Syntra holds", which
+    // read as "Syntra holds 0 for it" on every real run.
     expect(verdict).toEqual({
       blocked: true,
       requiresConfirmation: false,
       reasons: [
-        'the target returned no accounts at all while Syntra holds 1000 for it; an empty target and an unreachable one look identical, and the safe reading is the second',
+        'the target returned no accounts at all, and a run has been applied against it before, so it is not a target that was simply never populated; an empty target and an unreachable one look identical from here, and the safe reading is the second',
       ],
     });
   });
@@ -116,17 +123,72 @@ describe('evaluateProvisionGuard — the unconditional refusals', () => {
 
 describe('evaluateProvisionGuard — the first run', () => {
   it('always requires confirmation, regardless of size', () => {
-    // A first run has a denominator of zero for every population, so no
-    // percentage can say anything about it, and it is also the one where the
-    // rule set has never been proved against real data.
+    // The rule set has never been proved against real data, so a person reads
+    // the numbers whatever they say.
     const verdict = guard({ hasEverApplied: false, actions: many('create_account', 1) });
     expect(verdict).toEqual({
       blocked: true,
       requiresConfirmation: true,
       reasons: [
-        'this target has never had a run applied, so every population has a denominator of zero and no threshold can say anything about it',
+        'this target has never had a run applied, so the first run is confirmed by a person whatever the thresholds say',
       ],
     });
+  });
+
+  it('states the real numbers on the axes that have a denominator', () => {
+    /**
+     * The premise the early return rested on — "a first run has a denominator
+     * of zero for every population" — is false for four of the five axes.
+     * `accountsAtTarget`, `activeAccountsAtTarget` and
+     * `entitlementHoldingsAtTarget` are read FROM THE TARGET in phase 4 and
+     * know nothing about whether Syntra has applied here before, and
+     * `activeSyntraUsersLinked` is Syntra's own user table, which Directory
+     * Sync fills independently of this target.
+     *
+     * `archive` is the live exposure, because it is the destructive one: a
+     * first run against an existing 4,000-account directory proposing to
+     * archive all of them was confirmed with no number attached at all.
+     */
+    const verdict = guard({
+      hasEverApplied: false,
+      previousPersonsWithActiveContract: null,
+      accountsAtTarget: 4000,
+      actions: many('archive_account', 4000),
+    });
+    expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: true });
+    expect(reasonsOf(verdict)).toContain(
+      'would archive 4000 of 4000 accounts (100.0%), above the 2% threshold',
+    );
+  });
+
+  it('says an axis has no denominator rather than refusing the run for it', () => {
+    // A create against a directory holding nothing at all is the ordinary
+    // first run, not evidence that the plan and the inventory came from
+    // different reads. Confirmable, because the alternative is a target on
+    // which no first run can ever be applied.
+    const verdict = guard({
+      hasEverApplied: false,
+      previousPersonsWithActiveContract: null,
+      accountsAtTarget: 0,
+      actions: many('create_account', 4000),
+    });
+    expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: true });
+    expect(reasonsOf(verdict).join(' ')).toContain('has no denominator on this run');
+  });
+
+  it('still refuses outright when an axis that should have a denominator has none', () => {
+    // An archive addresses an object that already exists at the target, so
+    // proposing 40 of them while the inventory reports no accounts at all is
+    // incoherent however new the target is — and it stays a refusal rather
+    // than becoming a first-run footnote.
+    const verdict = guard({
+      hasEverApplied: false,
+      previousPersonsWithActiveContract: null,
+      accountsAtTarget: 0,
+      actions: many('archive_account', 40),
+    });
+    expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
+    expect(reasonsOf(verdict)[0]).toContain('cannot evaluate the archive axis');
   });
 });
 
@@ -721,17 +783,21 @@ describe('evaluateProvisionGuard — every input it divides by is checked', () =
 });
 
 describe('evaluateProvisionGuard — the action types it does and does not guard', () => {
-  it('guards exactly the five consequential types', () => {
+  it('guards exactly the consequential types', () => {
     // Exhaustive by construction: adding a member to ProvisionActionType makes
     // this object literal a compile error, so a new action type cannot arrive
     // unguarded without somebody deciding it should be.
+    //
+    // `update_account` is here because it CARRIES THE CONTAINER MOVE, which is
+    // a `modifyDN` — the same LDAP operation as the archive. Only its moving
+    // half is counted; a plain attribute write is still unguarded.
     const classification: Record<ProvisionActionType, boolean> = {
       create_account: true,
       disable_account: true,
       archive_account: true,
       revoke_entitlement: true,
       deactivate_syntra_user: true,
-      update_account: false,
+      update_account: true,
       enable_account: false,
       grant_entitlement: false,
       rename_account: false,
@@ -746,6 +812,7 @@ describe('evaluateProvisionGuard — the action types it does and does not guard
 
   it('counts only the action type each population names', () => {
     // 1000 additive actions plus 201 creates still reports 201, not 1201.
+    // These updates carry no container, so none of them is a move.
     const verdict = guard({
       actions: [...many('update_account', 1000), ...many('create_account', 201)],
     });
@@ -753,15 +820,88 @@ describe('evaluateProvisionGuard — the action types it does and does not guard
   });
 });
 
+describe('evaluateProvisionGuard — the container move inside update_account', () => {
+  /** An `update_account` that moves the object, as `plan.ts` writes one. */
+  const move = (count: number, to = 'OU=Finance,OU=Users,DC=acme,DC=test') =>
+    Array.from({ length: count }, () => ({
+      ...action('update_account'),
+      before: { attributes: {}, container: 'OU=Users,DC=acme,DC=test' },
+      after: { attributes: {}, container: to },
+    }));
+
+  it('caps a mass container move, which is the same LDAP operation as an archive', () => {
+    /**
+     * `update_account` was excluded from every population as "additive or
+     * corrective" — but it carries the container move, which `apply.ts` turns
+     * into a `modifyDN`. A changed `containerTemplate` proposes one for every
+     * account in the tenant and moves all of them, with no cap and no
+     * confirmation, while `archive_account` and `rename_account` — the same
+     * operation — are both controlled.
+     */
+    const verdict = guard({ actions: move(1000) });
+    expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: true });
+    expect(reasonsOf(verdict)[0]).toContain(
+      'would move 1000 of 1000 accounts to a different container (100.0%)',
+    );
+  });
+
+  it('leaves an attribute-only update uncapped', () => {
+    // The other half of the same action, which really is corrective: the
+    // container is unchanged, `toWriteOperation` carries no distinguished
+    // name, and the connector moves nothing.
+    const attributeOnly = Array.from({ length: 1000 }, () => ({
+      ...action('update_account'),
+      before: { attributes: { displayName: ['old'] }, container: 'OU=Users,DC=acme,DC=test' },
+      after: { attributes: { displayName: ['new'] }, container: 'OU=Users,DC=acme,DC=test' },
+    }));
+    expect(guard({ actions: attributeOnly })).toEqual({ blocked: false });
+  });
+
+  it('reads a differently cased container as the same container', () => {
+    // Distinguished names are compared case-insensitively at the target, and
+    // `apply.ts` decides whether to move on the same comparison. A guard that
+    // folded case differently would count moves that never happen, or miss
+    // ones that do.
+    const cased = Array.from({ length: 1000 }, () => ({
+      ...action('update_account'),
+      before: { attributes: {}, container: 'OU=Users,DC=acme,DC=test' },
+      after: { attributes: {}, container: 'ou=users,dc=acme,dc=test' },
+    }));
+    expect(guard({ actions: cased })).toEqual({ blocked: false });
+  });
+
+  it('passes a move that stays under the threshold', () => {
+    // 20 of 1000 is 2%, and "above" means strictly above.
+    expect(guard({ actions: move(20) })).toEqual({ blocked: false });
+    expect(guard({ actions: move(21) })).toMatchObject({ blocked: true });
+  });
+});
+
 describe('evaluateProvisionGuard — autoApply does not enter into it', () => {
   it('has no input by which a caller could waive a threshold', () => {
-    // The guard is a pure function of the plan and a set of counts. There is
-    // deliberately no `autoApply`, no `force` and no `override` on GuardInput.
-    //
-    // Inspect the INPUT, not the verdict. The previous version read
-    // `Object.keys` of the verdict -- which of course never contains
-    // `autoApply`, and would go on not containing it however many waivers
-    // GuardInput grew.
+    /**
+     * The guard is a pure function of the plan and a set of counts. There is
+     * deliberately no `autoApply`, no `force` and no `override` on GuardInput.
+     *
+     * **Asserted against the TYPE and against the BEHAVIOUR, never against
+     * `Object.keys` of a literal.** Two versions of this test have now been
+     * blind to the exact change they existed to catch: the first read the keys
+     * of the verdict, which of course never contains `autoApply`; the second
+     * read the keys of an object literal written three lines above, which
+     * would go on not containing `force` however many waivers `GuardInput`
+     * grew — a fixture cannot report a field the fixture did not set.
+     *
+     * `NoWaiver` is the real assertion. It resolves to `never` only while
+     * `GuardInput` has none of these keys, so adding one is a COMPILE error in
+     * this file — which `npx tsc -b`, the gate this repository runs before
+     * every commit, fails on. The runtime half below then proves the guard
+     * ignores such a property even if a caller invents one.
+     */
+    type Waiver = 'autoApply' | 'force' | 'override' | 'confirm' | 'skipGuard';
+    type NoWaiver = Extract<keyof GuardInput, Waiver>;
+    const noWaiverOnGuardInput: NoWaiver[] = [];
+    expect(noWaiverOnGuardInput).toEqual([]);
+
     const input: GuardInput = {
       actions: many('disable_account', 500),
       thresholds,
@@ -775,11 +915,20 @@ describe('evaluateProvisionGuard — autoApply does not enter into it', () => {
       previousPersonsWithActiveContract: 1180,
       hasEverApplied: true,
     };
-    for (const waiver of ['autoApply', 'force', 'override', 'confirm', 'skipGuard']) {
-      expect(Object.keys(input)).not.toContain(waiver);
-    }
-    // And the guard blocks it regardless of who is calling.
+    // And the guard blocks it regardless of who is calling, and regardless of
+    // what a caller puts beside the inputs it does read.
     expect(evaluateProvisionGuard(input)).toMatchObject({ blocked: true });
+    const withWaivers = {
+      ...input,
+      autoApply: true,
+      force: true,
+      override: true,
+      confirm: true,
+      skipGuard: true,
+    } as GuardInput;
+    expect(evaluateProvisionGuard(withWaivers)).toEqual(
+      evaluateProvisionGuard(input),
+    );
   });
 
   it('does not mutate its input', () => {

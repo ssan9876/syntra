@@ -21,6 +21,7 @@ import { remitFor } from './entitlement-service.js';
 // because it sits below core in the dependency graph; there is no reason for
 // core to reach across for it.
 import { escapeDnValue } from './templates.js';
+import { movesContainer } from './guard.js';
 import { targetWithCredential } from './target-service.js';
 import { applySyntraUserAction } from './syntra-user.js';
 
@@ -308,7 +309,6 @@ function toWriteOperation(
     case 'update_account': {
       if (context.anchor === null) return null;
       const container = text(after.container);
-      const from = text(before.container);
       // The distinguished name is carried ONLY for a move, and the connector
       // treats it as one: it calls `modifyDN` whenever the DN it was handed
       // differs from the object's own. Rebuilding the RDN from the correlation
@@ -316,7 +316,12 @@ function toWriteOperation(
       // `CN=<sAMAccountName>` — which is a rename, an operation this product
       // makes opt-in and always confirmable, arriving as a side effect of an
       // attribute write.
-      const moving = container !== '' && container.toLowerCase() !== from.toLowerCase();
+      //
+      // `movesContainer` is the GUARD's predicate, imported rather than
+      // restated. The guard counts the moving updates against a threshold, and
+      // a second copy of "is this a move" here is how the thing that is capped
+      // and the thing that happens come apart.
+      const moving = movesContainer(before, after);
       return {
         op: 'update_account',
         actionId: action.id,
