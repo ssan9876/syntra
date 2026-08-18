@@ -5,6 +5,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import {
   KEY_ROTATION_CRON,
   KEY_ROTATION_JOB,
+  AUTOMATE_OUTBOX_JOB,
   PROVISION_JOB,
   SYNC_JOB,
   keyRotationScheduleKey,
@@ -420,5 +421,9 @@ describe('startSyncScheduler', () => {
     });
     expect(scheduler.registered).toContain(PROVISION_JOB);
     expect(scheduler.registered).toContain(SYNC_JOB);
+    // Same rule, one subsystem over: Automate's outbox is the only thing that
+    // ever sends any of its mail, so a queue registered without it means every
+    // notification this slice writes is a row nothing reads.
+    expect(scheduler.registered).toContain(AUTOMATE_OUTBOX_JOB);
   });
 });

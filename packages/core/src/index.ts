@@ -225,3 +225,4 @@ export * from './automate/reflect.js';
 export * from './automate/sweep-guard.js';
 export * from './automate/sweep-service.js';
 export * from './automate/delegation-service.js';
+export * from './automate/jobs.js';

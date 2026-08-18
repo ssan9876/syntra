@@ -1,11 +1,14 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { prisma, withTenant } from '@syntra/db';
 import {
+  applyAutomateSchedules,
   applySourceSchedule,
   applyTargetSchedule,
+  automateSettings,
   createScheduler,
   localMasterKeyProvider,
   registerKeyRotationJob,
+  registerAutomateJobs,
   registerProvisionJobs,
   registerSyncJobs,
   scheduleKeyRotation,
@@ -136,6 +139,29 @@ export async function scheduleBackgroundWork(
       }
     }
   }
+
+  // LAST, not between the key-rotation and source loops where the plan put it.
+  //
+  // The loops are independent by design -- "log and do nothing for this piece"
+  // -- so their order carries no meaning, but `scheduler.test.ts`'s
+  // "still schedules the sources when the target read fails" identifies the
+  // transaction to fail BY COUNT ("the sources read is the first transaction
+  // of the run and the targets read is the second"). Inserting a transaction
+  // ahead of those two makes that test fail the wrong one. Appending here
+  // leaves every existing count intact. The coupling is worth knowing about:
+  // any future loop added above the source loop breaks that test too.
+  for (const tenant of tenants) {
+    try {
+      const settings = await withTenant(tenant.id, (tx) => automateSettings(tx));
+      await applyAutomateSchedules(scheduler, tenant.id, settings.sweepSchedule);
+    } catch (cause) {
+      logger.error(
+        { err: cause, tenantId: tenant.id },
+        'failed to schedule Automate background work',
+      );
+    }
+  }
+
 }
 
 /**
@@ -176,6 +202,12 @@ export async function startSyncScheduler(
     registerSyncJobs(scheduler, provider);
     registerKeyRotationJob(scheduler, provider);
     registerProvisionJobs(scheduler, provider, transport);
+    // The transport is NOT optional here. Ruling P16 made this point about
+    // Provision's initial passwords: without one, an unattended path produces
+    // something and delivers it to nobody. In Automate the whole notification
+    // system is that path -- an outbox job registered with no transport sends
+    // nothing at all, and the failure is silent.
+    registerAutomateJobs(scheduler, transport, { publicUrl: config.publicUrl });
     await scheduler.start();
   } catch (cause) {
     logger.error(
