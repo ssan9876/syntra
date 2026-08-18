@@ -9,6 +9,14 @@ const json = (body: unknown, status = 200) =>
     headers: { 'content-type': 'application/json' },
   }) as never;
 
+const currentRule = (overrides: Record<string, unknown> = {}) => ({
+  ruleId: 'r1',
+  ruleName: 'Finance staff',
+  contractId: 'c1',
+  contractDescription: 'Accountant, Finance, from 2026-01-01',
+  ...overrides,
+});
+
 const holding = (overrides: Record<string, unknown> = {}) => ({
   entitlementId: 'e1',
   displayName: 'Finance',
@@ -17,6 +25,10 @@ const holding = (overrides: Record<string, unknown> = {}) => ({
   ruleName: 'Finance staff',
   contractId: 'c1',
   contractDescription: 'Accountant, Finance, from 2026-01-01',
+  grantedByRuleId: 'r1',
+  grantedByRuleName: 'Finance staff',
+  attributionStale: false,
+  currentRules: [currentRule()],
   ...overrides,
 });
 
@@ -54,11 +66,16 @@ describe('PersonAccessPage', () => {
     renderPage();
 
     expect(await screen.findByText('Finance')).toBeVisible();
-    expect(screen.getByText('Finance staff')).toBeVisible();
+    // Twice, and deliberately: the rule that asks for it now, and the rule
+    // stamped when it was granted, which here are the same rule.
+    expect(screen.getAllByText('Finance staff')).toHaveLength(2);
     expect(
       screen.getByText('Accountant, Finance, from 2026-01-01'),
     ).toBeVisible();
     expect(screen.getByText('A business rule')).toBeVisible();
+    // Nothing is stale, so nothing says so.
+    expect(screen.queryByText('no longer asks for this')).toBeNull();
+    expect(screen.queryByText('nothing asks for this now')).toBeNull();
   });
 
   it('does not render an account in conflict as quietly as a disabled leaver', async () => {
@@ -170,5 +187,190 @@ describe('PersonAccessPage', () => {
     expect(
       await screen.findByText('Found at the target, not granted here'),
     ).toBeVisible();
+  });
+
+  it('names the rule that asks for it now beside the dead one it was stamped with', async () => {
+    // The defect this screen was fixed for: R1 granted it in January and no
+    // longer asks for it; R2 holds the access in place. A page that names only
+    // R1 gets R1 revoked and the access kept. A page that names neither -- an
+    // em dash where the rule used to be -- says nothing granted this, which is
+    // the opposite of true.
+    mockFetch({
+      personId: 'p1',
+      accounts: [
+        account({
+          entitlements: [
+            holding({
+              ruleId: 'r2',
+              ruleName: 'Finance analysts',
+              attributionStale: true,
+              grantedByRuleId: 'r1',
+              grantedByRuleName: 'Finance staff',
+              currentRules: [
+                currentRule({
+                  ruleId: 'r2',
+                  ruleName: 'Finance analysts',
+                  contractDescription: 'Analyst, Finance',
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText('Finance analysts')).toBeVisible();
+    expect(screen.getByText('Analyst, Finance')).toBeVisible();
+    // The stamp is still shown, as history, and said to be history.
+    expect(screen.getByText('Finance staff')).toBeVisible();
+    expect(screen.getByText('no longer asks for this')).toBeVisible();
+    expect(screen.queryByText('—')).toBeNull();
+  });
+
+  it('lists every rule that asks for the entitlement, not the first one', async () => {
+    // Two rules can ask for one entitlement; `apply.ts` records only the
+    // first. Revoking the one rule a page names and expecting the access to go
+    // is the same mistake one layer up.
+    mockFetch({
+      personId: 'p1',
+      accounts: [
+        account({
+          entitlements: [
+            holding({
+              currentRules: [
+                currentRule({
+                  ruleId: 'r2',
+                  ruleName: 'Finance analysts',
+                  contractDescription: 'Analyst, Finance',
+                }),
+                currentRule(),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText('Finance analysts')).toBeVisible();
+    expect(screen.getAllByText('Finance staff')).toHaveLength(2);
+    expect(screen.getByText('Analyst, Finance')).toBeVisible();
+  });
+
+  it('says a stale attribution is stale rather than saying nothing granted it', async () => {
+    // The stamp is dead and nothing replaced it: this person holds access no
+    // rule asks for. An em dash here reads as "nothing ever granted this",
+    // which is the auditor's other answer entirely.
+    mockFetch({
+      personId: 'p1',
+      accounts: [
+        account({
+          entitlements: [
+            holding({
+              ruleId: null,
+              ruleName: null,
+              contractId: null,
+              contractDescription: null,
+              attributionStale: true,
+              currentRules: [],
+            }),
+          ],
+        }),
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText('nothing asks for this now')).toBeVisible();
+    expect(
+      screen.getByText('A rule granted this and no rule keeps it in place.'),
+    ).toBeVisible();
+    expect(screen.getByText('Finance staff')).toBeVisible();
+    expect(screen.getByText('no longer asks for this')).toBeVisible();
+  });
+
+  it('says the recorded rule is gone rather than leaving the grant unattributed', async () => {
+    // `grantedByRuleId` carries no foreign key, so deleting the stamped rule
+    // leaves the column dangling and the name null. "Granted by a rule, no
+    // rule" is what that used to render as.
+    mockFetch({
+      personId: 'p1',
+      accounts: [
+        account({
+          entitlements: [
+            holding({
+              ruleId: 'r2',
+              ruleName: 'Finance analysts',
+              attributionStale: true,
+              grantedByRuleId: 'r1',
+              grantedByRuleName: null,
+              currentRules: [
+                currentRule({ ruleId: 'r2', ruleName: 'Finance analysts' }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    renderPage();
+
+    expect(
+      await screen.findByText('a rule that has since been deleted'),
+    ).toBeVisible();
+    expect(screen.getByText('Finance analysts')).toBeVisible();
+  });
+
+  it('names the live rule that no active contract of this person satisfies', async () => {
+    // The stamped rule still names the entitlement and is still enabled, and
+    // no contract of this person matches it any more -- a leaver, or a
+    // transfer. The rule is worth naming and is still not asking for this.
+    mockFetch({
+      personId: 'p1',
+      accounts: [
+        account({
+          entitlements: [
+            holding({ contractId: null, contractDescription: null, currentRules: [] }),
+          ],
+        }),
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText('nothing asks for this now')).toBeVisible();
+    expect(
+      screen.getByText(
+        'Finance staff still names it, but no active contract of this person matches it.',
+      ),
+    ).toBeVisible();
+  });
+
+  it('leaves a holding no rule ever attributed reading as exactly that', async () => {
+    // The other half of the distinction: a `manual` holding nothing claims is
+    // not a stale attribution, and must not be dressed up as one.
+    mockFetch({
+      personId: 'p1',
+      accounts: [
+        account({
+          entitlements: [
+            holding({
+              origin: 'manual',
+              ruleId: null,
+              ruleName: null,
+              contractId: null,
+              contractDescription: null,
+              grantedByRuleId: null,
+              grantedByRuleName: null,
+              attributionStale: false,
+              currentRules: [],
+            }),
+          ],
+        }),
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText('Granted by hand')).toBeVisible();
+    expect(screen.getAllByText('—')).toHaveLength(2);
+    expect(screen.queryByText('nothing asks for this now')).toBeNull();
   });
 });

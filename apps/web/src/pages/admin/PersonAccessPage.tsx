@@ -3,6 +3,18 @@ import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
+/**
+ * One rule that asks for a holding **today**, with the contract of this person
+ * that satisfies it. `explainPersonAccess` only lists a rule here when a
+ * contract does satisfy it, so the pairing is total.
+ */
+interface CurrentRule {
+  ruleId: string;
+  ruleName: string;
+  contractId: string | null;
+  contractDescription: string | null;
+}
+
 interface Holding {
   entitlementId: string;
   displayName: string;
@@ -11,6 +23,18 @@ interface Holding {
   ruleName: string | null;
   contractId: string | null;
   contractDescription: string | null;
+  /**
+   * The stamp `apply.ts` wrote at the moment of the grant, and never updated
+   * since: history, not an answer to "why does this person have this now".
+   * `grantedByRuleName` is null while `grantedByRuleId` is not when the rule
+   * it names has been deleted — the column carries no foreign key.
+   */
+  grantedByRuleId: string | null;
+  grantedByRuleName: string | null;
+  /** The stamp no longer accounts for the holding. Never true off `origin: 'rule'`. */
+  attributionStale: boolean;
+  /** Every rule that asks for it now — possibly none, possibly several. */
+  currentRules: CurrentRule[];
 }
 
 interface Access {
@@ -103,6 +127,102 @@ const accountStatus = (status: string) =>
     title: 'A status this screen does not have a reading for.',
   };
 
+/**
+ * The live answer: every rule that asks for this holding **now**, each with
+ * the contract of this person that satisfies it.
+ *
+ * A list and not a name. Two rules can ask for the same entitlement, and
+ * `apply.ts` records only `attributedRuleIds[0]` — so a screen that shows one
+ * of them invites exactly the mistake the recorded stamp invited: revoke the
+ * named rule, and the access stays, because the other one still holds it in
+ * place.
+ *
+ * Empty is two different statements and they are not rendered alike:
+ *
+ * - Empty while something is nonetheless attributed — the stamp is stale, or
+ *   the stamped rule still names the entitlement but no active contract of
+ *   this person satisfies it any more — means nobody is asking for access this
+ *   person has. That is the finding an auditor came for, and reconciliation
+ *   will propose revoking it.
+ * - Empty with nothing attributed at all is a `manual` or `discovered`
+ *   holding, already named as such one column to the left. An em dash is the
+ *   whole truth there.
+ */
+function HeldByNow({ holding }: { holding: Holding }) {
+  if (holding.currentRules.length > 0) {
+    return (
+      <ul className="space-y-1.5">
+        {holding.currentRules.map((rule) => (
+          <li key={rule.ruleId}>
+            <span className="text-ink">{rule.ruleName}</span>
+            {rule.contractDescription && (
+              <span className="block text-sm text-muted">
+                {rule.contractDescription}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (holding.attributionStale || holding.ruleName !== null) {
+    return (
+      <div className="space-y-1.5">
+        <span title="No rule on this target asks for this entitlement for this person today. Reconciliation proposes revoking a rule-granted holding nothing desires.">
+          <Status tone="warning">nothing asks for this now</Status>
+        </span>
+        <span className="block text-sm text-muted">
+          {/* `ruleName` survives an empty live set in one case: the stamped
+              rule still names the entitlement and is still enabled, but no
+              active contract of this person satisfies its condition today — a
+              leaver, or a transfer. Worth naming, and still not a rule asking
+              for this person to hold this. */}
+          {holding.ruleName === null
+            ? 'A rule granted this and no rule keeps it in place.'
+            : `${holding.ruleName} still names it, but no active contract of this person matches it.`}
+        </span>
+      </div>
+    );
+  }
+
+  return <span className="text-muted">—</span>;
+}
+
+/**
+ * What was stamped on the holding when it was granted, presented as what it
+ * is: history.
+ *
+ * Kept beside the live answer rather than instead of it, because "R1 granted
+ * this in January, R2 asks for it now" is the sentence an auditor needs, and
+ * dropping the first half loses the trail into the audit log. A stale stamp is
+ * said to be stale here — not silently replaced, and not rendered as an em
+ * dash, which would say nothing ever granted this.
+ */
+function RecordedAtGrant({ holding }: { holding: Holding }) {
+  if (holding.grantedByRuleId === null) {
+    return <span className="text-muted">—</span>;
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {holding.grantedByRuleName === null ? (
+        <span className="text-ink">a rule that has since been deleted</span>
+      ) : (
+        <span className="text-ink">{holding.grantedByRuleName}</span>
+      )}
+      {holding.attributionStale && (
+        <span
+          className="block text-sm text-warning"
+          title="Deleted, disabled, or edited to stop naming this entitlement. The recorded rule is not why this person holds this now."
+        >
+          no longer asks for this
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function PersonAccessPage() {
   const { id } = useParams<{ id: string }>();
   const { data, error, loading } = useApiResource<Access>(
@@ -113,7 +233,7 @@ export function PersonAccessPage() {
     <>
       <PageHeader
         title="Why does this person hold this?"
-        description="Every target-system account and every entitlement on it, with the rule and the contract behind it."
+        description="Every target-system account and every entitlement on it: the rules that hold it in place today, beside the rule recorded when it was granted."
       />
 
       <div className="space-y-6">
@@ -168,11 +288,18 @@ export function PersonAccessPage() {
                       <th scope="col" className="px-4 py-2.5 font-medium">
                         Where it came from
                       </th>
+                      {/* Two columns and not one, because they answer two
+                          different questions and the whole defect was
+                          answering the first with the second. The contract
+                          lives with the rule it satisfies: one holding can
+                          have several current rules, each satisfied by a
+                          different contract of this person, and a single
+                          contract column could only ever show one of them. */}
                       <th scope="col" className="px-4 py-2.5 font-medium">
-                        Rule
+                        Why it is held now
                       </th>
                       <th scope="col" className="px-4 py-2.5 font-medium">
-                        Contract
+                        Recorded at the grant
                       </th>
                     </tr>
                   </thead>
@@ -182,17 +309,17 @@ export function PersonAccessPage() {
                         key={holding.entitlementId}
                         className="border-b border-border-subtle last:border-0"
                       >
-                        <td className="px-4 py-2.5 text-ink">
+                        <td className="px-4 py-2.5 align-top text-ink">
                           {holding.displayName}
                         </td>
-                        <td className="px-4 py-2.5 text-muted">
+                        <td className="px-4 py-2.5 align-top text-muted">
                           {ORIGINS[holding.origin] ?? holding.origin}
                         </td>
-                        <td className="px-4 py-2.5 text-ink">
-                          {holding.ruleName ?? '—'}
+                        <td className="px-4 py-2.5 align-top text-ink">
+                          <HeldByNow holding={holding} />
                         </td>
-                        <td className="px-4 py-2.5 text-muted">
-                          {holding.contractDescription ?? '—'}
+                        <td className="px-4 py-2.5 align-top text-ink">
+                          <RecordedAtGrant holding={holding} />
                         </td>
                       </tr>
                     ))}
