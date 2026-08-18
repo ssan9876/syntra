@@ -19,8 +19,8 @@ import { remitFor } from './entitlement-service.js';
 import { targetWithCredential } from './target-service.js';
 import type {
   ContractFacts,
-  DraftDriftFinding,
   DesiredState,
+  DraftDriftFinding,
   KnownAccount,
   PersonFacts,
   RuleFacts,
