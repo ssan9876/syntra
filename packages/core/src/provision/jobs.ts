@@ -128,7 +128,10 @@ const NON_TERMINAL = ['running', 'previewed', 'blocked', 'applying'] as const;
  * counts up, because it can neither be applied nor superseded. Recovery took
  * database surgery.
  */
-function awaitingDecision(run: { status: string; requiresConfirmation: boolean }): boolean {
+function awaitingDecision(run: {
+  status: string;
+  requiresConfirmation: boolean;
+}): boolean {
   if (run.status === 'previewed') return true;
   return run.status === 'blocked' && run.requiresConfirmation;
 }
