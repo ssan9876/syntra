@@ -219,3 +219,4 @@ export * from './automate/catalog-service.js';
 export * from './automate/workflow-service.js';
 export * from './automate/eligibility.js';
 export * from './automate/fulfil.js';
+export * from './automate/request-service.js';
