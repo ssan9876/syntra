@@ -5,6 +5,8 @@ import {
   businessRuleRequestSchema,
   conditionRequestSchema,
   createTargetRequestSchema,
+  targetConfigSchema,
+  testTargetRequestSchema,
   updateTargetRequestSchema,
 } from './provision.js';
 
@@ -133,6 +135,63 @@ describe('the target a caller may create', () => {
         thresholds: { createAccountThreshold: 5 },
       }).success,
     ).toBe(false);
+  });
+
+  it('refuses a misspelled config field rather than reverting it to its default', () => {
+    // The one request object on this slice that was left without `.strict()`,
+    // and the one where it costs the most: target config is REPLACED WHOLE
+    // rather than merged, so a dropped key does not leave the stored value
+    // alone -- it reverts the field to its schema default, and the caller is
+    // told 204. `primaryGroupExternalIds` misspelled goes back to `[]`;
+    // `provenanceAttribute` misspelled goes back to `info`. An administrator
+    // narrowing a target after an incident gets a save that reports success
+    // and changed nothing.
+    const parsed = createTargetRequestSchema.safeParse({
+      name: 'Acme AD',
+      config: { ...config, primaryGroupExternalIDs: ['513'] },
+      bindPassword: 'x',
+    });
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toContain('primaryGroupExternalIDs');
+  });
+
+  it('keeps that strictness through .partial() and .extend() on the update body', () => {
+    // Zod PRESERVES `unknownKeys` through `.partial()` and `.extend()`, which
+    // is why `updateTargetRequestSchema` inherits it -- and why a test that
+    // proves it must reverse the flag with `.passthrough()` rather than by
+    // deleting `.strict()` from the derived schema, which would prove nothing.
+    expect(
+      updateTargetRequestSchema.safeParse({
+        config: { ...config, anchorAttrib: 'objectGUID' },
+      }).success,
+    ).toBe(false);
+
+    const loosened = targetConfigSchema.passthrough();
+    expect(loosened.safeParse({ ...config, anchorAttrib: 'objectGUID' }).success).toBe(
+      true,
+    );
+  });
+
+  it('caps the bind password the way the merged directory-source schema does', () => {
+    // `sync.ts` has carried `.max(1024)` since it merged. An unbounded string
+    // here is an unbounded write to the credential vault from an anonymous
+    // request body, and the twin schemas disagreeing is how that stays
+    // unnoticed.
+    const long = 'x'.repeat(1025);
+    expect(
+      createTargetRequestSchema.safeParse({ name: 'Acme AD', config, bindPassword: long })
+        .success,
+    ).toBe(false);
+    expect(
+      testTargetRequestSchema.safeParse({ config, bindPassword: long }).success,
+    ).toBe(false);
+    expect(
+      createTargetRequestSchema.safeParse({
+        name: 'Acme AD',
+        config,
+        bindPassword: 'x'.repeat(1024),
+      }).success,
+    ).toBe(true);
   });
 
   it('accepts the settings it does implement', () => {

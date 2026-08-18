@@ -2,26 +2,44 @@ import { z } from 'zod';
 
 export const enforcementModeSchema = z.enum(['additive', 'authoritative']);
 
-export const targetConfigSchema = z.object({
-  url: z.string().min(1),
-  // `plain` is absent: writes to a target require an encrypted transport
-  // unconditionally, and a target that could be configured to write in the
-  // clear is a target that eventually does.
-  tlsMode: z.enum(['ldaps', 'starttls']),
-  rejectUnauthorized: z.boolean().default(true),
-  bindDn: z.string().min(1),
-  baseDn: z.string().min(1),
-  entitlementSearchBase: z.string().min(1),
-  archiveContainer: z.string().min(1),
-  provenanceAttribute: z.string().default('info'),
-  anchorAttribute: z.string().default('objectGUID'),
-  accountFilter: z.string().default('(&(objectCategory=person)(objectClass=user))'),
-  groupFilter: z.string().default('(objectClass=group)'),
-  primaryGroupExternalIds: z.array(z.string()).default([]),
-  pageSize: z.number().int().positive().max(5000).default(1000),
-  connectTimeoutMs: z.number().int().positive().max(120_000).default(10_000),
-  timeoutMs: z.number().int().positive().max(600_000).default(60_000),
-});
+/**
+ * `.strict()`, and this is the object where it matters most.
+ *
+ * Target config is **replaced whole** rather than merged, so without it a typo
+ * in a field name is dropped by Zod and the field it meant to set silently
+ * reverts to its schema default. `primaryGroupExternalIds` misspelled goes
+ * back to `[]`; `provenanceAttribute` misspelled goes back to `info` — and the
+ * caller is told 204. An administrator narrowing a target's behaviour after an
+ * incident gets a save that reports success and changed nothing.
+ *
+ * Note for anyone writing a test against this: in Zod, `.partial()` and
+ * `.extend()` PRESERVE `unknownKeys`, so `createTargetRequestSchema.partial()`
+ * is still strict. `.passthrough()` is what reverses it. A test that mutates
+ * strictness must use `.passthrough()`; one that deletes `.strict()` from a
+ * derived schema proves nothing, because the derivation kept it.
+ */
+export const targetConfigSchema = z
+  .object({
+    url: z.string().min(1),
+    // `plain` is absent: writes to a target require an encrypted transport
+    // unconditionally, and a target that could be configured to write in the
+    // clear is a target that eventually does.
+    tlsMode: z.enum(['ldaps', 'starttls']),
+    rejectUnauthorized: z.boolean().default(true),
+    bindDn: z.string().min(1),
+    baseDn: z.string().min(1),
+    entitlementSearchBase: z.string().min(1),
+    archiveContainer: z.string().min(1),
+    provenanceAttribute: z.string().default('info'),
+    anchorAttribute: z.string().default('objectGUID'),
+    accountFilter: z.string().default('(&(objectCategory=person)(objectClass=user))'),
+    groupFilter: z.string().default('(objectClass=group)'),
+    primaryGroupExternalIds: z.array(z.string()).default([]),
+    pageSize: z.number().int().positive().max(5000).default(1000),
+    connectTimeoutMs: z.number().int().positive().max(120_000).default(10_000),
+    timeoutMs: z.number().int().positive().max(600_000).default(60_000),
+  })
+  .strict();
 
 /**
  * `.strict()` on the request bodies, and it is not decoration.
@@ -41,7 +59,7 @@ export const createTargetRequestSchema = z
   .object({
     name: z.string().min(1),
     config: targetConfigSchema,
-    bindPassword: z.string().min(1),
+    bindPassword: z.string().min(1).max(1024),
     pairedDirectorySourceId: z.string().uuid().nullable().optional(),
     schedule: z.string().nullable().optional(),
     autoApply: z.boolean().optional(),
@@ -87,7 +105,7 @@ export type UpdateTargetRequest = z.input<typeof updateTargetRequestSchema>;
 export const testTargetRequestSchema = z
   .object({
     config: targetConfigSchema,
-    bindPassword: z.string().min(1).optional(),
+    bindPassword: z.string().min(1).max(1024).optional(),
     borrowFromTargetId: z.string().uuid().optional(),
   })
   .strict();
