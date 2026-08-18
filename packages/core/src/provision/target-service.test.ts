@@ -1230,16 +1230,23 @@ describe('the gaps the mutation pass found', () => {
   });
 
   it('refuses a malformed cron expression rather than committing it', async () => {
-    // The ordinary typo: four fields, not five. It used to commit, audit as a
-    // success and only then throw out of pg-boss, leaving the stored schedule
-    // and the firing schedule permanently disagreeing -- and where the target
-    // had no schedule before, leaving one that never fires at all, which
-    // produces no run, therefore no `consecutiveSkippedRuns` and no
-    // `lastSkipReason`: a target that has stopped running looks exactly like
-    // one running cleanly.
+    // An hour of 25. It used to commit, audit as a success and only then throw
+    // out of pg-boss, leaving the stored schedule and the firing schedule
+    // permanently disagreeing -- and where the target had no schedule before,
+    // leaving one that never fires at all, which produces no run, therefore no
+    // `consecutiveSkippedRuns` and no `lastSkipReason`: a target that has
+    // stopped running looks exactly like one running cleanly.
+    //
+    // NOT the four-field `'0 2 * *'` this fixture started as, and the reason is
+    // worth leaving here. `CronExpressionParser.parse('0 2 * *', { strict:
+    // false })` -- pg-boss's own call -- ACCEPTS it, left-pads the missing
+    // field and stringifies it back as `* 0 2 * *`: every minute of hour 0 on
+    // the 2nd of the month. So a dropped field is not the throw this test is
+    // about; it is a silent reinterpretation, and no validator that accepts
+    // exactly what the scheduler accepts can refuse it. Checked, not assumed.
     const { id } = await create();
     await expect(
-      updateTarget(tenantId, provider, null, id, { schedule: '0 2 * *' }),
+      updateTarget(tenantId, provider, null, id, { schedule: '0 25 * * *' }),
     ).rejects.toThrow(/not a cron expression the scheduler can use/);
 
     // And it took the whole transaction with it. A row carrying a schedule the
