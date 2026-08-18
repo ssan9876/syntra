@@ -93,6 +93,79 @@ const APPLIABLE = ['previewed', 'blocked'];
  */
 const DRIFT_PAGE = 500;
 
+/**
+ * Every field `applyProvisionRun` returns, and every one of them is rendered.
+ *
+ * This interface used to name five of the seven and the notice reported three
+ * of those, so an apply that answered "12 applied, 3 deferred, 1 in flight"
+ * was announced to the administrator as "12 applied". Extra JSON is ignored
+ * rather than refused, so nothing broke and nothing said anything either.
+ *
+ * The two that were missing are exactly the two this branch's engine work
+ * added, and both are load-bearing:
+ *
+ * - `deferred` — actions held back because they require an explicit
+ *   confirmation and this apply was not confirmed (a rename, a re-enable
+ *   outside the window, a re-create of a vanished account). On an unattended
+ *   `autoApply` run this number is the whole of "the target looks healthy and
+ *   is doing nothing", which is the condition Ruling P4 exists for. Computing
+ *   it, returning it and then not showing it stops the fix at the API
+ *   boundary.
+ * - `inFlight` — the write was attempted and whether it landed is **not known
+ *   here**. `resolveInFlightActions` asks the target on the next run. It is
+ *   the only outcome whose truth is at the directory rather than in Syntra,
+ *   so it is the one an administrator most needs to be told about, and it must
+ *   never read as a plain success.
+ *
+ * `skipped` is not a sixth outcome: `apply.ts` computes it as
+ * `count(status: 'proposed')` AFTER the deferred actions have had their
+ * message written and their status left alone, so the deferred are counted
+ * inside it. Rendering the two as though they were disjoint would be a
+ * different false arithmetic in place of the old omission.
+ */
+interface ApplyResult {
+  status: string;
+  applied: number;
+  failed: number;
+  pendingRetry: number;
+  inFlight: number;
+  deferred: number;
+  skipped: number;
+}
+
+const count = (n: number, singular: string, plural: string) =>
+  `${n} ${n === 1 ? singular : plural}`;
+
+/**
+ * Never `info` while anything is unresolved.
+ *
+ * `inFlight` outranks a failure for the heading because a failure is a known
+ * outcome and an in-flight action is an unknown one, but either way this is
+ * not the tone a clean apply gets.
+ */
+function applyTone(result: ApplyResult): 'info' | 'warning' | 'danger' {
+  if (result.inFlight > 0 || result.failed > 0) return 'danger';
+  if (result.pendingRetry > 0 || result.deferred > 0) return 'warning';
+  return 'info';
+}
+
+function applyTitle(result: ApplyResult): string {
+  if (result.inFlight > 0) {
+    return `${count(result.inFlight, 'action is', 'actions are')} in flight`;
+  }
+  if (result.failed > 0) return `${count(result.failed, 'action', 'actions')} failed`;
+  if (result.deferred > 0) {
+    return `${count(result.deferred, 'action was', 'actions were')} deferred`;
+  }
+  if (result.pendingRetry > 0) {
+    return `${count(result.pendingRetry, 'action is', 'actions are')} awaiting retry`;
+  }
+  // Deliberately not `${n} actions applied`, which is word-for-word the first
+  // line of the list below: a heading that repeats a line of its own body reads
+  // as two facts and is one.
+  return result.applied === 0 ? 'Nothing was applied' : 'Applied';
+}
+
 const DRIFT_LABELS: Record<string, string> = {
   unmanaged_entitlement: 'A holding Provision did not grant',
   missing_grant: 'A holding Provision granted and the target no longer has',
@@ -109,7 +182,7 @@ export function ProvisionRunDetailPage() {
   const [tab, setTab] = useState<Tab>('person');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<ApplyResult | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -163,22 +236,16 @@ export function ProvisionRunDetailPage() {
   async function apply() {
     setBusy(true);
     setProblem(null);
-    setNotice(null);
+    setOutcome(null);
     try {
-      const result = await api<{
-        status: string;
-        applied: number;
-        failed: number;
-        skipped: number;
-        pendingRetry: number;
-      }>(`/api/admin/targets/${id}/runs/${runId}/apply`, {
-        method: 'POST',
-        body: JSON.stringify({ only: [...selected], confirm }),
-      });
-      setNotice(
-        `Applied ${result.applied}, failed ${result.failed}, awaiting retry ` +
-          `${result.pendingRetry}. The run is now ${result.status}.`,
+      const result = await api<ApplyResult>(
+        `/api/admin/targets/${id}/runs/${runId}/apply`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ only: [...selected], confirm }),
+        },
       );
+      setOutcome(result);
       setConfirm(false);
       reload();
     } catch (cause) {
@@ -272,7 +339,45 @@ export function ProvisionRunDetailPage() {
       />
 
       <div className="space-y-6">
-        {notice && <Alert tone="info">{notice}</Alert>}
+        {outcome && (
+          <Alert tone={applyTone(outcome)} title={applyTitle(outcome)}>
+            {/* Every state, every time, including the zeros. A count that is
+                only printed when it is non-zero is a count a reader cannot
+                tell from a count nobody computed — and it was the silent
+                omission of two of these that this alert was rewritten for. */}
+            <p>The run is now {outcome.status}.</p>
+            <ul className="mt-2 list-disc pl-5">
+              <li>{count(outcome.applied, 'action', 'actions')} applied</li>
+              <li>{count(outcome.failed, 'action', 'actions')} failed</li>
+              <li>
+                {count(outcome.pendingRetry, 'action', 'actions')} awaiting
+                retry — a retryable failure, which the next run for this target
+                picks up
+              </li>
+              <li>
+                {count(outcome.inFlight, 'action', 'actions')} in flight — the
+                write was attempted and whether it landed is at the target, not
+                here. The next run asks the directory and resolves it.
+              </li>
+              <li>
+                {count(outcome.deferred, 'action', 'actions')} deferred — they
+                require an explicit confirmation and this apply was not
+                confirmed
+              </li>
+            </ul>
+            {outcome.skipped > 0 && (
+              // Stated as the total it is. `apply.ts` counts every action left
+              // `proposed`, and a deferred action is left `proposed`, so the
+              // deferred are inside this number rather than beside it.
+              <p className="mt-2">
+                {count(outcome.skipped, 'action', 'actions')} were left
+                unapplied altogether, the deferred among them. Applying part of
+                a run ends it: the next run works out afresh what is still
+                needed.
+              </p>
+            )}
+          </Alert>
+        )}
         {problem && <Alert tone="danger">{problem}</Alert>}
 
         {run.status === 'blocked' && (

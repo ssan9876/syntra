@@ -54,12 +54,16 @@ const finding = (overrides: Record<string, unknown> = {}) => ({
 function mockFetch(
   body: Record<string, unknown>,
   drift: unknown[] | 'fails' = [],
+  // Every field `applyProvisionRun` returns. The default used to name five of
+  // the seven, which is the same omission the page itself had.
   applyResult: Record<string, unknown> = {
     status: 'applied',
     applied: 1,
     failed: 0,
-    skipped: 0,
     pendingRetry: 0,
+    inFlight: 0,
+    deferred: 0,
+    skipped: 0,
   },
 ) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
@@ -88,6 +92,19 @@ const renderPage = () =>
       </Routes>
     </MemoryRouter>,
   );
+
+/**
+ * The apply notice, found by its heading.
+ *
+ * `role="alert"` is not a name-from-content role, so the container has no
+ * accessible name to query it by and the heading is the handle.
+ */
+async function noticeHeaded(title: string): Promise<HTMLElement> {
+  const heading = await screen.findByText(title);
+  const alert = heading.closest('[role="alert"]');
+  expect(alert).not.toBeNull();
+  return alert as HTMLElement;
+}
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -384,6 +401,152 @@ describe('ProvisionRunDetailPage', () => {
     ).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Drift (500+)' }));
     expect(screen.getByText('This list is not all of it')).toBeVisible();
+  });
+
+  it('reports every count the apply returned, not the three it used to', async () => {
+    /*
+     * Driven off the fixture rather than off a hand-written list of labels, so
+     * that adding a field to the fixture — which is what a maintainer does when
+     * the engine grows one — fails this test until the page renders it.
+     *
+     * Honest about its limit: `apps/web` has no compile-time or runtime link to
+     * `applyProvisionRun`'s return type, so nothing in this package can fail
+     * because the ENGINE grew a field. It fails when the fixture does.
+     */
+    const result = {
+      status: 'partially_applied',
+      applied: 12,
+      failed: 2,
+      pendingRetry: 3,
+      inFlight: 1,
+      deferred: 4,
+      skipped: 7,
+    };
+    const numbers = Object.values(result).filter(
+      (value): value is number => typeof value === 'number',
+    );
+    // Only worth anything while every count is distinct: two fields sharing a
+    // value would let one of them go unrendered unnoticed.
+    expect(new Set(numbers).size).toBe(numbers.length);
+
+    mockFetch(run(), [], result);
+    renderPage();
+
+    await screen.findByText('Anna Novak');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply 1 action' }));
+
+    const notice = await noticeHeaded('1 action is in flight');
+    for (const value of numbers) {
+      // Digit boundaries, not word boundaries. `textContent` puts no separator
+      // between adjacent list items, so "12 actions applied" and "2 actions
+      // failed" concatenate to `applied2 actions failed` and a word boundary
+      // before that 2 never happens. This still cannot match the 2 inside 12.
+      expect(notice, `count ${value}`).toHaveTextContent(
+        new RegExp(`(?<![0-9])${value}(?![0-9])`),
+      );
+    }
+    expect(notice).toHaveTextContent('The run is now partially_applied.');
+  });
+
+  it('does not let an in-flight action read as a plain success', async () => {
+    // The one outcome whose truth is at the target and not in Syntra: the write
+    // was attempted, and `resolveInFlightActions` has to ask the directory on
+    // the next run whether it landed. Reported as "1 applied" it looks finished.
+    mockFetch(run(), [], {
+      status: 'partially_applied',
+      applied: 1,
+      failed: 0,
+      pendingRetry: 0,
+      inFlight: 1,
+      deferred: 0,
+      skipped: 0,
+    });
+    renderPage();
+
+    await screen.findByText('Anna Novak');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply 1 action' }));
+
+    const notice = await noticeHeaded('1 action is in flight');
+    expect(notice).toHaveTextContent(/whether it landed is at the target, not here/);
+    // And not wearing the tone a clean apply wears.
+    expect(notice.className).toMatch(/danger/);
+  });
+
+  it('says how many actions were deferred for want of a confirmation', async () => {
+    // A silent skip is how a target looks healthy while doing nothing (Ruling
+    // P4), and on an unattended `autoApply` run nobody is watching it happen.
+    // The counter was computed, returned, and then not shown.
+    mockFetch(run(), [], {
+      status: 'partially_applied',
+      applied: 0,
+      failed: 0,
+      pendingRetry: 0,
+      inFlight: 0,
+      deferred: 3,
+      skipped: 3,
+    });
+    renderPage();
+
+    await screen.findByText('Anna Novak');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply 1 action' }));
+
+    const notice = await noticeHeaded('3 actions were deferred');
+    expect(notice).toHaveTextContent(
+      /3 actions deferred — they require an explicit confirmation/,
+    );
+  });
+
+  it('does not add the deferred to the skipped as though they were separate', async () => {
+    // `apply.ts` computes `skipped` as `count(status: 'proposed')` after the
+    // deferred actions have had their message written and their status left
+    // alone, so the deferred are counted INSIDE it. "3 deferred and 5 skipped"
+    // would be eight actions where there are five.
+    mockFetch(run(), [], {
+      status: 'partially_applied',
+      applied: 1,
+      failed: 0,
+      pendingRetry: 0,
+      inFlight: 0,
+      deferred: 3,
+      skipped: 5,
+    });
+    renderPage();
+
+    await screen.findByText('Anna Novak');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply 1 action' }));
+
+    const notice = await noticeHeaded('3 actions were deferred');
+    expect(notice).toHaveTextContent(
+      /5 actions were left unapplied altogether, the deferred among them/,
+    );
+  });
+
+  it('reports a clean apply as a clean apply', async () => {
+    // The half that keeps the other four worth reading: a notice that is always
+    // amber is a notice nobody reads.
+    mockFetch(run(), [], {
+      status: 'applied',
+      applied: 1,
+      failed: 0,
+      pendingRetry: 0,
+      inFlight: 0,
+      deferred: 0,
+      skipped: 0,
+    });
+    renderPage();
+
+    await screen.findByText('Anna Novak');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply 1 action' }));
+
+    // The heading is `Applied`, not `1 action applied`: a heading that repeats
+    // the first line of its own body reads as two facts and is one.
+    const notice = await noticeHeaded('Applied');
+    // Still says every state, including the zeros: a count printed only when it
+    // is non-zero cannot be told from a count nobody computed.
+    expect(notice).toHaveTextContent(/0 actions in flight/);
+    expect(notice).toHaveTextContent(/0 actions deferred/);
+    expect(notice).not.toHaveTextContent(/left unapplied altogether/);
+    expect(notice.className).not.toMatch(/danger|warning/);
   });
 
   it('names an action attributed to nobody rather than dropping it', async () => {
