@@ -15,6 +15,15 @@ export default defineConfig({
   test: {
     include: ['packages/**/src/**/*.test.ts', 'apps/**/src/**/*.test.ts'],
     testTimeout: 30_000,
+    // The same budget as a test body, deliberately. A `beforeEach` here does
+    // exactly what a test body does -- `resetDatabase()` TRUNCATEs every table
+    // and the fixture then writes through `withTenant` -- and that costs ~3 s
+    // on an idle machine. Vitest's 10 s default left a margin thin enough that
+    // five cases in `automate/approvers.test.ts` failed with
+    // "Hook timed out in 10000ms" and every one of them passed on a re-run
+    // with no change to the code. A red run that says nothing about the code
+    // is the most expensive kind on this programme; it has cost it days.
+    hookTimeout: 30_000,
     globalSetup: ['./vitest.global-setup.ts'],
     env: {
       DATABASE_URL: database.appUrl,
