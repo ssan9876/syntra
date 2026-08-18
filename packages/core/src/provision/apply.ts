@@ -755,7 +755,7 @@ async function applyOneAction(
   let throttledForMs = 0;
   let throttledAttempts = 0;
 
-for (;;) {
+  for (;;) {
     const attempt = attempts + 1;
 
     // Step 1: mark in_flight and record the INTENT, committed before the call.
