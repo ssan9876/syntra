@@ -1247,11 +1247,23 @@ async function finish(
      * their manager, not an administrator — can ever obtain it, and no account
      * Provision creates is usable by the person it was created for.
      *
-     * `putSecret` is a local AES operation against a row in this transaction,
-     * not a network or KMS round trip, so it belongs here rather than outside
-     * (Global Constraint 2). The message is queued AFTER the commit, below:
-     * telling somebody their password before the row that says the account
-     * exists has committed is the wrong order to fail in.
+     * `putSecret` is inside this transaction because the sealed password and
+     * the row that says the account exists have to commit or not commit
+     * together — not because the seal is cheap. **It is cheap only under
+     * `localMasterKeyProvider`**, where wrapping the data key is a local AES
+     * operation. `MasterKeyProvider` is an interface precisely so a KMS-backed
+     * provider can be dropped in without any caller changing, and under one
+     * this line, and the three other `putSecret` call sites in this package,
+     * become network round trips inside `withTenant` — Global Constraint 2's
+     * exact prohibition, arriving through a seam designed to be swapped.
+     *
+     * Not restructured here, because the atomicity is worth more today than
+     * the hypothetical is worth avoiding. Written down so that the day a KMS
+     * provider is added, this comment does not read as a licence for it.
+     *
+     * The message is queued AFTER the commit, below: telling somebody their
+     * password before the row that says the account exists has committed is
+     * the wrong order to fail in.
      */
     let deliver: { to: string; login: string; password: string } | null = null;
     let deliveryNote = 'not applicable';

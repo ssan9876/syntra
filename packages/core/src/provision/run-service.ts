@@ -18,6 +18,7 @@ import { remitFor } from './entitlement-service.js';
 import { targetWithCredential } from './target-service.js';
 import type {
   ContractFacts,
+  DraftDriftFinding,
   DesiredState,
   KnownAccount,
   PersonFacts,
@@ -187,6 +188,166 @@ async function adoptStaleRunsAndStart(
   }
 }
 
+/**
+ * How many single-row writes one short transaction may carry.
+ *
+ * The two loops below are DATA-BOUND: their length follows the size of the
+ * directory and of what changed in it, not any constant in this file. Inside
+ * `withTenant`'s 5000 ms that is the defect this package has now shipped seven
+ * times — the transaction aborts with P2028, and the retry runs the same
+ * statements against the same directory, so the failure is permanent rather
+ * than transient. Chunking makes the BUDGET the bound instead of the
+ * directory: a batch is a fixed number of round trips whatever the run found.
+ *
+ * Two hundred small updates against a local PostgreSQL is a small fraction of
+ * the budget, and the cost of a batch that is too small is only more
+ * transactions.
+ */
+const WRITE_BATCH = 200;
+
+/**
+ * Drift, in short transactions rather than one.
+ *
+ * The bounded part is unchanged and still three statements: read what is
+ * there, insert what is not, stamp every fingerprint this run saw. The
+ * per-finding detail update is what moves — its old docstring claimed the
+ * count "on a run that saw the same problems as the last one is none", which
+ * is true of a settled directory and false of the two runs that matter: a mass
+ * flip, where every existing finding's detail changes at once, and any run
+ * after a container or rule change. A bound that holds only when nothing has
+ * happened is not a bound.
+ *
+ * `lastSeenAt` is stamped for every fingerprint before any detail is written,
+ * so a run that gives out partway through the detail pass still leaves the
+ * dashboard able to age findings out; `firstSeenAt` is never touched, because
+ * it is the answer to "how long has this been wrong".
+ */
+async function writeDriftFindings(
+  tenantId: string,
+  targetSystemId: string,
+  runId: string,
+  findings: DraftDriftFinding[],
+): Promise<void> {
+  if (findings.length === 0) return;
+  const seenAt = new Date();
+  const fingerprints = findings.map((f) => f.fingerprint);
+
+  const { bound, existingByFingerprint } = await withTenant(tenantId, async (tx) => {
+    const boundTenant = await currentTenant(tx);
+    const existing = await tx.driftFinding.findMany({
+      where: { targetSystemId, fingerprint: { in: fingerprints } },
+      select: { fingerprint: true, subjectAnchor: true, detail: true },
+    });
+    const byFingerprint = new Map(existing.map((e) => [e.fingerprint, e]));
+
+    const fresh = findings.filter((f) => !byFingerprint.has(f.fingerprint));
+    if (fresh.length > 0) {
+      await tx.driftFinding.createMany({
+        data: fresh.map((finding) => ({
+          tenantId: boundTenant,
+          targetSystemId,
+          runId,
+          accountId: finding.accountId,
+          entitlementId: finding.entitlementId,
+          subjectAnchor: finding.subjectAnchor,
+          kind: finding.kind,
+          detail: finding.detail as never,
+          fingerprint: finding.fingerprint,
+          firstSeenAt: seenAt,
+          lastSeenAt: seenAt,
+        })),
+        // A concurrent run may have inserted the same fingerprint between the
+        // read above and this write. The row exists and says the same thing;
+        // the sweep below stamps it.
+        skipDuplicates: true,
+      });
+    }
+
+    // Every finding this run saw is stamped, new or not, so `lastSeenAt` means
+    // "still true as of this run" and the dashboard can age findings out.
+    await tx.driftFinding.updateMany({
+      where: { targetSystemId, fingerprint: { in: fingerprints } },
+      data: { runId, lastSeenAt: seenAt },
+    });
+
+    return { bound: boundTenant, existingByFingerprint: byFingerprint };
+  });
+
+  // Only the rows whose detail genuinely changed, and only ever
+  // WRITE_BATCH of them per transaction.
+  const stale = findings.filter((finding) => {
+    const before = existingByFingerprint.get(finding.fingerprint);
+    if (before === undefined) return false;
+    return (
+      before.subjectAnchor !== finding.subjectAnchor ||
+      stableJson(before.detail) !== stableJson(finding.detail)
+    );
+  });
+
+  for (let from = 0; from < stale.length; from += WRITE_BATCH) {
+    const batch = stale.slice(from, from + WRITE_BATCH);
+    await withTenant(tenantId, async (tx) => {
+      for (const finding of batch) {
+        await tx.driftFinding.update({
+          where: {
+            tenantId_targetSystemId_fingerprint: {
+              tenantId: bound,
+              targetSystemId,
+              fingerprint: finding.fingerprint,
+            },
+          },
+          data: {
+            subjectAnchor: finding.subjectAnchor,
+            detail: finding.detail as never,
+          },
+        });
+      }
+    });
+  }
+}
+
+/**
+ * The holder count is the TARGET's, per spec section 11, so the second guard
+ * axis has a denominator on a run that has applied nothing yet.
+ *
+ * Grouped by value rather than written one row at a time — one statement per
+ * distinct count that changed, not one per entitlement. That grouping was
+ * already here and is kept; what it was not is BOUNDED. Its docstring said the
+ * statement count "on a settled directory is zero", which is true and is not a
+ * bound: on a first run every count changes at once, and the number of
+ * distinct counts across three hundred groups is of the order of three
+ * hundred. Chunked for the same reason as the drift pass.
+ */
+async function writeHolderCounts(
+  tenantId: string,
+  targetSystemId: string,
+  entitlements: { id: string; holderCount: number }[],
+  holdersAtTarget: ReadonlyMap<string, number>,
+): Promise<void> {
+  const changedByCount = new Map<number, string[]>();
+  for (const entitlement of entitlements) {
+    const holders = holdersAtTarget.get(entitlement.id) ?? 0;
+    if (holders === entitlement.holderCount) continue;
+    const bucket = changedByCount.get(holders) ?? [];
+    bucket.push(entitlement.id);
+    changedByCount.set(holders, bucket);
+  }
+  if (changedByCount.size === 0) return;
+
+  const groups = [...changedByCount];
+  for (let from = 0; from < groups.length; from += WRITE_BATCH) {
+    const batch = groups.slice(from, from + WRITE_BATCH);
+    await withTenant(tenantId, async (tx) => {
+      for (const [holders, ids] of batch) {
+        await tx.entitlement.updateMany({
+          where: { targetSystemId, id: { in: ids } },
+          data: { holderCount: holders },
+        });
+      }
+    });
+  }
+}
+
 export interface PreviewProvisionRunOptions {
   now?: Date;
   connector?: TargetConnector<never>;
@@ -225,9 +386,17 @@ export interface ProvisionRunSummary {
  *    holding no database connection while it runs.
  * 5. Snapshot the database side in one short transaction.
  * 6. Evaluate, reconcile, plan and guard. Pure. No transaction, no I/O.
- * 7. Write every account reservation, action, exception, drift finding and the
- *    run's terminal status **in one transaction**, so that a run which fails
- *    partway writes no plan at all.
+ * 7. Write every account reservation, action, exception and the run's terminal
+ *    status **in one transaction**, so that a run which fails partway writes no
+ *    plan at all. Everything in it is a `createMany` or a single update: the
+ *    statement count follows the plan's SHAPE, never the directory's size.
+ *
+ *    The two writes whose length follows the data — the drift findings and the
+ *    entitlement holder counts — are phase 7a, immediately before it, in short
+ *    chunked transactions of their own. They are observations of the target
+ *    rather than parts of the plan, so nothing in phase 7 depends on them;
+ *    they run first so that a run which cannot record what it saw writes no
+ *    plan either, which is the failure rule phase 7 already has.
  */
 export async function previewProvisionRun(
   tenantId: string,
@@ -748,7 +917,17 @@ export async function previewProvisionRun(
 
     const counts = (type: string) => actions.filter((a) => a.actionType === type).length;
 
-    // Phase 7. Everything, together.
+    // Phase 7a. The two OBSERVATIONS of the target, each in short transactions
+    // of its own rather than inside the plan's. See `writeDriftFindings` and
+    // `writeHolderCounts`: both are data-bound, and a data-bound loop inside a
+    // 5000 ms transaction is the defect this package has already shipped
+    // seven times. Before the plan and not after it, so that a run which
+    // cannot finish them writes no plan either — the same failure rule phase 7
+    // already has, rather than a second one.
+    await writeDriftFindings(tenantId, targetSystemId, run.id, reconciled.findings);
+    await writeHolderCounts(tenantId, targetSystemId, snapshot.entitlements, holdersAtTarget);
+
+    // Phase 7. The PLAN, together.
     return await withTenant(tenantId, async (tx) => {
       const bound = await currentTenant(tx);
 
@@ -888,88 +1067,6 @@ export async function previewProvisionRun(
       });
 
       /**
-       * Drift, in a bounded number of statements.
-       *
-       * A per-finding `upsert` is one round trip each and the count is
-       * unbounded: a first run against a directory Syntra holds no accounts
-       * for raises one `orphan_account` per object in it. Ten thousand upserts
-       * do not finish inside `withTenant`'s 5000 ms, the transaction aborts
-       * with P2028, and the retry re-runs the same statements against the same
-       * directory — permanently, not transiently. Sixth-and-seventh instance
-       * of the same defect on this programme, so it is written as: read what
-       * is there, insert what is not, stamp the rest, and update only the rows
-       * whose detail genuinely changed — which on a run that saw the same
-       * problems as the last one is none.
-       */
-      const seenAt = new Date();
-      const findings = reconciled.findings;
-      if (findings.length > 0) {
-        const fingerprints = findings.map((f) => f.fingerprint);
-        const existing = await tx.driftFinding.findMany({
-          where: { targetSystemId, fingerprint: { in: fingerprints } },
-          select: { fingerprint: true, subjectAnchor: true, detail: true },
-        });
-        const existingByFingerprint = new Map(existing.map((e) => [e.fingerprint, e]));
-
-        const fresh = findings.filter((f) => !existingByFingerprint.has(f.fingerprint));
-        if (fresh.length > 0) {
-          await tx.driftFinding.createMany({
-            data: fresh.map((finding) => ({
-              tenantId: bound,
-              targetSystemId,
-              runId: run.id,
-              accountId: finding.accountId,
-              entitlementId: finding.entitlementId,
-              subjectAnchor: finding.subjectAnchor,
-              kind: finding.kind,
-              detail: finding.detail as never,
-              fingerprint: finding.fingerprint,
-              firstSeenAt: seenAt,
-              lastSeenAt: seenAt,
-            })),
-            // A concurrent run may have inserted the same fingerprint between
-            // the read above and this write. The row exists and says the same
-            // thing; the sweep below stamps it.
-            skipDuplicates: true,
-          });
-        }
-
-        // Every finding this run saw is stamped, new or not, so `lastSeenAt`
-        // means "still true as of this run" and the dashboard can age findings
-        // out. `firstSeenAt` is never touched: it is the answer to "how long
-        // has this been wrong", which is the only question that makes a drift
-        // list actionable.
-        await tx.driftFinding.updateMany({
-          where: { targetSystemId, fingerprint: { in: fingerprints } },
-          data: { runId: run.id, lastSeenAt: seenAt },
-        });
-
-        for (const finding of findings) {
-          const before = existingByFingerprint.get(finding.fingerprint);
-          if (before === undefined) continue;
-          if (
-            before.subjectAnchor === finding.subjectAnchor &&
-            stableJson(before.detail) === stableJson(finding.detail)
-          ) {
-            continue;
-          }
-          await tx.driftFinding.update({
-            where: {
-              tenantId_targetSystemId_fingerprint: {
-                tenantId: bound,
-                targetSystemId,
-                fingerprint: finding.fingerprint,
-              },
-            },
-            data: {
-              subjectAnchor: finding.subjectAnchor,
-              detail: finding.detail as never,
-            },
-          });
-        }
-      }
-
-      /**
        * The membership probe's verdict, written down so the catalog screen and
        * the rules editor can show it and so the next run starts from it.
        *
@@ -996,30 +1093,6 @@ export async function previewProvisionRun(
             id: { in: [...readableEntitlementIds] },
           },
           data: { status: 'present' },
-        });
-      }
-
-      /**
-       * The holder count is the target's, per spec section 11, so the second
-       * guard axis has a denominator on a run that has applied nothing yet.
-       *
-       * Grouped by value rather than written one row at a time: on a first run
-       * every count changes at once, and one statement per group is the
-       * transaction-budget defect again. The statement count is the number of
-       * distinct counts that changed, which on a settled directory is zero.
-       */
-      const changedByCount = new Map<number, string[]>();
-      for (const entitlement of snapshot.entitlements) {
-        const holders = holdersAtTarget.get(entitlement.id) ?? 0;
-        if (holders === entitlement.holderCount) continue;
-        const bucket = changedByCount.get(holders) ?? [];
-        bucket.push(entitlement.id);
-        changedByCount.set(holders, bucket);
-      }
-      for (const [holders, ids] of changedByCount) {
-        await tx.entitlement.updateMany({
-          where: { targetSystemId, id: { in: ids } },
-          data: { holderCount: holders },
         });
       }
 
