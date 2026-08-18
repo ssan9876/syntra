@@ -20,6 +20,13 @@ let targetId: string;
 let sourceId: string;
 let personId: string;
 
+/**
+ * Prisma's default interactive-transaction timeout, which `withTenant` does
+ * not override. The budget every "no I/O inside a transaction" rule in this
+ * package is measured against.
+ */
+const PRISMA_TRANSACTION_MS = 5000;
+
 beforeEach(async () => {
   await resetDatabase();
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
@@ -1141,16 +1148,39 @@ describe('enqueuePairedSync', () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
-  it('enqueues outside the transaction that read the target', async () => {
-    // `scheduler.enqueue` is a write to pg-boss over its own connection.
-    // Holding a `withTenant` transaction open across it spends the five-second
-    // budget on somebody else's I/O -- so by the time the queue is touched,
-    // this tenant's transaction has committed and another one can open.
-    const enqueue = vi.fn(async () => {
-      const rows = await withTenant(tenantId, (tx) => tx.targetSystem.findMany());
-      expect(rows).toHaveLength(1);
-      return 'job-1';
-    });
-    expect(await enqueuePairedSync({ enqueue } as never, tenantId, targetId)).toBe(true);
-  });
+  it(
+    'enqueues outside the transaction that read the target',
+    { timeout: 30_000 },
+    async () => {
+      /**
+       * The distinguishing signal is the DURATION, not a read.
+       *
+       * This test used to open a nested `withTenant` inside `enqueue` and
+       * assert it could read the target. It could not fail: the nested
+       * transaction takes a DIFFERENT pooled connection and reads a row
+       * committed in `beforeEach`, so it succeeds whether or not the outer
+       * transaction is still open. It was guarding a transaction-budget
+       * invariant with nothing.
+       *
+       * `withTenant` is `prisma.$transaction(fn)` on Prisma's 5000 ms default,
+       * and that budget is exactly what an enqueue inside the transaction
+       * spends: `scheduler.enqueue` is a write to pg-boss over its own
+       * connection, and in production it is as slow as that queue is. So the
+       * fake queue is made slower than the budget. Outside the transaction —
+       * where the code puts it — nothing is held and this passes. Moved
+       * inside, Prisma rolls the transaction back at 5000 ms and the commit
+       * fails with P2028, which is precisely the production failure this
+       * placement exists to prevent: a target that cannot be provisioned at
+       * all whenever the queue is slow.
+       */
+      const enqueue = vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, PRISMA_TRANSACTION_MS + 800));
+        return 'job-1';
+      });
+      expect(await enqueuePairedSync({ enqueue } as never, tenantId, targetId)).toBe(
+        true,
+      );
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    },
+  );
 });
