@@ -11,3 +11,4 @@ export * from './tenant.js';
 export * from './protocol.js';
 export * from './protocol-admin.js';
 export * from './provision.js';
+export * from './automate.js';

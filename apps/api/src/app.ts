@@ -31,11 +31,13 @@ import { registerAdminApplicationRoutes } from './routes/admin/applications.js';
 import { registerAdminPolicyRoutes } from './routes/admin/policies.js';
 import { registerAdminProtocolRoutes } from './routes/admin/protocol-apps.js';
 import { registerAdminUpstreamRoutes } from './routes/admin/upstreams.js';
+import { registerAdminAutomateRoutes } from './routes/admin/automate.js';
 import { registerAdminTargetRoutes } from './routes/admin/targets.js';
 import { registerAdminProfileRoutes } from './routes/admin/profiles.js';
 import { registerAdminRuleRoutes } from './routes/admin/rules.js';
 import { registerAdminProvisionRunRoutes } from './routes/admin/provision-runs.js';
 import { registerPortalRoutes } from './routes/portal.js';
+import { registerAutomatePortalRoutes } from './routes/automate-portal.js';
 import { registerSamlIdpRoutes } from './routes/saml-idp.js';
 import { registerOidcRoutes } from './routes/oidc-op.js';
 import { registerOidcInteractionRoutes } from './routes/oidc-interaction.js';
@@ -229,11 +231,30 @@ export async function buildApp(
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
 
+  await app.register(registerAdminAutomateRoutes, {
+    prefix: '/api/admin',
+    publicUrl: config.publicUrl,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+
   await app.register(registerPortalRoutes, {
     prefix: '/api/portal',
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
     publicUrl: config.publicUrl,
+  });
+
+  // Its own plugin rather than added to `portal.ts`, so the `preHandler` hook
+  // and the rate limits of the launch routes stay where they are: Fastify
+  // encapsulates hooks per plugin, and `registerPortalRoutes` already adds a
+  // `preHandler` of its own.
+  await app.register(registerAutomatePortalRoutes, {
+    prefix: '/api/portal',
+    publicUrl: config.publicUrl,
+    // Spec section 5: an approval that produces target grants enqueues a run
+    // of the affected target system. Without this the portal's own decisions
+    // wait for the tick job, up to five minutes.
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
 
   await app.register(registerSamlIdpRoutes, {

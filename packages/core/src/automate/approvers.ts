@@ -21,12 +21,20 @@ export type ApproverSelector =
   | 'group'
   | 'person';
 
+/**
+ * `| undefined` on every optional, for the reason `AudienceCondition` and
+ * `FormField` carry it: `exactOptionalPropertyTypes` is on repo-wide, and zod
+ * infers `depth?: number | undefined` for `z.number().optional()`. Without it
+ * the schema's inferred type is NOT assignable to this one, and the HTTP layer
+ * -- which parses a stage out of `@syntra/contracts` and hands it straight to
+ * `upsertWorkflow` -- does not compile.
+ */
 export interface SelectorConfig {
   /** managerChain only, 1..5. */
-  depth?: number;
-  roleId?: string;
-  groupId?: string;
-  personId?: string;
+  depth?: number | undefined;
+  roleId?: string | undefined;
+  groupId?: string | undefined;
+  personId?: string | undefined;
 }
 
 /** The whole stage as it stood at submission. Written onto ApprovalStep. */
