@@ -881,15 +881,39 @@ describe('resolveMappingContract agrees with resolveContractForMapping', () => {
    * implementations are compared on identical input. Not a mock of the answer
    * -- the real function runs, over a fake `findMany`.
    */
+  type ContractWhere = {
+    startDate: { lte: Date };
+    OR: ({ endDate: null } | { endDate: { gte: Date } })[];
+  };
+
+  /**
+   * The stub applies the WHOLE `where`, including `OR`.
+   *
+   * It used to destructure `OR` and never read it, filtering on its own
+   * restatement of "ends on or after `on`" instead — so the active-contract
+   * half of `activeContracts` was compared against the test's own copy of it
+   * rather than against the query, and changing that clause in
+   * `contract-service.ts` would not have failed a single case here. Only the
+   * precedence half was really under test. Now the clause is interpreted the
+   * way PostgreSQL would: every disjunct is tried and any match passes.
+   */
+  const matchesOr = (contract: ContractFacts, or: ContractWhere['OR']): boolean =>
+    or.some((clause) =>
+      clause.endDate === null
+        ? contract.endDate === null
+        : contract.endDate !== null &&
+          contract.endDate.getTime() >= clause.endDate.gte.getTime(),
+    );
+
   const txOver = (rows: ContractFacts[]) =>
     ({
       contract: {
-        findMany: async ({ where }: { where: { startDate: { lte: Date }; OR: unknown } }) =>
+        findMany: async ({ where }: { where: ContractWhere }) =>
           rows
             .filter(
               (c) =>
                 c.startDate.getTime() <= where.startDate.lte.getTime() &&
-                (c.endDate === null || c.endDate.getTime() >= where.startDate.lte.getTime()),
+                matchesOr(c, where.OR),
             )
             .sort((a, b) => a.sequence - b.sequence),
       },

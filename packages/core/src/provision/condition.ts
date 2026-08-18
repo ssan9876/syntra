@@ -235,16 +235,52 @@ export function evaluateCondition(
   condition: Condition,
   facts: ConditionFacts,
 ): boolean {
+  // A condition this module cannot evaluate matches NOBODY. It never grants,
+  // and it never widens a `not` into everybody — see `evaluate` below for why
+  // the tri-state exists and where it is collapsed.
+  return evaluate(condition, facts) ?? false;
+}
+
+/**
+ * The recursive half, which answers `undefined` for "this module does not
+ * recognise that".
+ *
+ * A plain boolean cannot carry that answer safely, because `not` inverts it.
+ * The second `switch` below used to have no `default`: an `op` outside
+ * `ConditionOperator` — which the type says cannot happen and a `condition`
+ * column written by an older version or by hand can still contain — fell out
+ * of the function as `undefined`, and `!undefined` is `true`. So a leaf nobody
+ * could evaluate, wrapped in a `not`, matched every person in the tenant.
+ * Returning `false` from the default alone would move the same hole one level
+ * out rather than closing it.
+ *
+ * `undefined` therefore propagates through the connectives the way an unknown
+ * does: decisive answers still decide (`all` is false if any child is false,
+ * `any` is true if any child is true), and anything that still depends on the
+ * unknown stays unknown. `evaluateCondition` collapses it to `false` at the
+ * boundary, so nothing downstream has to think about it.
+ *
+ * The real control is upstream: `run-service.ts` parses every stored condition
+ * with `conditionSchema` before a run evaluates it, and refuses the run if one
+ * does not parse. This is the backstop, and it fails the way this whole module
+ * fails — closed.
+ */
+function evaluate(condition: Condition, facts: ConditionFacts): boolean | undefined {
   if ('all' in condition) {
     // An empty `all` is true. That is how a birthright rule matching everybody
     // with any active contract is expressed without a special case.
-    return condition.all.every((child) => evaluateCondition(child, facts));
+    const answers = condition.all.map((child) => evaluate(child, facts));
+    if (answers.some((a) => a === false)) return false;
+    return answers.some((a) => a === undefined) ? undefined : true;
   }
   if ('any' in condition) {
-    return condition.any.some((child) => evaluateCondition(child, facts));
+    const answers = condition.any.map((child) => evaluate(child, facts));
+    if (answers.some((a) => a === true)) return true;
+    return answers.some((a) => a === undefined) ? undefined : false;
   }
   if ('not' in condition) {
-    return !evaluateCondition(condition.not, facts);
+    const inner = evaluate(condition.not, facts);
+    return inner === undefined ? undefined : !inner;
   }
 
   const raw = facts[condition.field];
@@ -282,9 +318,23 @@ export function evaluateCondition(
       const needle = normalise(condition.value);
       return needle !== '' && actual.includes(needle);
     }
+    // The same backstop, for the operator next door, where it was missing.
+    // `conditionSchema` requires `.min(1)` on the list — but an empty one
+    // stored some other way makes `in` match nobody, which is harmless, and
+    // `notIn` match EVERYBODY, which is exactly the defect the blank-needle
+    // case above was written for. A list nobody wrote is not a filter, in
+    // either direction.
     case 'in':
-      return condition.value.some((candidate) => normalise(candidate) === actual);
-    case 'notIn':
-      return !condition.value.some((candidate) => normalise(candidate) === actual);
+    case 'notIn': {
+      if (condition.value.length === 0) return false;
+      const hit = condition.value.some((candidate) => normalise(candidate) === actual);
+      return condition.op === 'in' ? hit : !hit;
+    }
+    default:
+      // An `op` the closed set does not contain. Unreachable through the type
+      // and reachable through the column, and the honest answer is that this
+      // module cannot say — NOT `false`, which a `not` one level up would
+      // turn back into "everybody".
+      return undefined;
   }
 }

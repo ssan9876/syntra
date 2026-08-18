@@ -242,6 +242,42 @@ describe('reconcile — the four outcomes', () => {
     ]);
   });
 
+  it('does not treat a holding Provision did not GRANT as revocable', () => {
+    /**
+     * `heldWithinRemit` means "revocable", and the branch that fills it claims
+     * Provision granted the thing. A holding recorded with `origin: 'manual'`
+     * or `'discovered'` is one Provision recorded and did not grant, so under
+     * `additive` it belongs in the drift report and nowhere near the set the
+     * planner differences against — which is what this module's own rule and
+     * `types.ts`'s definition of the set both say, and what the old
+     * `holdings.some((h) => h.entitlementId === …)` quietly contradicted.
+     *
+     * Latent today only because `apply.ts` writes `origin: 'rule'` at the one
+     * site that creates these rows. A defect held shut by an unrelated
+     * constant is not a defect that is not there.
+     */
+    for (const origin of ['manual', 'discovered'] as const) {
+      const output = run({
+        known: [
+          known({
+            holdings: [{ entitlementId: 'ent-finance', origin, grantedByRuleId: null }],
+          }),
+        ],
+      });
+      const actual = output.actual.get('person-1')!;
+      expect([origin, [...actual.heldWithinRemit]]).toEqual([origin, []]);
+      // And it is REPORTED rather than ignored, in both modes (Ruling P2).
+      expect(output.findings.map((f) => f.kind)).toContain('unmanaged_entitlement');
+    }
+  });
+
+  it('does treat one Provision granted as revocable, in the same fixture', () => {
+    // The other direction, so the case above is not passing because the
+    // comparison was switched off.
+    const actual = run().actual.get('person-1')!;
+    expect([...actual.heldWithinRemit]).toEqual(['ent-finance']);
+  });
+
   it('matches each entitlement against the holdings one at a time', () => {
     // One holding matching is enough for THAT entitlement to be granted, and
     // says nothing about the others. Read as "all the holdings match", every

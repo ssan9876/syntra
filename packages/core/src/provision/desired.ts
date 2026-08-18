@@ -344,11 +344,11 @@ export function desiredState(input: DesiredStateInput): DesiredState {
    * loop below uses `activeNow`, a subset. Anybody a rule could reach either
    * way is covered.
    *
-   * `!== false` and not `=== true`: `evaluateCondition` can answer `undefined`
-   * for a condition it does not recognise, and "we could not tell whether this
-   * rule reaches this person" must not read as "it does not". Being
-   * unprocessable freezes this person's grants and leaves their existing
-   * access alone, which is the direction to fail in.
+   * A condition this module cannot evaluate matches nobody, so it cannot pull
+   * a person into this refusal either — which is safe here only because
+   * `run-service.ts` parses every stored condition before a run evaluates it
+   * and refuses the run outright if one does not parse. A rule whose
+   * population cannot be computed never reaches this loop.
    */
   for (const rule of rules) {
     if (!rule.enabled) continue;
@@ -356,9 +356,8 @@ export function desiredState(input: DesiredStateInput): DesiredState {
       (id) => (input.entitlementStatus.get(id) ?? 'missing') !== 'present',
     );
     if (unresolvable === undefined) continue;
-    const reaches = activeInWindow.some(
-      (contract) =>
-        evaluateCondition(rule.condition, conditionFacts(person, contract)) !== false,
+    const reaches = activeInWindow.some((contract) =>
+      evaluateCondition(rule.condition, conditionFacts(person, contract)),
     );
     if (!reaches) continue;
     const status = input.entitlementStatus.get(unresolvable) ?? 'missing';

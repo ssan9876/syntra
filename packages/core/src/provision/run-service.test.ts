@@ -795,6 +795,47 @@ describe('previewProvisionRun', () => {
     expect(accounts).toEqual([]);
   });
 
+  it('refuses the run when a stored rule condition cannot be read', async () => {
+    /**
+     * `condition` is a `Json` column, so what comes back is `unknown` and
+     * `as never` was a suppression rather than a check. A row written by an
+     * older schema or edited by hand reaches `evaluateCondition` with an
+     * operator outside the closed set, and its backstops are the last line
+     * rather than the control.
+     *
+     * `explain.ts` treats an unparseable condition as "this rule's attribution
+     * cannot be computed", which is right for a read-only view and wrong here:
+     * this is the path that writes to a domain controller, and evaluating an
+     * unreadable rule as matching nobody computes a desired set without it and
+     * proposes REVOKING everything it granted. So the run is refused, naming
+     * the rule, and phase 7 never runs — no plan, no reservations, no drift.
+     */
+    await seedPerson('Anna', 'Novak', null);
+    await withTenant(tenantId, (tx) =>
+      tx.businessRule.updateMany({
+        where: { targetSystemId: targetId },
+        data: { condition: { field: 'contract.department', op: 'matchesRegex', value: '.*' } },
+      }),
+    );
+
+    await expect(
+      previewProvisionRun(tenantId, provider, targetId, {
+        now: NOW,
+        connector: target as never,
+      }),
+    ).rejects.toThrow(/condition this version cannot read/);
+
+    const runs = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findMany({ include: { actions: true } }),
+    );
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.status).toBe('failed');
+    expect(runs[0]!.actions).toEqual([]);
+    expect(runs[0]!.error).toContain('Finance staff');
+    const accounts = await withTenant(tenantId, (tx) => tx.targetAccount.findMany());
+    expect(accounts).toEqual([]);
+  });
+
   it('records drift under additive without proposing a revocation', async () => {
     // Ruling P2. Additive means "I saw this and left it".
     //

@@ -14,6 +14,7 @@ import { desiredState } from './desired.js';
 import { evaluateProvisionGuard } from './guard.js';
 import { planActions } from './plan.js';
 import { reconcile, unprocessableScope } from './reconcile.js';
+import { conditionSchema } from './condition.js';
 import { remitFor } from './entitlement-service.js';
 import { targetWithCredential } from './target-service.js';
 import type {
@@ -680,14 +681,42 @@ export async function previewProvisionRun(
           : (e.status as 'present' | 'missing' | 'unreadable'),
       ]),
     );
-    const ruleFacts: RuleFacts[] = snapshot.rules.map((r) => ({
-      id: r.id,
-      name: r.name,
-      condition: r.condition as never,
-      grantsAccount: r.grantsAccount,
-      enabled: r.enabled,
-      entitlementIds: r.entitlements.map((j) => j.entitlementId),
-    }));
+    /**
+     * The stored condition, PARSED rather than asserted.
+     *
+     * `condition` is a `Json` column, so what comes back is `unknown` and
+     * `as never` was a suppression rather than a check. A row an older version
+     * of the schema wrote — or one edited by hand — reaches `evaluateCondition`
+     * with an operator the closed set does not contain, and that function's
+     * backstops are the last line rather than the control: an unrecognised
+     * `op` inside a `not` used to match every person in the tenant.
+     *
+     * `explain.ts` parses the same column with `safeParse` and treats a failure
+     * as "this rule's attribution cannot be computed", which is right for a
+     * read-only view. It is not right here. This is the path that writes to a
+     * domain controller, and a rule whose condition cannot be read is a rule
+     * whose population cannot be computed — evaluating it as matching nobody
+     * would compute a desired set without it and propose REVOKING everything
+     * it granted. So the run is refused, loudly, naming the rule: phase 7 has
+     * not run, so no plan is written, and the target's screen carries the
+     * message.
+     */
+    const ruleFacts: RuleFacts[] = snapshot.rules.map((r) => {
+      const parsed = conditionSchema.safeParse(r.condition);
+      if (!parsed.success) {
+        throw new Error(
+          `the business rule "${r.name}" (${r.id}) has a condition this version cannot read, so the persons it applies to cannot be computed and this run would propose revoking everything it granted: ${parsed.error.issues[0]?.message ?? 'unparseable condition'}`,
+        );
+      }
+      return {
+        id: r.id,
+        name: r.name,
+        condition: parsed.data,
+        grantsAccount: r.grantsAccount,
+        enabled: r.enabled,
+        entitlementIds: r.entitlements.map((j) => j.entitlementId),
+      };
+    });
 
     /**
      * Correlation keys that are spoken for, **accumulated across the loop**.

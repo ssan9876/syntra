@@ -229,6 +229,74 @@ describe('evaluateCondition — combinators', () => {
   });
 });
 
+describe('evaluateCondition — a filter nobody wrote is not a filter', () => {
+  it('matches nobody on an empty `in` OR an empty `notIn`', () => {
+    /**
+     * `in: []` matching nobody is harmless and was already true.
+     * `notIn: []` matched EVERYBODY — `![].some(…)` is `true` — which is
+     * exactly the defect the blank-needle backstop beside it was written for,
+     * in the operator next door. A rule of "department notIn []" granted its
+     * entitlement to every person in the tenant.
+     *
+     * `conditionSchema` requires `.min(1)` on the list, so this is the
+     * backstop for a `condition` column written before that check existed or
+     * by some other route — the same standing as the `startsWith` and
+     * `contains` cases.
+     */
+    for (const op of ['in', 'notIn'] as const) {
+      expect([
+        op,
+        evaluateCondition({ field: 'contract.department', op, value: [] }, facts()),
+      ]).toEqual([op, false]);
+    }
+  });
+
+  it('matches nobody on an operator it does not recognise, inside a `not` as well', () => {
+    /**
+     * The second `switch` had no `default`, so an `op` outside the closed set
+     * — which the type says cannot happen and a hand-edited or
+     * older-schema `condition` column can still contain — fell out of the
+     * function as `undefined`. On its own that reads as false; inside a `not`,
+     * `!undefined` is `true`, so a leaf nobody could evaluate matched every
+     * person in the tenant. Returning `false` from a default alone would have
+     * moved the same hole one level out rather than closing it, which is why
+     * the recursion carries "cannot say" and collapses it once, at the edge.
+     */
+    const unknown = {
+      field: 'contract.department',
+      op: 'matchesRegex',
+      value: '.*',
+    } as unknown as Condition;
+    expect(evaluateCondition(unknown, facts())).toBe(false);
+    expect(evaluateCondition({ not: unknown }, facts())).toBe(false);
+    expect(evaluateCondition({ not: { not: unknown } }, facts())).toBe(false);
+    expect(evaluateCondition({ any: [unknown] }, facts())).toBe(false);
+    expect(evaluateCondition({ all: [unknown] }, facts())).toBe(false);
+  });
+
+  it('still decides a combinator whose answer does not depend on the unknown', () => {
+    // "Cannot say" is not contagious: `all` is false the moment any child is
+    // false, and `any` is true the moment any child is true, whatever the rest
+    // of the list could not answer. Only a verdict that still rests on the
+    // unknown stays unknown, and only that one collapses to "matches nobody".
+    const unknown = { field: 'contract.department', op: 'wat' } as unknown as Condition;
+    const no: Condition = {
+      field: 'contract.department',
+      op: 'equals',
+      value: 'Facilities',
+    };
+    const yes: Condition = {
+      field: 'contract.department',
+      op: 'equals',
+      value: 'Finance',
+    };
+    expect(evaluateCondition({ all: [no, unknown] }, facts())).toBe(false);
+    expect(evaluateCondition({ any: [yes, unknown] }, facts())).toBe(true);
+    expect(evaluateCondition({ all: [yes, unknown] }, facts())).toBe(false);
+    expect(evaluateCondition({ any: [no, unknown] }, facts())).toBe(false);
+  });
+});
+
 describe('conditionSchema', () => {
   it('accepts a nested condition and returns it typed', () => {
     const parsed = conditionSchema.parse({

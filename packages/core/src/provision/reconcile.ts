@@ -298,8 +298,18 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
 
     for (const entitlementId of heldAtTarget) {
       const inRemit = input.remit.has(entitlementId);
+      // `origin === 'rule'`, because "Provision granted this" is what the
+      // branch below claims and what `heldWithinRemit` means. A `manual` or
+      // `discovered` holding is one Provision recorded but did not grant, and
+      // counting it here makes it revocable under `additive` — contradicting
+      // this module's own rule that an unmanaged entitlement is kept OUT of
+      // `heldWithinRemit` under that mode, and `types.ts`'s definition of the
+      // set. Latent today only because `apply.ts` writes `origin: 'rule'` at
+      // the one site that creates these rows: a defect held shut by an
+      // unrelated constant, which is not the same as a defect that is not
+      // there.
       const granted = account?.holdings.some(
-        (h) => h.entitlementId === entitlementId,
+        (h) => h.entitlementId === entitlementId && h.origin === 'rule',
       );
 
       if (granted) {
