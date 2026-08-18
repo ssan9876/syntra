@@ -542,6 +542,102 @@ describe('adTargetConfigSchema', () => {
     }
   });
 
+  it('takes the whitespace off an attribute name before anything reads with it', () => {
+    // `anchorOf` reads `entry[config.anchorAttribute]` -- an exact key lookup,
+    // not the case-insensitive `attributeOf` -- so `'objectGUID '` names an
+    // attribute no object at the target carries. Every group then comes back
+    // unidentifiable, and the catalog read has to refuse the whole target to
+    // stop every entitlement on it being marked `missing`, every rule naming
+    // them unresolvable and every person those rules touch unprocessable.
+    // Whitespace is invisible in the form that produced it, so it comes off
+    // here, before a run is ever scheduled.
+    expect(
+      adTargetConfigSchema.parse({ ...base, anchorAttribute: 'objectGUID ' })
+        .anchorAttribute,
+    ).toBe('objectGUID');
+    expect(
+      adTargetConfigSchema.parse({ ...base, provenanceAttribute: ' info' })
+        .provenanceAttribute,
+    ).toBe('info');
+  });
+
+  it('refuses an attribute name that is blank, or blank once trimmed', () => {
+    // An attribute name of spaces is not empty and passed a bare `min(1)`.
+    // Neither names anything, and `entry['']` is as absent as `entry[' ']`.
+    for (const value of ['', ' ', '   ']) {
+      expect(
+        adTargetConfigSchema.safeParse({ ...base, anchorAttribute: value }).success,
+      ).toBe(false);
+      expect(
+        adTargetConfigSchema.safeParse({ ...base, provenanceAttribute: value }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('leaves the case of an attribute name alone', () => {
+    // Trimming whitespace and folding case are not the same act, and only the
+    // first is wanted: this codebase folds case in some comparisons and
+    // insists on it in others, and a schema that lowercased here would decide
+    // that for all of them.
+    expect(adTargetConfigSchema.parse({ ...base, anchorAttribute: 'objectGUID' }).anchorAttribute).toBe(
+      'objectGUID',
+    );
+  });
+
+  it('refuses a search base, a bind DN or a URL that is only whitespace', () => {
+    // The `min(1)` above passed all of these: a DN of spaces is not empty.
+    // `archiveContainer: ' '` would move archived accounts to the RDN alone,
+    // and `baseDn: ' '` would search -- and write into -- the whole domain,
+    // exactly as the empty string would.
+    for (const field of [
+      'bindDn',
+      'baseDn',
+      'entitlementSearchBase',
+      'archiveContainer',
+    ] as const) {
+      expect(adTargetConfigSchema.safeParse({ ...base, [field]: '   ' }).success).toBe(
+        false,
+      );
+    }
+    expect(
+      adTargetConfigSchema.safeParse({
+        ...base,
+        url: '   ',
+        tlsMode: 'starttls' as const,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses a filter that is blank, and trims the one it keeps', () => {
+    // `accountFilter` is concatenated into `(&<accountFilter>(sAMAccountName=
+    // ...))`, and RFC 4515 allows no whitespace between filter components.
+    expect(adTargetConfigSchema.safeParse({ ...base, groupFilter: ' ' }).success).toBe(
+      false,
+    );
+    expect(
+      adTargetConfigSchema.parse({ ...base, accountFilter: ' (objectClass=user) ' })
+        .accountFilter,
+    ).toBe('(objectClass=user)');
+  });
+
+  it('refuses a padded primary-group id rather than excluding nothing with it', () => {
+    // An anchor comes out of `normaliseAnchor` trimmed, so a padded id can
+    // never equal one: the exclusion silently does nothing, the primary group
+    // is offered in the catalog, and the revoke fails forever advising the
+    // administrator to exclude it with `primaryGroupExternalIds` -- which is
+    // what they did. The case rule above is untouched and is a different act:
+    // a differently-cased id is visible, a padded one is not.
+    expect(
+      adTargetConfigSchema.safeParse({ ...base, primaryGroupExternalIds: [''] }).success,
+    ).toBe(false);
+    expect(
+      adTargetConfigSchema.parse({
+        ...base,
+        primaryGroupExternalIds: [' 9f3c-AB ', 'b2d1'],
+      }).primaryGroupExternalIds,
+    ).toEqual(['9f3c-AB', 'b2d1']);
+  });
+
   it('requires a URL, and refuses it for being empty rather than for the mode', () => {
     // Split out of the loop above, which asserted this for the wrong reason: an
     // empty url is not an `ldaps://` url, so with the fixture's `tlsMode:

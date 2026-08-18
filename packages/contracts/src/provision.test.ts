@@ -172,6 +172,54 @@ describe('the target a caller may create', () => {
     );
   });
 
+  it('trims a config value and refuses one that is nothing but whitespace', () => {
+    // The connector reads `entry[config.anchorAttribute]` by exact key, so
+    // `'objectGUID '` names an attribute no object carries: every group in the
+    // catalog read comes back unidentifiable at once. This schema is what the
+    // save is checked against and what gets stored, so it has to refuse
+    // exactly what `adTargetConfigSchema` refuses -- otherwise a 204 buys a
+    // target whose own configuration fails to parse on every run.
+    expect(
+      targetConfigSchema.parse({ ...config, anchorAttribute: 'objectGUID ' })
+        .anchorAttribute,
+    ).toBe('objectGUID');
+    expect(
+      targetConfigSchema.parse({ ...config, baseDn: '  OU=Users,DC=acme,DC=test ' })
+        .baseDn,
+    ).toBe('OU=Users,DC=acme,DC=test');
+    for (const field of [
+      'url',
+      'bindDn',
+      'baseDn',
+      'entitlementSearchBase',
+      'archiveContainer',
+      'anchorAttribute',
+      'provenanceAttribute',
+      'accountFilter',
+      'groupFilter',
+    ] as const) {
+      expect(targetConfigSchema.safeParse({ ...config, [field]: '   ' }).success).toBe(
+        false,
+      );
+    }
+    expect(
+      targetConfigSchema.safeParse({ ...config, primaryGroupExternalIds: [' '] }).success,
+    ).toBe(false);
+  });
+
+  it('leaves the case of a config value exactly as it was given', () => {
+    // Trimming whitespace is not lowercasing. An external id is an opaque
+    // anchor compared by exact equality, and folding it here would quietly
+    // decide a question this codebase answers differently per comparison.
+    const parsed = targetConfigSchema.parse({
+      ...config,
+      anchorAttribute: 'objectGUID',
+      primaryGroupExternalIds: ['AB12-cd'],
+    });
+    expect(parsed.anchorAttribute).toBe('objectGUID');
+    expect(parsed.primaryGroupExternalIds).toEqual(['AB12-cd']);
+  });
+
   it('caps the bind password the way the merged directory-source schema does', () => {
     // `sync.ts` has carried `.max(1024)` since it merged. An unbounded string
     // here is an unbounded write to the credential vault from an anonymous

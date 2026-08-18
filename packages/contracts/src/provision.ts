@@ -4,6 +4,20 @@ import { cronExpression } from './sync.js';
 export const enforcementModeSchema = z.enum(['additive', 'authoritative']);
 
 /**
+ * Trimmed, and refused when trimming leaves nothing — the same shape, and for
+ * the same reasons, as `directoryString` in `@syntra/connectors`'
+ * `adTargetConfigSchema`, where the reasoning is written out.
+ *
+ * The two schemas have to agree on what they refuse. This one is what an
+ * administrator's save is checked against and what gets STORED; the connector
+ * parses the stored object again before every run. A value this accepted and
+ * that refused would be a 204 on a target that then fails to parse its own
+ * configuration on every run, which is the "save that reports success and
+ * changed nothing" this file's `.strict()` exists to prevent, one layer down.
+ */
+const directoryString = z.string().trim().min(1);
+
+/**
  * `.strict()`, and this is the object where it matters most.
  *
  * Target config is **replaced whole** rather than merged, so without it a typo
@@ -21,21 +35,23 @@ export const enforcementModeSchema = z.enum(['additive', 'authoritative']);
  */
 export const targetConfigSchema = z
   .object({
-    url: z.string().min(1),
+    url: directoryString,
     // `plain` is absent: writes to a target require an encrypted transport
     // unconditionally, and a target that could be configured to write in the
     // clear is a target that eventually does.
     tlsMode: z.enum(['ldaps', 'starttls']),
     rejectUnauthorized: z.boolean().default(true),
-    bindDn: z.string().min(1),
-    baseDn: z.string().min(1),
-    entitlementSearchBase: z.string().min(1),
-    archiveContainer: z.string().min(1),
-    provenanceAttribute: z.string().default('info'),
-    anchorAttribute: z.string().default('objectGUID'),
-    accountFilter: z.string().default('(&(objectCategory=person)(objectClass=user))'),
-    groupFilter: z.string().default('(objectClass=group)'),
-    primaryGroupExternalIds: z.array(z.string()).default([]),
+    bindDn: directoryString,
+    baseDn: directoryString,
+    entitlementSearchBase: directoryString,
+    archiveContainer: directoryString,
+    provenanceAttribute: directoryString.default('info'),
+    anchorAttribute: directoryString.default('objectGUID'),
+    accountFilter: directoryString.default(
+      '(&(objectCategory=person)(objectClass=user))',
+    ),
+    groupFilter: directoryString.default('(objectClass=group)'),
+    primaryGroupExternalIds: z.array(directoryString).default([]),
     pageSize: z.number().int().positive().max(5000).default(1000),
     connectTimeoutMs: z.number().int().positive().max(120_000).default(10_000),
     timeoutMs: z.number().int().positive().max(600_000).default(60_000),
