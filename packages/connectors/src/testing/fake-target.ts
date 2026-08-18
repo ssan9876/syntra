@@ -1,3 +1,4 @@
+import { splitDn } from '../ldap/dn.js';
 import type {
   ConnectionResult,
   DiscoveredEntitlement,
@@ -41,6 +42,28 @@ interface FakeObject {
 
 /** Where a create lands when the operation names no distinguished name. */
 const DEFAULT_CONTAINER = 'OU=Users,DC=acme,DC=test';
+
+/**
+ * What stands in for the initial password in `calls`.
+ *
+ * A placeholder rather than a deleted key, so the recorded operation keeps
+ * the shape a caller inspecting `calls` expects, and so a test searching the
+ * recorded calls for the password it supplied finds nothing.
+ */
+const REDACTED = '[redacted by FakeTarget]';
+
+/**
+ * Correlation keys, folded.
+ *
+ * Active Directory compares `sAMAccountName` case-insensitively and refuses
+ * `A.Novak` beside `a.novak`; PostgreSQL does not, which is why `apply.ts`
+ * folds it on its side too. A fake that compares exactly creates the second
+ * one happily, so a duplicate the real target would reject looks like an
+ * ordinary create -- and the conflict path a create is supposed to take never
+ * runs in any test that uses this. A fake stricter than the real thing hides
+ * bugs; a fake looser than it invents them.
+ */
+const foldKey = (key: string): string => key.toLowerCase();
 
 /**
  * An in-memory TargetConnector with programmable failures.
@@ -167,7 +190,18 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
     _config: FakeTargetConfig,
     op: WriteOperation,
   ): Promise<WriteResult> {
-    this.calls.push(op);
+    // A COPY with the password taken out, not the operation object itself.
+    //
+    // `calls.push(op)` retained the whole operation, `initialPassword`
+    // included, while the comment on `perform` claimed "nothing in `calls`'
+    // stored copy that a later assertion could read back" -- and the test
+    // pinning that claim looked only at `objects`, so the claim was never
+    // checked. The fake exists partly to prove no initial password survives
+    // into the action and audit rows; one that keeps a copy of it lets
+    // exactly that leak pass unnoticed.
+    this.calls.push(
+      op.op === 'create_account' ? { ...op, initialPassword: REDACTED } : op,
+    );
     const outcome = this.programmed.get(op.op);
 
     if (outcome?.loseResponseTimes) {
@@ -198,7 +232,7 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
     switch (op.op) {
       case 'create_account': {
         const existing = [...this.objects.values()].find(
-          (o) => o.correlationKey === op.correlationKey,
+          (o) => foldKey(o.correlationKey) === foldKey(op.correlationKey),
         );
         if (existing) {
           // Present, carrying THIS actionId -- our own previous attempt
@@ -218,10 +252,12 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
           };
         }
         const anchor = this.nextAnchor();
-        // The password is used and not kept. Nothing on FakeObject, nothing in
-        // `calls`' stored copy that a later assertion could read back, and
+        // The password is used and not kept. Nothing on FakeObject, and
         // nothing in any WriteResult: a fake that retained it would let a leak
-        // through the action and audit rows pass unnoticed.
+        // through the action and audit rows pass unnoticed. `calls` is the
+        // third place it could hide, and `write` above redacts it there --
+        // this comment used to claim that and `write` used to push the
+        // operation object itself.
         this.objects.set(anchor, {
           anchor,
           correlationKey: op.correlationKey,
@@ -282,7 +318,13 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
       case 'rename_account': {
         const object = this.objects.get(op.anchor);
         if (!object) return this.gone(op.anchor);
-        const container = object.dn.slice(object.dn.indexOf(',') + 1);
+        // `splitDn`, not `indexOf(',')`. `CN=Novak\, Anna,OU=Staff,...` is an
+        // entirely ordinary account -- Provision correlates accounts
+        // administrators created by hand -- and splitting at the ESCAPED
+        // comma takes ` Anna,OU=Staff,...` as the container, so the rename
+        // moves the object somewhere nobody chose. The real connector has
+        // had this right since it merged.
+        const { parent: container } = splitDn(object.dn);
         object.correlationKey = op.correlationKey;
         object.dn = `CN=${op.correlationKey},${container}`;
         return { ok: true, message: 'renamed' };

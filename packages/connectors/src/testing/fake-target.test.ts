@@ -434,5 +434,72 @@ describe('FakeTarget: the rest of the target-connector surface', () => {
     expect(JSON.stringify([...target.objects.values()])).not.toContain(
       'fake-initial-password',
     );
+    // `calls` too, which is where the password actually was. The comment on
+    // `perform` claimed "nothing in `calls`' stored copy that a later
+    // assertion could read back" while `write` pushed the operation object
+    // itself -- `initialPassword` and all -- and the assertion above looked
+    // only at `objects`, so the claim was never checked. A fake that retains
+    // it lets a leak through the action and audit rows pass unnoticed, which
+    // is the one thing this test exists to prevent.
+    expect(JSON.stringify(target.calls)).not.toContain('fake-initial-password');
+  });
+
+  it('correlates account names the way Active Directory does, case-folded', async () => {
+    // AD compares sAMAccountName case-insensitively and refuses `A.Novak`
+    // beside `a.novak`. A fake that compares exactly creates the second one
+    // happily, so a duplicate the real target would reject looks like an
+    // ordinary create here -- and the conflict path that a create is supposed
+    // to take never runs. `apply.ts` folds the key on its side for the same
+    // reason.
+    const target = seeded();
+    const first = await target.write(config, create('act-1', 'a.novak'));
+    expect(first.ok).toBe(true);
+
+    const clash = await target.write(config, create('act-2', 'A.Novak'));
+    expect(clash.ok).toBe(false);
+    expect(clash.failure).toBe('conflict');
+    expect(target.objects.size).toBe(1);
+  });
+
+  it('adopts its own account whatever case the correlation key arrives in', async () => {
+    // The other half: the adoption path a lost response takes must survive a
+    // key that came back from the directory in a different case, or a retry
+    // creates a second account instead of recognising the first.
+    const target = seeded();
+    const created = await target.write(config, create('act-1', 'a.novak'));
+    const retry = await target.write(config, create('act-1', 'A.NOVAK'));
+
+    expect(retry.ok).toBe(true);
+    expect(retry.message).toContain('adopted');
+    expect(retry.anchor).toBe(created.anchor);
+  });
+
+  it('renames an account whose container holds an escaped comma', async () => {
+    // `dn.slice(dn.indexOf(',') + 1)` splits at the ESCAPED comma of
+    // `CN=Novak\, Anna,OU=Staff,...` and takes ` Anna,OU=Staff,...` as the
+    // container, so the rename moves the object somewhere nobody chose. The
+    // real connector has `splitDn` for exactly this, and an account created
+    // by hand with a comma in its name is entirely ordinary.
+    const target = new FakeTarget();
+    const staff = 'OU=Staff,DC=acme,DC=test';
+    target.containers.push(staff);
+    const created = await target.write(config, {
+      op: 'create_account',
+      actionId: 'act-1',
+      correlationKey: 'novak.anna',
+      attributes: { distinguishedName: [`CN=Novak\\, Anna,${staff}`] },
+      enabled: true,
+      initialPassword: 'Aa1!fake-initial-password',
+    });
+
+    const result = await target.write(config, {
+      op: 'rename_account',
+      actionId: 'act-2',
+      anchor: created.anchor!,
+      correlationKey: 'novakova.anna',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(target.objects.get(created.anchor!)!.dn).toBe(`CN=novakova.anna,${staff}`);
   });
 });
