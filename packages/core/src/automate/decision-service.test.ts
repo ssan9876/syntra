@@ -609,7 +609,15 @@ describe('no transition into approved exists that is not caused by a decision', 
         continue;
       }
       for (const [index, line] of source.split('\n').entries()) {
-        if (/status\s*[:=]\s*'approved'/.test(line)) hits.push(`${file}:${index + 1}`);
+        // EITHER quote style. The first version of this matched `'approved'`
+        // only, and prettier's default is double quotes -- so a module whose
+        // write had been reformatted dropped silently out of the offending
+        // set. That is the wrong direction for a guard: a FOURTH entry point
+        // written as `status: "approved"` would have been invisible to it,
+        // which is the failure this test exists to make impossible.
+        if (/status\s*[:=]\s*['"]approved['"]/.test(line)) {
+          hits.push(`${file}:${index + 1}`);
+        }
       }
     }
 

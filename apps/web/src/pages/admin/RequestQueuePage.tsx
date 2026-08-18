@@ -1,8 +1,8 @@
-import { Link } from "react-router-dom";
-import { Alert, Empty, Panel, SkeletonRows, Status } from "@syntra/ui";
-import { PageHeader } from "./PageHeader.js";
-import { useApiResource } from "./hooks.js";
-import { REQUEST_LABEL, REQUEST_TONE, when } from "../automate/status.js";
+import { Link } from 'react-router-dom';
+import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { PageHeader } from './PageHeader.js';
+import { useApiResource } from './hooks.js';
+import { REQUEST_LABEL, REQUEST_TONE, when } from '../automate/status.js';
 
 interface QueueRow {
   id: string;
@@ -22,14 +22,14 @@ interface QueueRow {
  * be applied.
  */
 const STUCK = [
-  "blocked_no_approver",
-  "fulfilment_failed",
-  "partially_fulfilled",
+  'blocked_no_approver',
+  'fulfilment_failed',
+  'partially_fulfilled',
 ];
 
 export function RequestQueuePage() {
   const { data, error, loading } = useApiResource<{ requests: QueueRow[] }>(
-    "/api/admin/automate/requests",
+    '/api/admin/automate/requests',
   );
 
   const rows = [...(data?.requests ?? [])].sort((a, b) => {
@@ -82,13 +82,13 @@ export function RequestQueuePage() {
                         to={`/admin/automate/requests/${row.id}`}
                         className="text-ink hover:text-primary"
                       >
-                        {row.product?.name ?? "Requested access"}
+                        {row.product?.name ?? 'Requested access'}
                       </Link>
                       {row.statusReason && (
                         <p className="text-sm text-muted">{row.statusReason}</p>
                       )}
                       {row.items
-                        .filter((item) => item.status === "failed")
+                        .filter((item) => item.status === 'failed')
                         .map((item, index) => (
                           // The target's own message. It is the only thing that
                           // says what to fix.
@@ -104,7 +104,7 @@ export function RequestQueuePage() {
                       {when(row.submittedAt)}
                     </td>
                     <td className="px-4 py-3">
-                      <Status tone={REQUEST_TONE[row.status] ?? "neutral"}>
+                      <Status tone={REQUEST_TONE[row.status] ?? 'neutral'}>
                         {REQUEST_LABEL[row.status] ?? row.status}
                       </Status>
                     </td>

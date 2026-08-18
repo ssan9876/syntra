@@ -1,10 +1,10 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from "@syntra/ui";
-import { AppShell } from "../../components/AppShell.js";
-import { ApiError, api } from "../../session/api.js";
-import { useApiResource } from "../../session/use-api-resource.js";
-import { GRANT_LABEL, GRANT_TONE, when } from "./status.js";
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { AppShell } from '../../components/AppShell.js';
+import { ApiError, api } from '../../session/api.js';
+import { useApiResource } from '../../session/use-api-resource.js';
+import { GRANT_LABEL, GRANT_TONE, when } from './status.js';
 
 interface GrantRow {
   id: string;
@@ -18,12 +18,12 @@ interface GrantRow {
   reviewReason: string | null;
 }
 
-const LIVE = ["scheduled", "pending", "active"];
+const LIVE = ['scheduled', 'pending', 'active'];
 
 export function MyAccessPage() {
   const { data, error, loading, reload } = useApiResource<{
     grants: GrantRow[];
-  }>("/api/portal/automate/grants");
+  }>('/api/portal/automate/grants');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -32,14 +32,14 @@ export function MyAccessPage() {
     setProblem(null);
     try {
       await api(`/api/portal/automate/grants/${grantId}/hand-back`, {
-        method: "POST",
+        method: 'POST',
       });
       reload();
     } catch (cause) {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : "Something went wrong.",
+          : 'Something went wrong.',
       );
     } finally {
       setBusy(null);
@@ -80,7 +80,7 @@ export function MyAccessPage() {
                       <p className="text-sm text-muted">
                         From {when(grant.startsAt)}
                         {grant.endsAt === null
-                          ? ", with no end date"
+                          ? ', with no end date'
                           : ` until ${when(grant.endsAt)}`}
                       </p>
                       {grant.needsReview && (
@@ -91,7 +91,7 @@ export function MyAccessPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Status tone={GRANT_TONE[grant.status] ?? "neutral"}>
+                      <Status tone={GRANT_TONE[grant.status] ?? 'neutral'}>
                         {GRANT_LABEL[grant.status] ?? grant.status}
                       </Status>
                       {LIVE.includes(grant.status) &&

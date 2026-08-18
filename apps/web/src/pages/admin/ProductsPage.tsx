@@ -1,7 +1,7 @@
-import { Link } from "react-router-dom";
-import { Alert, Empty, Panel, SkeletonRows, Status } from "@syntra/ui";
-import { PageHeader } from "./PageHeader.js";
-import { useApiResource } from "./hooks.js";
+import { Link } from 'react-router-dom';
+import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { PageHeader } from './PageHeader.js';
+import { useApiResource } from './hooks.js';
 
 interface ProductRow {
   id: string;
@@ -15,7 +15,7 @@ interface ProductRow {
 
 export function ProductsPage() {
   const { data, error, loading } = useApiResource<{ products: ProductRow[] }>(
-    "/api/admin/automate/products",
+    '/api/admin/automate/products',
   );
 
   return (
@@ -84,7 +84,7 @@ export function ProductsPage() {
                     <td className="px-4 py-3">
                       <Status
                         tone={
-                          product.status === "active" ? "active" : "neutral"
+                          product.status === 'active' ? 'active' : 'neutral'
                         }
                       >
                         {product.status}

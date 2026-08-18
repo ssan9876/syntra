@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { Alert, Empty, Field, Panel, SkeletonRows, Status } from "@syntra/ui";
-import { AppShell } from "../../components/AppShell.js";
-import { useApiResource } from "../../session/use-api-resource.js";
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { AppShell } from '../../components/AppShell.js';
+import { useApiResource } from '../../session/use-api-resource.js';
 
 interface CatalogEntry {
   id: string;
@@ -17,27 +17,27 @@ interface CatalogEntry {
 }
 
 function durationLine(entry: CatalogEntry): string {
-  if (entry.durationMode === "permanent")
-    return "Held until somebody takes it away";
-  if (entry.durationMode === "fixed") return "Held for a fixed period";
+  if (entry.durationMode === 'permanent')
+    return 'Held until somebody takes it away';
+  if (entry.durationMode === 'fixed') return 'Held for a fixed period';
   return `You choose how long, up to ${entry.maxDurationDays ?? 0} days`;
 }
 
 export function CatalogPage() {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState('');
   const { data, error, loading } = useApiResource<{ products: CatalogEntry[] }>(
-    "/api/portal/automate/catalog",
+    '/api/portal/automate/catalog',
   );
 
   const products = (data?.products ?? []).filter((p) =>
-    query.trim() === ""
+    query.trim() === ''
       ? true
-      : `${p.name} ${p.description ?? ""} ${p.category ?? ""}`
+      : `${p.name} ${p.description ?? ''} ${p.category ?? ''}`
           .toLowerCase()
           .includes(query.trim().toLowerCase()),
   );
   const categories = [
-    ...new Set(products.map((p) => p.category ?? "Everything else")),
+    ...new Set(products.map((p) => p.category ?? 'Everything else')),
   ];
 
   return (
@@ -85,7 +85,7 @@ export function CatalogPage() {
                     <ul className="divide-y divide-border-subtle">
                       {products
                         .filter(
-                          (p) => (p.category ?? "Everything else") === category,
+                          (p) => (p.category ?? 'Everything else') === category,
                         )
                         .map((product) => (
                           <li key={product.id} className="px-4 py-3">
@@ -103,12 +103,12 @@ export function CatalogPage() {
                             <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted">
                               <Status
                                 tone={
-                                  product.needsApproval ? "primary" : "active"
+                                  product.needsApproval ? 'primary' : 'active'
                                 }
                               >
                                 {product.needsApproval
-                                  ? "Needs approval"
-                                  : "Granted immediately"}
+                                  ? 'Needs approval'
+                                  : 'Granted immediately'}
                               </Status>
                               <span>{durationLine(product)}</span>
                             </p>

@@ -1,9 +1,9 @@
-import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { Alert, Button, Field, Panel, SkeletonRows } from "@syntra/ui";
-import { AppShell } from "../../components/AppShell.js";
-import { ApiError, api } from "../../session/api.js";
-import { useApiResource } from "../../session/use-api-resource.js";
+import { useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { Alert, Button, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { AppShell } from '../../components/AppShell.js';
+import { ApiError, api } from '../../session/api.js';
+import { useApiResource } from '../../session/use-api-resource.js';
 
 interface FormField {
   key: string;
@@ -37,8 +37,8 @@ export function RequestFormPage() {
   );
 
   const [values, setValues] = useState<Record<string, string>>({});
-  const [justification, setJustification] = useState("");
-  const [days, setDays] = useState("");
+  const [justification, setJustification] = useState('');
+  const [days, setDays] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -47,15 +47,15 @@ export function RequestFormPage() {
     setProblem(null);
     try {
       const created = await api<{ requestId: string }>(
-        "/api/portal/automate/requests",
+        '/api/portal/automate/requests',
         {
-          method: "POST",
+          method: 'POST',
           body: JSON.stringify({
             productId: id,
             subjectPersonId: undefined,
-            justification: justification.trim() === "" ? null : justification,
+            justification: justification.trim() === '' ? null : justification,
             formValues: values,
-            requestedDurationDays: days.trim() === "" ? null : Number(days),
+            requestedDurationDays: days.trim() === '' ? null : Number(days),
           }),
         },
       );
@@ -68,7 +68,7 @@ export function RequestFormPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : "Something went wrong sending this request.",
+          : 'Something went wrong sending this request.',
       );
     } finally {
       setBusy(false);
@@ -100,15 +100,15 @@ export function RequestFormPage() {
 
               {data.formSchema.map((field) => (
                 <div key={field.key}>
-                  {field.type === "select" ||
-                  field.type === "resourcePicker" ? (
+                  {field.type === 'select' ||
+                  field.type === 'resourcePicker' ? (
                     <label className="block">
                       <span className="mb-1 block font-medium text-ink">
                         {field.label}
                       </span>
                       <select
                         className="w-full rounded-control border border-border-subtle bg-surface px-3 py-2"
-                        value={values[field.key] ?? ""}
+                        value={values[field.key] ?? ''}
                         onChange={(event) =>
                           setValues({
                             ...values,
@@ -117,7 +117,7 @@ export function RequestFormPage() {
                         }
                       >
                         <option value="">Choose one</option>
-                        {(field.type === "resourcePicker"
+                        {(field.type === 'resourcePicker'
                           ? data.resources.map((r) => ({
                               value: r.id,
                               label: r.resourceId,
@@ -138,7 +138,7 @@ export function RequestFormPage() {
                   ) : (
                     <Field
                       label={field.label}
-                      value={values[field.key] ?? ""}
+                      value={values[field.key] ?? ''}
                       onChange={(value) =>
                         setValues({ ...values, [field.key]: value })
                       }
@@ -157,7 +157,7 @@ export function RequestFormPage() {
                 hint="Whoever decides this will read exactly what you write here."
               />
 
-              {data.durationMode === "requesterChoice" && (
+              {data.durationMode === 'requesterChoice' && (
                 <Field
                   label="For how many days?"
                   value={days}

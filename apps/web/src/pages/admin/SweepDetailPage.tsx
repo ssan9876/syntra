@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { Alert, Button, Panel, SkeletonRows, Status } from "@syntra/ui";
-import { PageHeader } from "./PageHeader.js";
-import { useApiResource } from "./hooks.js";
-import { ApiError, api } from "../../session/api.js";
+import { useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { Alert, Button, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { PageHeader } from './PageHeader.js';
+import { useApiResource } from './hooks.js';
+import { ApiError, api } from '../../session/api.js';
 
 interface SweepAction {
   id: string;
@@ -46,7 +46,7 @@ export function SweepDetailPage() {
     if (data)
       setTicked(
         new Set(
-          data.actions.filter((a) => a.status === "proposed").map((a) => a.id),
+          data.actions.filter((a) => a.status === 'proposed').map((a) => a.id),
         ),
       );
   }, [data]);
@@ -56,7 +56,7 @@ export function SweepDetailPage() {
     setProblem(null);
     try {
       await api(`/api/admin/automate/sweeps/${id}/apply`, {
-        method: "POST",
+        method: 'POST',
         body: JSON.stringify({ confirm: true, only: [...ticked] }),
       });
       reload();
@@ -64,7 +64,7 @@ export function SweepDetailPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : "Something went wrong applying this sweep.",
+          : 'Something went wrong applying this sweep.',
       );
     } finally {
       setBusy(false);
@@ -93,7 +93,7 @@ export function SweepDetailPage() {
           {data.blockedReason && (
             // Leads with why, and the numbers behind it.
             <Alert
-              tone={data.status === "blocked" ? "danger" : "warning"}
+              tone={data.status === 'blocked' ? 'danger' : 'warning'}
               title="This sweep stopped"
             >
               {data.blockedReason}
@@ -141,7 +141,7 @@ export function SweepDetailPage() {
             <Panel
               title="Proposed removals"
               actions={
-                data.status === "previewed" ? (
+                data.status === 'previewed' ? (
                   <Button variant="primary" loading={busy} onClick={apply}>
                     Apply the ticked rows
                   </Button>
@@ -158,7 +158,7 @@ export function SweepDetailPage() {
                       type="checkbox"
                       aria-label={`${action.resourceId} for ${action.subjectPersonId}`}
                       checked={ticked.has(action.id)}
-                      disabled={data.status !== "previewed"}
+                      disabled={data.status !== 'previewed'}
                       onChange={() => toggle(action.id)}
                     />
                     <span className="flex-1 text-ink">
@@ -166,7 +166,7 @@ export function SweepDetailPage() {
                     </span>
                     <span className="text-muted">{action.message}</span>
                     <Status
-                      tone={action.kind === "lapse" ? "warning" : "neutral"}
+                      tone={action.kind === 'lapse' ? 'warning' : 'neutral'}
                     >
                       {action.kind}
                     </Status>

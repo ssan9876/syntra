@@ -1,10 +1,10 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from "@syntra/ui";
-import { PageHeader } from "./PageHeader.js";
-import { useApiResource } from "./hooks.js";
-import { ApiError, api } from "../../session/api.js";
-import { when } from "../automate/status.js";
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { PageHeader } from './PageHeader.js';
+import { useApiResource } from './hooks.js';
+import { ApiError, api } from '../../session/api.js';
+import { when } from '../automate/status.js';
 
 interface SweepRow {
   id: string;
@@ -18,21 +18,21 @@ interface SweepRow {
 
 const TONE: Record<
   string,
-  "neutral" | "active" | "warning" | "danger" | "primary"
+  'neutral' | 'active' | 'warning' | 'danger' | 'primary'
 > = {
-  running: "neutral",
-  previewed: "primary",
-  blocked: "danger",
-  applying: "primary",
-  applied: "active",
-  partially_applied: "warning",
-  failed: "danger",
+  running: 'neutral',
+  previewed: 'primary',
+  blocked: 'danger',
+  applying: 'primary',
+  applied: 'active',
+  partially_applied: 'warning',
+  failed: 'danger',
 };
 
 export function SweepsPage() {
   const { data, error, loading, reload } = useApiResource<{
     sweeps: SweepRow[];
-  }>("/api/admin/automate/sweeps");
+  }>('/api/admin/automate/sweeps');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -40,13 +40,13 @@ export function SweepsPage() {
     setBusy(true);
     setProblem(null);
     try {
-      await api("/api/admin/automate/sweeps", { method: "POST" });
+      await api('/api/admin/automate/sweeps', { method: 'POST' });
       reload();
     } catch (cause) {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : "Something went wrong.",
+          : 'Something went wrong.',
       );
     } finally {
       setBusy(false);
@@ -97,7 +97,7 @@ export function SweepsPage() {
                     <p className="text-sm text-danger">{sweep.blockedReason}</p>
                   )}
                 </div>
-                <Status tone={TONE[sweep.status] ?? "neutral"}>
+                <Status tone={TONE[sweep.status] ?? 'neutral'}>
                   {sweep.status}
                 </Status>
               </li>

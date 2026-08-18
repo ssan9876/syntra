@@ -1,7 +1,7 @@
-import { Link, useParams } from "react-router-dom";
-import { Alert, Empty, Panel, SkeletonRows, Status } from "@syntra/ui";
-import { useApiResource } from "./hooks.js";
-import { PageHeader } from "./PageHeader.js";
+import { Link, useParams } from 'react-router-dom';
+import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { useApiResource } from './hooks.js';
+import { PageHeader } from './PageHeader.js';
 
 /**
  * One rule that asks for a holding **today**, with the contract of this person
@@ -60,10 +60,10 @@ interface Access {
 }
 
 const ORIGINS: Record<string, string> = {
-  rule: "A business rule",
-  request: "An approved request",
-  discovered: "Found at the target, not granted here",
-  manual: "Granted by hand",
+  rule: 'A business rule',
+  request: 'An approved request',
+  discovered: 'Found at the target, not granted here',
+  manual: 'Granted by hand',
 };
 
 /**
@@ -92,54 +92,50 @@ const ORIGINS: Record<string, string> = {
  */
 const ACCOUNT_STATUS: Record<
   string,
-  {
-    tone: "active" | "inactive" | "warning" | "danger";
-    label: string;
-    title: string;
-  }
+  { tone: 'active' | 'inactive' | 'warning' | 'danger'; label: string; title: string }
 > = {
   active: {
-    tone: "active",
-    label: "active",
-    title: "The account exists at the target and is enabled.",
+    tone: 'active',
+    label: 'active',
+    title: 'The account exists at the target and is enabled.',
   },
   disabled: {
-    tone: "inactive",
-    label: "disabled",
+    tone: 'inactive',
+    label: 'disabled',
     title:
-      "Disabled on purpose — a step on this target’s deprovisioning ladder.",
+      'Disabled on purpose — a step on this target’s deprovisioning ladder.',
   },
   archived: {
-    tone: "inactive",
-    label: "archived",
+    tone: 'inactive',
+    label: 'archived',
     title:
-      "Moved to the archive container with its managed entitlements stripped. Provision never deletes.",
+      'Moved to the archive container with its managed entitlements stripped. Provision never deletes.',
   },
   pending: {
-    tone: "warning",
-    label: "pending — nothing at the target yet",
+    tone: 'warning',
+    label: 'pending — nothing at the target yet',
     title:
-      "A reserved login. The row holds the correlation key so two runs cannot generate the same one; no account has been created at the target.",
+      'A reserved login. The row holds the correlation key so two runs cannot generate the same one; no account has been created at the target.',
   },
   missing_at_target: {
-    tone: "danger",
-    label: "missing at the target",
+    tone: 'danger',
+    label: 'missing at the target',
     title:
-      "Syntra records this account and the target no longer returns its anchor. Recreating it is never automatic: it usually vanished because somebody deleted it deliberately.",
+      'Syntra records this account and the target no longer returns its anchor. Recreating it is never automatic: it usually vanished because somebody deleted it deliberately.',
   },
   conflict: {
-    tone: "danger",
-    label: "conflict",
+    tone: 'danger',
+    label: 'conflict',
     title:
-      "The target refused the last write to this account. Nothing further is proposed for this person here until it is resolved.",
+      'The target refused the last write to this account. Nothing further is proposed for this person here until it is resolved.',
   },
 };
 
 const accountStatus = (status: string) =>
   ACCOUNT_STATUS[status] ?? {
-    tone: "neutral" as const,
+    tone: 'neutral' as const,
     label: status,
-    title: "A status this screen does not have a reading for.",
+    title: 'A status this screen does not have a reading for.',
   };
 
 /**
@@ -185,28 +181,26 @@ function HeldByNow({ holding }: { holding: Holding }) {
   // BEFORE the rule branches: a request-origin holding has no rule attribution
   // to be stale about, and falling through would render "nothing asks for this
   // now" over access somebody signed for.
-  if (holding.origin === "request") {
+  if (holding.origin === 'request') {
     return (
-      <div className="space-y-1.5">
-        <span className="block text-sm text-muted">
-          {holding.requestId === null ? (
-            "An approved request."
-          ) : (
-            <>
-              Requested{" "}
-              <Link
-                to={`/admin/automate/requests/${holding.requestId}`}
-                className="text-primary underline-offset-2 hover:underline"
-              >
-                on request {holding.requestId.slice(0, 8)}
-              </Link>
-            </>
-          )}
-          {holding.grantEndsAt === null
-            ? ", with no end date."
-            : `, until ${new Date(holding.grantEndsAt).toLocaleDateString()}.`}
-        </span>
-      </div>
+      <span className="block text-sm text-muted">
+        {holding.requestId === null ? (
+          'An approved request.'
+        ) : (
+          <>
+            Requested{' '}
+            <Link
+              to={`/admin/automate/requests/${holding.requestId}`}
+              className="text-primary underline-offset-2 hover:underline"
+            >
+              on request {holding.requestId.slice(0, 8)}
+            </Link>
+          </>
+        )}
+        {holding.grantEndsAt === null
+          ? ', with no end date.'
+          : `, until ${new Date(holding.grantEndsAt).toLocaleDateString()}.`}
+      </span>
     );
   }
 
@@ -223,7 +217,7 @@ function HeldByNow({ holding }: { holding: Holding }) {
               leaver, or a transfer. Worth naming, and still not a rule asking
               for this person to hold this. */}
           {holding.ruleName === null
-            ? "A rule granted this and no rule keeps it in place."
+            ? 'A rule granted this and no rule keeps it in place.'
             : `${holding.ruleName} still names it, but no active contract of this person matches it.`}
         </span>
       </div>

@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Alert, Button, Empty, Field, Panel, SkeletonRows } from "@syntra/ui";
-import { AppShell } from "../../components/AppShell.js";
-import { ApiError, api } from "../../session/api.js";
-import { useApiResource } from "../../session/use-api-resource.js";
+import { useState } from 'react';
+import { Alert, Button, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { AppShell } from '../../components/AppShell.js';
+import { ApiError, api } from '../../session/api.js';
+import { useApiResource } from '../../session/use-api-resource.js';
 
 interface Managed {
   delegationId: string;
@@ -24,12 +24,12 @@ function ResourcePanel({ resource }: { resource: Managed }) {
   const { data, error, loading, reload } = useApiResource<{
     members: Member[];
   }>(path);
-  const [personId, setPersonId] = useState("");
+  const [personId, setPersonId] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const act = async (
-    action: "grant" | "revoke",
+    action: 'grant' | 'revoke',
     subjectPersonIds: string[],
   ) => {
     setBusy(true);
@@ -38,15 +38,15 @@ function ResourcePanel({ resource }: { resource: Managed }) {
       await api(
         `/api/portal/automate/managed-resources/${resource.resourceType}/${resource.resourceId}/${action}`,
         {
-          method: "POST",
+          method: 'POST',
           body: JSON.stringify({
             subjectPersonIds,
-            justification: "managed from the portal",
+            justification: 'managed from the portal',
             durationDays: null,
           }),
         },
       );
-      setPersonId("");
+      setPersonId('');
       reload();
     } catch (cause) {
       // "That person is outside the audience for this resource" and "ask an
@@ -55,7 +55,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : "Something went wrong.",
+          : 'Something went wrong.',
       );
     } finally {
       setBusy(false);
@@ -79,11 +79,11 @@ function ResourcePanel({ resource }: { resource: Managed }) {
                 className="flex items-center justify-between py-2"
               >
                 <span className="text-ink">{member.subjectPersonId}</span>
-                {resource.capabilities.includes("revoke") && (
+                {resource.capabilities.includes('revoke') && (
                   <Button
                     size="sm"
                     loading={busy}
-                    onClick={() => act("revoke", [member.subjectPersonId])}
+                    onClick={() => act('revoke', [member.subjectPersonId])}
                   >
                     Remove
                   </Button>
@@ -92,7 +92,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
             ))}
           </ul>
         )}
-        {resource.capabilities.includes("grant") && (
+        {resource.capabilities.includes('grant') && (
           <div className="flex items-end gap-2">
             <div className="flex-1">
               <Field
@@ -104,7 +104,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
             <Button
               variant="primary"
               loading={busy}
-              onClick={() => act("grant", [personId])}
+              onClick={() => act('grant', [personId])}
             >
               Add
             </Button>
@@ -117,7 +117,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
 
 export function ManagedResourcesPage() {
   const { data, error, loading } = useApiResource<{ resources: Managed[] }>(
-    "/api/portal/automate/managed-resources",
+    '/api/portal/automate/managed-resources',
   );
 
   return (

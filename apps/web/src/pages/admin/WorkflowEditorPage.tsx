@@ -1,7 +1,7 @@
-import { useState } from "react";
-import { Alert, Button, Field, Panel } from "@syntra/ui";
-import { PageHeader } from "./PageHeader.js";
-import { ApiError, api } from "../../session/api.js";
+import { useState } from 'react';
+import { Alert, Button, Field, Panel } from '@syntra/ui';
+import { PageHeader } from './PageHeader.js';
+import { ApiError, api } from '../../session/api.js';
 
 interface StagePreview {
   sequence: number;
@@ -15,16 +15,16 @@ interface StagePreview {
 }
 
 const DROP_REASON: Record<string, string> = {
-  subject: "they are the subject",
-  submitter: "they raised the request",
-  no_user: "no Syntra account",
-  inactive_user: "inactive account",
-  no_active_contract: "no contract in force",
+  subject: 'they are the subject',
+  submitter: 'they raised the request',
+  no_user: 'no Syntra account',
+  inactive_user: 'inactive account',
+  no_active_contract: 'no contract in force',
 };
 
 export function WorkflowEditorPage() {
-  const [workflowId, setWorkflowId] = useState("");
-  const [subjectPersonId, setSubjectPersonId] = useState("");
+  const [workflowId, setWorkflowId] = useState('');
+  const [subjectPersonId, setSubjectPersonId] = useState('');
   const [stages, setStages] = useState<StagePreview[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -32,9 +32,9 @@ export function WorkflowEditorPage() {
     setProblem(null);
     try {
       const result = await api<{ stages: StagePreview[] }>(
-        "/api/admin/automate/workflows/resolution-preview",
+        '/api/admin/automate/workflows/resolution-preview',
         {
-          method: "POST",
+          method: 'POST',
           body: JSON.stringify({
             workflowId,
             subjectPersonId,
@@ -47,7 +47,7 @@ export function WorkflowEditorPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : "That preview could not be run.",
+          : 'That preview could not be run.',
       );
     }
   };
@@ -90,22 +90,22 @@ export function WorkflowEditorPage() {
             >
               <p className="font-medium text-ink">
                 Stage {stage.sequence}: {stage.name} ({stage.selector}
-                {stage.usedFallback ? ", via the fallback" : ""})
+                {stage.usedFallback ? ', via the fallback' : ''})
               </p>
               <p className="text-muted">
-                {stage.approvers.length} valid:{" "}
-                {stage.approvers.map((a) => a.displayName).join(", ") ||
-                  "nobody"}
+                {stage.approvers.length} valid:{' '}
+                {stage.approvers.map((a) => a.displayName).join(', ') ||
+                  'nobody'}
               </p>
               {stage.dropped.length > 0 && (
                 <p className="text-muted">
-                  {stage.dropped.length} dropped:{" "}
+                  {stage.dropped.length} dropped:{' '}
                   {stage.dropped
                     .map(
                       (d) =>
                         `${d.displayName} (${DROP_REASON[d.reason] ?? d.reason})`,
                     )
-                    .join(", ")}
+                    .join(', ')}
                 </p>
               )}
               {stage.blocked && (

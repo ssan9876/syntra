@@ -1,8 +1,8 @@
-import { Link } from "react-router-dom";
-import { Alert, Empty, Panel, SkeletonRows, Status } from "@syntra/ui";
-import { AppShell } from "../../components/AppShell.js";
-import { useApiResource } from "../../session/use-api-resource.js";
-import { REQUEST_LABEL, REQUEST_TONE, when } from "./status.js";
+import { Link } from 'react-router-dom';
+import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { AppShell } from '../../components/AppShell.js';
+import { useApiResource } from '../../session/use-api-resource.js';
+import { REQUEST_LABEL, REQUEST_TONE, when } from './status.js';
 
 interface RequestRow {
   id: string;
@@ -14,7 +14,7 @@ interface RequestRow {
 
 export function MyRequestsPage() {
   const { data, error, loading } = useApiResource<{ requests: RequestRow[] }>(
-    "/api/portal/automate/requests",
+    '/api/portal/automate/requests',
   );
 
   return (
@@ -45,7 +45,7 @@ export function MyRequestsPage() {
                         to={`/requests/${row.id}`}
                         className="font-medium text-ink hover:text-primary"
                       >
-                        {row.product?.name ?? "Requested access"}
+                        {row.product?.name ?? 'Requested access'}
                       </Link>
                       <p className="text-sm text-muted">
                         Asked on {when(row.submittedAt)}
@@ -54,7 +54,7 @@ export function MyRequestsPage() {
                         <p className="text-sm text-muted">{row.statusReason}</p>
                       )}
                     </div>
-                    <Status tone={REQUEST_TONE[row.status] ?? "neutral"}>
+                    <Status tone={REQUEST_TONE[row.status] ?? 'neutral'}>
                       {REQUEST_LABEL[row.status] ?? row.status}
                     </Status>
                   </li>

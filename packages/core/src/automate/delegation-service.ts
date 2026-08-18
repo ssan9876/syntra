@@ -1,18 +1,18 @@
 // `Prisma` comes through `@syntra/db` (Ruling A-13): `packages/core` does not
 // declare `@prisma/client`, and not declaring it is what makes
 // `new PrismaClient()` unresolvable here.
-import { Prisma, withTenant, type TenantClient } from "@syntra/db";
-import { recordEvent } from "../audit/audit-service.js";
-import { hasPermission } from "../rbac/rbac-service.js";
-import { PERMISSIONS } from "../rbac/permissions.js";
+import { Prisma, withTenant, type TenantClient } from '@syntra/db';
+import { recordEvent } from '../audit/audit-service.js';
+import { hasPermission } from '../rbac/rbac-service.js';
+import { PERMISSIONS } from '../rbac/permissions.js';
 import {
   allSubjectAudienceFacts,
   automateSettings,
-} from "./catalog-service.js";
-import { audienceAdmits, type AudienceCondition } from "./audience.js";
-import { fulfilRequest, revokeGrant, type FulfilOptions } from "./fulfil.js";
-import { displayNames, enqueueOutbox, recipientsForPersons } from "./notify.js";
-import { LIVE_GRANT_STATUSES, type ResourceType } from "./types.js";
+} from './catalog-service.js';
+import { audienceAdmits, type AudienceCondition } from './audience.js';
+import { fulfilRequest, revokeGrant, type FulfilOptions } from './fulfil.js';
+import { displayNames, enqueueOutbox, recipientsForPersons } from './notify.js';
+import { LIVE_GRANT_STATUSES, type ResourceType } from './types.js';
 
 export class DelegationRefusedError extends Error {
   constructor(
@@ -20,18 +20,18 @@ export class DelegationRefusedError extends Error {
     message: string,
   ) {
     super(message);
-    this.name = "DelegationRefusedError";
+    this.name = 'DelegationRefusedError';
   }
 }
 
 export type ResourceCapability =
-  "view_members" | "approve" | "grant" | "revoke";
+  'view_members' | 'approve' | 'grant' | 'revoke';
 
 export const RESOURCE_CAPABILITIES: readonly ResourceCapability[] = [
-  "view_members",
-  "approve",
-  "grant",
-  "revoke",
+  'view_members',
+  'approve',
+  'grant',
+  'revoke',
 ];
 
 const DAY_MS = 86_400_000;
@@ -78,28 +78,28 @@ export async function createApprovalDelegation(
         !(await hasPermission(tx, actorUserId, PERMISSIONS.AUTOMATE_MANAGE))
       ) {
         throw new DelegationRefusedError(
-          "not-permitted",
-          "You can record an absence for yourself; delegating on somebody else’s behalf needs automate.manage.",
+          'not-permitted',
+          'You can record an absence for yourself; delegating on somebody else’s behalf needs automate.manage.',
         );
       }
     }
 
     if (input.delegatorPersonId === input.delegatePersonId) {
       throw new DelegationRefusedError(
-        "self",
-        "A person cannot delegate to themselves.",
+        'self',
+        'A person cannot delegate to themselves.',
       );
     }
     if (input.endsAt <= input.startsAt) {
       throw new DelegationRefusedError(
-        "window",
-        "A delegation ends after it starts.",
+        'window',
+        'A delegation ends after it starts.',
       );
     }
     const days = (input.endsAt.getTime() - input.startsAt.getTime()) / DAY_MS;
     if (days > settings.maxDelegationDays) {
       throw new DelegationRefusedError(
-        "too-long",
+        'too-long',
         `A delegation may run for at most ${settings.maxDelegationDays} days. An indefinite delegation is a permanent transfer of authority that nobody ever re-decides.`,
       );
     }
@@ -118,8 +118,8 @@ export async function createApprovalDelegation(
     });
     if (chained !== null) {
       throw new DelegationRefusedError(
-        "not-transitive",
-        "Delegation is not transitive: one of these two already holds a delegation, and chaining them would route approvals to somebody neither party chose.",
+        'not-transitive',
+        'Delegation is not transitive: one of these two already holds a delegation, and chaining them would route approvals to somebody neither party chose.',
       );
     }
 
@@ -137,10 +137,10 @@ export async function createApprovalDelegation(
 
     await recordEvent(tx, {
       actorUserId,
-      action: "automate.delegation.create",
-      targetType: "ApprovalDelegation",
+      action: 'automate.delegation.create',
+      targetType: 'ApprovalDelegation',
       targetId: created.id,
-      outcome: "success",
+      outcome: 'success',
       sourceIp: null,
       payload: {
         delegatorPersonId: input.delegatorPersonId,
@@ -165,14 +165,14 @@ export async function createApprovalDelegation(
     await enqueueOutbox(
       tx,
       recipients.map((r) => ({
-        template: "automate-delegation-started" as const,
+        template: 'automate-delegation-started' as const,
         to: r.email,
         vars: {
           displayName: r.displayName,
           delegatorName:
-            names.get(`person:${input.delegatorPersonId}`) ?? "the delegator",
+            names.get(`person:${input.delegatorPersonId}`) ?? 'the delegator',
           delegateName:
-            names.get(`person:${input.delegatePersonId}`) ?? "the delegate",
+            names.get(`person:${input.delegatePersonId}`) ?? 'the delegate',
           endsAt: input.endsAt.toDateString(),
         },
         requestId: null,
@@ -202,10 +202,10 @@ export async function endApprovalDelegation(
     });
     await recordEvent(tx, {
       actorUserId,
-      action: "automate.delegation.end",
-      targetType: "ApprovalDelegation",
+      action: 'automate.delegation.end',
+      targetType: 'ApprovalDelegation',
       targetId: delegationId,
-      outcome: "success",
+      outcome: 'success',
       sourceIp: null,
       payload: {
         delegatorPersonId: delegation.delegatorPersonId,
@@ -222,16 +222,16 @@ export async function endApprovalDelegation(
     await enqueueOutbox(
       tx,
       recipients.map((r) => ({
-        template: "automate-delegation-ended" as const,
+        template: 'automate-delegation-ended' as const,
         to: r.email,
         vars: {
           displayName: r.displayName,
           delegatorName:
             names.get(`person:${delegation.delegatorPersonId}`) ??
-            "the delegator",
+            'the delegator',
           delegateName:
             names.get(`person:${delegation.delegatePersonId}`) ??
-            "the delegate",
+            'the delegate',
           endsAt: now.toDateString(),
         },
         requestId: null,
@@ -259,8 +259,8 @@ export async function upsertResourceDelegation(
   return withTenant(tenantId, async (tx) => {
     if (input.capabilities.length === 0) {
       throw new DelegationRefusedError(
-        "no-capabilities",
-        "A delegation with no capabilities does nothing; remove it instead.",
+        'no-capabilities',
+        'A delegation with no capabilities does nothing; remove it instead.',
       );
     }
     // Applications and local groups only.
@@ -278,10 +278,10 @@ export async function upsertResourceDelegation(
     // section 14 is written entirely about groups a team lead owns, and a
     // target entitlement is Provision's to grant, behind a product and an
     // approval chain. `resourceParam` in the contracts is narrowed to match.
-    if (input.resourceType === "entitlement") {
+    if (input.resourceType === 'entitlement') {
       throw new DelegationRefusedError(
-        "entitlement-not-delegable",
-        "A target entitlement cannot be delegated. It is granted through a catalog product and a Provision run, so that the approval and the target write stay in one place; delegate the application or the local group instead.",
+        'entitlement-not-delegable',
+        'A target entitlement cannot be delegated. It is granted through a catalog product and a Provision run, so that the approval and the target write stay in one place; delegate the application or the local group instead.',
       );
     }
     // Scope is per resource, never per type. There is no "manage all groups"
@@ -311,10 +311,10 @@ export async function upsertResourceDelegation(
 
     await recordEvent(tx, {
       actorUserId,
-      action: "automate.resource_delegation.upsert",
-      targetType: "ResourceDelegation",
+      action: 'automate.resource_delegation.upsert',
+      targetType: 'ResourceDelegation',
       targetId: row.id,
-      outcome: "success",
+      outcome: 'success',
       sourceIp: null,
       payload: {
         resourceType: input.resourceType,
@@ -395,8 +395,8 @@ async function delegationFor(
   );
   if (match === undefined || !match.capabilities.includes(capability)) {
     throw new DelegationRefusedError(
-      "not-permitted",
-      "You do not manage that resource, or not in that way.",
+      'not-permitted',
+      'You do not manage that resource, or not in that way.',
     );
   }
   return match;
@@ -432,7 +432,7 @@ export async function delegatedGrant(
     const subjects = [...new Set(input.subjectPersonIds)];
     if (subjects.length > settings.delegatedBulkLimit) {
       throw new DelegationRefusedError(
-        "too-many",
+        'too-many',
         `A delegated act may name at most ${settings.delegatedBulkLimit} people. For more than that, ask an administrator.`,
       );
     }
@@ -441,10 +441,10 @@ export async function delegatedGrant(
     // rather than only at the configuration: a row written before that guard
     // existed must not produce a grant that violates
     // `access_grant_target_matches_type`.
-    if (input.resourceType === "entitlement") {
+    if (input.resourceType === 'entitlement') {
       throw new DelegationRefusedError(
-        "entitlement-not-delegable",
-        "A target entitlement cannot be granted by a delegated manager; it goes through a catalog product and a Provision run.",
+        'entitlement-not-delegable',
+        'A target entitlement cannot be granted by a delegated manager; it goes through a catalog product and a Provision run.',
       );
     }
 
@@ -453,19 +453,19 @@ export async function delegatedGrant(
       input.actingPersonId,
       input.resourceType,
       input.resourceId,
-      "grant",
+      'grant',
       now,
     );
 
-    if (input.resourceType === "group") {
+    if (input.resourceType === 'group') {
       const group = await tx.group.findUniqueOrThrow({
         where: { id: input.resourceId },
         include: { source: { select: { name: true } } },
       });
       if (group.sourceId !== null) {
         throw new DelegationRefusedError(
-          "group-is-synced",
-          `${group.name} is owned by the directory source ${group.source?.name ?? "unknown"}, which rewrites its membership on every run.`,
+          'group-is-synced',
+          `${group.name} is owned by the directory source ${group.source?.name ?? 'unknown'}, which rewrites its membership on every run.`,
         );
       }
     }
@@ -480,7 +480,7 @@ export async function delegatedGrant(
       },
     });
     const condition =
-      productGrant?.product.status === "active"
+      productGrant?.product.status === 'active'
         ? (productGrant.product.audienceCondition as AudienceCondition | null)
         : delegation.audienceCondition;
 
@@ -509,8 +509,8 @@ export async function delegatedGrant(
         !audienceAdmits(condition, facts.contracts, facts)
       ) {
         throw new DelegationRefusedError(
-          "outside-audience",
-          "One of these people is outside the audience for this resource, so it is not yours to grant them.",
+          'outside-audience',
+          'One of these people is outside the audience for this resource, so it is not yours to grant them.',
         );
       }
 
@@ -521,12 +521,12 @@ export async function delegatedGrant(
           subjectPersonId,
           requestedByUserId: input.actingUserId,
           requestedByPersonId: input.actingPersonId,
-          origin: "delegated_admin",
+          origin: 'delegated_admin',
           resourceType: input.resourceType,
           resourceId: input.resourceId,
           justification: input.justification,
           requestedDurationDays: input.durationDays,
-          status: "approved",
+          status: 'approved',
           decidedAt: now,
         },
       });
@@ -541,10 +541,10 @@ export async function delegatedGrant(
       });
       await recordEvent(tx, {
         actorUserId: input.actingUserId,
-        action: "automate.delegated.grant",
-        targetType: "AccessRequest",
+        action: 'automate.delegated.grant',
+        targetType: 'AccessRequest',
         targetId: request.id,
-        outcome: "success",
+        outcome: 'success',
         sourceIp: null,
         payload: {
           delegationId: delegation.delegationId,
@@ -590,7 +590,7 @@ export async function delegatedRevoke(
     const subjects = [...new Set(input.subjectPersonIds)];
     if (subjects.length > settings.delegatedBulkLimit) {
       throw new DelegationRefusedError(
-        "too-many",
+        'too-many',
         `A delegated act may name at most ${settings.delegatedBulkLimit} people. For more than that, ask an administrator.`,
       );
     }
@@ -599,7 +599,7 @@ export async function delegatedRevoke(
       input.actingPersonId,
       input.resourceType,
       input.resourceId,
-      "revoke",
+      'revoke',
       now,
     );
 
@@ -620,7 +620,7 @@ export async function delegatedRevoke(
       tenantId,
       input.actingUserId,
       grantId,
-      "removed by the resource manager",
+      'removed by the resource manager',
       options,
     );
   }
