@@ -973,6 +973,92 @@ describe('applyProvisionRun', () => {
     expect(seen).toContain('in_flight');
   });
 
+  it('leaves a landed create in_flight when its outcome could not be recorded', async () => {
+    /**
+     * A failure to RECORD an action is not the same event as a failure to
+     * PERFORM it, and this code used to collapse them. The account is at the
+     * target; the throw came out of step 3 — Prisma's P2028 on the finish
+     * transaction is the ordinary way — and `failed` loses the anchor and the
+     * sealed password, so every later run re-proposes the create into a
+     * permanent `conflict`. `in_flight` is the status that exists for "we do
+     * not know whether this landed", and `resolveInFlightActions` is what
+     * resolves it against the target on the next run.
+     */
+    const landsThenLosesTheAnswer = {
+      test: (c: never) => target.test(c),
+      discoverSchema: (c: never) => target.discoverSchema(c),
+      listEntitlements: (c: never) => target.listEntitlements(c),
+      listContainers: (c: never) => target.listContainers(c),
+      readEntitlementMembers: (c: never, dn: string) =>
+        target.readEntitlementMembers(c, dn),
+      read: (c: never) => target.read(c),
+      write: async (c: never, operation: WriteOperation) => {
+        const answer = await target.write(c, operation as never);
+        if (operation.op === 'create_account') {
+          throw new Error(
+            'Transaction API error: Transaction not found (P2028)',
+          );
+        }
+        return answer;
+      },
+    };
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: landsThenLosesTheAnswer as never,
+    });
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: landsThenLosesTheAnswer as never,
+      now: NOW,
+      sleep: noSleep,
+    });
+
+    const create = (await actionsOf(run.id)).find(
+      (a) => a.actionType === 'create_account',
+    )!;
+    expect(create.status).toBe('in_flight');
+    expect(create.message).toMatch(/whether it landed at the target is unknown/);
+    expect(result.inFlight).toBe(1);
+    expect(result.failed).toBe(0);
+    // It really did land, which is the whole point: the object is there and
+    // carries this action's provenance, so the next run adopts it rather than
+    // creating a second one.
+    expect(target.objects.size).toBe(1);
+    // And the run is not called `applied`, because an action nobody resolved
+    // is not an action that finished.
+    expect(result.status).toBe('partially_applied');
+  });
+
+  it('records the actions it deferred for want of confirmation', async () => {
+    // Ruling P4. `skipped` used to be computed, returned and discarded, and on
+    // an unattended `autoApply` run that is the whole of "the target looks
+    // healthy and is doing nothing".
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const create = (await actionsOf(run.id)).find(
+      (a) => a.actionType === 'create_account',
+    )!;
+    await withTenant(tenantId, (tx) =>
+      tx.provisionAction.update({
+        where: { id: create.id },
+        data: { requiresConfirmation: true },
+      }),
+    );
+    // Applied without a confirmation, which is what a schedule does.
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      connector: target as never,
+      now: NOW,
+      sleep: noSleep,
+    });
+    expect(result.deferred).toBe(1);
+    const after = (await actionsOf(run.id)).find((a) => a.id === create.id)!;
+    expect(after.status).toBe('proposed');
+    expect(after.message).toMatch(/requires an explicit confirmation/);
+  });
+
   it('escapes the correlation key it renders into a distinguished name', async () => {
     // Ruling P22, at the one site left that builds a DN outside
     // `renderContainer`. The connector escapes the key when IT builds the DN

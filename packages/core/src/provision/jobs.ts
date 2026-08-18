@@ -364,6 +364,30 @@ export async function runProvisionJob(
       ...connectorOption,
       ...(options.transport === undefined ? {} : { transport: options.transport }),
     });
+    // Ruling P4, on the one path where nobody is watching. An unattended run
+    // cannot confirm anything, so every action that requires confirmation —
+    // a rename, a re-enable outside the window, a re-create of a vanished
+    // account — is deferred; and a deferral nothing records is how a target
+    // looks healthy while doing nothing. The actions themselves carry a
+    // message and the run reaches `partially_applied` rather than `applied`;
+    // this is the event that says how many, on a schedule nobody is at.
+    if (result.deferred > 0) {
+      await withTenant(payload.tenantId, (tx) =>
+        recordEvent(tx, {
+          actorUserId: null,
+          action: 'provision.run.actions_deferred',
+          targetType: 'ProvisionRun',
+          targetId: run.id,
+          outcome: 'failure',
+          sourceIp: null,
+          payload: {
+            deferred: result.deferred,
+            reason:
+              'these actions require an explicit confirmation, and a scheduled run confirms nothing',
+          },
+        }),
+      );
+    }
     if (result.applied > 0) {
       await claimSyntraUsers(payload.tenantId, payload.targetSystemId);
       // A freshly provisioned person cannot sign in until the next directory

@@ -402,6 +402,27 @@ export async function applyProvisionRun(
   applied: number;
   failed: number;
   pendingRetry: number;
+  /**
+   * Actions whose outcome this apply could not record.
+   *
+   * The write was attempted; whether it landed is unknown, and the row is left
+   * `in_flight` for `resolveInFlightActions` to ask the target about. Counted
+   * separately from `failed` because a failure to RECORD an action is not the
+   * same event as a failure to PERFORM one.
+   */
+  inFlight: number;
+  /**
+   * Actions this apply DEFERRED because they require confirmation and it was
+   * not confirmed — a rename, a re-enable outside the window, a re-create of a
+   * vanished account.
+   *
+   * Distinct from `skipped`, which is every action left `proposed` however it
+   * got there, including the ones an `only` list deliberately excluded. A
+   * scheduled `autoApply` run is where this number matters: it is the whole of
+   * "the target looks healthy and is doing nothing", and it used to be
+   * computed, returned and discarded.
+   */
+  deferred: number;
   skipped: number;
 }> {
   const sleep = options.sleep ?? defaultSleep;
@@ -497,13 +518,19 @@ export async function applyProvisionRun(
   let applied = 0;
   let failed = 0;
   let pendingRetry = 0;
+  let inFlight = 0;
+  const deferredIds: string[] = [];
   let heartbeatAt = Date.now();
 
   for (const action of actions) {
     if (action.requiresConfirmation && !confirmed) {
       // A rename, a re-enable outside the window, or a re-create of a vanished
       // account. Never auto-applied, and never unlocked by a caller that
-      // merely passed the parameter.
+      // merely passed the parameter — but recorded rather than dropped. Ruling
+      // P4 exists because a silent skip is how a target looks healthy while
+      // doing nothing, and on an unattended `autoApply` run nobody is watching
+      // this happen.
+      deferredIds.push(action.id);
       continue;
     }
 
@@ -524,7 +551,7 @@ export async function applyProvisionRun(
       );
     }
 
-    let outcome: 'applied' | 'failed' | 'pending_retry' | 'conflict';
+    let outcome: ActionOutcome;
     try {
       outcome = await applyOneAction(tenantId, provider, action, {
         connector,
@@ -547,10 +574,24 @@ export async function applyProvisionRun(
 
     if (outcome === 'applied') applied += 1;
     else if (outcome === 'pending_retry') pendingRetry += 1;
+    else if (outcome === 'in_flight') inFlight += 1;
     else failed += 1;
   }
 
   return withTenant(tenantId, async (tx) => {
+    // Said on the actions themselves, which is where the run's own screen
+    // shows them. A row left `proposed` on a finished run with no message is
+    // indistinguishable from one nobody got to.
+    if (deferredIds.length > 0) {
+      await tx.provisionAction.updateMany({
+        where: { runId, id: { in: deferredIds }, status: 'proposed' },
+        data: {
+          message:
+            'not attempted: this action requires an explicit confirmation and this run was not confirmed',
+        },
+      });
+    }
+
     const remaining = await tx.provisionAction.count({
       where: { runId, status: { in: ['proposed', 'pending_retry', 'in_flight'] } },
     });
@@ -560,6 +601,10 @@ export async function applyProvisionRun(
     // A run reaches `applied` only when every action it proposed reached a
     // terminal state and none failed.
     const status = remaining === 0 && anyFailed === 0 ? 'applied' : 'partially_applied';
+    const skipped = await tx.provisionAction.count({
+      where: { runId, status: 'proposed' },
+    });
+    const deferred = deferredIds.length;
 
     await tx.provisionRun.update({
       where: { id: runId },
@@ -589,13 +634,10 @@ export async function applyProvisionRun(
       targetId: runId,
       outcome: status === 'applied' ? 'success' : 'failure',
       sourceIp: null,
-      payload: { status, applied, failed, pendingRetry },
+      payload: { status, applied, failed, pendingRetry, inFlight, deferred, skipped },
     });
 
-    const skipped = await tx.provisionAction.count({
-      where: { runId, status: 'proposed' },
-    });
-    return { status, applied, failed, pendingRetry, skipped };
+    return { status, applied, failed, pendingRetry, inFlight, deferred, skipped };
   });
 }
 
@@ -611,13 +653,36 @@ interface ApplyOneOptions {
   transport?: Transport;
 }
 
-/** One action, all three steps. Throws only what the caller records as failed. */
+type ActionOutcome =
+  | 'applied'
+  | 'failed'
+  | 'pending_retry'
+  | 'conflict'
+  | 'in_flight';
+
+/**
+ * One action, all three steps.
+ *
+ * Throws only what the caller records as failed, and it stops throwing the
+ * moment the intent has been committed. **A failure to RECORD an action is not
+ * the same event as a failure to PERFORM it.** Once step 1 has committed, the
+ * action is `in_flight` and the write either has happened or is about to; a
+ * throw out of step 2 or step 3 — a socket that hung up, Prisma's P2028 on the
+ * finish transaction — leaves the outcome genuinely unknown. Recording
+ * `failed` there is a claim, and on a create it is a wrong one: the account
+ * landed at the target, and `failed` loses its anchor and its sealed password,
+ * so every later run re-proposes the create into a permanent `conflict`.
+ *
+ * `in_flight` is the state that exists for "we do not know whether this
+ * landed", and `resolveInFlightActions` is the machinery that asks the target
+ * and resolves it on the next run.
+ */
 async function applyOneAction(
   tenantId: string,
   provider: MasterKeyProvider,
   action: ActionRow,
   options: ApplyOneOptions,
-): Promise<'applied' | 'failed' | 'pending_retry' | 'conflict'> {
+): Promise<ActionOutcome> {
   if ((SYNTRA_ONLY_ACTION_TYPES as readonly string[]).includes(action.actionType)) {
     // No connector, no in-flight window: one transaction with its own audit
     // event, in `syntra-user.ts`, which checks the type and the status itself.
@@ -661,107 +726,160 @@ async function applyOneAction(
   let result: WriteResult;
   let throttledForMs = 0;
   let throttledAttempts = 0;
+  // Flipped by step 1's commit and never back. Everything after that point is
+  // inside the honest gap between Syntra and the target.
+  let intentCommitted = false;
 
-  for (;;) {
-    const attempt = attempts + 1;
+  try {
+    for (;;) {
+      const attempt = attempts + 1;
 
-    // Step 1: mark in_flight and record the INTENT, committed before the call.
-    // This is what makes the gap observable.
-    await withTenant(tenantId, async (tx) => {
-      await tx.provisionAction.update({
-        where: { id: action.id },
-        data: { status: 'in_flight' },
+      // Step 1: mark in_flight and record the INTENT, committed before the call.
+      // This is what makes the gap observable.
+      await withTenant(tenantId, async (tx) => {
+        await tx.provisionAction.update({
+          where: { id: action.id },
+          data: { status: 'in_flight' },
+        });
+        await recordEvent(tx, {
+          actorUserId: options.actorUserId,
+          action: 'provision.action.intent',
+          targetType: 'ProvisionAction',
+          targetId: action.id,
+          outcome: 'success',
+          sourceIp: null,
+          payload: { actionType: action.actionType, attempt },
+        });
       });
-      await recordEvent(tx, {
-        actorUserId: options.actorUserId,
-        action: 'provision.action.intent',
-        targetType: 'ProvisionAction',
-        targetId: action.id,
-        outcome: 'success',
-        sourceIp: null,
-        payload: { actionType: action.actionType, attempt },
-      });
-    });
+      intentCommitted = true;
 
-    // Step 2: the connector call. No transaction. No connection held.
-    result = await options.connector.write(options.config as never, operation);
+      // Step 2: the connector call. No transaction. No connection held.
+      result = await options.connector.write(options.config as never, operation);
 
-    if (result.ok && operation.op === 'create_account' && result.anchor === undefined) {
-      // A create with no anchor is an object Syntra can never address again:
-      // the next run cannot match it to the row it reserved, proposes another
-      // create, and the connector answers `conflict` — permanently, because
-      // the object carries a different action's provenance marker. Retried
-      // rather than recorded: the connector's own adopt-by-provenance path
-      // returns the anchor once the directory catches up.
-      result = {
-        ok: false,
-        message:
-          'the target reported the account was created and returned no anchor for it, so Syntra cannot address the object again',
-        failure: 'transient',
-      };
-    }
-
-    if (result.ok) {
-      attempts = attempt;
-      break;
-    }
-
-    if (result.failure === 'throttled') {
-      // Not counted against maxAttempts: a throttle is the target asking for
-      // patience, not the operation being wrong. Bounded all the same — see
-      // THROTTLE_BUDGET_MS.
-      const wait = throttleWait(result.retryAfterMs, attempt);
-      throttledAttempts += 1;
-      if (
-        throttledAttempts >= MAX_THROTTLED_ATTEMPTS ||
-        throttledForMs + wait > THROTTLE_BUDGET_MS
-      ) {
-        attempts = attempt;
-        // A retryable failure, so `finish` records `pending_retry`: the action
-        // is not wrong, the target is busy, and the next run for this target
-        // picks it up provided the plan still wants it.
+      if (result.ok && operation.op === 'create_account' && result.anchor === undefined) {
+        // A create with no anchor is an object Syntra can never address again:
+        // the next run cannot match it to the row it reserved, proposes another
+        // create, and the connector answers `conflict` — permanently, because
+        // the object carries a different action's provenance marker. Retried
+        // rather than recorded: the connector's own adopt-by-provenance path
+        // returns the anchor once the directory catches up.
         result = {
           ok: false,
-          message: `the target throttled this action ${throttledAttempts} times over ${Math.round(
-            throttledForMs / 1000,
-          )}s and did not accept it; the next run for this target picks it up`,
+          message:
+            'the target reported the account was created and returned no anchor for it, so Syntra cannot address the object again',
           failure: 'transient',
         };
+      }
+
+      if (result.ok) {
+        attempts = attempt;
         break;
       }
-      throttledForMs += wait;
-      await options.sleep(wait);
-      continue;
+
+      if (result.failure === 'throttled') {
+        // Not counted against maxAttempts: a throttle is the target asking for
+        // patience, not the operation being wrong. Bounded all the same — see
+        // THROTTLE_BUDGET_MS.
+        const wait = throttleWait(result.retryAfterMs, attempt);
+        throttledAttempts += 1;
+        if (
+          throttledAttempts >= MAX_THROTTLED_ATTEMPTS ||
+          throttledForMs + wait > THROTTLE_BUDGET_MS
+        ) {
+          attempts = attempt;
+          // A retryable failure, so `finish` records `pending_retry`: the action
+          // is not wrong, the target is busy, and the next run for this target
+          // picks it up provided the plan still wants it.
+          result = {
+            ok: false,
+            message: `the target throttled this action ${throttledAttempts} times over ${Math.round(
+              throttledForMs / 1000,
+            )}s and did not accept it; the next run for this target picks it up`,
+            failure: 'transient',
+          };
+          break;
+        }
+        throttledForMs += wait;
+        await options.sleep(wait);
+        continue;
+      }
+
+      attempts = attempt;
+      if (!isRetryable(result.failure)) break;
+      if (attempts >= options.maxAttempts) break;
+      await options.sleep(backoffMs(attempts));
     }
 
-    attempts = attempt;
-    if (!isRetryable(result.failure)) break;
-    if (attempts >= options.maxAttempts) break;
-    await options.sleep(backoffMs(attempts));
+    // Step 3: the outcome, the state change and the RESULT event, together.
+    return await finish(tenantId, action.id, result, {
+      attempts,
+      accountId: context.accountId,
+      entitlementId: action.entitlementId,
+      actorUserId: options.actorUserId,
+      provider,
+      targetSystemId: options.targetSystemId,
+      // Exactly what the connector was told to strip, so what Syntra records
+      // revoked and what it actually removed cannot diverge.
+      strippedEntitlementIds: context.managed.map((m) => m.entitlementId),
+      ...(action.actionType === 'create_account'
+        ? {
+            initialPassword,
+            delivery: (options.profile?.initialPasswordDelivery ?? 'vaultOnly') as
+              | 'manager'
+              | 'personalEmail'
+              | 'vaultOnly',
+            ...(options.transport === undefined ? {} : { transport: options.transport }),
+          }
+        : {}),
+    });
+  } catch (cause) {
+    // Nothing was attempted, so the caller's `failed` is the honest answer.
+    if (!intentCommitted) throw cause;
+    return recordActionUnresolved(tenantId, action.id, options.actorUserId, cause);
   }
+}
 
-  // Step 3: the outcome, the state change and the RESULT event, together.
-  return finish(tenantId, action.id, result, {
-    attempts,
-    accountId: context.accountId,
-    entitlementId: action.entitlementId,
-    actorUserId: options.actorUserId,
-    provider,
-    targetSystemId: options.targetSystemId,
-    // Exactly what the connector was told to strip, so what Syntra records
-    // revoked and what it actually removed cannot diverge.
-    strippedEntitlementIds: context.managed.map((m) => m.entitlementId),
-    ...(action.actionType === 'create_account'
-      ? {
-          initialPassword,
-          delivery: (options.profile?.initialPasswordDelivery ?? 'vaultOnly') as
-            | 'manager'
-            | 'personalEmail'
-            | 'vaultOnly',
-          ...(options.transport === undefined ? {} : { transport: options.transport }),
-        }
-      : {}),
-  });
+/**
+ * An action whose apply threw AFTER its intent was committed.
+ *
+ * Left `in_flight` — deliberately, and this is the one place in the apply that
+ * leaves a row non-terminal on purpose. The write may have landed; the next
+ * run's `resolveInFlightActions` reads the target and answers the question
+ * this process cannot. Marking it `failed` would discard a landed create's
+ * anchor and its sealed password and re-propose the create into a permanent
+ * `conflict`; marking it `applied` would claim something nobody observed.
+ *
+ * Best-effort, and it swallows its own failure. The likeliest cause of getting
+ * here is that the database has just gone away, which is also what would make
+ * this write fail; the row is already `in_flight` from step 1, so the state
+ * that matters is correct even if the message never lands.
+ */
+async function recordActionUnresolved(
+  tenantId: string,
+  actionId: string,
+  actorUserId: string | null,
+  cause: unknown,
+): Promise<'in_flight'> {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  await withTenant(tenantId, async (tx) => {
+    await tx.provisionAction.update({
+      where: { id: actionId },
+      // The STATUS IS NOT TOUCHED. It is `in_flight` and stays `in_flight`.
+      data: {
+        message: `this apply could not record the outcome of this action, so whether it landed at the target is unknown until the next run resolves it: ${message}`,
+      },
+    });
+    await recordEvent(tx, {
+      actorUserId,
+      action: 'provision.action.result',
+      targetType: 'ProvisionAction',
+      targetId: actionId,
+      outcome: 'failure',
+      sourceIp: null,
+      payload: { status: 'in_flight', message },
+    });
+  }).catch(() => undefined);
+  return 'in_flight';
 }
 
 /**
@@ -834,7 +952,16 @@ async function readActionContext(
   });
 }
 
-/** An action whose apply threw. Marked failed so the run can carry on. */
+/**
+ * An action whose apply threw **before its intent was committed**.
+ *
+ * Marked failed so the run can carry on. Nothing was attempted at the target:
+ * the throw came from resolving the action's context, from expressing it as a
+ * write operation, or from `applySyntraUserAction`, which touches no connector
+ * at all. A throw from after step 1's commit goes to `recordActionUnresolved`
+ * instead and is left `in_flight`, because then the answer is genuinely not
+ * known.
+ */
 async function recordActionThrew(
   tenantId: string,
   actionId: string,

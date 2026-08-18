@@ -891,6 +891,8 @@ describe('registerProvisionJobs — what the registration passes, and what arriv
     applied: 0,
     failed: 0,
     pendingRetry: 0,
+    inFlight: 0,
+    deferred: 0,
     skipped: 0,
   });
 
