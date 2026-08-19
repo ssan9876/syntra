@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
-import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { asDatabaseSuperuser, resetDatabase } from '@syntra/db/src/test-support.js';
+import { recordEvent } from '../audit/audit-service.js';
+import { verifyIncremental } from './audit-integrity.js';
 import type { CollectedTenant } from './collect.js';
 import { SnapshotNotReadableError, readableSnapshot } from './readable.js';
 import {
@@ -452,5 +454,56 @@ describe('pruneSnapshots', () => {
     );
     const result = await pruneSnapshots(tenantId, { now: NOW, retentionDays: 30 });
     expect(result).toEqual({ pruned: 0, retainedForReference: 1 });
+  });
+});
+
+describe('the audit integrity finding and the nightly detect stage (C-a)', () => {
+  it('does NOT resolve an audit_chain_broken finding on the next snapshot build', async () => {
+    // C1's fix and C5's fix meet here. The detect stage sweeps STANDING_KINDS
+    // with the drafts it computed; `coverage_gap` is a member and its only
+    // producer emits `subjectRefType: 'source'`. While the audit verifier
+    // raised its two `critical` findings under `coverage_gap`, EVERY nightly
+    // build resolved them — `resolvedBySnapshotId` naming a snapshot that had
+    // read no audit events at all. Slice 1's headline integrity output went
+    // quiet overnight, exactly as its findings output did before C1.
+    //
+    // No individual finding asks this question, because each was verified
+    // against the world before the other existed (Ruling G-11).
+    await withTenant(tenantId, async (tx) => {
+      for (let i = 0; i < 5; i += 1) {
+        await recordEvent(tx, {
+          actorUserId: null,
+          action: `govern.test.event.${i}`,
+          targetType: 'Test',
+          targetId: null,
+          outcome: 'success',
+          sourceIp: null,
+          payload: { i },
+        });
+      }
+    });
+    await asDatabaseSuperuser(
+      `UPDATE "AuditEvent" SET action = 'tampered' WHERE "tenantId" = $1 AND sequence = 2`,
+      [tenantId],
+    );
+    await verifyIncremental(tenantId, { now: NOW });
+
+    const raised = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'audit_chain_broken' } }),
+    );
+    expect(raised.status).toBe('open');
+
+    // A whole, ordinary nightly build. It runs the detect stage and its sweep.
+    const built = await buildSnapshot(tenantId, {
+      now: NOW,
+      collect: async () => emptyCollection(),
+    });
+
+    const after = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findUniqueOrThrow({ where: { id: raised.id } }),
+    );
+    expect(after.status).toBe('open');
+    expect(after.resolvedBySnapshotId).toBeNull();
+    expect(after.resolvedBySnapshotId).not.toBe(built.snapshotId);
   });
 });

@@ -23,12 +23,16 @@ import {
   detectPrivilegedUncertified,
   detectStaleSources,
   detectUnattributableHoldings,
+  detectUnexplainedGains,
+  reconcileFindings,
   type DetectHolding,
 } from './finding-service.js';
-// `reconcileFindings` is deliberately NOT imported here. The build closes
-// standing findings through `reconcileLinkedFindings`, which also carries the
-// Provision `DriftFinding` linkage; a bare reconcile would close a Govern
-// finding while leaving the drift row it aggregates open.
+// The STANDING kinds are closed through `reconcileLinkedFindings`, which also
+// carries the Provision `DriftFinding` linkage: a bare reconcile there would
+// close a Govern finding while leaving the drift row it aggregates open.
+// `reconcileFindings` is still used, for `unexplained_gain` alone -- that kind
+// has no drift counterpart, and it is reconciled over the gains of THIS
+// snapshot rather than the tenant.
 import { adoptDriftClosures, reconcileLinkedFindings } from './drift-link.js';
 import type { FindingKind } from './types.js';
 
@@ -398,6 +402,77 @@ export async function buildSnapshot(
           }),
         );
       }
+
+      // Cross-reference each gain to the audit event that explains it, where
+      // one exists. `explained = false` on a gain is the most valuable row this
+      // system produces: access appeared, and SYNTRA DID NOT CAUSE IT. It is
+      // only meaningful once this pass has run, which is why
+      // `detectUnexplainedGains` is called here rather than in the detect stage.
+      await withTenant(tenantId, async (tx) => {
+        const gains = await tx.holdingEvent.findMany({
+          where: { toSnapshotId: snapshotId, change: 'gained' },
+          select: { id: true, personId: true, resourceId: true },
+        });
+        if (gains.length === 0) return;
+
+        const since = previous === null ? new Date(0) : collected.asOf;
+        const candidates = await tx.auditEvent.findMany({
+          where: {
+            occurredAt: { gte: new Date(since.getTime() - 86_400_000 * 2) },
+            action: {
+              in: [
+                'provision.apply.grant_entitlement',
+                'automate.grant.fulfilled',
+                'access.assignment.create',
+                'directory.group.add_member',
+                'rbac.role.assign',
+              ],
+            },
+          },
+          select: { sequence: true, targetId: true, payload: true },
+        });
+        const bySubject = new Map<string, number>();
+        for (const event of candidates) {
+          const payload = event.payload as Record<string, unknown>;
+          const person = typeof payload['personId'] === 'string' ? payload['personId'] : null;
+          const resource =
+            typeof payload['resourceId'] === 'string'
+              ? payload['resourceId']
+              : typeof payload['entitlementId'] === 'string'
+                ? payload['entitlementId']
+                : null;
+          if (person !== null && resource !== null) bySubject.set(`${person}|${resource}`, event.sequence);
+        }
+
+        for (const gain of gains) {
+          if (gain.personId === null) continue;
+          const sequence = bySubject.get(`${gain.personId}|${gain.resourceId}`);
+          if (sequence === undefined) continue;
+          await tx.holdingEvent.update({
+            where: { id: gain.id },
+            data: { auditEventSequence: sequence, explained: true },
+          });
+        }
+      });
+
+      const gainRows = await withTenant(tenantId, (tx) =>
+        tx.holdingEvent.findMany({
+          where: { toSnapshotId: snapshotId },
+          select: {
+            subjectKey: true, systemId: true, resourceKind: true,
+            resourceId: true, resourceName: true, change: true, explained: true,
+          },
+        }),
+      );
+      // `['unexplained_gain']` and NOTHING else. This call runs inside the same
+      // `buildSnapshot` that opened the six standing kinds moments earlier, and
+      // a reconciliation that swept the whole tenant here would mark every one
+      // of them `resolved` with `resolvedBySnapshotId` naming a snapshot that
+      // never showed them gone. That is C1, and it emptied slice 1's headline
+      // output on every nightly run.
+      await reconcileFindings(tenantId, snapshotId, ['unexplained_gain'], detectUnexplainedGains(gainRows), {
+        now: collected.asOf,
+      });
     }
 
     // ---- detect: the standing findings ------------------------------------
