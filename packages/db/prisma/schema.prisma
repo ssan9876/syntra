@@ -2065,3 +2065,581 @@ model NotificationPreference {
   @@unique([userId])
   @@index([tenantId])
 }
+// ---------------------------------------------------------------------------
+// Govern — Access Governance. Spec docs/superpowers/specs/2026-08-16-syntra-govern-design.md
+//
+// Govern reads every other subsystem's tables and writes only these. It holds
+// no target credential, opens no socket, and writes no access-bearing row.
+// ---------------------------------------------------------------------------
+
+/// One row per tenant, holding every number the Govern design names, so none
+/// of them is a constant compiled into the code.
+///
+/// `lastAppliedBatchAt` and `personsWithActiveContractAtLastBatch` are not
+/// settings. They are the denominator the population-collapse refusal
+/// compares against, STORED rather than recomputed for the same reason
+/// Provision stores `lastAppliedRunAt` and Automate stores
+/// `lastAppliedSweepAt`: the comparison is against the last state somebody
+/// accepted, not against the last state observed.
+model GovernSettings {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @unique @db.Uuid
+
+  /// Nightly at 01:00, ahead of Automate's 02:00 sweep, so the sweep runs
+  /// against a picture assembled tonight rather than last night.
+  snapshotSchedule       String? @default("0 1 * * *")
+  /// A year plus the audit that follows it.
+  snapshotRetentionDays  Int     @default(400)
+  /// How long ago the WORLD was read. The other clock.
+  defaultFreshnessSlaHours Int   @default(24)
+  /// How long ago GOVERN assembled the picture. Not the same clock, and a
+  /// refusal always names which one it was.
+  maxSnapshotAgeDays     Int     @default(30)
+
+  batchThresholdPercent       Int @default(10)
+  /// Lower than Provision's 50 deliberately: a campaign is a deliberate act
+  /// with a human on the other end of the confirmation, and "this campaign is
+  /// emptying Finance-Payments" is the single sentence most worth
+  /// interrupting somebody with.
+  perResourceThresholdPercent Int @default(30)
+  personPopulationDropPercent Int @default(20)
+
+  minimumCoveragePercent Int @default(90)
+  bulkCertifyLimit       Int @default(50)
+  /// Measured to CONFIRMATION, not to observation: observation waits on the
+  /// next snapshot, and an SLA that fired because a nightly job had not run
+  /// yet trains people to ignore alerts.
+  dispatchSlaHours       Int @default(72)
+  privilegedRecertifyDays Int @default(90)
+
+  maxExceptionDays    Int   @default(90)
+  exceptionWarningDays Int[] @default([14, 3])
+
+  minReciprocalDecisions Int @default(3)
+  reciprocityWindowDays  Int @default(180)
+
+  lastAppliedBatchAt                   DateTime?
+  personsWithActiveContractAtLastBatch Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+/// The per-source freshness override section 8 assumes. A source with no row
+/// uses `GovernSettings.defaultFreshnessSlaHours`.
+///
+/// A table rather than a column on `DirectorySource` or `TargetSystem`,
+/// because Govern's opinion about somebody else's row never lives on that row.
+model GovernSourcePolicy {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  /// 'directorySource' | 'targetSystem' | 'syntraInternal'
+  sourceKind String
+  /// Text, not @db.Uuid: `syntraInternal`'s id is the literal 'syntra'.
+  sourceId   String
+  freshnessSlaHours Int     @default(24)
+  inDefaultScope    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, sourceKind, sourceId])
+  @@index([tenantId])
+}
+
+/// Govern's opinion about whether a resource is privileged. Beside the
+/// resource, never on it: `Entitlement` belongs to Provision and `Group` is
+/// rewritten nightly by its source.
+///
+/// `Holding.privileged` is derived from this table at build, plus one rule
+/// that needs no configuration: every `syntraRole` holding is privileged,
+/// because a Syntra role carries permissions from the closed catalogue and
+/// there is no version of that which is not.
+model ResourceClassification {
+  id           String  @id @default(uuid()) @db.Uuid
+  tenantId     String  @db.Uuid
+  systemId     String
+  resourceKind String
+  resourceId   String
+  privileged   Boolean @default(false)
+  note         String?
+  setByUserId  String? @db.Uuid
+  setAt        DateTime @default(now())
+
+  @@unique([tenantId, systemId, resourceKind, resourceId])
+  @@index([tenantId])
+}
+/// A point-in-time, materialized, immutable set of Holding rows with their
+/// attributions, plus a coverage record.
+///
+/// `asOf` is the instant the COLLECT stage began, not `finishedAt`, so a build
+/// taking twenty minutes describes a world as it stood at one stated moment
+/// rather than over a smeared window. It is the timestamp every report header
+/// carries, and it is NOT the same as any holding's `observedAt`.
+///
+/// Only `complete` snapshots are readable by any report or campaign, enforced
+/// in the one accessor function `readableSnapshot()`, because a partially
+/// built snapshot is indistinguishable from a small organization.
+model AccessSnapshot {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  /// 'scheduled' | 'manual' | 'campaign'
+  kind     String
+  /// 'building' | 'complete' | 'failed'
+  status   String @default("building")
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  asOf       DateTime
+
+  /// The declarative scope this snapshot was built over, or null for the
+  /// whole tenant.
+  scope Json?
+
+  holdingCount             Int @default(0)
+  unattributableCount      Int @default(0)
+  coverageGapCount         Int @default(0)
+  unattributedAccountCount Int @default(0)
+  personCount              Int @default(0)
+  /// The denominator the population-collapse refusal compares against, frozen
+  /// with the picture it describes.
+  personsWithActiveContract Int @default(0)
+  countsByResourceKind      Json @default("{}")
+
+  error String?
+
+  sources     SnapshotSource[]
+  holdings    Holding[]
+  gaps        CoverageGap[]
+
+  @@index([tenantId])
+  @@index([tenantId, status, asOf])
+}
+
+/// Per snapshot, per source in scope. Section 8. `syntraInternal` is always
+/// `fresh` and `complete`, and saying so explicitly is better than leaving a
+/// blank that a reader interprets as an omission.
+model SnapshotSource {
+  id         String         @id @default(uuid()) @db.Uuid
+  tenantId   String         @db.Uuid
+  snapshotId String         @db.Uuid
+  snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  /// 'directorySource' | 'targetSystem' | 'syntraInternal'
+  sourceKind String
+  sourceId   String
+  sourceName String
+  /// Bare column, not a relation: the run may be a SyncRun or a ProvisionRun,
+  /// and pruning either must not take the coverage record with it.
+  lastRunId  String? @db.Uuid
+
+  lastSuccessfulReadAt DateTime?
+  lastAttemptedReadAt  DateTime?
+  /// 'complete' | 'partial' | 'unread'
+  completeness String
+  /// 'fresh' | 'stale'
+  staleness    String
+  freshnessSlaHours Int
+  gapCount     Int @default(0)
+
+  @@unique([snapshotId, sourceKind, sourceId])
+  @@index([tenantId])
+}
+
+/// One row per (subject, resource, system) the subject can reach.
+///
+/// `not_held` is never a row: absence means not-held only WITHIN a region
+/// coverage says was read, and elsewhere it means unknown. Storing explicit
+/// not-held rows multiplies the row count by the size of the resource catalog
+/// AND destroys the distinction, because an unread region then produces no row
+/// at all — which reads as "not held" to anybody writing a query later.
+///
+/// A snapshot is immutable once complete, so no certification state lives
+/// here. Certification is a fact about a (subject, resource) pair that
+/// outlives any one snapshot; `HoldingCertification` holds it.
+model Holding {
+  id         String         @id @default(uuid()) @db.Uuid
+  tenantId   String         @db.Uuid
+  snapshotId String         @db.Uuid
+  snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  /// `person:<uuid>` or `account:<systemId>:<accountRef>`. NOT NULL, because
+  /// a unique index over the two nullable columns below would constrain
+  /// nothing and a GROUP BY over them puts every orphan in one bucket.
+  subjectKey String
+  personId   String? @db.Uuid
+  accountRef String?
+
+  /// 'targetSystem' | 'syntraInternal' | 'directorySource'
+  systemKind String
+  /// Text, not @db.Uuid. One of its values is the literal 'syntra'.
+  systemId   String
+  /// 'targetEntitlement' | 'targetAccount' | 'syntraGroup' | 'application'
+  /// | 'syntraRole' | 'syntraUser'
+  resourceKind String
+  /// Text, not @db.Uuid. One of its values is a target account's anchor.
+  resourceId   String
+  /// Copied, not referenced. A group renamed next month must not silently
+  /// rewrite last quarter's evidence.
+  resourceName String
+
+  /// 'held' | 'unknown'. There is no third value and a check constraint says so.
+  state       String  @default("held")
+  privileged  Boolean @default(false)
+  /// When the system that read it last confirmed it was true. NOT the
+  /// snapshot's asOf, and the report shows both.
+  observedAt  DateTime
+  /// Which run of which subsystem last confirmed it.
+  observedVia String
+  /// The earliest snapshot in which this (subject, resource) pair was seen.
+  firstSeenAt DateTime
+
+  attributionCount Int     @default(0)
+  /// Computed once at build so no screen has to re-derive it and get it half
+  /// right. True when the attribution set is empty, or when its only kinds are
+  /// `discovered` and `unattributable`.
+  unattributable   Boolean @default(false)
+
+  attributions HoldingAttribution[]
+
+  @@unique([snapshotId, subjectKey, systemId, resourceKind, resourceId])
+  @@index([tenantId, snapshotId, personId])
+  @@index([tenantId, snapshotId, systemId, resourceId])
+}
+
+/// Several rows per holding, by design. A single `origin` column would have to
+/// choose, and it would choose wrong exactly in the cases that matter — the
+/// researcher with two contracts, the person whose requested access is also
+/// now birthright, the group membership that arrives both by rule and by hand.
+model HoldingAttribution {
+  id        String  @id @default(uuid()) @db.Uuid
+  tenantId  String  @db.Uuid
+  holdingId String  @db.Uuid
+  holding   Holding @relation(fields: [holdingId], references: [id], onDelete: Cascade)
+
+  /// 'business_rule' | 'request' | 'delegated_admin' | 'auto_granted'
+  /// | 'direct_assignment' | 'group_inheritance' | 'org_unit_inheritance'
+  /// | 'directory_source' | 'discovered' | 'manual' | 'unattributable'
+  kind    String
+  refType String
+  refId   String?
+  /// The copied names, the resolved org-unit chain, the approver set. Copied,
+  /// not referenced: an approver who leaves must still have a name in the
+  /// record of what they approved.
+  detail  Json    @default("{}")
+  resolvedAt DateTime
+
+  @@index([tenantId])
+  @@index([holdingId])
+}
+
+/// One row per region of the world Govern cannot describe. THE ROW THAT MUST
+/// NEVER BE A FLAG. It is counted on the face of every report whose scope
+/// intersects it, and it is what makes a question over that scope answer
+/// `unknown` rather than a number.
+model CoverageGap {
+  id         String         @id @default(uuid()) @db.Uuid
+  tenantId   String         @db.Uuid
+  snapshotId String         @db.Uuid
+  snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  /// 'source_unread' | 'source_stale' | 'resource_unreadable'
+  /// | 'account_unreadable' | 'subject_unresolvable' | 'person_unprocessable'
+  kind String
+  /// Null where the gap is not about one system.
+  systemKind String?
+  systemId   String?
+  resourceId String?
+  personId   String? @db.Uuid
+  accountRef String?
+  reason     String
+  sourceRunId String? @db.Uuid
+
+  @@index([tenantId])
+  @@index([snapshotId, kind])
+}
+
+/// Produced by diffing consecutive snapshots, and cross-referenced to the
+/// audit event that caused it where one exists.
+///
+/// `explained = false` on a `gained` event is one of the most valuable rows
+/// this system produces: access appeared, and Syntra did not cause it.
+model HoldingEvent {
+  id             String @id @default(uuid()) @db.Uuid
+  tenantId       String @db.Uuid
+  fromSnapshotId String @db.Uuid
+  toSnapshotId   String @db.Uuid
+
+  subjectKey String
+  personId   String? @db.Uuid
+  accountRef String?
+  systemId   String
+  resourceKind String
+  resourceId   String
+  resourceName String
+
+  /// 'gained' | 'lost' | 'attribution_changed' | 'became_unknown' | 'became_known'
+  change String
+  beforeAttributions Json @default("[]")
+  afterAttributions  Json @default("[]")
+
+  /// The audit event that explains it, where one exists. A sequence number,
+  /// not a row id: the chain is ordered by sequence and that is the ordering
+  /// an investigator works in.
+  auditEventSequence Int?
+  explained          Boolean @default(false)
+
+  @@index([tenantId, toSnapshotId])
+  @@index([tenantId, personId, toSnapshotId])
+}
+
+/// A projection, rebuilt from CampaignDecision rows, which remain the record.
+/// It exists so that "never certified" and "not certified since" are one
+/// indexed lookup on a report rather than a join across every campaign a
+/// tenant has ever run.
+model HoldingCertification {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  /// 'person' | 'account'
+  subjectRefType String
+  subjectRefId   String
+  systemId       String
+  resourceKind   String
+  resourceId     String
+
+  lastCertifiedAt        DateTime
+  lastCertifiedByPersonId String  @db.Uuid
+  /// Bare columns, not relations: slice 2 owns those tables and a cascade
+  /// from a deleted campaign would silently un-certify history.
+  lastCampaignId  String @db.Uuid
+  lastDecisionId  String @db.Uuid
+
+  @@unique([tenantId, subjectRefType, subjectRefId, systemId, resourceKind, resourceId])
+  @@index([tenantId])
+}
+
+/// Govern PROPOSES an owner for an orphan account and never assigns one.
+/// Confirmation calls Provision's own account-linking entry point; Govern does
+/// not write TargetAccount.
+model AccountAttribution {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  systemId   String
+  accountRef String
+  proposedPersonId String @db.Uuid
+
+  /// 'name_similarity' | 'mail_address' | 'employee_identifier' | 'adjacent_manager'
+  method     String
+  /// 0..1. A number a human reads, never a number a machine acts on: linking
+  /// an account to a person is not a labelling exercise, and Provision's next
+  /// run evaluates that person's desired state against that account.
+  confidence Float
+  /// 'proposed' | 'confirmed' | 'denied'
+  status     String @default("proposed")
+  decidedByUserId String? @db.Uuid
+  decidedAt       DateTime?
+  decidedReason   String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, systemId, accountRef, proposedPersonId])
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+/// One lifecycle, one table, one count. A finding that persists across
+/// snapshots is updated, not duplicated. A finding that stops being observed
+/// becomes `resolved` WITH THE SNAPSHOT THAT SHOWED IT GONE, not silently
+/// deleted, because "it went away and we do not know why" is itself worth a row.
+model GovernFinding {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  /// The closed set of section 16.
+  kind     String
+  /// 'low' | 'medium' | 'high' | 'critical'
+  severity String
+
+  /// 'person' | 'account' | 'resource' | 'source' | 'reviewer' | 'holding'
+  /// | 'snapshot' | 'campaign' | 'sod_violation' | 'dispatch'
+  subjectRefType String
+  subjectRefId   String
+
+  detail Json @default("{}")
+  /// A Provision DriftFinding this AGGREGATES, never copies. Closing it in
+  /// either place closes it in both, because there is only one row underneath.
+  /// Bare column, not a relation: DriftFinding cascades from ProvisionRun, and
+  /// a pruned run must not delete Govern's finding.
+  driftFindingId String? @db.Uuid
+
+  /// 'open' | 'acknowledged' | 'accepted' | 'resolved'
+  status String @default("open")
+  /// Required to leave `open`. Enforced in the service, not in SQL: the
+  /// constraint would have to know which transitions are which.
+  ownerPersonId String? @db.Uuid
+  dueAt DateTime?
+
+  /// `accepted` requires a reason AND an expiry. Acceptance with no expiry is
+  /// not representable, for the reason section 15 gives about exceptions.
+  acceptedReason String?
+  acceptedUntil  DateTime?
+
+  resolvedBySnapshotId String? @db.Uuid
+  resolvedAt           DateTime?
+
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+
+  remediations RemediationItem[]
+
+  @@unique([tenantId, kind, subjectRefType, subjectRefId])
+  @@index([tenantId])
+  @@index([tenantId, status, severity])
+}
+
+/// The half of a finding that has an assignee and a deadline.
+///
+/// `campaignItemId` is a bare nullable column with no relation, filled in
+/// slice 2. A relation would cascade, and deleting a campaign item that
+/// produced a remediation item would destroy the record of what still has to
+/// change.
+model RemediationItem {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  /// 'rule_change_required' | 'directory_source_change_required'
+  /// | 'direct_assignment_change_required' | 'role_assignment_change_required'
+  /// | 'account_removal_required' | 'syntra_user_change_required'
+  /// | 'undecided_item' | 'orphan_attribution'
+  ///
+  /// The first six are the six `requires_change` routes of Task 20's dispatch
+  /// table, one to one. `ROUTE_REMEDIATION_KIND` in `dispatch.ts` is the map,
+  /// and it is a total `Record<RevocationRoute, string | null>` so a route
+  /// added later without a kind is a compile error.
+  kind String
+  ownerPersonId String  @db.Uuid
+  dueAt         DateTime
+
+  findingId String?        @db.Uuid
+  finding   GovernFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  campaignItemId String? @db.Uuid
+
+  description String
+  deepLink    String
+
+  /// 'open' | 'in_progress' | 'done' | 'wont_fix'
+  status            String @default("open")
+  resolutionComment String?
+  resolvedByUserId  String? @db.Uuid
+  resolvedAt        DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, status, dueAt])
+  @@index([tenantId, ownerPersonId, status])
+}
+
+/// A deterministic JSON document with a stable digest. Creating one is a
+/// privileged, audited action, and its limitations page is printed on its
+/// cover rather than kept in a caveats appendix.
+model EvidencePack {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  /// 'campaign' | 'report' | 'period'
+  kind  String
+  scope Json @default("{}")
+
+  snapshotId String? @db.Uuid
+  campaignId String? @db.Uuid
+
+  chainHeadSequence       Int
+  chainHeadHash           String
+  /// 'valid' | 'broken' | 'not_verified'
+  chainVerificationResult String
+  chainFromSequence       Int
+  chainToSequence         Int
+
+  /// sha256 over the stable serialization. Printed in the bundle's own header,
+  /// so a reader can recompute it.
+  digest String
+  /// Where the bytes live. Null when the bundle is served on demand rather
+  /// than stored.
+  storageRef String?
+  byteLength Int
+
+  createdByUserId String? @db.Uuid
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, kind, createdAt])
+}
+
+/// Written after a successful verification of the segment ending here.
+/// APPEND-ONLY: a reversal is a new row.
+model AuditCheckpoint {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  sequence   Int
+  hash       String
+  verifiedAt DateTime @default(now())
+  /// Over (sequence, hash), with a key the application holds and the database
+  /// does not. Raises the bar from "database access" to "database access plus
+  /// the signing key". It is NOT proof against the operator; anchoring is.
+  signature String?
+  keyId     String?
+
+  @@unique([tenantId, sequence])
+  @@index([tenantId])
+}
+
+/// The result of one verification run. `mode` matters: an incremental check
+/// says the segment since the last checkpoint holds; a full check says the
+/// chain holds from genesis, and they are different claims.
+model AuditChainCheck {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  fromSequence Int
+  toSequence   Int
+  /// 'valid' | 'broken'
+  result       String
+  brokenAtSequence Int?
+  startedAt  DateTime @default(now())
+  durationMs Int
+  /// 'incremental' | 'full' | 'full_fallback'
+  /// `full_fallback` is a full walk an incremental run had to fall back to,
+  /// because the checkpoint it would have seeded from carries no valid
+  /// signature. Distinct from `full` so the screen can say which happened.
+  mode       String
+
+  @@index([tenantId])
+  @@index([tenantId, startedAt])
+}
+
+/// The only one of the three mitigations that is actually proof against the
+/// operator, because the receipt comes from somewhere the operator does not
+/// control. A tenant that has not configured anchoring sees that stated on its
+/// own integrity screen, in those terms, rather than a green tick.
+model AuditAnchor {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  sequence   Int
+  hash       String
+  anchoredAt DateTime @default(now())
+  /// 'file' | 'mail'
+  method     String
+  receipt    String
+  /// 'pending' | 'anchored' | 'failed'
+  status     String @default("pending")
+  error      String?
+
+  @@index([tenantId])
+  @@index([tenantId, sequence])
+}

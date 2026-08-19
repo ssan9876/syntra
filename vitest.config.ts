@@ -47,11 +47,13 @@ export default defineConfig({
     // this process, so every worker would receive the same value.
     setupFiles: ['./vitest.setup-worker.ts'],
     env: {
-      // The unsharded URL, as a floor. Every worker overwrites it in the setup
-      // file above; this is what a stray import outside a worker would see, and
-      // it points at a real, migrated database rather than at `.env`'s
-      // development one.
-      DATABASE_URL: database.appUrl,
+      // Shard 1's URL as the floor, not the unsharded name. Every worker
+      // overwrites it in the setup file above, so this is only what a stray
+      // import outside a worker would see -- but the unsharded database is
+      // provisioned by nothing now that the setup migrates shards, so naming
+      // it here pointed the floor at a database that does not exist. Shard 1
+      // always does.
+      DATABASE_URL: (database.name === null ? database : testDatabaseConfig(1)).appUrl,
       ...(database.superuserUrl ? { SUPERUSER_DATABASE_URL: database.superuserUrl } : {}),
       // The setup file re-derives nothing: it swaps this name into
       // `DATABASE_URL` and appends its own worker number. Passed rather than
