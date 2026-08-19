@@ -12,6 +12,7 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
 import { resolveInFlightActions, valuesOf } from './apply.js';
 import { desiredState } from './desired.js';
 import { evaluateProvisionGuard, type GuardVerdict } from './guard.js';
+import { loadRevocationOrders } from '../govern/revocation-service.js';
 import { sodImpact, type PersonHolding } from '../govern/sod.js';
 import { loadSodFactsIfEvaluable } from '../govern/sod-service.js';
 import { planActions } from './plan.js';
@@ -703,6 +704,18 @@ export async function previewProvisionRun(
     });
 
     /**
+     * Govern's open revocation orders for this target, as plain values.
+     *
+     * Read here rather than inside phase 5 for the same reason the SoD facts
+     * are: a different subsystem's tables, its own failure meaning, and a
+     * budget of its own. Provision never queries Govern beyond this one read,
+     * and what comes back is an array of plain values the planner consumes.
+     */
+    const revocationOrders = await withTenant(tenantId, (tx) =>
+      loadRevocationOrders(tx, targetSystemId),
+    );
+
+    /**
      * Phase 5a. The segregation-of-duties facts, in a short transaction of
      * their own.
      *
@@ -934,6 +947,7 @@ export async function previewProvisionRun(
       contractsByPerson,
       syntraUserByPerson,
       pairedDirectorySource: prepared.target.pairedDirectorySourceId !== null,
+      revocationOrders,
       ladder: {
         entitlementRevocationDelayDays: prepared.target.entitlementRevocationDelayDays,
         disableGraceDays: prepared.target.disableGraceDays,
@@ -1242,6 +1256,9 @@ export async function previewProvisionRun(
           grantId:
             a.attributedGrantIds.length === 1 ? a.attributedGrantIds[0]! : null,
           requiresConfirmation: a.requiresConfirmation,
+          // The Govern order this action executes, so the audit event at
+          // apply time can name the human, the campaign and the decision.
+          revocationOrderId: a.revocationOrderId,
           message: a.message,
           // `planActions` already returned these sorted by ACTION_ORDER, and
           // this is what preserves that through the write. `createdAt` cannot:
@@ -1252,6 +1269,22 @@ export async function previewProvisionRun(
           sequence: index,
         })),
       });
+
+      // The orders this plan consumed are `planned`, so the next run does
+      // not propose them again. A one-shot term is consumed once.
+      const plannedOrderIds = [
+        ...new Set(
+          actions
+            .map((a) => a.revocationOrderId)
+            .filter((id): id is string => id !== null),
+        ),
+      ];
+      if (plannedOrderIds.length > 0) {
+        await tx.revocationOrder.updateMany({
+          where: { id: { in: plannedOrderIds }, status: 'open' },
+          data: { status: 'planned', plannedAt: new Date() },
+        });
+      }
 
       await tx.provisionException.createMany({
         data: exceptions.map((e) => ({

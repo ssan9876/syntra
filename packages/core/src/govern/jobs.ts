@@ -19,6 +19,7 @@ import {
   reassignInvalidReviewers,
   runCampaignReminders,
 } from './reviewer-service.js';
+import { reflectRevocationOutcomes } from './revocation-service.js';
 import { detectSodViolations } from './sod-service.js';
 import { governSettings } from './settings-service.js';
 import { buildSnapshot, pruneSnapshots } from './snapshot-service.js';
@@ -125,6 +126,15 @@ export async function runSnapshotJob(
     await mootVanishedHoldings(payload.tenantId, campaign.id, built.snapshotId, { now });
     await reassignInvalidReviewers(payload.tenantId, campaign.id, { now });
   }
+
+  // The snapshot is what closes the loop: `applied` requires BOTH the owning
+  // subsystem's confirmation AND a subsequent snapshot that no longer shows
+  // the holding, so this runs against the build that just completed. Called
+  // from here rather than from its own test: a function nothing in the
+  // product calls leaves every dispatch on `dispatched` for ever, the
+  // `dispatch_not_applied` SLA finding never fires, and a campaign closes
+  // with 91 revocations of which 34 never happened.
+  await reflectRevocationOutcomes(payload.tenantId, built.snapshotId, { now });
 
   await sweepAcceptedFindings(payload.tenantId, now);
   return {

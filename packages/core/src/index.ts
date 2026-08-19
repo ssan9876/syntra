@@ -110,6 +110,7 @@ export type {
   PersonFacts,
   PlannedAction,
   ProfileFacts,
+  RevocationOrderFacts,
   RuleFacts,
   TargetObject,
   UnprocessableKind,
@@ -249,3 +250,25 @@ export * from './govern/sod-service.js';
 export * from './govern/decision-service.js';
 export * from './govern/reviewer-service.js';
 export * from './govern/campaign-service.js';
+export * from './govern/dispatch.js';
+export * from './govern/revocation-service.js';
+// Member by member, not `export *`, and for the THIRD time in this barrel.
+// `revocation-guard.ts` exports `GuardInput`, `GuardVerdict` and
+// `GuardThresholds`, and the barrel already has all three:
+//   `export * from './sync/guard.js'`            -> GuardInput, GuardVerdict
+//   the `provision/guard.js` block above         -> GuardThresholds
+// A star export here is TS2308 twice over plus a duplicate-export error, and
+// under TS2308 the barrel then exports NEITHER side of the ambiguous names —
+// so Directory Sync's guard types would disappear from the public surface
+// without anybody's build failing.
+//
+// `evaluateRevocationGuard` does not collide, but it is enumerated here rather
+// than left to a star export because a module that is half-starred and
+// half-enumerated is how the next name added to it silently fails to leave the
+// package, which is the same defect one level along.
+export { evaluateRevocationGuard } from './govern/revocation-guard.js';
+export type {
+  GuardInput as GovernGuardInput,
+  GuardVerdict as GovernGuardVerdict,
+  GuardThresholds as GovernGuardThresholds,
+} from './govern/revocation-guard.js';

@@ -7,6 +7,7 @@ import type {
   DesiredState,
   LadderSettings,
   PlannedAction,
+  RevocationOrderFacts,
   SyntraUserFacts,
 } from './types.js';
 
@@ -81,6 +82,14 @@ export interface PlanInput {
   syntraUserByPerson: ReadonlyMap<string, readonly SyntraUserFacts[]>;
   pairedDirectorySource: boolean;
   ladder: LadderSettings;
+  /**
+   * Govern's open revocation orders for this target, as plain values.
+   *
+   * Provision never queries Govern. The orders arrive here already read, and
+   * each is consumed at most once — a one-shot negative term, not a standing
+   * rule.
+   */
+  revocationOrders: readonly RevocationOrderFacts[];
   now: Date;
 }
 
@@ -237,6 +246,8 @@ export function planActions(input: PlanInput): PlannedAction[] {
         // removal by its `SweepAction` instead.
         attributedGrantIds: [],
         requiresConfirmation: false,
+        // Overridden only by the revocation-order term below.
+        revocationOrderId: null,
         message: null,
         ...over,
       });
@@ -462,6 +473,45 @@ export function planActions(input: PlanInput): PlannedAction[] {
               }),
         });
       }
+    }
+
+    // A revocation order is not an inference. It is a single dated instruction
+    // carrying a named human, a campaign, a decision id and a comment; it is
+    // consumed once; and it appears here attributed to that decision rather
+    // than to reconciliation. It is subject to the ordinary guard exactly as
+    // any other revocation, including the per-entitlement axis.
+    for (const order of input.revocationOrders) {
+      if (order.accountId !== accountId) continue;
+      // Desired state wants it: the order is overtaken, and executing it would
+      // remove access a rule or a live grant asks for — which Provision would
+      // restore on the same run.
+      if (state.entitlements.has(order.entitlementId)) continue;
+      if (!current.heldEntitlements.has(order.entitlementId)) continue;
+      // Already proposed by ordinary reconciliation. One revocation, not two.
+      if (
+        actions.some(
+          (a) =>
+            a.actionType === 'revoke_entitlement' &&
+            a.personId === personId &&
+            a.entitlementId === order.entitlementId,
+        )
+      ) {
+        continue;
+      }
+      push('revoke_entitlement', {
+        entitlementId: order.entitlementId,
+        before: {
+          held: true,
+          revocationOrderId: order.orderId,
+          decidedBy: order.decidedByPersonName,
+          campaign: order.campaignName,
+          campaignDecisionId: order.campaignDecisionId,
+          reason: order.reason,
+        },
+        after: { held: false },
+        revocationOrderId: order.orderId,
+        message: `revoked by ${order.decidedByPersonName} in ${order.campaignName ?? 'an access review'}: ${order.reason}`,
+      });
     }
 
     // An account no longer required, at a target where Provision knows of one:
