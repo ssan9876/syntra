@@ -12,6 +12,7 @@ import {
 } from './audit-integrity.js';
 import { sweepAcceptedFindings } from './finding-service.js';
 import { refreshOrphanProposals } from './orphan-service.js';
+import { detectSodViolations } from './sod-service.js';
 import { governSettings } from './settings-service.js';
 import { buildSnapshot, pruneSnapshots } from './snapshot-service.js';
 
@@ -90,6 +91,21 @@ export async function runSnapshotJob(
     ...(options.batchSize === undefined ? {} : { batchSize: options.batchSize }),
   });
   const orphans = await refreshOrphanProposals(payload.tenantId, built.snapshotId, { now });
+
+  // Detection is over a snapshot, per person, and it runs as part of the
+  // nightly job so the violation count and the picture it came from are never a
+  // day apart.
+  //
+  // Called from HERE rather than from `buildSnapshot`, deliberately:
+  // `sod-service.ts` imports `readableSnapshot` from `readable.ts`, which
+  // `snapshot-service.ts` also owns the writing half of, and a detect call in
+  // the other direction closes the loop. ESM tolerates a cycle until the day an
+  // initialisation order changes and one of them is half-constructed, and the
+  // failure reads as an unrelated `undefined is not a function`. `jobs.ts`
+  // already depends on both and on neither's internals, which is where a
+  // sequencer belongs.
+  await detectSodViolations(payload.tenantId, built.snapshotId, { now });
+
   await sweepAcceptedFindings(payload.tenantId, now);
   return {
     snapshotId: built.snapshotId,

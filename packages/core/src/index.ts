@@ -244,3 +244,5 @@ export * from './govern/report-service.js';
 export * from './govern/export-service.js';
 export * from './govern/jobs.js';
 export * from './govern/scope.js';
+export * from './govern/sod.js';
+export * from './govern/sod-service.js';

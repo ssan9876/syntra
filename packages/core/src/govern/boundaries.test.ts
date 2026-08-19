@@ -110,6 +110,18 @@ describe('no import cycle reaches snapshot-service.ts — Ruling G-6', () => {
   });
 });
 
+describe('the sequencer is jobs.ts, not snapshot-service.ts', () => {
+  it('keeps snapshot-service free of any import of sod-service', () => {
+    // They would otherwise import each other: sod-service needs the snapshot
+    // accessor, and a detect call in the other direction closes the loop. ESM
+    // tolerates a cycle until an initialisation order changes and one module is
+    // half-constructed, and the failure reads as an unrelated
+    // `undefined is not a function` somewhere else entirely.
+    const snapshot = sourceFiles().find((f) => f.name === 'snapshot-service.ts');
+    expect(snapshot?.text ?? '').not.toMatch(/from '\.\/sod-service\.js'/);
+  });
+});
+
 describe('every snapshot read goes through readableSnapshot', () => {
   it('is asserted over the module list, so a module added later without it fails', () => {
     // Automate's visibility suite, for staleness. Govern trades Provision's
