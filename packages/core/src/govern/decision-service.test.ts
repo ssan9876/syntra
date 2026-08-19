@@ -199,18 +199,41 @@ describe('the structural tests that must fail if somebody forgets', () => {
     expect(readFileSync(join(dir, 'decision-service.ts'), 'utf8')).toMatch(CERTIFY_WRITE);
   });
 
-  it('no Govern file contains a timeout or expiry that certifies', () => {
+  it('no Govern function whose job is closing, sweeping or expiring CERTIFIES', () => {
+    // Scoped to the FUNCTION, not to a character window.
+    //
+    // A proximity regex (`/close[\s\S]{0,600}status: 'certified'/`) depends on
+    // how far apart the two happen to sit in the file: a `status: 'certified'`
+    // forty lines below `export async function closeDueCampaigns` is more than
+    // 600 characters away and slips through, which is exactly where such a
+    // write would be. Splitting on the top-level function declarations and
+    // checking the whole body of any function NAMED for closing, sweeping,
+    // timing out or expiring does not depend on layout at all.
+    //
+    // This is the half `DECISION_ENTRY_POINTS` cannot cover: that scan permits
+    // `decision-service.ts` to write the status, so a certify-on-timeout added
+    // to THIS file would pass it.
     const dir = dirname(fileURLToPath(import.meta.url));
+    const DECLARATION = /^(?:export )?(?:async )?function (\w+)/gm;
+    const TIMEOUT_NAME = /close|sweep|timeout|expire/i;
+
     for (const file of readdirSync(dir).filter(
       (f) => f.endsWith('.ts') && !f.endsWith('.test.ts'),
     )) {
       const text = readFileSync(join(dir, file), 'utf8');
-      // A future `status: 'certified'` inside a close or sweep function fails:
-      // the regex is deliberately about proximity.
-      expect(
-        /(?:close|sweep|timeout|expire)[\s\S]{0,600}status:\s*'certified'/.test(text),
-        `${file} appears to certify on a timeout`,
-      ).toBe(false);
+      const declarations = [...text.matchAll(DECLARATION)];
+      for (const [index, declaration] of declarations.entries()) {
+        const name = declaration[1]!;
+        if (!TIMEOUT_NAME.test(name)) continue;
+        const body = text.slice(
+          declaration.index!,
+          declarations[index + 1]?.index ?? text.length,
+        );
+        expect(
+          CERTIFY_WRITE.test(body),
+          `${file}: ${name}() certifies, and silence must never certify`,
+        ).toBe(false);
+      }
     }
   });
 

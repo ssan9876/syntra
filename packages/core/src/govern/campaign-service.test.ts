@@ -449,6 +449,21 @@ describe('generation', () => {
     const after = await withTenant(tenantId, (tx) => tx.notificationOutbox.count());
     expect(before).toBe(0);
     expect(after).toBeGreaterThan(0);
+
+    // AND the ordering, structurally — because the counts above are taken
+    // outside the call and cannot see a notification sent DURING generation,
+    // which is the failure this rule exists to prevent. A reviewer told while
+    // the queue is still filling opens a queue that is still filling.
+    const source = readFileSync(new URL('./campaign-service.ts', import.meta.url), 'utf8');
+    const body = source.slice(
+      source.indexOf('export async function startCampaign'),
+      source.indexOf('export async function extendCampaign'),
+    );
+    const opened = body.indexOf("status: 'open'");
+    const notified = body.indexOf('enqueueOutbox(');
+    expect(opened, 'startCampaign must set status open').toBeGreaterThan(-1);
+    expect(notified, 'startCampaign must notify').toBeGreaterThan(-1);
+    expect(notified, 'nobody is notified until the campaign is open').toBeGreaterThan(opened);
   });
 
   it('batches generation so no transaction carries the whole scope', async () => {

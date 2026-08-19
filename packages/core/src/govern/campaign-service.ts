@@ -69,8 +69,20 @@ type ScopeFromSchema = z.infer<typeof campaignScopeSchema>;
 // to `never` is the error.
 const _scopeAssignableToType: MutuallyAssignable<ScopeFromSchema, CampaignScope> = true;
 const _typeAssignableToScope: MutuallyAssignable<CampaignScope, ScopeFromSchema> = true;
+/**
+ * And the KEYS, because the two guards above cannot see a missing OPTIONAL.
+ *
+ * Drop `privilegedOnly` from the schema and both directions still hold: an
+ * object without an optional property is assignable to a type that has one, and
+ * an extra property is assignable in the other direction. So the schema could
+ * silently stop parsing a field the type still advertises — the scope would
+ * accept it, strip it, and the campaign would cover more than the screen said.
+ * `keyof` is exact in both directions and catches it.
+ */
+const _scopeKeysMatch: MutuallyAssignable<keyof ScopeFromSchema, keyof CampaignScope> = true;
 void _scopeAssignableToType;
 void _typeAssignableToScope;
+void _scopeKeysMatch;
 
 export class CampaignRefusedError extends Error {
   constructor(
