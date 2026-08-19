@@ -8,6 +8,8 @@ import {
   createUser,
   hashPassword,
   setPasswordHash,
+  upsertBusinessFunction,
+  upsertSodRule,
   upsertWorkflow,
 } from '@syntra/core';
 import { buildTestApp } from '../test-support.js';
@@ -301,5 +303,137 @@ describe('my access', () => {
       boCookie,
     );
     expect(response.statusCode).toBe(404);
+  });
+});
+
+/**
+ * The submission-time segregation-of-duties warning (spec section 14).
+ *
+ * At REQUEST time, not only at approval time: this is the only moment at which
+ * the warning changes anything, because it is the only moment at which the
+ * requester could still choose differently.
+ */
+describe('the catalog segregation-of-duties warning', () => {
+  const SYSTEM_AD = '10000000-0000-0000-0000-0000000000ad';
+  const ENT_RAISE = '20000000-0000-0000-0000-000000000001';
+
+  /** Anna holds ONE side already; the product grants the other. */
+  const seedSod = async () => {
+    const applicationId = await withTenant(ctx.tenantId, async (tx) => {
+      const application = await tx.application.findFirstOrThrow();
+      const snapshot = await tx.accessSnapshot.create({
+        data: {
+          tenantId: ctx.tenantId,
+          kind: 'manual',
+          status: 'complete',
+          asOf: new Date(),
+          unattributedAccountCount: 0,
+        },
+      });
+      await tx.snapshotSource.create({
+        data: {
+          tenantId: ctx.tenantId,
+          snapshotId: snapshot.id,
+          sourceKind: 'syntraInternal',
+          sourceId: 'syntra',
+          sourceName: 'Syntra',
+          completeness: 'complete',
+          staleness: 'fresh',
+          freshnessSlaHours: 24,
+        },
+      });
+      await tx.holding.create({
+        data: {
+          tenantId: ctx.tenantId,
+          snapshotId: snapshot.id,
+          subjectKey: `person:${annaPersonId}`,
+          personId: annaPersonId,
+          systemKind: 'targetSystem',
+          systemId: SYSTEM_AD,
+          resourceKind: 'targetEntitlement',
+          resourceId: ENT_RAISE,
+          resourceName: 'AP entry (Finance-Payments)',
+          state: 'held',
+          observedAt: new Date(),
+          observedVia: 'provision',
+          firstSeenAt: new Date(),
+          attributionCount: 0,
+        },
+      });
+      return application.id;
+    });
+
+    const entry = await upsertBusinessFunction(ctx.tenantId, null, {
+      name: 'AP entry',
+      description: null,
+      ownerPersonId: annaPersonId,
+      resources: [
+        { systemId: SYSTEM_AD, resourceKind: 'targetEntitlement', resourceId: ENT_RAISE },
+      ],
+    });
+    const approve = await upsertBusinessFunction(ctx.tenantId, null, {
+      name: 'AP approve',
+      description: null,
+      ownerPersonId: annaPersonId,
+      resources: [
+        // `syntra`, because the product grant carries no target system — the
+        // same spelling `grantResource` produces. A different one here would
+        // evaluate the rule against nothing and report every request clean.
+        { systemId: 'syntra', resourceKind: 'application', resourceId: applicationId },
+      ],
+    });
+    await upsertSodRule(ctx.tenantId, null, {
+      name: 'AP entry vs AP approve',
+      functionAId: entry.id,
+      functionBId: approve.id,
+      severity: 'critical',
+      rationale: 'the same person must not raise a payment and approve it',
+      exceptionWorkflowId: null,
+      enabled: true,
+    });
+  };
+
+  it('names the rule and the holding on the other side, on the catalog read', async () => {
+    await seedSod();
+    const response = await call('GET', '/api/portal/automate/catalog', annaCookie);
+    expect(response.statusCode).toBe(200);
+    const product = response.json().products.find(
+      (p: { id: string }) => p.id === productId,
+    );
+    // Still in the catalog. The warning informs; it never hides the entry —
+    // that would tell somebody they may not have something without telling
+    // them why, which is the failure section 14 names.
+    expect(product).toBeDefined();
+    expect(product.sodWarning.hasCritical).toBe(true);
+    expect(product.sodWarning.violations[0].ruleName).toBe('AP entry vs AP approve');
+    // "You would violate a rule" is not actionable. Naming what they already
+    // hold on the other side is.
+    expect(product.sodWarning.violations[0].otherSideHoldings).toEqual([
+      'AP entry (Finance-Payments)',
+    ]);
+  });
+
+  it('carries the same warning to the form, where the submit button is', async () => {
+    await seedSod();
+    const response = await call(
+      'GET',
+      `/api/portal/automate/catalog/${productId}/form`,
+      annaCookie,
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json().sodWarning.violations[0].ruleName).toBe(
+      'AP entry vs AP approve',
+    );
+  });
+
+  it('says nothing at all in a tenant that has configured no rule', async () => {
+    // The overwhelmingly common tenant, and the one that must cost nothing: no
+    // enabled rule short-circuits on a single count, before any snapshot or
+    // holdings read.
+    const response = await call('GET', '/api/portal/automate/catalog', annaCookie);
+    const product = response.json().products.find(
+      (p: { id: string }) => p.id === productId,
+    );
+    expect(product.sodWarning).toBeNull();
   });
 });

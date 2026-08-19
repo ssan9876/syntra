@@ -4,6 +4,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createTarget, upsertAccountProfile, upsertBusinessRule } from './target-service.js';
 import { explainPersonAccess, previewAccountProfile, previewRuleImpact } from './explain.js';
+import { upsertBusinessFunction, upsertSodRule } from '../govern/sod-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 const NOW = new Date('2026-06-15T00:00:00Z');
@@ -776,6 +777,148 @@ describe('previewRuleImpact', () => {
     );
     expect(impact.wouldGrant).toBe(0);
     expect(impact.wouldRevoke).toBe(1);
+  });
+
+  // --- the segregation-of-duties column ---
+
+  /**
+   * A second entitlement at this target, a readable Govern snapshot, and a
+   * `critical` rule making the two entitlements incompatible.
+   *
+   * The snapshot has no holdings deliberately: the case being pinned is the
+   * BIRTHRIGHT one, where a single rule grants both sides at once to somebody
+   * who holds neither today. That is the violation an administrator creates
+   * with one click, and it is invisible to anything that looks only at what
+   * people already hold.
+   */
+  const seedSodRule = async () => {
+    const approveId = await withTenant(tenantId, async (tx) => {
+      const approve = await tx.entitlement.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          externalId: 'guid-ap-approve',
+          type: 'group',
+          displayName: 'AP approve',
+        },
+      });
+      const snapshot = await tx.accessSnapshot.create({
+        data: {
+          tenantId,
+          kind: 'manual',
+          status: 'complete',
+          asOf: NOW,
+          unattributedAccountCount: 0,
+        },
+      });
+      await tx.snapshotSource.create({
+        data: {
+          tenantId,
+          snapshotId: snapshot.id,
+          sourceKind: 'syntraInternal',
+          sourceId: 'syntra',
+          sourceName: 'Syntra',
+          completeness: 'complete',
+          staleness: 'fresh',
+          freshnessSlaHours: 24,
+        },
+      });
+      return approve.id;
+    });
+    const raise = await upsertBusinessFunction(tenantId, null, {
+      name: 'Raise a payment',
+      description: null,
+      ownerPersonId: personId,
+      resources: [
+        { systemId: targetId, resourceKind: 'targetEntitlement', resourceId: entitlementId },
+      ],
+    });
+    const approve = await upsertBusinessFunction(tenantId, null, {
+      name: 'Approve a payment',
+      description: null,
+      ownerPersonId: personId,
+      resources: [
+        { systemId: targetId, resourceKind: 'targetEntitlement', resourceId: approveId },
+      ],
+    });
+    await upsertSodRule(tenantId, null, {
+      name: 'Payment raising and approval',
+      functionAId: raise.id,
+      functionBId: approve.id,
+      severity: 'critical',
+      rationale: 'the same person must not raise a payment and approve it',
+      exceptionWorkflowId: null,
+      enabled: true,
+    });
+    return { approveId };
+  };
+
+  it('reports zero SoD impact in a tenant that has configured no rule', async () => {
+    // The overwhelmingly common tenant, and the degradation that matters: an
+    // absent SoD picture is not a violation, and the rule editor must open.
+    const impact = await previewRuleImpact(
+      tenantId,
+      targetId,
+      {
+        name: 'Finance staff',
+        condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+        grantsAccount: true,
+        enabled: true,
+        entitlementIds: [entitlementId],
+      },
+      NOW,
+    );
+    expect(impact.sodIntroduced).toBe(0);
+    expect(impact.sodIntroducedCritical).toBe(0);
+    expect(impact.sodSample).toEqual([]);
+  });
+
+  it('counts the violation a birthright rule granting BOTH sides would INTRODUCE', async () => {
+    const { approveId } = await seedSodRule();
+    const impact = await previewRuleImpact(
+      tenantId,
+      targetId,
+      {
+        name: 'Finance staff',
+        condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+        grantsAccount: true,
+        enabled: true,
+        entitlementIds: [entitlementId, approveId],
+      },
+      NOW,
+    );
+    // Anna matches; Bo does not. One person, one rule, one introduced
+    // violation — and it is `critical`, which is the severity Provision's run
+    // guard escalates on.
+    expect(impact.matchedPersons).toBe(1);
+    expect(impact.sodIntroduced).toBe(1);
+    expect(impact.sodIntroducedCritical).toBe(1);
+    expect(impact.sodSample).toEqual([
+      { personId, ruleName: 'Payment raising and approval' },
+    ]);
+    // And it does not refuse, block, or otherwise change what the preview says
+    // about the grant itself. The column informs; it never gates.
+    expect(impact.wouldGrant).toBe(2);
+  });
+
+  it('counts nothing when the rule grants only ONE side', async () => {
+    // A rule that puts nobody on both sides introduces nothing, and a column
+    // that fired here would be ignored within a week.
+    await seedSodRule();
+    const impact = await previewRuleImpact(
+      tenantId,
+      targetId,
+      {
+        name: 'Finance staff',
+        condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+        grantsAccount: true,
+        enabled: true,
+        entitlementIds: [entitlementId],
+      },
+      NOW,
+    );
+    expect(impact.sodIntroduced).toBe(0);
+    expect(impact.sodIntroducedCritical).toBe(0);
   });
 
   it('refuses a condition nested past the cap, rather than previewing it', async () => {

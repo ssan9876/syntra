@@ -16,6 +16,7 @@ import {
   upsertBusinessRule,
 } from './target-service.js';
 import { previewProvisionRun, ProvisionRunInFlightError } from './run-service.js';
+import { upsertBusinessFunction, upsertSodRule } from '../govern/sod-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 const USERS = 'OU=Users,DC=acme,DC=test';
@@ -1031,6 +1032,190 @@ describe('the guard at the call site', () => {
     const actions = await actionsOf(run.id);
     expect(actions.map((a) => a.actionType)).toContain('create_account');
     expect(actions.every((a) => a.status === 'proposed')).toBe(true);
+  });
+
+  // --- the segregation-of-duties axis of the guard (spec section 5) ---
+
+  /**
+   * A second group at this target, named by the SAME business rule, and a
+   * `critical` SoD rule making the two incompatible.
+   *
+   * One birthright rule granting both sides is the shape §5 names, and it is
+   * the shape an administrator produces without noticing: the two groups are
+   * both "what Finance staff get", and nothing in Provision's own screens has
+   * ever had a reason to say they are incompatible.
+   *
+   * The Govern snapshot carries NO holdings deliberately. Bea holds nothing
+   * today; the violation is entirely in what this run would do, which is
+   * exactly what the axis is supposed to see and what a check over standing
+   * violations would miss.
+   */
+  const seedSodRuleOverBothSides = async () => {
+    const APPROVE_DN = 'CN=AP approve,OU=Groups,DC=acme,DC=test';
+    target.entitlements.push({
+      externalId: 'guid-ap-approve',
+      dn: APPROVE_DN,
+      type: 'group',
+      displayName: 'AP approve',
+    });
+    const approveId = await withTenant(tenantId, async (tx) => {
+      const approve = await tx.entitlement.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          externalId: 'guid-ap-approve',
+          dn: APPROVE_DN,
+          type: 'group',
+          displayName: 'AP approve',
+          status: 'present',
+        },
+      });
+      const snapshot = await tx.accessSnapshot.create({
+        data: {
+          tenantId,
+          kind: 'manual',
+          status: 'complete',
+          asOf: NOW,
+          unattributedAccountCount: 0,
+        },
+      });
+      await tx.snapshotSource.create({
+        data: {
+          tenantId,
+          snapshotId: snapshot.id,
+          sourceKind: 'syntraInternal',
+          sourceId: 'syntra',
+          sourceName: 'Syntra',
+          completeness: 'complete',
+          staleness: 'fresh',
+          freshnessSlaHours: 24,
+        },
+      });
+      return approve.id;
+    });
+
+    // The one rule now names both sides.
+    const rule = await withTenant(tenantId, (tx) => tx.businessRule.findFirstOrThrow());
+    await upsertBusinessRule(tenantId, null, targetId, {
+      id: rule.id,
+      name: 'Finance staff',
+      condition: { field: 'contract.department', op: 'equals', value: 'Finance' },
+      grantsAccount: true,
+      enabled: true,
+      entitlementIds: [entitlementId, approveId],
+    });
+
+    const ownerId = await withTenant(tenantId, async (tx) =>
+      (await tx.person.findFirstOrThrow()).id,
+    );
+    const raise = await upsertBusinessFunction(tenantId, null, {
+      name: 'Raise a payment',
+      description: null,
+      ownerPersonId: ownerId,
+      resources: [
+        { systemId: targetId, resourceKind: 'targetEntitlement', resourceId: entitlementId },
+      ],
+    });
+    const approve = await upsertBusinessFunction(tenantId, null, {
+      name: 'Approve a payment',
+      description: null,
+      ownerPersonId: ownerId,
+      resources: [
+        { systemId: targetId, resourceKind: 'targetEntitlement', resourceId: approveId },
+      ],
+    });
+    await upsertSodRule(tenantId, null, {
+      name: 'Payment raising and approval',
+      functionAId: raise.id,
+      functionBId: approve.id,
+      severity: 'critical',
+      rationale: 'the same person must not raise a payment and approve it',
+      exceptionWorkflowId: null,
+      enabled: true,
+    });
+    return { approveId };
+  };
+
+  /** Anna established at the target, Bea new: the run creates and grants. */
+  const seedRoomForOneJoiner = async () => {
+    const personId = await seedPerson('Anna', 'Novak', null);
+    const anchor = await seedObject('anna.novak', { holdsFinance: true });
+    await seedKnownAccount(personId, anchor, 'anna.novak', { holdsFinance: true });
+    await markApplied();
+    await seedPerson('Bea', 'Olsen', null);
+    await updateTarget(tenantId, provider, null, targetId, {
+      thresholds: { createAccountThresholdPercent: 100 },
+    });
+  };
+
+  it('marks a run requiresConfirmation when it would INTRODUCE a critical SoD violation', async () => {
+    await seedRoomForOneJoiner();
+    await seedSodRuleOverBothSides();
+
+    const run = await preview();
+    // Refused PENDING CONFIRMATION, which is what a human reviewing a plan can
+    // act on, and the reason names the rule so they know what they are
+    // confirming.
+    expect(run.requiresConfirmation).toBe(true);
+    expect(run.blockedReason).toContain('critical segregation-of-duties');
+    expect(run.blockedReason).toContain('Payment raising and approval');
+
+    // And NEVER a refusal, and never at anybody's expense. A person whose
+    // contract entitles them to both sides is not doing anything wrong;
+    // refusing to provision them would mean they cannot do their job because
+    // of a rule somebody else wrote. That is the unprocessable-person trap,
+    // produced by a governance control, and it is the failure this design
+    // exists to avoid — so both halves are asserted, not just the first.
+    const row = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findUniqueOrThrow({ where: { id: run.id } }),
+    );
+    expect(row.personsUnprocessable).toBe(0);
+    const exceptions = await withTenant(tenantId, (tx) =>
+      tx.provisionException.findMany({ where: { runId: run.id } }),
+    );
+    expect(exceptions).toEqual([]);
+    // Bea still gets BOTH sides planned. The run is held for a human to read,
+    // not narrowed behind their back: a plan silently missing one of its two
+    // grants would apply, look successful, and leave her unable to do half her
+    // job with nothing anywhere saying why.
+    const bea = await withTenant(tenantId, (tx) =>
+      tx.person.findFirstOrThrow({ where: { givenName: 'Bea' } }),
+    );
+    const actions = await actionsOf(run.id);
+    expect(
+      actions.filter(
+        (a) => a.actionType === 'grant_entitlement' && a.personId === bea.id,
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('never downgrades a run refused OUTRIGHT into a confirmable one', async () => {
+    // Segregation of duties may RAISE a clean run to "confirm first". It may
+    // never lower a hard refusal to "confirm and proceed": here the target
+    // returned no accounts at all after a run had been applied against it,
+    // which is indistinguishable from an unreachable directory, and there is
+    // nothing an administrator could usefully confirm about that.
+    await seedPerson('Bea', 'Olsen', null);
+    await markApplied();
+    await seedSodRuleOverBothSides();
+
+    const run = await preview();
+    expect(run.status).toBe('blocked');
+    expect(run.requiresConfirmation).toBe(false);
+    expect(run.blockedReason).toContain('the target returned no accounts at all');
+    // And the SoD reason is still carried, beside the refusal rather than
+    // instead of it — an administrator investigating the refusal should see
+    // everything the run found.
+    expect(run.blockedReason).toContain('critical segregation-of-duties');
+  });
+
+  it('leaves a run alone when no SoD rule is configured', async () => {
+    // The same plan, without the rule: the axis must not block anything by
+    // existing.
+    await seedRoomForOneJoiner();
+    const run = await preview();
+    expect(run.status).toBe('previewed');
+    expect(run.blockedReason).toBeNull();
   });
 
   it('counts holders from the target, not from Syntra own grants', async () => {

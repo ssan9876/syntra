@@ -193,6 +193,24 @@ describe('sodImpact — the rule editor’s and Provision’s preview', () => {
     expect(impact.alreadyViolating).toBe(1);
   });
 
+  it('sees a subject who holds NOTHING today and would be granted BOTH sides', () => {
+    // The birthright case, and the one a rule editor most needs: one rule
+    // grants both functions to a new joiner at once. They appear in no
+    // holdings map because they hold nothing yet, and an implementation that
+    // iterated only the holdings would report the plan as clean.
+    const impact = sodImpact({
+      rules: [rule],
+      holdingsByPerson: new Map(),
+      wouldGrant: new Map([
+        ['p-new', [holding({}), holding({ resourceId: 'ent-ap-approve' })]],
+      ]),
+      unevaluable: [],
+    });
+    expect(impact.introduced).toHaveLength(1);
+    expect(impact.introduced[0]).toMatchObject({ personId: 'p-new', severity: 'critical' });
+    expect(impact.introducedCritical).toBe(1);
+  });
+
   it('counts nothing as introduced when the grant changes nothing', () => {
     const impact = sodImpact({
       rules: [rule],

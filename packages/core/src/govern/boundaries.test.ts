@@ -110,6 +110,35 @@ describe('no import cycle reaches snapshot-service.ts — Ruling G-6', () => {
   });
 });
 
+describe('the prevention points depend on Govern, never the reverse', () => {
+  it('keeps every import of Provision and Automate out of the govern directory', () => {
+    // Provision's rule editor and run guard, and Automate's eligibility check
+    // and catalog, all import Govern. That is one-way by design: `sod.ts` is
+    // pure and takes plain values, so none of them acquires a dependency on a
+    // RUNNING Govern, and Govern acquires no dependency on them at all.
+    //
+    // The two exceptions are named, not implied: `jobs.ts` and `collect.ts`
+    // reach into Automate for the outbox and for the live-grant vocabulary,
+    // and both were already true before segregation of duties existed. An
+    // import of `../provision/` in either direction would close a loop that
+    // ESM tolerates until an initialisation order changes.
+    const ALLOWED = new Map([
+      ['jobs.ts', ["'../automate/notify.js'"]],
+      ['collect.ts', ["'../automate/types.js'"]],
+    ]);
+    for (const file of sourceFiles()) {
+      const imports = [...file.text.matchAll(/from ('\.\.\/(?:provision|automate)\/[^']+')/g)].map(
+        (m) => m[1]!,
+      );
+      const allowed = ALLOWED.get(file.name) ?? [];
+      expect(
+        imports.filter((i) => !allowed.includes(i)),
+        `${file.name} must not import Provision or Automate`,
+      ).toEqual([]);
+    }
+  });
+});
+
 describe('the sequencer is jobs.ts, not snapshot-service.ts', () => {
   it('keeps snapshot-service free of any import of sod-service', () => {
     // They would otherwise import each other: sod-service needs the snapshot

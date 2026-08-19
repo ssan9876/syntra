@@ -178,7 +178,16 @@ export function sodImpact(input: SodImpactInput): SodImpact {
   const unevaluableSubjects = new Set<string>();
   let alreadyViolating = 0;
 
-  for (const [personId, holdings] of input.holdingsByPerson) {
+  // The UNION of both maps, not `holdingsByPerson` alone. A birthright rule
+  // that grants BOTH sides at once introduces a violation in somebody who
+  // holds nothing today, and iterating only over people who already hold
+  // something would report that plan as clean — which is the single case a
+  // rule editor's preview most needs to catch, because it is the one an
+  // administrator creates with one click.
+  const subjects = new Set([...input.holdingsByPerson.keys(), ...input.wouldGrant.keys()]);
+
+  for (const personId of subjects) {
+    const holdings = input.holdingsByPerson.get(personId) ?? [];
     const added = input.wouldGrant.get(personId) ?? [];
     const after = [...holdings, ...added];
 

@@ -500,8 +500,12 @@ export function evaluateGrantImpact(
  * worse failure than an unchecked grant in a tenant that has configured no
  * rules. Detection itself (`detectSodViolations`) takes an explicit snapshot id
  * and still refuses an unreadable one, because there the absence IS the answer.
+ *
+ * Exported for Provision's two preview surfaces -- the rule editor and the run
+ * guard -- which need the same degradation for the same reason: neither may
+ * refuse to preview a plan because Govern has never run.
  */
-async function loadSodFactsIfEvaluable(tx: TenantClient): Promise<SodFacts | null> {
+export async function loadSodFactsIfEvaluable(tx: TenantClient): Promise<SodFacts | null> {
   const ruleCount = await tx.sodRule.count({ where: { enabled: true } });
   if (ruleCount === 0) return null;
   try {
