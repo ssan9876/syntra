@@ -23,9 +23,13 @@ import {
   detectPrivilegedUncertified,
   detectStaleSources,
   detectUnattributableHoldings,
-  reconcileFindings,
   type DetectHolding,
 } from './finding-service.js';
+// `reconcileFindings` is deliberately NOT imported here. The build closes
+// standing findings through `reconcileLinkedFindings`, which also carries the
+// Provision `DriftFinding` linkage; a bare reconcile would close a Govern
+// finding while leaving the drift row it aggregates open.
+import { adoptDriftClosures, reconcileLinkedFindings } from './drift-link.js';
 import type { FindingKind } from './types.js';
 
 // NOTE: this module does NOT import './readable.js'. It has no use for the
@@ -461,7 +465,7 @@ export async function buildSnapshot(
       'privileged_uncertified',
     ];
 
-    await reconcileFindings(
+    await reconcileLinkedFindings(
       tenantId,
       snapshotId,
       STANDING_KINDS,
@@ -480,6 +484,11 @@ export async function buildSnapshot(
       ],
       { now: collected.asOf },
     );
+
+    // The other direction, in the same build: a `DriftFinding` Provision has
+    // closed since the last snapshot resolves the Govern finding that
+    // aggregates it. One problem, one row, closed from either end.
+    await adoptDriftClosures(tenantId, snapshotId, { now: collected.asOf });
 
     // ---- flip to complete, with the counts and the audit event --------------
     const unattributableCount = prepared.filter((h) => h.unattributable).length;

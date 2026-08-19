@@ -236,3 +236,4 @@ export * from './govern/collect.js';
 export * from './govern/readable.js';
 export * from './govern/snapshot-service.js';
 export * from './govern/finding-service.js';
+export * from './govern/drift-link.js';
