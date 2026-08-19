@@ -226,3 +226,6 @@ export * from './automate/sweep-guard.js';
 export * from './automate/sweep-service.js';
 export * from './automate/delegation-service.js';
 export * from './automate/jobs.js';
+
+// Govern — access governance: inventory, campaigns and segregation of duties.
+export * from './govern/types.js';
