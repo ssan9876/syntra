@@ -83,3 +83,36 @@ export async function readableSnapshot(
     })),
   };
 }
+
+export interface SnapshotBracket {
+  /** The most recent complete snapshot at or before the date. */
+  before: { id: string; asOf: Date } | null;
+  /** The first complete snapshot strictly after it. */
+  after: { asOf: Date } | null;
+}
+
+/**
+ * The two complete snapshots a date falls between.
+ *
+ * A LOCATOR, not a read: it returns ids and as-of times, never a snapshot's
+ * contents, and the caller still goes through `readableSnapshot` for those.
+ * It lives HERE rather than in `report-service.ts` because Ruling G-1's
+ * boundary test forbids any other module from touching `accessSnapshot`
+ * directly -- and rightly, since a `findFirst` there is one edit away from
+ * becoming a read that skips the readability gate. Answering "which snapshot"
+ * is this module's job; deciding what a gap between them means is the
+ * caller's.
+ */
+export async function snapshotBracket(tx: TenantClient, date: Date): Promise<SnapshotBracket> {
+  const before = await tx.accessSnapshot.findFirst({
+    where: { status: 'complete', asOf: { lte: date } },
+    orderBy: { asOf: 'desc' },
+    select: { id: true, asOf: true },
+  });
+  const after = await tx.accessSnapshot.findFirst({
+    where: { status: 'complete', asOf: { gt: date } },
+    orderBy: { asOf: 'asc' },
+    select: { asOf: true },
+  });
+  return { before, after };
+}

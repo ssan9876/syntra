@@ -482,10 +482,20 @@ describe('the audit integrity finding and the nightly detect stage (C-a)', () =>
         });
       }
     });
-    await asDatabaseSuperuser(
-      `UPDATE "AuditEvent" SET action = 'tampered' WHERE "tenantId" = $1 AND sequence = 2`,
-      [tenantId],
-    );
+    // The rules have to come off first. PostgreSQL RULES are NOT bypassed by
+    // superuser the way RLS is, so a bare superuser UPDATE against
+    // `AuditEvent` is rewritten to DO INSTEAD NOTHING: it reports success,
+    // changes nothing, and this case then asserts that an UNTAMPERED chain
+    // raised no finding -- which it would not.
+    await asDatabaseSuperuser('ALTER TABLE "AuditEvent" DISABLE RULE audit_no_update');
+    try {
+      await asDatabaseSuperuser(
+        `UPDATE "AuditEvent" SET action = 'tampered' WHERE "tenantId" = $1 AND sequence = 2`,
+        [tenantId],
+      );
+    } finally {
+      await asDatabaseSuperuser('ALTER TABLE "AuditEvent" ENABLE RULE audit_no_update');
+    }
     await verifyIncremental(tenantId, { now: NOW });
 
     const raised = await withTenant(tenantId, (tx) =>

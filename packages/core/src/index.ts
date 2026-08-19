@@ -239,3 +239,6 @@ export * from './govern/finding-service.js';
 export * from './govern/drift-link.js';
 export * from './govern/orphan-service.js';
 export * from './govern/audit-integrity.js';
+export * from './govern/settings-service.js';
+export * from './govern/report-service.js';
+export * from './govern/export-service.js';
