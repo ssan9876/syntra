@@ -143,8 +143,8 @@ export async function createEvidencePack(
   actorUserId: string,
   input: {
     kind: 'campaign' | 'report' | 'period';
-    snapshotId?: string;
-    campaignId?: string;
+    snapshotId?: string | undefined;
+    campaignId?: string | undefined;
     scope: Record<string, unknown>;
   },
 ): Promise<{ id: string; digest: string; bundle: EvidenceBundle }> {

@@ -36,6 +36,7 @@ import { registerAdminTargetRoutes } from './routes/admin/targets.js';
 import { registerAdminProfileRoutes } from './routes/admin/profiles.js';
 import { registerAdminRuleRoutes } from './routes/admin/rules.js';
 import { registerAdminProvisionRunRoutes } from './routes/admin/provision-runs.js';
+import { registerAdminGovernRoutes } from './routes/admin/govern.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerAutomatePortalRoutes } from './routes/automate-portal.js';
 import { registerSamlIdpRoutes } from './routes/saml-idp.js';
@@ -223,6 +224,14 @@ export async function buildApp(
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminProfileRoutes, { prefix: '/api/admin' });
+  // Govern. Registered after the Provision plugins so nothing under
+  // `/govern/...` can be shadowed by a broader `:id` route above it, and given
+  // the scheduler factory because `Refresh now` enqueues Directory Sync's and
+  // Provision's OWN jobs rather than reading a source itself.
+  await app.register(registerAdminGovernRoutes, {
+    prefix: '/api/admin',
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
   await app.register(registerAdminRuleRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminProvisionRunRoutes, {
     prefix: '/api/admin',

@@ -56,6 +56,31 @@ export const PERMISSIONS = {
   PROVISION_READ: 'provision.read',
   /** Every configuration mutation, every apply and every confirmation. */
   PROVISION_MANAGE: 'provision.manage',
+  /** Snapshots, reports, findings, campaigns, violations. SCOPEABLE to an org unit. */
+  GOVERN_READ: 'govern.read',
+  /**
+   * Build snapshots, create and close campaigns, confirm a revocation batch,
+   * define functions and rules, assign findings, change a setting.
+   */
+  GOVERN_MANAGE: 'govern.manage',
+  /**
+   * Approve an SoD exception where its rule names no workflow. DELIBERATELY
+   * distinct from `govern.manage`: administering the governance module and
+   * accepting the organization's risk are different jobs, and a product that
+   * conflates them hands risk acceptance to whoever configures the software.
+   */
+  GOVERN_ACCEPT_RISK: 'govern.accept_risk',
+  /**
+   * Produce a CSV or an evidence bundle. Distinct from `govern.read` because
+   * reading a screen and walking out with a file are different acts with
+   * different consequences, and only one of them is a copy.
+   */
+  GOVERN_EXPORT: 'govern.export',
+  /*
+   * There is deliberately no `govern.review`. Review authority comes from
+   * resolution, as approval authority does in Automate. A tenant-wide "may
+   * certify anything" permission is not a thing anybody should hold.
+   */
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

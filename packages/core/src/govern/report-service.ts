@@ -130,7 +130,7 @@ const BUCKET_ORDER = [
 
 export async function whoHasAccessToSystem(
   tenantId: string,
-  input: { snapshotId?: string; systemId: string; resourceId?: string },
+  input: { snapshotId?: string | undefined; systemId: string; resourceId?: string | undefined },
 ): Promise<ReportEnvelope<{ rows: SystemAccessRow[]; holderCount: Tri<number> }>> {
   const loaded = await withTenant(tenantId, async (tx) => {
     const snapshot = await readableSnapshot(tx, input.snapshotId);
@@ -409,7 +409,7 @@ export interface PersonHoldingRow {
 
 export async function whatDoesPersonHold(
   tenantId: string,
-  input: { snapshotId?: string; personId: string; on?: Date },
+  input: { snapshotId?: string | undefined; personId: string; on?: Date | undefined },
 ): Promise<
   ReportEnvelope<{
     personId: string;
@@ -511,6 +511,13 @@ export interface ChangeReport {
   /** Two panes that are never merged. */
   observedChanges: {
     subjectKey: string;
+    /**
+     * Carried so a scoped reader's report can be filtered to the persons they
+     * may see. `subjectKey` would need parsing at every call site, and an
+     * unattributed account has no person at all — which is the case that must
+     * not silently pass a filter.
+     */
+    personId: string | null;
     resourceName: string;
     change: string;
     explained: boolean;
@@ -560,6 +567,7 @@ export async function whatChanged(
     limitation: DIFF_LIMITATION,
     observedChanges: loaded.events.map((e) => ({
       subjectKey: e.subjectKey,
+      personId: e.personId,
       resourceName: e.resourceName,
       change: e.change,
       explained: e.explained,
@@ -593,7 +601,7 @@ export interface ApprovalReport {
 export async function whoApprovedIt(
   tenantId: string,
   input: {
-    snapshotId?: string;
+    snapshotId?: string | undefined;
     subjectKey: string;
     systemId: string;
     resourceKind: ResourceKind;

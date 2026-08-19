@@ -1,6 +1,8 @@
-import { withTenant, type TenantClient } from '@syntra/db';
+import { Prisma, withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { currentTenant } from '../tenant-context.js';
+import type { z } from 'zod';
+import { governSettingsBody } from '@syntra/contracts';
 import type { MutuallyAssignable } from './types.js';
 
 /** Get-or-create the single row, so no caller has to know whether it exists. */
@@ -42,21 +44,27 @@ const PERCENT_FIELDS = [
  * Global Constraint 12's own terms.
  */
 export interface GovernSettingsInput {
-  snapshotSchedule?: string;
-  snapshotRetentionDays?: number;
-  defaultFreshnessSlaHours?: number;
-  maxSnapshotAgeDays?: number;
-  batchThresholdPercent?: number;
-  perResourceThresholdPercent?: number;
-  personPopulationDropPercent?: number;
-  minimumCoveragePercent?: number;
-  bulkCertifyLimit?: number;
-  dispatchSlaHours?: number;
-  privilegedRecertifyDays?: number;
-  maxExceptionDays?: number;
-  exceptionWarningDays?: number[];
-  minReciprocalDecisions?: number;
-  reciprocityWindowDays?: number;
+  /**
+   * Nullable, because clearing the cadence is a real operation:
+   * `applyGovernSchedules` reads `null` as "unschedule every purpose for this
+   * tenant", and a settings body that could not express it would leave a
+   * tenant that turned snapshots off with schedule rows nothing removes.
+   */
+  snapshotSchedule?: string | null | undefined;
+  snapshotRetentionDays?: number | undefined;
+  defaultFreshnessSlaHours?: number | undefined;
+  maxSnapshotAgeDays?: number | undefined;
+  batchThresholdPercent?: number | undefined;
+  perResourceThresholdPercent?: number | undefined;
+  personPopulationDropPercent?: number | undefined;
+  minimumCoveragePercent?: number | undefined;
+  bulkCertifyLimit?: number | undefined;
+  dispatchSlaHours?: number | undefined;
+  privilegedRecertifyDays?: number | undefined;
+  maxExceptionDays?: number | undefined;
+  exceptionWarningDays?: number[] | undefined;
+  minReciprocalDecisions?: number | undefined;
+  reciprocityWindowDays?: number | undefined;
 }
 
 export const GOVERN_SETTING_KEYS: readonly (keyof GovernSettingsInput)[] = [
@@ -81,6 +89,20 @@ export const GOVERN_SETTING_KEYS: readonly (keyof GovernSettingsInput)[] = [
 type _KeysCovered = MutuallyAssignable<
   keyof GovernSettingsInput,
   (typeof GOVERN_SETTING_KEYS)[number]
+>;
+
+/**
+ * The HTTP body and this input cannot drift apart either.
+ *
+ * It lives here rather than beside the schema because `@syntra/contracts` has
+ * no dependency on `@syntra/core` — core depends on contracts — so the guard
+ * only compiles on this side. `z.infer` over a `.partial().strict()` object is
+ * an ordinary type (no `z.lazy`, no `z.ZodType<T>` annotation), so this guard
+ * actually bites: add a key to one side and the other side stops compiling.
+ */
+type _SettingsBodyMatches = MutuallyAssignable<
+  z.infer<typeof governSettingsBody>,
+  GovernSettingsInput
 >;
 
 export class UnknownSettingError extends Error {
@@ -116,9 +138,22 @@ export async function updateGovernSettings(
 
   await withTenant(tenantId, async (tx) => {
     const before = await governSettings(tx);
-    // No cast: `GovernSettingsInput` is a partial over named scalar columns and
-    // Prisma accepts it directly.
-    const after = await tx.governSettings.update({ where: { tenantId }, data: input });
+
+    // The zod body infers every optional as `T | undefined`, and under
+    // `exactOptionalPropertyTypes` Prisma's generated update type does not
+    // admit a present key whose value is `undefined`. Dropping the absent keys
+    // is a normalisation rather than a way around the type system: what
+    // remains is exactly the keys the caller set, and `GOVERN_SETTING_KEYS`
+    // above has already refused anything not on the allow-list.
+    //
+    // Cast to the NAMED generated type, never `as never`: this one still
+    // checks that the values are the right shape for the columns, which is the
+    // whole property Global Constraint 12 is protecting.
+    const data = Object.fromEntries(
+      Object.entries(input).filter(([, value]) => value !== undefined),
+    ) as Prisma.GovernSettingsUpdateInput;
+
+    const after = await tx.governSettings.update({ where: { tenantId }, data });
 
     const changed: Record<string, { from: unknown; to: unknown }> = {};
     for (const key of Object.keys(input)) {
