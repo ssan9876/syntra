@@ -12,6 +12,13 @@ import {
 } from './audit-integrity.js';
 import { sweepAcceptedFindings } from './finding-service.js';
 import { refreshOrphanProposals } from './orphan-service.js';
+import {
+  closeDueCampaigns,
+  mootDepartedSubjects,
+  mootVanishedHoldings,
+  reassignInvalidReviewers,
+  runCampaignReminders,
+} from './reviewer-service.js';
 import { detectSodViolations } from './sod-service.js';
 import { governSettings } from './settings-service.js';
 import { buildSnapshot, pruneSnapshots } from './snapshot-service.js';
@@ -105,6 +112,19 @@ export async function runSnapshotJob(
   // already depends on both and on neither's internals, which is where a
   // sequencer belongs.
   await detectSodViolations(payload.tenantId, built.snapshotId, { now });
+
+  // Campaign upkeep, over the picture the build just produced. All three
+  // read the CURRENT snapshot, so they belong here rather than on their own
+  // schedule: a moot decided against yesterday's holdings is a moot decided
+  // against a world that has moved.
+  const openCampaigns = await withTenant(payload.tenantId, (tx) =>
+    tx.campaign.findMany({ where: { status: 'open' }, select: { id: true } }),
+  );
+  for (const campaign of openCampaigns) {
+    await mootDepartedSubjects(payload.tenantId, campaign.id, { now });
+    await mootVanishedHoldings(payload.tenantId, campaign.id, built.snapshotId, { now });
+    await reassignInvalidReviewers(payload.tenantId, campaign.id, { now });
+  }
 
   await sweepAcceptedFindings(payload.tenantId, now);
   return {
@@ -332,6 +352,19 @@ export function registerGovernJobs(
   });
   scheduler.register<GovernJobPayload>(GOVERN_ANCHOR_JOB, async (payload) => {
     await runAnchorJob(payload, { anchorSink: options.anchorSink ?? null });
+  });
+  // `publicUrl` for the same reason the verify job takes it: every one of these
+  // notifications carries a link into a review queue, and a link that resolves
+  // to nothing is a reminder nobody can act on.
+  scheduler.register<GovernJobPayload>(GOVERN_REMIND_JOB, async (payload) => {
+    await runCampaignReminders(payload.tenantId, {
+      ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
+    });
+  });
+  scheduler.register<GovernJobPayload>(GOVERN_CLOSE_JOB, async (payload) => {
+    await closeDueCampaigns(payload.tenantId, {
+      ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
+    });
   });
 }
 

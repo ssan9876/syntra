@@ -247,3 +247,4 @@ export * from './govern/scope.js';
 export * from './govern/sod.js';
 export * from './govern/sod-service.js';
 export * from './govern/decision-service.js';
+export * from './govern/reviewer-service.js';

@@ -125,6 +125,16 @@ describe('the prevention points depend on Govern, never the reverse', () => {
     const ALLOWED = new Map([
       ['jobs.ts', ["'../automate/notify.js'"]],
       ['collect.ts', ["'../automate/types.js'"]],
+      // §12: Automate's selector machinery is REUSED rather than
+      // reimplemented. An approval chain and a review chain disagreeing about
+      // who somebody's manager is would be a support call nobody can close.
+      // `approvers.js` is pure resolution and `notify.js` is the outbox;
+      // neither reaches back into Govern.
+      ['decision-service.ts', ["'../automate/approvers.js'"]],
+      [
+        'reviewer-service.ts',
+        ["'../automate/approvers.js'", "'../automate/notify.js'"],
+      ],
     ]);
     for (const file of sourceFiles()) {
       const imports = [...file.text.matchAll(/from ('\.\.\/(?:provision|automate)\/[^']+')/g)].map(
