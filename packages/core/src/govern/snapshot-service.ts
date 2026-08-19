@@ -16,6 +16,17 @@ import {
   type ClassifiedSource,
 } from './freshness.js';
 import { SYNTRA_SYSTEM_ID, subjectKey, type ResourceKind } from './types.js';
+import {
+  detectAccessWithoutContract,
+  detectCoverageGaps,
+  detectNoHumanDecision,
+  detectPrivilegedUncertified,
+  detectStaleSources,
+  detectUnattributableHoldings,
+  reconcileFindings,
+  type DetectHolding,
+} from './finding-service.js';
+import type { FindingKind } from './types.js';
 
 // NOTE: this module does NOT import './readable.js'. It has no use for the
 // accessor — it writes snapshots, it does not read them back — and Task 8 makes
@@ -384,6 +395,91 @@ export async function buildSnapshot(
         );
       }
     }
+
+    // ---- detect: the standing findings ------------------------------------
+    const contracts = await withTenant(tenantId, (tx) =>
+      tx.contract.findMany({ select: { personId: true, startDate: true, endDate: true } }),
+    );
+    const certifications = await withTenant(tenantId, (tx) =>
+      tx.holdingCertification.findMany({
+        select: {
+          subjectRefType: true, subjectRefId: true, systemId: true,
+          resourceKind: true, resourceId: true, lastCertifiedAt: true,
+        },
+      }),
+    );
+    const settings = await withTenant(tenantId, (tx) =>
+      tx.governSettings.findUnique({ where: { tenantId }, select: { privilegedRecertifyDays: true } }),
+    );
+
+    const detectHoldings: DetectHolding[] = prepared.map((h) => ({
+      subjectKey: h.subjectKey,
+      personId: h.personId,
+      accountRef: h.accountRef,
+      systemId: h.systemId,
+      systemName: h.systemId,
+      resourceKind: h.resourceKind,
+      resourceId: h.resourceId,
+      resourceName: h.resourceName,
+      privileged: h.privileged,
+      unattributable: h.unattributable,
+      attributionKinds: h.attributions.map((a) => a.kind),
+    }));
+
+    const certifiedAt = new Map(
+      certifications.map((c) => [
+        `${c.subjectRefType === 'person' ? 'person' : 'account'}:${c.subjectRefId}|${c.systemId}|${c.resourceKind}|${c.resourceId}`,
+        c.lastCertifiedAt,
+      ]),
+    );
+
+    /**
+     * The detect stage is authoritative for EXACTLY these six kinds and names
+     * them, so the reconciliation cannot reach `unexplained_gain` (Task 10),
+     * `orphan_account` (Task 8A), `audit_chain_broken` (Task 10) or any
+     * campaign kind. The list is written out rather than derived from the
+     * drafts: a detector that legitimately produces zero drafts this run must
+     * still close last run's findings.
+     *
+     * `audit_chain_broken` MUST STAY OUT OF THIS LIST, and it is the reason the
+     * kind exists at all. The audit verifier's two `critical` findings were
+     * once raised under `coverage_gap` — a member here, whose only producer is
+     * `detectCoverageGaps` and which can only ever emit
+     * `subjectRefType: 'source'`. So this sweep, running nightly, resolved
+     * every audit integrity alarm with a snapshot that had read no audit events
+     * whatever. That is C1's defect reproduced at the two sites C5's fix
+     * created: the alarm switched off overnight, every night, by the thing that
+     * tidies up findings. Nothing in a snapshot build can show an audit chain
+     * break gone, so nothing in a snapshot build may close one.
+     */
+    const STANDING_KINDS: readonly FindingKind[] = [
+      'unattributable_holding',
+      'access_without_contract',
+      'no_human_decision',
+      'stale_source',
+      'coverage_gap',
+      'privileged_uncertified',
+    ];
+
+    await reconcileFindings(
+      tenantId,
+      snapshotId,
+      STANDING_KINDS,
+      [
+        ...detectUnattributableHoldings(detectHoldings),
+        ...detectAccessWithoutContract(detectHoldings, contracts, collected.asOf),
+        ...detectNoHumanDecision(detectHoldings),
+        ...detectStaleSources(sources),
+        ...detectCoverageGaps(allGaps),
+        ...detectPrivilegedUncertified(
+          detectHoldings,
+          certifiedAt,
+          collected.asOf,
+          settings?.privilegedRecertifyDays ?? 90,
+        ),
+      ],
+      { now: collected.asOf },
+    );
 
     // ---- flip to complete, with the counts and the audit event --------------
     const unattributableCount = prepared.filter((h) => h.unattributable).length;
