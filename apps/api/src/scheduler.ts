@@ -2,13 +2,19 @@ import type { FastifyBaseLogger } from 'fastify';
 import { prisma, withTenant } from '@syntra/db';
 import {
   applyAutomateSchedules,
+  applyGovernSchedules,
   applySourceSchedule,
   applyTargetSchedule,
   automateSettings,
   createScheduler,
+  fileAnchorSink,
+  governSnapshotSchedule,
+  localFileCheckpointSigner,
   localMasterKeyProvider,
+  mailAnchorSink,
   registerKeyRotationJob,
   registerAutomateJobs,
+  registerGovernJobs,
   registerProvisionJobs,
   registerSyncJobs,
   scheduleKeyRotation,
@@ -162,6 +168,24 @@ export async function scheduleBackgroundWork(
     }
   }
 
+  // AFTER the Automate loop, for the reason the comment above records: the
+  // plan put this between the key-rotation and source loops, and
+  // `scheduler.test.ts` identifies the transaction to fail BY COUNT. Any loop
+  // inserted above the source loop fails the wrong one.
+  for (const tenant of tenants) {
+    try {
+      // Get-or-create through `governSettings`, so a tenant that has never
+      // opened the Govern screen is scheduled on the default cadence rather
+      // than skipped.
+      const schedule = await governSnapshotSchedule(tenant.id);
+      await applyGovernSchedules(scheduler, tenant.id, schedule);
+    } catch (cause) {
+      logger.error(
+        { err: cause, tenantId: tenant.id },
+        'failed to schedule Govern background work',
+      );
+    }
+  }
 }
 
 /**
@@ -208,6 +232,54 @@ export async function startSyncScheduler(
     // system is that path -- an outbox job registered with no transport sends
     // nothing at all, and the failure is silent.
     registerAutomateJobs(scheduler, transport, { publicUrl: config.publicUrl });
+    // EVERY option is passed. `registerGovernJobs(scheduler)` with no second
+    // argument compiles, runs, schedules all seven jobs and disables three
+    // things at once, saying nothing:
+    //
+    //  - no `signer`, so `checkpointTrust` is handed `null` on every production
+    //    run. The protection is correct, unskippable and mutation-guarded --
+    //    and unreachable, because the state it refuses
+    //    (`unsigned_while_signer_configured`, exactly the forged checkpoint the
+    //    attack inserts) needs a signer to be configured before it can occur.
+    //  - no `anchorSink`, so `runAnchorJob` returns `not_configured` forever
+    //    and §17's anchoring -- which `AuditAnchor`'s own schema comment calls
+    //    the ONLY protection against the operator -- never happens.
+    //  - no `publicUrl`, so it defaults to `''` and every critical-finding
+    //    alarm carries a relative `/admin/govern/findings/...` link, which in
+    //    an email client resolves to nothing.
+    //
+    // The sibling registrations above pass their dependencies; so does this one.
+    registerGovernJobs(scheduler, {
+      publicUrl: config.publicUrl,
+      transport,
+      // `== null`, not `=== null`: this whole function's contract is that it
+      // never rejects, and an absent key must degrade to "this deployment signs
+      // nothing" rather than throw during boot. `runAnchorJob` reads its sink
+      // the same way.
+      signer:
+        config.governCheckpointKey == null
+          ? null
+          : localFileCheckpointSigner(
+              config.governCheckpointKeyId,
+              config.governCheckpointKey,
+            ),
+      anchorSink:
+        config.governAnchorDir != null
+          ? fileAnchorSink(config.governAnchorDir)
+          : config.governAnchorEmail != null
+            ? // The DEPLOYMENT's name, not a tenant's. `registerGovernJobs` runs
+              // once for the process and the handler serves every tenant, so a
+              // tenant name captured here would be on every other tenant's
+              // receipt. A receipt naming the wrong tenant is worse than one
+              // naming none; the payload names the tenant and the anchor row
+              // records it.
+              mailAnchorSink(
+                transport,
+                config.governAnchorEmail,
+                new URL(config.publicUrl).host,
+              )
+            : null,
+    });
     await scheduler.start();
   } catch (cause) {
     logger.error(

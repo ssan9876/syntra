@@ -86,3 +86,35 @@ describe('loadConfig — TRUST_PROXY', () => {
     ).toThrow(/TRUST_PROXY/);
   });
 });
+
+describe('the Govern checkpoint signer and anchor sinks', () => {
+  it('accepts a deployment with no Govern signing key and says so in the parsed shape', () => {
+    // A deployment with no key is not broken, and the honest default is what
+    // makes `checkpointTrust` able to say `unsigned_no_signer_configured`
+    // rather than pretend. What is not acceptable is the state these keys
+    // remove: the integrity screen telling an operator to configure a signing
+    // key while no configuration key for one exists.
+    const config = loadConfig({ ...valid, GOVERN_CHECKPOINT_KEY: undefined });
+    expect(config.governCheckpointKey).toBeNull();
+    expect(config.governCheckpointKeyId).toBe('govern-checkpoint-1');
+    expect(config.governAnchorDir).toBeNull();
+    expect(config.governAnchorEmail).toBeNull();
+  });
+
+  it('REFUSES a Govern signing key of the wrong length rather than silently truncating', () => {
+    expect(() =>
+      loadConfig({ ...valid, GOVERN_CHECKPOINT_KEY: Buffer.alloc(16).toString('base64') }),
+    ).toThrow(/GOVERN_CHECKPOINT_KEY must be 32 bytes/);
+  });
+
+  it('parses a 32-byte key into a Buffer of exactly that length', () => {
+    const config = loadConfig({
+      ...valid,
+      GOVERN_CHECKPOINT_KEY: Buffer.alloc(32, 7).toString('base64'),
+      GOVERN_CHECKPOINT_KEY_ID: 'rotated-2',
+    });
+    expect(config.governCheckpointKey).toHaveLength(32);
+    expect(config.governCheckpointKeyId).toBe('rotated-2');
+  });
+});
+
