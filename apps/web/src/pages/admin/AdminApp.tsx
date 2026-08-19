@@ -30,6 +30,12 @@ import { RequestQueuePage } from './RequestQueuePage.js';
 import { RequestDetailAdminPage } from './RequestDetailAdminPage.js';
 import { SweepsPage } from './SweepsPage.js';
 import { SweepDetailPage } from './SweepDetailPage.js';
+import { GovernSnapshotsPage } from './GovernSnapshotsPage.js';
+import { GovernSnapshotDetailPage } from './GovernSnapshotDetailPage.js';
+import { GovernReportsPage } from './GovernReportsPage.js';
+import { GovernFindingsPage } from './GovernFindingsPage.js';
+import { GovernOrphansPage } from './GovernOrphansPage.js';
+import { GovernIntegrityPage } from './GovernIntegrityPage.js';
 
 interface NavItem {
   to: string;
@@ -52,6 +58,13 @@ const NAV: NavItem[] = [
   { to: '/admin/automate/workflows', label: 'Approval workflows', permission: 'automate.read' },
   { to: '/admin/automate/requests', label: 'Requests', permission: 'automate.read' },
   { to: '/admin/automate/sweeps', label: 'Expiry sweeps', permission: 'automate.read' },
+  // Findings first: the dashboard leads with what is wrong, not with a
+  // certification rate.
+  { to: '/admin/govern/findings', label: 'Findings', permission: 'govern.read' },
+  { to: '/admin/govern/snapshots', label: 'Snapshots', permission: 'govern.read' },
+  { to: '/admin/govern/reports', label: 'Access reports', permission: 'govern.read' },
+  { to: '/admin/govern/orphans', label: 'Orphan accounts', permission: 'govern.read' },
+  { to: '/admin/govern/integrity', label: 'Audit integrity', permission: 'govern.read' },
   { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
   { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
 ];
@@ -129,6 +142,13 @@ export function AdminApp() {
             <Route path="automate/requests/:id" element={<RequestDetailAdminPage />} />
             <Route path="automate/sweeps" element={<SweepsPage />} />
             <Route path="automate/sweeps/:id" element={<SweepDetailPage />} />
+            {/* Relative paths, and the literal segment before the parametric one. */}
+            <Route path="govern/findings" element={<GovernFindingsPage />} />
+            <Route path="govern/snapshots" element={<GovernSnapshotsPage />} />
+            <Route path="govern/snapshots/:id" element={<GovernSnapshotDetailPage />} />
+            <Route path="govern/reports" element={<GovernReportsPage />} />
+            <Route path="govern/orphans" element={<GovernOrphansPage />} />
+            <Route path="govern/integrity" element={<GovernIntegrityPage />} />
             <Route path="applications" element={<ApplicationsPage />} />
             <Route path="applications/:id" element={<ApplicationDetailPage />} />
             <Route path="policy" element={<PoliciesPage />} />
