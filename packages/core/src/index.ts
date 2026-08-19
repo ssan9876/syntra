@@ -233,3 +233,5 @@ export * from './govern/freshness.js';
 export * from './govern/attribute.js';
 export * from './govern/diff.js';
 export * from './govern/collect.js';
+export * from './govern/readable.js';
+export * from './govern/snapshot-service.js';
