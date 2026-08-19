@@ -135,6 +135,15 @@ describe('the prevention points depend on Govern, never the reverse', () => {
         'reviewer-service.ts',
         ["'../automate/approvers.js'", "'../automate/notify.js'"],
       ],
+      // §11: a campaign's scope is written in "the same closed interpreter
+      // Provision's business rules and Automate's audiences use, over the same
+      // closed field set. A tenant learns one expression language."
+      // `condition.ts` imports nothing but zod, so it is a leaf and the
+      // direction cannot close into a cycle.
+      [
+        'campaign-service.ts',
+        ["'../provision/condition.js'", "'../automate/notify.js'"],
+      ],
     ]);
     for (const file of sourceFiles()) {
       const imports = [...file.text.matchAll(/from ('\.\.\/(?:provision|automate)\/[^']+')/g)].map(

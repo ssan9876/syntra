@@ -180,12 +180,29 @@ export async function resolveItemReviewers(
 ): Promise<ResolveOutcome> {
   const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: campaignId } });
   const stage = stageFor(campaign);
-  const items = await tx.campaignItem.findMany({ where: { id: { in: [...itemIds] } } });
+  const items = await tx.campaignItem.findMany({
+    where: { id: { in: [...itemIds] } },
+    include: { reviewers: { where: { unassignedAt: null }, select: { id: true } } },
+  });
 
   const assignedByPerson = new Map<string, number>();
   const blockedItems: string[] = [];
 
   for (const item of items) {
+    // ALREADY RESOLVED ITEMS ARE SKIPPED, which is what makes a retried
+    // `startCampaign` idempotent on this half as well as on item creation.
+    //
+    // Generation is idempotent by `skipDuplicates` against the item's natural
+    // key; without this guard the reviewer half is not. A run retried at the
+    // same instant hits `@@unique([itemId, personId, assignedAt])` and throws;
+    // retried a second later — which is what actually happens — it writes a
+    // SECOND identical assignment, and every reminder, every escalation and
+    // every reassignment then fires twice for the rest of the campaign.
+    //
+    // Re-resolving an item whose reviewer became invalid is
+    // `reassignInvalidReviewers`, deliberately: it unassigns first, with a
+    // recorded reason, so the window stays answerable.
+    if (item.reviewers.length > 0) continue;
     const subject = subjectFor(item);
 
     // An unattributed account has no person and no contract, so no selector

@@ -240,6 +240,30 @@ describe('resolution', () => {
     expect(item.statusReason).toContain('belongs to nobody');
   });
 
+  it('SKIPS an item that already has a reviewer, so a retried generation is idempotent', async () => {
+    // Item creation is idempotent by `skipDuplicates` against the item's
+    // natural key. Without the matching guard here the reviewer half is not: a
+    // `startCampaign` retried at the same instant hits
+    // `@@unique([itemId, personId, assignedAt])` and throws, and retried a
+    // second later — which is what actually happens — writes a SECOND
+    // identical assignment. Every reminder, escalation and reassignment then
+    // fires twice for the rest of the campaign.
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+
+    const later = new Date(NOW.getTime() + 1000);
+    const second = await withTenant(tenantId, (tx) =>
+      resolveItemReviewers(tx, campaignId, [itemId], later),
+    );
+    expect(second.assignedByPerson.size).toBe(0);
+    expect(second.blocked).toBe(0);
+
+    const reviewers = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { itemId } }),
+    );
+    expect(reviewers).toHaveLength(1);
+  });
+
   it('notifies the campaign owner and govern.manage about a blocked item', async () => {
     const itemId = await seedItem('Ola');
     await withTenant(tenantId, (tx) =>
