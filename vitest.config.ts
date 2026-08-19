@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { testDatabaseConfig } from './packages/db/src/test-database.js';
+import { testDatabaseConfig, testWorkerCount } from './packages/db/src/test-database.js';
 
 /**
  * The suite runs against a database of its own, created by the global setup.
@@ -10,6 +10,22 @@ import { testDatabaseConfig } from './packages/db/src/test-database.js';
  * explains why sharing the development database is not an option.
  */
 const database = testDatabaseConfig();
+
+/**
+ * One worker, one database.
+ *
+ * `resetDatabase()` TRUNCATEs every table, so the count of workers and the
+ * count of databases have to be the same number -- and it is literally the
+ * same call, `testWorkerCount()`, that the global setup provisions against.
+ * `minForks` and `maxForks` are both pinned to it so vitest cannot decide to
+ * run more workers than there are databases, which would put two of them on
+ * one and reproduce the failure this change exists to remove.
+ *
+ * Sharding is off when the operator exported `DATABASE_URL` (`name === null`):
+ * that database is theirs, not ours to shard, and the setup file leaves it
+ * alone for the same reason.
+ */
+const shards = database.name === null ? 1 : testWorkerCount();
 
 export default defineConfig({
   test: {
@@ -25,13 +41,28 @@ export default defineConfig({
     // is the most expensive kind on this programme; it has cost it days.
     hookTimeout: 30_000,
     globalSetup: ['./vitest.global-setup.ts'],
+    // Runs in each worker BEFORE the test module, and therefore before
+    // `packages/db/src/client.ts` constructs its `PrismaClient` from
+    // `DATABASE_URL`. `env` below cannot do this job: it is evaluated once, in
+    // this process, so every worker would receive the same value.
+    setupFiles: ['./vitest.setup-worker.ts'],
     env: {
+      // The unsharded URL, as a floor. Every worker overwrites it in the setup
+      // file above; this is what a stray import outside a worker would see, and
+      // it points at a real, migrated database rather than at `.env`'s
+      // development one.
       DATABASE_URL: database.appUrl,
       ...(database.superuserUrl ? { SUPERUSER_DATABASE_URL: database.superuserUrl } : {}),
+      // The setup file re-derives nothing: it swaps this name into
+      // `DATABASE_URL` and appends its own worker number. Passed rather than
+      // recomputed because by the time the setup file runs, `DATABASE_URL`
+      // above is already set, and `testDatabaseConfig()` reads that as "the
+      // operator chose this database" -- so a worker calling it would take the
+      // do-not-provision branch every time and never shard at all. Absent when
+      // that branch is genuinely correct, which is what switches sharding off.
+      ...(database.name === null ? {} : { SYNTRA_TEST_DB_BASE: database.name }),
     },
-    // Integration tests share one PostgreSQL database and truncate between
-    // tests. Parallel forks would race on the same rows.
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    poolOptions: { forks: { singleFork: shards === 1, minForks: shards, maxForks: shards } },
   },
 });

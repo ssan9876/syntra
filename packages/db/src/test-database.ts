@@ -21,6 +21,7 @@
  * would construct a `PrismaClient` before `DATABASE_URL` had been rewritten,
  * and every test would run against whatever `.env` said.
  */
+import { cpus } from 'node:os';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -92,12 +93,43 @@ function withDatabase(url: string, name: string): string {
  * never collide, and re-running the suite in the same clone reuses the
  * database rather than paying for a migration run every time.
  */
-export function scratchDatabaseName(root: string = repoRoot): string {
+export function scratchDatabaseName(root: string = repoRoot, shard?: number): string {
   const digest = createHash('sha256').update(resolve(root)).digest('hex').slice(0, 12);
-  return `syntra_test_${digest}`;
+  // Unsuffixed when there is no shard, so a single-worker run keeps the name
+  // it has always had and does not orphan the database an existing checkout
+  // already migrated.
+  return shard === undefined ? `syntra_test_${digest}` : `syntra_test_${digest}_w${shard}`;
 }
 
-export function testDatabaseConfig(): TestDatabaseConfig {
+/**
+ * How many workers the suite runs, and therefore how many databases it needs.
+ *
+ * The two numbers are the same number on purpose. Every worker truncates every
+ * table in the database it is pointed at, so two workers sharing one database
+ * do not merely race -- they delete each other's fixtures mid-test, and the
+ * failures that produces name no assertion and point nowhere near the code
+ * being changed. This project has lost days to that three times, most
+ * memorably a run of 116 failures containing not one assertion.
+ *
+ * So the shard count is computed ONCE, here, and both `vitest.config.ts`
+ * (which pins `minForks`/`maxForks` to it) and the global setup (which
+ * provisions that many databases) read it from this function. A drift between
+ * them is exactly the failure above, so there is no second place to change.
+ *
+ * `SYNTRA_TEST_WORKERS` overrides it, for bisecting a suspected ordering
+ * dependency by forcing 1.
+ */
+export function testWorkerCount(): number {
+  const override = Number.parseInt(process.env.SYNTRA_TEST_WORKERS ?? '', 10);
+  if (Number.isInteger(override) && override > 0) return override;
+  // Leave a core for the PostgreSQL server and this process. Every worker is
+  // I/O-bound on that one server, so more workers than cores buys nothing and
+  // lengthens the truncation queue.
+  const cores = cpus().length;
+  return Math.max(1, Math.min(8, cores - 1));
+}
+
+export function testDatabaseConfig(shard?: number): TestDatabaseConfig {
   const dotEnv = readDotEnv();
   // An exported DATABASE_URL means the caller chose a database — CI, or a
   // developer pointing the suite somewhere on purpose — and provisioning is
@@ -122,7 +154,7 @@ export function testDatabaseConfig(): TestDatabaseConfig {
     );
   }
 
-  const name = scratchDatabaseName();
+  const name = scratchDatabaseName(repoRoot, shard);
   return {
     name,
     appUrl: withDatabase(base, name),

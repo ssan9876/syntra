@@ -14,6 +14,7 @@ import {
   provisionTestDatabase,
   repoRoot,
   testDatabaseConfig,
+  testWorkerCount,
 } from './packages/db/src/test-database.js';
 
 /**
@@ -32,18 +33,33 @@ function prismaCli(): string {
 }
 
 export default async function setup(): Promise<void> {
-  const config = testDatabaseConfig();
-  if (config.name === null) return;
+  // Nothing to provision when the operator chose the database.
+  if (testDatabaseConfig().name === null) return;
 
-  await provisionTestDatabase(config);
+  // ONE database per worker, and the count comes from the same function
+  // `vitest.config.ts` pins `minForks`/`maxForks` to. If these two ever
+  // disagreed, some worker would share a database with another and truncate it
+  // mid-test -- the failure mode that made this suite serial in the first
+  // place. There is deliberately no second place to change the number.
+  const shards = testWorkerCount();
 
-  // `migrate deploy` and nothing else: it never diffs, never needs a shadow
-  // database, and never prompts. Run every time rather than only after
-  // creation, so a scratch database left over from an older branch picks up
-  // the migrations that branch did not have.
-  execFileSync(process.execPath, [prismaCli(), 'migrate', 'deploy'], {
-    cwd: resolve(repoRoot, 'packages/db'),
-    env: { ...process.env, DATABASE_URL: config.appUrl },
-    stdio: ['ignore', 'ignore', 'inherit'],
-  });
+  for (let shard = 1; shard <= shards; shard += 1) {
+    const config = testDatabaseConfig(shard);
+    await provisionTestDatabase(config);
+
+    // `migrate deploy` and nothing else: it never diffs, never needs a shadow
+    // database, and never prompts. Run every time rather than only after
+    // creation, so a scratch database left over from an older branch picks up
+    // the migrations that branch did not have.
+    //
+    // Sequential rather than concurrent: `prisma migrate deploy` takes an
+    // advisory lock per database, but they all contend for the same server on
+    // first run, and a second or two per shard once is not worth the risk of
+    // interleaving CREATE DATABASE with a migration.
+    execFileSync(process.execPath, [prismaCli(), 'migrate', 'deploy'], {
+      cwd: resolve(repoRoot, 'packages/db'),
+      env: { ...process.env, DATABASE_URL: config.appUrl },
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+  }
 }
