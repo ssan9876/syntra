@@ -230,3 +230,4 @@ export * from './automate/jobs.js';
 // Govern — access governance: inventory, campaigns and segregation of duties.
 export * from './govern/types.js';
 export * from './govern/freshness.js';
+export * from './govern/attribute.js';
