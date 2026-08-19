@@ -231,3 +231,4 @@ export * from './automate/jobs.js';
 export * from './govern/types.js';
 export * from './govern/freshness.js';
 export * from './govern/attribute.js';
+export * from './govern/diff.js';
