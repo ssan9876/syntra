@@ -655,11 +655,28 @@ describe('automateSettings', () => {
     // runSweepJob all call this, and two of them finding nothing and both
     // creating is a unique-constraint violation out of a job whose log
     // explains nothing.
-    const [a, b] = await Promise.all([
-      withTenant(tenantId, (tx) => automateSettings(tx)),
-      withTenant(tenantId, (tx) => automateSettings(tx)),
-    ]);
-    expect(a.id).toBe(b.id);
+    // EIGHT, not two.
+    //
+    // The two-way version of this passed four whole-suite runs against an
+    // implementation that could not survive contention -- Prisma's `upsert`
+    // compiles to find-then-create, so both callers find nothing and both
+    // insert. It only failed once the suite itself began running eight workers
+    // in parallel and the machine was loaded enough to interleave them.
+    //
+    // A concurrency of two is not a race test, it is a race test's fixture
+    // holding still. Eight makes the window reliable: measured, this fails on
+    // the `upsert` implementation and passes on `INSERT ... ON CONFLICT DO
+    // NOTHING`.
+    const settings = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        withTenant(tenantId, (tx) => automateSettings(tx)),
+      ),
+    );
+    // One row, and every caller got it -- rather than seven exceptions and a
+    // winner.
+    expect(new Set(settings.map((s) => s.id)).size).toBe(1);
+    const rows = await withTenant(tenantId, (tx) => tx.automateSettings.findMany());
+    expect(rows).toHaveLength(1);
   });
 });
 

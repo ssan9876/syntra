@@ -671,20 +671,43 @@ export async function previewAudience(
  * after tenants already exist and a nullable settings read scattered through
  * six services is six places to forget the defaults.
  *
- * `upsert`, not find-then-create: `runOutboxJob` (every minute), `runTickJob`
- * (every five) and `runSweepJob` all call this, so two callers finding nothing
- * and both creating is reachable, and the loser gets a P2002 on
- * `AutomateSettings.tenantId` out of a job that then fails for no reason a log
- * explains. An empty `update` makes the row's existence the whole point of the
- * statement.
+ * **`INSERT ... ON CONFLICT DO NOTHING`, not `upsert`.** `runOutboxJob` (every
+ * minute), `runTickJob` (every five) and `runSweepJob` all call this, so two
+ * callers arriving before the row exists is ordinary rather than exotic, and
+ * the loser gets a P2002 out of a job whose log explains nothing.
+ *
+ * Prisma's `upsert` is NOT that statement. It compiles to a find, then a
+ * create or an update, so two concurrent transactions both find nothing and
+ * both insert. This was written as an `upsert` on exactly that assumption and
+ * it survived four whole-suite runs; the fifth -- the first with the suite
+ * running eight workers in parallel -- failed on the very case that names the
+ * race. A test that passes because nothing was contending is not evidence that
+ * the code handles contention.
+ *
+ * The retry-on-P2002 shape does not work here and is worth ruling out
+ * explicitly: this runs inside the CALLER's `withTenant`, and in PostgreSQL an
+ * error aborts the whole transaction, so catching it and reading again would
+ * issue the read on a transaction that can no longer do anything. The
+ * conflict has to be handled by the statement itself.
+ *
+ * `ON CONFLICT DO NOTHING` never raises. Under two concurrent transactions the
+ * second one blocks on the first's uncommitted row, then does nothing, and the
+ * `findUniqueOrThrow` after it sees the committed row -- which is why the read
+ * is a separate statement rather than a `RETURNING`, since `DO NOTHING`
+ * returns no row to the loser.
+ *
+ * `gen_random_uuid()` and `now()` are supplied because the columns behind
+ * Prisma's `@default(uuid())` and `@updatedAt` have no database-side default;
+ * everything else on the table does, which is what keeps this to one statement.
  */
 export async function automateSettings(tx: TenantClient) {
   const tenantId = await currentTenant(tx);
-  return tx.automateSettings.upsert({
-    where: { tenantId },
-    update: {},
-    create: { tenantId },
-  });
+  await tx.$executeRaw`
+    INSERT INTO "AutomateSettings" ("id", "tenantId", "updatedAt")
+    VALUES (gen_random_uuid(), ${tenantId}::uuid, now())
+    ON CONFLICT ("tenantId") DO NOTHING
+  `;
+  return tx.automateSettings.findUniqueOrThrow({ where: { tenantId } });
 }
 
 const SETTING_KEYS = [
