@@ -169,6 +169,31 @@ export const GOVERN_READ_ROUTES: readonly { path: string; scoped: boolean; why?:
     scoped: false,
     why: 'the audit chain is tenant-wide and names no person',
   },
+  {
+    path: 'GET /govern/settings',
+    scoped: false,
+    why: 'the tenant’s thresholds and cadences; it names no person and a scoped reader still has to see what the guard is set to',
+  },
+  // ---- slice 2 -----------------------------------------------------------
+  {
+    path: 'GET /govern/campaigns',
+    scoped: false,
+    why: 'a campaign is a scope and a set of dates; the per-person rows are its items and those are not returned here',
+  },
+  { path: 'GET /govern/campaigns/:id', scoped: true },
+  { path: 'GET /govern/batches/:id', scoped: true },
+  {
+    path: 'GET /govern/sod/functions',
+    scoped: false,
+    why: 'a business function is a set of resources and names no person but its owner',
+  },
+  {
+    path: 'GET /govern/sod/rules',
+    scoped: false,
+    why: 'a rule relates two business functions; who violates it is the violations list below',
+  },
+  { path: 'GET /govern/sod/violations', scoped: true },
+  { path: 'GET /govern/sod/graph', scoped: true },
 ];
 
 /**
@@ -626,7 +651,9 @@ export async function registerAdminGovernRoutes(
 
   app.get('/govern/campaigns/:id', { preHandler: requireGovernRead() }, async (request) => {
     const { id } = idParam.parse(request.params);
+    const scope = scopeOf(request);
     return request.db(async (tx) => {
+      const admitted = scope.kind === 'tenant' ? 'all' : await personIdsInScope(tx, scope);
       const campaign = await tx.campaign.findUniqueOrThrow({ where: { id } });
       // §12: a campaign report NEVER prints a percentage without the four
       // counts beside it, and every percentage names its denominator inline.
@@ -648,7 +675,17 @@ export async function registerAdminGovernRoutes(
           denominator: campaign.totalItems,
           statement: '(decided + moot) / total',
         },
-        signals: await tx.reviewQualitySignal.findMany({ where: { campaignId: id } }),
+        // A quality signal names a REVIEWER, and "who rubber-stamped" is at
+        // least as sensitive as "who holds what". A scoped reader sees the
+        // signals for the reviewers they are scoped to, and the campaign's own
+        // counts above are tenant-wide facts about the campaign rather than
+        // about any person.
+        signals: await tx.reviewQualitySignal.findMany({
+          where: {
+            campaignId: id,
+            ...(admitted === 'all' ? {} : { personId: { in: [...admitted] } }),
+          },
+        }),
       };
     });
   });
@@ -734,15 +771,54 @@ export async function registerAdminGovernRoutes(
 
   app.get('/govern/batches/:id', { preHandler: requireGovernRead() }, async (request) => {
     const { id } = idParam.parse(request.params);
-    return request.db(async (tx) => ({
-      batch: await tx.revocationBatch.findUniqueOrThrow({ where: { id } }),
-      dispatches: await tx.revocationDispatch.findMany({
+    const scope = scopeOf(request);
+    return request.db(async (tx) => {
+      const admitted = scope.kind === 'tenant' ? 'all' : await personIdsInScope(tx, scope);
+      const rows = await tx.revocationDispatch.findMany({
         where: { batchId: id },
         // An explicit ordinal: `createdAt` is transaction start time and every
         // row of the batch's `createMany` carries the same one.
         orderBy: { sequence: 'asc' },
-      }),
-    }));
+      });
+      // `RevocationDispatch.itemId` is a bare column with no relation, so the
+      // subjects come from one grouped read rather than a join.
+      const personByItem = new Map<string, string | null>(
+        admitted === 'all'
+          ? []
+          : (
+              await tx.campaignItem.findMany({
+                where: {
+                  id: { in: rows.map((r) => r.itemId).filter((x): x is string => x !== null) },
+                },
+                select: { id: true, personId: true },
+              })
+            ).map((item) => [item.id, item.personId]),
+      );
+      // EVERY DISPATCH ROW NAMES A PERSON, in `holdingDescriptor.subjectKey`
+      // and on its campaign item. A tenant-wide list here would hand a
+      // department lead the revocation list of every other department, which
+      // is the same failure the findings list was fixed for.
+      const visible =
+        admitted === 'all'
+          ? rows
+          : rows.filter((row) => {
+              const personId = row.itemId === null ? null : personByItem.get(row.itemId);
+              // A row whose subject cannot be resolved is WITHHELD from a
+              // scoped reader rather than shown: the safe direction here is
+              // the opposite of the findings list's, because a dispatch row
+              // always has a subject and a missing one means the item was
+              // deleted, not that the row is about nobody.
+              return personId != null && admitted.has(personId);
+            });
+      return {
+        batch: await tx.revocationBatch.findUniqueOrThrow({ where: { id } }),
+        dispatches: visible,
+        // NAMED, not silently dropped. The batch's own counts are tenant-wide,
+        // so a scoped reader seeing 40 rows under a header saying 342 would
+        // read the difference as a bug rather than as a boundary.
+        withheldOutOfScope: rows.length - visible.length,
+      };
+    });
   });
 
   app.post(
@@ -912,11 +988,13 @@ export async function registerAdminGovernRoutes(
 
   app.get('/govern/sod/graph', { preHandler: requireGovernRead() }, async (request) => {
     const query = graphQuery.parse(request.query ?? {});
+    const scope = scopeOf(request);
     // A READ of what the nightly job found, never a detection run. Detecting
     // from a GET would write findings as a side effect of somebody opening a
     // screen, and two people with the screen open would each write them.
-    return request.db(async (tx) => ({
-      findings: await tx.governFinding.findMany({
+    return request.db(async (tx) => {
+      const admitted = scope.kind === 'tenant' ? 'all' : await personIdsInScope(tx, scope);
+      const findings = await tx.governFinding.findMany({
         where: {
           kind: {
             in: [
@@ -930,7 +1008,14 @@ export async function registerAdminGovernRoutes(
         },
         orderBy: [{ severity: 'desc' }, { firstSeenAt: 'asc' }],
         take: query.limit,
-      }),
-    }));
+      });
+      // Every one of these four kinds names people — a pair, a cycle, a
+      // beneficiary, an account — so the same subtraction applies as to the
+      // findings list.
+      return {
+        findings:
+          admitted === 'all' ? findings : findings.filter((f) => findingInScope(f, admitted)),
+      };
+    });
   });
 }

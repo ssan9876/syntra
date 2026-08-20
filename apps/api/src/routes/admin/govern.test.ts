@@ -289,17 +289,36 @@ describe('the org-unit scope on EVERY read path — §21', () => {
     }
   });
 
+  it('EVERY read route in the module is enumerated — the list is the control', () => {
+    // The scoping test iterates `GOVERN_READ_ROUTES`, so a read route missing
+    // from the list is invisible to it: the enumeration protects nothing
+    // against the one thing it exists to protect against, which is somebody
+    // adding a route. Seven slice-2 reads landed before this case did.
+    const source = readFileSync(new URL('./govern.ts', import.meta.url), 'utf8');
+    const body = source.slice(source.indexOf('export async function registerAdminGovernRoutes'));
+    const declared = new Set(GOVERN_READ_ROUTES.map((r) => r.path));
+    const found = [...body.matchAll(/app\.get\(\s*'([^']+)'/g)].map((m) => `GET ${m[1]!}`);
+    expect(found.length).toBeGreaterThan(10);
+    for (const path of found) {
+      expect(declared, `${path} is a read route and must be in GOVERN_READ_ROUTES`).toContain(path);
+    }
+  });
+
   it('the exempt list is short and named, so adding to it is a deliberate edit', () => {
     expect(
       GOVERN_READ_ROUTES.filter((r) => !r.scoped)
         .map((r) => r.path)
         .sort(),
     ).toEqual([
+      'GET /govern/campaigns',
       'GET /govern/integrity',
       'GET /govern/orphans',
+      'GET /govern/settings',
       'GET /govern/snapshots',
       'GET /govern/snapshots/:id',
       'GET /govern/snapshots/:id/coverage',
+      'GET /govern/sod/functions',
+      'GET /govern/sod/rules',
     ]);
   });
 
@@ -406,5 +425,261 @@ describe('Refresh now enqueues somebody else’s job and says whose', () => {
     expect(res.json()).toMatchObject({
       detail: expect.stringContaining('never reads a source itself'),
     });
+  });
+});
+
+/**
+ * The chain §13 calls "revocation is a run", end to end over HTTP.
+ *
+ * Every link is a route somebody has to be able to reach: without
+ * `POST /govern/campaigns/:id/revocations` nothing computes a batch, and
+ * `POST /govern/batches/:id/confirm` has nothing to confirm. The services are
+ * tested in `packages/core`; what this asserts is that the product exposes them
+ * at all, and with the right permission on each.
+ */
+describe('the slice-2 admin surface — campaigns, batches and SoD', () => {
+  let manager: string;
+  let subject: string;
+  let snapshot: string;
+
+  beforeEach(async () => {
+    const seeded = await withTenant(ctx.tenantId, async (tx) => {
+      const tenantId = ctx.tenantId;
+      const mk = async (given: string) => {
+        const person = await tx.person.create({
+          data: { tenantId, givenName: given, familyName: 'Test' },
+        });
+        await tx.contract.create({
+          data: {
+            tenantId,
+            personId: person.id,
+            sequence: 1,
+            isPrimary: true,
+            startDate: new Date('2020-01-01'),
+          },
+        });
+        return person.id;
+      };
+      const ownerPersonId = await mk('Ola');
+      const annaPersonId = await mk('Anna');
+
+      const target = await tx.targetSystem.create({
+        data: {
+          tenantId,
+          name: 'Acme AD',
+          secretName: 's/ad',
+          config: { tlsMode: 'ldaps' },
+          lastRunAt: new Date(),
+          lastAppliedRunAt: new Date(),
+        },
+      });
+      const entitlement = await tx.entitlement.create({
+        data: {
+          tenantId,
+          targetSystemId: target.id,
+          externalId: 'guid-1',
+          type: 'group',
+          displayName: 'Finance-Payments',
+        },
+      });
+      const account = await tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: target.id,
+          personId: annaPersonId,
+          anchor: 'guid-anna',
+          correlationKey: 'anna',
+          status: 'active',
+          lastReconciledAt: new Date(),
+        },
+      });
+      await tx.accountEntitlement.create({
+        data: {
+          tenantId,
+          accountId: account.id,
+          entitlementId: entitlement.id,
+          origin: 'discovered',
+        },
+      });
+      return { ownerPersonId, subjectPersonId: annaPersonId };
+    });
+    manager = seeded.ownerPersonId;
+    subject = seeded.subjectPersonId;
+    const built = await buildSnapshot(ctx.tenantId, {});
+    snapshot = built.snapshotId;
+  });
+
+  it('runs a campaign from creation to a confirmed revocation batch', async () => {
+    await seedAdmin('gov', [PERMISSIONS.GOVERN_MANAGE, PERMISSIONS.GOVERN_READ]);
+    const cookie = await cookieFor('gov');
+
+    // The scope preview, BEFORE anything is created. The screen that catches a
+    // campaign covering nothing, or everything.
+    const preview = await post('/api/admin/govern/campaigns/preview-scope', cookie, {
+      scope: { resourceKinds: ['targetEntitlement'] },
+      snapshotId: snapshot,
+    });
+    expect(preview.statusCode).toBe(200);
+    expect((preview.json() as { holdings: number }).holdings).toBeGreaterThan(0);
+
+    const created = await post('/api/admin/govern/campaigns', cookie, {
+      name: 'Q2 review',
+      scope: { resourceKinds: ['targetEntitlement'] },
+      reviewerSelector: 'person',
+      reviewerConfig: { personId: manager },
+      fallbackSelector: 'person',
+      fallbackConfig: { personId: manager },
+      ownerPersonId: manager,
+      opensAt: new Date().toISOString(),
+      dueAt: new Date(Date.now() + 14 * 86_400_000).toISOString(),
+      snapshotId: snapshot,
+    });
+    expect(created.statusCode).toBe(201);
+    const campaignId = (created.json() as { id: string }).id;
+
+    expect((await post(`/api/admin/govern/campaigns/${campaignId}/start`, cookie)).statusCode).toBe(
+      200,
+    );
+
+    // Decide every item `revoke`, the way a reviewer would.
+    await withTenant(ctx.tenantId, async (tx) => {
+      const items = await tx.campaignItem.findMany({ where: { campaignId } });
+      expect(items.length).toBeGreaterThan(0);
+      for (const item of items) {
+        await tx.campaignDecision.create({
+          data: {
+            tenantId: ctx.tenantId,
+            itemId: item.id,
+            personId: manager,
+            decision: 'revoke',
+            comment: 'no longer needed',
+            itemOpenedAt: new Date(),
+            decidedAt: new Date(),
+            sessionDecisionOrdinal: 1,
+            coverageAtDecision: {},
+          },
+        });
+        await tx.campaignItem.update({
+          where: { id: item.id },
+          data: { status: 'revoke_decided' },
+        });
+      }
+    });
+
+    const computed = await post(`/api/admin/govern/campaigns/${campaignId}/revocations`, cookie);
+    expect(computed.statusCode).toBe(200);
+    const batch = computed.json() as {
+      batchId: string;
+      status: string;
+      requiresConfirmation: boolean;
+      blockedReason: string | null;
+    };
+    // The FIRST batch in a tenant always requires confirmation, whatever its
+    // size: every denominator is zero and no percentage can say anything.
+    expect(batch.status).toBe('previewed');
+    expect(batch.requiresConfirmation).toBe(true);
+    expect(batch.blockedReason).toContain('first revocation batch');
+
+    const detail = await get(`/api/admin/govern/batches/${batch.batchId}`, cookie);
+    expect(detail.statusCode).toBe(200);
+    const rows = (detail.json() as { dispatches: { route: string; sequence: number }[] }).dispatches;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.map((r) => r.sequence)).toEqual([...rows.keys()]);
+
+    // A body with no `confirmed` is a 400, not a silent refusal and not a
+    // silent pass: the field is required, never defaulted.
+    const unconfirmed = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/admin/govern/batches/${batch.batchId}/confirm`,
+      headers: { host: ctx.host, cookie },
+      payload: {},
+    });
+    expect(unconfirmed.statusCode).toBe(400);
+
+    // `confirmed: false` reaches the service and is REFUSED, with the code.
+    const declined = await post(`/api/admin/govern/batches/${batch.batchId}/confirm`, cookie, {
+      confirmed: false,
+    });
+    expect(declined.statusCode).toBe(409);
+    expect(declined.json()).toMatchObject({ type: expect.stringContaining('confirmation_required') });
+
+    const confirmed = await post(`/api/admin/govern/batches/${batch.batchId}/confirm`, cookie, {
+      confirmed: true,
+    });
+    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json()).toMatchObject({ status: 'applied' });
+
+    const order = await withTenant(ctx.tenantId, (tx) => tx.revocationOrder.findFirstOrThrow());
+    // Ruling G1's condition: the order names a human, a campaign and a reason.
+    expect(order.campaignName).toBe('Q2 review');
+    expect(order.decidedByPersonName).toContain('Ola');
+    expect(order.reason).toContain('no longer needed');
+  });
+
+  it('refuses the whole chain to a reader who cannot manage', async () => {
+    await seedAdmin('reader', [PERMISSIONS.GOVERN_READ]);
+    const cookie = await cookieFor('reader');
+    // The READ is allowed...
+    expect((await get('/api/admin/govern/campaigns', cookie)).statusCode).toBe(200);
+    // ...and every write is not.
+    for (const url of [
+      '/api/admin/govern/campaigns',
+      `/api/admin/govern/campaigns/${'00000000-0000-0000-0000-000000000001'}/start`,
+      `/api/admin/govern/campaigns/${'00000000-0000-0000-0000-000000000001'}/revocations`,
+      `/api/admin/govern/batches/${'00000000-0000-0000-0000-000000000001'}/confirm`,
+      '/api/admin/govern/sod/rules',
+    ]) {
+      expect((await post(url, cookie, {})).statusCode, url).toBe(403);
+    }
+  });
+
+  it('keeps risk acceptance behind govern.accept_risk, not govern.manage', async () => {
+    // Administering the governance module and accepting the organization's risk
+    // are different jobs, and a product that conflates them hands risk
+    // acceptance to whoever configures the software.
+    await seedAdmin('gov2', [PERMISSIONS.GOVERN_MANAGE, PERMISSIONS.GOVERN_READ]);
+    const cookie = await cookieFor('gov2');
+    const res = await post(
+      `/api/admin/govern/sod/exceptions/${'00000000-0000-0000-0000-000000000001'}/decide`,
+      cookie,
+      { decision: 'approve', comment: 'fine' },
+    );
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('previews a SoD rule before it is saved, and saves nothing doing it', async () => {
+    await seedAdmin('gov3', [PERMISSIONS.GOVERN_MANAGE, PERMISSIONS.GOVERN_READ]);
+    const cookie = await cookieFor('gov3');
+    const holdings = await withTenant(ctx.tenantId, (tx) =>
+      tx.holding.findMany({ where: { snapshotId: snapshot }, take: 2 }),
+    );
+    expect(holdings.length).toBeGreaterThan(0);
+
+    const fn = async (name: string, resourceId: string) => {
+      const res = await post('/api/admin/govern/sod/functions', cookie, {
+        name,
+        ownerPersonId: manager,
+        resources: [
+          { systemId: holdings[0]!.systemId, resourceKind: 'targetEntitlement', resourceId },
+        ],
+      });
+      expect(res.statusCode).toBe(201);
+      return (res.json() as { id: string }).id;
+    };
+    const a = await fn('Raise', holdings[0]!.resourceId);
+    const b = await fn('Approve', '20000000-0000-0000-0000-0000000000ff');
+
+    const before = await withTenant(ctx.tenantId, (tx) => tx.sodRule.count());
+    const preview = await post('/api/admin/govern/sod/rules/preview', cookie, {
+      functionAId: a,
+      functionBId: b,
+      severity: 'critical',
+    });
+    expect(preview.statusCode).toBe(200);
+    // A rule that would fire against 400 people is a configuration error, and
+    // the person with the console open is who should see it — before it exists.
+    expect(preview.json()).toHaveProperty('violatingPersons');
+    expect(await withTenant(ctx.tenantId, (tx) => tx.sodRule.count())).toBe(before);
+    expect(subject).toBeTruthy();
   });
 });
