@@ -529,3 +529,40 @@ describe('ldapConnector.read: streaming', () => {
     await stream.return?.(undefined);
   });
 });
+
+describe('ldapConnector.read: the anchor is an attribute too', () => {
+  it('offers the anchor attribute for mapping, in its canonical form', async () => {
+    // `objectGUID` into an external id is how an administrator makes Syntra's
+    // record joinable to the directory's by hand. Excluded from `attributes`,
+    // such a mapping could never resolve and the whole record failed to map.
+    //
+    // Sixteen raw bytes, deliberately: that is what Active Directory returns,
+    // and `toArray` would render it with `toString('utf8')` — mojibake in
+    // somebody's record. What comes back is the same canonical string the
+    // anchor carries, which is the one that can be pasted back into AD.
+    const guid = Buffer.from([
+      0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+      0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+    ]);
+    vi.spyOn(Client.prototype, 'searchPaginated').mockImplementation(function () {
+      return (async function* () {
+        yield {
+          searchEntries: [
+            { dn: 'uid=jdoe,ou=Care,ou=Shared,dc=acme,dc=test', uid: 'jdoe', objectGUID: guid },
+          ],
+          searchReferences: [],
+        } as never;
+      })();
+    });
+
+    const stream = ldapConnector.read({ ...config, anchorAttribute: 'objectGUID' })[
+      Symbol.asyncIterator
+    ]();
+    const first = await stream.next();
+    const record = first.value as { anchor: string; attributes: Record<string, string[]> };
+
+    expect(record.attributes.objectGUID).toEqual([record.anchor]);
+    expect(record.anchor).toBe('76543210-ba98-fedc-0123-456789abcdef');
+    await stream.return?.(undefined);
+  });
+});

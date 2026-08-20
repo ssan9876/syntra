@@ -153,17 +153,31 @@ function toRecord(
   const raw = entry[anchorAttribute];
   const anchorSource = Array.isArray(raw) ? raw[0] : raw;
 
+  const anchor = normaliseAnchor(
+    anchorAttribute,
+    Buffer.isBuffer(anchorSource) ? anchorSource : String(anchorSource ?? ''),
+  );
+
   const attributes: Record<string, string[]> = {};
   for (const [key, value] of Object.entries(entry)) {
     if (key === 'dn' || key === anchorAttribute) continue;
     attributes[key] = toArray(value);
   }
+  // The anchor is an ATTRIBUTE too, and mapping one onto a field is a
+  // reasonable thing to want — `objectGUID` into an external id is how an
+  // administrator makes Syntra's record joinable to the directory's by hand.
+  // Excluding it meant such a mapping could never resolve and the record
+  // failed to map at all.
+  //
+  // The NORMALISED value, not the raw one. `toArray` renders a Buffer with
+  // `toString('utf8')`, and `objectGUID` is sixteen raw bytes: a mapping onto
+  // it would have written mojibake into somebody's record. This is the same
+  // string the anchor itself carries, which is the one an administrator can
+  // paste back into Active Directory and find the object.
+  attributes[anchorAttribute] = [anchor];
 
   const record: SourceRecord = {
-    anchor: normaliseAnchor(
-      anchorAttribute,
-      Buffer.isBuffer(anchorSource) ? anchorSource : String(anchorSource ?? ''),
-    ),
+    anchor,
     objectType,
     dn: String(entry.dn ?? ''),
     attributes,

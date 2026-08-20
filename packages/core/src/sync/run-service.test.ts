@@ -565,6 +565,47 @@ describe('applyChange membership failure paths', () => {
     expect(events[0]!.outcome).toBe('success');
   });
 
+  it('applies a change ONCE even when two applies hold the same proposed row', async () => {
+    // `applyRun` reads the proposed changes and then applies them one
+    // transaction at a time, so two applies of one run — two administrators on
+    // the same screen, or an administrator racing the scheduler's autoApply —
+    // both hold rows that said `proposed` when they read them. The second
+    // caller here is that stale read, passed back in verbatim.
+    const { users, events, row } = await withTenant(tenantId, async (tx) => {
+      const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });
+      const change = await tx.syncChange.create({
+        data: {
+          tenantId,
+          runId: newRun.id,
+          changeType: 'create_user',
+          targetType: 'User',
+          targetId: null,
+          sourceAnchor: 'anchor-for-a-racing-create',
+          after: { login: 'twice', email: 'twice@acme.test', displayName: 'Twice' },
+          status: 'proposed',
+        },
+      });
+
+      await applyChange(tx, change, sourceId, newRun.id);
+      // The same row object, still carrying `status: 'proposed'`.
+      await applyChange(tx, change, sourceId, newRun.id);
+
+      return {
+        users: await tx.user.findMany({ where: { login: 'twice' } }),
+        events: await tx.auditEvent.findMany({ where: { action: 'sync.create_user' } }),
+        row: await tx.syncChange.findUnique({ where: { id: change.id } }),
+      };
+    });
+
+    expect(users).toHaveLength(1);
+    expect(row!.status).toBe('applied');
+    // The audit trail is the part the schema does not protect. A unique
+    // constraint turns a duplicated create into a failed change; nothing turns
+    // a duplicated event into anything but a second event saying the same
+    // thing happened again.
+    expect(events).toHaveLength(1);
+  });
+
   it('refuses a CREATE carrying a field no mapping may write, and creates nobody', async () => {
     // The create paths cherry-pick named columns, so an unassignable field was
     // never going to be written — it was going to be dropped in silence. The

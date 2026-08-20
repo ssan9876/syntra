@@ -148,14 +148,24 @@ apply at 100%. On an idle machine refint won the race; under a full-suite load i
 did not. There is now a deterministic case built on a member DN that names no
 entry at all, so the fix does not depend on winning or losing that race.
 
-## Reads accumulate rather than stream (spec section 8)
+## ~~Reads accumulate rather than stream~~ (spec section 8) — fixed
 
-Section 8 promises results "streamed rather than accumulated, so a large directory does
-not become a large heap." `client.search()` drains every page internally and returns a
-complete array; the connector maps that into a second complete array; `previewRun`
-accumulates a third. The async-generator shape is decorative. `searchPaginated` is the
-real fix. Note the fix wave corrects the comment that claims otherwise, but not the
-behaviour.
+`client.search()` drained every page internally and handed back one complete
+array, which the connector then mapped into a second complete array before
+yielding any of it, and `previewRun` accumulated a third. Section 8 asks for
+results "streamed rather than accumulated, so a large directory does not become a
+large heap"; the async-generator shape was decorative.
+
+`read()` now walks `searchPaginated` and yields each entry as it maps it. A page
+is still a page — `pageSize` entries are resident while they are mapped — and
+`previewRun` still collects what it is given, because the diff correlates the whole
+read against a snapshot and cannot be computed a page at a time. What is gone is
+the two full copies underneath that, which is the difference between one and three.
+
+The test that pins it asserts the connector yields from the first page before the
+server is asked for the second. Every other test in that file consumes the whole
+iterator and passes either way, which is how this stayed decorative long enough to
+be written down as spec debt.
 
 ## ~~Active Directory range retrieval~~ (spec section 8, by implication) — fixed
 

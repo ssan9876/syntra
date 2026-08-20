@@ -427,6 +427,29 @@ export async function applyChange(
   sourceId: string,
   runId: string,
 ): Promise<void> {
+  // CLAIMED FIRST, in the same transaction as the write.
+  //
+  // `applyRun` reads the proposed changes and then applies them one
+  // transaction at a time, so two applies of one run — two administrators on
+  // the same screen, or an administrator and the scheduler's `autoApply` —
+  // both read the same rows as `proposed` and both go on to write. The
+  // schema bounds the damage rather than preventing it: the unique constraint
+  // on `(tenantId, sourceId, sourceAnchor)` turns a duplicated create into a
+  // failed change, and an update applied twice is merely applied twice. What
+  // is not bounded is the audit trail, which grows a second event saying the
+  // same thing happened again.
+  //
+  // The `where` is the lock. Postgres blocks the second `updateMany` on the
+  // row until the first transaction commits, then re-evaluates it under READ
+  // COMMITTED and finds `applied` — so the count comes back zero and this
+  // returns having done nothing. No new status, nothing to strand: a crash
+  // rolls the claim back with the work it was claiming.
+  const claimed = await tx.syncChange.updateMany({
+    where: { id: change.id, status: 'proposed' },
+    data: { status: 'proposed' },
+  });
+  if (claimed.count === 0) return;
+
   const tenantId = await currentTenant(tx);
   const result = await performChange(tx, change, sourceId, runId, tenantId);
   await audit(tx, change, runId, result);
