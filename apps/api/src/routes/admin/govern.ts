@@ -12,18 +12,50 @@ import {
   findingQuery,
   governSettingsBody,
   governSnapshotQuery,
+  businessFunctionBody,
+  campaignListQuery,
+  confirmBatchBody,
+  createCampaignBody,
+  decideExceptionBody,
+  extendCampaignBody,
+  graphQuery,
   idParam,
+  previewReviewersBody,
+  previewScopeBody,
+  rebaseCampaignBody,
+  requestExceptionBody,
+  skipDispatchBody,
+  sodRuleBody,
+  sodRulePreviewBody,
+  violationQuery,
   personReportQuery,
   refreshSourceParams,
   resolveRemediationBody,
   systemReportQuery,
 } from '@syntra/contracts';
 import {
+  CampaignRefusedError,
+  ExceptionRefusedError,
   PERMISSIONS,
   PROVISION_JOB,
+  RevocationRefusedError,
   SYNC_JOB,
   acceptFinding,
   assignFinding,
+  computeRevocationBatch,
+  confirmRevocationBatch,
+  createCampaign,
+  decideSodException,
+  extendCampaign,
+  previewCampaignScope,
+  previewReviewerResolution,
+  previewSodRuleImpact,
+  rebaseCampaign,
+  requestSodException,
+  skipDispatch,
+  startCampaign,
+  upsertBusinessFunction,
+  upsertSodRule,
   buildSnapshot,
   confirmProposal,
   createEvidencePack,
@@ -184,7 +216,7 @@ const scopeOf = (request: FastifyRequest): GovernScope =>
 
 export async function registerAdminGovernRoutes(
   app: FastifyInstance,
-  options: { scheduler?: () => Scheduler | null } = {},
+  options: { scheduler?: () => Scheduler | null; publicUrl?: string } = {},
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
@@ -569,4 +601,336 @@ export async function registerAdminGovernRoutes(
       return reply.status(204).send();
     },
   );
+
+  // ---- campaigns ---------------------------------------------------------
+  app.get('/govern/campaigns', { preHandler: requireGovernRead() }, async (request) => {
+    const query = campaignListQuery.parse(request.query ?? {});
+    return request.db(async (tx) => ({
+      campaigns: await tx.campaign.findMany({
+        where: { ...(query.status === undefined ? {} : { status: query.status }) },
+        orderBy: [{ dueAt: 'asc' }],
+        take: query.limit,
+      }),
+    }));
+  });
+
+  app.post(
+    '/govern/campaigns',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const body = createCampaignBody.parse(request.body);
+      const created = await createCampaign(request.tenantId, request.session.userId, body);
+      return reply.status(201).send(created);
+    },
+  );
+
+  app.get('/govern/campaigns/:id', { preHandler: requireGovernRead() }, async (request) => {
+    const { id } = idParam.parse(request.params);
+    return request.db(async (tx) => {
+      const campaign = await tx.campaign.findUniqueOrThrow({ where: { id } });
+      // §12: a campaign report NEVER prints a percentage without the four
+      // counts beside it, and every percentage names its denominator inline.
+      // The shape is the enforcement — a caller cannot render the number
+      // without having the denominator and the sentence in hand.
+      return {
+        campaign,
+        counts: {
+          total: campaign.totalItems,
+          certified: campaign.certifiedItems,
+          revoked: campaign.revokedItems,
+          requiresChange: campaign.requiresChangeItems,
+          moot: campaign.mootItems,
+          undecided: campaign.undecidedItems,
+          blocked: campaign.blockedItems,
+        },
+        coverage: {
+          percent: campaign.coveragePercent,
+          denominator: campaign.totalItems,
+          statement: '(decided + moot) / total',
+        },
+        signals: await tx.reviewQualitySignal.findMany({ where: { campaignId: id } }),
+      };
+    });
+  });
+
+  app.post(
+    '/govern/campaigns/preview-scope',
+    { preHandler: requireGovernRead() },
+    async (request) => {
+      const body = previewScopeBody.parse(request.body);
+      return previewCampaignScope(request.tenantId, body.scope, body.snapshotId);
+    },
+  );
+
+  app.post(
+    '/govern/campaigns/preview-reviewers',
+    { preHandler: requireGovernRead() },
+    async (request) => {
+      // "Stage: manager; 1,102 items resolve, 61 fall to the fallback, 17
+      // resolve to nobody — here they are." The screen that catches an
+      // unreviewable campaign before 200 people are emailed, rather than at 3am
+      // on the due date. It writes no `CampaignItem` and no
+      // `CampaignItemReviewer` row.
+      return previewReviewerResolution(request.tenantId, previewReviewersBody.parse(request.body));
+    },
+  );
+
+  app.post(
+    '/govern/campaigns/:id/start',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      try {
+        return await startCampaign(request.tenantId, request.session.userId, id, {
+          // The link in every reviewer's email. Absent, the notification
+          // renders a relative URL nobody can click from a mail client.
+          publicUrl: options.publicUrl ?? '',
+        });
+      } catch (error) {
+        // The refusals are 409s carrying their code, not 500s. A stale source
+        // or an empty scope is a decision this endpoint made, and the console
+        // renders the reason rather than "something went wrong".
+        if (error instanceof CampaignRefusedError) {
+          throw new ProblemError(409, error.code, 'Campaign refused', error.message);
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/govern/campaigns/:id/extend',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = extendCampaignBody.parse(request.body);
+      await extendCampaign(request.tenantId, request.session.userId, id, body.dueAt);
+      return reply.status(204).send();
+    },
+  );
+
+  app.post(
+    '/govern/campaigns/:id/rebase',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = rebaseCampaignBody.parse(request.body);
+      return rebaseCampaign(request.tenantId, request.session.userId, id, body.snapshotId);
+    },
+  );
+
+  // ---- revocation --------------------------------------------------------
+  app.post(
+    '/govern/campaigns/:id/revocations',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      // WITHOUT THIS ROUTE nothing computes a batch, and §13's whole
+      // "revocation is a run" machinery is unreachable from the product:
+      // `POST /govern/batches/:id/confirm` would have nothing to confirm.
+      return computeRevocationBatch(request.tenantId, request.session.userId, id);
+    },
+  );
+
+  app.get('/govern/batches/:id', { preHandler: requireGovernRead() }, async (request) => {
+    const { id } = idParam.parse(request.params);
+    return request.db(async (tx) => ({
+      batch: await tx.revocationBatch.findUniqueOrThrow({ where: { id } }),
+      dispatches: await tx.revocationDispatch.findMany({
+        where: { batchId: id },
+        // An explicit ordinal: `createdAt` is transaction start time and every
+        // row of the batch's `createMany` carries the same one.
+        orderBy: { sequence: 'asc' },
+      }),
+    }));
+  });
+
+  app.post(
+    '/govern/batches/:id/confirm',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = confirmBatchBody.parse(request.body);
+      // `autoApply` does not exist for a batch. Confirmation is per batch,
+      // explicit, and the confirming user is recorded. `confirmed` is a
+      // REQUIRED field of the body rather than a default, so a batch the guard
+      // flagged cannot be waved through by a caller who did not read the reason.
+      try {
+        return await confirmRevocationBatch(request.tenantId, request.session.userId, id, {
+          confirmed: body.confirmed,
+        });
+      } catch (error) {
+        if (error instanceof RevocationRefusedError) {
+          throw new ProblemError(409, error.code, 'Revocation refused', error.message);
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/govern/dispatches/:id/skip',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = skipDispatchBody.parse(request.body);
+      await skipDispatch(request.tenantId, request.session.userId, id, body.reason);
+      return reply.status(204).send();
+    },
+  );
+
+  // ---- segregation of duties ---------------------------------------------
+  app.get('/govern/sod/functions', { preHandler: requireGovernRead() }, async (request) =>
+    request.db(async (tx) => ({
+      functions: await tx.businessFunction.findMany({
+        include: { resources: true },
+        orderBy: { name: 'asc' },
+      }),
+    })),
+  );
+
+  app.post(
+    '/govern/sod/functions',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const body = businessFunctionBody.parse(request.body);
+      const created = await upsertBusinessFunction(request.tenantId, request.session.userId, body);
+      return reply.status(201).send(created);
+    },
+  );
+
+  app.get('/govern/sod/rules', { preHandler: requireGovernRead() }, async (request) =>
+    request.db(async (tx) => ({
+      rules: await tx.sodRule.findMany({
+        include: { functionA: true, functionB: true },
+        orderBy: { name: 'asc' },
+      }),
+    })),
+  );
+
+  app.post(
+    '/govern/sod/rules',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const body = sodRuleBody.parse(request.body);
+      const created = await upsertSodRule(request.tenantId, request.session.userId, body);
+      return reply.status(201).send(created);
+    },
+  );
+
+  app.post(
+    '/govern/sod/rules/preview',
+    { preHandler: requireGovernRead() },
+    // BEFORE it is saved. A rule that would fire against 400 people is a
+    // configuration error, and the person with the console open is who should
+    // see it, at that moment — not the 400 people, six hours later.
+    async (request) =>
+      previewSodRuleImpact(request.tenantId, sodRulePreviewBody.parse(request.body)),
+  );
+
+  app.get('/govern/sod/violations', { preHandler: requireGovernRead() }, async (request) => {
+    const query = violationQuery.parse(request.query ?? {});
+    const scope = scopeOf(request);
+    return request.db(async (tx) => {
+      // A violation names a person, so the org-unit scope applies here exactly
+      // as it does to the findings list (§21).
+      const admitted = scope.kind === 'tenant' ? 'all' : await personIdsInScope(tx, scope);
+      return {
+        violations: await tx.sodViolation.findMany({
+          where: {
+            status: query.status ?? 'open',
+            ...(admitted === 'all' ? {} : { personId: { in: [...admitted] } }),
+          },
+          include: { rule: { select: { id: true, name: true, rationale: true } } },
+          orderBy: [{ severity: 'desc' }, { firstSeenAt: 'asc' }],
+          take: query.limit,
+        }),
+      };
+    });
+  });
+
+  app.post(
+    '/govern/sod/violations/:id/except',
+    // Requesting an exception is not accepting one. This opens a request; the
+    // decision below is a different permission entirely.
+    { preHandler: requireGovernRead() },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = requestExceptionBody.parse(request.body);
+      // The RULE and the PERSON come from the violation rather than from the
+      // body. A caller who could name them would be able to raise an exception
+      // against a rule for a person whose violation is somebody else's.
+      const violation = await request.db((tx) =>
+        tx.sodViolation.findUniqueOrThrow({
+          where: { id },
+          select: { ruleId: true, personId: true },
+        }),
+      );
+      try {
+        const created = await requestSodException(request.tenantId, request.session.userId, {
+          ruleId: violation.ruleId,
+          personId: violation.personId,
+          violationId: id,
+          ...body,
+        });
+        return reply.status(201).send(created);
+      } catch (error) {
+        if (error instanceof ExceptionRefusedError) {
+          throw new ProblemError(409, error.code, 'Exception refused', error.message);
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/govern/sod/exceptions/:id/decide',
+    // NOT govern.manage. Administering the governance module and accepting the
+    // organization's risk are different jobs, and a product that conflates them
+    // hands risk acceptance to whoever configures the software.
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_ACCEPT_RISK) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = decideExceptionBody.parse(request.body);
+      try {
+        await decideSodException(
+          request.tenantId,
+          request.session.userId,
+          id,
+          body.decision,
+          body.comment,
+        );
+      } catch (error) {
+        if (error instanceof ExceptionRefusedError) {
+          throw new ProblemError(409, error.code, 'Exception refused', error.message);
+        }
+        throw error;
+      }
+      return reply.status(204).send();
+    },
+  );
+
+  app.get('/govern/sod/graph', { preHandler: requireGovernRead() }, async (request) => {
+    const query = graphQuery.parse(request.query ?? {});
+    // A READ of what the nightly job found, never a detection run. Detecting
+    // from a GET would write findings as a side effect of somebody opening a
+    // screen, and two people with the screen open would each write them.
+    return request.db(async (tx) => ({
+      findings: await tx.governFinding.findMany({
+        where: {
+          kind: {
+            in: [
+              'approval_reciprocity',
+              'sod_laundering',
+              'no_human_decision',
+              'unmergeable_actor',
+            ],
+          },
+          status: { in: ['open', 'accepted'] },
+        },
+        orderBy: [{ severity: 'desc' }, { firstSeenAt: 'asc' }],
+        take: query.limit,
+      }),
+    }));
+  });
 }

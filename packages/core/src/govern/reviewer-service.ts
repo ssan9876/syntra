@@ -1011,7 +1011,7 @@ export async function previewReviewerResolution(
     reviewerConfig: Record<string, unknown>;
     fallbackSelector: string;
     fallbackConfig: Record<string, unknown>;
-    snapshotId?: string;
+    snapshotId?: string | undefined;
   },
 ): Promise<ReviewerResolutionPreview> {
   const now = new Date();

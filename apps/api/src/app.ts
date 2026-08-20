@@ -39,6 +39,7 @@ import { registerAdminProvisionRunRoutes } from './routes/admin/provision-runs.j
 import { registerAdminGovernRoutes } from './routes/admin/govern.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerAutomatePortalRoutes } from './routes/automate-portal.js';
+import { registerGovernPortalRoutes } from './routes/govern-portal.js';
 import { registerSamlIdpRoutes } from './routes/saml-idp.js';
 import { registerOidcRoutes } from './routes/oidc-op.js';
 import { registerOidcInteractionRoutes } from './routes/oidc-interaction.js';
@@ -230,6 +231,9 @@ export async function buildApp(
   // Provision's OWN jobs rather than reading a source itself.
   await app.register(registerAdminGovernRoutes, {
     prefix: '/api/admin',
+    // §12: starting a campaign emails every resolved reviewer a link. Without
+    // this the link is relative and nobody can click it from a mail client.
+    publicUrl: config.publicUrl,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminRuleRoutes, { prefix: '/api/admin' });
@@ -265,6 +269,12 @@ export async function buildApp(
     // wait for the tick job, up to five minutes.
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
+
+  // Its own plugin for the same reason Automate's is: Fastify encapsulates
+  // hooks per plugin, and this one needs `requireSession('portal')` and NO
+  // permission at all — review authority comes from resolution, not from a
+  // right anybody holds.
+  await app.register(registerGovernPortalRoutes, { prefix: '/api/portal' });
 
   await app.register(registerSamlIdpRoutes, {
     prefix: '/saml',

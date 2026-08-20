@@ -294,7 +294,8 @@ export interface ScopePreview {
  */
 export async function previewCampaignScope(
   tenantId: string,
-  scope: CampaignScope,
+  /** `unknown` for the reason `createCampaign`'s does: the schema is the gate. */
+  scope: unknown,
   snapshotId?: string,
 ): Promise<ScopePreview> {
   return withTenant(tenantId, async (tx) => {
@@ -317,7 +318,18 @@ export async function createCampaign(
   input: {
     name: string;
     description: string | null;
-    scope: CampaignScope;
+    /**
+     * `unknown`, and parsed by `campaignScopeSchema` below.
+     *
+     * The SCHEMA is the authority — the three `MutuallyAssignable` guards above
+     * exist to keep the type honest about it, not the other way round — and a
+     * caller at the HTTP edge holds a zod-inferred value whose
+     * `subjectCondition` is `unknown` by construction. Typing this as
+     * `CampaignScope` bought a compile-time check for in-package callers at the
+     * price of an `as never` at the only call site that matters, which Global
+     * Constraint 12 forbids outside a Prisma `Json` write.
+     */
+    scope: unknown;
     reviewerSelector: string;
     reviewerConfig: Record<string, unknown>;
     fallbackSelector: string;
@@ -326,8 +338,10 @@ export async function createCampaign(
     opensAt: Date;
     dueAt: Date;
     allowBulkCertify: boolean;
-    recurrence?: string | null;
-    snapshotId?: string;
+    // `| undefined` on both: `exactOptionalPropertyTypes` is on
+    // repo-wide and a zod-inferred optional is `T | undefined`.
+    recurrence?: string | null | undefined;
+    snapshotId?: string | undefined;
   },
 ): Promise<{ id: string }> {
   const scope = campaignScopeSchema.parse(input.scope);

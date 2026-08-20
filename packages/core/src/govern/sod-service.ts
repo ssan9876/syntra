@@ -27,7 +27,7 @@ export async function upsertBusinessFunction(
   tenantId: string,
   actorUserId: string | null,
   input: {
-    id?: string;
+    id?: string | undefined;
     name: string;
     description: string | null;
     ownerPersonId: string;
@@ -86,7 +86,7 @@ export async function upsertSodRule(
   tenantId: string,
   actorUserId: string | null,
   input: {
-    id?: string;
+    id?: string | undefined;
     name: string;
     functionAId: string;
     functionBId: string;
