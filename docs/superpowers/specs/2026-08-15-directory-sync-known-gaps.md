@@ -239,6 +239,67 @@ Changing the fixture means REMOVING the container, not restarting it — the ima
 bootstraps its custom LDIF only into an empty data directory. `README.md` says
 so where the other OpenLDAP recreation note lives.
 
+## ~~The synced organizational tree was flat and unreferenced~~ — fixed
+
+Org units were created and then attached to nothing, and Syntra's scoped
+administration is built on that tree.
+
+I first recorded this as two decisions — the hierarchy an unfinished import, the
+user's placement a policy choice — and parked the second. That was wrong, and the
+spec says so plainly. Section 6, on anchoring: "A person moving from one
+organizational unit to another changes their DN... Anchoring on the GUID makes the
+same event **a plain update of one field**." Success criterion 6 requires surviving
+that move; today it survived by doing nothing, which passes the letter and leaves
+Syntra permanently stale about where people work.
+
+What an org unit's REMOVAL means is a genuine policy choice, and it is untouched: a
+unit that disappears from the source is still left alone, still reported, still a
+human decision, exactly as section 10 says. That is the rule the `diff.ts` comment
+about scoped role assignments was always about, and it is not this rule.
+
+`parentAnchor` rides in the change's `fields`, so the ordinary field diff picks it
+up — one before-and-after line, reviewed like anything else — but it is structural
+rather than mappable: `ASSIGNABLE_FIELDS` does not list it, so no mapping rule can
+aim a source attribute at the hierarchy, and `apply` strips it from the blob and
+translates it to a local id.
+
+Three things it had to get right, each with a test that fails without it:
+
+- **A parent we could not read is not a parent that is gone.** `parentAnchorOf`
+  returns undefined for a unit above the search base or one whose read failed, and
+  undefined omits the key — `fields` is differenced against what is stored, so an
+  omitted key proposes nothing while `''` proposes a detach. Otherwise a run whose
+  org-unit search came back empty detaches every person in the tenant from their
+  department, silently narrowing every scoped administrative role, and reports
+  success. Same rule as the unresolvable member DN above.
+- **Order.** `orderBy: { id: 'asc' }` is uuid order. Units now apply before the users
+  that name them and parents before their children, reconstructed from the anchors
+  the diff already carries.
+- **Escaped commas.** `cn=Doe\, Jo,ou=Care,...` is what Active Directory generates
+  for someone displayed as "Doe, Jo"; splitting on the first raw comma yields a DN
+  that resolves to nothing, which this code reads as "in no organizational unit".
+
+## ~~A group that came back could never come back~~ — fixed
+
+Found while adding the above, and older than it.
+
+`diffObjects` routed a returning group through `update_group` carrying
+`{ status: 'active' }`. `status` is not a field a mapping may write —
+`rejectUnassignable` refuses it, and rightly, since a source attribute that could
+set `status` could deactivate people — so the change failed on every run. Forever.
+The run came back `partially_applied` with a failed change, and the group stayed
+inactive with its memberships intact and granting nothing.
+
+Deactivation is chosen over deletion precisely because it is recoverable, and the
+memberships are kept precisely so the group can return intact. A group that cannot
+return is deleted in all but name. `reactivate_group` is now a change type of its
+own, outside `MAPPED_WRITES`, mirroring the `reactivate_user` that has been the
+working half of this pair all along.
+
+The unit test asserted `update_group`. It encoded the defect exactly, which is why
+nothing ever caught it — a reminder that a test agreeing with the code is not the
+same as a test checking it.
+
 ## Smaller items, recorded but not urgent
 
 - ~~`create_user` / `create_group` / `create_org_unit` write only hardcoded columns and
@@ -247,19 +308,9 @@ so where the other OpenLDAP recreation note lives.
   covered `update_*` only, so a create carrying a field a mapping may not write dropped
   it in silence rather than failing. The administrator reviewed a diff naming the field
   and got a row without it. Creates now refuse it with the same message updates get.
-- Org units are created but never attached to anything — `parentId` is never set and no
-  user's `orgUnitId` is ever assigned. The synced OU tree is flat and unreferenced.
-  **This is the largest thing left, and it is two decisions, not one.** Setting
-  `parentId` from the directory's own DN hierarchy is an unfinished import: the
-  structure is the directory's and Syntra is simply not recording it. Assigning a
-  user's `orgUnitId` is a policy choice, because org units carry scoped administrative
-  role assignments — `diff.ts` already refuses to sync an org unit's *removal* on
-  exactly that ground ("consequential enough to be a human decision, not a sync
-  outcome"), and a directory that moves somebody between OUs would, if this were
-  implemented naively, move their administrators' authority with them. Both halves also
-  need the diff to carry a parent *anchor* rather than a local id — the parent may be
-  created by the same run — plus apply-time ordering (parents before children, org
-  units before users) and the unresolvable-DN rule above. Needs its own design pass.
+- ~~Org units are created but never attached to anything — `parentId` is never set
+  and no user's `orgUnitId` is ever assigned.~~ **Fixed** — see below; it grew out of
+  the smaller-items list and got a section of its own.
 - The `sync.apply` audit event is written outside the run's transaction. Narrow: every
   individual mutation already commits with its own audit event, so a crash in that
   window loses a summary, not the record of what changed.
