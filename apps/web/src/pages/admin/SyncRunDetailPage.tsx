@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import type { SyncRunSummary } from '@syntra/contracts';
@@ -60,6 +60,25 @@ export function SyncRunDetailPage() {
   const { data: sourcesData } = useApiResource<{ sources: SourceRow[] }>(
     '/api/admin/sources',
   );
+  /**
+   * A run that has not reached the directory yet, or is still reading it.
+   *
+   * `POST /sources/:id/run` enqueues rather than performs, so the button that
+   * sends an administrator here now returns before anything has been read.
+   * Without this the page they land on says `queued` and stays saying it until
+   * they think to reload — which reads exactly like a run that never started.
+   */
+  const inFlight = data !== null && (data.status === 'queued' || data.status === 'running');
+  useEffect(() => {
+    if (!inFlight) return;
+    // Two seconds, and only while in flight. A directory read takes as long as
+    // it takes; polling it faster does not make it finish sooner, and polling
+    // a settled run forever is a request per viewer per interval for a row
+    // that will never change again.
+    const timer = setInterval(reload, 2000);
+    return () => clearInterval(timer);
+  }, [inFlight, reload]);
+
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   // Deliberately not persisted and not defaulted from anything: the tick is
@@ -202,6 +221,25 @@ export function SyncRunDetailPage() {
       />
 
       <div className="space-y-6">
+        {inFlight && (
+          // Named as a state of the DIRECTORY READ, not of the page. "Queued"
+          // and "reading" are different facts — the first says the job has not
+          // started, which is what an administrator needs to know before they
+          // conclude their source is unreachable — and neither of them is an
+          // error, which is what an empty run screen looks like.
+          <Alert
+            tone="info"
+            title={
+              data.status === 'queued'
+                ? 'Queued — this run has not started yet'
+                : 'Reading the directory'
+            }
+          >
+            {data.status === 'queued'
+              ? 'A run is a background job. It starts as soon as a worker is free, and this page follows it.'
+              : 'Nothing is proposed until the whole directory has been read. This page follows it.'}
+          </Alert>
+        )}
         {blocked && (
           // A blocked run leads with why. The numbers are the point: an
           // administrator needs to see the scale before deciding anything.

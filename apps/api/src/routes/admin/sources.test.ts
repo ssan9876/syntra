@@ -4,6 +4,7 @@ import {
   ASSIGNABLE_FIELDS,
   DEFAULT_MAPPINGS,
   PERMISSIONS,
+  SYNC_JOB,
   assignRole,
   createRole,
   createUser,
@@ -1226,5 +1227,67 @@ describe('deleting a source', () => {
     );
 
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('a manual run is a job, not a request', () => {
+  it('answers 202 with a queued run and enqueues it, without reading the directory', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    const sourceId = created.json().id as string;
+
+    const res = await post(`/api/admin/sources/${sourceId}/run`, cookie);
+
+    // 202, not 200. The work has been accepted, not done.
+    expect(res.statusCode).toBe(202);
+    expect(res.json().status).toBe('queued');
+
+    // The job carries the run id, so the screen the caller was just sent to is
+    // the row the worker will fill in — not whichever run happens to be newest
+    // when it next polls.
+    const job = scheduler.enqueued.at(-1);
+    expect(job?.name).toBe(SYNC_JOB);
+    expect((job?.data as { runId?: string }).runId).toBe(res.json().id);
+    expect((job?.data as { sourceId?: string }).sourceId).toBe(sourceId);
+
+    // Nothing was read. `recordsRead` moving here would mean the endpoint did
+    // the directory read after all, which is the thing being removed.
+    const run = await withTenant(ctx.tenantId, (tx) =>
+      tx.syncRun.findUniqueOrThrow({ where: { id: res.json().id } }),
+    );
+    expect(run.status).toBe('queued');
+    expect(run.recordsRead).toBe(0);
+  });
+
+  it('refuses, rather than quietly running inline, when there is no scheduler', async () => {
+    // The condition that leaves this null is pg-boss failing to start, which
+    // also means no scheduled sync is running for any source in any tenant.
+    // Doing the work inline would hide that behind a button that still appears
+    // to work.
+    //
+    // `ctx` is rebuilt rather than a second app stood up beside it: every
+    // helper in this file closes over `ctx`, and `beforeEach` replaces it for
+    // the next test regardless.
+    ctx = await buildTestApp({ scheduler: () => null });
+    await ctx.app.ready();
+
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+
+    const res = await post(`/api/admin/sources/${created.json().id}/run`, cookie);
+    expect(res.statusCode).toBe(503);
+    expect(res.json().detail).toMatch(/pg-boss|scheduler|background/i);
+
+    // And no run row invented for a job nobody will ever take.
+    const runs = await withTenant(ctx.tenantId, (tx) => tx.syncRun.findMany());
+    expect(runs).toEqual([]);
   });
 });

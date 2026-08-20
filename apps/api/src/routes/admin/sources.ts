@@ -27,7 +27,7 @@ import {
   localMasterKeyProvider,
   mappingsFor,
   ownedObjectCounts,
-  previewRun,
+  queueRun,
   recordEvent,
   removeSourceSchedule,
   setMappings,
@@ -562,12 +562,28 @@ export async function registerAdminSourceRoutes(
   app.post(
     '/sources/:id/run',
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
-    async (request) => {
+    async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      // previewRun takes a tenantId, not a caller's transaction: it opens its
-      // own transactions internally, one per phase, so it can durably mark a
-      // failed run even after the read/diff work has aborted a transaction.
-      return previewRun(request.tenantId, provider, id);
+      const scheduler = options.scheduler?.();
+      if (!scheduler) {
+        // 503 rather than falling back to running it here. The same failure
+        // that leaves this null means no scheduled sync is running for any
+        // source in any tenant, and quietly doing the work inline would hide a
+        // broken deployment behind a button that still appears to work.
+        throw new ProblemError(
+          503,
+          'scheduler-unavailable',
+          'Background jobs are not running',
+          'A run is a background job, and the job scheduler did not start. No scheduled sync is running either. Check the API log for why pg-boss failed to start.',
+        );
+      }
+      // ENQUEUED, not performed. A directory read is network-bound and has no
+      // time limit of its own; performing it inside the request holds a
+      // connection open for the length of it, which is the shape that outlasts
+      // a proxy timeout — the browser is told it failed while the run carries
+      // on, and the operator's next move is to press the button again.
+      const run = await queueRun(scheduler, request.tenantId, id);
+      return reply.status(202).send(run);
     },
   );
 }

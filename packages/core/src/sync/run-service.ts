@@ -69,6 +69,15 @@ export async function previewRun(
   tenantId: string,
   provider: MasterKeyProvider,
   sourceId: string,
+  /**
+   * A run row that already exists, from `queueRun`.
+   *
+   * The manual endpoint has to hand the caller a run id before the directory
+   * read starts — that is the whole point of queueing it — so the row is made
+   * there and adopted here. Absent, this creates its own, which is what the
+   * scheduler's unattended path does.
+   */
+  existingRunId?: string,
 ) {
   // Phase 1: create the run row, so there is something to mark `failed` no
   // matter where the rest of this gives out.
@@ -76,6 +85,15 @@ export async function previewRun(
     const source = await tx.directorySource.findUnique({ where: { id: sourceId } });
     if (!source) throw new Error(`no such source: ${sourceId}`);
     const boundTenant = await currentTenant(tx);
+    if (existingRunId !== undefined) {
+      // `queued` becomes `running` HERE, not when the job was accepted. The
+      // status is about what is happening to the directory, and between the
+      // two a job can sit in the queue for as long as the queue is busy.
+      return tx.syncRun.update({
+        where: { id: existingRunId },
+        data: { status: 'running', startedAt: new Date() },
+      });
+    }
     return tx.syncRun.create({ data: { tenantId: boundTenant, sourceId } });
   });
 

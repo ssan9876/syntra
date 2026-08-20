@@ -17,6 +17,13 @@ export interface FakeScheduler extends Scheduler {
   unscheduled: { name: string; key: string | undefined }[];
   /** Queue names a handler was registered for, in registration order. */
   registered: string[];
+  /**
+   * One-off jobs, in the order they were sent. A recurring schedule and a
+   * single enqueue are different promises to the caller — "every night" against
+   * "now, once" — and a fake that recorded only the first would let an endpoint
+   * that queues nothing pass.
+   */
+  enqueued: { name: string; data: unknown }[];
 }
 
 /**
@@ -42,17 +49,22 @@ export function createFakeScheduler(
   const scheduled: ScheduleCall[] = [];
   const unscheduled: { name: string; key: string | undefined }[] = [];
   const registered: string[] = [];
+  const enqueued: { name: string; data: unknown }[] = [];
 
   return {
     scheduled,
     unscheduled,
     registered,
+    enqueued,
     register: (name) => {
       registered.push(name);
     },
     start: async () => {},
     stop: async () => {},
-    enqueue: async () => null,
+    enqueue: async (name, data) => {
+      enqueued.push({ name, data });
+      return null;
+    },
     schedule: async (name, cron, data, key) => {
       const payload = data as
         | { sourceId?: string; targetSystemId?: string }

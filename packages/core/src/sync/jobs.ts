@@ -1,4 +1,5 @@
 import { withTenant } from '@syntra/db';
+import { currentTenant } from '../tenant-context.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import type { Scheduler } from '../jobs/scheduler.js';
 import { applyRun, previewRun } from './run-service.js';
@@ -8,6 +9,12 @@ export const SYNC_JOB = 'sync.run';
 export interface SyncJobPayload {
   tenantId: string;
   sourceId: string;
+  /**
+   * A run row created before the job was enqueued, so a caller could be told
+   * which run its request produced without waiting for the directory read.
+   * Absent on the scheduled path, which has nobody to tell.
+   */
+  runId?: string;
 }
 
 /** A background job has no request and therefore no bound tenant. */
@@ -16,6 +23,46 @@ export function syncJobPayload(
   sourceId: string,
 ): SyncJobPayload {
   return { tenantId, sourceId };
+}
+
+/**
+ * Queues a manual run and hands back the row it will fill in.
+ *
+ * `POST /sources/:id/run` used to perform the whole read-and-diff inside the
+ * HTTP request. A directory read is network-bound and unbounded — it is the
+ * one operation in this subsystem with no time limit of its own — and holding
+ * a request open for it is the shape that outlasts a proxy timeout: the
+ * browser is told the run failed while the run carries happily on, and the
+ * operator's next move is to press the button again. Section 7 says a run is a
+ * job; this makes the manual path the same job the schedule uses.
+ *
+ * The row is created here rather than in the worker so the response can name
+ * it. `queued` is a real state, distinct from `running`: between the two the
+ * job sits in pg-boss for as long as the queue is busy, and a screen that
+ * showed `running` for that window would be lying about the directory.
+ */
+export async function queueRun(
+  scheduler: Scheduler,
+  tenantId: string,
+  sourceId: string,
+): Promise<{ id: string; status: string }> {
+  const run = await withTenant(tenantId, async (tx) => {
+    const source = await tx.directorySource.findUnique({ where: { id: sourceId } });
+    if (!source) throw new Error(`no such source: ${sourceId}`);
+    const boundTenant = await currentTenant(tx);
+    return tx.syncRun.create({
+      data: { tenantId: boundTenant, sourceId, status: 'queued' },
+    });
+  });
+
+  // Enqueued AFTER the row commits. The other order races: a worker free at
+  // that moment reads a run id that no transaction has written yet.
+  await scheduler.enqueue<SyncJobPayload>(SYNC_JOB, {
+    tenantId,
+    sourceId,
+    runId: run.id,
+  });
+  return run;
 }
 
 /**
@@ -94,7 +141,7 @@ export async function runSyncJob(
   // internally — one per change — because PostgreSQL aborts a transaction on
   // error, so a single caller transaction could not mark a failed change and
   // continue.
-  const run = await previewRun(payload.tenantId, provider, payload.sourceId);
+  const run = await previewRun(payload.tenantId, provider, payload.sourceId, payload.runId);
 
   await withTenant(payload.tenantId, (tx) =>
     tx.directorySource.update({
