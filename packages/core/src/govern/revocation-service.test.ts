@@ -702,20 +702,13 @@ describe('confirmRevocationBatch', () => {
     // to `automate_grant`, and `revokeGrant` was called on a dead grant — which
     // either errors on the irreversible path or succeeds as a no-op and reports
     // `revocation_dispatched` for a holding nothing removed.
-    await withTenant(tenantId, (tx) =>
-      tx.accessGrant.create({
-        data: {
-          tenantId,
-          subjectPersonId,
-          resourceType: 'entitlement',
-          resourceId: entitlementIds[0]!,
-          targetSystemId,
-          origin: 'request',
-          startsAt: NOW,
-          status: 'revoked',
-        },
-      }),
-    );
+    //
+    // The item must carry a GRANT ATTRIBUTION KIND for this to bite. Route 5 is
+    // `grantKinds.length > 0 && grantIds.length > 0`, so a `discovered` holding
+    // beside a dead grant routes to `revocation_order` whether the status
+    // filter is there or not — which is what the first version of this test
+    // asserted, and it passed with the filter deleted.
+    await makeFirstItemAGrant('revoked');
     const computed = await computeRevocationBatch(tenantId, actorUserId, campaignId, { now: NOW });
     const dispatch = await withTenant(tenantId, (tx) =>
       tx.revocationDispatch.findFirstOrThrow({
@@ -724,6 +717,13 @@ describe('confirmRevocationBatch', () => {
       }),
     );
     expect(dispatch.route).toBe('revocation_order');
+
+    // And nothing is handed to Automate on the irreversible path.
+    await confirmRevocationBatch(tenantId, actorUserId, computed.batchId, {
+      now: NOW,
+      confirmed: true,
+    });
+    expect(revokeGrantMock).not.toHaveBeenCalled();
   });
 
   it('routes a DISABLED rule beside a live grant to Automate, not to requires_change', async () => {
