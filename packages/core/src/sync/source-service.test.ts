@@ -22,8 +22,8 @@ const input = {
   config: {
     url: 'ldap://localhost:1389',
     bindDn: 'cn=admin,dc=acme,dc=test',
-    userSearchBase: 'dc=acme,dc=test',
-    groupSearchBase: 'dc=acme,dc=test',
+    userSearchBase: 'ou=Shared,dc=acme,dc=test',
+    groupSearchBase: 'ou=Shared,dc=acme,dc=test',
     anchorAttribute: 'entryUUID',
   },
   bindPassword: 'adminpassword',

@@ -37,8 +37,8 @@ const PASSWORD_HASH = await hashPassword(PASSWORD);
 const config = {
   url: process.env.LDAP_URL ?? 'ldap://localhost:1389',
   bindDn: 'cn=admin,dc=acme,dc=test',
-  userSearchBase: 'dc=acme,dc=test',
-  groupSearchBase: 'dc=acme,dc=test',
+  userSearchBase: 'ou=Shared,dc=acme,dc=test',
+  groupSearchBase: 'ou=Shared,dc=acme,dc=test',
   userFilter: '(objectClass=inetOrgPerson)',
   groupFilter: '(objectClass=groupOfNames)',
   anchorAttribute: 'entryUUID',
@@ -304,7 +304,7 @@ describe('testing a connection that was never saved', () => {
     });
 
     const res = await post('/api/admin/sources/test', cookie, {
-      config: { ...config, userSearchBase: 'ou=Care,dc=acme,dc=test' },
+      config: { ...config, userSearchBase: 'ou=Care,ou=Shared,dc=acme,dc=test' },
       sourceId: created.json().id,
     });
 
@@ -508,7 +508,7 @@ describe('borrowing a saved source’s bind password', () => {
     const sourceId = await savedSource(cookie);
 
     const res = await post('/api/admin/sources/test', cookie, {
-      config: { ...config, userSearchBase: 'ou=Care,dc=acme,dc=test' },
+      config: { ...config, userSearchBase: 'ou=Care,ou=Shared,dc=acme,dc=test' },
       sourceId,
       bindPassword: 'adminpassword',
     });
@@ -526,7 +526,7 @@ describe('borrowing a saved source’s bind password', () => {
     const res = await post('/api/admin/sources/test', cookie, {
       config: {
         ...config,
-        userSearchBase: 'ou=Care,dc=acme,dc=test',
+        userSearchBase: 'ou=Care,ou=Shared,dc=acme,dc=test',
         userFilter: '(objectClass=person)',
       },
       sourceId,

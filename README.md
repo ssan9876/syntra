@@ -176,6 +176,23 @@ failure reads `Client network socket disconnected before secure TLS connection
 was established`, which looks like a network fault and is not one — the compose
 file sets `try` instead, and also maps 636 so the LDAPS path is covered.
 
+**A change to `infra/ldap/seed.ldif` needs the container REMOVED, not
+restarted:** `docker compose -f infra/docker-compose.yml rm -sf openldap &&
+docker compose -f infra/docker-compose.yml up -d openldap`. The image bootstraps
+the custom LDIF only when it initialises an empty data directory, and the data
+lives in the container's own filesystem — so `up -d` on an existing container
+leaves the old tree in place and the sync tests fail against DNs that are not
+there.
+
+The fixture is split into two subtrees on purpose. `ou=Shared,dc=acme,dc=test`
+is read by every test that only reads; `ou=Scenarios,dc=acme,dc=test` belongs to
+`packages/core/src/sync/scenarios.test.ts`, the one file that writes to the
+directory. One container serves up to eight parallel vitest workers, and before
+the split a reader previewing twice around one of that file's mutations saw an
+object appear or vanish and proposed a `create_user` or a `deactivate_user` for
+it. A test that needs to mutate the directory gets a subtree of its own and
+scopes its source to it.
+
 ### Connecting a directory source
 
 `infra/docker-compose.yml` already runs an OpenLDAP container for

@@ -17,9 +17,9 @@ let sourceId: string;
 const config = {
   url: process.env.LDAP_URL ?? 'ldap://localhost:1389',
   bindDn: 'cn=admin,dc=acme,dc=test',
-  userSearchBase: 'dc=acme,dc=test',
-  groupSearchBase: 'dc=acme,dc=test',
-  orgUnitSearchBase: 'dc=acme,dc=test',
+  userSearchBase: 'ou=Shared,dc=acme,dc=test',
+  groupSearchBase: 'ou=Shared,dc=acme,dc=test',
+  orgUnitSearchBase: 'ou=Shared,dc=acme,dc=test',
   userFilter: '(objectClass=inetOrgPerson)',
   groupFilter: '(objectClass=groupOfNames)',
   anchorAttribute: 'entryUUID',

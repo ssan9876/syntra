@@ -1,26 +1,85 @@
-dn: ou=Care,dc=acme,dc=test
+# TWO SUBTREES, AND THE SPLIT IS THE POINT.
+#
+# One OpenLDAP container serves the whole test suite, and the suite runs up to
+# eight worker processes at once. Each worker gets a PostgreSQL database of its
+# own — `vitest.config.ts` shards them precisely so two workers cannot truncate
+# each other's tables — and for a long time there was no equivalent for the
+# directory. Every sync test read `dc=acme,dc=test`, and `scenarios.test.ts`
+# wrote to it: moving `uid=jdoe` between organizational units, replacing a
+# group's member list, adding and removing whole entries. A reader previewing
+# twice around one of those windows saw an object appear or vanish and proposed
+# a `create_user` or a `deactivate_user` for it. Both files passed alone.
+#
+#   ou=Shared     — read by every test that only reads. Never mutated.
+#   ou=Scenarios  — owned by `scenarios.test.ts`, the one file that writes.
+#
+# A test that needs to mutate the directory gets a subtree of its own and scopes
+# its source to it. `e2e/sync.spec.ts` already worked this way, with a
+# timestamped OU it creates and removes; this is the same rule applied to the
+# fixtures that ship.
+#
+# The two subtrees are deliberately identical in shape. `scenarios.test.ts` is
+# about what a sync does when a directory CHANGES, and it needs the same
+# starting point the read-only tests get.
+
+dn: ou=Shared,dc=acme,dc=test
+objectClass: organizationalUnit
+ou: Shared
+
+dn: ou=Care,ou=Shared,dc=acme,dc=test
 objectClass: organizationalUnit
 ou: Care
 
-dn: ou=Learning,dc=acme,dc=test
+dn: ou=Learning,ou=Shared,dc=acme,dc=test
 objectClass: organizationalUnit
 ou: Learning
 
-dn: uid=jdoe,ou=Care,dc=acme,dc=test
+dn: uid=jdoe,ou=Care,ou=Shared,dc=acme,dc=test
 objectClass: inetOrgPerson
 uid: jdoe
 cn: Jo Doe
 sn: Doe
 mail: jo.doe@acme.test
 
-dn: uid=sroe,ou=Care,dc=acme,dc=test
+dn: uid=sroe,ou=Care,ou=Shared,dc=acme,dc=test
 objectClass: inetOrgPerson
 uid: sroe
 cn: Sam Roe
 sn: Roe
 mail: sam.roe@acme.test
 
-dn: cn=Nurses,dc=acme,dc=test
+dn: cn=Nurses,ou=Shared,dc=acme,dc=test
 objectClass: groupOfNames
 cn: Nurses
-member: uid=jdoe,ou=Care,dc=acme,dc=test
+member: uid=jdoe,ou=Care,ou=Shared,dc=acme,dc=test
+
+dn: ou=Scenarios,dc=acme,dc=test
+objectClass: organizationalUnit
+ou: Scenarios
+
+dn: ou=Care,ou=Scenarios,dc=acme,dc=test
+objectClass: organizationalUnit
+ou: Care
+
+dn: ou=Learning,ou=Scenarios,dc=acme,dc=test
+objectClass: organizationalUnit
+ou: Learning
+
+dn: uid=jdoe,ou=Care,ou=Scenarios,dc=acme,dc=test
+objectClass: inetOrgPerson
+uid: jdoe
+cn: Jo Doe
+sn: Doe
+mail: jo.doe@acme.test
+
+dn: uid=sroe,ou=Care,ou=Scenarios,dc=acme,dc=test
+objectClass: inetOrgPerson
+uid: sroe
+cn: Sam Roe
+sn: Roe
+mail: sam.roe@acme.test
+
+dn: cn=Nurses,ou=Scenarios,dc=acme,dc=test
+objectClass: groupOfNames
+cn: Nurses
+member: uid=jdoe,ou=Care,ou=Scenarios,dc=acme,dc=test

@@ -7,6 +7,17 @@ import { createSource, setMappings } from './source-service.js';
 import { applyRun, previewRun } from './run-service.js';
 import { moveLdapEntry, replaceLdapAttribute, withLdapEntry } from './test-support.js';
 
+/**
+ * THE ONLY FILE THAT WRITES TO THE DIRECTORY, and the only one scoped to
+ * `ou=Scenarios`.
+ *
+ * Everything below moves entries between organizational units, replaces group
+ * member lists and adds and removes whole objects. Every one of those was
+ * visible to the five other files that read this container until the fixture
+ * grew a subtree per owner — see `infra/ldap/seed.ldif`. A test that mutates
+ * shared state under eight parallel workers is not a test, it is a coin toss
+ * for whoever reads next.
+ */
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 let tenantId: string;
 let sourceId: string;
@@ -14,9 +25,9 @@ let sourceId: string;
 const config = {
   url: process.env.LDAP_URL ?? 'ldap://localhost:1389',
   bindDn: 'cn=admin,dc=acme,dc=test',
-  userSearchBase: 'dc=acme,dc=test',
-  groupSearchBase: 'dc=acme,dc=test',
-  orgUnitSearchBase: 'dc=acme,dc=test',
+  userSearchBase: 'ou=Scenarios,dc=acme,dc=test',
+  groupSearchBase: 'ou=Scenarios,dc=acme,dc=test',
+  orgUnitSearchBase: 'ou=Scenarios,dc=acme,dc=test',
   userFilter: '(objectClass=inetOrgPerson)',
   groupFilter: '(objectClass=groupOfNames)',
   anchorAttribute: 'entryUUID',
@@ -64,9 +75,9 @@ describe('an organizational unit move', () => {
     );
 
     await moveLdapEntry(
-      'uid=jdoe,ou=Care,dc=acme,dc=test',
+      'uid=jdoe,ou=Care,ou=Scenarios,dc=acme,dc=test',
       'uid=jdoe',
-      'ou=Learning,dc=acme,dc=test',
+      'ou=Learning,ou=Scenarios,dc=acme,dc=test',
     );
 
     try {
@@ -95,9 +106,9 @@ describe('an organizational unit move', () => {
       expect(users[0]!.id).toBe(before!.id);
     } finally {
       await moveLdapEntry(
-        'uid=jdoe,ou=Learning,dc=acme,dc=test',
+        'uid=jdoe,ou=Learning,ou=Scenarios,dc=acme,dc=test',
         'uid=jdoe',
-        'ou=Care,dc=acme,dc=test',
+        'ou=Care,ou=Scenarios,dc=acme,dc=test',
       );
     }
   });
@@ -108,7 +119,7 @@ describe('a joiner', () => {
     await sync();
 
     await withLdapEntry(
-      'uid=nhaddad,ou=Care,dc=acme,dc=test',
+      'uid=nhaddad,ou=Care,ou=Scenarios,dc=acme,dc=test',
       {
         objectClass: ['inetOrgPerson'],
         uid: 'nhaddad',
@@ -139,7 +150,7 @@ describe('a leaver', () => {
     // the anchor must stay the same throughout, exactly like a temporary
     // filter exclusion (e.g. an account disabled and later re-enabled).
     await withLdapEntry(
-      'uid=tberg,ou=Care,dc=acme,dc=test',
+      'uid=tberg,ou=Care,ou=Scenarios,dc=acme,dc=test',
       {
         objectClass: ['inetOrgPerson'],
         uid: 'tberg',
@@ -205,13 +216,13 @@ describe('a member DN that resolves to nothing', () => {
     // DN does not cost the person it names — they were already invisible —
     // it costs whoever else is in the group.
     await withLdapEntry(
-      'cn=Ward,dc=acme,dc=test',
+      'cn=Ward,ou=Scenarios,dc=acme,dc=test',
       {
         objectClass: ['groupOfNames'],
         cn: 'Ward',
         member: [
-          'uid=jdoe,ou=Care,dc=acme,dc=test',
-          'uid=sroe,ou=Care,dc=acme,dc=test',
+          'uid=jdoe,ou=Care,ou=Scenarios,dc=acme,dc=test',
+          'uid=sroe,ou=Care,ou=Scenarios,dc=acme,dc=test',
         ],
       },
       async () => {
@@ -232,9 +243,9 @@ describe('a member DN that resolves to nothing', () => {
         // present one: an entry deleted between our user read and our group
         // read, or a member who moved organizational unit a moment ago and
         // whose old DN the server has not rewritten yet.
-        await replaceLdapAttribute('cn=Ward,dc=acme,dc=test', 'member', [
-          'uid=jdoe,ou=Care,dc=acme,dc=test',
-          'uid=ghost,ou=Care,dc=acme,dc=test',
+        await replaceLdapAttribute('cn=Ward,ou=Scenarios,dc=acme,dc=test', 'member', [
+          'uid=jdoe,ou=Care,ou=Scenarios,dc=acme,dc=test',
+          'uid=ghost,ou=Care,ou=Scenarios,dc=acme,dc=test',
         ]);
 
         const run = await preview();
@@ -269,13 +280,13 @@ describe('a membership change', () => {
     // all times, so proving removal means starting with two and dropping to
     // one, never emptying the group outright.
     await withLdapEntry(
-      'cn=Trainers,dc=acme,dc=test',
+      'cn=Trainers,ou=Scenarios,dc=acme,dc=test',
       {
         objectClass: ['groupOfNames'],
         cn: 'Trainers',
         member: [
-          'uid=jdoe,ou=Care,dc=acme,dc=test',
-          'uid=sroe,ou=Care,dc=acme,dc=test',
+          'uid=jdoe,ou=Care,ou=Scenarios,dc=acme,dc=test',
+          'uid=sroe,ou=Care,ou=Scenarios,dc=acme,dc=test',
         ],
       },
       async () => {
@@ -293,8 +304,8 @@ describe('a membership change', () => {
 
         // Drop jdoe from the group in the directory; a broken remove_member
         // path would leave this membership row in place.
-        await replaceLdapAttribute('cn=Trainers,dc=acme,dc=test', 'member', [
-          'uid=sroe,ou=Care,dc=acme,dc=test',
+        await replaceLdapAttribute('cn=Trainers,ou=Scenarios,dc=acme,dc=test', 'member', [
+          'uid=sroe,ou=Care,ou=Scenarios,dc=acme,dc=test',
         ]);
 
         await sync();
