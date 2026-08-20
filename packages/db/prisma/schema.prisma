@@ -376,7 +376,12 @@ model SyncChange {
   message      String?
 
   @@index([tenantId])
+  // The console reads a run's changes ordered by type; `applyRun` reads and
+  // counts them by status, three times per apply. Two different questions, two
+  // indexes — the second one was missing and every apply sequential-scanned
+  // the run's changes.
   @@index([runId, changeType])
+  @@index([runId, status])
 }
 
 /// One authentication policy per tenant: an ordered list of rules plus the
