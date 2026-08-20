@@ -355,6 +355,22 @@ function serveRangedMembership(
   const specs: string[] = [];
   let served = 0;
 
+  /**
+   * Makes the real server's answer look like Active Directory's truncated one.
+   *
+   * The fixture group genuinely has its members inline; AD would have replaced
+   * them with `member;range=0-0` and expected the client to come back for the
+   * rest. Rewriting the entry in place is what turns one into the other.
+   */
+  const truncate = (entries: Record<string, unknown>[]) => {
+    for (const entry of entries) {
+      if (entry.dn !== groupDn) continue;
+      delete entry.member;
+      delete entry.uniqueMember;
+      Object.assign(entry, windows[0] ?? {});
+    }
+  };
+
   vi.spyOn(Client.prototype, 'search').mockImplementation(async function (
     this: Client,
     ...args: Parameters<Client['search']>
@@ -374,14 +390,26 @@ function serveRangedMembership(
     }
 
     const result = await realSearch.apply(this, args);
-    for (const entry of result.searchEntries as unknown as Record<string, unknown>[]) {
-      if (entry.dn === groupDn) {
-        delete entry.member;
-        delete entry.uniqueMember;
-        Object.assign(entry, windows[0] ?? {});
-      }
-    }
+    truncate(result.searchEntries as unknown as Record<string, unknown>[]);
     return result;
+  });
+
+  // `read()` streams with `searchPaginated`, so the ENTRY read goes through
+  // here while the range windows above still go through `search` with a
+  // base scope. Two spies, because the connector genuinely uses two calls:
+  // one to walk the directory, one to walk a truncated attribute.
+  const realPaginated = Client.prototype.searchPaginated;
+  vi.spyOn(Client.prototype, 'searchPaginated').mockImplementation(function (
+    this: Client,
+    ...args: Parameters<Client['searchPaginated']>
+  ) {
+    const pages = realPaginated.apply(this, args);
+    return (async function* () {
+      for await (const page of pages) {
+        truncate(page.searchEntries as unknown as Record<string, unknown>[]);
+        yield page;
+      }
+    })();
   });
 
   return { specs };
@@ -459,5 +487,45 @@ describe('rangedMembershipFailure', () => {
 
   it('says nothing about an attribute that merely mentions member', () => {
     expect(rangedMembershipFailure({ memberOf: [], memberUid: [] })).toBeUndefined();
+  });
+});
+
+describe('ldapConnector.read: streaming', () => {
+  it('yields the first page BEFORE it asks the server for the second', async () => {
+    // Section 8: "streamed rather than accumulated, so a large directory does
+    // not become a large heap." `client.search()` drains every page internally
+    // and returns one complete array, so a connector built on it holds a whole
+    // search base in memory before it yields anything — and this assertion is
+    // the only thing standing between here and a quiet revert to it, because
+    // every other test in this file consumes the whole iterator and cannot
+    // tell the two apart.
+    let pagesProduced = 0;
+    vi.spyOn(Client.prototype, 'searchPaginated').mockImplementation(function () {
+      return (async function* () {
+        for (const uid of ['first', 'second']) {
+          pagesProduced += 1;
+          yield {
+            searchEntries: [
+              {
+                dn: `uid=${uid},ou=Care,ou=Shared,dc=acme,dc=test`,
+                uid,
+                entryUUID: `00000000-0000-4000-8000-00000000000${pagesProduced}`,
+              },
+            ],
+            searchReferences: [],
+          } as never;
+        }
+      })();
+    });
+
+    const stream = ldapConnector.read(config)[Symbol.asyncIterator]();
+    const first = await stream.next();
+
+    expect((first.value as { dn: string }).dn).toContain('uid=first');
+    // ONE. A draining read would have produced both before handing anything
+    // back, and this would be 2.
+    expect(pagesProduced).toBe(1);
+
+    await stream.return?.(undefined);
   });
 });

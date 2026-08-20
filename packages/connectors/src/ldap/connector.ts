@@ -325,37 +325,34 @@ export const ldapConnector: Connector<Config> = {
     const client = await connect(config);
     try {
       for (const search of searches(config)) {
-        // Paged on the wire, but NOT streamed into memory. `search()` drains
-        // every page internally and hands back one complete array, which is
-        // then mapped into a second complete array before any of it is
-        // yielded — so one search base's worth of entries is resident at
-        // once, and the async-generator shape below buys nothing but a
-        // convenient interface.
+        // STREAMED, a page at a time. `search()` drains every page internally
+        // and hands back one complete array, which was then mapped into a
+        // second complete array before any of it was yielded — so a whole
+        // search base was resident at once and the async-generator shape below
+        // bought nothing but a convenient interface. Section 8 asks for
+        // "streamed rather than accumulated, so a large directory does not
+        // become a large heap"; `searchPaginated` is what makes that true.
         //
-        // Real streaming means ldapts's separate `searchPaginated()`
-        // generator, which is a change to how failures and page boundaries
-        // are handled, not a swapped call. It is on the follow-up list.
-        const records = await runSearch(
-          client,
-          search,
-          {
-            // No extra option is needed to make `search()` continue past the
-            // first page; it already does.
-            paged: { pageSize: config.pageSize },
-            attributes: ['*', config.anchorAttribute],
-          },
-          (searchEntries) =>
-            searchEntries.map((entry) => ({
-              entry,
-              record: toRecord(entry, search.objectType, config.anchorAttribute),
-            })),
-        );
+        // A page is still a page: `pageSize` entries are resident while they
+        // are mapped and yielded, and the caller decides what it keeps. What
+        // is gone is the two full copies underneath it.
+        const pages = client.searchPaginated(search.base, {
+          filter: search.filter,
+          scope: 'sub',
+          paged: { pageSize: config.pageSize },
+          attributes: ['*', config.anchorAttribute],
+        });
 
-        for (const { entry, record } of records) {
-          // Sequential, not Promise.all: a domain with 300 oversized groups
-          // would otherwise open 300 concurrent range walks on one connection.
-          await resolveMembership(client, entry, record);
-          yield record;
+        for await (const page of pages) {
+          const entries = page.searchEntries as unknown as Record<string, unknown>[];
+          for (const entry of entries) {
+            const record = toRecord(entry, search.objectType, config.anchorAttribute);
+            // Sequential, not Promise.all: a domain with 300 oversized groups
+            // would otherwise open 300 concurrent range walks on one
+            // connection.
+            await resolveMembership(client, entry, record);
+            yield record;
+          }
         }
       }
     } finally {
