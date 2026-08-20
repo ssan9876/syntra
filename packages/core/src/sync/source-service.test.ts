@@ -388,3 +388,39 @@ describe('DEFAULT_MAPPINGS', () => {
     expect(rule?.sourceAttribute).toBe('uid');
   });
 });
+
+describe('a mapping may not aim at the hierarchy', () => {
+  it('refuses a rule targeting parentAnchor', async () => {
+    // Placement comes from the directory's own DN tree, never from an
+    // attribute. A rule that could write `parentAnchor` could move a person —
+    // and every scoped administrative role that reaches them — by setting a
+    // string on their record. It is not in `ASSIGNABLE_FIELDS`, and this is
+    // the check that turns that omission into a refusal an operator can read.
+    await expect(
+      withTenant(tenantId, async (tx) => {
+        const source = await createSource(tx, provider, {
+          ...input,
+          name: 'Hierarchy LDAP',
+        });
+        await setMappings(tx, source.id, [
+          // A valid rule set in every other respect, so the refusal below is
+          // about the target field and not about a missing correlation key.
+          {
+            objectType: 'user',
+            sourceAttribute: 'uid',
+            targetField: 'login',
+            transform: 'none',
+            isCorrelation: true,
+          },
+          {
+            objectType: 'user',
+            sourceAttribute: 'departmentNumber',
+            targetField: 'parentAnchor',
+            transform: 'none',
+            isCorrelation: false,
+          },
+        ]);
+      }),
+    ).rejects.toThrow(/parentAnchor/);
+  });
+});

@@ -278,6 +278,15 @@ function computeDiff(input: DiffInput) {
       // `ASSIGNABLE_FIELDS` deliberately does not list it.
       //
       // Groups are left out. Syntra's `Group` has no organizational unit.
+      //
+      // Cleared before it is set, and unconditionally. `setMappings` refuses a
+      // rule targeting `parentAnchor` — it is not in `ASSIGNABLE_FIELDS` — but
+      // the apply-time gate that catches a rule stored before that check
+      // existed now skips structural keys by construction, so this is the
+      // place that has to be sure. A rule aiming a source attribute at
+      // `parentAnchor` would otherwise survive here on exactly the records
+      // whose real parent could not be resolved, and rewrite the hierarchy.
+      delete mapped.fields.parentAnchor;
       if (record.objectType !== 'group') {
         const parent = parentAnchorOf(record.dn);
         if (parent !== undefined) mapped.fields.parentAnchor = parent;
