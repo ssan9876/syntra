@@ -138,6 +138,28 @@ describe('the three qualifications Automate’s handoff left open', () => {
     expect(report.cycles).toEqual([]);
   });
 
+  it('counts NOBODY as the decider of an auto-granted request, even with a person on the row', () => {
+    // The kind is what decides this, not the null. `fromPersonId: null` is the
+    // contract, but it is a type annotation and nothing enforces it — a caller
+    // that filled the field with the SUBMITTER (which is the obvious thing to
+    // reach for, since somebody did press the button) would turn a zero-stage
+    // product into a stream of decisions nobody made, with a person's name on
+    // every one. The previous version of this case passed `fromPersonId: null`,
+    // so deleting the kind check from the directed filter changed nothing.
+    const edges = [
+      ...[1, 2, 3].map((i) =>
+        edge({ kind: 'auto_granted', fromPersonId: 'a', toPersonId: 'b', requestId: `auto-ab-${i}` }),
+      ),
+      ...[1, 2, 3].map((i) =>
+        edge({ kind: 'auto_granted', fromPersonId: 'b', toPersonId: 'a', requestId: `auto-ba-${i}` }),
+      ),
+    ];
+    const report = buildDecisionGraph(input({ edges }));
+    expect(report.reciprocity).toEqual([]);
+    expect(report.cycles).toEqual([]);
+    expect(report.autoGranted).toHaveLength(2);
+  });
+
   it('QUALIFICATION THREE: an actor with no linked person is REPORTED, never dropped', () => {
     // A service account submitting requests on people's behalf is either an
     // integration worth knowing about or a problem worth knowing about, and

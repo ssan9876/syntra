@@ -74,6 +74,21 @@ beforeEach(async () => {
       },
     });
 
+    // A LIVE GRANT for the beneficiary. Without one, every "revokes nothing"
+    // in this file is a title rather than an assertion: the mutation that
+    // revokes on lapse or on refusal has nothing to take away, so it passes.
+    await tx.accessGrant.create({
+      data: {
+        tenantId,
+        subjectPersonId: anna.id,
+        resourceType: 'application',
+        resourceId: '30000000-0000-0000-0000-000000000001',
+        origin: 'request',
+        startsAt: new Date('2020-01-01'),
+        status: 'active',
+      },
+    });
+
     return {
       ruleId: rule.id, violationId: violation.id, beneficiaryId: anna.id,
       acceptorUserId: dirkUser.id, acceptorPersonId: dirk.id,
@@ -99,6 +114,15 @@ const request = (over: Record<string, unknown> = {}) => ({
   endsAt: days(30),
   ...over,
 });
+
+/** Every live grant the beneficiary holds is still live. */
+async function grantsUntouched(): Promise<void> {
+  const grants = await withTenant(tenantId, (tx) =>
+    tx.accessGrant.findMany({ where: { subjectPersonId: beneficiaryId } }),
+  );
+  expect(grants).toHaveLength(1);
+  expect(grants[0]).toMatchObject({ status: 'active', endsAt: null });
+}
 
 describe('for how long', () => {
   it('refuses an exception longer than maxExceptionDays', async () => {
@@ -249,6 +273,8 @@ describe('a refused exception revokes NOTHING', () => {
     ]);
     expect(exception.status).toBe('refused');
     expect(violation.status).toBe('open');
+    // The sentence in the title, as an assertion.
+    await grantsUntouched();
     expect((finding.detail as { riskAcceptanceRefused?: boolean }).riskAcceptanceRefused).toBe(true);
     expect(remediation).not.toBeNull();
   });
@@ -291,6 +317,33 @@ describe('when it lapses', () => {
     // already `critical`, so raising stops there and the finding names the lapse.
     expect(finding.severity).toBe('critical');
     expect((finding.detail as { lapsedExceptionAt?: string }).lapsedExceptionAt).toBeTruthy();
+    await grantsUntouched();
+  });
+
+  it('RAISES the finding one step when it has room to be raised', async () => {
+    // The case above starts at `critical`, where `raiseSeverity` is capped and
+    // the raise is invisible — so deleting the raise altogether passed it. The
+    // property is that a violation somebody once formally accepted and then let
+    // quietly expire is a different and worse thing than one nobody has looked
+    // at yet, and it needs a finding with somewhere to go.
+    await withTenant(tenantId, (tx) =>
+      tx.governFinding.updateMany({ where: { kind: 'sod_violation' }, data: { severity: 'low' } }),
+    );
+    const { id } = await requestSodException(tenantId, acceptorUserId, request({ endsAt: days(1) }));
+    await decideSodException(tenantId, acceptorUserId, id, 'approve', 'ok');
+    await sweepExceptions(tenantId, { now: days(2) });
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'sod_violation' } }),
+    );
+    expect(finding.severity).toBe('medium');
+    // And the VIOLATION keeps its own severity: the exception never changed
+    // what the violation is, only whether somebody had accepted it.
+    const violation = await withTenant(tenantId, (tx) =>
+      tx.sodViolation.findUniqueOrThrow({ where: { id: violationId } }),
+    );
+    expect(violation.severity).toBe('critical');
+    await grantsUntouched();
   });
 
   it('LAPSES EARLY when a basis contract ends, ahead of the end date', async () => {
@@ -307,6 +360,7 @@ describe('when it lapses', () => {
     const exception = await withTenant(tenantId, (tx) => tx.sodException.findUniqueOrThrow({ where: { id } }));
     expect(exception.status).toBe('lapsed');
     expect(exception.revokedReason).toContain('contract');
+    await grantsUntouched();
   });
 
   it('an early revocation by the rule owner reopens the violation immediately', async () => {
@@ -320,5 +374,6 @@ describe('when it lapses', () => {
     ]);
     expect(exception.status).toBe('revoked');
     expect(violation.status).toBe('open');
+    await grantsUntouched();
   });
 });
