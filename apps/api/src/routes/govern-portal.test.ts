@@ -105,6 +105,40 @@ describe('review authority comes from resolution, never from a permission', () =
     expect(body.items.map((i) => i.id).sort()).toEqual([itemId, ownItemId].sort());
   });
 
+  it('serves the queue in WORDS — a name, a system, and how they got it', async () => {
+    // §8: a screen that renders `business_rule` and a uuid is a screen whose
+    // answer is "keep", every time, and the certification it produces means
+    // nothing. The reviewer is shown who, what, how they got it, when it was
+    // last confirmed true and who last certified it.
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.campaignItem.updateMany({
+        where: { id: itemId },
+        data: {
+          attributions: [
+            { kind: 'business_rule', detail: { ruleName: 'Finance staff' } },
+          ] as never,
+        },
+      }),
+    );
+    const res = await get('/api/portal/govern/reviews', await portalCookie('jan'));
+    const body = res.json() as {
+      items: {
+        id: string;
+        subjectName: string;
+        systemName: string;
+        provenance: string;
+        lastCertifiedAt: string | null;
+        sourceSlaHours: number;
+      }[];
+    };
+    const item = body.items.find((i) => i.id === itemId)!;
+    expect(item.subjectName).toBe('Anna Test');
+    // The rule's NAME, not its kind and not its id.
+    expect(item.provenance).toContain('Finance staff');
+    expect(item.lastCertifiedAt).toBeNull();
+    expect(item.systemName).toBeTruthy();
+  });
+
   it('serves NOTHING to a person who is nobody’s reviewer', async () => {
     const res = await get('/api/portal/govern/reviews', await portalCookie('anna'));
     expect(res.statusCode).toBe(200);
