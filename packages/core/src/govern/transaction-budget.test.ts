@@ -185,10 +185,28 @@ describe('the transaction budget', () => {
     // EXECUTED, not documented. A test that asserted `BUDGET_MS < 5000` would be
     // an assertion about a constant, and Global Constraint 4 says "Task 12 makes
     // the rule a test".
-    const { slowest } = await timedTransactions(() =>
-      buildSnapshot(tenantId, { batchSize: Number.MAX_SAFE_INTEGER }),
-    );
-    expect(slowest).toBeGreaterThan(BUDGET_MS);
+    let aborted = false;
+    const { slowest } = await timedTransactions(async () => {
+      try {
+        await buildSnapshot(tenantId, { batchSize: Number.MAX_SAFE_INTEGER });
+      } catch {
+        // Prisma's own 5,000 ms interactive-transaction ceiling ends it first:
+        // "Transaction already closed... the timeout for this transaction was
+        // 5000 ms". That is the SAME finding as breaching the budget, arriving
+        // as an exception instead of a number, and it is the shape the defect
+        // takes in production — the snapshot half-written, its attributions
+        // never recorded.
+        //
+        // The slice-2 half of this file has said so since it was written. This
+        // half measured only, so on a loaded machine — where crossing 2,500 ms
+        // and crossing 5,000 ms are the same run — the test that exists to
+        // prove the budget matters failed by proving it.
+        aborted = true;
+      }
+    });
+
+    const breached = aborted || slowest > BUDGET_MS;
+    expect(breached).toBe(true);
   }, 300_000);
 });
 

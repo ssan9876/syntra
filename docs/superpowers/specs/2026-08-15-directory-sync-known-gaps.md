@@ -382,3 +382,27 @@ told they cannot. Extending it is a line per page once those pages grow rows wor
 labelling.
 
 Everything else on this page is closed.
+
+## Two load-sensitive tests, outside this subsystem
+
+Found by the whole-repo runs that verified the work above, recorded here because
+this is where the reader is. Neither is Directory Sync, and neither is a
+regression — both pass alone and fail on a machine running eight workers.
+
+- `auth/login-service.test.ts > takes comparable time for an unknown login and a
+  wrong password` asserts a wall-clock RATIO inside `0.3 … 3`. It measured 3.05.
+  The property it is defending is real and worth defending — an unknown login and
+  a wrong password must do the same work, or the login endpoint is a user
+  enumeration oracle — but a ratio of two timings on a loaded machine is not a
+  sound way to measure it. Asserting that both paths perform a password hash
+  would be.
+- `automate/catalog-service.test.ts > does not race two concurrent first reads
+  into a P2002` fires eight concurrent transactions and failed with "Unable to
+  start a transaction in the given time" — pool acquisition, not the race it is
+  testing.
+
+`govern/transaction-budget.test.ts` was a third and is now fixed: its slice-1 half
+measured the unbounded case only, so when the machine was slow enough for the
+breach to arrive as Prisma's 5,000 ms transaction ceiling instead of a number, the
+test that exists to prove the budget matters failed by proving it. The slice-2 half
+of the same file had already learned this and treats an abort as the same finding.

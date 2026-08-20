@@ -6,6 +6,8 @@ import {
   PERMISSIONS,
   SYNC_JOB,
   assignRole,
+  localMasterKeyProvider,
+  previewRun,
   createRole,
   createUser,
   hashPassword,
@@ -94,6 +96,25 @@ const patch = (url: string, cookie: string, payload: unknown) =>
 
 const del = (url: string, cookie: string) =>
   ctx.app.inject({ method: 'DELETE', url, headers: { host: ctx.host, cookie } });
+
+/** The key `buildTestApp` configures, so a test can open the same vault. */
+const testProvider = localMasterKeyProvider(Buffer.alloc(32, 7));
+
+/**
+ * Queues a run the way the console does, and then does the worker's job.
+ *
+ * `POST /sources/:id/run` enqueues and answers 202 — that is the point of it —
+ * and the fake scheduler records the job without running it. A test about what
+ * a run PRODUCES therefore has to perform it, against the same run row the
+ * endpoint created, which is what the worker would do.
+ */
+async function runNow(id: string, cookie: string): Promise<{ id: string; status: string }> {
+  const queued = await post(`/api/admin/sources/${id}/run`, cookie);
+  expect(queued.statusCode).toBe(202);
+  const job = scheduler.enqueued.at(-1)!.data as { runId: string };
+  const run = await previewRun(ctx.tenantId, testProvider, id, job.runId);
+  return { id: run.id, status: run.status };
+}
 
 beforeEach(async () => {
   scheduler = createFakeScheduler();
@@ -566,20 +587,19 @@ describe('runs', () => {
     const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
     const id = await seeded(cookie);
 
-    const run = await post(`/api/admin/sources/${id}/run`, cookie);
-    expect(run.statusCode).toBe(200);
-    expect(run.json().status).toBe('previewed');
+    const run = await runNow(id, cookie);
+    expect(run.status).toBe('previewed');
 
-    const detail = await get(`/api/admin/sync-runs/${run.json().id}`, cookie);
+    const detail = await get(`/api/admin/sync-runs/${run.id}`, cookie);
     expect(detail.json().changes.length).toBeGreaterThan(0);
   });
 
   it('applies a run', async () => {
     const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ, PERMISSIONS.DIRECTORY_READ]);
     const id = await seeded(cookie);
-    const run = await post(`/api/admin/sources/${id}/run`, cookie);
+    const run = await runNow(id, cookie);
 
-    const applied = await post(`/api/admin/sync-runs/${run.json().id}/apply`, cookie);
+    const applied = await post(`/api/admin/sync-runs/${run.id}/apply`, cookie);
     expect(applied.statusCode).toBe(200);
 
     const users = await get('/api/admin/users', cookie);
@@ -589,7 +609,7 @@ describe('runs', () => {
   it('refuses to apply with only sync.read', async () => {
     const manage = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
     const id = await seeded(manage);
-    const run = await post(`/api/admin/sources/${id}/run`, manage);
+    const run = await runNow(id, manage);
 
     // A second administrator holding only read.
     await withTenant(ctx.tenantId, async (tx) => {
@@ -617,10 +637,7 @@ describe('runs', () => {
     });
     const readerCookie = `syntra_session=${up.cookies.find((c) => c.name === 'syntra_session')!.value}`;
 
-    const res = await post(
-      `/api/admin/sync-runs/${run.json().id}/apply`,
-      readerCookie,
-    );
+    const res = await post(`/api/admin/sync-runs/${run.id}/apply`, readerCookie);
     expect(res.statusCode).toBe(403);
   });
 
@@ -653,10 +670,10 @@ describe('runs', () => {
     });
     const id = created.json().id;
 
-    const run = await post(`/api/admin/sources/${id}/run`, cookie);
-    expect(run.json().status).toBe('blocked');
+    const run = await runNow(id, cookie);
+    expect(run.status).toBe('blocked');
 
-    const res = await post(`/api/admin/sync-runs/${run.json().id}/apply`, cookie);
+    const res = await post(`/api/admin/sync-runs/${run.id}/apply`, cookie);
     expect(res.statusCode).toBe(409);
     expect(res.json().type).toContain('run-blocked');
   });
@@ -681,9 +698,9 @@ describe('skipping a change', () => {
         ],
       },
     });
-    const run = await post(`/api/admin/sources/${id}/run`, cookie);
-    const detail = await get(`/api/admin/sync-runs/${run.json().id}`, cookie);
-    return { runId: run.json().id, changes: detail.json().changes };
+    const run = await runNow(id, cookie);
+    const detail = await get(`/api/admin/sync-runs/${run.id}`, cookie);
+    return { runId: run.id, changes: detail.json().changes };
   }
 
   it('skips a proposed change and records who did it', async () => {
@@ -1069,8 +1086,8 @@ describe('deleting a source', () => {
         ],
       },
     });
-    const run = await post(`/api/admin/sources/${id}/run`, cookie);
-    await post(`/api/admin/sync-runs/${run.json().id}/apply`, cookie);
+    const run = await runNow(id, cookie);
+    await post(`/api/admin/sync-runs/${run.id}/apply`, cookie);
     return id;
   }
 
