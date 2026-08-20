@@ -113,6 +113,41 @@ deactivating rather than orphaning, because an account no directory keeps curren
 a leaver waiting to happen, and because this subsystem deletes no directory object
 anywhere else.
 
+## ~~An unresolvable member DN revoked the members we COULD read~~ — fixed
+
+Found while diagnosing a flaky test, and much worse than the flake. `computeDiff`
+resolved each of a group's member DNs to an anchor; a DN naming nothing the read
+returned was counted in `unresolvedMembers` and then dropped. `desired` is
+differenced against what Syntra holds, so the omission read as `remove_member`.
+
+The two comments directly below that branch already explain, twice, why dropping
+an anchor is wrong for the cases where the DN *does* resolve. The case where we
+know least was the one falling through to a revocation.
+
+The cost does not land on the unreadable member — they were already invisible. It
+lands on everyone else in the group: `desired` is short one anchor, so the
+difference proposes removing whichever real members remain. One dangling DN in
+three thousand memberships is far under the deactivation threshold, so the guard
+never sees it.
+
+Directories present this constantly: OpenLDAP's referential-integrity overlay
+rewrites a group's member DN *after* a `modifyDN` commits, so a read taken in that
+window sees a dangling DN; a member outside the configured search base never
+appears in the read at all; an entry deleted between the user read and the group
+read is gone from one and named by the other.
+
+`diffMemberships` now takes the set of groups read in part and proposes their
+additions and none of their removals — the treatment every other partial read in
+this subsystem gets. Per group, not per run.
+
+This was also the cause of `scenarios.test.ts`'s intermittent failure on the
+organizational-unit move, which turned the whole-repo suite red once during the
+Govern merge. It moves `uid=jdoe` and previews immediately; with refint lagging,
+`cn=Nurses` reported its only member as a dangling DN and the guard blocked the
+apply at 100%. On an idle machine refint won the race; under a full-suite load it
+did not. There is now a deterministic case built on a member DN that names no
+entry at all, so the fix does not depend on winning or losing that race.
+
 ## Reads accumulate rather than stream (spec section 8)
 
 Section 8 promises results "streamed rather than accumulated, so a large directory does
