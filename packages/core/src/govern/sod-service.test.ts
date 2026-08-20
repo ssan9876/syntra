@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import {
+  detectDecisionGraph,
   detectSodViolations,
   previewSodRuleImpact,
   sodImpactForGrant,
@@ -31,6 +32,8 @@ let annaId: string;
 let bramId: string;
 let raiseFnId: string;
 let approveFnId: string;
+/** An account for the requests the graph reads. `requestedByUserId` is NOT NULL. */
+let submitterUserId: string;
 
 /**
  * Anna holds BOTH sides, across two systems and two accounts — the classic real
@@ -186,6 +189,18 @@ beforeEach(async () => {
   ruleId = rule.ruleId;
   raiseFnId = rule.raiseId;
   approveFnId = rule.approveId;
+  submitterUserId = await withTenant(tenantId, async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        tenantId,
+        login: 'anna',
+        email: 'anna@a.test',
+        displayName: 'Anna Novak',
+        personId: annaId,
+      },
+    });
+    return user.id;
+  });
 });
 
 describe('detection', () => {
@@ -497,5 +512,291 @@ describe('Automate’s eligibility re-check', () => {
       checkEligibility(tx, productId, bramId, NOW),
     );
     expect(outcome.ok).toBe(true);
+  });
+});
+
+/**
+ * §14's persistence half.
+ *
+ * `graph.test.ts` covers the patterns over plain values. This covers the part
+ * that reads the tables and writes the findings — the half that, missing,
+ * leaves `buildDecisionGraph` a correct pure function nothing in the product
+ * ever calls.
+ */
+describe('detectDecisionGraph', () => {
+  /** One approved decision by `decider` on a request whose subject is `subject`. */
+  async function approval(
+    decider: string,
+    subject: string,
+    options: { grantedResourceId?: string; decidedAt?: Date } = {},
+  ): Promise<string> {
+    return withTenant(tenantId, async (tx) => {
+      const decidedAt = options.decidedAt ?? NOW;
+      const request = await tx.accessRequest.create({
+        data: {
+          tenantId,
+          subjectPersonId: subject,
+          requestedByUserId: submitterUserId,
+          requestedByPersonId: subject,
+          origin: 'catalog',
+          status: 'approved',
+          submittedAt: decidedAt,
+          decidedAt,
+        },
+      });
+      const step = await tx.approvalStep.create({
+        data: {
+          tenantId,
+          requestId: request.id,
+          sequence: 1,
+          stageSnapshot: { selector: 'manager' },
+          status: 'approved',
+          closedAt: decidedAt,
+        },
+      });
+      await tx.approvalDecision.create({
+        data: {
+          tenantId,
+          stepId: step.id,
+          personId: decider,
+          decision: 'approve',
+          via: 'selector',
+          decidedAt,
+        },
+      });
+      if (options.grantedResourceId !== undefined) {
+        await tx.accessGrant.create({
+          data: {
+            tenantId,
+            subjectPersonId: subject,
+            requestId: request.id,
+            resourceType: 'entitlement',
+            resourceId: options.grantedResourceId,
+            targetSystemId: SYSTEM_AD,
+            origin: 'request',
+            startsAt: decidedAt,
+            status: 'active',
+          },
+        });
+      }
+      return request.id;
+    });
+  }
+
+  it('reads reciprocity out of ApprovalDecision and says it is not an accusation', async () => {
+    for (let i = 0; i < 3; i += 1) {
+      await approval(annaId, bramId);
+      await approval(bramId, annaId);
+    }
+    const result = await detectDecisionGraph(tenantId, snapshotId, { now: NOW });
+    expect(result.reciprocity).toBe(1);
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({
+        where: { kind: 'approval_reciprocity', subjectRefType: 'person_pair' },
+      }),
+    );
+    // ONE finding, not one per axis: the cycle detector must not report the
+    // same pair a second time.
+    expect(
+      await withTenant(tenantId, (tx) =>
+        tx.governFinding.count({ where: { kind: 'approval_reciprocity' } }),
+      ),
+    ).toBe(1);
+    expect(finding.severity).toBe('medium');
+    expect(finding.subjectRefId).toBe([annaId, bramId].sort().join(':'));
+    // THE SENTENCE. In a team of four, mutual approval is not a ring; it is
+    // Tuesday, and a finding that reads as an accusation there is a finding
+    // people learn to dismiss.
+    const detail = finding.detail as { statement?: string; aToB?: number };
+    expect(detail.statement).toContain('normal and expected');
+    expect(detail.statement).toContain('not an accusation');
+    expect(detail.aToB).toBe(3);
+  });
+
+  it('EXCLUDES rejections — a pair who refused each other is a disagreement', async () => {
+    await withTenant(tenantId, async (tx) => {
+      for (let i = 0; i < 3; i += 1) {
+        for (const [decider, subject] of [
+          [annaId, bramId],
+          [bramId, annaId],
+        ] as const) {
+          const request = await tx.accessRequest.create({
+            data: {
+              tenantId,
+              subjectPersonId: subject,
+              requestedByUserId: submitterUserId,
+              requestedByPersonId: subject,
+              origin: 'catalog',
+              status: 'rejected',
+              submittedAt: NOW,
+              decidedAt: NOW,
+            },
+          });
+          const step = await tx.approvalStep.create({
+            data: {
+              tenantId,
+              requestId: request.id,
+              sequence: 1,
+              stageSnapshot: { selector: 'manager' },
+              status: 'rejected',
+            },
+          });
+          await tx.approvalDecision.create({
+            data: {
+              tenantId,
+              stepId: step.id,
+              personId: decider,
+              decision: 'reject',
+              comment: 'no',
+              via: 'selector',
+              decidedAt: NOW,
+            },
+          });
+        }
+      }
+    });
+    expect((await detectDecisionGraph(tenantId, snapshotId, { now: NOW })).reciprocity).toBe(0);
+  });
+
+  it('QUALIFICATION ONE: a delegated grant is an edge with no ApprovalDecision behind it', async () => {
+    // A graph built only from `ApprovalDecision` cannot see a pair of team
+    // leads who each granted the other access to the resource they manage.
+    await withTenant(tenantId, async (tx) => {
+      for (let i = 0; i < 3; i += 1) {
+        for (const [granter, subject] of [
+          [annaId, bramId],
+          [bramId, annaId],
+        ] as const) {
+          await tx.accessRequest.create({
+            data: {
+              tenantId,
+              subjectPersonId: subject,
+              requestedByUserId: submitterUserId,
+              requestedByPersonId: granter,
+              origin: 'delegated_admin',
+              resourceType: 'entitlement',
+              resourceId: ENT_RAISE,
+              status: 'approved',
+              submittedAt: NOW,
+              decidedAt: NOW,
+            },
+          });
+        }
+      }
+    });
+    expect((await detectDecisionGraph(tenantId, snapshotId, { now: NOW })).reciprocity).toBe(1);
+  });
+
+  it('QUALIFICATION TWO: an auto-granted request is its own class, with nobody named', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.accessRequest.create({
+        data: {
+          tenantId,
+          subjectPersonId: bramId,
+          requestedByUserId: submitterUserId,
+          requestedByPersonId: bramId,
+          origin: 'catalog',
+          status: 'approved',
+          submittedAt: NOW,
+          decidedAt: NOW,
+        },
+      }),
+    );
+    const result = await detectDecisionGraph(tenantId, snapshotId, { now: NOW });
+    expect(result).toMatchObject({ autoGranted: 1, reciprocity: 0, cycles: 0 });
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'no_human_decision' } }),
+    );
+    expect(finding.subjectRefId).toBe(bramId);
+    expect((finding.detail as { statement?: string }).statement).toContain('no human decided it');
+  });
+
+  it('QUALIFICATION THREE: an actor with no linked person is REPORTED, never dropped', async () => {
+    await withTenant(tenantId, async (tx) => {
+      const service = await tx.user.create({
+        data: { tenantId, login: 'svc', email: 'svc@a.test', displayName: 'Integration' },
+      });
+      await tx.accessRequest.create({
+        data: {
+          tenantId,
+          subjectPersonId: bramId,
+          requestedByUserId: service.id,
+          requestedByPersonId: null,
+          origin: 'catalog',
+          status: 'pending_approval',
+          submittedAt: NOW,
+        },
+      });
+    });
+    const result = await detectDecisionGraph(tenantId, snapshotId, { now: NOW });
+    expect(result.unmergeableActors).toBe(1);
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'unmergeable_actor' } }),
+    );
+    expect((finding.detail as { statement?: string }).statement).toContain('silence is the wrong');
+  });
+
+  it('raises SoD laundering at the RULE’s own severity, and does not soft-pedal it', async () => {
+    // Neither request violates the rule on its own and neither person holds
+    // both sides. Together they put the organization where the rule says it
+    // must not be — and that is a finding rather than a signal.
+    await approval(annaId, bramId, { grantedResourceId: ENT_RAISE });
+    await approval(bramId, annaId, { grantedResourceId: ENT_APPROVE });
+
+    const result = await detectDecisionGraph(tenantId, snapshotId, { now: NOW });
+    expect(result.laundering).toBe(1);
+
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'sod_laundering' } }),
+    );
+    expect(finding.severity).toBe('critical');
+    const detail = finding.detail as { statement?: string; ruleName?: string };
+    expect(detail.ruleName).toBe('Payment raising and approval');
+    expect(detail.statement).toContain('opposite side');
+    // The reciprocity sentence would be an excuse here, not context.
+    expect(detail.statement).not.toContain('normal and expected');
+  });
+
+  it('raises nothing for a DISABLED rule', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.sodRule.update({ where: { id: ruleId }, data: { enabled: false } }),
+    );
+    await approval(annaId, bramId, { grantedResourceId: ENT_RAISE });
+    await approval(bramId, annaId, { grantedResourceId: ENT_APPROVE });
+    expect((await detectDecisionGraph(tenantId, snapshotId, { now: NOW })).laundering).toBe(0);
+  });
+
+  it('does NOT close the sod_violation findings the same job just opened', async () => {
+    // `upsertFindings`, never `reconcileFindings`. This computes four kinds,
+    // and a whole-tenant sweep from here would close every other open finding
+    // in the tenant — including the ones `detectSodViolations` wrote seconds
+    // earlier in the same snapshot job.
+    await detectSodViolations(tenantId, snapshotId, { now: NOW });
+    const before = await withTenant(tenantId, (tx) =>
+      tx.governFinding.count({ where: { kind: 'sod_violation', status: 'open' } }),
+    );
+    expect(before).toBe(1);
+
+    await approval(annaId, bramId);
+    await detectDecisionGraph(tenantId, snapshotId, { now: NOW });
+
+    expect(
+      await withTenant(tenantId, (tx) =>
+        tx.governFinding.count({ where: { kind: 'sod_violation', status: 'open' } }),
+      ),
+    ).toBe(1);
+  });
+
+  it('reports nothing at all over an empty tenant', async () => {
+    expect(await detectDecisionGraph(tenantId, snapshotId, { now: NOW })).toEqual({
+      reciprocity: 0,
+      cycles: 0,
+      laundering: 0,
+      autoGranted: 0,
+      unmergeableActors: 0,
+    });
+    expect(await withTenant(tenantId, (tx) => tx.governFinding.count())).toBe(0);
   });
 });

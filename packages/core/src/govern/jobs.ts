@@ -20,7 +20,8 @@ import {
   runCampaignReminders,
 } from './reviewer-service.js';
 import { reflectRevocationOutcomes } from './revocation-service.js';
-import { detectSodViolations } from './sod-service.js';
+import { sweepExceptions } from './exception-service.js';
+import { detectDecisionGraph, detectSodViolations } from './sod-service.js';
 import { governSettings } from './settings-service.js';
 import { buildSnapshot, pruneSnapshots } from './snapshot-service.js';
 
@@ -51,7 +52,14 @@ export const GOVERN_PURPOSES: readonly GovernPurpose[] = [
   'exception',
 ];
 
-const QUEUE_FOR: Record<GovernPurpose, string> = {
+/**
+ * Exported so a test can assert the OTHER half of the pair: every purpose this
+ * map schedules must have a handler registered against the queue it names. A
+ * scheduled purpose with no handler is a queue that fills and never drains —
+ * pg-boss keeps the schedule in the database, so the rows accumulate silently
+ * and the control the purpose exists for never runs.
+ */
+export const GOVERN_JOB_BY_PURPOSE: Record<GovernPurpose, string> = {
   snapshot: GOVERN_SNAPSHOT_JOB,
   prune: GOVERN_PRUNE_JOB,
   verify: GOVERN_VERIFY_JOB,
@@ -113,6 +121,9 @@ export async function runSnapshotJob(
   // already depends on both and on neither's internals, which is where a
   // sequencer belongs.
   await detectSodViolations(payload.tenantId, built.snapshotId, { now });
+  // §14, after the rules: the laundering pattern is detectable ONLY with them
+  // in hand, and this reads the same snapshot they were just evaluated over.
+  await detectDecisionGraph(payload.tenantId, built.snapshotId, { now });
 
   // Campaign upkeep, over the picture the build just produced. All three
   // read the CURRENT snapshot, so they belong here rather than on their own
@@ -321,10 +332,10 @@ export async function applyGovernSchedules(
     const key = governScheduleKey(tenantId, purpose);
     const cron = CRON[purpose];
     if (snapshotSchedule === null || cron === '') {
-      await scheduler.unschedule(QUEUE_FOR[purpose], key);
+      await scheduler.unschedule(GOVERN_JOB_BY_PURPOSE[purpose], key);
       continue;
     }
-    await scheduler.schedule(QUEUE_FOR[purpose], cron, governJobPayload(tenantId), key);
+    await scheduler.schedule(GOVERN_JOB_BY_PURPOSE[purpose], cron, governJobPayload(tenantId), key);
   }
 }
 
@@ -373,6 +384,11 @@ export function registerGovernJobs(
   });
   scheduler.register<GovernJobPayload>(GOVERN_CLOSE_JOB, async (payload) => {
     await closeDueCampaigns(payload.tenantId, {
+      ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
+    });
+  });
+  scheduler.register<GovernJobPayload>(GOVERN_EXCEPTION_JOB, async (payload) => {
+    await sweepExceptions(payload.tenantId, {
       ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
     });
   });

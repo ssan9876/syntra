@@ -144,6 +144,17 @@ describe('the prevention points depend on Govern, never the reverse', () => {
         'campaign-service.ts',
         ["'../provision/condition.js'", "'../automate/notify.js'"],
       ],
+      // §15. The self-approval invariant applies unchanged to a risk
+      // acceptance, and §12's reason applies with it: Automate's resolver is
+      // REUSED rather than reimplemented, because an approval chain and a
+      // risk-acceptance chain disagreeing about who somebody's manager is
+      // would be a support call nobody can close. It is the RESOLVER that is
+      // reused and not `request-service.js`, which is keyed on a Product — an
+      // exception is not a catalog item.
+      [
+        'exception-service.ts',
+        ["'../automate/approvers.js'", "'../automate/notify.js'"],
+      ],
       // §5 and §13. The revocation service is the ONE place Govern hands work
       // to another subsystem, so it is the one place these names belong — and
       // all four go the safe way. `fulfil.js` is Automate's entry point for

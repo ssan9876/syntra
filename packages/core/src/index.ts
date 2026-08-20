@@ -250,6 +250,8 @@ export * from './govern/sod-service.js';
 export * from './govern/decision-service.js';
 export * from './govern/reviewer-service.js';
 export * from './govern/campaign-service.js';
+export * from './govern/graph.js';
+export * from './govern/exception-service.js';
 export * from './govern/dispatch.js';
 export * from './govern/revocation-service.js';
 // Member by member, not `export *`, and for the THIRD time in this barrel.

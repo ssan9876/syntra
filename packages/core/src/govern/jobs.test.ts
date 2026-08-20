@@ -12,6 +12,8 @@ import { TEMPLATES } from '../notify/templates/index.js';
 import { fileAnchorSink, localFileCheckpointSigner } from './audit-integrity.js';
 import {
   GOVERN_ANCHOR_JOB,
+  GOVERN_EXCEPTION_JOB,
+  GOVERN_JOB_BY_PURPOSE,
   GOVERN_PURPOSES,
   GOVERN_SNAPSHOT_JOB,
   GOVERN_VERIFY_JOB,
@@ -121,7 +123,87 @@ describe('registerGovernJobs', () => {
       expect.arrayContaining([GOVERN_SNAPSHOT_JOB, GOVERN_VERIFY_JOB, GOVERN_ANCHOR_JOB]),
     );
   });
+
+  it('registers a handler for EVERY purpose it schedules', () => {
+    // `applyGovernSchedules` schedules all seven. A purpose scheduled with no
+    // handler is a queue that fills up and never drains — pg-boss keeps the
+    // schedule in the database, so the rows accumulate silently and the control
+    // the purpose exists for never runs.
+    const { scheduler, registered } = fakeScheduler();
+    registerGovernJobs(scheduler);
+    for (const purpose of GOVERN_PURPOSES) {
+      expect(registered, `no handler registered for the ${purpose} purpose`).toContain(
+        GOVERN_JOB_BY_PURPOSE[purpose],
+      );
+    }
+  });
 });
+
+/**
+ * One active SoD exception whose end date has already passed.
+ *
+ * `sweepExceptions` reads the wall clock through its own `now` default, so the
+ * end date sits in the past rather than the fixture reaching for a fake timer:
+ * the job handler takes no `now`, and a test that could only drive it through
+ * one would be testing a seam the product does not have.
+ */
+async function seedLapsableException(): Promise<string> {
+  return withTenant(tenantId, async (tx) => {
+    const person = await tx.person.create({
+      data: { tenantId, givenName: 'Anna', familyName: 'Novak' },
+    });
+    const owner = await tx.person.create({
+      data: { tenantId, givenName: 'Ola', familyName: 'Owner' },
+    });
+    const a = await tx.businessFunction.create({
+      data: { tenantId, name: 'Raise', ownerPersonId: owner.id },
+    });
+    const b = await tx.businessFunction.create({
+      data: { tenantId, name: 'Approve', ownerPersonId: owner.id },
+    });
+    const rule = await tx.sodRule.create({
+      data: {
+        tenantId,
+        name: 'Payment raising and approval',
+        functionAId: a.id,
+        functionBId: b.id,
+        severity: 'critical',
+        rationale: 'raise and approve',
+      },
+    });
+    const snapshot = await tx.accessSnapshot.create({
+      data: { tenantId, kind: 'manual', status: 'complete', asOf: NOW },
+    });
+    const violation = await tx.sodViolation.create({
+      data: {
+        tenantId,
+        ruleId: rule.id,
+        personId: person.id,
+        holdingsA: [],
+        holdingsB: [],
+        severity: 'critical',
+        status: 'excepted',
+        firstSeenAt: NOW,
+        lastSeenAt: NOW,
+        lastSnapshotId: snapshot.id,
+      },
+    });
+    const exception = await tx.sodException.create({
+      data: {
+        tenantId,
+        ruleId: rule.id,
+        personId: person.id,
+        violationId: violation.id,
+        justification: 'two separate engagements',
+        compensatingControl: 'monthly review',
+        startsAt: new Date('2026-01-01T00:00:00Z'),
+        endsAt: new Date('2026-02-01T00:00:00Z'),
+        status: 'active',
+      },
+    });
+    return exception.id;
+  });
+}
 
 /**
  * One revocation the owning subsystem has already applied, waiting for
@@ -226,6 +308,21 @@ describe('the jobs', () => {
     await runSnapshotJob(governJobPayload(tenantId), { now: NOW });
     const other = await withTenant(otherTenantId, (tx) => tx.accessSnapshot.count());
     expect(other).toBe(0);
+  });
+
+  it('sweeps SoD exceptions when the exception job runs', async () => {
+    // Not "the function works when a test calls it". `sweepExceptions` is the
+    // function behind GOVERN_EXCEPTION_JOB, and a purpose that is scheduled
+    // with no handler means no exception ever lapses: the violation stays
+    // `excepted` for ever and the acceptance nobody renewed becomes permanent.
+    const exceptionId = await seedLapsableException();
+    const { scheduler, run } = fakeScheduler();
+    registerGovernJobs(scheduler);
+    await run(GOVERN_EXCEPTION_JOB, governJobPayload(tenantId));
+    const after = await withTenant(tenantId, (tx) =>
+      tx.sodException.findUniqueOrThrow({ where: { id: exceptionId } }),
+    );
+    expect(after.status).toBe('lapsed');
   });
 
   it('advances a dispatched revocation when the snapshot job runs', async () => {

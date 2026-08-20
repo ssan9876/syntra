@@ -4,7 +4,13 @@ import { recordEvent } from '../audit/audit-service.js';
 // authoritative for the three SoD kinds and must close the ones that have gone.
 // A whole-tenant sweep from here would close every standing finding the
 // snapshot build opened minutes earlier.
-import { reconcileFindings, type FindingDraft } from './finding-service.js';
+import { reconcileFindings, upsertFindings, type FindingDraft } from './finding-service.js';
+import {
+  buildDecisionGraph,
+  type DecisionEdge,
+  type GraphInput,
+} from './graph.js';
+import { governSettings } from './settings-service.js';
 import { readableSnapshot, SnapshotNotReadableError } from './readable.js';
 import {
   evaluateSodRules,
@@ -600,5 +606,295 @@ export function grantResource(grant: {
           ? 'application'
           : 'syntraGroup',
     resourceId: grant.resourceId,
+  };
+}
+
+/**
+ * Section 14. The decision graph Automate's section 9 named as Govern's
+ * problem, persisted.
+ *
+ * Automate closes every path to self-approval it can see and names the tenth
+ * honestly: two-stage laundering — the subject decides stage 1 of somebody
+ * else's request, who decides stage 2 of theirs. It cannot detect that from
+ * inside one request, and it says so; this is the other side of that handoff.
+ *
+ * `buildDecisionGraph` is PURE and takes plain values. This function is the
+ * only thing that reads the tables and the only thing that writes findings, so
+ * the pattern logic can be exercised without a database and the database work
+ * has nothing to reason about.
+ *
+ * `upsertFindings`, never `reconcileFindings`: this computes four kinds and a
+ * whole-tenant sweep from here would close every other open finding in the
+ * tenant — including the `sod_violation` rows `detectSodViolations` opened
+ * seconds earlier in the same job.
+ */
+export async function detectDecisionGraph(
+  tenantId: string,
+  snapshotId: string,
+  options: { now?: Date } = {},
+): Promise<{
+  reciprocity: number;
+  cycles: number;
+  laundering: number;
+  autoGranted: number;
+  unmergeableActors: number;
+}> {
+  const now = options.now ?? new Date();
+
+  const input = await withTenant(tenantId, async (tx): Promise<GraphInput> => {
+    const settings = await governSettings(tx);
+    const cutoff = new Date(now.getTime() - settings.reciprocityWindowDays * 86_400_000);
+
+    // ---- edge 1: somebody decided somebody else's request -----------------
+    // `(tenantId, decidedAt)` is indexed for exactly this read. Rejections are
+    // excluded: refusing somebody's request is not a favour, and a pair who
+    // each rejected the other three times is a disagreement, not a ring.
+    const decisions = await tx.approvalDecision.findMany({
+      where: { decision: 'approve', decidedAt: { gte: cutoff } },
+      select: {
+        personId: true,
+        via: true,
+        decidedAt: true,
+        step: {
+          select: {
+            stageSnapshot: true,
+            request: { select: { id: true, subjectPersonId: true } },
+          },
+        },
+      },
+    });
+
+    const edges: DecisionEdge[] = decisions.map((row) => ({
+      kind: 'decided_for',
+      fromPersonId: row.personId,
+      toPersonId: row.step.request.subjectPersonId,
+      requestId: row.step.request.id,
+      decidedAt: row.decidedAt,
+      via: row.via,
+      selector: ((row.step.stageSnapshot as { selector?: string }).selector ?? null) as
+        | string
+        | null,
+    }));
+
+    // ---- edge 2: QUALIFICATION ONE, the delegated grant -------------------
+    // A graph built only from `ApprovalDecision` cannot see a pair of team
+    // leads who each granted the other access to the resource they manage —
+    // the same laundering pattern with LESS friction than the two-stage one,
+    // since it needs no approvals at all. The row exists; it is an
+    // `AccessRequest` with `origin: 'delegated_admin'` that never had a step.
+    const delegated = await tx.accessRequest.findMany({
+      where: { origin: 'delegated_admin', decidedAt: { gte: cutoff } },
+      select: {
+        id: true,
+        subjectPersonId: true,
+        requestedByPersonId: true,
+        decidedAt: true,
+      },
+    });
+    for (const row of delegated) {
+      edges.push({
+        kind: 'delegated_grant',
+        fromPersonId: row.requestedByPersonId,
+        toPersonId: row.subjectPersonId,
+        requestId: row.id,
+        decidedAt: row.decidedAt ?? now,
+        via: 'delegated_admin',
+        selector: null,
+      });
+    }
+
+    // ---- edge 3: QUALIFICATION TWO, the auto-granted request --------------
+    // A product with an EMPTY stage list is approved on submission. Nobody
+    // decided it, so it can neither reciprocate nor complete a cycle — and
+    // counting it as a decision would put a person's name on a decision they
+    // did not make. It is its own class: access nobody decided is precisely
+    // the access a recertification exists to have somebody decide.
+    const autoGranted = await tx.accessRequest.findMany({
+      where: {
+        origin: 'catalog',
+        status: { in: ['approved', 'fulfilled'] },
+        decidedAt: { gte: cutoff },
+        steps: { none: {} },
+      },
+      select: { id: true, subjectPersonId: true, decidedAt: true },
+    });
+    for (const row of autoGranted) {
+      edges.push({
+        kind: 'auto_granted',
+        fromPersonId: null,
+        toPersonId: row.subjectPersonId,
+        requestId: row.id,
+        decidedAt: row.decidedAt ?? now,
+        via: 'auto',
+        selector: null,
+      });
+    }
+
+    // ---- QUALIFICATION THREE: the actor with no linked person -------------
+    // A service account submitting requests on people's behalf is either an
+    // integration worth knowing about or a problem worth knowing about, and
+    // either way silence is the wrong answer. It is REPORTED, never dropped
+    // and never quietly merged onto the subject.
+    const unattributedRequests = await tx.accessRequest.findMany({
+      where: { requestedByPersonId: null, submittedAt: { gte: cutoff } },
+      select: { id: true, requestedByUserId: true },
+    });
+    const byUser = new Map<string, string[]>();
+    for (const row of unattributedRequests) {
+      byUser.set(row.requestedByUserId, [
+        ...(byUser.get(row.requestedByUserId) ?? []),
+        row.id,
+      ]);
+    }
+
+    // ---- the SoD rules, and what each request actually granted ------------
+    // The laundering pattern is detectable ONLY with the rules in hand, which
+    // is why it lands beside them rather than in the inventory.
+    const facts = await loadSodFacts(tx, snapshotId);
+    const grants = await tx.accessGrant.findMany({
+      where: { requestId: { not: null } },
+      select: { requestId: true, targetSystemId: true, resourceType: true, resourceId: true },
+    });
+    const grantedResourceByRequest = new Map<string, string>();
+    for (const grant of grants) {
+      if (grant.requestId === null) continue;
+      grantedResourceByRequest.set(grant.requestId, grantResource(grant).resourceId);
+    }
+
+    return {
+      edges,
+      unmergeable: [...byUser].map(([userId, requestIds]) => ({ userId, requestIds })),
+      // Disabled rules are excluded: a rule switched off is a rule the
+      // organization is not asserting, and `evaluateSodRules` skips it too.
+      sodPairs: facts.rules
+        .filter((rule) => rule.enabled)
+        .map((rule) => ({
+          ruleId: rule.ruleId,
+          ruleName: rule.name,
+          severity: rule.severity,
+          sideAResourceIds: rule.functionA.resources.map((resource) => resource.resourceId),
+          sideBResourceIds: rule.functionB.resources.map((resource) => resource.resourceId),
+        })),
+      grantedResourceByRequest,
+      minReciprocalDecisions: settings.minReciprocalDecisions,
+      reciprocityWindowDays: settings.reciprocityWindowDays,
+      now,
+    };
+  });
+
+  const report = buildDecisionGraph(input);
+  const drafts: FindingDraft[] = [];
+
+  /**
+   * THE SENTENCE, on every reciprocity and cycle finding.
+   *
+   * In a team of four, mutual approval is not a ring; it is Tuesday. A finding
+   * that reads as an accusation in that case is a finding people learn to
+   * dismiss, and a control nobody reads protects nothing. `medium`, and it says
+   * in words what it is.
+   */
+  const CONTEXT =
+    'In a small team mutual approval is normal and expected. This is context for a ' +
+    'human to look at, not an accusation, and nothing has been blocked or removed.';
+
+  for (const pair of report.reciprocity) {
+    drafts.push({
+      kind: 'approval_reciprocity',
+      severity: 'medium',
+      subjectRefType: 'person_pair',
+      subjectRefId: [pair.a, pair.b].sort().join(':'),
+      detail: {
+        a: pair.a,
+        b: pair.b,
+        aToB: pair.aToB,
+        bToA: pair.bToA,
+        requestIds: pair.requestIds,
+        windowDays: input.reciprocityWindowDays,
+        minimum: input.minReciprocalDecisions,
+        statement: CONTEXT,
+      },
+    });
+  }
+
+  for (const cycle of report.cycles) {
+    drafts.push({
+      kind: 'approval_reciprocity',
+      severity: 'medium',
+      subjectRefType: 'person_cycle',
+      subjectRefId: [...cycle.path].sort().join(':'),
+      detail: {
+        path: cycle.path,
+        requestIds: cycle.requestIds,
+        statement:
+          `${CONTEXT} A cycle is reported because a pairwise check cannot see one: ` +
+          'A approves for B, B for C, and C for A.',
+      },
+    });
+  }
+
+  for (const found of report.laundering) {
+    drafts.push({
+      kind: 'sod_laundering',
+      // The RULE's own severity, and NOT soft-pedalled. This is the pattern
+      // that is a finding rather than a signal: two people put each other on
+      // opposite sides of a rule the organization wrote down, and the sentence
+      // above would be an excuse here rather than context.
+      severity: found.severity,
+      subjectRefType: 'sod_laundering',
+      subjectRefId: `${found.ruleId}:${[found.a, found.b].sort().join(':')}`,
+      detail: {
+        ruleId: found.ruleId,
+        ruleName: found.ruleName,
+        a: found.a,
+        b: found.b,
+        requestIds: found.requestIds,
+        statement:
+          `Each of these two people decided the other onto the opposite side of "${found.ruleName}". ` +
+          'Neither request violates the rule on its own, and neither person holds both sides; ' +
+          'together they put the organization where the rule says it must not be.',
+      },
+    });
+  }
+
+  for (const auto of report.autoGranted) {
+    drafts.push({
+      kind: 'no_human_decision',
+      severity: 'low',
+      subjectRefType: 'person',
+      subjectRefId: auto.toPersonId,
+      detail: {
+        requestIds: auto.requestIds,
+        statement:
+          'This access was granted by a product with no approval stages, so no human decided it. ' +
+          'That is a configuration choice rather than a fault; it is listed here because access ' +
+          'nobody decided is precisely the access a recertification exists to have somebody decide.',
+      },
+    });
+  }
+
+  for (const actor of report.unmergeableActors) {
+    drafts.push({
+      kind: 'unmergeable_actor',
+      severity: 'low',
+      subjectRefType: 'user',
+      subjectRefId: actor.userId,
+      detail: {
+        requestIds: actor.requestIds,
+        statement:
+          'This account submitted requests and is not linked to a person, so its requests cannot ' +
+          'be placed in the decision graph. It is either an integration worth knowing about or a ' +
+          'problem worth knowing about, and either way silence is the wrong answer.',
+      },
+    });
+  }
+
+  if (drafts.length > 0) await upsertFindings(tenantId, drafts, { now });
+
+  return {
+    reciprocity: report.reciprocity.length,
+    cycles: report.cycles.length,
+    laundering: report.laundering.length,
+    autoGranted: report.autoGranted.length,
+    unmergeableActors: report.unmergeableActors.length,
   };
 }
