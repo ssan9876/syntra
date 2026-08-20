@@ -173,15 +173,28 @@ Directory Sync follow-up, because Provision *writes*: a truncated group read
 makes 2,500 people look like they need grants, or like nothing at all, and
 either reading drives writes to a real directory.
 
-## The manual run endpoint is synchronous, and the console now waits on it
+## ~~The manual run endpoint is synchronous, and the console waits on it~~ — fixed
 
-`POST /sources/:id/run` performs the whole read-and-diff inside the HTTP request. Spec
-section 7 says a run is a pg-boss job. This mattered less while the endpoint had no
-caller in the browser; the editor's **Run now** button now holds a request open for
-the length of a full directory read, which is the shape that outlasts a proxy timeout.
-The button reports as loading and the console lands on the run when it returns, so a
-slow read looks like a slow button rather than a failure — but the fix is still to
-enqueue and return the run id, and then poll.
+`POST /sources/:id/run` performed the whole read-and-diff inside the HTTP request.
+A directory read is network-bound and has no time limit of its own, and holding a
+request open for it is the shape that outlasts a proxy timeout: the browser is told
+the run failed while the run carries on, and the operator's next move is to press
+the button again.
+
+`queueRun` creates the run row and then enqueues — that order, because the reverse
+races a free worker against a transaction that has not committed — and the endpoint
+answers 202 with the row the worker will fill in. Section 7's "a run is a pg-boss
+job" now covers the manual path as well as the schedule.
+
+`queued` is a state distinct from `running`: between them the job sits in pg-boss
+for as long as the queue is busy, and a screen showing `running` for that window
+would be lying about the directory. The run page names the difference and follows
+the run, stopping when it settles.
+
+With no scheduler the endpoint answers 503 rather than falling back to inline. The
+failure that leaves it null means no scheduled sync is running for any source in
+any tenant, and doing the work inline would hide a broken deployment behind a
+button that still appears to work.
 
 ## The default user filter is wrong for Active Directory — half closed
 
