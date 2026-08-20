@@ -250,6 +250,10 @@ function computeDiff(input: DiffInput) {
   // source plainly returned as unresolved.
   const dnToAnchor = new Map(input.records.map((r) => [r.dn, r.anchor]));
   let unresolvedMembers = 0;
+  // Groups holding a member DN this run could not resolve. Their membership
+  // was read in part, and a partial read must not produce removals — see
+  // `diffMemberships`.
+  const incompleteGroups = new Set<string>();
   const changes: ProposedChange[] = [];
 
   // Groups that correlated cleanly. A conflict group is never created, so a
@@ -303,7 +307,15 @@ function computeDiff(input: DiffInput) {
       for (const dn of group.memberDns) {
         const anchor = dnToAnchor.get(dn);
         if (!anchor) {
+          // A DN naming nothing this read returned. It is NOT evidence that
+          // the member left: a person who moved between organizational units
+          // seconds ago is referenced by their old DN until the directory's
+          // referential-integrity overlay catches up, and a member outside the
+          // configured search base never appears in the read at all. Counted,
+          // surfaced on the run, and — the load-bearing half — recorded as a
+          // gap in this group's read, so no removal is proposed for it.
           unresolvedMembers++;
+          incompleteGroups.add(group.anchor);
           continue;
         }
         // A member we could not map is left exactly as it stands: kept if
@@ -326,7 +338,7 @@ function computeDiff(input: DiffInput) {
       return { groupAnchor: group.anchor, memberAnchors };
     });
 
-  changes.push(...diffMemberships(desired, input.currentMemberships));
+  changes.push(...diffMemberships(desired, input.currentMemberships, incompleteGroups));
 
   // Derived from the same snapshot the diff was computed against rather than
   // from separate count queries: the numerator and the denominator have to

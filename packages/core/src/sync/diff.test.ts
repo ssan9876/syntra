@@ -187,6 +187,7 @@ describe('diffMemberships', () => {
     const changes = diffMemberships(
       [{ groupAnchor: 'g1', memberAnchors: ['a1', 'a2'] }],
       [{ groupAnchor: 'g1', memberAnchors: ['a1'] }],
+      new Set(),
     );
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ changeType: 'add_member' });
@@ -197,6 +198,7 @@ describe('diffMemberships', () => {
     const changes = diffMemberships(
       [{ groupAnchor: 'g1', memberAnchors: ['a1'] }],
       [{ groupAnchor: 'g1', memberAnchors: ['a1', 'a2'] }],
+      new Set(),
     );
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ changeType: 'remove_member' });
@@ -206,6 +208,7 @@ describe('diffMemberships', () => {
     const changes = diffMemberships(
       [{ groupAnchor: 'g1', memberAnchors: ['a2', 'a1'] }],
       [{ groupAnchor: 'g1', memberAnchors: ['a1', 'a2'] }],
+      new Set(),
     );
     expect(changes).toEqual([]);
   });
@@ -216,7 +219,53 @@ describe('diffMemberships', () => {
     const changes = diffMemberships(
       [],
       [{ groupAnchor: 'g9', memberAnchors: ['a1'] }],
+      new Set(),
     );
     expect(changes).toEqual([]);
+  });
+
+  it('proposes no removal for a group whose membership could not be read in full', () => {
+    // The member Syntra holds is missing from `desired` because its DN
+    // resolved to nothing the source returned — a member who moved between
+    // organizational units a moment ago, one outside the configured search
+    // base, or a nested group. Every one of those is a gap in OUR read, and
+    // none of them is a person who left the group.
+    const changes = diffMemberships(
+      [{ groupAnchor: 'g1', memberAnchors: [] }],
+      [{ groupAnchor: 'g1', memberAnchors: ['a1'] }],
+      new Set(['g1']),
+    );
+    expect(changes).toEqual([]);
+  });
+
+  it('still proposes the additions for a group whose read was incomplete', () => {
+    // An add is safe on a partial read: the source named that member. Only the
+    // removals are the ones our own failure could invent.
+    const changes = diffMemberships(
+      [{ groupAnchor: 'g1', memberAnchors: ['a2'] }],
+      [{ groupAnchor: 'g1', memberAnchors: ['a1'] }],
+      new Set(['g1']),
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ changeType: 'add_member' });
+    expect(changes[0]!.after).toEqual({ groupAnchor: 'g1', memberAnchor: 'a2' });
+  });
+
+  it('leaves a group whose read WAS complete free to remove members', () => {
+    // The guard is per group, not per run: one group with an unreadable member
+    // must not freeze the membership of every other group in the directory.
+    const changes = diffMemberships(
+      [
+        { groupAnchor: 'g1', memberAnchors: [] },
+        { groupAnchor: 'g2', memberAnchors: [] },
+      ],
+      [
+        { groupAnchor: 'g1', memberAnchors: ['a1'] },
+        { groupAnchor: 'g2', memberAnchors: ['a2'] },
+      ],
+      new Set(['g1']),
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0]!.before).toEqual({ groupAnchor: 'g2', memberAnchor: 'a2' });
   });
 });

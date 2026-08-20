@@ -160,10 +160,19 @@ export function diffObjects(
  * A group missing from `desired` is skipped entirely: its absence from the
  * read is already handled as a deactivation, and emptying its membership as
  * well would revoke access twice over.
+ *
+ * `incompleteGroups` names the groups whose membership this run could not read
+ * in full — a member DN that resolved to nothing the source returned. Those
+ * groups get their ADDITIONS and none of their removals. `desired` is
+ * differenced against what Syntra holds, so a member we failed to resolve is
+ * indistinguishable from a member who left, and the two have opposite correct
+ * answers. Every other partial read in this subsystem is handled the same way:
+ * counted, reported, and never allowed to look like an absence.
  */
 export function diffMemberships(
   desired: MembershipState[],
   current: MembershipState[],
+  incompleteGroups: ReadonlySet<string>,
 ): ProposedChange[] {
   const changes: ProposedChange[] = [];
   const currentByGroup = new Map(
@@ -187,6 +196,11 @@ export function diffMemberships(
         });
       }
     }
+
+    // Additions above, removals below, and the incomplete read stops here.
+    // An add is safe on a partial read — the source named that member — while
+    // a removal on a partial read is a revocation caused by our own failure.
+    if (incompleteGroups.has(group.groupAnchor)) continue;
 
     for (const anchor of now) {
       if (!wanted.has(anchor)) {

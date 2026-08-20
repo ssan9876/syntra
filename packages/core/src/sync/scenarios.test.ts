@@ -77,6 +77,16 @@ describe('an organizational unit move', () => {
       expect(changes.filter((c) => c.changeType === 'deactivate_user')).toEqual([]);
       expect(changes.filter((c) => c.changeType === 'create_user')).toEqual([]);
 
+      // AND NOT A REVOCATION EITHER. `cn=Nurses` names its only member by DN,
+      // and OpenLDAP's referential-integrity overlay rewrites that DN AFTER
+      // the move commits — so a read taken in the window between the two sees
+      // a member DN that resolves to nothing. Dropping it made `desired` empty
+      // and the diff read "remove the only membership in this directory",
+      // which the guard then blocked at 100%. This assertion is why that
+      // window no longer matters: an unresolvable member is a gap in the read,
+      // never an absence.
+      expect(changes.filter((c) => c.changeType === 'remove_member')).toEqual([]);
+
       await applyRun(tenantId, run.id);
       const users = await withTenant(tenantId, (tx) =>
         tx.user.findMany({ where: { login: 'jdoe' } }),
@@ -181,6 +191,71 @@ describe('a leaver', () => {
           tx.user.findFirst({ where: { login: 'tberg' } }),
         );
         expect(stillInactive!.status).toBe('inactive');
+      },
+    );
+  });
+});
+
+describe('a member DN that resolves to nothing', () => {
+  it('freezes that group rather than revoking the members it CAN read', async () => {
+    await sync();
+
+    // Two real members, so the damage this test measures lands on somebody
+    // other than the unreadable member. That is the whole point: a dangling
+    // DN does not cost the person it names — they were already invisible —
+    // it costs whoever else is in the group.
+    await withLdapEntry(
+      'cn=Ward,dc=acme,dc=test',
+      {
+        objectClass: ['groupOfNames'],
+        cn: 'Ward',
+        member: [
+          'uid=jdoe,ou=Care,dc=acme,dc=test',
+          'uid=sroe,ou=Care,dc=acme,dc=test',
+        ],
+      },
+      async () => {
+        await sync();
+        const held = async () =>
+          (
+            await withTenant(tenantId, (tx) =>
+              tx.groupMembership.findMany({ include: { group: true, user: true } }),
+            )
+          )
+            .filter((m) => m.group.name === 'Ward')
+            .map((m) => m.user.login)
+            .sort();
+        expect(await held()).toEqual(['jdoe', 'sroe']);
+
+        // `uid=ghost` names no entry at all. A groupOfNames does not require
+        // its members to exist, which is exactly why a real directory can
+        // present one: an entry deleted between our user read and our group
+        // read, or a member who moved organizational unit a moment ago and
+        // whose old DN the server has not rewritten yet.
+        await replaceLdapAttribute('cn=Ward,dc=acme,dc=test', 'member', [
+          'uid=jdoe,ou=Care,dc=acme,dc=test',
+          'uid=ghost,ou=Care,dc=acme,dc=test',
+        ]);
+
+        const run = await preview();
+        const changes = await changesOf(run.id);
+
+        // WITHOUT the incomplete-read guard, `desired` for Ward is [jdoe]:
+        // ghost drops out, and the difference against what Syntra holds reads
+        // "remove sroe". Sam Roe loses access because somebody else's DN went
+        // stale, and at any real scale one dangling member in three thousand
+        // is far under the guard's threshold, so nothing stops it.
+        expect(changes.filter((c) => c.changeType === 'remove_member')).toEqual([]);
+
+        await applyRun(tenantId, run.id);
+        expect(await held()).toEqual(['jdoe', 'sroe']);
+
+        // Counted and surfaced, not silently swallowed. The run says the read
+        // was partial; the console prints it above the changes.
+        const finished = await withTenant(tenantId, (tx) =>
+          tx.syncRun.findUniqueOrThrow({ where: { id: run.id } }),
+        );
+        expect(finished.unresolvedMembers).toBeGreaterThan(0);
       },
     );
   });
