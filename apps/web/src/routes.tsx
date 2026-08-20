@@ -16,6 +16,7 @@ import { RequestDetailPage } from './pages/automate/RequestDetailPage.js';
 import { MyAccessPage } from './pages/automate/MyAccessPage.js';
 import { MyApprovalsPage } from './pages/automate/MyApprovalsPage.js';
 import { ManagedResourcesPage } from './pages/automate/ManagedResourcesPage.js';
+import { MyReviewsPage } from './pages/govern/MyReviewsPage.js';
 
 /**
  * The console is a separate chunk behind a guard, so a portal-only session
@@ -146,6 +147,18 @@ export function AppRoutes() {
         element={
           <RequireSession scope="portal">
             <ManagedResourcesPage />
+          </RequireSession>
+        }
+      />
+      {/* The reviewer surface is the PORTAL, inside the same `scope="portal"`
+          tree as the catalog and the approvals queue. No console, no admin
+          scope, no step-up MFA: reviewing is something managers do twice a year
+          from a link in an email. */}
+      <Route
+        path="/govern/reviews"
+        element={
+          <RequireSession scope="portal">
+            <MyReviewsPage />
           </RequireSession>
         }
       />

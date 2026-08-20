@@ -36,6 +36,10 @@ import { GovernReportsPage } from './GovernReportsPage.js';
 import { GovernFindingsPage } from './GovernFindingsPage.js';
 import { GovernOrphansPage } from './GovernOrphansPage.js';
 import { GovernIntegrityPage } from './GovernIntegrityPage.js';
+import { GovernCampaignsPage } from './GovernCampaignsPage.js';
+import { GovernCampaignDetailPage } from './GovernCampaignDetailPage.js';
+import { GovernBatchPage } from './GovernBatchPage.js';
+import { GovernSodPage } from './GovernSodPage.js';
 
 interface NavItem {
   to: string;
@@ -63,6 +67,8 @@ const NAV: NavItem[] = [
   { to: '/admin/govern/findings', label: 'Findings', permission: 'govern.read' },
   { to: '/admin/govern/snapshots', label: 'Snapshots', permission: 'govern.read' },
   { to: '/admin/govern/reports', label: 'Access reports', permission: 'govern.read' },
+  { to: '/admin/govern/campaigns', label: 'Access reviews', permission: 'govern.read' },
+  { to: '/admin/govern/sod', label: 'Segregation of duties', permission: 'govern.read' },
   { to: '/admin/govern/orphans', label: 'Orphan accounts', permission: 'govern.read' },
   { to: '/admin/govern/integrity', label: 'Audit integrity', permission: 'govern.read' },
   { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
@@ -147,6 +153,10 @@ export function AdminApp() {
             <Route path="govern/snapshots" element={<GovernSnapshotsPage />} />
             <Route path="govern/snapshots/:id" element={<GovernSnapshotDetailPage />} />
             <Route path="govern/reports" element={<GovernReportsPage />} />
+            <Route path="govern/campaigns" element={<GovernCampaignsPage />} />
+            <Route path="govern/campaigns/:id" element={<GovernCampaignDetailPage />} />
+            <Route path="govern/batches/:id" element={<GovernBatchPage />} />
+            <Route path="govern/sod" element={<GovernSodPage />} />
             <Route path="govern/orphans" element={<GovernOrphansPage />} />
             <Route path="govern/integrity" element={<GovernIntegrityPage />} />
             <Route path="applications" element={<ApplicationsPage />} />
