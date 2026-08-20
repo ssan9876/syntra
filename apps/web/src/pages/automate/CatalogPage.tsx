@@ -4,6 +4,17 @@ import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { useApiResource } from '../../session/use-api-resource.js';
 
+interface SodWarning {
+  violations: {
+    ruleId: string;
+    ruleName: string;
+    severity: string;
+    otherSideHoldings: string[];
+  }[];
+  hasCritical: boolean;
+  hasActiveException: boolean;
+}
+
 interface CatalogEntry {
   id: string;
   name: string;
@@ -14,6 +25,39 @@ interface CatalogEntry {
   durationMode: string;
   maxDurationDays: number | null;
   needsApproval: boolean;
+  /** Null when there is nothing to say, which is the common case. */
+  sodWarning?: SodWarning | null;
+}
+
+/**
+ * The segregation-of-duties warning, at the moment somebody could still choose
+ * differently.
+ *
+ * It WARNS and never blocks: the link into the request form stays exactly
+ * where it was, and the form's submit button stays enabled. A catalog that
+ * greyed the entry out would tell somebody they may not have something without
+ * telling them why, which is the failure spec section 14 names. The refusal,
+ * when there is one, happens at eligibility with a reason the requester can
+ * read.
+ */
+export function SodWarningNote({ warning }: { warning: SodWarning }) {
+  const first = warning.violations[0];
+  if (first === undefined) return null;
+  const held = first.otherSideHoldings.filter((h) => h.trim() !== '');
+  return (
+    <Alert tone="warning">
+      <span className="font-medium">Segregation of duties.</span> Requesting
+      this would put you on both sides of “{first.ruleName}”.
+      {held.length > 0 && (
+        <> You already hold <span className="font-medium">{held.join(', ')}</span>.</>
+      )}{' '}
+      You can still request it; an approver sees the same warning
+      {first.severity === 'critical'
+        ? ', and a critical rule needs an approved exception before it can be fulfilled'
+        : ''}
+      .
+    </Alert>
+  );
 }
 
 function durationLine(entry: CatalogEntry): string {
@@ -112,6 +156,11 @@ export function CatalogPage() {
                               </Status>
                               <span>{durationLine(product)}</span>
                             </p>
+                            {product.sodWarning != null && (
+                              <div className="mt-2">
+                                <SodWarningNote warning={product.sodWarning} />
+                              </div>
+                            )}
                           </li>
                         ))}
                     </ul>

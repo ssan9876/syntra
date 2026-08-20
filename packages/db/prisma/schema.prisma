@@ -420,12 +420,12 @@ model AuthPolicyRule {
   /// IANA zone the window is expressed in. Treated as UTC when null.
   timezone       String?
   /// Set only on rules whose outcome is 'federate'. See Task 14.
-  upstreamIdpId String?  @db.Uuid
+  upstreamIdpId  String?    @db.Uuid
   /// The login identifier's domain part, for a 'federate' rule. Its own
   /// column rather than a reuse of `contractValues`: the two match on
   /// different things, and overloading one array is how a later reader
   /// concludes a routing rule can carry a contract condition.
-  loginDomains  String[] @default([])
+  loginDomains   String[]   @default([])
 
   @@unique([policyId, position])
   @@index([tenantId])
@@ -450,7 +450,7 @@ model Application {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  assignments AppAssignment[]
+  assignments   AppAssignment[]
   samlConfig    SamlConfig?
   oidcClient    OidcClient?
   claimMappings ClaimMapping[]
@@ -675,13 +675,13 @@ model SamlConfig {
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
-  @@index([tenantId])
   /// UNIQUE, not just indexed. `findSamlConfigByEntityId` resolves an incoming
   /// AuthnRequest by entity ID, so two applications registering the same one
   /// make the entry point of an allowlist-based control non-deterministic:
   /// which application answers is whatever the planner returns, and the
   /// symptom is one of two integrations intermittently ceasing to work.
   @@unique([tenantId, spEntityId])
+  @@index([tenantId])
 }
 
 /// An OIDC relying party. One per Application of type 'oidc'.
@@ -926,18 +926,18 @@ model SamlSsoSession {
 /// own route and its own table, so no single edit removes both. Single-use,
 /// and its lifetime matches the authorization code's exactly — see Task 11.
 model AuthorizationDecision {
-  id             String    @id @default(uuid()) @db.Uuid
-  tenantId       String    @db.Uuid
-  userId         String    @db.Uuid
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @db.Uuid
+  userId          String    @db.Uuid
   /// The OIDC client this decision was made for. A decision for one
   /// application never satisfies another.
-  clientId       String
+  clientId        String
   /// The interaction it resolved, for the audit trail.
-  interactionUid String
+  interactionUid  String
   satisfiedFactor String?
-  createdAt      DateTime  @default(now())
-  expiresAt      DateTime
-  consumedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime
+  consumedAt      DateTime?
 
   @@index([tenantId])
   @@index([tenantId, userId, clientId])
@@ -951,18 +951,18 @@ model AuthorizationDecision {
 /// the allowlist, the signature against the SP's certificate — and a value
 /// that travels through the browser has to be checked again on the way back.
 model SamlAuthnRequest {
-  id            String    @id @default(uuid()) @db.Uuid
-  tenantId      String    @db.Uuid
-  applicationId String    @db.Uuid
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String    @db.Uuid
+  applicationId  String    @db.Uuid
   /// Syntra's own opaque handle. This is what travels in the URL.
-  handle        String
+  handle         String
   /// The SP's AuthnRequest ID, echoed back as InResponseTo. Null when the
   /// flow is identity-provider-initiated and there was no request.
-  requestId     String?
+  requestId      String?
   /// Already matched against the allowlist when this row was written.
-  acsUrl        String
-  relayState    String?
-  forceAuthn    Boolean   @default(false)
+  acsUrl         String
+  relayState     String?
+  forceAuthn     Boolean   @default(false)
   /// SHA-256 of the high-entropy nonce written to the browser as a cookie
   /// when this request was parked, and required to match when it is
   /// continued. `handle` alone is a bearer credential: whoever can make Syntra
@@ -977,9 +977,9 @@ model SamlAuthnRequest {
   /// binding still holds for an application whose administrator turned that
   /// requirement off.
   browserBinding String
-  createdAt     DateTime  @default(now())
-  expiresAt     DateTime
-  consumedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  expiresAt      DateTime
+  consumedAt     DateTime?
 
   @@index([tenantId])
   @@index([tenantId, handle])
@@ -989,19 +989,19 @@ model SamlAuthnRequest {
 /// credential is never on this row: it lives in the Core vault under
 /// `secretName`, so a target can be read and edited without exposing it.
 model TargetSystem {
-  id       String @id @default(uuid()) @db.Uuid
-  tenantId String @db.Uuid
-  name     String
+  id                      String           @id @default(uuid()) @db.Uuid
+  tenantId                String           @db.Uuid
+  name                    String
   /// 'activeDirectory'. A string rather than an enum so a second connector
   /// family needs no migration.
-  type     String @default("activeDirectory")
+  type                    String           @default("activeDirectory")
   /// URL, TLS mode, certificate verification, bind DN, base DN, entitlement
   /// search base, archive container, provenance attribute, page size,
   /// timeouts. Validated as a whole by adTargetConfigSchema, so it is
   /// replaced whole on a save rather than merged.
-  config   Json
+  config                  Json
   /// Names the Core vault entry holding the bind credential.
-  secretName String
+  secretName              String
   /// The directory source that reads this same system back into Syntra. When
   /// set, account status propagates inward (spec §4) and a successful apply
   /// enqueues a run of it.
@@ -1048,17 +1048,17 @@ model TargetSystem {
   /// then, and answers "no" for somebody whose contract ends next week —
   /// producing `required: false` for an employee who is still at their desk.
   /// This setting can only ever bring an account forward.
-  preHireDays                    Int  @default(0)
-  entitlementRevocationDelayDays Int  @default(0)
-  disableGraceDays               Int  @default(0)
+  preHireDays                     Int  @default(0)
+  entitlementRevocationDelayDays  Int  @default(0)
+  disableGraceDays                Int  @default(0)
   /// Null means never. Archiving moves the object and strips its remaining
   /// managed entitlements, so it is opted into.
-  archiveAfterDays               Int?
+  archiveAfterDays                Int?
   /// Re-enabling an account disabled for longer than this is confirmable.
   /// Deliberately not derived from disableGraceDays: with that at its default
   /// of zero, deriving it would make every re-enable confirmable, including
   /// the correction the morning after.
-  reenableWithoutConfirmationDays Int @default(7)
+  reenableWithoutConfirmationDays Int  @default(7)
 
   createAccountThresholdPercent        Int @default(20)
   disableAccountThresholdPercent       Int @default(10)
@@ -1089,11 +1089,11 @@ model TargetSystem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profile     AccountProfile?
-  rules       BusinessRule[]
+  profile      AccountProfile?
+  rules        BusinessRule[]
   entitlements Entitlement[]
-  accounts    TargetAccount[]
-  runs        ProvisionRun[]
+  accounts     TargetAccount[]
+  runs         ProvisionRun[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -1119,20 +1119,20 @@ model AccountProfile {
   target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
 
   /// e.g. "%person.givenName.first%.%person.familyName%"
-  correlationKeyTemplate String
+  correlationKeyTemplate  String
   /// 'numericSuffix' — base, then base with an incrementing suffix.
-  uniquenessStrategy     String @default("numericSuffix")
-  maxUniquenessAttempts  Int    @default(20)
+  uniquenessStrategy      String @default("numericSuffix")
+  maxUniquenessAttempts   Int    @default(20)
   /// e.g. "OU=%contract.department%,OU=Users,%baseDn%"
-  containerTemplate      String
+  containerTemplate       String
   /// Used when containerTemplate resolves to an empty value. Required: a
   /// template that resolves to nothing must land somewhere known, and
   /// Provision does not create organizational units in somebody else's domain.
-  fallbackContainer      String
+  fallbackContainer       String
   /// { "displayName": "...", "userPrincipalName": "...", "mail": "..." }
-  attributeTemplates     Json
+  attributeTemplates      Json
   /// { "length": 20, "requireUpper": true, ... }
-  initialPasswordPolicy  Json
+  initialPasswordPolicy   Json
   /// 'manager' | 'personalEmail' | 'vaultOnly'
   initialPasswordDelivery String @default("vaultOnly")
 
@@ -1204,13 +1204,13 @@ model Entitlement {
   description    String?
   /// 'present' | 'missing' | 'unreadable'. A rule naming a missing or
   /// unreadable entitlement is unresolvable AS A WHOLE — see plan.ts.
-  status         String   @default("present")
+  status         String       @default("present")
   /// Current holders, the denominator of the per-entitlement guard axis.
-  holderCount    Int      @default(0)
+  holderCount    Int          @default(0)
   /// Whether this entitlement may be named by a catalog product. False by
   /// default, so a target's catalog can be published without publishing every
   /// group in the domain.
-  requestable    Boolean  @default(false)
+  requestable    Boolean      @default(false)
   lastSeenAt     DateTime?
 
   createdAt DateTime @default(now())
@@ -1226,26 +1226,26 @@ model Entitlement {
 /// One account per person per target — which is what makes a rehire find its
 /// own account instead of creating a second one.
 model TargetAccount {
-  id             String       @id @default(uuid()) @db.Uuid
-  tenantId       String       @db.Uuid
-  targetSystemId String       @db.Uuid
-  target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
-  personId       String       @db.Uuid
-  person         Person       @relation(fields: [personId], references: [id], onDelete: Restrict)
+  id                    String       @id @default(uuid()) @db.Uuid
+  tenantId              String       @db.Uuid
+  targetSystemId        String       @db.Uuid
+  target                TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  personId              String       @db.Uuid
+  person                Person       @relation(fields: [personId], references: [id], onDelete: Restrict)
   /// The target's immutable object identifier. Null until the account exists
   /// in the target: a `pending` row holds its correlation key reserved so two
   /// runs cannot generate the same login.
-  anchor         String?
-  correlationKey String
+  anchor                String?
+  correlationKey        String
   /// 'pending' | 'active' | 'disabled' | 'archived' | 'missing_at_target'
   /// | 'conflict'
-  status         String   @default("pending")
-  statusReason   String?
-  disabledAt     DateTime?
-  disableDueAt   DateTime?
-  archiveDueAt   DateTime?
-  createdActionId String?  @db.Uuid
-  lastReconciledAt DateTime?
+  status                String       @default("pending")
+  statusReason          String?
+  disabledAt            DateTime?
+  disableDueAt          DateTime?
+  archiveDueAt          DateTime?
+  createdActionId       String?      @db.Uuid
+  lastReconciledAt      DateTime?
   /// What Provision last wrote, so update_account can carry the complete
   /// managed set and a no-op run stays a no-op.
   lastAppliedAttributes Json?
@@ -1264,11 +1264,11 @@ model TargetAccount {
 /// `origin` separates convergence from drift and is not derivable after the
 /// fact, so it is recorded at the moment of the grant.
 model AccountEntitlement {
-  id            String        @id @default(uuid()) @db.Uuid
-  tenantId      String        @db.Uuid
-  accountId     String        @db.Uuid
-  account       TargetAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  entitlementId String        @db.Uuid
+  id                 String        @id @default(uuid()) @db.Uuid
+  tenantId           String        @db.Uuid
+  accountId          String        @db.Uuid
+  account            TargetAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  entitlementId      String        @db.Uuid
   /// Cascade, not Restrict. `Entitlement` cascades from `TargetSystem`, and
   /// PostgreSQL checks RESTRICT immediately -- so with Restrict here, deleting
   /// a target that holds a single live holding fails with a foreign-key
@@ -1276,7 +1276,7 @@ model AccountEntitlement {
   /// holding is a record of a grant into this entitlement; it is meaningless
   /// once the entitlement row is gone, and the account's own row cascades from
   /// the target by the same reasoning.
-  entitlement   Entitlement   @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+  entitlement        Entitlement   @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
   /// 'rule' — Provision granted it because a rule said so.
   /// 'request' — an approved AccessRequest put it into desired state. ONE
   ///   value covers both grant origins: a delegated administrator's act is an
@@ -1284,13 +1284,13 @@ model AccountEntitlement {
   ///   without a second enum value that would mean the same thing here.
   /// 'manual' — an administrator linked it in Syntra deliberately.
   /// 'discovered' — the target already held it when Provision first looked.
-  origin        String
-  grantedByRuleId String? @db.Uuid
-  grantedByRequestId String? @db.Uuid
-  grantedAt     DateTime  @default(now())
-  revokedAt     DateTime?
+  origin             String
+  grantedByRuleId    String?       @db.Uuid
+  grantedByRequestId String?       @db.Uuid
+  grantedAt          DateTime      @default(now())
+  revokedAt          DateTime?
   /// 'held' | 'revoked'
-  state         String    @default("held")
+  state              String        @default("held")
 
   @@index([tenantId])
   @@index([accountId])
@@ -1356,29 +1356,38 @@ model ProvisionRun {
 /// enforcement loop read the same table, so there is no version of "the
 /// preview said one thing and the apply did another".
 model ProvisionAction {
-  id       String       @id @default(uuid()) @db.Uuid
-  tenantId String       @db.Uuid
-  runId    String       @db.Uuid
-  run      ProvisionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  id                   String       @id @default(uuid()) @db.Uuid
+  tenantId             String       @db.Uuid
+  runId                String       @db.Uuid
+  run                  ProvisionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   /// create_account | update_account | enable_account | disable_account
   /// | archive_account | rename_account | grant_entitlement
   /// | revoke_entitlement | deactivate_syntra_user | reactivate_syntra_user
   /// THERE IS NO DELETE OF ANY KIND, AND NO TYPE THAT COULD BECOME ONE.
-  actionType    String
-  personId      String? @db.Uuid
-  accountId     String? @db.Uuid
-  entitlementId String? @db.Uuid
-  before        Json?
-  after         Json?
+  actionType           String
+  personId             String?      @db.Uuid
+  accountId            String?      @db.Uuid
+  entitlementId        String?      @db.Uuid
+  before               Json?
+  after                Json?
   /// Which rules caused this. Recorded at evaluation time because it is
   /// unanswerable afterwards, and "why does this person hold this?" is the
   /// most-asked question of any provisioning product.
-  attributedRuleIds String[] @default([])
+  attributedRuleIds    String[]     @default([])
+  /// The Govern revocation order this action is applying, when one caused it.
+  /// A bare column, not a relation: Provision must not acquire a dependency on
+  /// a later-built subsystem's table, and cascading from an order would delete
+  /// the record of what Provision did.
+  ///
+  /// The order's provenance travels into `before` as plain values at plan time,
+  /// so this column identifies the order and the audit event names the human --
+  /// without Provision ever querying Govern.
+  revocationOrderId    String?      @db.Uuid
   /// The AccessGrant this action is applying or removing, when one caused it.
   /// A bare column and not a relation: Automate's reflection pass reads it,
   /// and a foreign key would make deleting a grant fail on the history of
   /// what was done about it.
-  grantId       String?  @db.Uuid
+  grantId              String?      @db.Uuid
   /// The order this action is applied in, from ACTION_ORDER (spec section 14:
   /// within a person, create then attribute updates then grants then
   /// revocations then disable then archive).
@@ -1389,17 +1398,17 @@ model ProvisionAction {
   /// imposes no order at all. A grant attempted before the create it depends
   /// on fails `not_found`, nondeterministically -- which passes CI and fails
   /// in production.
-  sequence      Int      @default(0)
+  sequence             Int          @default(0)
   /// 'proposed' | 'in_flight' | 'applied' | 'skipped' | 'failed'
   /// | 'pending_retry' | 'conflict' | 'superseded'
-  status        String   @default("proposed")
-  attempts      Int      @default(0)
-  nextAttemptAt DateTime?
-  message       String?
-  appliedAt     DateTime?
+  status               String       @default("proposed")
+  attempts             Int          @default(0)
+  nextAttemptAt        DateTime?
+  message              String?
+  appliedAt            DateTime?
   /// Whether applying this needs an explicit tick even in an otherwise
   /// unblocked run: a rename, or a re-enable outside the window.
-  requiresConfirmation Boolean @default(false)
+  requiresConfirmation Boolean      @default(false)
 
   createdAt DateTime @default(now())
 
@@ -1434,8 +1443,8 @@ model ProvisionException {
   /// grant is skipped and named, and the person's other access is untouched.
   /// Comment-only — this column has no check constraint and a `///` produces
   /// no DDL, so no migration follows from adding a value here.
-  kind    String
-  message String
+  kind           String
+  message        String
 
   createdAt DateTime @default(now())
 
@@ -1447,17 +1456,17 @@ model ProvisionException {
 /// A finding that persists across runs is updated rather than duplicated, so
 /// the count on the dashboard is a count of problems and not a count of runs.
 model DriftFinding {
-  id             String       @id @default(uuid()) @db.Uuid
-  tenantId       String       @db.Uuid
-  targetSystemId String       @db.Uuid
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @db.Uuid
+  targetSystemId String        @db.Uuid
   /// The run that most recently observed it. Nullable: `claimSyntraUsers`
   /// (Task 15) records a finding and can be called when no run has ever
   /// existed for this target, and resolving a run id it does not have by
   /// `findFirstOrThrow` would turn a drift report into an exception.
-  runId          String?      @db.Uuid
+  runId          String?       @db.Uuid
   run            ProvisionRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
-  accountId      String?      @db.Uuid
-  entitlementId  String?      @db.Uuid
+  accountId      String?       @db.Uuid
+  entitlementId  String?       @db.Uuid
   /// The target's own identifier for the object a finding is about, when that
   /// object is not one Syntra holds a row for -- an orphan account. It cannot
   /// go in `entitlementId`, which is `@db.Uuid` and would reject
@@ -1466,16 +1475,16 @@ model DriftFinding {
   subjectAnchor  String?
   /// 'unmanaged_entitlement' | 'missing_grant' | 'orphan_account'
   /// | 'account_missing_at_target' | 'unexpected_status'
-  kind   String
-  detail Json
+  kind           String
+  detail         Json
   /// 'open' | 'acknowledged' | 'resolved'
-  status String @default("open")
+  status         String        @default("open")
   /// A stable identity for "the same problem", so the upsert has something
   /// NOT NULL to key on. accountId and entitlementId are both nullable and a
   /// unique index over nullable columns constrains nothing, so this column
   /// exists rather than a four-column partial index that would not work.
   /// Built by driftFingerprint() in reconcile.ts.
-  fingerprint String
+  fingerprint    String
 
   firstSeenAt DateTime @default(now())
   lastSeenAt  DateTime @default(now())
@@ -1530,8 +1539,8 @@ model AutomateSettings {
 /// NOBODY — the safe reading of an unconfigured access control — and a
 /// product genuinely meant for everybody says so with `{ "all": [] }`.
 model Product {
-  id                  String  @id @default(uuid()) @db.Uuid
-  tenantId            String  @db.Uuid
+  id                  String           @id @default(uuid()) @db.Uuid
+  tenantId            String           @db.Uuid
   name                String
   slug                String
   description         String?
@@ -1545,19 +1554,19 @@ model Product {
   /// SQL, only in the resolver, which is why Task 6 has a test for it and the
   /// catalog editor says so.
   audienceCondition   Json?
-  workflowId          String  @db.Uuid
+  workflowId          String           @db.Uuid
   workflow            ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Restrict)
   /// The typed request form, a list of fields from a closed set.
-  formSchema          Json    @default("[]")
+  formSchema          Json             @default("[]")
   /// 'permanent' | 'fixed' | 'requesterChoice'
-  durationMode        String  @default("permanent")
+  durationMode        String           @default("permanent")
   defaultDurationDays Int?
   maxDurationDays     Int?
-  ownerPersonId       String? @db.Uuid
-  ownerGroupId        String? @db.Uuid
+  ownerPersonId       String?          @db.Uuid
+  ownerGroupId        String?          @db.Uuid
   /// 'draft' | 'active' | 'retired'. Never hard-deleted while any grant or
   /// request references it.
-  status              String  @default("draft")
+  status              String           @default("draft")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1574,10 +1583,10 @@ model Product {
 /// requested, approved and fulfilled as a set, with per-resource outcomes
 /// recorded per RequestItem.
 model ProductGrant {
-  id        String  @id @default(uuid()) @db.Uuid
-  tenantId  String  @db.Uuid
-  productId String  @db.Uuid
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id             String  @id @default(uuid()) @db.Uuid
+  tenantId       String  @db.Uuid
+  productId      String  @db.Uuid
+  product        Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   /// 'entitlement' | 'application' | 'group'
   resourceType   String
   resourceId     String  @db.Uuid
@@ -1613,33 +1622,33 @@ model ApprovalWorkflow {
 }
 
 model ApprovalStage {
-  id         String           @id @default(uuid()) @db.Uuid
-  tenantId   String           @db.Uuid
-  workflowId String           @db.Uuid
-  workflow   ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
-  sequence   Int
-  name       String
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @db.Uuid
+  workflowId         String           @db.Uuid
+  workflow           ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  sequence           Int
+  name               String
   /// 'manager' | 'managerChain' | 'productOwner' | 'resourceOwner' | 'role'
   /// | 'group' | 'person'
-  selector   String
+  selector           String
   /// { depth?, roleId?, groupId?, personId? }
-  selectorConfig Json @default("{}")
+  selectorConfig     Json             @default("{}")
   /// 'any' (first decision decides) | 'all' (every resolved approver)
-  quorum     String @default("any")
+  quorum             String           @default("any")
   /// Required when selector is manager, managerChain or resourceOwner: the
   /// three that legitimately resolve to nobody. Enforced by a check
   /// constraint as well as at save time, because discovering it at 3am on
   /// somebody's request is the failure this exists to prevent.
-  fallbackSelector String?
-  fallbackConfig   Json    @default("{}")
-  slaHours   Int    @default(48)
+  fallbackSelector   String?
+  fallbackConfig     Json             @default("{}")
+  slaHours           Int              @default(48)
   /// 'remind' (default) | 'escalate' | 'expire'. THERE IS NO VALUE THAT
   /// APPROVES. Approval by inattention is a privilege grant nobody made.
-  onTimeout  String @default("remind")
+  onTimeout          String           @default("remind")
   escalationSelector String?
-  escalationConfig   Json    @default("{}")
+  escalationConfig   Json             @default("{}")
   /// Required when onTimeout is 'expire'.
-  expiryHours Int?
+  expiryHours        Int?
 
   @@unique([workflowId, sequence])
   @@index([tenantId])
@@ -1649,42 +1658,42 @@ model ApprovalStage {
 /// have separate lifecycles, and conflating them is what makes "what happens
 /// when the date arrives" unanswerable.
 model AccessRequest {
-  id        String   @id @default(uuid()) @db.Uuid
-  tenantId  String   @db.Uuid
+  id                    String    @id @default(uuid()) @db.Uuid
+  tenantId              String    @db.Uuid
   /// Null for a delegated administrative act, which has no catalog entry.
-  productId String?  @db.Uuid
-  product   Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
-  subjectPersonId  String @db.Uuid
-  requestedByUserId String @db.Uuid
+  productId             String?   @db.Uuid
+  product               Product?  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  subjectPersonId       String    @db.Uuid
+  requestedByUserId     String    @db.Uuid
   /// The person behind requestedByUserId, resolved at submission so the
   /// self-approval subtraction has a person to subtract without re-reading
   /// the User row at every stage. Null when the submitting account is not
   /// linked to a person.
-  requestedByPersonId String? @db.Uuid
+  requestedByPersonId   String?   @db.Uuid
   /// 'catalog' | 'delegated_admin'
-  origin        String @default("catalog")
+  origin                String    @default("catalog")
   /// Set for a delegated act, which names its resource directly.
-  resourceType  String?
-  resourceId    String? @db.Uuid
-  justification String?
-  formValues    Json    @default("{}")
+  resourceType          String?
+  resourceId            String?   @db.Uuid
+  justification         String?
+  formValues            Json      @default("{}")
   requestedDurationDays Int?
   /// The grant this request would replace, for an extension. Task 9 sets
   /// `supersededByGrantId` on the old grant when the new one lands, so a
   /// naive implementation cannot expire the old one, revoke at the target and
   /// re-grant an hour later.
-  replacesGrantId String? @db.Uuid
+  replacesGrantId       String?   @db.Uuid
   /// pending_approval | blocked_no_approver | approved | awaiting_fulfilment
   /// | fulfilled | partially_fulfilled | fulfilment_failed | rejected
   /// | cancelled | expired
-  status       String @default("pending_approval")
-  statusReason String?
-  submittedAt  DateTime  @default(now())
-  decidedAt    DateTime?
-  fulfilledAt  DateTime?
+  status                String    @default("pending_approval")
+  statusReason          String?
+  submittedAt           DateTime  @default(now())
+  decidedAt             DateTime?
+  fulfilledAt           DateTime?
   /// When this request entered awaiting_fulfilment, so the fulfilment SLA has
   /// something to measure from that `submittedAt` cannot supply.
-  dispatchedAt DateTime?
+  dispatchedAt          DateTime?
 
   items RequestItem[]
   steps ApprovalStep[]
@@ -1699,21 +1708,21 @@ model AccessRequest {
 /// as Directory Sync's materialized SyncChange and Provision's
 /// ProvisionAction: what was reviewed is what is applied, literally.
 model RequestItem {
-  id        String        @id @default(uuid()) @db.Uuid
-  tenantId  String        @db.Uuid
-  requestId String        @db.Uuid
-  request   AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  resourceType   String
-  resourceId     String  @db.Uuid
-  targetSystemId String? @db.Uuid
+  id                String        @id @default(uuid()) @db.Uuid
+  tenantId          String        @db.Uuid
+  requestId         String        @db.Uuid
+  request           AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  resourceType      String
+  resourceId        String        @db.Uuid
+  targetSystemId    String?       @db.Uuid
   /// 'pending' | 'dispatched' | 'fulfilled' | 'failed' | 'skipped'
-  status  String @default("pending")
+  status            String        @default("pending")
   /// The Provision action that is applying this. A bare column, not a
   /// relation: the action is Provision's row and cascading from it would
   /// delete the record of what happened when a run is cleaned up.
-  provisionActionId String? @db.Uuid
-  grantId String? @db.Uuid
-  message String?
+  provisionActionId String?       @db.Uuid
+  grantId           String?       @db.Uuid
+  message           String?
 
   @@unique([requestId, resourceType, resourceId])
   @@index([tenantId])
@@ -1724,18 +1733,18 @@ model RequestItem {
 /// stage as it stood, so a workflow edited afterwards cannot change what an
 /// approver's signature meant.
 model ApprovalStep {
-  id        String        @id @default(uuid()) @db.Uuid
-  tenantId  String        @db.Uuid
-  requestId String        @db.Uuid
-  request   AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  sequence  Int
-  stageSnapshot Json
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @db.Uuid
+  requestId      String        @db.Uuid
+  request        AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sequence       Int
+  stageSnapshot  Json
   /// 'waiting' | 'open' | 'approved' | 'rejected' | 'skipped'
-  status    String    @default("waiting")
-  openedAt  DateTime?
-  closedAt  DateTime?
-  slaDueAt  DateTime?
-  escalatedAt DateTime?
+  status         String        @default("waiting")
+  openedAt       DateTime?
+  closedAt       DateTime?
+  slaDueAt       DateTime?
+  escalatedAt    DateTime?
   /// When the last reminder went out, so the daily cadence after 100% of the
   /// SLA is a cadence and not a message per tick.
   lastRemindedAt DateTime?
@@ -1752,16 +1761,16 @@ model ApprovalStep {
 /// the Tuesday it was sitting there" answerable a year later rather than
 /// recomputable against a directory that has since moved.
 model ApprovalStepApprover {
-  id       String       @id @default(uuid()) @db.Uuid
-  tenantId String       @db.Uuid
-  stepId   String       @db.Uuid
-  step     ApprovalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
-  personId String       @db.Uuid
+  id                 String       @id @default(uuid()) @db.Uuid
+  tenantId           String       @db.Uuid
+  stepId             String       @db.Uuid
+  step               ApprovalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  personId           String       @db.Uuid
   /// 'selector' | 'delegate' | 'escalation' | 'fallback'
-  via      String
+  via                String
   /// The delegator, when via is 'delegate'.
-  onBehalfOfPersonId String? @db.Uuid
-  addedAt  DateTime @default(now())
+  onBehalfOfPersonId String?      @db.Uuid
+  addedAt            DateTime     @default(now())
 
   /// One row per person per step. A person resolved both by the selector and
   /// as somebody's delegate is one approver, not two — which is also what
@@ -1775,42 +1784,45 @@ model ApprovalStepApprover {
 /// the two PostgreSQL rules that make that true of the data rather than true
 /// of the one code path that happens to respect it.
 model ApprovalDecision {
-  id       String       @id @default(uuid()) @db.Uuid
-  tenantId String       @db.Uuid
-  stepId   String       @db.Uuid
-  step     ApprovalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
-  personId String       @db.Uuid
+  id                 String       @id @default(uuid()) @db.Uuid
+  tenantId           String       @db.Uuid
+  stepId             String       @db.Uuid
+  step               ApprovalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  personId           String       @db.Uuid
   /// The account the decision was made from, so a decision can be tied to a
   /// session as well as to a person.
-  userId   String?      @db.Uuid
+  userId             String?      @db.Uuid
   /// 'approve' | 'reject'
-  decision String
+  decision           String
   /// Required on a reject. A refusal with no reason is an unanswerable
   /// support call and a request the person will simply raise again.
-  comment  String?
+  comment            String?
   /// An approver may SHORTEN a duration when deciding. Never lengthen it.
-  shortenedToDays Int?
+  shortenedToDays    Int?
   /// 'selector' | 'delegate' | 'escalation' | 'fallback' | 'administrator'
-  via      String
-  onBehalfOfPersonId String? @db.Uuid
-  decidedAt DateTime @default(now())
+  via                String
+  onBehalfOfPersonId String?      @db.Uuid
+  decidedAt          DateTime     @default(now())
 
   @@index([tenantId])
   @@index([stepId])
+  /// The decision graph's reciprocity query is a 180-day window over decisions
+  /// joined to their requests' subjects. Without this it is a scan.
+  @@index([tenantId, decidedAt])
 }
 
 /// Adds an approver; never replaces one. Depth 1, end date required.
 model ApprovalDelegation {
-  id                 String    @id @default(uuid()) @db.Uuid
-  tenantId           String    @db.Uuid
-  delegatorPersonId  String    @db.Uuid
-  delegatePersonId   String    @db.Uuid
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  delegatorPersonId String    @db.Uuid
+  delegatePersonId  String    @db.Uuid
   /// Optional restriction to one product category.
-  category           String?
-  startsAt           DateTime
-  endsAt             DateTime
-  createdByUserId    String?   @db.Uuid
-  revokedAt          DateTime?
+  category          String?
+  startsAt          DateTime
+  endsAt            DateTime
+  createdByUserId   String?   @db.Uuid
+  revokedAt         DateTime?
 
   createdAt DateTime @default(now())
 
@@ -1832,38 +1844,38 @@ model ApprovalDelegation {
 /// mirrors Provision's split between the horizon deciding that an account
 /// exists and `now` deciding that it holds anything.
 model AccessGrant {
-  id              String  @id @default(uuid()) @db.Uuid
-  tenantId        String  @db.Uuid
-  subjectPersonId String  @db.Uuid
-  resourceType    String
-  resourceId      String  @db.Uuid
-  targetSystemId  String? @db.Uuid
+  id                  String    @id @default(uuid()) @db.Uuid
+  tenantId            String    @db.Uuid
+  subjectPersonId     String    @db.Uuid
+  resourceType        String
+  resourceId          String    @db.Uuid
+  targetSystemId      String?   @db.Uuid
   /// 'request' | 'delegated_admin'
-  origin          String  @default("request")
-  requestId       String? @db.Uuid
+  origin              String    @default("request")
+  requestId           String?   @db.Uuid
   /// Denormalised from the request so the sweep can group by product without
   /// a join through a nullable request, and so a grant survives a request
   /// whose product was later retired.
-  productId       String? @db.Uuid
-  startsAt        DateTime
-  endsAt          DateTime?
-  status          String  @default("pending")
-  statusReason    String?
+  productId           String?   @db.Uuid
+  startsAt            DateTime
+  endsAt              DateTime?
+  status              String    @default("pending")
+  statusReason        String?
   /// Set the FIRST time a sweep observes that the subject no longer satisfies
   /// the product's audience. A flag, not a removal: it changes nothing about
   /// what the person holds, so the sweep guard does not count it and the
   /// review screen cannot skip it.
-  needsReview     Boolean @default(false)
-  reviewReason    String?
-  reviewedAt      DateTime?
+  needsReview         Boolean   @default(false)
+  reviewReason        String?
+  reviewedAt          DateTime?
   /// The grant that replaced this one when an extension was approved before
   /// the original expired, so no removal is produced and there is no outage.
-  supersededByGrantId String? @db.Uuid
+  supersededByGrantId String?   @db.Uuid
   /// The person who approved the request this grant came from, so the expiry
   /// warning and the lapse notice can reach them without walking the steps.
   /// Populated by `fulfilRequest` from the last `approve` decision on the
   /// request; null for a delegated administrative grant, which has no stages.
-  approvedByPersonId  String? @db.Uuid
+  approvedByPersonId  String?   @db.Uuid
   /// The ids of the `AppAssignment` / `GroupMembership` rows THIS grant wrote.
   /// Ending a grant deletes these rows and no others. Spec section 5's safety
   /// argument for Automate writing those two tables at all is that each has
@@ -1871,7 +1883,7 @@ model AccessGrant {
   /// in the other direction, removing a membership an administrator added by
   /// hand and reporting it as a grant that lapsed. Empty for an
   /// `entitlement` grant, which writes nothing directly.
-  writtenRowIds       String[] @default([])
+  writtenRowIds       String[]  @default([])
 
   createdAt DateTime  @default(now())
   endedAt   DateTime?
@@ -1909,21 +1921,21 @@ model ResourceOwner {
 /// per type: there is no "manage all groups" delegation; that is a role, and
 /// roles live in the console.
 model ResourceDelegation {
-  id               String  @id @default(uuid()) @db.Uuid
-  tenantId         String  @db.Uuid
-  resourceType     String
-  resourceId       String  @db.Uuid
-  delegatePersonId String? @db.Uuid
-  delegateGroupId  String? @db.Uuid
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  resourceType      String
+  resourceId        String    @db.Uuid
+  delegatePersonId  String?   @db.Uuid
+  delegateGroupId   String?   @db.Uuid
   /// Subset of ['view_members','approve','grant','revoke'].
-  capabilities     String[]
+  capabilities      String[]
   /// Applies where the resource is not reachable through a product whose
   /// condition would apply. Without an audience rule of some kind, delegation
   /// is a hole underneath the catalog's visibility model.
   audienceCondition Json?
-  startsAt         DateTime
-  endsAt           DateTime?
-  createdByUserId  String?  @db.Uuid
+  startsAt          DateTime
+  endsAt            DateTime?
+  createdByUserId   String?   @db.Uuid
 
   createdAt DateTime @default(now())
 
@@ -1934,8 +1946,8 @@ model ResourceDelegation {
 /// A run, in exactly the idiom Directory Sync and Provision established: it
 /// computes, writes down one row per proposed removal, and stops.
 model ExpirySweep {
-  id       String @id @default(uuid()) @db.Uuid
-  tenantId String @db.Uuid
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
   /// 'running' | 'previewed' | 'blocked' | 'applying' | 'applied'
   /// | 'partially_applied' | 'failed' | 'superseded'
   ///
@@ -1946,12 +1958,12 @@ model ExpirySweep {
   /// `previewExpirySweep` would raise P2002 — a system that silently stops
   /// removing access while continuing to grant it. Task 13 supersedes a stale
   /// row at the head of the preview, in the same transaction as the create.
-  status   String @default("running")
+  status     String    @default("running")
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
 
-  expireCount Int @default(0)
-  lapseCount  Int @default(0)
+  expireCount     Int @default(0)
+  lapseCount      Int @default(0)
   /// Grants flagged for review. Counted separately and NOT by the guard: a
   /// flag changes nothing about what anybody holds.
   reviewFlagCount Int @default(0)
@@ -1975,22 +1987,22 @@ model ExpirySweep {
 }
 
 model SweepAction {
-  id       String      @id @default(uuid()) @db.Uuid
-  tenantId String      @db.Uuid
-  sweepId  String      @db.Uuid
-  sweep    ExpirySweep @relation(fields: [sweepId], references: [id], onDelete: Cascade)
-  grantId  String      @db.Uuid
+  id                String      @id @default(uuid()) @db.Uuid
+  tenantId          String      @db.Uuid
+  sweepId           String      @db.Uuid
+  sweep             ExpirySweep @relation(fields: [sweepId], references: [id], onDelete: Cascade)
+  grantId           String      @db.Uuid
   /// 'expire' | 'lapse'
-  kind     String
-  productId       String? @db.Uuid
-  subjectPersonId String  @db.Uuid
-  resourceType    String
-  resourceId      String  @db.Uuid
-  targetSystemId  String? @db.Uuid
+  kind              String
+  productId         String?     @db.Uuid
+  subjectPersonId   String      @db.Uuid
+  resourceType      String
+  resourceId        String      @db.Uuid
+  targetSystemId    String?     @db.Uuid
   /// 'proposed' | 'dispatched' | 'applied' | 'skipped' | 'failed'
-  status   String @default("proposed")
-  provisionActionId String? @db.Uuid
-  message  String?
+  status            String      @default("proposed")
+  provisionActionId String?     @db.Uuid
+  message           String?
 
   /// How the apply loop reads it. Directory Sync indexed its equivalent on
   /// (runId, changeType) and then queried by status; do not repeat that.
@@ -2023,22 +2035,22 @@ model SweepException {
 /// "the approver says they never got the mail" is the most common support
 /// question a request system produces, and without a row it is unanswerable.
 model NotificationOutbox {
-  id        String  @id @default(uuid()) @db.Uuid
-  tenantId  String  @db.Uuid
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @db.Uuid
   template  String
   to        String
-  vars      Json    @default("{}")
-  requestId String? @db.Uuid
+  vars      Json      @default("{}")
+  requestId String?   @db.Uuid
   /// Who it was for, so a per-user digest preference can be honoured and a
   /// failure can be reported against somebody.
-  userId    String? @db.Uuid
-  attempts  Int     @default(0)
+  userId    String?   @db.Uuid
+  attempts  Int       @default(0)
   lastError String?
   sentAt    DateTime?
   /// Withheld until the daily digest runs, for a recipient who chose one.
   /// Failures, blocks and confirmations are never digested regardless of
   /// preference, so this is false on those rows whatever the preference says.
-  digest    Boolean @default(false)
+  digest    Boolean   @default(false)
 
   createdAt DateTime @default(now())
 
@@ -2064,4 +2076,1089 @@ model NotificationPreference {
   /// changing it would change that read for no behaviour.
   @@unique([userId])
   @@index([tenantId])
+}
+
+// ---------------------------------------------------------------------------
+// Govern — Access Governance. Spec docs/superpowers/specs/2026-08-16-syntra-govern-design.md
+//
+// Govern reads every other subsystem's tables and writes only these. It holds
+// no target credential, opens no socket, and writes no access-bearing row.
+// ---------------------------------------------------------------------------
+
+/// One row per tenant, holding every number the Govern design names, so none
+/// of them is a constant compiled into the code.
+///
+/// `lastAppliedBatchAt` and `personsWithActiveContractAtLastBatch` are not
+/// settings. They are the denominator the population-collapse refusal
+/// compares against, STORED rather than recomputed for the same reason
+/// Provision stores `lastAppliedRunAt` and Automate stores
+/// `lastAppliedSweepAt`: the comparison is against the last state somebody
+/// accepted, not against the last state observed.
+model GovernSettings {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @unique @db.Uuid
+
+  /// Nightly at 01:00, ahead of Automate's 02:00 sweep, so the sweep runs
+  /// against a picture assembled tonight rather than last night.
+  snapshotSchedule         String? @default("0 1 * * *")
+  /// A year plus the audit that follows it.
+  snapshotRetentionDays    Int     @default(400)
+  /// How long ago the WORLD was read. The other clock.
+  defaultFreshnessSlaHours Int     @default(24)
+  /// How long ago GOVERN assembled the picture. Not the same clock, and a
+  /// refusal always names which one it was.
+  maxSnapshotAgeDays       Int     @default(30)
+
+  batchThresholdPercent       Int @default(10)
+  /// Lower than Provision's 50 deliberately: a campaign is a deliberate act
+  /// with a human on the other end of the confirmation, and "this campaign is
+  /// emptying Finance-Payments" is the single sentence most worth
+  /// interrupting somebody with.
+  perResourceThresholdPercent Int @default(30)
+  personPopulationDropPercent Int @default(20)
+
+  minimumCoveragePercent  Int @default(90)
+  bulkCertifyLimit        Int @default(50)
+  /// Measured to CONFIRMATION, not to observation: observation waits on the
+  /// next snapshot, and an SLA that fired because a nightly job had not run
+  /// yet trains people to ignore alerts.
+  dispatchSlaHours        Int @default(72)
+  privilegedRecertifyDays Int @default(90)
+
+  maxExceptionDays     Int   @default(90)
+  exceptionWarningDays Int[] @default([14, 3])
+
+  minReciprocalDecisions Int @default(3)
+  reciprocityWindowDays  Int @default(180)
+
+  lastAppliedBatchAt                   DateTime?
+  personsWithActiveContractAtLastBatch Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+/// The per-source freshness override section 8 assumes. A source with no row
+/// uses `GovernSettings.defaultFreshnessSlaHours`.
+///
+/// A table rather than a column on `DirectorySource` or `TargetSystem`,
+/// because Govern's opinion about somebody else's row never lives on that row.
+model GovernSourcePolicy {
+  id                String  @id @default(uuid()) @db.Uuid
+  tenantId          String  @db.Uuid
+  /// 'directorySource' | 'targetSystem' | 'syntraInternal'
+  sourceKind        String
+  /// Text, not @db.Uuid: `syntraInternal`'s id is the literal 'syntra'.
+  sourceId          String
+  freshnessSlaHours Int     @default(24)
+  inDefaultScope    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, sourceKind, sourceId])
+  @@index([tenantId])
+}
+
+/// Govern's opinion about whether a resource is privileged. Beside the
+/// resource, never on it: `Entitlement` belongs to Provision and `Group` is
+/// rewritten nightly by its source.
+///
+/// `Holding.privileged` is derived from this table at build, plus one rule
+/// that needs no configuration: every `syntraRole` holding is privileged,
+/// because a Syntra role carries permissions from the closed catalogue and
+/// there is no version of that which is not.
+model ResourceClassification {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @db.Uuid
+  systemId     String
+  resourceKind String
+  resourceId   String
+  privileged   Boolean  @default(false)
+  note         String?
+  setByUserId  String?  @db.Uuid
+  setAt        DateTime @default(now())
+
+  @@unique([tenantId, systemId, resourceKind, resourceId])
+  @@index([tenantId])
+}
+
+/// A point-in-time, materialized, immutable set of Holding rows with their
+/// attributions, plus a coverage record.
+///
+/// `asOf` is the instant the COLLECT stage began, not `finishedAt`, so a build
+/// taking twenty minutes describes a world as it stood at one stated moment
+/// rather than over a smeared window. It is the timestamp every report header
+/// carries, and it is NOT the same as any holding's `observedAt`.
+///
+/// Only `complete` snapshots are readable by any report or campaign, enforced
+/// in the one accessor function `readableSnapshot()`, because a partially
+/// built snapshot is indistinguishable from a small organization.
+model AccessSnapshot {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  /// 'scheduled' | 'manual' | 'campaign'
+  kind     String
+  /// 'building' | 'complete' | 'failed'
+  status   String @default("building")
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  asOf       DateTime
+
+  /// The declarative scope this snapshot was built over, or null for the
+  /// whole tenant.
+  scope Json?
+
+  holdingCount              Int  @default(0)
+  unattributableCount       Int  @default(0)
+  coverageGapCount          Int  @default(0)
+  unattributedAccountCount  Int  @default(0)
+  personCount               Int  @default(0)
+  /// The denominator the population-collapse refusal compares against, frozen
+  /// with the picture it describes.
+  personsWithActiveContract Int  @default(0)
+  countsByResourceKind      Json @default("{}")
+
+  error String?
+
+  sources  SnapshotSource[]
+  holdings Holding[]
+  gaps     CoverageGap[]
+
+  @@index([tenantId])
+  @@index([tenantId, status, asOf])
+}
+
+/// Per snapshot, per source in scope. Section 8. `syntraInternal` is always
+/// `fresh` and `complete`, and saying so explicitly is better than leaving a
+/// blank that a reader interprets as an omission.
+model SnapshotSource {
+  id         String         @id @default(uuid()) @db.Uuid
+  tenantId   String         @db.Uuid
+  snapshotId String         @db.Uuid
+  snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  /// 'directorySource' | 'targetSystem' | 'syntraInternal'
+  sourceKind String
+  sourceId   String
+  sourceName String
+  /// Bare column, not a relation: the run may be a SyncRun or a ProvisionRun,
+  /// and pruning either must not take the coverage record with it.
+  lastRunId  String? @db.Uuid
+
+  lastSuccessfulReadAt DateTime?
+  lastAttemptedReadAt  DateTime?
+  /// 'complete' | 'partial' | 'unread'
+  completeness         String
+  /// 'fresh' | 'stale'
+  staleness            String
+  freshnessSlaHours    Int
+  gapCount             Int       @default(0)
+
+  @@unique([snapshotId, sourceKind, sourceId])
+  @@index([tenantId])
+}
+
+/// One row per (subject, resource, system) the subject can reach.
+///
+/// `not_held` is never a row: absence means not-held only WITHIN a region
+/// coverage says was read, and elsewhere it means unknown. Storing explicit
+/// not-held rows multiplies the row count by the size of the resource catalog
+/// AND destroys the distinction, because an unread region then produces no row
+/// at all — which reads as "not held" to anybody writing a query later.
+///
+/// A snapshot is immutable once complete, so no certification state lives
+/// here. Certification is a fact about a (subject, resource) pair that
+/// outlives any one snapshot; `HoldingCertification` holds it.
+model Holding {
+  id         String         @id @default(uuid()) @db.Uuid
+  tenantId   String         @db.Uuid
+  snapshotId String         @db.Uuid
+  snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  /// `person:<uuid>` or `account:<systemId>:<accountRef>`. NOT NULL, because
+  /// a unique index over the two nullable columns below would constrain
+  /// nothing and a GROUP BY over them puts every orphan in one bucket.
+  subjectKey String
+  personId   String? @db.Uuid
+  accountRef String?
+
+  /// 'targetSystem' | 'syntraInternal' | 'directorySource'
+  systemKind   String
+  /// Text, not @db.Uuid. One of its values is the literal 'syntra'.
+  systemId     String
+  /// 'targetEntitlement' | 'targetAccount' | 'syntraGroup' | 'application'
+  /// | 'syntraRole' | 'syntraUser'
+  resourceKind String
+  /// Text, not @db.Uuid. One of its values is a target account's anchor.
+  resourceId   String
+  /// Copied, not referenced. A group renamed next month must not silently
+  /// rewrite last quarter's evidence.
+  resourceName String
+
+  /// 'held' | 'unknown'. There is no third value and a check constraint says so.
+  state       String   @default("held")
+  privileged  Boolean  @default(false)
+  /// When the system that read it last confirmed it was true. NOT the
+  /// snapshot's asOf, and the report shows both.
+  observedAt  DateTime
+  /// Which run of which subsystem last confirmed it.
+  observedVia String
+  /// The earliest snapshot in which this (subject, resource) pair was seen.
+  firstSeenAt DateTime
+
+  attributionCount Int     @default(0)
+  /// Computed once at build so no screen has to re-derive it and get it half
+  /// right. True when the attribution set is empty, or when its only kinds are
+  /// `discovered` and `unattributable`.
+  unattributable   Boolean @default(false)
+
+  attributions HoldingAttribution[]
+
+  @@unique([snapshotId, subjectKey, systemId, resourceKind, resourceId])
+  @@index([tenantId, snapshotId, personId])
+  @@index([tenantId, snapshotId, systemId, resourceId])
+}
+
+/// Several rows per holding, by design. A single `origin` column would have to
+/// choose, and it would choose wrong exactly in the cases that matter — the
+/// researcher with two contracts, the person whose requested access is also
+/// now birthright, the group membership that arrives both by rule and by hand.
+model HoldingAttribution {
+  id        String  @id @default(uuid()) @db.Uuid
+  tenantId  String  @db.Uuid
+  holdingId String  @db.Uuid
+  holding   Holding @relation(fields: [holdingId], references: [id], onDelete: Cascade)
+
+  /// 'business_rule' | 'request' | 'delegated_admin' | 'auto_granted'
+  /// | 'direct_assignment' | 'group_inheritance' | 'org_unit_inheritance'
+  /// | 'directory_source' | 'discovered' | 'manual' | 'unattributable'
+  kind       String
+  refType    String
+  refId      String?
+  /// The copied names, the resolved org-unit chain, the approver set. Copied,
+  /// not referenced: an approver who leaves must still have a name in the
+  /// record of what they approved.
+  detail     Json     @default("{}")
+  resolvedAt DateTime
+
+  @@index([tenantId])
+  @@index([holdingId])
+}
+
+/// One row per region of the world Govern cannot describe. THE ROW THAT MUST
+/// NEVER BE A FLAG. It is counted on the face of every report whose scope
+/// intersects it, and it is what makes a question over that scope answer
+/// `unknown` rather than a number.
+model CoverageGap {
+  id         String         @id @default(uuid()) @db.Uuid
+  tenantId   String         @db.Uuid
+  snapshotId String         @db.Uuid
+  snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  /// 'source_unread' | 'source_stale' | 'resource_unreadable'
+  /// | 'account_unreadable' | 'subject_unresolvable' | 'person_unprocessable'
+  kind        String
+  /// Null where the gap is not about one system.
+  systemKind  String?
+  systemId    String?
+  resourceId  String?
+  personId    String? @db.Uuid
+  accountRef  String?
+  reason      String
+  sourceRunId String? @db.Uuid
+
+  @@index([tenantId])
+  @@index([snapshotId, kind])
+}
+
+/// Produced by diffing consecutive snapshots, and cross-referenced to the
+/// audit event that caused it where one exists.
+///
+/// `explained = false` on a `gained` event is one of the most valuable rows
+/// this system produces: access appeared, and Syntra did not cause it.
+model HoldingEvent {
+  id             String @id @default(uuid()) @db.Uuid
+  tenantId       String @db.Uuid
+  fromSnapshotId String @db.Uuid
+  toSnapshotId   String @db.Uuid
+
+  subjectKey   String
+  personId     String? @db.Uuid
+  accountRef   String?
+  systemId     String
+  resourceKind String
+  resourceId   String
+  resourceName String
+
+  /// 'gained' | 'lost' | 'attribution_changed' | 'became_unknown' | 'became_known'
+  change             String
+  beforeAttributions Json   @default("[]")
+  afterAttributions  Json   @default("[]")
+
+  /// The audit event that explains it, where one exists. A sequence number,
+  /// not a row id: the chain is ordered by sequence and that is the ordering
+  /// an investigator works in.
+  auditEventSequence Int?
+  explained          Boolean @default(false)
+
+  @@index([tenantId, toSnapshotId])
+  @@index([tenantId, personId, toSnapshotId])
+}
+
+/// A projection, rebuilt from CampaignDecision rows, which remain the record.
+/// It exists so that "never certified" and "not certified since" are one
+/// indexed lookup on a report rather than a join across every campaign a
+/// tenant has ever run.
+model HoldingCertification {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  /// 'person' | 'account'
+  subjectRefType String
+  subjectRefId   String
+  systemId       String
+  resourceKind   String
+  resourceId     String
+
+  lastCertifiedAt         DateTime
+  lastCertifiedByPersonId String   @db.Uuid
+  /// Bare columns, not relations: slice 2 owns those tables and a cascade
+  /// from a deleted campaign would silently un-certify history.
+  lastCampaignId          String   @db.Uuid
+  lastDecisionId          String   @db.Uuid
+
+  @@unique([tenantId, subjectRefType, subjectRefId, systemId, resourceKind, resourceId])
+  @@index([tenantId])
+}
+
+/// Govern PROPOSES an owner for an orphan account and never assigns one.
+/// Confirmation calls Provision's own account-linking entry point; Govern does
+/// not write TargetAccount.
+model AccountAttribution {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  systemId         String
+  accountRef       String
+  proposedPersonId String @db.Uuid
+
+  /// 'name_similarity' | 'mail_address' | 'employee_identifier' | 'adjacent_manager'
+  method          String
+  /// 0..1. A number a human reads, never a number a machine acts on: linking
+  /// an account to a person is not a labelling exercise, and Provision's next
+  /// run evaluates that person's desired state against that account.
+  confidence      Float
+  /// 'proposed' | 'confirmed' | 'denied'
+  status          String    @default("proposed")
+  decidedByUserId String?   @db.Uuid
+  decidedAt       DateTime?
+  decidedReason   String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, systemId, accountRef, proposedPersonId])
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+/// One lifecycle, one table, one count. A finding that persists across
+/// snapshots is updated, not duplicated. A finding that stops being observed
+/// becomes `resolved` WITH THE SNAPSHOT THAT SHOWED IT GONE, not silently
+/// deleted, because "it went away and we do not know why" is itself worth a row.
+model GovernFinding {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  /// The closed set of section 16.
+  kind     String
+  /// 'low' | 'medium' | 'high' | 'critical'
+  severity String
+
+  /// 'person' | 'account' | 'resource' | 'source' | 'reviewer' | 'holding'
+  /// | 'snapshot' | 'campaign' | 'sod_violation' | 'dispatch'
+  subjectRefType String
+  subjectRefId   String
+
+  detail         Json    @default("{}")
+  /// A Provision DriftFinding this AGGREGATES, never copies. Closing it in
+  /// either place closes it in both, because there is only one row underneath.
+  /// Bare column, not a relation: DriftFinding cascades from ProvisionRun, and
+  /// a pruned run must not delete Govern's finding.
+  driftFindingId String? @db.Uuid
+
+  /// 'open' | 'acknowledged' | 'accepted' | 'resolved'
+  status        String    @default("open")
+  /// Required to leave `open`. Enforced in the service, not in SQL: the
+  /// constraint would have to know which transitions are which.
+  ownerPersonId String?   @db.Uuid
+  dueAt         DateTime?
+
+  /// `accepted` requires a reason AND an expiry. Acceptance with no expiry is
+  /// not representable, for the reason section 15 gives about exceptions.
+  acceptedReason String?
+  acceptedUntil  DateTime?
+
+  resolvedBySnapshotId String?   @db.Uuid
+  resolvedAt           DateTime?
+
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+
+  remediations RemediationItem[]
+
+  @@unique([tenantId, kind, subjectRefType, subjectRefId])
+  @@index([tenantId])
+  @@index([tenantId, status, severity])
+}
+
+/// The half of a finding that has an assignee and a deadline.
+///
+/// `campaignItemId` is a bare nullable column with no relation, filled in
+/// slice 2. A relation would cascade, and deleting a campaign item that
+/// produced a remediation item would destroy the record of what still has to
+/// change.
+model RemediationItem {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  /// 'rule_change_required' | 'directory_source_change_required'
+  /// | 'direct_assignment_change_required' | 'role_assignment_change_required'
+  /// | 'account_removal_required' | 'syntra_user_change_required'
+  /// | 'undecided_item' | 'orphan_attribution'
+  ///
+  /// The first six are the six `requires_change` routes of Task 20's dispatch
+  /// table, one to one. `ROUTE_REMEDIATION_KIND` in `dispatch.ts` is the map,
+  /// and it is a total `Record<RevocationRoute, string | null>` so a route
+  /// added later without a kind is a compile error.
+  kind          String
+  ownerPersonId String   @db.Uuid
+  dueAt         DateTime
+
+  findingId      String?        @db.Uuid
+  finding        GovernFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  campaignItemId String?        @db.Uuid
+
+  description String
+  deepLink    String
+
+  /// 'open' | 'in_progress' | 'done' | 'wont_fix'
+  status            String    @default("open")
+  resolutionComment String?
+  resolvedByUserId  String?   @db.Uuid
+  resolvedAt        DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, status, dueAt])
+  @@index([tenantId, ownerPersonId, status])
+}
+
+/// A deterministic JSON document with a stable digest. Creating one is a
+/// privileged, audited action, and its limitations page is printed on its
+/// cover rather than kept in a caveats appendix.
+model EvidencePack {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  /// 'campaign' | 'report' | 'period'
+  kind  String
+  scope Json   @default("{}")
+
+  snapshotId String? @db.Uuid
+  campaignId String? @db.Uuid
+
+  chainHeadSequence       Int
+  chainHeadHash           String
+  /// 'valid' | 'broken' | 'not_verified'
+  chainVerificationResult String
+  chainFromSequence       Int
+  chainToSequence         Int
+
+  /// sha256 over the stable serialization. Printed in the bundle's own header,
+  /// so a reader can recompute it.
+  digest     String
+  /// Where the bytes live. Null when the bundle is served on demand rather
+  /// than stored.
+  storageRef String?
+  byteLength Int
+
+  createdByUserId String?  @db.Uuid
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, kind, createdAt])
+}
+
+/// Written after a successful verification of the segment ending here.
+/// APPEND-ONLY: a reversal is a new row.
+model AuditCheckpoint {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  sequence   Int
+  hash       String
+  verifiedAt DateTime @default(now())
+  /// Over (sequence, hash), with a key the application holds and the database
+  /// does not. Raises the bar from "database access" to "database access plus
+  /// the signing key". It is NOT proof against the operator; anchoring is.
+  signature  String?
+  keyId      String?
+
+  @@unique([tenantId, sequence])
+  @@index([tenantId])
+}
+
+/// The result of one verification run. `mode` matters: an incremental check
+/// says the segment since the last checkpoint holds; a full check says the
+/// chain holds from genesis, and they are different claims.
+model AuditChainCheck {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  fromSequence     Int
+  toSequence       Int
+  /// 'valid' | 'broken'
+  result           String
+  brokenAtSequence Int?
+  startedAt        DateTime @default(now())
+  durationMs       Int
+  /// 'incremental' | 'full' | 'full_fallback'
+  /// `full_fallback` is a full walk an incremental run had to fall back to,
+  /// because the checkpoint it would have seeded from carries no valid
+  /// signature. Distinct from `full` so the screen can say which happened.
+  mode             String
+
+  @@index([tenantId])
+  @@index([tenantId, startedAt])
+}
+
+/// The only one of the three mitigations that is actually proof against the
+/// operator, because the receipt comes from somewhere the operator does not
+/// control. A tenant that has not configured anchoring sees that stated on its
+/// own integrity screen, in those terms, rather than a green tick.
+model AuditAnchor {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  sequence   Int
+  hash       String
+  anchoredAt DateTime @default(now())
+  /// 'file' | 'mail'
+  method     String
+  receipt    String
+  /// 'pending' | 'anchored' | 'failed'
+  status     String   @default("pending")
+  error      String?
+
+  @@index([tenantId])
+  @@index([tenantId, sequence])
+}
+
+/// A recertification campaign. Its scope is declarative, its snapshot is frozen
+/// at start, and its headline number is COVERAGE, not completion.
+model Campaign {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  name        String
+  description String?
+  /// A condition in the same closed interpreter Provision's business rules and
+  /// Automate's audiences use, over the same closed field set. A tenant learns
+  /// one expression language.
+  scope       Json
+
+  /// Set at start; changed only by an explicit, recorded re-base.
+  snapshotId            String  @db.Uuid
+  rebasedFromSnapshotId String? @db.Uuid
+
+  /// From Automate's closed selector set, reused rather than reimplemented: an
+  /// approval chain and a review chain disagreeing about who somebody's manager
+  /// is would be a support call nobody can close.
+  reviewerSelector String
+  reviewerConfig   Json   @default("{}")
+  /// REQUIRED. A campaign whose selector resolves to nobody and has no fallback
+  /// is a campaign whose items block on the due date.
+  fallbackSelector String
+  fallbackConfig   Json   @default("{}")
+
+  ownerPersonId  String   @db.Uuid
+  opensAt        DateTime
+  dueAt          DateTime
+  /// Carried rather than derived, so a campaign that was extended three times
+  /// says so on its own row and in its evidence bundle.
+  originalDueAt  DateTime
+  extensionCount Int      @default(0)
+  recurrence     String?
+
+  allowBulkCertify Boolean @default(true)
+
+  /// draft | generating | open | executing | closed_complete | closed_incomplete | cancelled
+  status String @default("draft")
+
+  totalItems          Int    @default(0)
+  certifiedItems      Int    @default(0)
+  revokedItems        Int    @default(0)
+  mootItems           Int    @default(0)
+  undecidedItems      Int    @default(0)
+  blockedItems        Int    @default(0)
+  requiresChangeItems Int    @default(0)
+  /// (decided + moot) / total. Never printed without the four counts beside it.
+  coveragePercent     Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items   CampaignItem[]
+  batches RevocationBatch[]
+  signals ReviewQualitySignal[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+/// One holding under review. COPIED from the snapshot, not referenced by id,
+/// for the same reason Automate snapshots a workflow: editing the world
+/// afterwards must not change what somebody attested to.
+///
+/// ONE ITEM PER (SUBJECT, RESOURCE). Per-subject items are what most products
+/// ship and they are the mechanism by which rubber-stamping becomes the norm,
+/// since the only available action is a single yes over 40 things.
+model CampaignItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @db.Uuid
+  campaignId String   @db.Uuid
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  holdingSnapshotId String  @db.Uuid
+  subjectKey        String
+  personId          String? @db.Uuid
+  accountRef        String?
+
+  systemId     String
+  resourceKind String
+  resourceId   String
+  resourceName String
+
+  /// The copied attribution set.
+  attributions   Json     @default("[]")
+  observedAt     DateTime
+  /// 'complete' | 'partial' | 'unread' -- as at generation, and re-checked if
+  /// the source goes stale mid-campaign.
+  coverageStatus String
+  /// privileged | unattributable | sod_violation | stale | needs_review | no_human_decision
+  riskFlags      String[] @default([])
+
+  /// pending | certified | revoke_decided | revocation_dispatched
+  /// | revocation_confirmed | revocation_applied | revocation_requires_change
+  /// | revocation_failed | undecided | moot | blocked_no_reviewer
+  status       String  @default("pending")
+  statusReason String?
+  outcomeRef   String?
+
+  createdAt DateTime @default(now())
+
+  reviewers CampaignItemReviewer[]
+  decisions CampaignDecision[]
+
+  /// The natural key. A `startCampaign` that crashes mid-generation and is
+  /// retried would otherwise duplicate every item it had already created.
+  /// Generation uses `createMany({ skipDuplicates: true })` against it, so a
+  /// retry is idempotent rather than a P2002 on an irreversible-adjacent path.
+  @@unique([campaignId, subjectKey, systemId, resourceKind, resourceId])
+  /// How every loop and every screen reads it.
+  @@index([campaignId, status])
+  @@index([campaignId, personId])
+  @@index([tenantId])
+}
+
+/// The materialized, historical reviewer set: who this was with, ON THE DAY.
+/// Automate's ApprovalStepApprover, for attestation.
+model CampaignItemReviewer {
+  id       String       @id @default(uuid()) @db.Uuid
+  tenantId String       @db.Uuid
+  itemId   String       @db.Uuid
+  item     CampaignItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  personId         String    @db.Uuid
+  /// 'selector' | 'fallback' | 'escalation' | 'reassignment'
+  via              String
+  assignedAt       DateTime  @default(now())
+  unassignedAt     DateTime?
+  unassignedReason String?
+
+  /// When this reviewer last had a reminder about this item's campaign, so the
+  /// cadence is driven per REVIEWER and not per campaign. A de-duplication
+  /// keyed on the campaign reminds the first reviewer in the iteration and
+  /// silently skips all 199 others, forever.
+  lastRemindedAt DateTime?
+
+  /// When this reviewer first opened this item's detail, SERVER-SIDE. Not a
+  /// client-reported dwell time, which is worth nothing. It is a column and not
+  /// an in-process Map because two API workers, a load balancer or a restart
+  /// all make the map empty at decision time -- and the resulting signal reads
+  /// "instantaneous, never opened" for a reviewer who read everything, which is
+  /// an accusation the evidence bundle would then carry.
+  openedAt DateTime?
+
+  /// Lets escalation upsert instead of racing a findFirst-then-create.
+  /// `assignedAt` is in the key so a reviewer unassigned and later re-assigned
+  /// gets a new row rather than resurrecting the old one with its old
+  /// `openedAt`.
+  @@unique([itemId, personId, assignedAt])
+  @@index([tenantId])
+  @@index([itemId, unassignedAt])
+  @@index([tenantId, personId, unassignedAt])
+}
+
+/// APPEND-ONLY: never updated, never deleted. A reversal is a new decision with
+/// its own reason.
+model CampaignDecision {
+  id       String       @id @default(uuid()) @db.Uuid
+  tenantId String       @db.Uuid
+  itemId   String       @db.Uuid
+  item     CampaignItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  personId        String  @db.Uuid
+  /// The ACCOUNT the decision was made from. Automate's grant-revocation entry
+  /// point takes a User id and a person may hold several accounts or none, so
+  /// re-resolving at dispatch time would pick an arbitrary one.
+  /// `ApprovalDecision.userId` exists for the same reason.
+  decidedByUserId String? @db.Uuid
+
+  /// 'certify' | 'revoke'
+  decision String
+  comment  String?
+
+  /// The SERVER-SIDE interval between the request that fetched the item's
+  /// detail and the request that recorded the decision.
+  itemOpenedAt DateTime
+  decidedAt    DateTime @default(now())
+
+  /// TRUE when this reviewer never fetched the item's detail before deciding.
+  /// A FACT, not an inference: `itemOpenedAt === decidedAt` is also what a
+  /// decision made in the same second as the open looks like, and the evidence
+  /// bundle must not accuse somebody on a timestamp coincidence.
+  neverOpened Boolean @default(false)
+
+  viaBulk                Boolean @default(false)
+  bulkSize               Int?
+  /// The position of this decision within a run of consecutive decisions by
+  /// this reviewer. An explicit ordinal, because createdAt is transaction start
+  /// time and every row of one bulk action carries the same one.
+  sessionDecisionOrdinal Int
+  /// The coverage of this item's source AT THE MOMENT OF THE DECISION, so the
+  /// evidence bundle can say what the reviewer was told.
+  coverageAtDecision     Json    @default("{}")
+
+  @@index([tenantId])
+  @@index([itemId])
+  @@index([tenantId, personId, decidedAt])
+}
+
+/// Context for a human, offered as signals rather than as proof. A manager of a
+/// stable ten-person team who reads everything and certifies all of it in four
+/// minutes is behaving correctly and looks identical to a rubber-stamper on the
+/// aggregate; the screen says so.
+model ReviewQualitySignal {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @db.Uuid
+  campaignId String   @db.Uuid
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  personId   String   @db.Uuid
+
+  itemsAssigned    Int
+  itemsDecided     Int
+  certifiedShare   Float
+  medianIntervalMs Int
+  bulkShare        Float
+  /// The longest RUN of consecutive decisions by this reviewer in this campaign
+  /// -- consecutive by `sessionDecisionOrdinal`, with no gap -- and the elapsed
+  /// time across that run. NOT `max(bulkSize)`, which is a different and much
+  /// smaller statement, and which the screen would have labelled with this
+  /// column's name.
+  largestBurst     Int
+  largestBurstMs   Int   @default(0)
+  /// The share of this reviewer's decisions carrying `neverOpened`.
+  neverOpenedShare Float
+
+  computedAt DateTime @default(now())
+
+  @@unique([campaignId, personId])
+  @@index([tenantId])
+}
+
+/// Revocation is a RUN. Decisions accumulate and are computed into a batch,
+/// which is written down, guarded and stopped -- the idiom Directory Sync
+/// established, Provision inherited and Automate reused.
+model RevocationBatch {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @db.Uuid
+  /// NOT NULL. Every revocation batch belongs to a campaign.
+  ///
+  /// An earlier draft made this nullable "for an SoD remediation batch, which
+  /// belongs to no campaign", and shipped a second partial unique index for
+  /// those rows -- but NO PRODUCTION PATH EVER CREATED ONE. The remedy for a
+  /// refused or lapsed exception is a `RemediationItem` routed to a named
+  /// owner, not a revocation: nothing is revoked when an exception lapses.
+  /// Where an SoD violation does have to be removed, the route is a one-item
+  /// campaign -- which has a campaign id.
+  ///
+  /// A nullable column with a supporting index and no writer is the half-built
+  /// state this programme has now paid for three times, so the column is NOT
+  /// NULL and `govern_revocation_batch_one_non_terminal_standalone` does not
+  /// exist. If a standalone batch is ever wanted, the column, the index and the
+  /// path that writes it arrive together.
+  campaignId String   @db.Uuid
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  /// computing | previewed | blocked | applying | applied | partially_applied
+  /// | failed | superseded
+  status String @default("computing")
+
+  proposedCount       Int @default(0)
+  skippedCount        Int @default(0)
+  dispatchedCount     Int @default(0)
+  confirmedCount      Int @default(0)
+  appliedCount        Int @default(0)
+  failedCount         Int @default(0)
+  requiresChangeCount Int @default(0)
+  cancelledCount      Int @default(0)
+
+  requiresConfirmation Boolean @default(false)
+  blockedReason        String?
+  /// `autoApply` DOES NOT EXIST for a batch. Confirmation is per batch,
+  /// explicit, and the confirming user is recorded.
+  confirmedByUserId    String? @db.Uuid
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  error      String?
+
+  dispatches RevocationDispatch[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+model RevocationDispatch {
+  id       String          @id @default(uuid()) @db.Uuid
+  tenantId String          @db.Uuid
+  batchId  String          @db.Uuid
+  batch    RevocationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  itemId            String? @db.Uuid
+  /// Everything needed to describe the holding on the review screen without a
+  /// join into a snapshot that may later be pruned.
+  holdingDescriptor Json
+  /// The row of the routing table that selected this outcome.
+  route             String
+
+  /// proposed | skipped | dispatched | confirmed | applied | failed
+  /// | requires_change | cancelled
+  status String @default("proposed")
+
+  grantId           String? @db.Uuid
+  revocationOrderId String? @db.Uuid
+  remediationItemId String? @db.Uuid
+  message           String?
+
+  /// An explicit ordinal: createdAt is transaction start time and every row of
+  /// the batch's single createMany carries the same one.
+  sequence Int @default(0)
+
+  dispatchedAt DateTime?
+  confirmedAt  DateTime?
+  appliedAt    DateTime?
+
+  @@index([batchId, status])
+  @@index([batchId, sequence])
+  @@index([tenantId])
+}
+
+/// A ONE-SHOT negative term consumed by Provision's plan stage.
+///
+/// It is not a standing deny rule and it is not an inference: it is a single
+/// dated instruction carrying a named human, a campaign, a decision id and a
+/// comment. It is refused at creation if the holding carries any live
+/// attribution, it is terminal once applied, and it is cancelled rather than
+/// applied if the holding acquires an attribution before it is planned.
+model RevocationOrder {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+
+  targetSystemId String @db.Uuid
+  accountId      String @db.Uuid
+  entitlementId  String @db.Uuid
+
+  decidedByPersonId   String  @db.Uuid
+  campaignDecisionId  String? @db.Uuid
+  /// The order carries its provenance ALL THE WAY TO THE TARGET. These three
+  /// are denormalised so Provision's plan stage receives them as plain values
+  /// and its audit event can name a human, WITHOUT Provision ever querying
+  /// Govern.
+  decidedByPersonName String
+  campaignName        String?
+  reason              String
+
+  /// open | planned | applied | cancelled
+  status          String  @default("open")
+  cancelledReason String?
+
+  createdAt DateTime  @default(now())
+  plannedAt DateTime?
+  appliedAt DateTime?
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+/// Rules relate BUSINESS FUNCTIONS, not entitlements. A rule written directly
+/// over two Active Directory groups is wrong within a year and wrong invisibly:
+/// a group gets renamed, a second group is created that confers the same power,
+/// a second system is introduced that does payments, and the rule sees nothing.
+model BusinessFunction {
+  id            String  @id @default(uuid()) @db.Uuid
+  tenantId      String  @db.Uuid
+  name          String
+  description   String?
+  ownerPersonId String  @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  resources BusinessFunctionResource[]
+  rulesAsA  SodRule[]                  @relation("SodRuleFunctionA")
+  rulesAsB  SodRule[]                  @relation("SodRuleFunctionB")
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+/// Named by IMMUTABLE IDENTIFIER -- Provision's rule about `Entitlement.externalId`
+/// being the target's own object id, restated one level up.
+model BusinessFunctionResource {
+  id         String           @id @default(uuid()) @db.Uuid
+  tenantId   String           @db.Uuid
+  functionId String           @db.Uuid
+  function   BusinessFunction @relation(fields: [functionId], references: [id], onDelete: Cascade)
+
+  systemId     String
+  resourceKind String
+  resourceId   String
+
+  @@unique([tenantId, functionId, systemId, resourceKind, resourceId])
+  @@index([tenantId])
+}
+
+model SodRule {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  name     String
+
+  functionAId String           @db.Uuid
+  functionA   BusinessFunction @relation("SodRuleFunctionA", fields: [functionAId], references: [id], onDelete: Restrict)
+  functionBId String           @db.Uuid
+  functionB   BusinessFunction @relation("SodRuleFunctionB", fields: [functionBId], references: [id], onDelete: Restrict)
+
+  /// low | medium | high | critical
+  severity            String
+  /// REQUIRED free text -- what the risk actually is. A rule nobody can explain
+  /// is a rule nobody will defend when it fires.
+  rationale           String
+  /// Whoever writes the rule decides who may accept its risk.
+  exceptionWorkflowId String? @db.Uuid
+  enabled             Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  violations SodViolation[]
+  exceptions SodException[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+/// Detected over a snapshot, PER PERSON -- not per account, and not per system.
+/// Cross-account and cross-system by construction, which is the entire value:
+/// the classic real violation is somebody who raises payments with their
+/// ordinary account and approves them with an administrative one, and no
+/// single-system check has ever caught that.
+model SodViolation {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @db.Uuid
+  ruleId   String  @db.Uuid
+  rule     SodRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  personId String  @db.Uuid
+
+  /// The SPECIFIC holdings on each side. "You violate this rule" is not
+  /// actionable; "these three holdings put you on the A side" is.
+  holdingsA  Json
+  holdingsB  Json
+  /// A person with concurrent contracts may legitimately hold both sides, and
+  /// an exception whose stated basis is "these are two separate engagements" is
+  /// a real and reviewable justification -- which lapses when one of them does.
+  contractsA Json @default("[]")
+  contractsB Json @default("[]")
+
+  severity    String
+  /// open | excepted | resolved | unevaluable
+  status      String  @default("open")
+  exceptionId String? @db.Uuid
+
+  firstSeenAt    DateTime
+  lastSeenAt     DateTime
+  lastSnapshotId String   @db.Uuid
+
+  exceptions SodException[]
+
+  @@unique([tenantId, ruleId, personId])
+  @@index([tenantId])
+  @@index([tenantId, status, severity])
+}
+
+/// An exception is a RISK ACCEPTANCE, and the person who accepts a risk should
+/// be the person who carries it. Approved through Automate's workflow engine.
+model SodException {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String       @db.Uuid
+  ruleId      String       @db.Uuid
+  rule        SodRule      @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  personId    String       @db.Uuid
+  violationId String       @db.Uuid
+  violation   SodViolation @relation(fields: [violationId], references: [id], onDelete: Cascade)
+
+  /// Both REQUIRED. A perpetual, unjustified, uncompensated exception is how an
+  /// SoD programme dies quietly.
+  justification       String
+  compensatingControl String
+  /// Where the basis is a pair of concurrent contracts, this records them, and
+  /// the exception lapses automatically when EITHER ends -- ahead of its end
+  /// date. The justification stopped being true.
+  basisContractIds    Json?
+
+  approvalRequestId  String? @db.Uuid
+  approvedByPersonId String? @db.Uuid
+
+  startsAt DateTime
+  /// NOT NULLABLE, and validated against `maxExceptionDays` at save. Null is
+  /// not representable: a perpetual exception is a decision nobody ever
+  /// re-makes.
+  endsAt   DateTime
+
+  /// pending | active | refused | blocked_no_approver | lapsed | revoked
+  status          String  @default("pending")
+  revokedReason   String?
+  revokedByUserId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status, endsAt])
 }

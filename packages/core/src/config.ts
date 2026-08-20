@@ -13,6 +13,36 @@ const schema = z.object({
       'MASTER_KEY must be 32 bytes, base64 encoded',
     ),
   SMTP_URL: z.string().url(),
+  /**
+   * A base64 32-byte key that signs audit checkpoints, and the id it is known
+   * by. Optional, and deliberately so: a deployment that has not configured one
+   * is honest about what its verification is worth -- `checkpointTrust` returns
+   * `unsigned_no_signer_configured` and `integrityStatus` says so on the screen
+   * in words. What is NOT acceptable is the state this key removes: the screen
+   * telling an operator to configure a signing key while no configuration key
+   * for one exists.
+   *
+   * Turning it on for the first time refuses the pre-existing unsigned
+   * checkpoint once, walks from genesis once, raises one `critical` finding and
+   * re-establishes a signed checkpoint. The finding clears on the following run.
+   */
+  GOVERN_CHECKPOINT_KEY: z
+    .string()
+    .refine(
+      (v) => Buffer.from(v, 'base64').length === 32,
+      'GOVERN_CHECKPOINT_KEY must be 32 bytes, base64 encoded',
+    )
+    .optional(),
+  GOVERN_CHECKPOINT_KEY_ID: z.string().min(1).default('govern-checkpoint-1'),
+  /**
+   * Where the weekly anchor receipt goes. A directory for a write-once volume,
+   * or an address. Neither configured means `runAnchorJob` returns
+   * `not_configured` and the integrity screen states, in words, that nothing
+   * protects against the operator -- which is true, and is why `AuditAnchor`'s
+   * own schema comment calls anchoring the only protection against them.
+   */
+  GOVERN_ANCHOR_DIR: z.string().min(1).optional(),
+  GOVERN_ANCHOR_EMAIL: z.string().email().optional(),
   // Password attempts per minute per tenant per IP. Deployment-tuned rather
   // than fixed: a busy shared-NAT site needs headroom, and an end-to-end suite
   // signs in far more often than a person does. The default is the strict
@@ -104,6 +134,11 @@ export interface Config {
   smtpUrl: string;
   authRateLimitMax: number;
   authRateLimitTenantMax: number;
+  /** Null when this deployment signs no checkpoints, which is a supported state. */
+  governCheckpointKey: Buffer | null;
+  governCheckpointKeyId: string;
+  governAnchorDir: string | null;
+  governAnchorEmail: string | null;
   /** false, a hop count, or a comma-separated list of trusted proxies. */
   trustProxy: false | number | string;
   outboundAllowPrivate: boolean;
@@ -144,6 +179,13 @@ export function loadConfig(
     sessionSecret: v.SESSION_SECRET,
     masterKey: Buffer.from(v.MASTER_KEY, 'base64'),
     smtpUrl: v.SMTP_URL,
+    governCheckpointKey:
+      v.GOVERN_CHECKPOINT_KEY === undefined
+        ? null
+        : Buffer.from(v.GOVERN_CHECKPOINT_KEY, 'base64'),
+    governCheckpointKeyId: v.GOVERN_CHECKPOINT_KEY_ID,
+    governAnchorDir: v.GOVERN_ANCHOR_DIR ?? null,
+    governAnchorEmail: v.GOVERN_ANCHOR_EMAIL ?? null,
     authRateLimitMax: v.AUTH_RATE_LIMIT_MAX,
     authRateLimitTenantMax:
       v.AUTH_RATE_LIMIT_TENANT_MAX ?? v.AUTH_RATE_LIMIT_MAX * 10,

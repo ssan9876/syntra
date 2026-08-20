@@ -4,6 +4,7 @@ import { Alert, Button, Field, Panel, SkeletonRows } from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from '../../session/use-api-resource.js';
+import { SodWarningNote } from './CatalogPage.js';
 
 interface FormField {
   key: string;
@@ -16,6 +17,22 @@ interface FormField {
 
 interface ProductForm {
   name: string;
+  /**
+   * The segregation-of-duties warning, carried from the catalog card to the
+   * form (Ruling G-33). The card is where somebody first sees it; this is
+   * where the submit button is, and a warning that vanished on the way here
+   * would be a warning nobody read.
+   */
+  sodWarning?: {
+    violations: {
+      ruleId: string;
+      ruleName: string;
+      severity: string;
+      otherSideHoldings: string[];
+    }[];
+    hasCritical: boolean;
+    hasActiveException: boolean;
+  } | null;
   requestInstructions: string | null;
   formSchema: FormField[];
   durationMode: string;
@@ -167,6 +184,17 @@ export function RequestFormPage() {
                 />
               )}
 
+              {data.sodWarning != null && (
+                <SodWarningNote warning={data.sodWarning} />
+              )}
+
+              {/*
+                Deliberately NOT disabled by the warning above. §14 warns at
+                request time and refuses at eligibility, with a reason the
+                requester can read; a form that greyed this button out would
+                tell somebody they may not have something without ever telling
+                them why.
+              */}
               <Button variant="primary" loading={busy} onClick={submit}>
                 Send the request
               </Button>

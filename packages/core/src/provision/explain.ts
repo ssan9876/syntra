@@ -1,4 +1,6 @@
 import { withTenant } from '@syntra/db';
+import { sodImpact, type PersonHolding } from '../govern/sod.js';
+import { loadSodFactsIfEvaluable } from '../govern/sod-service.js';
 import {
   conditionSchema,
   evaluateCondition,
@@ -412,6 +414,23 @@ export interface RuleImpact {
   wouldGrant: number;
   wouldRevoke: number;
   sample: { personId: string; displayName: string }[];
+  /**
+   * The segregation-of-duties column.
+   *
+   * A birthright rule that creates a violation is a configuration error made
+   * by a person with a console open, and that is who should see it, at that
+   * moment, BEFORE it is saved. Counted as INTRODUCED, never as "in
+   * violation": telling an administrator their edit creates a violation that
+   * was already there teaches them to ignore the column.
+   *
+   * All three are zero when the tenant has no enabled rule or has never built
+   * a readable snapshot. That is "no picture", not "clean" — and the preview
+   * degrades rather than refusing, because a rule editor that would not open
+   * until Govern had run is a governance control making Provision unusable.
+   */
+  sodIntroduced: number;
+  sodIntroducedCritical: number;
+  sodSample: { personId: string; ruleName: string }[];
 }
 
 /** Capped: an impact preview must not return 40,000 names to a browser. */
@@ -671,6 +690,44 @@ export async function previewRuleImpact(
       (h) => matchedIds.has(h.account.personId) && wanted.has(h.entitlementId),
     ).length;
 
+    /**
+     * The segregation-of-duties column, from a PURE function over plain
+     * values.
+     *
+     * `explain.ts` gains no dependency on a running Govern: it reads three
+     * Govern tables through `loadSodFactsIfEvaluable` — which returns null,
+     * cheaply, in the overwhelmingly common tenant with no enabled rule — and
+     * hands their rows to `sodImpact`. What the edit WOULD grant is every
+     * entitlement it names, to every person it matches, expressed as the same
+     * resource identity Govern's collector writes: the target's id, kind
+     * `targetEntitlement`, and the entitlement's id.
+     */
+    const sodFacts = await loadSodFactsIfEvaluable(tx);
+    const sodWouldGrant = new Map<string, PersonHolding[]>();
+    if (sodFacts !== null && grants.size > 0) {
+      for (const person of matched) {
+        sodWouldGrant.set(
+          person.personId,
+          [...grants].map((entitlementId) => ({
+            systemId: targetSystemId,
+            resourceKind: 'targetEntitlement' as const,
+            resourceId: entitlementId,
+            resourceName: entitlementId,
+            contractIds: [],
+          })),
+        );
+      }
+    }
+    const sod =
+      sodFacts === null
+        ? null
+        : sodImpact({
+            rules: sodFacts.rules,
+            holdingsByPerson: sodFacts.holdingsByPerson,
+            wouldGrant: sodWouldGrant,
+            unevaluable: sodFacts.unevaluable,
+          });
+
     return {
       matchedPersons: matched.length,
       totalPersons: persons.length,
@@ -681,6 +738,12 @@ export async function previewRuleImpact(
       wouldGrant: Math.max(0, matched.length * grants.size - alreadyHeld),
       wouldRevoke: revoked.size,
       sample: matched.slice(0, RULE_IMPACT_SAMPLE_SIZE),
+      sodIntroduced: sod?.introduced.length ?? 0,
+      sodIntroducedCritical: sod?.introducedCritical ?? 0,
+      // Capped by the same constant as `sample`, for the same reason.
+      sodSample: (sod?.introduced ?? [])
+        .slice(0, RULE_IMPACT_SAMPLE_SIZE)
+        .map((i) => ({ personId: i.personId, ruleName: i.ruleName })),
     };
   });
 }

@@ -370,10 +370,20 @@ describe('scheduleBackgroundWork - provisioning targets', () => {
 });
 
 describe('startSyncScheduler', () => {
+  // `publicUrl` and the four Govern fields are named because they are READ by
+  // `startSyncScheduler`, and `as unknown as Config` hides that: the fixture
+  // compiled without them while `registerGovernJobs` was handed `undefined`
+  // where it expected `null`, and the failure surfaced as `start()` never being
+  // reached rather than as anything about configuration.
   const config = {
     databaseUrl: process.env.DATABASE_URL ?? '',
     masterKey: Buffer.alloc(32, 7),
     smtpUrl: 'smtp://localhost:1025',
+    publicUrl: 'https://syntra.example.test',
+    governCheckpointKey: null,
+    governCheckpointKeyId: 'govern-checkpoint-1',
+    governAnchorDir: null,
+    governAnchorEmail: null,
   } as unknown as Config;
 
   it('resolves with null rather than rejecting when the scheduler cannot start', async () => {

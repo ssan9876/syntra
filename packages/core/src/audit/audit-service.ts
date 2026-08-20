@@ -26,7 +26,13 @@ interface Hashable extends AuditInput {
  * is serialised with sorted keys. Without this, an event could hash
  * differently on verification than it did on insert.
  */
-function stableStringify(value: unknown): string {
+/**
+ * EXPORTED because Govern's evidence bundles must have a stable digest and
+ * must use THIS serialization, not a second one. A bundle serialised by a
+ * different sorted-key implementation would have a digest that a later reader
+ * recomputing it from the same content could not reproduce.
+ */
+export function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value) ?? 'null';
   }
@@ -42,7 +48,50 @@ function stableStringify(value: unknown): string {
 }
 
 /** Fixed field order, so the same event always produces the same digest. */
-function computeHash(e: Hashable): string {
+/**
+ * The payload exactly as the database will hold it.
+ *
+ * Two known ways a payload changes on its way into `jsonb`, and the digest has
+ * to be taken over the far side of both or the writer and the verifier
+ * disagree about a log nobody touched:
+ *
+ *  - **`undefined`.** Prisma drops the key on write and it returns absent, so
+ *    the key is dropped here too.
+ *  - **Float precision.** Prisma's engine re-serialises a JS number at 16
+ *    significant digits, so `0.1 + 0.2` is written as `0.3` -- the seventeenth
+ *    digit never reaches the database. Non-integers are therefore projected to
+ *    15 significant digits, which is a FIXED POINT of that formatting: a double
+ *    that is the nearest one to a 15-digit decimal has a shortest
+ *    representation of at most 15 digits, so re-formatting it at 16 returns it
+ *    unchanged. Integers are left alone -- `toPrecision(15)` would corrupt
+ *    `Number.MAX_SAFE_INTEGER`, which the engine stores exactly.
+ *
+ * Used for the digest AND for the value written, so the two cannot drift: what
+ * is hashed is literally what is stored.
+ */
+export function canonicalPayload(value: unknown): unknown {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) || !Number.isFinite(value)
+      ? value
+      : Number(value.toPrecision(15));
+  }
+  if (Array.isArray(value)) return value.map(canonicalPayload);
+  if (value === null || typeof value !== 'object' || value instanceof Date) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => [k, canonicalPayload(v)]),
+  );
+}
+
+/**
+ * EXPORTED as `auditEventHash` because Govern verifies the chain INCREMENTALLY
+ * -- from a checkpoint's sequence, seeded with its hash -- while `verifyChain`
+ * walks every event ever recorded with no bound. A second implementation would
+ * drift from the one that wrote the chain, and the drift would report a whole
+ * chain as broken.
+ */
+export function auditEventHash(e: Hashable): string {
   const canonical = JSON.stringify([
     e.tenantId,
     e.sequence,
@@ -76,8 +125,16 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
   const prevHash = last?.hash ?? GENESIS_HASH;
   const occurredAt = new Date();
 
-  const hash = computeHash({
+  // Hashed AND written, so the digest is taken over exactly the bytes the
+  // database ends up holding. Rejecting an awkward value at the door would be
+  // the other resolution and is worse: `exactOptionalPropertyTypes` makes
+  // `{ foo: x ?? undefined }` an ordinary idiom across three subsystems, and a
+  // float nobody rounded on purpose would fail the write for the hash's sake.
+  const payload = canonicalPayload(input.payload) as Record<string, unknown>;
+
+  const hash = auditEventHash({
     ...input,
+    payload,
     tenantId,
     sequence,
     occurredAt,
@@ -95,7 +152,7 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
       targetId: input.targetId,
       outcome: input.outcome,
       sourceIp: input.sourceIp,
-      payload: input.payload as never,
+      payload: payload as never,
       prevHash,
       hash,
     },
@@ -122,7 +179,7 @@ export async function verifyChain(tx: TenantClient): Promise<ChainResult> {
       return { valid: false, brokenAtSequence: e.sequence };
     }
 
-    const recomputed = computeHash({
+    const recomputed = auditEventHash({
       tenantId,
       sequence: e.sequence,
       occurredAt: e.occurredAt,

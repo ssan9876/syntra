@@ -70,6 +70,13 @@ export type RefusalReason =
   | 'invalid_form'
   | 'duration_not_permitted'
   | 'not_permitted_on_behalf'
+  /**
+   * Granting this would create a CRITICAL segregation-of-duties violation.
+   * Only `critical` refuses; below that the approver is told and approving
+   * records an acknowledgement. Blocking on a lower severity would freeze
+   * somebody for a configuration error somebody else made.
+   */
+  | 'sod_violation'
   | 'workflow_disabled';
 
 /**

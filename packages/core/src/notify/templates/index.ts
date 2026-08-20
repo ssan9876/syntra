@@ -153,6 +153,45 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nThere are {{count}} things waiting for you:\n\n{{lines}}\n\nAnything urgent — a failure, a block, or a sweep needing confirmation — is sent to you immediately and is never in this summary.',
     html: '<p>Hello {{displayName}},</p><p>There are {{count}} things waiting for you:</p><pre>{{lines}}</pre><p>Anything urgent — a failure, a block, or a sweep needing confirmation — is sent to you immediately and is never in this summary.</p>',
   },
+  // ---- Govern (spec sections 12, 17, 19) ----------------------------------
+  //
+  // Every `var` these render is a NAME, a count or a date. Never an id: a UUID
+  // in a notification is "the feature works and no human can use it".
+  'govern-review-assigned': {
+    subject: '{{itemCount}} access reviews are waiting for you at {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe access review "{{campaignName}}" has {{itemCount}} items for you to decide, and closes on {{dueAt}}.\n\n{{reviewUrl}}\n\nEach item says what the access is, how the person got it, and when it was last confirmed. Certifying an item records that you decided to keep it, against the facts shown, at the time you clicked. It does not say the access is appropriate \u2014 only that you looked.',
+    html: '<p>Hello {{displayName}},</p><p>The access review <strong>{{campaignName}}</strong> has {{itemCount}} items for you to decide, and closes on {{dueAt}}.</p><p><a href="{{reviewUrl}}">{{reviewUrl}}</a></p><p>Each item says what the access is, how the person got it, and when it was last confirmed. Certifying an item records that you decided to keep it, against the facts shown, at the time you clicked. It does not say the access is appropriate \u2014 only that you looked.</p>',
+  },
+  'govern-review-reminder': {
+    subject: '{{itemCount}} access reviews still waiting \u2014 {{campaignName}}',
+    text: 'Hello {{displayName}},\n\n{{itemCount}} items in "{{campaignName}}" are still undecided. The review closes on {{dueAt}}.\n\n{{reviewUrl}}\n\nNothing is certified and nothing is removed if you do not respond. The items are recorded as undecided, they are listed against your name on the campaign report, and somebody has to decide them by hand afterwards.',
+    html: '<p>Hello {{displayName}},</p><p>{{itemCount}} items in <strong>{{campaignName}}</strong> are still undecided. The review closes on {{dueAt}}.</p><p><a href="{{reviewUrl}}">{{reviewUrl}}</a></p><p>Nothing is certified and nothing is removed if you do not respond. The items are recorded as undecided, they are listed against your name on the campaign report, and somebody has to decide them by hand afterwards.</p>',
+  },
+  'govern-review-escalated': {
+    subject: 'An access review was escalated past you \u2014 {{campaignName}}',
+    text: 'Hello {{displayName}},\n\n{{itemCount}} items in "{{campaignName}}" have been escalated to {{escalatedTo}} because they were still undecided.\n\nYou have NOT been removed as a reviewer and you can still decide them: {{reviewUrl}}\n\nYou are being told because decisions attributed to you should never be decisions somebody else made.',
+    html: '<p>Hello {{displayName}},</p><p>{{itemCount}} items in <strong>{{campaignName}}</strong> have been escalated to {{escalatedTo}} because they were still undecided.</p><p>You have <strong>not</strong> been removed as a reviewer and you can still decide them: <a href="{{reviewUrl}}">{{reviewUrl}}</a></p><p>You are being told because decisions attributed to you should never be decisions somebody else made.</p>',
+  },
+  'govern-review-reassigned': {
+    subject: 'Access reviews have moved to you \u2014 {{campaignName}}',
+    text: 'Hello {{displayName}},\n\n{{itemCount}} items in "{{campaignName}}" have been reassigned to you, because {{previousReviewer}} can no longer decide them.\n\n{{reviewUrl}}',
+    html: '<p>Hello {{displayName}},</p><p>{{itemCount}} items in <strong>{{campaignName}}</strong> have been reassigned to you, because {{previousReviewer}} can no longer decide them.</p><p><a href="{{reviewUrl}}">{{reviewUrl}}</a></p>',
+  },
+  'govern-campaign-blocked-item': {
+    subject: 'An access review item has no reviewer \u2014 {{campaignName}}',
+    text: 'Hello {{displayName}},\n\n{{itemCount}} items in "{{campaignName}}" resolved to nobody who can decide them, and the fallback resolved to nobody either.\n\n{{campaignUrl}}\n\nThey will not auto-decide and they will not go away. Somebody has to name a reviewer, or the scope has to change.',
+    html: '<p>Hello {{displayName}},</p><p>{{itemCount}} items in <strong>{{campaignName}}</strong> resolved to nobody who can decide them, and the fallback resolved to nobody either.</p><p><a href="{{campaignUrl}}">{{campaignUrl}}</a></p><p>They will not auto-decide and they will not go away. Somebody has to name a reviewer, or the scope has to change.</p>',
+  },
+  'govern-finding-critical': {
+    subject: 'A critical governance finding was raised at {{tenantName}}',
+    text: 'Hello {{displayName}},\n\n{{findingKind}}: {{summary}}\n\n{{findingUrl}}\n\nThis is not part of a digest and it is not batched. It was sent the moment it was found.',
+    html: '<p>Hello {{displayName}},</p><p><strong>{{findingKind}}</strong>: {{summary}}</p><p><a href="{{findingUrl}}">{{findingUrl}}</a></p><p>This is not part of a digest and it is not batched. It was sent the moment it was found.</p>',
+  },
+  'govern-exception-expiring': {
+    subject: 'An SoD exception expires on {{endsAt}} \u2014 {{ruleName}}',
+    text: 'Hello {{displayName}},\n\nThe exception to "{{ruleName}}" for {{beneficiaryName}} expires on {{endsAt}}.\n\nRenew it here, pre-filled with the existing justification: {{renewUrl}}\n\nNothing is removed when it lapses. The violation reopens and everybody involved is told.',
+    html: '<p>Hello {{displayName}},</p><p>The exception to <strong>{{ruleName}}</strong> for {{beneficiaryName}} expires on {{endsAt}}.</p><p><a href="{{renewUrl}}">Renew it</a>, pre-filled with the existing justification.</p><p>Nothing is removed when it lapses. The violation reopens and everybody involved is told.</p>',
+  },
 } satisfies Record<string, Template>;
 
 export type TemplateName = keyof typeof TEMPLATES;

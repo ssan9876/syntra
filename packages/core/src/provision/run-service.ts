@@ -11,7 +11,10 @@ import { recordEvent } from '../audit/audit-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { resolveInFlightActions, valuesOf } from './apply.js';
 import { desiredState } from './desired.js';
-import { evaluateProvisionGuard } from './guard.js';
+import { evaluateProvisionGuard, type GuardVerdict } from './guard.js';
+import { loadRevocationOrders } from '../govern/revocation-service.js';
+import { sodImpact, type PersonHolding } from '../govern/sod.js';
+import { loadSodFactsIfEvaluable } from '../govern/sod-service.js';
 import { planActions } from './plan.js';
 import { reconcile, unprocessableScope } from './reconcile.js';
 import { conditionSchema } from './condition.js';
@@ -700,6 +703,31 @@ export async function previewProvisionRun(
       };
     });
 
+    /**
+     * Govern's open revocation orders for this target, as plain values.
+     *
+     * Read here rather than inside phase 5 for the same reason the SoD facts
+     * are: a different subsystem's tables, its own failure meaning, and a
+     * budget of its own. Provision never queries Govern beyond this one read,
+     * and what comes back is an array of plain values the planner consumes.
+     */
+    const revocationOrders = await withTenant(tenantId, (tx) =>
+      loadRevocationOrders(tx, targetSystemId),
+    );
+
+    /**
+     * Phase 5a. The segregation-of-duties facts, in a short transaction of
+     * their own.
+     *
+     * Not folded into phase 5: that transaction has its own budget and its own
+     * failure meaning, and this read is over Govern's tables rather than
+     * Provision's. Null — cheaply, on one `count` — in the overwhelmingly
+     * common tenant with no enabled SoD rule, and null again in a tenant whose
+     * Govern has never built a readable snapshot. A run must never fail to
+     * preview because a governance subsystem has not run yet.
+     */
+    const sodFacts = await withTenant(tenantId, (tx) => loadSodFactsIfEvaluable(tx));
+
     // Phase 6. Pure computation. No transaction, no I/O.
     const horizon = new Date(now.getTime() + prepared.target.preHireDays * MS_PER_DAY);
 
@@ -919,6 +947,7 @@ export async function previewProvisionRun(
       contractsByPerson,
       syntraUserByPerson,
       pairedDirectorySource: prepared.target.pairedDirectorySourceId !== null,
+      revocationOrders,
       ladder: {
         entitlementRevocationDelayDays: prepared.target.entitlementRevocationDelayDays,
         disableGraceDays: prepared.target.disableGraceDays,
@@ -946,7 +975,7 @@ export async function previewProvisionRun(
      * for, and confirmation is a person reading numbers, which a scheduler
      * cannot do.
      */
-    const verdict = evaluateProvisionGuard({
+    const guardVerdict = evaluateProvisionGuard({
       actions,
       thresholds: {
         createAccountThresholdPercent: prepared.target.createAccountThresholdPercent,
@@ -978,6 +1007,89 @@ export async function previewProvisionRun(
       previousPersonsWithActiveContract: snapshot.previousPersons,
       hasEverApplied: snapshot.hasEverApplied,
     });
+
+    /**
+     * The segregation-of-duties axis of the guard (spec section 5).
+     *
+     * The plan's OWN actions, not the tenant's standing violations: a run is
+     * confirmed for what it would INTRODUCE, not for what is already true. An
+     * administrator told to confirm a violation that predates the run learns
+     * to confirm without reading, which costs more than the axis buys.
+     *
+     * `sodImpact` is pure and takes plain values, so `run-service.ts` gains no
+     * dependency on a running Govern — phase 5a read three Govern tables and
+     * this hands their rows to a function.
+     *
+     * **It never refuses and never makes a person unprocessable.** A person
+     * whose contract entitles them to both sides is not doing anything wrong,
+     * and refusing to provision them would mean they cannot do their job
+     * because of a rule somebody else wrote: the unprocessable-person trap
+     * Provision's whole exception model exists to avoid, inverted and produced
+     * by a governance control. So this only ever ADDS a reason and only ever
+     * sets `requiresConfirmation` — a hard refusal already standing is left
+     * hard, and a clean verdict becomes a confirmable one, never a refusal.
+     */
+    const sodWouldGrant = new Map<string, PersonHolding[]>();
+    if (sodFacts !== null) {
+      // Built once. A `find` per granted action is quadratic in the plan, and
+      // a plan is exactly the thing that gets large.
+      const entitlementNames = new Map(
+        snapshot.entitlements.map((e) => [e.id, e.displayName]),
+      );
+      for (const action of actions) {
+        if (action.actionType !== 'grant_entitlement') continue;
+        if (action.entitlementId === null) continue;
+        // Segregation of duties is per PERSON. An action carrying no person —
+        // an orphan account's — has no subject to evaluate, and the hole it
+        // leaves is already a Govern finding in its own right.
+        if (action.personId === null) continue;
+        const personId = action.personId;
+        const list = sodWouldGrant.get(personId) ?? [];
+        list.push({
+          // The same resource identity Govern's collector writes for a target
+          // entitlement holding: the target's id, `targetEntitlement`, and the
+          // entitlement's id. A different spelling here would evaluate every
+          // rule against nothing and report every plan clean.
+          systemId: targetSystemId,
+          resourceKind: 'targetEntitlement',
+          resourceId: action.entitlementId,
+          resourceName: entitlementNames.get(action.entitlementId) ?? action.entitlementId,
+          contractIds: [],
+        });
+        sodWouldGrant.set(personId, list);
+      }
+    }
+    const sod =
+      sodFacts === null
+        ? null
+        : sodImpact({
+            rules: sodFacts.rules,
+            holdingsByPerson: sodFacts.holdingsByPerson,
+            wouldGrant: sodWouldGrant,
+            unevaluable: sodFacts.unevaluable,
+          });
+    const sodReasons: string[] = [];
+    if (sod !== null && sod.introducedCritical > 0) {
+      const named = sod.introduced.filter((i) => i.severity === 'critical');
+      sodReasons.push(
+        `this run would introduce ${sod.introducedCritical} critical segregation-of-duties ` +
+          `violation${sod.introducedCritical === 1 ? '' : 's'}: ` +
+          [...new Set(named.slice(0, 5).map((i) => i.ruleName))].join(', '),
+      );
+    }
+    const verdict: GuardVerdict =
+      sodReasons.length === 0
+        ? guardVerdict
+        : guardVerdict.blocked
+          ? {
+              blocked: true,
+              // A run refused OUTRIGHT stays refused outright. Segregation of
+              // duties may raise a clean run to "confirm first"; it may never
+              // lower an unevaluable directory to "confirm and proceed".
+              requiresConfirmation: guardVerdict.requiresConfirmation,
+              reasons: [...guardVerdict.reasons, ...sodReasons],
+            }
+          : { blocked: true, requiresConfirmation: true, reasons: sodReasons };
 
     const exceptions = [
       ...desired
@@ -1144,6 +1256,9 @@ export async function previewProvisionRun(
           grantId:
             a.attributedGrantIds.length === 1 ? a.attributedGrantIds[0]! : null,
           requiresConfirmation: a.requiresConfirmation,
+          // The Govern order this action executes, so the audit event at
+          // apply time can name the human, the campaign and the decision.
+          revocationOrderId: a.revocationOrderId,
           message: a.message,
           // `planActions` already returned these sorted by ACTION_ORDER, and
           // this is what preserves that through the write. `createdAt` cannot:
@@ -1154,6 +1269,22 @@ export async function previewProvisionRun(
           sequence: index,
         })),
       });
+
+      // The orders this plan consumed are `planned`, so the next run does
+      // not propose them again. A one-shot term is consumed once.
+      const plannedOrderIds = [
+        ...new Set(
+          actions
+            .map((a) => a.revocationOrderId)
+            .filter((id): id is string => id !== null),
+        ),
+      ];
+      if (plannedOrderIds.length > 0) {
+        await tx.revocationOrder.updateMany({
+          where: { id: { in: plannedOrderIds }, status: 'open' },
+          data: { status: 'planned', plannedAt: new Date() },
+        });
+      }
 
       await tx.provisionException.createMany({
         data: exceptions.map((e) => ({

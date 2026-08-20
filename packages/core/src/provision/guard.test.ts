@@ -21,6 +21,7 @@ const action = (
   attributedRuleIds: [],
   attributedGrantIds: [],
   requiresConfirmation: false,
+  revocationOrderId: null,
   message: null,
 });
 

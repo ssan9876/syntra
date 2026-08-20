@@ -75,6 +75,7 @@ const plan = (over: Partial<Parameters<typeof planActions>[0]> = {}) =>
     syntraUserByPerson: new Map(),
     pairedDirectorySource: false,
     ladder,
+    revocationOrders: [],
     now: NOW,
     ...over,
   });
@@ -367,6 +368,7 @@ describe('planActions — the leaver and the grace ladder', () => {
       syntraUserByPerson: new Map(),
       pairedDirectorySource: false,
       ladder,
+      revocationOrders: [],
       now: day('2026-03-01'),
     });
     expect(types(actions)).toEqual(['revoke_entitlement', 'disable_account']);

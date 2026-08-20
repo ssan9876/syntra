@@ -23,6 +23,7 @@ import {
   recordDecision,
   resourcesManagedBy,
   searchVisibleProducts,
+  sodImpactForProducts,
   submitRequest,
   visibleProducts,
   type Scheduler,
@@ -129,6 +130,44 @@ export async function registerAutomatePortalRoutes(
       tx.approvalStage.groupBy({ by: ['workflowId'], _count: { _all: true } }),
     );
     const hasStages = new Set(stageCounts.map((c) => c.workflowId));
+
+    /**
+     * The submission-time segregation-of-duties warning (spec section 14).
+     *
+     * SET-BASED over the products in view, never `sodImpactForGrant` per
+     * product in a loop over the catalog: one call loads the subject's
+     * holdings and the tenant's rules ONCE, where forty products would
+     * otherwise cost eighty queries to render a warning.
+     *
+     * It informs and does not gate. Nothing here filters the product out or
+     * marks it unrequestable — the refusal, when there is one, happens at
+     * eligibility with a reason the requester can read, and a catalog that hid
+     * the entry would tell somebody they may not have something without ever
+     * telling them why.
+     */
+    const sodWarnings = await request.db(async (tx) => {
+      const grants = await tx.productGrant.findMany({
+        where: { productId: { in: filtered.map((p) => p.id) } },
+        select: {
+          productId: true,
+          targetSystemId: true,
+          resourceType: true,
+          resourceId: true,
+        },
+      });
+      const byProduct = new Map<string, typeof grants>();
+      for (const grant of grants) {
+        const list = byProduct.get(grant.productId) ?? [];
+        list.push(grant);
+        byProduct.set(grant.productId, list);
+      }
+      return sodImpactForProducts(
+        tx,
+        subjectPersonId,
+        filtered.map((p) => ({ id: p.id, grants: byProduct.get(p.id) ?? [] })),
+      );
+    });
+
     return {
       products: filtered.map((p) => ({
         id: p.id,
@@ -141,6 +180,9 @@ export async function registerAutomatePortalRoutes(
         durationMode: p.durationMode,
         maxDurationDays: p.maxDurationDays,
         needsApproval: hasStages.has(p.workflowId),
+        // Null when there is nothing to say, which is the overwhelmingly
+        // common case and the one the card must not decorate.
+        sodWarning: sodWarnings.get(p.id) ?? null,
       })),
     };
   });
@@ -180,8 +222,19 @@ export async function registerAutomatePortalRoutes(
     const grants = await request.db((tx) =>
       tx.productGrant.findMany({ where: { productId: id } }),
     );
+    // The same warning as the catalog card, at the moment of submission
+    // (Ruling G-33). The card is where somebody first sees it; this is where
+    // the submit button is, and a warning that vanished on the way to the
+    // form would be a warning nobody read.
+    const sodWarning = await request.db(
+      async (tx) =>
+        (
+          await sodImpactForProducts(tx, subjectPersonId, [{ id, grants }])
+        ).get(id) ?? null,
+    );
     return {
       name: product.name,
+      sodWarning,
       requestInstructions: product.requestInstructions,
       formSchema: product.formSchema,
       durationMode: product.durationMode,

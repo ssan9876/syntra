@@ -298,6 +298,32 @@ export interface PlannedAction {
    */
   requiresConfirmation: boolean;
   message: string | null;
+  /**
+   * The Govern revocation order this action executes, when one caused it.
+   *
+   * Null for every action reconciliation proposed on its own. It is written
+   * onto the `ProvisionAction` row so the audit event at apply time can name a
+   * human, a campaign and a decision — Ruling G1's condition, without which
+   * the ruling does not hold: a record that cannot show a human decision is
+   * indistinguishable from the inference the remit rule forbids.
+   */
+  revocationOrderId: string | null;
+}
+
+/**
+ * A one-shot negative term Govern's campaigns produce, consumed by the plan
+ * stage. PLAIN VALUES — Provision never queries Govern, and the three
+ * provenance fields are denormalised here so that the audit event written when
+ * this action is applied can name a human, a campaign and a decision.
+ */
+export interface RevocationOrderFacts {
+  orderId: string;
+  accountId: string;
+  entitlementId: string;
+  decidedByPersonName: string;
+  campaignName: string | null;
+  campaignDecisionId: string | null;
+  reason: string;
 }
 
 /**

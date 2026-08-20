@@ -12,6 +12,21 @@ import type { ResourceType } from './types.js';
 export type AutomateTemplate = Extract<TemplateName, `automate-${string}`>;
 
 /**
+ * Every template the OUTBOX can carry. `AutomateTemplate` stays as it is for
+ * Automate's own code; this is the wider one the outbox is typed on, because
+ * the outbox is a shared table and Govern writes into it too.
+ *
+ * Written as an `Extract` over two prefixes rather than as `TemplateName`
+ * itself, deliberately: `welcome` and `password-reset` are sent directly by
+ * Core's own paths and must not become enqueueable by accident, so the prefixes
+ * remain the allow-list and a third subsystem has to add itself here on purpose.
+ */
+export type OutboxTemplate = Extract<
+  TemplateName,
+  `automate-${string}` | `govern-${string}`
+>;
+
+/**
  * Failures, blocks and confirmations are never digested, regardless of
  * preference.
  *
@@ -19,20 +34,30 @@ export type AutomateTemplate = Extract<TemplateName, `automate-${string}`>;
  * the traffic that says something is stuck, and a stuck request that arrives
  * tomorrow morning in a summary is a stuck request nobody acted on today.
  */
-export const NEVER_DIGESTED: readonly AutomateTemplate[] = [
+export const NEVER_DIGESTED: readonly OutboxTemplate[] = [
   'automate-fulfilment-failed',
   'automate-partially-fulfilled',
   'automate-awaiting-fulfilment-sla',
   'automate-blocked-no-approver',
   'automate-sweep-confirmation',
+  // Section 17: a `critical` governance finding is notified IMMEDIATELY and is
+  // never digested. That sentence is in the spec, in the template's own body
+  // ("It was sent the moment it was found") and in `verifyIncremental`'s
+  // comment -- and until this entry existed it was enforced by none of them.
+  // The digest path is exactly where an urgent message silently rejoins the
+  // queue: `enqueueOutbox` writes `digest: true` for any digestible template
+  // whose recipient chose a daily summary, and an audit chain that does not
+  // hold, arriving in tomorrow morning's summary, is an audit chain nobody
+  // acted on today.
+  'govern-finding-critical',
 ];
 
-export function isDigestible(template: AutomateTemplate): boolean {
+export function isDigestible(template: OutboxTemplate): boolean {
   return !NEVER_DIGESTED.includes(template);
 }
 
 export interface OutboxDraft {
-  template: AutomateTemplate;
+  template: OutboxTemplate;
   to: string;
   vars: Record<string, string>;
   requestId: string | null;
