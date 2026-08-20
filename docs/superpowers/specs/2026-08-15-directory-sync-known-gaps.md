@@ -198,6 +198,45 @@ The stored `ldapConfigSchema` default is unchanged and still wrong for Active
 Directory, because changing it breaks OpenLDAP, which has no `objectCategory`. A
 source created over the API without a `userFilter` still gets the OpenLDAP-shaped one.
 
+## The LDAP test fixture is shared mutable state across parallel workers
+
+Diagnosed while fixing the unresolvable-member-DN defect above, and not yet fixed.
+
+Seven test files read the one OpenLDAP container at `localhost:1389`, and the
+suite runs up to eight worker processes in parallel. Each worker gets a database
+of its own — `vitest.config.ts` shards them precisely so two workers cannot
+truncate each other's tables — but there is one directory and no equivalent
+isolation for it.
+
+`scenarios.test.ts` is the only writer. It moves `uid=jdoe` between organizational
+units, replaces `cn=Nurses`' member list, and adds and removes whole entries
+(`nhaddad`, `tberg`, `cn=Trainers`, `cn=Ward`). Every one of those is visible to
+the six readers, whose sources are scoped to `dc=acme,dc=test` — the whole tree.
+A reader that previews twice around one of those windows sees an object appear or
+vanish and proposes a `create_user` or a `deactivate_user` for it.
+
+Observed twice: `scenarios.test.ts`'s organizational-unit move failing in the
+whole-repo run (that one turned out to be the product defect above), and
+`run-service.test.ts > proposes nothing on a second run over an unchanged
+directory` proposing a `deactivate_user`. Both files pass alone.
+
+Two candidate fixes, neither yet chosen:
+
+- **A marker attribute the readers filter out.** Every transient entry
+  `scenarios.test.ts` creates carries a marker, and the other six sources add
+  `(!(<marker>))` to their filters. Contained — one config line per reader — and
+  it leaves `scenarios.test.ts`'s own source reading everything, which is what
+  that file is for. Does not cover the mutations to entries that permanently
+  exist (`jdoe`'s DN, `cn=Nurses`' members), though the unresolvable-member fix
+  above has already made the worst of those harmless.
+- **A subtree per file.** Each file gets an organizational unit of its own and
+  scopes its source to it. Complete, and correspondingly larger: `seed.ldif` and
+  every file's `config` change together.
+
+Until one is done, a whole-repo run can fail in a sync test for reasons that have
+nothing to do with the code under test, and the failure will not reproduce in
+isolation.
+
 ## Smaller items, recorded but not urgent
 
 - ~~`create_user` / `create_group` / `create_org_unit` write only hardcoded columns and
