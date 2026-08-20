@@ -148,7 +148,16 @@ describe('diffObjects', () => {
     expect(changes).toEqual([]);
   });
 
-  it('proposes update_group for a matched but inactive group', () => {
+  it('proposes reactivate_group — NOT update_group — for a group that came back', () => {
+    // This asserted `update_group` for a long time, and `update_group` could
+    // never apply. `status` is not a field a mapping may write — if it were, a
+    // source attribute could deactivate people — so `rejectUnassignable`
+    // refused the change on every run, forever, and the group stayed dead with
+    // its memberships intact and granting nothing.
+    //
+    // Deactivation is chosen over deletion precisely because it is
+    // recoverable. A group that cannot come back is deleted in all but name,
+    // and `reactivate_user` has been the working half of this pair all along.
     const changes = diffObjects(
       [
         {
@@ -161,7 +170,7 @@ describe('diffObjects', () => {
       new Map([['g1', { name: 'Nurses' }]]),
     );
     expect(changes).toHaveLength(1);
-    expect(changes[0]!.changeType).toBe('update_group');
+    expect(changes[0]!.changeType).toBe('reactivate_group');
     expect(changes[0]!.after).toEqual({ status: 'active' });
   });
 

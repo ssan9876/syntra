@@ -361,6 +361,27 @@ describe('a member DN that resolves to nothing', () => {
   });
 });
 
+describe('a group that comes back', () => {
+  it('is reactivated, the way a returning person is', async () => {
+    await sync();
+    const nurses = await withTenant(tenantId, (tx) =>
+      tx.group.findFirstOrThrow({ where: { name: 'Nurses' } }),
+    );
+
+    // Deactivated as a run would deactivate it — the group vanished from the
+    // source once — and then the source still has it on the next run.
+    await withTenant(tenantId, (tx) =>
+      tx.group.update({ where: { id: nurses.id }, data: { status: 'inactive' } }),
+    );
+
+    await sync();
+    const after = await withTenant(tenantId, (tx) =>
+      tx.group.findUniqueOrThrow({ where: { id: nurses.id } }),
+    );
+    expect(after.status).toBe('active');
+  });
+});
+
 describe('a membership change', () => {
   it('adds and removes members to match the source', async () => {
     await sync();

@@ -6,6 +6,7 @@ export type ChangeType =
   | 'update_user'
   | 'deactivate_user'
   | 'reactivate_user'
+  | 'reactivate_group'
   | 'create_group'
   | 'update_group'
   | 'deactivate_group'
@@ -92,10 +93,18 @@ export function diffObjects(
     // A matched object that is inactive has reappeared in the source. Propose
     // restoring it; nothing is applied without an explicit apply step.
     // Org units have no status column, so only users and groups can be reactivated.
+    //
+    // `reactivate_group`, NOT `update_group`. Status is not a field a mapping
+    // may write — `rejectUnassignable` refuses it, and rightly, or a source
+    // attribute could deactivate people — so routing a group's return through
+    // the generic update meant the change failed on every run, forever, and
+    // the group stayed dead with its memberships intact and granting nothing.
+    // Deactivation is chosen over deletion precisely because it is
+    // recoverable; a group that cannot come back is deleted in all but name.
     if (existing.status !== 'active' && object.objectType !== 'orgUnit') {
       changes.push({
         changeType:
-          object.objectType === 'user' ? 'reactivate_user' : VERB[object.objectType].update,
+          object.objectType === 'user' ? 'reactivate_user' : 'reactivate_group',
         targetType,
         targetId: existing.id,
         sourceAnchor: object.anchor,

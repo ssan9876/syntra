@@ -246,6 +246,22 @@ async function performChange(
       return { outcome: 'success' };
     }
 
+    case 'reactivate_group': {
+      // No session revocation to mirror `reactivate_user`'s: a group holds no
+      // sessions. The memberships were never removed on deactivation, so the
+      // group comes back granting exactly what it granted before — which is
+      // the whole reason deactivation is not a delete.
+      await tx.group.update({
+        where: { id: change.targetId! },
+        data: { status: 'active', statusReason: null },
+      });
+      await tx.syncChange.update({
+        where: { id: change.id },
+        data: { status: 'applied' },
+      });
+      return { outcome: 'success' };
+    }
+
     case 'create_group': {
       const created = await tx.group.create({
         data: {
