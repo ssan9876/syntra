@@ -34,14 +34,23 @@ const fields = (value: unknown) => (value ?? {}) as Record<string, string>;
  * The object type an `update_*` change writes to. Only these three pass a
  * mapped blob straight into an `update`, so only these three need checking.
  */
-const UPDATES: Record<string, ObjectType> = {
+const MAPPED_WRITES: Record<string, ObjectType> = {
   update_user: 'user',
   update_group: 'group',
   update_org_unit: 'orgUnit',
+  // CREATES TOO. They cherry-pick named columns, so an unassignable field was
+  // never a write risk here the way it is on `update_*` — it was a SILENCE
+  // risk. The administrator reviewed a diff that named the field, applied it,
+  // and got a row without it, with nothing anywhere saying so. A run that
+  // diverges from the diff somebody approved has to say it diverged.
+  create_user: 'user',
+  create_group: 'group',
+  create_org_unit: 'orgUnit',
 };
 
 /**
- * Refuses an update carrying a field a mapping was never allowed to write.
+ * Refuses a create or an update carrying a field a mapping was never allowed
+ * to write.
  *
  * `setMappings` rejects these at configuration time, which is where an
  * administrator can see the message. This is the second gate, for a mapping
@@ -56,7 +65,7 @@ async function rejectUnassignable(
   change: ChangeRow,
   after: Record<string, string>,
 ): Promise<ApplyResult | undefined> {
-  const objectType = UPDATES[change.changeType];
+  const objectType = MAPPED_WRITES[change.changeType];
   if (!objectType) return undefined;
 
   const rejected = unassignableFields(objectType, Object.keys(after));

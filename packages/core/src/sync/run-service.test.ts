@@ -565,6 +565,40 @@ describe('applyChange membership failure paths', () => {
     expect(events[0]!.outcome).toBe('success');
   });
 
+  it('refuses a CREATE carrying a field no mapping may write, and creates nobody', async () => {
+    // The create paths cherry-pick named columns, so an unassignable field was
+    // never going to be written — it was going to be dropped in silence. The
+    // administrator reviewed a diff naming that field and would have got a row
+    // without it. Failing the change is what makes the divergence visible.
+    const { updated, ghost } = await withTenant(tenantId, async (tx) => {
+      const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });
+      const change = await tx.syncChange.create({
+        data: {
+          tenantId,
+          runId: newRun.id,
+          changeType: 'create_user',
+          targetType: 'User',
+          targetId: null,
+          sourceAnchor: 'anchor-for-a-user-that-does-not-exist',
+          after: { login: 'ghost', status: 'inactive' },
+          status: 'proposed',
+        },
+      });
+
+      await applyChange(tx, change, sourceId, newRun.id);
+
+      return {
+        updated: await tx.syncChange.findUnique({ where: { id: change.id } }),
+        ghost: await tx.user.findFirst({ where: { login: 'ghost' } }),
+      };
+    });
+
+    expect(updated!.status).toBe('failed');
+    expect(updated!.message).toMatch(/status/);
+    // Nobody at all: a refusal that still creates the row is not a refusal.
+    expect(ghost).toBeNull();
+  });
+
   it('refuses an update carrying a field no mapping may write', async () => {
     // A mapping stored before setMappings started rejecting these. update_user
     // passes the mapped blob straight into update({ data }), so without this
