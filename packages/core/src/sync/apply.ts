@@ -31,6 +31,49 @@ interface ApplyResult {
 const fields = (value: unknown) => (value ?? {}) as Record<string, string>;
 
 /**
+ * Keys the DIFF puts in `after` that no mapping may target and no `update`
+ * may receive.
+ *
+ * `parentAnchor` is where the directory says the object sits. It travels in
+ * `after` so the run's review shows a move as one before-and-after line like
+ * any other change, but it names a source anchor rather than a column, so it
+ * has to be translated to a local id and taken out before Prisma sees the
+ * blob. `ASSIGNABLE_FIELDS` deliberately does not list it: a mapping rule
+ * pointing at it would let a source attribute rewrite the hierarchy.
+ */
+const STRUCTURAL = ['parentAnchor'] as const;
+
+const writable = (after: Record<string, string>): Record<string, string> => {
+  const copy = { ...after };
+  for (const key of STRUCTURAL) delete copy[key];
+  return copy;
+};
+
+/**
+ * Turns the anchor of an organizational unit into its local row id.
+ *
+ * An empty anchor is the directory saying "at the top of what you asked me
+ * for", which is a null placement. An anchor naming a unit this tenant has no
+ * row for returns undefined, and every caller treats that as "change nothing":
+ * the unit is almost always one whose own `create_org_unit` failed in the same
+ * run, and detaching a person because we could not create their department is
+ * the mistake this subsystem exists not to make.
+ */
+async function resolveUnit(
+  tx: TenantClient,
+  sourceId: string,
+  anchor: string | undefined,
+): Promise<string | null | undefined> {
+  if (anchor === undefined) return undefined;
+  if (anchor === '') return null;
+  const unit = await tx.orgUnit.findFirst({
+    where: { sourceId, sourceAnchor: anchor },
+    select: { id: true },
+  });
+  return unit?.id;
+}
+
+/**
  * The object type an `update_*` change writes to. Only these three pass a
  * mapped blob straight into an `update`, so only these three need checking.
  */
@@ -68,7 +111,7 @@ async function rejectUnassignable(
   const objectType = MAPPED_WRITES[change.changeType];
   if (!objectType) return undefined;
 
-  const rejected = unassignableFields(objectType, Object.keys(after));
+  const rejected = unassignableFields(objectType, Object.keys(writable(after)));
   if (rejected.length === 0) return undefined;
 
   await tx.syncChange.update({
@@ -129,12 +172,19 @@ async function performChange(
 
   switch (change.changeType) {
     case 'create_user': {
+      const unit = await resolveUnit(tx, sourceId, after.parentAnchor);
       const created = await tx.user.create({
         data: {
           tenantId,
           login: after.login ?? '',
           email: after.email ?? '',
           displayName: after.displayName ?? after.login ?? '',
+          // Spread rather than assigned: `undefined` means the unit could not
+          // be resolved, and Prisma would take an explicit `orgUnitId:
+          // undefined` as "leave it null" — the same value it takes for a
+          // person the directory genuinely places nowhere. Those are different
+          // facts and this is the only place they can still be told apart.
+          ...(unit === undefined ? {} : { orgUnitId: unit }),
           sourceId,
           sourceAnchor: change.sourceAnchor,
         },
@@ -147,9 +197,13 @@ async function performChange(
     }
 
     case 'update_user': {
+      const unit = await resolveUnit(tx, sourceId, after.parentAnchor);
       await tx.user.update({
         where: { id: change.targetId! },
-        data: after,
+        data: {
+          ...writable(after),
+          ...(unit === undefined ? {} : { orgUnitId: unit }),
+        },
       });
       await tx.syncChange.update({
         where: { id: change.id },
@@ -210,7 +264,7 @@ async function performChange(
     }
 
     case 'update_group': {
-      await tx.group.update({ where: { id: change.targetId! }, data: after });
+      await tx.group.update({ where: { id: change.targetId! }, data: writable(after) });
       await tx.syncChange.update({
         where: { id: change.id },
         data: { status: 'applied' },
@@ -236,10 +290,12 @@ async function performChange(
     }
 
     case 'create_org_unit': {
+      const parent = await resolveUnit(tx, sourceId, after.parentAnchor);
       const created = await tx.orgUnit.create({
         data: {
           tenantId,
           name: after.name ?? '',
+          ...(parent === undefined ? {} : { parentId: parent }),
           sourceId,
           sourceAnchor: change.sourceAnchor,
         },
@@ -252,7 +308,17 @@ async function performChange(
     }
 
     case 'update_org_unit': {
-      await tx.orgUnit.update({ where: { id: change.targetId! }, data: after });
+      const parent = await resolveUnit(tx, sourceId, after.parentAnchor);
+      // A unit that is its own parent is a tree with a cycle in it, and every
+      // later walk of that tree — scoped role resolution included — never
+      // terminates. The directory cannot produce one; a DN comparison that
+      // wrongly matched a unit to itself could.
+      const reparent =
+        parent === undefined || parent === change.targetId ? {} : { parentId: parent };
+      await tx.orgUnit.update({
+        where: { id: change.targetId! },
+        data: { ...writable(after), ...reparent },
+      });
       await tx.syncChange.update({
         where: { id: change.id },
         data: { status: 'applied' },

@@ -15,6 +15,7 @@ import {
   type MappingRule,
 } from './mapping.js';
 import { absentAnchors, correlate, type ExistingObject } from './correlate.js';
+import { normaliseDn, parentDn } from './dn.js';
 import {
   diffMemberships,
   diffObjects,
@@ -226,6 +227,34 @@ function computeDiff(input: DiffInput) {
     if (!failureReasons.includes(reason)) failureReasons.push(reason);
   };
 
+  // Where each organizational unit SITS, keyed the way a child names it.
+  //
+  // Built from every record the source returned rather than from the mapped
+  // ones: a unit whose `name` mapping failed is still a unit the directory
+  // has, and its children are still inside it.
+  const orgUnitAnchorByDn = new Map(
+    input.records
+      .filter((r) => r.objectType === 'orgUnit')
+      .map((r) => [normaliseDn(r.dn), r.anchor]),
+  );
+
+  /**
+   * The anchor of the organizational unit containing `dn`, or undefined.
+   *
+   * UNDEFINED IS NOT "NO PARENT". It means this run could not see the parent —
+   * the unit sits above the configured search base, or its read failed — and
+   * the caller must then propose nothing, leaving whatever placement Syntra
+   * already holds. `fields` is differenced against what is stored, so an
+   * omitted key produces no change and a key set to `''` proposes detaching
+   * the row from its unit. Those are opposite answers, and the second one is
+   * only ever correct when the directory actually said so.
+   */
+  const parentAnchorOf = (dn: string): string | undefined => {
+    const parent = parentDn(dn);
+    if (parent === null) return undefined;
+    return orgUnitAnchorByDn.get(normaliseDn(parent));
+  };
+
   for (const record of input.records) {
     // The connector could see the object but not read it in full — an Active
     // Directory group whose membership came back range-truncated. Treated
@@ -241,7 +270,20 @@ function computeDiff(input: DiffInput) {
     // the failure only knows what went wrong, and the set has to be keyed the
     // same way the per-type loop reads it.
     if (isMappingFailure(mapped)) failed(record, mapped.reason);
-    else objects.push(mapped);
+    else {
+      // PLACEMENT IS NOT A MAPPING. `parentAnchor` rides in `fields` so the
+      // ordinary field diff picks it up — before and after, one change, shown
+      // to whoever reviews the run — but it is never something a mapping rule
+      // may target: it comes from the directory's own hierarchy, and
+      // `ASSIGNABLE_FIELDS` deliberately does not list it.
+      //
+      // Groups are left out. Syntra's `Group` has no organizational unit.
+      if (record.objectType !== 'group') {
+        const parent = parentAnchorOf(record.dn);
+        if (parent !== undefined) mapped.fields.parentAnchor = parent;
+      }
+      objects.push(mapped);
+    }
   }
 
   // Built from every record the source returned, not only the ones that
@@ -384,19 +426,29 @@ async function loadExisting(tx: TenantClient): Promise<ExistingSnapshot> {
   const groups = await tx.group.findMany();
   const units = await tx.orgUnit.findMany();
 
+  // Placement, expressed in the SOURCE's vocabulary rather than in local ids.
+  // The diff compares what the directory says against what is stored, and the
+  // directory speaks anchors; a row placed in a locally managed unit has no
+  // anchor to offer and reads as unplaced, which is what makes the directory's
+  // answer win.
+  const anchorOfUnit = new Map(units.map((o) => [o.id, o.sourceAnchor ?? '']));
+  const placement = (id: string | null): string =>
+    id === null ? '' : (anchorOfUnit.get(id) ?? '');
+
   const fields = new Map<string, Record<string, string>>();
   for (const u of users) {
     fields.set(u.id, {
       login: u.login,
       email: u.email,
       displayName: u.displayName,
+      parentAnchor: placement(u.orgUnitId),
     });
   }
   for (const g of groups) {
     fields.set(g.id, { name: g.name, description: g.description ?? '' });
   }
   for (const o of units) {
-    fields.set(o.id, { name: o.name });
+    fields.set(o.id, { name: o.name, parentAnchor: placement(o.parentId) });
   }
 
   return {
@@ -499,10 +551,49 @@ export async function applyRun(
     }),
   );
 
-  // Objects before memberships: a membership references rows that the same
-  // run may only just have created.
+  // Three passes, each referencing only what the ones before it have written.
+  //
+  //   organizational units, parents first — a unit's `parentId` and a user's
+  //     `orgUnitId` both name a unit row that this run may only just have
+  //     created, and a child applied before its parent resolves the parent to
+  //     nothing and lands at the top of the tree;
+  //   then users and groups, which name units;
+  //   then memberships, which name users and groups.
+  //
+  // `orderBy: { id: 'asc' }` above is uuid order, which is to say no order at
+  // all. Nothing in the rows themselves records the hierarchy, so it is
+  // reconstructed here from the anchors the diff already carries.
+  const unitChanges = changes.filter((c) => c.changeType.endsWith('_org_unit'));
+  const unitByAnchor = new Map(
+    unitChanges.flatMap((c) => (c.sourceAnchor === null ? [] : [[c.sourceAnchor, c]] as const)),
+  );
+
+  const units: typeof changes = [];
+  const placed = new Set<string>();
+  const walking = new Set<string>();
+  const place = (change: (typeof changes)[number]) => {
+    if (placed.has(change.id)) return;
+    // A cycle cannot come out of a directory, which is a tree. It can come out
+    // of a bug, and the cost of one here is a hang rather than a wrong answer,
+    // so it is cheaper to refuse to recurse than to prove it impossible.
+    if (walking.has(change.id)) return;
+    walking.add(change.id);
+    const parentAnchor = ((change.after ?? {}) as Record<string, unknown>).parentAnchor;
+    if (typeof parentAnchor === 'string' && parentAnchor !== '') {
+      const parent = unitByAnchor.get(parentAnchor);
+      if (parent !== undefined && parent.id !== change.id) place(parent);
+    }
+    walking.delete(change.id);
+    placed.add(change.id);
+    units.push(change);
+  };
+  for (const change of unitChanges) place(change);
+
   const ordered = [
-    ...changes.filter((c) => !c.changeType.endsWith('_member')),
+    ...units,
+    ...changes.filter(
+      (c) => !c.changeType.endsWith('_member') && !c.changeType.endsWith('_org_unit'),
+    ),
     ...changes.filter((c) => c.changeType.endsWith('_member')),
   ];
 

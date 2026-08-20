@@ -207,6 +207,95 @@ describe('a leaver', () => {
   });
 });
 
+describe('organizational placement', () => {
+  const unitNamed = async (name: string) =>
+    withTenant(tenantId, (tx) => tx.orgUnit.findFirstOrThrow({ where: { name } }));
+  const jdoe = async () =>
+    withTenant(tenantId, (tx) => tx.user.findFirstOrThrow({ where: { login: 'jdoe' } }));
+
+  it('records the directory hierarchy rather than a flat list of units', async () => {
+    await sync();
+
+    const scenarios = await unitNamed('Scenarios');
+    const care = await unitNamed('Care');
+    const learning = await unitNamed('Learning');
+
+    // The search base itself is read as a unit and has no parent inside the
+    // scope the source was given. Its children point at it — which is also
+    // the proof that `applyRun` ordered the parent's create before theirs:
+    // reversed, `resolveUnit` would have found nothing and both would sit at
+    // the top of the tree.
+    expect(scenarios.parentId).toBeNull();
+    expect(care.parentId).toBe(scenarios.id);
+    expect(learning.parentId).toBe(scenarios.id);
+  });
+
+  it('puts a person in the unit that contains them', async () => {
+    await sync();
+    expect((await jdoe()).orgUnitId).toBe((await unitNamed('Care')).id);
+  });
+
+  it('makes a move between units A PLAIN UPDATE OF ONE FIELD', async () => {
+    // The spec's words, and its sixth success criterion. Anchoring on
+    // entryUUID is what stops this being a deactivation and a second account;
+    // recording the new unit is what stops it being a no-op that leaves Syntra
+    // permanently stale about where people work.
+    await sync();
+    const before = await jdoe();
+    expect(before.orgUnitId).toBe((await unitNamed('Care')).id);
+
+    await moveLdapEntry(
+      'uid=jdoe,ou=Care,ou=Scenarios,dc=acme,dc=test',
+      'uid=jdoe',
+      'ou=Learning,ou=Scenarios,dc=acme,dc=test',
+    );
+    try {
+      const run = await preview();
+      const changes = await changesOf(run.id);
+      const updates = changes.filter((c) => c.changeType === 'update_user');
+      expect(updates).toHaveLength(1);
+      // Reviewable as a move, in before-and-after, like every other change.
+      expect((updates[0]!.before as Record<string, unknown>).parentAnchor).toBeTruthy();
+
+      await applyRun(tenantId, run.id);
+      const after = await jdoe();
+      expect(after.id).toBe(before.id);
+      expect(after.status).toBe('active');
+      expect(after.orgUnitId).toBe((await unitNamed('Learning')).id);
+    } finally {
+      await moveLdapEntry(
+        'uid=jdoe,ou=Learning,ou=Scenarios,dc=acme,dc=test',
+        'uid=jdoe',
+        'ou=Care,ou=Scenarios,dc=acme,dc=test',
+      );
+    }
+  });
+
+  it('leaves a person where they are when the units could not be read', async () => {
+    // A gap in the read is not an absence — the same rule the memberships
+    // follow. Detaching everybody from their department because one search
+    // came back empty is a silent, tenant-wide narrowing of every scoped
+    // administrative role, from a run that reported success.
+    await sync();
+    const care = await unitNamed('Care');
+    expect((await jdoe()).orgUnitId).toBe(care.id);
+
+    await withTenant(tenantId, (tx) =>
+      tx.directorySource.update({
+        where: { id: sourceId },
+        data: { config: { ...config, orgUnitFilter: '(objectClass=nothingAtAll)' } as never },
+      }),
+    );
+
+    const run = await preview();
+    const changes = await changesOf(run.id);
+    expect(changes.filter((c) => c.changeType === 'update_user')).toEqual([]);
+
+    await applyRun(tenantId, run.id);
+    expect((await jdoe()).orgUnitId).toBe(care.id);
+  });
+});
+
 describe('a member DN that resolves to nothing', () => {
   it('freezes that group rather than revoking the members it CAN read', async () => {
     await sync();
