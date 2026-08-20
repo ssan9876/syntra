@@ -206,7 +206,7 @@ failure that leaves it null means no scheduled sync is running for any source in
 any tenant, and doing the work inline would hide a broken deployment behind a
 button that still appears to work.
 
-## The default user filter is wrong for Active Directory — half closed
+## The default user filter is wrong for Active Directory — a kept decision
 
 `userFilter` defaults to `(objectClass=person)`. In AD, `computer` derives from
 `person`, so this matches every machine account in the domain and would create a Syntra
@@ -323,7 +323,7 @@ The unit test asserted `update_group`. It encoded the defect exactly, which is w
 nothing ever caught it — a reminder that a test agreeing with the code is not the
 same as a test checking it.
 
-## Smaller items, recorded but not urgent
+## Smaller items
 
 - ~~`create_user` / `create_group` / `create_org_unit` write only hardcoded columns and
   ignore other mapped fields.~~ **Fixed.** The columns they write turn out to be exactly
@@ -334,9 +334,9 @@ same as a test checking it.
 - ~~Org units are created but never attached to anything — `parentId` is never set
   and no user's `orgUnitId` is ever assigned.~~ **Fixed** — see below; it grew out of
   the smaller-items list and got a section of its own.
-- The `sync.apply` audit event is written outside the run's transaction. Narrow: every
+- The `sync.apply` audit event is written outside the run's transaction. **Kept.** Every
   individual mutation already commits with its own audit event, so a crash in that
-  window loses a summary, not the record of what changed.
+  window loses a summary and not the record of what changed.
 - ~~`SyncChange` is indexed on `(runId, changeType)` but `applyRun` queries
   `(runId, status)`.~~ **Fixed** — `(runId, status)` added alongside, not instead:
   the console's per-run listing really does read by type.
@@ -346,9 +346,39 @@ same as a test checking it.
   mid-directory, pg-boss still holding its job. `shutdownHandler` drains HTTP, then
   stops the scheduler, then disconnects Prisma. HTTP first, because a request in flight
   may enqueue and a scheduler stopped underneath it turns a save into a 500.
-- `connector.ts` excludes the anchor attribute from the requested attribute list, so a
-  mapping whose source attribute is the anchor can never resolve.
+- ~~`connector.ts` excludes the anchor attribute from the requested attribute list, so a
+  mapping whose source attribute is the anchor can never resolve.~~ **Fixed** — and as
+  the NORMALISED value, because `toArray` renders a Buffer with `toString('utf8')` and
+  `objectGUID` is sixteen raw bytes, so the obvious version of the fix writes mojibake
+  into somebody's record.
 - No concurrency control on `applyRun`. Two simultaneous applies of one run would both
   see `proposed`. The unique constraint on `(tenantId, sourceId, sourceAnchor)` turns
   the duplicate into a failed change rather than a duplicate account — worth knowing
   that the schema, not the code, is what protects this.
+
+---
+
+## What is left, and why it is left
+
+Three things on this page are decisions rather than debt. They are written down so
+that the next person to read the list knows the difference.
+
+**The stored `ldapConfigSchema` default for `userFilter` stays wrong for Active
+Directory.** `(objectClass=person)` matches every machine account in an AD domain,
+and the right filter is `(&(objectCategory=person)(objectClass=user))` — but
+`objectCategory` does not exist in OpenLDAP, so changing the stored default breaks
+the other half of the supported directories. The console seeds the correct filter
+when the editor's **Active Directory** button is used, which is the one place a
+source is actually configured. A source created over the API without a `userFilter`
+still gets the OpenLDAP-shaped one.
+
+**The `sync.apply` summary event is written outside the run's transaction.** Every
+individual mutation commits with its own audit event, so the window loses a summary
+and never the record of what changed.
+
+**Groups and organizational units carry no source column in the console.** `UsersPage`
+does, which is where an administrator would try to edit a synced field and needs to be
+told they cannot. Extending it is a line per page once those pages grow rows worth
+labelling.
+
+Everything else on this page is closed.
