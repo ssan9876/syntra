@@ -200,17 +200,37 @@ source created over the API without a `userFilter` still gets the OpenLDAP-shape
 
 ## Smaller items, recorded but not urgent
 
-- `create_user` / `create_group` / `create_org_unit` write only hardcoded columns and
-  ignore other mapped fields. Self-corrects on the next run via `update_*`, but a first
-  sync is lossy relative to the diff the administrator reviewed.
+- ~~`create_user` / `create_group` / `create_org_unit` write only hardcoded columns and
+  ignore other mapped fields.~~ **Fixed.** The columns they write turn out to be exactly
+  `ASSIGNABLE_FIELDS`, so nothing mappable was being lost — but `rejectUnassignable`
+  covered `update_*` only, so a create carrying a field a mapping may not write dropped
+  it in silence rather than failing. The administrator reviewed a diff naming the field
+  and got a row without it. Creates now refuse it with the same message updates get.
 - Org units are created but never attached to anything — `parentId` is never set and no
   user's `orgUnitId` is ever assigned. The synced OU tree is flat and unreferenced.
+  **This is the largest thing left, and it is two decisions, not one.** Setting
+  `parentId` from the directory's own DN hierarchy is an unfinished import: the
+  structure is the directory's and Syntra is simply not recording it. Assigning a
+  user's `orgUnitId` is a policy choice, because org units carry scoped administrative
+  role assignments — `diff.ts` already refuses to sync an org unit's *removal* on
+  exactly that ground ("consequential enough to be a human decision, not a sync
+  outcome"), and a directory that moves somebody between OUs would, if this were
+  implemented naively, move their administrators' authority with them. Both halves also
+  need the diff to carry a parent *anchor* rather than a local id — the parent may be
+  created by the same run — plus apply-time ordering (parents before children, org
+  units before users) and the unresolvable-DN rule above. Needs its own design pass.
 - The `sync.apply` audit event is written outside the run's transaction. Narrow: every
   individual mutation already commits with its own audit event, so a crash in that
   window loses a summary, not the record of what changed.
-- `SyncChange` is indexed on `(runId, changeType)` but `applyRun` queries
-  `(runId, status)`.
-- `scheduler.stop()` is never called on shutdown.
+- ~~`SyncChange` is indexed on `(runId, changeType)` but `applyRun` queries
+  `(runId, status)`.~~ **Fixed** — `(runId, status)` added alongside, not instead:
+  the console's per-run listing really does read by type.
+- ~~`scheduler.stop()` is never called on shutdown.~~ **Fixed**, and it was worse than
+  the note suggested: `server.ts` registered no signal handler at all, so SIGTERM
+  terminated the process outright — in-flight requests cut, a sync run abandoned
+  mid-directory, pg-boss still holding its job. `shutdownHandler` drains HTTP, then
+  stops the scheduler, then disconnects Prisma. HTTP first, because a request in flight
+  may enqueue and a scheduler stopped underneath it turns a save into a 500.
 - `connector.ts` excludes the anchor attribute from the requested attribute list, so a
   mapping whose source attribute is the anchor can never resolve.
 - No concurrency control on `applyRun`. Two simultaneous applies of one run would both
