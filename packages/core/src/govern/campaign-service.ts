@@ -376,10 +376,25 @@ export async function startCampaign(
   tenantId: string,
   actorUserId: string | null,
   campaignId: string,
-  options: { now?: Date; batchSize?: number; publicUrl?: string } = {},
+  options: {
+    now?: Date;
+    batchSize?: number;
+    /**
+     * The REVIEWER page size, separate from `batchSize`.
+     *
+     * `batchSize` bounds item creation, which is one `createMany` per page and
+     * costs almost nothing per row; reviewer resolution does per-item work and
+     * is the loop Global Constraint 4 is actually about. Without a seam the
+     * only way to unbound it is to edit `REVIEWER_BATCH` itself, and a budget
+     * constant no test can move is a budget constant no test can prove.
+     */
+    reviewerBatchSize?: number;
+    publicUrl?: string;
+  } = {},
 ): Promise<{ status: string; itemCount: number; blockedCount: number }> {
   const now = options.now ?? new Date();
   const batchSize = options.batchSize ?? ITEM_BATCH;
+  const reviewerBatchSize = options.reviewerBatchSize ?? REVIEWER_BATCH;
   const publicUrl = options.publicUrl ?? '';
 
   const prepared = await withTenant(tenantId, async (tx) => {
@@ -497,7 +512,7 @@ export async function startCampaign(
       tx.campaignItem.findMany({
         where: { campaignId, ...(cursor === null ? {} : { id: { gt: cursor } }) },
         orderBy: { id: 'asc' },
-        take: REVIEWER_BATCH,
+        take: reviewerBatchSize,
         select: { id: true },
       }),
     );

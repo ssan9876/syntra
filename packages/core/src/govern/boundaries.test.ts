@@ -144,6 +144,24 @@ describe('the prevention points depend on Govern, never the reverse', () => {
         'campaign-service.ts',
         ["'../provision/condition.js'", "'../automate/notify.js'"],
       ],
+      // §5 and §13. The revocation service is the ONE place Govern hands work
+      // to another subsystem, so it is the one place these names belong — and
+      // all four go the safe way. `fulfil.js` is Automate's entry point for
+      // ending a grant and `types.js` its live-grant vocabulary, both called;
+      // `provision/desired.js` gives `personDisplayName`, a pure formatter; and
+      // `provision/types.js` is a TYPE-ONLY import of `RevocationOrderFacts`,
+      // the plain-value shape Provision's plan stage receives. Provision never
+      // queries Govern — it is HANDED that array — so nothing here closes a
+      // loop.
+      [
+        'revocation-service.ts',
+        [
+          "'../automate/fulfil.js'",
+          "'../automate/types.js'",
+          "'../provision/desired.js'",
+          "'../provision/types.js'",
+        ],
+      ],
     ]);
     for (const file of sourceFiles()) {
       const imports = [...file.text.matchAll(/from ('\.\.\/(?:provision|automate)\/[^']+')/g)].map(
