@@ -123,6 +123,82 @@ describe('registerGovernJobs', () => {
   });
 });
 
+/**
+ * One revocation the owning subsystem has already applied, waiting for
+ * something to notice. The grant behind it is `revoked`, which is the fact
+ * `reflectRevocationOutcomes` reads to advance the dispatch.
+ */
+async function seedDispatchedRevocation(): Promise<string> {
+  return withTenant(tenantId, async (tx) => {
+    const owner = await tx.person.create({
+      data: { tenantId, givenName: 'Ola', familyName: 'Owner' },
+    });
+    const snapshot = await tx.accessSnapshot.create({
+      data: { tenantId, kind: 'campaign', status: 'complete', asOf: NOW },
+    });
+    await tx.snapshotSource.create({
+      data: {
+        tenantId,
+        snapshotId: snapshot.id,
+        sourceKind: 'syntraInternal',
+        sourceId: 'syntra',
+        sourceName: 'Syntra',
+        completeness: 'complete',
+        staleness: 'fresh',
+        freshnessSlaHours: 24,
+      },
+    });
+    const campaign = await tx.campaign.create({
+      data: {
+        tenantId,
+        name: 'Q2 review',
+        scope: {},
+        snapshotId: snapshot.id,
+        reviewerSelector: 'manager',
+        fallbackSelector: 'campaign_owner',
+        ownerPersonId: owner.id,
+        opensAt: NOW,
+        // FAR in the future, so the close sweep in the same job does not touch
+        // it and the test measures only the reflection.
+        dueAt: new Date(NOW.getTime() + 90 * 86_400_000),
+        originalDueAt: new Date(NOW.getTime() + 90 * 86_400_000),
+        status: 'open',
+      },
+    });
+    const batch = await tx.revocationBatch.create({
+      data: { tenantId, campaignId: campaign.id, status: 'applied', startedAt: NOW },
+    });
+    const grant = await tx.accessGrant.create({
+      data: {
+        tenantId,
+        subjectPersonId: owner.id,
+        resourceType: 'product',
+        resourceId: '30000000-0000-0000-0000-000000000001',
+        origin: 'request',
+        startsAt: NOW,
+        status: 'revoked',
+      },
+    });
+    const dispatch = await tx.revocationDispatch.create({
+      data: {
+        tenantId,
+        batchId: batch.id,
+        holdingDescriptor: {
+          subjectKey: `person:${owner.id}`,
+          systemId: 'syntra',
+          resourceKind: 'syntraGroup',
+          resourceId: '30000000-0000-0000-0000-000000000001',
+        },
+        route: 'automate_grant',
+        status: 'dispatched',
+        grantId: grant.id,
+        dispatchedAt: NOW,
+      },
+    });
+    return dispatch.id;
+  });
+}
+
 describe('the jobs', () => {
   it('builds a snapshot and refreshes orphan proposals in one run', async () => {
     await withTenant(tenantId, (tx) =>
@@ -150,6 +226,24 @@ describe('the jobs', () => {
     await runSnapshotJob(governJobPayload(tenantId), { now: NOW });
     const other = await withTenant(otherTenantId, (tx) => tx.accessSnapshot.count());
     expect(other).toBe(0);
+  });
+
+  it('advances a dispatched revocation when the snapshot job runs', async () => {
+    // Not "the function works when a test calls it" — that was already true.
+    // The question is whether anything in the PRODUCT calls it. Nothing did:
+    // `reflectRevocationOutcomes` was invoked from its own test and from
+    // nowhere else, so a dispatch never advanced past `dispatched`, the
+    // `dispatch_not_applied` finding never fired, and §13's stated failure —
+    // "a campaign that closes with 91 revocations, of which 34 never happened,
+    // and nobody notices for a year" — is what the product would do.
+    const dispatchId = await seedDispatchedRevocation();
+    await runSnapshotJob(governJobPayload(tenantId), { now: NOW });
+    const after = await withTenant(tenantId, (tx) =>
+      tx.revocationDispatch.findUniqueOrThrow({ where: { id: dispatchId } }),
+    );
+    expect(after.status).not.toBe('dispatched');
+    // `confirmedAt` is written by nothing else in the platform.
+    expect(after.confirmedAt).not.toBeNull();
   });
 
   it('prunes nothing when retention has not been reached', async () => {

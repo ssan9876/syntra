@@ -427,15 +427,15 @@ export async function confirmRevocationBatch(
       previousPersonsWithActiveContract: settings.personsWithActiveContractAtLastBatch,
       hasEverApplied: settings.lastAppliedBatchAt !== null,
     });
+    // RETURNED, NEVER WRITTEN-THEN-THROWN. `withTenant` is
+    // `prisma.$transaction(fn)`, so a throw here rolls back the `blocked` row
+    // the refusal just wrote — leaving the batch `previewed`, its confirm
+    // button live, and no record anywhere that the execution-time guard
+    // refused it. The write is committed by the caller below, in a transaction
+    // of its own, BEFORE the error is raised. Same shape as the departed-
+    // subject moot in `decision-service.ts`.
     if (reguard.outcome === 'refused') {
-      await tx.revocationBatch.update({
-        where: { id: batchId },
-        data: { status: 'blocked', blockedReason: reguard.reasons.join('; ') },
-      });
-      throw new RevocationRefusedError(
-        'blocked',
-        `this batch is refused at execution: ${reguard.reasons.join('; ')}`,
-      );
+      return { refusedReasons: reguard.reasons } as const;
     }
 
     await tx.revocationBatch.update({
@@ -451,12 +451,37 @@ export async function confirmRevocationBatch(
     });
 
     return {
+      refusedReasons: null,
       rows,
       campaignName: campaign.name,
       campaignOwnerPersonId: campaign.ownerPersonId,
       personsWithActiveContract: snapshot.personsWithActiveContract,
     };
   });
+
+  if (prepared.refusedReasons !== null) {
+    const reasons = prepared.refusedReasons.join('; ');
+    await withTenant(tenantId, async (tx) => {
+      await tx.revocationBatch.update({
+        where: { id: batchId },
+        data: { status: 'blocked', blockedReason: reasons },
+      });
+      // The refusal itself is an audited event. §13 refusing again at execution
+      // is one of the more important things this subsystem ever does, and a
+      // refusal nobody can find afterwards is a refusal that reads, to the
+      // person whose batch stopped, as a bug.
+      await recordEvent(tx, {
+        actorUserId,
+        action: 'govern.revocation.confirm',
+        targetType: 'RevocationBatch',
+        targetId: batchId,
+        outcome: 'failure',
+        sourceIp: null,
+        payload: { refusedAtExecution: true, reasons: prepared.refusedReasons },
+      });
+    });
+    throw new RevocationRefusedError('blocked', `this batch is refused at execution: ${reasons}`);
+  }
 
   let dispatched = 0;
   let requiresChange = 0;
@@ -677,8 +702,9 @@ export async function confirmRevocationBatch(
       // `RemediationItem` is created naming what has to change and who owns it,
       // and the vocabulary rule keeps it out of every revoked figure.
       await withTenant(tenantId, async (tx) => {
+        const kind = ROUTE_REMEDIATION_KIND[row.route as never] ?? 'direct_assignment_change_required';
         const remediationId = await createRemediationItem(tx, tenantId, {
-          kind: ROUTE_REMEDIATION_KIND[row.route as never] ?? 'direct_assignment_change_required',
+          kind,
           ownerPersonId: prepared.campaignOwnerPersonId,
           dueAt: new Date(now.getTime() + 14 * 86_400_000),
           ...(row.itemId === null ? {} : { campaignItemId: row.itemId }),
@@ -691,13 +717,33 @@ export async function confirmRevocationBatch(
           deepLink: `/admin/govern/batches/${batchId}`,
         });
 
+        // `createRemediationItem` DEDUPLICATES: it returns `null` when an open
+        // item of this kind already covers this campaign item, which is what a
+        // second campaign over an unchanged holding produces. Null here would
+        // violate `revocation_dispatch_requires_change_has_item`, abort the
+        // transaction, and land the row in the catch below as `failed` with a
+        // database error string in the message a human reads. The existing item
+        // is the honest answer: this row is covered by that remediation.
+        const remediationItemId =
+          remediationId ??
+          (
+            await tx.remediationItem.findFirstOrThrow({
+              where: {
+                kind,
+                status: { in: ['open', 'in_progress'] },
+                ...(row.itemId === null ? {} : { campaignItemId: row.itemId }),
+              },
+              select: { id: true },
+            })
+          ).id;
+
         await tx.revocationDispatch.update({
           where: { id: row.id },
           data: {
             status: 'requires_change',
             // The CHECK `revocation_dispatch_requires_change_has_item` requires
             // this, and a null here would abort the transaction.
-            remediationItemId: remediationId,
+            remediationItemId,
             message: descriptor.explanation ?? null,
           },
         });
@@ -717,7 +763,7 @@ export async function confirmRevocationBatch(
           targetId: row.id,
           outcome: 'success',
           sourceIp: null,
-          payload: { route: row.route, remediationItemId: remediationId, batchId },
+          payload: { route: row.route, remediationItemId, batchId },
         });
       });
       requiresChange += 1;
