@@ -200,7 +200,7 @@ source created over the API without a `userFilter` still gets the OpenLDAP-shape
 
 ## ~~The LDAP test fixture is shared mutable state across parallel workers~~ — fixed
 
-Five test files read the one OpenLDAP container at `localhost:1389`, and the
+Six test files read the one OpenLDAP container at `localhost:1389`, and the
 suite runs up to eight worker processes in parallel. Each worker gets a database
 of its own — `vitest.config.ts` shards them precisely so two workers cannot
 truncate each other's tables — and there was no equivalent for the directory.
@@ -216,7 +216,7 @@ above), and `run-service.test.ts > proposes nothing on a second run over an
 unchanged directory` proposing a `deactivate_user`. Both files passed alone.
 
 `infra/ldap/seed.ldif` now carries two subtrees of identical shape:
-`ou=Shared,dc=acme,dc=test` for the four files that only read, and
+`ou=Shared,dc=acme,dc=test` for the five files that only read, and
 `ou=Scenarios,dc=acme,dc=test` for the one that writes. Each file scopes its
 source to its own container, so no file can observe another's directory. The
 rule this establishes — **a test that mutates the directory gets a subtree of
@@ -224,8 +224,16 @@ its own** — is the one `e2e/sync.spec.ts` already followed with its timestampe
 OU; this applies it to the fixtures that ship.
 
 Verified by repetition rather than by one green run: the race passed
-intermittently before, so a single pass proves nothing. The five files were run
-together, in parallel, several times over.
+intermittently before, so a single pass proves nothing. The files were run
+together, in parallel, several times over, and then the whole repository.
+
+`packages/connectors/src/ldap/connector.test.ts` was missed on the first pass —
+the audit that found the readers searched `packages/core` and `apps/api` and not
+`packages/connectors`, and the sync-scoped verification runs could not have
+caught it. The whole-repo run did, deterministically: its user counts doubled and
+its group DNs moved. The lesson is the audit, not the fix — "which files talk to
+this container" is a question to ask of the repository, not of the directories
+the bug happened to be found in.
 
 Changing the fixture means REMOVING the container, not restarting it — the image
 bootstraps its custom LDIF only into an empty data directory. `README.md` says

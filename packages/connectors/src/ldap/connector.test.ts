@@ -5,12 +5,17 @@ import { RANGE_STEP } from './range.js';
 import type { LdapConfig } from './config.js';
 
 const config: LdapConfig & { bindPassword: string } = {
+  // `ou=Shared`, like every other file that only READS this container. The
+  // directory is one server for up to eight parallel workers, and
+  // `scenarios.test.ts` mutates `ou=Scenarios` throughout its run — see
+  // `infra/ldap/seed.ldif`. Scoped to the root, the counts below see both
+  // subtrees and the group DNs are in the wrong place.
   url: process.env.LDAP_URL ?? 'ldap://localhost:1389',
   bindDn: 'cn=admin,dc=acme,dc=test',
   bindPassword: 'adminpassword',
-  userSearchBase: 'dc=acme,dc=test',
-  groupSearchBase: 'dc=acme,dc=test',
-  orgUnitSearchBase: 'dc=acme,dc=test',
+  userSearchBase: 'ou=Shared,dc=acme,dc=test',
+  groupSearchBase: 'ou=Shared,dc=acme,dc=test',
+  orgUnitSearchBase: 'ou=Shared,dc=acme,dc=test',
   userFilter: '(objectClass=inetOrgPerson)',
   groupFilter: '(objectClass=groupOfNames)',
   anchorAttribute: 'entryUUID',
@@ -182,8 +187,8 @@ describe('ldapConnector.read', () => {
     const byType = (t: string) => records.filter((r) => r.objectType === t);
 
     expect(byType('user').map((r) => r.dn).sort()).toEqual([
-      'uid=jdoe,ou=Care,dc=acme,dc=test',
-      'uid=sroe,ou=Care,dc=acme,dc=test',
+      'uid=jdoe,ou=Care,ou=Shared,dc=acme,dc=test',
+      'uid=sroe,ou=Care,ou=Shared,dc=acme,dc=test',
     ]);
     expect(byType('group')).toHaveLength(1);
     expect(byType('orgUnit').length).toBeGreaterThanOrEqual(2);
@@ -205,7 +210,7 @@ describe('ldapConnector.read', () => {
   it('carries group members as DNs', async () => {
     const records = await readAll();
     const nurses = records.find((r) => r.dn.startsWith('cn=Nurses'));
-    expect(nurses?.memberDns).toEqual(['uid=jdoe,ou=Care,dc=acme,dc=test']);
+    expect(nurses?.memberDns).toEqual(['uid=jdoe,ou=Care,ou=Shared,dc=acme,dc=test']);
   });
 
   it('returns attributes as arrays', async () => {
@@ -383,9 +388,9 @@ function serveRangedMembership(
 }
 
 describe('ldapConnector.read: Active Directory range retrieval', () => {
-  const nursesDn = 'cn=Nurses,dc=acme,dc=test';
-  const jdoe = 'uid=jdoe,ou=Care,dc=acme,dc=test';
-  const sroe = 'uid=sroe,ou=Care,dc=acme,dc=test';
+  const nursesDn = 'cn=Nurses,ou=Shared,dc=acme,dc=test';
+  const jdoe = 'uid=jdoe,ou=Care,ou=Shared,dc=acme,dc=test';
+  const sroe = 'uid=sroe,ou=Care,ou=Shared,dc=acme,dc=test';
 
   it('walks the windows and yields the whole membership, not the first window', async () => {
     // The truncated first window holds one member. The group has three. A
@@ -393,13 +398,13 @@ describe('ldapConnector.read: Active Directory range retrieval', () => {
     // then proposes revoking the group from the other two.
     const { specs } = serveRangedMembership(nursesDn, [
       { 'member;range=0-0': [jdoe] },
-      { 'member;range=1-*': [sroe, 'uid=third,ou=Care,dc=acme,dc=test'] },
+      { 'member;range=1-*': [sroe, 'uid=third,ou=Care,ou=Shared,dc=acme,dc=test'] },
     ]);
 
     const records = await readAll();
     const nurses = records.find((r) => r.dn === nursesDn);
 
-    expect(nurses?.memberDns).toEqual([jdoe, sroe, 'uid=third,ou=Care,dc=acme,dc=test']);
+    expect(nurses?.memberDns).toEqual([jdoe, sroe, 'uid=third,ou=Care,ou=Shared,dc=acme,dc=test']);
     expect(nurses?.readFailure).toBeUndefined();
     // Two round trips, and the second asks for the window after the one the
     // server returned. Without this the assertion above would also pass on a
