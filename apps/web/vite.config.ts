@@ -15,6 +15,19 @@ export default defineConfig({
   plugins: [react(), tailwind()],
   server: {
     port,
+    // IPv4 LOOPBACK, EXPLICITLY. Vite's default binds whatever `localhost`
+    // resolves to, and on Linux that is `::1` alone — while Playwright's
+    // chromium is launched with `--host-resolver-rules=MAP acme.localhost
+    // 127.0.0.1`, because Syntra selects the tenant from the Host header and
+    // the browser has to arrive on a name a tenant claims. The two miss each
+    // other and every browser test fails with ERR_CONNECTION_REFUSED on the
+    // first `page.goto`, which reads as "the app is broken" rather than "the
+    // server is on the other loopback".
+    //
+    // 127.0.0.1 rather than 0.0.0.0: this is a development server, and putting
+    // it on every interface to fix a loopback mismatch would be answering the
+    // wrong question.
+    host: '127.0.0.1',
     // Fail rather than silently move to the next free port: a suite pointed at
     // 5173 must not quietly be served by whatever else was already there.
     strictPort: true,
