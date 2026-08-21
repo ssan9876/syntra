@@ -397,9 +397,32 @@ regression — both pass alone and fail on a machine running eight workers.
   sound way to measure it. Asserting that both paths perform a password hash
   would be.
 - `automate/catalog-service.test.ts > does not race two concurrent first reads
-  into a P2002` fires eight concurrent transactions and failed with "Unable to
-  start a transaction in the given time" — pool acquisition, not the race it is
-  testing.
+  into a P2002` fires eight concurrent transactions and fails intermittently with
+  "Unable to start a transaction in the given time" — pool acquisition, not the
+  race it is testing. It reproduces running alone, so "load" was the wrong word
+  for it.
+
+  **The arithmetic behind it, and a fix that did not work.** Prisma's default pool
+  is `physical cores * 2 + 1` per client, and every vitest worker builds its own.
+  On this sixteen-core machine that is 33 each and 264 across eight workers,
+  against a PostgreSQL `max_connections` of 100 — so the shards, given a database
+  apiece precisely so they could not interfere, still share one server and still
+  interfere through it.
+
+  Pinning `connection_limit=10` on the shard URLs looked like the fix and made
+  things worse: one failing file became five, all with the same error, because
+  that message is Prisma's `maxWait` expiring while it waits for a free connection
+  in *its own* pool. Shrinking the pool from 33 to 10 makes it more likely, not
+  less, for any worker that legitimately wants more than ten transactions at once
+  — `scheduler.test.ts`, `sync/jobs.test.ts` and `loop.integration.test.ts` all do,
+  and all three started failing. It was reverted.
+
+  A real fix is one of: raise the server's `max_connections` (an infra change to
+  `infra/docker-compose.yml`), lower the worker count and accept a slower suite, or
+  give each worker a pool small enough for the server AND raise `maxWait` so a
+  queued transaction waits rather than throwing. All three are deliberate choices
+  about the suite rather than about Directory Sync, which is why this is written
+  down instead of chosen here.
 
 `govern/transaction-budget.test.ts` was a third and is now fixed: its slice-1 half
 measured the unbounded case only, so when the machine was slow enough for the
