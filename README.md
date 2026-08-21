@@ -67,14 +67,24 @@ will too.
 
 ## Running it
 
-Requires Node 22+, pnpm 9, and Docker.
+Requires Node 22+ and Docker. pnpm is pinned by `packageManager` in
+`package.json`, so `corepack enable` selects the right version — a newer
+pnpm silently skips the build scripts for Prisma and argon2, and the
+install looks clean until nothing can reach the database.
 
 ```bash
 pnpm install
 pnpm db:up                                  # PostgreSQL 16, MailDev, OpenLDAP
+
+# BEFORE db:migrate, both of them. Prisma's CLI reads `.env` from its own
+# working directory, and pnpm runs `migrate` with the cwd set to packages/db,
+# so the root file is not in scope for it: a checkout carrying only that one
+# fails with "Environment variable not found: DATABASE_URL".
+cp .env.example .env                        # then fill in the secrets
+cp packages/db/.env.example packages/db/.env
+
 pnpm db:migrate
 
-cp .env.example .env                        # then fill in the secrets
 SEED_ADMIN_PASSWORD='choose-a-long-one' \
 SEED_USER_PASSWORD='choose-another-one' \
   pnpm seed
