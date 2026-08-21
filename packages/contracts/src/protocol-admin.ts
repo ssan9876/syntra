@@ -245,6 +245,10 @@ export const upstreamIdpRequest = z
     displayNameAttribute: z.string().max(128).default('name'),
     groupsAttribute: z.string().max(128).nullable().default(null),
     createUsers: z.boolean().default(true),
+    // FALSE. `createUsers` may default to true because creating a new account
+    // grants nothing that did not just arrive from the upstream; adopting an
+    // existing one hands over whatever that account already holds.
+    allowLoginAdoption: z.boolean().default(false),
     refreshOnLogin: z.boolean().default(true),
     defaultOrgUnitId: z.string().uuid().nullable().default(null),
   })

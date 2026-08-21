@@ -174,6 +174,19 @@ const REFUSAL_DETAIL: Record<ProvisionRefusal, string> = {
     'That identity provider did not send enough information to identify you.',
   link_conflict:
     'Another identity from that provider already uses this account. Ask an administrator to sort it out before signing in again.',
+  // THE SAME SENTENCE, TWICE, and that is the point.
+  //
+  // The two refusals differ in a way the caller must not learn: one means "a
+  // local account has that login", the other means "a local account has that
+  // login AND holds a password or a role". Telling them apart would make this
+  // endpoint an oracle for which accounts are worth attacking, answerable by
+  // anyone who can get an upstream to assert a login. The reason code is
+  // distinct where it belongs — in the audit trail and the logs — and the
+  // person at the browser gets one answer for both.
+  adoption_not_allowed:
+    'You signed in successfully, but this organization has no account for you. Ask an administrator to create one.',
+  adoption_refused_privileged:
+    'You signed in successfully, but this organization has no account for you. Ask an administrator to create one.',
 };
 
 export async function registerFederationRoutes(

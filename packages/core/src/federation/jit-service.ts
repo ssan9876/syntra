@@ -30,7 +30,17 @@ export type ProvisionRefusal =
    * The local account this subject would adopt is already bound to a
    * *different* subject of the same upstream. See `linkOrProvision`.
    */
-  | 'link_conflict';
+  | 'link_conflict'
+  /**
+   * A local account carries this login, and this upstream is not permitted to
+   * take existing accounts over. The default.
+   */
+  | 'adoption_not_allowed'
+  /**
+   * A local account carries this login and holds a password credential or a
+   * role assignment. Refused whatever the upstream is permitted to do.
+   */
+  | 'adoption_refused_privileged';
 
 export type ProvisionResult =
   | { userId: string; created: boolean }
@@ -121,6 +131,42 @@ export async function linkOrProvision(
         where: { upstreamIdpId: upstream.id, userId: existing.id },
       });
       if (bound) return { userId: null, reason: 'link_conflict' };
+
+      // ADOPTION IS A TAKEOVER, and it is off unless somebody turned it on.
+      //
+      // The upstream chooses what it asserts. An identity provider naming
+      // `admin` — configured to, or compromised into it — was handed the
+      // Syntra account called `admin`, roles and password intact, with an
+      // `UpstreamLink` now attached so every later login walks straight in.
+      // Directory Sync refuses precisely this and calls it a conflict rather
+      // than an adoption; §10 of its design says why in one line, and the
+      // reason does not change because the claim arrived over SAML.
+      if (!upstream.allowLoginAdoption) {
+        return { userId: null, reason: 'adoption_not_allowed' };
+      }
+
+      // AND EVEN THEN, not these two.
+      //
+      // An administrator turning the flag on is consenting to a migration —
+      // accounts that exist because people were pre-created, holding nothing
+      // yet. They are not consenting to hand over an account that already has
+      // a password somebody signs in with, or authority somebody granted it.
+      // Those are the two accounts worth stealing, so the flag does not reach
+      // them and no setting exists that does.
+      const [password, role] = await Promise.all([
+        tx.passwordCredential.findFirst({
+          where: { userId: existing.id },
+          select: { userId: true },
+        }),
+        tx.roleAssignment.findFirst({
+          where: { userId: existing.id },
+          select: { id: true },
+        }),
+      ]);
+      if (password || role) {
+        return { userId: null, reason: 'adoption_refused_privileged' };
+      }
+
       userId = existing.id;
     } else {
       if (!upstream.createUsers) return { userId: null, reason: 'no_local_user' };

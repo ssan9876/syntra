@@ -50,6 +50,7 @@ const upstreamFixture = (over: Partial<UpstreamInput> = {}): UpstreamInput => ({
   displayNameAttribute: 'displayName',
   groupsAttribute: 'groups',
   createUsers: true,
+  allowLoginAdoption: false,
   refreshOnLogin: true,
   defaultOrgUnitId: null,
   ...over,

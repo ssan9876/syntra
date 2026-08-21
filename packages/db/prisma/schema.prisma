@@ -783,6 +783,11 @@ model UpstreamIdp {
   displayNameAttribute String   @default("name")
   groupsAttribute      String?
   createUsers          Boolean  @default(true)
+  /// Whether a first federated login may take over an EXISTING local account
+  /// whose login matches. False, and it stays false unless somebody says
+  /// otherwise: an upstream that can choose the login it asserts can otherwise
+  /// name any account in the tenant and be handed it.
+  allowLoginAdoption   Boolean  @default(false)
   refreshOnLogin       Boolean  @default(true)
   defaultOrgUnitId     String?  @db.Uuid
   createdAt            DateTime @default(now())

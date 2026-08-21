@@ -35,6 +35,7 @@ const input = (over: Partial<UpstreamInput> = {}): UpstreamInput => ({
   displayNameAttribute: 'name',
   groupsAttribute: null,
   createUsers: true,
+  allowLoginAdoption: false,
   refreshOnLogin: true,
   defaultOrgUnitId: null,
   ...over,
@@ -151,5 +152,47 @@ describe('reading upstreams', () => {
     expect(await findUpstream(tenantId, created.id)).toBeNull();
     expect(await findUpstreamBySlug(tenantId, 'entra')).toBeNull();
     expect(await upstreamClientSecret(tenantId, provider, created.id)).toBeNull();
+  });
+});
+
+describe('allowLoginAdoption: the default has to survive every layer', () => {
+  it('is false for a row written without ever naming the column', async () => {
+    // The layer under the service. A row can arrive from a migration, a
+    // restore, a script, or code written before the column existed — and the
+    // question "what does adoption do for a row nobody set this on" is
+    // answered by the DATABASE, not by any default further up.
+    await withTenant(tenantId, (tx) =>
+      tx.$executeRaw`
+        INSERT INTO "UpstreamIdp" ("id", "tenantId", "slug", "name", "protocol", "updatedAt")
+        VALUES (gen_random_uuid(), current_setting('app.current_tenant')::uuid,
+                'legacy', 'Legacy IdP', 'oidc', now())
+      `,
+    );
+
+    const rows = await withTenant(tenantId, (tx) => listUpstreams(tx));
+    const legacy = rows.find((row) => row.slug === 'legacy');
+    expect(legacy?.allowLoginAdoption).toBe(false);
+  });
+
+  it('survives a round trip that does not mention it', async () => {
+    // `upsertUpstream` spreads its input, so a field the caller leaves at
+    // false must come back false rather than picking up a value from the row
+    // it is updating.
+    const created = await withTenant(tenantId, (tx) =>
+      upsertUpstream(tx, provider, input({ slug: 'round-trip' })),
+    );
+    expect(created.allowLoginAdoption).toBe(false);
+
+    const on = await withTenant(tenantId, (tx) =>
+      upsertUpstream(tx, provider, input({ slug: 'round-trip', allowLoginAdoption: true })),
+    );
+    expect(on.allowLoginAdoption).toBe(true);
+
+    // AND BACK OFF AGAIN. A setting that can be turned on and not off is not a
+    // setting, and an upsert that spreads its input can silently become one.
+    const off = await withTenant(tenantId, (tx) =>
+      upsertUpstream(tx, provider, input({ slug: 'round-trip' })),
+    );
+    expect(off.allowLoginAdoption).toBe(false);
   });
 });

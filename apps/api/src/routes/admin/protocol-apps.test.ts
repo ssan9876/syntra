@@ -506,6 +506,44 @@ describe('admin protocol configuration', () => {
     expect(JSON.stringify(audit.json())).not.toContain('super-secret-value');
   });
 
+  it('stores allowLoginAdoption FALSE when the body does not mention it', async () => {
+    // The end of the write path an administrator actually uses. A security
+    // default is only a default if it survives the whole way down: the zod
+    // schema, the service, and the column. This branch has had one made inert
+    // three times, each time by a layer that helpfully filled in a value.
+    const created = await post('/api/admin/upstreams', {
+      slug: 'entra',
+      name: 'Entra ID',
+      protocol: 'oidc',
+      issuerUrl: 'https://login.example/entra',
+      clientId: 'syntra',
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().allowLoginAdoption).toBe(false);
+
+    const list = await get('/api/admin/upstreams');
+    expect(list.json().upstreams[0].allowLoginAdoption).toBe(false);
+
+    // And on the audit event, so "who turned this on, and when" is answerable.
+    const audit = await get('/api/admin/audit');
+    expect(JSON.stringify(audit.json())).toContain('allowLoginAdoption');
+  });
+
+  it('stores allowLoginAdoption TRUE when the body asks for it', async () => {
+    // The control has to be live, or the test above passes against a field
+    // nailed to false and nobody notices until a migration needs it.
+    const created = await post('/api/admin/upstreams', {
+      slug: 'okta',
+      name: 'Okta',
+      protocol: 'oidc',
+      issuerUrl: 'https://login.example/okta',
+      clientId: 'syntra',
+      allowLoginAdoption: true,
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().allowLoginAdoption).toBe(true);
+  });
+
   it('refuses every protocol route to a portal session', async () => {
     const applicationId = await samlApplication('p');
     const res = await put(

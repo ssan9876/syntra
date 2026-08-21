@@ -72,6 +72,12 @@ export async function registerAdminUpstreamRoutes(
             idpEntityId: saved.idpEntityId,
             ssoUrl: saved.ssoUrl,
             createUsers: saved.createUsers,
+            // On the audit event, always, and not only when it is on. "Who
+            // let this upstream take over existing accounts, and when" is the
+            // question a reviewer asks after the fact, and an event that
+            // records the setting only in its dangerous state cannot answer
+            // when it was turned back off.
+            allowLoginAdoption: saved.allowLoginAdoption,
             secretWritten: body.clientSecret !== undefined,
           },
         });

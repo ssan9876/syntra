@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser, deactivateUser } from '../directory/user-service.js';
+import { hashPassword, setPasswordHash } from '../auth/password.js';
+import { assignRole, createRole } from '../rbac/rbac-service.js';
+import { ALL_PERMISSIONS } from '../rbac/permissions.js';
 import { upsertUpstream } from './upstream-service.js';
 import { linkOrProvision, mapClaims } from './jit-service.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
@@ -30,6 +33,7 @@ const base = {
   displayNameAttribute: 'name',
   groupsAttribute: null,
   createUsers: true,
+  allowLoginAdoption: false,
   refreshOnLogin: true,
   defaultOrgUnitId: null,
 };
@@ -128,15 +132,96 @@ describe('linkOrProvision', () => {
     expect(await users()).toHaveLength(0);
   });
 
-  it('links an existing local account by login when the subject is new', async () => {
+  it('REFUSES an existing local account by default, and touches nothing', async () => {
+    // This asserted the adoption for a long time, and the adoption is a
+    // takeover: the upstream chooses what it asserts, so an identity provider
+    // naming `admin` was handed the Syntra account called `admin`. Directory
+    // Sync refuses exactly this and calls it a conflict; the reason does not
+    // change because the claim arrived over SAML.
     const existing = await withTenant(tenantId, (tx) =>
       createUser(tx, { login: 'jdoe@acme.test', email: 'x@acme.test', displayName: 'Old' }),
     );
-    const result = await linkOrProvision(tenantId, upstream, profile());
+
+    expect(await linkOrProvision(tenantId, upstream, profile())).toEqual({
+      userId: null,
+      reason: 'adoption_not_allowed',
+    });
+
+    // No link, and the account is exactly as it was — a refusal that still
+    // rewrote `passwordSource` would have pointed this person's password reset
+    // at an upstream that does not know them.
+    expect(await links()).toHaveLength(0);
+    const after = await withTenant(tenantId, (tx) =>
+      tx.user.findUniqueOrThrow({ where: { id: existing.id } }),
+    );
+    expect(after.displayName).toBe('Old');
+    expect(after.passwordSource).toBe(existing.passwordSource);
+  });
+
+  it('links an existing local account when the upstream is permitted to', async () => {
+    // The migration case the flag exists for: accounts pre-created for people
+    // who have not signed in yet, holding nothing.
+    const adopting = await withTenant(tenantId, (tx) =>
+      upsertUpstream(tx, keyProvider, { ...base, allowLoginAdoption: true }),
+    );
+    const existing = await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'jdoe@acme.test', email: 'x@acme.test', displayName: 'Old' }),
+    );
+    const result = await linkOrProvision(tenantId, adopting, profile());
     expect(result).toMatchObject({ userId: existing.id, created: false });
     const rows = await links();
     expect(rows).toHaveLength(1);
     expect(rows[0]!.subject).toBe('upstream-sub-1');
+  });
+
+  it('refuses an account holding a PASSWORD, however the upstream is configured', async () => {
+    const adopting = await withTenant(tenantId, (tx) =>
+      upsertUpstream(tx, keyProvider, { ...base, allowLoginAdoption: true }),
+    );
+    const existing = await withTenant(tenantId, async (tx) => {
+      const user = await createUser(tx, {
+        login: 'jdoe@acme.test',
+        email: 'x@acme.test',
+        displayName: 'Old',
+      });
+      await setPasswordHash(tx, user.id, await hashPassword('a-long-enough-password'));
+      return user;
+    });
+
+    expect(await linkOrProvision(tenantId, adopting, profile())).toEqual({
+      userId: null,
+      reason: 'adoption_refused_privileged',
+    });
+    expect(await links()).toHaveLength(0);
+    // The credential is still there and still theirs.
+    const credential = await withTenant(tenantId, (tx) =>
+      tx.passwordCredential.findFirst({ where: { userId: existing.id } }),
+    );
+    expect(credential).not.toBeNull();
+  });
+
+  it('refuses an account holding a ROLE, however the upstream is configured', async () => {
+    // The account worth stealing. An administrator turning the flag on is
+    // consenting to a migration, not to handing over authority somebody
+    // granted — so the flag does not reach this, and no setting does.
+    const adopting = await withTenant(tenantId, (tx) =>
+      upsertUpstream(tx, keyProvider, { ...base, allowLoginAdoption: true }),
+    );
+    await withTenant(tenantId, async (tx) => {
+      const user = await createUser(tx, {
+        login: 'jdoe@acme.test',
+        email: 'x@acme.test',
+        displayName: 'Old',
+      });
+      const role = await createRole(tx, 'Owner', [...ALL_PERMISSIONS]);
+      await assignRole(tx, user.id, role.id);
+    });
+
+    expect(await linkOrProvision(tenantId, adopting, profile())).toEqual({
+      userId: null,
+      reason: 'adoption_refused_privileged',
+    });
+    expect(await links()).toHaveLength(0);
   });
 
   it('refuses to adopt an account the same upstream already bound to another subject', async () => {
@@ -160,10 +245,18 @@ describe('linkOrProvision', () => {
     expect(rows[0]!.userId).toBe(userId);
   });
 
-  it('lets a second upstream link the same local account', async () => {
+  it('lets a second upstream link the same local account, when permitted to', async () => {
+    // Two identity providers for one person is a real arrangement, and it is
+    // still an adoption: the second upstream is being handed an account it did
+    // not create. `allowLoginAdoption` is what says the tenant meant it.
     const first = await linkOrProvision(tenantId, upstream, profile());
     const okta = await withTenant(tenantId, (tx) =>
-      upsertUpstream(tx, keyProvider, { ...base, slug: 'okta', name: 'Okta' }),
+      upsertUpstream(tx, keyProvider, {
+        ...base,
+        slug: 'okta',
+        name: 'Okta',
+        allowLoginAdoption: true,
+      }),
     );
     const second = await linkOrProvision(tenantId, okta, profile({ subject: 'okta-1' }));
     expect(second).toMatchObject({

@@ -25,6 +25,7 @@ export interface UpstreamIdpRecord {
   displayNameAttribute: string;
   groupsAttribute: string | null;
   createUsers: boolean;
+  allowLoginAdoption: boolean;
   refreshOnLogin: boolean;
   defaultOrgUnitId: string | null;
 }
@@ -49,6 +50,12 @@ const toRecord = (row: Record<string, unknown>): UpstreamIdpRecord => ({
   displayNameAttribute: row.displayNameAttribute as string,
   groupsAttribute: (row.groupsAttribute as string | null) ?? null,
   createUsers: row.createUsers as boolean,
+  // `=== true`, not a cast. A cast turns undefined — a row read before the
+  // column existed, a projection that forgot it — into undefined, and
+  // `if (!upstream.allowLoginAdoption)` would then read as false by accident
+  // rather than by decision. This makes the safe answer the one you get when
+  // anything at all has gone wrong.
+  allowLoginAdoption: row.allowLoginAdoption === true,
   refreshOnLogin: row.refreshOnLogin as boolean,
   defaultOrgUnitId: (row.defaultOrgUnitId as string | null) ?? null,
 });
