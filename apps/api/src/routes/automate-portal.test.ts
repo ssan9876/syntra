@@ -228,6 +228,26 @@ describe('requests', () => {
     expect(mine.json().requests).toHaveLength(1);
   });
 
+  it('submits for MYSELF when the body names no subject, as the portal form does', async () => {
+    // `RequestFormPage` sends `subjectPersonId: undefined`, which
+    // `JSON.stringify` drops — and `subjectFor(request, requested: string |
+    // undefined)` was written for exactly that, returning the caller's own
+    // person when nothing is named. The contract required the field anyway, so
+    // every request submitted from the portal was refused with "Validation
+    // failed" before it reached the handler that knew what to do with it.
+    //
+    // Found by the browser suite the first time it ran. This is the cheap
+    // version of that assertion: an e2e run is slow insurance for a schema that
+    // one edit can put back.
+    const created = await call('POST', '/api/portal/automate/requests', annaCookie, {
+      productId,
+      justification: null,
+      formValues: {},
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    expect(created.json()).toMatchObject({ status: 'fulfilled' });
+  });
+
   it('answers a refusal as a 422 with the reason, not a 500', async () => {
     const response = await call('POST', '/api/portal/automate/requests', annaCookie, {
       productId,

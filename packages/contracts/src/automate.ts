@@ -118,7 +118,13 @@ export type WorkflowBody = z.input<typeof workflowBody>;
 
 export const submitRequestBody = z.object({
   productId: z.string().uuid(),
-  subjectPersonId: z.string().uuid(),
+  // OPTIONAL, because absent means "for myself" — which is what the portal's
+  // own request form sends, and what `subjectFor` was written to handle:
+  // `(request, requested: string | undefined)`, returning the caller's own
+  // person when nothing was named. Required here, the two disagreed and every
+  // request submitted from the portal was refused with "Validation failed"
+  // before it reached the handler that knew what to do with it.
+  subjectPersonId: z.string().uuid().optional(),
   justification: z.string().max(4000).nullable().default(null),
   formValues: z.record(z.unknown()).default({}),
   requestedDurationDays: z.number().int().positive().max(3650).nullable().default(null),
