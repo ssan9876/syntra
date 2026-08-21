@@ -8,8 +8,8 @@
     "generate": "prisma generate",
     "migrate": "prisma migrate deploy",
     "migrate:dev": "prisma migrate dev",
-    "seed": "tsx src/seed.ts",
-    "reset": "tsx src/reset.ts"
+    "seed": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/seed.ts",
+    "reset": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/reset.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.2.0",
