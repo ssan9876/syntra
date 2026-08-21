@@ -54,12 +54,71 @@ async function elevateTo(page: Page, path: string, password: string) {
 
 test.describe.configure({ mode: 'serial' });
 
-const CAMPAIGN = `Nurses review ${Date.now()}`;
+const STAMP = Date.now();
+const CAMPAIGN = `Ward review ${STAMP}`;
+const SUBJECT_LOGIN = `ward${STAMP}`;
+const GROUP_NAME = `Ward ${STAMP}`;
 let campaignId = '';
+let joPersonId = '';
+
+/**
+ * A SUBJECT WHO IS NOT THE REVIEWER.
+ *
+ * `reviewer-service.ts` subtracts the subject from the resolved set — nobody
+ * reviews their own access — and the seed links exactly two users to persons:
+ * `jdoe` to Jo Doe, and `sroe` to Sam Roe, who is inactive. The only Syntra
+ * group membership it creates is Jo's own membership of Nurses. Scope a
+ * campaign at `syntraGroup` with Jo as the reviewer and the only holding in
+ * range is Jo's, the resolved set empties, and every item lands
+ * `blocked_no_reviewer`.
+ *
+ * So the spec builds its own: a person, a login for them, and a group they are
+ * in. Jo can review that. `sync.spec.ts` works the same way with its
+ * timestamped OU — a browser test that needs a fixture the seed does not have
+ * creates it rather than describing one that does not exist.
+ */
+async function buildReviewableHolding(page: import('@playwright/test').Page): Promise<void> {
+  const person = await page.request.post('/api/admin/persons', {
+    data: { givenName: 'Wanda', familyName: `Ward${STAMP}`, businessEmail: `${SUBJECT_LOGIN}@acme.test` },
+  });
+  expect(person.status(), await person.text()).toBe(201);
+  const personId = (await person.json()).id as string;
+
+  const user = await page.request.post('/api/admin/users', {
+    data: {
+      login: SUBJECT_LOGIN,
+      email: `${SUBJECT_LOGIN}@acme.test`,
+      displayName: `Wanda Ward${STAMP}`,
+    },
+  });
+  expect(user.status(), await user.text()).toBe(201);
+  const userId = (await user.json()).id as string;
+
+  // The link is what makes the holding a PERSON's holding. Without it the item
+  // is an unattributed account, which routes to the fallback and tests
+  // something else entirely.
+  const linked = await page.request.post(`/api/admin/persons/${personId}/link-user`, {
+    data: { userId },
+  });
+  expect(linked.ok(), await linked.text()).toBeTruthy();
+
+  const group = await page.request.post('/api/admin/groups', {
+    data: { name: GROUP_NAME, description: 'Built by the Govern browser spec.' },
+  });
+  expect(group.status(), await group.text()).toBe(201);
+  const groupId = (await group.json()).id as string;
+
+  const member = await page.request.post(`/api/admin/groups/${groupId}/members/${userId}`);
+  expect(member.ok(), await member.text()).toBeTruthy();
+}
 
 test('a snapshot is built from the console, and says what it could not see', async ({ page }) => {
   await signIn(page, 'admin', ADMIN!);
   await elevateTo(page, '/admin/govern/snapshots', ADMIN!);
+
+  // BEFORE the snapshot. A snapshot is a point-in-time picture, and a holding
+  // created after it was taken is not in it.
+  await buildReviewableHolding(page);
 
   await page.getByRole('button', { name: 'Build a snapshot now' }).click();
 
@@ -83,6 +142,7 @@ test('a campaign against that snapshot appears with its denominator, never a bar
   const jo = ((await persons.json()) as { persons: { id: string; givenName: string }[] }).persons
     .find((p) => p.givenName === 'Jo');
   expect(jo, 'the seed must have Jo Doe in it').toBeTruthy();
+  joPersonId = jo!.id;
 
   const created = await page.request.post('/api/admin/govern/campaigns', {
     data: {
@@ -114,42 +174,25 @@ test('a campaign against that snapshot appears with its denominator, never a bar
   await expect(row).toContainText('not yet closed');
 });
 
-/**
- * THE PORTAL REVIEW PATH IS NOT COVERED HERE, and the reason is worth writing
- * down rather than discovering twice.
- *
- * A reviewer may not review their own access — `reviewer-service.ts` applies
- * the self-review invariant as a subtraction from the resolved set — and the
- * seed links exactly two users to persons: `jdoe` to Jo Doe, and `sroe` to Sam
- * Roe, who is inactive. The only Syntra group membership in the seed is Jo's
- * own membership of Nurses. So the only holding available to review belongs to
- * the only person available to review it, the resolved set is empty, and the
- * item lands `blocked_no_reviewer` — which is the product behaving correctly
- * and saying so, not a defect.
- *
- * Covering this needs the spec to create its own fixture: a second person with
- * a portal login, holding something the first person can review. `sync.spec.ts`
- * already works that way with its timestamped OU. Until then these two are
- * `fixme` rather than deleted, because the path they describe is real and
- * exercised thoroughly by the integration tests — it is the BROWSER journey
- * that is unproven.
- */
-test.fixme('a manager reviews from the PORTAL, with no administrative session', async ({ page }) => {
+test('a manager reviews from the PORTAL, with no administrative session', async ({ page }) => {
   await signIn(page, 'jdoe', USER!);
 
   await page.goto('/govern/reviews');
   await expect(page.getByRole('heading', { name: 'My reviews' })).toBeVisible();
 
-  const item = page.getByText('Nurses').first();
+  const item = page.getByText(GROUP_NAME).first();
   await expect(item).toBeVisible();
 
   // A revoke always needs a comment, and the page asks for it before it sends
   // anything.
-  page.once('dialog', (dialog) => void dialog.accept('Jo moved to Learning in January'));
+  page.once('dialog', (dialog) => void dialog.accept('Wanda left the ward in January'));
   await page.getByRole('button', { name: 'Remove' }).first().click();
 
   // Decided items leave the queue; nothing is left waiting.
-  await expect(page.getByRole('heading', { name: 'Nothing is waiting for you' })).toBeVisible();
+  // `getByText`, not `getByRole('heading')`. `Empty` renders its title as a
+  // `<p>` — there is no heading here, and an assertion that asks for one waits
+  // out its timeout against a screen that is showing exactly what it should.
+  await expect(page.getByText('Nothing is waiting for you')).toBeVisible();
 });
 
 test('the console has nothing to offer a reviewer who is not an administrator', async ({ page }) => {
@@ -161,12 +204,20 @@ test('the console has nothing to offer a reviewer who is not an administrator', 
   await expect(page.getByText(CAMPAIGN)).toHaveCount(0);
 });
 
-// Depends on the revoke the fixme above would have made.
-test.fixme('the revocation batch carries the decision, and is the last cheap moment', async ({ page }) => {
+test('the revocation batch carries the decision, and is the last cheap moment', async ({ page }) => {
   await signIn(page, 'admin', ADMIN!);
   await elevateTo(page, `/admin/govern/campaigns/${campaignId}`, ADMIN!);
 
-  await expect(page.getByText('1 revoked')).toBeVisible();
+  // NOT `1 revoked`. The campaign's counters — certified, revoked, moot,
+  // undecided, coverage — are written when the campaign CLOSES, by
+  // `closeDueCampaigns`, and stay zero while it is open. Asserting them here
+  // was asserting that a closing artefact exists before the close.
+  //
+  // What is true of an open campaign, and is the more interesting fact anyway:
+  // one item resolved to nobody. Jo cannot review Jo's own membership of
+  // Nurses, so that item has no reviewer and the screen says so instead of
+  // quietly counting it as done.
+  await expect(page.getByText(/item\(s\) have no reviewer and no fallback/)).toBeVisible();
 
   await page.getByRole('button', { name: 'Compute the revocation batch' }).click();
   await page.getByRole('link', { name: 'Open the batch' }).click();
@@ -174,7 +225,7 @@ test.fixme('the revocation batch carries the decision, and is the last cheap mom
   await expect(page.getByRole('heading', { name: /removals Govern can dispatch/ })).toBeVisible();
   // The decision reached the batch, whichever route it took: a dispatchable
   // removal, or its own panel because something else has to change first.
-  await expect(page.getByText('Nurses').first()).toBeVisible();
+  await expect(page.getByText(GROUP_NAME).first()).toBeVisible();
   await expect(
     page.getByText('Nothing here has happened yet. This is the last point at which a mistake costs nothing.'),
   ).toBeVisible();
