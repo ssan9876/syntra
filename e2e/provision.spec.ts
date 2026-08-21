@@ -264,6 +264,10 @@ test('configure a target, write a rule, review a run, apply part of it', async (
 
   await page.getByRole('button', { name: 'Create target' }).click();
   await expect(page).toHaveURL(/\/admin\/targets\/[0-9a-f-]{36}$/);
+  // Kept, because `goBack()` further down does not reliably land here — there
+  // are several navigations in between — and the target's own page is the only
+  // one carrying the links this test still needs.
+  const targetUrl = page.url();
 
   // Additive by default, and visible on the target's own screen (Ruling P2).
   await expect(page.getByLabel('Enforcement mode')).toHaveValue('additive');
@@ -304,9 +308,17 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   await page.getByRole('button', { name: 'Save rule' }).click();
   await expect(page.getByText('Saved.')).toBeVisible();
 
-  await page.goBack();
-  await page.getByRole('link', { name: 'Runs' }).click();
-  await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
+  // EXACT, and from the target's own page.
+  //
+  // `getByRole('link', { name: 'Runs' })` is a SUBSTRING match, and the admin
+  // navigation carries "Sync runs" on every page. After a `goBack()` that did
+  // not return here, that was the only match — so this clicked through to
+  // Directory Sync's run list, where `heading 'Runs'` matched "Sync runs" just
+  // as loosely and the assertion passed. The test then waited five minutes for
+  // a "Run now" button on a page that has never had one.
+  await page.goto(targetUrl);
+  await page.getByRole('link', { name: 'Runs', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Runs', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Run now' }).click();
 
   // Enqueued, not performed in the request: the row appears when the worker

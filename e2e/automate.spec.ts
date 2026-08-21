@@ -42,7 +42,32 @@ test('a product with no audience is visible to nobody, and saying so is on the s
   await expect(page.getByText(/nobody will see this product/i)).toBeVisible();
 });
 
-test('a user requests something, the manager approves, and the user sees it granted', async ({
+/**
+ * THESE FOUR HAVE NEVER PASSED, and it is not a selector problem.
+ *
+ * They sign in as `user` and `lead`. The seed creates `admin`, `jdoe`, `sroe`
+ * and `svc-backup` — neither of those two has ever existed. They then reach for
+ * a catalog product called "Statistics licence" with an approval workflow that
+ * names an approver, a group with a team lead, and a sweep that comes back
+ * blocked. The seed creates no Automate fixtures at all: no product, no
+ * audience, no workflow, no sweep.
+ *
+ * So this file was written against a fixture that was never built, and the
+ * whole spec failed on its first `page.goto` for as long as it has existed —
+ * which nobody saw, because the browser suite had never been run.
+ *
+ * Fixing it means the spec building its own fixtures through the API, the way
+ * `sync.spec.ts` does with its timestamped OU: two portal users, a product with
+ * an audience and a one-stage workflow, a group whose lead is one of them, and
+ * a sweep driven into the blocked state. That is a real piece of work and it is
+ * not a browser-selector fix, so these are marked rather than left red or
+ * quietly deleted — the journeys they describe are the ones Automate exists for,
+ * and the integration tests cover the same ground at the service layer.
+ *
+ * `automate.spec.ts:34` — the product with no audience — needs none of that and
+ * passes.
+ */
+test.fixme('a user requests something, the manager approves, and the user sees it granted', async ({
   page,
 }) => {
   await signIn(page, 'user', USER!);
@@ -68,7 +93,7 @@ test('a user requests something, the manager approves, and the user sees it gran
   await expect(page.getByText(/held/i).first()).toBeVisible();
 });
 
-test('a refusal names the reason and the requester reads it', async ({ page }) => {
+test.fixme('a refusal names the reason and the requester reads it', async ({ page }) => {
   await signIn(page, 'user', USER!);
   await page.goto('/catalog');
   await page.getByRole('link', { name: /finance folder/i }).click();
@@ -92,7 +117,7 @@ test('a refusal names the reason and the requester reads it', async ({ page }) =
   await expect(page.getByText('not for this project')).toBeVisible();
 });
 
-test('a team lead adds a member from the portal with no administrative session', async ({
+test.fixme('a team lead adds a member from the portal with no administrative session', async ({
   page,
 }) => {
   await signIn(page, 'lead', USER!);
@@ -105,7 +130,7 @@ test('a team lead adds a member from the portal with no administrative session',
   await expect(page.getByRole('heading', { name: /confirm your password/i })).toHaveCount(0);
 });
 
-test('a blocked sweep is reviewed and confirmed', async ({ page }) => {
+test.fixme('a blocked sweep is reviewed and confirmed', async ({ page }) => {
   await signIn(page, 'admin', ADMIN!);
   await elevateTo(page, '/admin/automate/sweeps');
   await page.getByRole('button', { name: /run a preview now/i }).click();
