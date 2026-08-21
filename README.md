@@ -98,6 +98,26 @@ The host matters: Syntra picks the tenant from the `Host` header, so
 `localhost:5173` will report an unknown tenant while `acme.localhost:5173`
 resolves to the seeded tenant.
 
+### Continuous integration
+
+`.github/workflows/ci.yml` runs two jobs on every push and pull request: the
+unit and integration suite against a real PostgreSQL, OpenLDAP and Samba domain
+controller, and the browser suite against a running, seeded stack.
+
+Both bring the infrastructure up with `infra/docker-compose.yml` rather than
+GitHub's `services:`. The OpenLDAP container needs its bootstrap LDIF and TLS
+settings and the Samba container needs a domain provisioned; both are already
+expressed in that file, and a second, drifting copy of it in YAML is how CI
+starts testing something the developers do not run.
+
+**One known flake, deliberately not retried.** Under load a handful of
+`resetDatabase()` hooks time out at 30 seconds and take their files with them.
+The failing set moves between runs and every one of them passes in isolation —
+seen roughly one run in two on an 8-worker machine. A `Hook timed out in
+30000ms` in the test job is that, not your change. It is written up, with the
+arithmetic and three candidate fixes, in
+`docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md`.
+
 ### Tests
 
 ```bash

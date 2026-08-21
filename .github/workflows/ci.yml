@@ -1,0 +1,176 @@
+name: CI
+
+# Everything this repository knows how to check, on every push and every pull
+# request. Until this file existed, all of it depended on somebody remembering.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A second push to the same branch cancels the first: a 30-minute suite that
+  # queues behind two superseded runs is a suite people stop waiting for.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Test-only, and generated rather than stored: nothing here protects anything.
+  # MASTER_KEY must be 32 base64 bytes or the seed makes no SAML signing key.
+  SEED_ADMIN_PASSWORD: a-long-enough-admin-password
+  SEED_USER_PASSWORD: a-long-enough-user-password
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The unit and integration suite: 167 files, ~3,350 tests, against a real
+  # PostgreSQL, a real OpenLDAP and a real Samba domain controller.
+  #
+  # `docker compose` rather than GitHub's `services:`, deliberately. The
+  # OpenLDAP container needs its bootstrap LDIF and its TLS settings, and the
+  # Samba container needs a domain provisioned; both are already expressed in
+  # `infra/docker-compose.yml`, and a second, drifting copy of that in YAML is
+  # how CI starts testing something the developers do not run.
+  # ---------------------------------------------------------------------------
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # `packageManager` in package.json pins the version. A newer pnpm installs
+      # without running build scripts for Prisma and argon2, reports success,
+      # and leaves nothing able to reach the database.
+      - run: corepack enable
+
+      - name: Start PostgreSQL, OpenLDAP, Samba and MailDev
+        run: docker compose -f infra/docker-compose.yml up -d
+
+      - name: Write the environment
+        # Two files, because Prisma's CLI reads `.env` from its own working
+        # directory and pnpm runs `migrate` with the cwd set to packages/db.
+        run: |
+          cp .env.example .env
+          cp packages/db/.env.example packages/db/.env
+          {
+            echo "SESSION_SECRET=$(openssl rand -base64 32)"
+            echo "MASTER_KEY=$(openssl rand -base64 32)"
+          } >> .env
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Wait for PostgreSQL
+        run: |
+          for _ in $(seq 1 60); do
+            docker exec infra-postgres-1 pg_isready -U syntra -d syntra && exit 0
+            sleep 2
+          done
+          echo "PostgreSQL never became ready"; docker compose -f infra/docker-compose.yml logs postgres; exit 1
+
+      - run: pnpm db:generate
+      - run: pnpm db:migrate
+
+      - name: Typecheck
+        run: pnpm exec tsc -b --force
+
+      # KNOWN FLAKY, and not papered over with a retry.
+      #
+      # Under load a handful of `resetDatabase()` hooks time out at 30s and take
+      # their files with them; the failing set moves between runs and every one
+      # of them passes in isolation. It was seen on an 8-worker machine roughly
+      # one run in two. A hosted runner has fewer cores and therefore fewer
+      # workers, so it may not appear here at all — but if this step goes red
+      # with `Hook timed out in 30000ms`, that is this and not your change.
+      # See docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md.
+      - name: Test
+        run: pnpm test
+
+      - name: Container logs, if the suite failed
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml logs --tail 100
+
+  # ---------------------------------------------------------------------------
+  # The browser suite, against a running stack. Separate job because it needs
+  # the application up, seeded, and a browser — and because a failure here means
+  # something different from a failure above.
+  # ---------------------------------------------------------------------------
+  e2e:
+    name: browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: corepack enable
+
+      - name: Start PostgreSQL, OpenLDAP, Samba and MailDev
+        run: docker compose -f infra/docker-compose.yml up -d
+
+      - name: Write the environment
+        run: |
+          cp .env.example .env
+          cp packages/db/.env.example packages/db/.env
+          {
+            echo "SESSION_SECRET=$(openssl rand -base64 32)"
+            echo "MASTER_KEY=$(openssl rand -base64 32)"
+          } >> .env
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - name: Wait for PostgreSQL
+        run: |
+          for _ in $(seq 1 60); do
+            docker exec infra-postgres-1 pg_isready -U syntra -d syntra && exit 0
+            sleep 2
+          done
+          echo "PostgreSQL never became ready"; exit 1
+
+      - run: pnpm db:generate
+      - run: pnpm db:migrate
+
+      # A fresh seed, every time. The integration suite truncates between cases
+      # and leaves the last one's fixtures behind, which is enough to fool the
+      # seed's idempotence guard into doing nothing — and the browser tests then
+      # look at a directory with no people in it.
+      - name: Seed
+        run: |
+          pnpm db:reset
+          pnpm seed
+
+      - name: Start the application
+        # The rate limit is doing its job when it refuses: this suite signs in
+        # far more often in a minute than a person ever would.
+        run: |
+          AUTH_RATE_LIMIT_MAX=200 pnpm dev > /tmp/dev.log 2>&1 &
+          for _ in $(seq 1 90); do
+            if curl -sf -o /dev/null -H 'Host: acme.localhost' http://127.0.0.1:5173/login \
+               && curl -s -o /dev/null http://127.0.0.1:3000/; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "the stack never came up"; cat /tmp/dev.log; exit 1
+
+      - run: pnpm e2e
+
+      - name: What the application said, if the browser suite failed
+        if: failure()
+        run: tail -100 /tmp/dev.log
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
