@@ -33,6 +33,13 @@ async function elevateTo(page: Page, path: string, password: string) {
   ).toBeVisible();
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Continue' }).click();
+  // WAITED FOR. Clicking Continue starts the elevation; it does not finish it.
+  // A UI action after this auto-waits and hides the gap — an API call through
+  // `page.request` does not, and goes out against whatever cookie exists at
+  // that instant.
+  await expect(
+    page.getByRole('heading', { name: /confirm your password/i }),
+  ).toBeHidden();
 }
 
 // The fixture directory (infra/ldap/seed.ldif) deliberately mirrors the app
