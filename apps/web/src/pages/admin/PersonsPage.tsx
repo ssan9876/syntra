@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { CreatePanel } from './CreatePanel.js';
 import { PageHeader } from './PageHeader.js';
 
 interface PersonRow {
@@ -13,7 +14,7 @@ interface PersonRow {
 }
 
 export function PersonsPage() {
-  const { data, error, loading } = useApiResource<{ persons: PersonRow[] }>(
+  const { data, error, loading, reload } = useApiResource<{ persons: PersonRow[] }>(
     '/api/admin/persons',
   );
 
@@ -25,6 +26,60 @@ export function PersonsPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+
+      <CreatePanel
+        title="New person"
+        submitLabel="Add someone"
+        path="/api/admin/persons"
+        onCreated={reload}
+        build={(v) => ({
+          givenName: v.givenName ?? '',
+          familyName: v.familyName ?? '',
+          // Each omitted when blank. The schema validates these as e-mail
+          // addresses and as a bounded string, and '' satisfies neither.
+          ...(v.businessEmail ? { businessEmail: v.businessEmail } : {}),
+          ...(v.externalId ? { externalId: v.externalId } : {}),
+        })}
+        fields={(v, set, errs) => (
+          <>
+            <Field
+              label="Given name"
+              value={v.givenName ?? ''}
+              onChange={(x) => set('givenName', x)}
+              error={errs.givenName}
+              placeholder="Maya"
+            />
+            <Field
+              label="Family name"
+              value={v.familyName ?? ''}
+              onChange={(x) => set('familyName', x)}
+              error={errs.familyName}
+              placeholder="Okafor"
+            />
+            <Field
+              label="Business email"
+              value={v.businessEmail ?? ''}
+              onChange={(x) => set('businessEmail', x)}
+              error={errs.businessEmail}
+              type="email"
+              placeholder="maya.okafor@acme.localhost"
+            />
+            <Field
+              label="External id"
+              value={v.externalId ?? ''}
+              onChange={(x) => set('externalId', x)}
+              error={errs.externalId}
+              hint="The identifier the HR system knows them by. Must be unique."
+              placeholder="E1042"
+            />
+          </>
+        )}
+      />
+
+      {/* A person is not an account. Creating one here records WHO somebody
+          is; linking them to a login, and giving them a contract, are separate
+          acts on their own page — which is the distinction this product is
+          built on and the reason the two lists are not one list. */}
 
       {!error && (
         <Panel>

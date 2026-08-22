@@ -1,5 +1,6 @@
-import { Alert, Empty, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { CreatePanel } from './CreatePanel.js';
 import { PageHeader } from './PageHeader.js';
 
 interface GroupRow {
@@ -9,7 +10,7 @@ interface GroupRow {
 }
 
 export function GroupsPage() {
-  const { data, error, loading } = useApiResource<{ groups: GroupRow[] }>(
+  const { data, error, loading, reload } = useApiResource<{ groups: GroupRow[] }>(
     '/api/admin/groups',
   );
 
@@ -21,6 +22,37 @@ export function GroupsPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+
+      <CreatePanel
+        title="New group"
+        submitLabel="New group"
+        path="/api/admin/groups"
+        onCreated={reload}
+        build={(v) => ({
+          name: v.name ?? '',
+          // Omitted rather than sent empty: the schema takes `description` as
+          // optional, and an empty string is a description somebody wrote.
+          ...(v.description ? { description: v.description } : {}),
+        })}
+        fields={(v, set, errs) => (
+          <>
+            <Field
+              label="Name"
+              value={v.name ?? ''}
+              onChange={(x) => set('name', x)}
+              error={errs.name}
+              placeholder="Ward Nurses"
+            />
+            <Field
+              label="Description"
+              value={v.description ?? ''}
+              onChange={(x) => set('description', x)}
+              error={errs.description}
+              hint="What this group is for. Shown wherever the group is granted access."
+            />
+          </>
+        )}
+      />
 
       {!error && (
         <Panel>

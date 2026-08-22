@@ -5,9 +5,15 @@ export interface SelectProps {
   value: string;
   onChange(value: string): void;
   options: { value: string; label: string }[];
-  hint?: string;
-  error?: string;
-  className?: string;
+  // `| undefined` on each, for the reason `Field` spells out: with
+  // `exactOptionalPropertyTypes` on, `error={errs.name}` off a
+  // `Record<string, string>` is `string | undefined` and will not assign to
+  // `string?`. `Field` was widened when it hit this; `Select` was not, and the
+  // two drifted — which is precisely what this shared component exists to
+  // prevent.
+  hint?: string | undefined;
+  error?: string | undefined;
+  className?: string | undefined;
 }
 
 /**

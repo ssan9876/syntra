@@ -1,5 +1,6 @@
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { CreatePanel } from './CreatePanel.js';
 import { PageHeader } from './PageHeader.js';
 
 interface UserRow {
@@ -19,8 +20,14 @@ interface SourceRow {
 }
 
 export function UsersPage() {
-  const { data, error, loading } = useApiResource<{ users: UserRow[] }>(
+  const { data, error, loading, reload } = useApiResource<{ users: UserRow[] }>(
     '/api/admin/users',
+  );
+  // For the org-unit picker on the create form. Same tolerance as the sources
+  // read below: a caller without `directory.read` on units gets an empty list
+  // and a form that still works, rather than a page that will not render.
+  const { data: unitsData } = useApiResource<{ orgUnits: { id: string; name: string }[] }>(
+    '/api/admin/org-units',
   );
   // Fetched alongside the users so a synced account can name the directory
   // that owns it, the way the sync run pages do. A caller holding
@@ -44,6 +51,67 @@ export function UsersPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+
+      <CreatePanel
+        title="New user"
+        submitLabel="New user"
+        path="/api/admin/users"
+        onCreated={reload}
+        build={(v) => ({
+          login: v.login ?? '',
+          email: v.email ?? '',
+          // Falls back to the login rather than being sent empty: the schema
+          // requires a display name, and "what shall I call this account" has
+          // an obvious answer when nobody typed one.
+          displayName: v.displayName?.trim() ? v.displayName : (v.login ?? ''),
+          ...(v.orgUnitId ? { orgUnitId: v.orgUnitId } : {}),
+        })}
+        fields={(v, set, errs) => (
+          <>
+            <Field
+              label="Login"
+              value={v.login ?? ''}
+              onChange={(x) => set('login', x)}
+              error={errs.login}
+              hint="How they sign in. Unique within this tenant."
+              placeholder="mokafor"
+            />
+            <Field
+              label="Email"
+              value={v.email ?? ''}
+              onChange={(x) => set('email', x)}
+              error={errs.email}
+              type="email"
+              placeholder="maya.okafor@acme.localhost"
+            />
+            <Field
+              label="Display name"
+              value={v.displayName ?? ''}
+              onChange={(x) => set('displayName', x)}
+              error={errs.displayName}
+              hint="Defaults to the login."
+              placeholder="Maya Okafor"
+            />
+            <Select
+              label="Org unit"
+              value={v.orgUnitId ?? ''}
+              onChange={(x) => set('orgUnitId', x)}
+              error={errs.orgUnitId}
+              options={[
+                { value: '', label: 'None' },
+                ...(unitsData?.orgUnits ?? []).map((u) => ({ value: u.id, label: u.name })),
+              ]}
+            />
+          </>
+        )}
+      />
+
+      {/* NO PASSWORD FIELD, and that is deliberate rather than unfinished.
+          There is no admin endpoint that sets one — `POST /users` does not
+          take a password and nothing else does either. A new account signs in
+          through a directory source, an upstream identity provider, or a
+          password reset. Offering a box here would be offering a control the
+          product does not have. */}
 
       {!error && anySynced && (
         // Said once, above the table, and again per row. An administrator who

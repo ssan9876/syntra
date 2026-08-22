@@ -1,5 +1,6 @@
-import { Alert, Empty, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Empty, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { CreatePanel } from './CreatePanel.js';
 import { PageHeader } from './PageHeader.js';
 
 interface OrgUnitRow {
@@ -9,7 +10,7 @@ interface OrgUnitRow {
 }
 
 export function OrgUnitsPage() {
-  const { data, error, loading } = useApiResource<{ orgUnits: OrgUnitRow[] }>(
+  const { data, error, loading, reload } = useApiResource<{ orgUnits: OrgUnitRow[] }>(
     '/api/admin/org-units',
   );
 
@@ -28,6 +29,41 @@ export function OrgUnitsPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+
+      <CreatePanel
+        title="New org unit"
+        submitLabel="New org unit"
+        path="/api/admin/org-units"
+        onCreated={reload}
+        build={(v) => ({
+          name: v.name ?? '',
+          // Empty means top level. `parentId` is a uuid or absent — never an
+          // empty string, which the schema rejects as a malformed uuid.
+          ...(v.parentId ? { parentId: v.parentId } : {}),
+        })}
+        fields={(v, set, errs) => (
+          <>
+            <Field
+              label="Name"
+              value={v.name ?? ''}
+              onChange={(x) => set('name', x)}
+              error={errs.name}
+              placeholder="Finance"
+            />
+            <Select
+              label="Parent"
+              value={v.parentId ?? ''}
+              onChange={(x) => set('parentId', x)}
+              error={errs.parentId}
+              hint="Leave at the top level for a unit with no parent."
+              options={[
+                { value: '', label: 'No parent — top level' },
+                ...(data?.orgUnits ?? []).map((u) => ({ value: u.id, label: u.name })),
+              ]}
+            />
+          </>
+        )}
+      />
 
       {!error && (
         <Panel>
