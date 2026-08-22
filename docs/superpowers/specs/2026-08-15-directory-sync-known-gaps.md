@@ -422,10 +422,54 @@ container. The hypervisor is exonerated; the demand is the problem.
 crashes, no hook timeouts, 3,357 tests. It costs time: ~43 minutes a run against
 ~24 at seven. `SYNTRA_TEST_WORKERS` already existed for this and CI now pins it.
 
-**What is still unexplained**, and worth saying rather than papering over: why the
-backend exits with code 2 at all. Oversubscription explains the correlation but not
-the mechanism, and nothing in the PostgreSQL log, the kernel log or the cgroup
-accounting names it.
+**The dying process is an AUTOVACUUM WORKER.** Identified by elimination over
+eleven further runs, each changing one variable against the configuration that
+crashed 3-of-3 (seven workers, `max_connections=300`):
+
+| what was changed | crashes |
+|---|---|
+| nothing — the baseline | 3 / 3 |
+| `max_parallel_workers_per_gather = 0` | 2 / 3 |
+| **`autovacuum = off`** | **0 / 3** |
+
+The evidence that narrowed it before the experiment confirmed it:
+
+- **Not a client backend.** Reproduced with `log_connections = on`; the crashing
+  PID had *zero* lines in a 942MB log. Every client backend logs "connection
+  received" in `BackendInitialize`, and its PID neighbours logged theirs — so
+  the setting was working.
+- **Not a query.** Reproduced with `log_statement = all`: 55,658 statements
+  logged from other backends, none from the dying one.
+- **Not the kernel.** No segfault or OOM in the guest *or* the host, `oom_kill 0`
+  in the cgroup, no signal termination — a process that calls `_exit(2)` itself.
+- **Not the hypervisor.** The rig was rebuilt as a KVM guest to test
+  Docker-in-LXC; it crashed 3-of-3, worse than the container.
+- **Not container limits.** Postgres peaked at 29 processes of a 14,330 ceiling
+  and 2.5GB, with every cgroup memory event at zero.
+
+That leaves the one postmaster child which logs nothing by default, receives no
+connection and runs no client statement. And it is exactly the process this suite
+fights: `resetDatabase()` TRUNCATEs every table between every test, on seven
+workers at once, and the log is thick with autovacuum workers losing lock races
+against those truncates — "skipping analyze ... lock not available" for ninety
+seconds before each crash.
+
+**Turning autovacuum off is NOT the fix**, and the same three runs prove it: hook
+timeouts of 18, 59 and 28 against 0–6 with it on. Elevated in every run, though
+not monotonically — an earlier reading of these as an accelerating curve was
+over-read from two data points. Without autovacuum the tables this suite hammers
+degrade and `resetDatabase()` times out instead. It was a diagnostic only, run as
+an `ALTER SYSTEM` on the test box with the repo untouched, and reverted after.
+
+**The fix remains four workers**, which is committed. It now has a mechanism
+rather than a correlation: fewer workers means a smaller truncate storm, so
+autovacuum workers are not fighting for locks hard enough to die.
+
+**Still unexplained**, and worth saying rather than papering over: the precise
+fault inside the worker. `exit code 2` with no signal is the signature of
+`quickdie()`'s `_exit(2)`, but nothing in the log, the kernel or the cgroup
+accounting names what drove it there. Identifying the process is as far as this
+evidence reaches; naming the fault inside it would need a core dump.
 
 Left over from the same runs: `transaction-budget.test.ts` fails on a cold database
 — 3241ms and 4579ms against a 2500ms budget on the first run after the container is
