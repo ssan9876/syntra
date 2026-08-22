@@ -21,3 +21,8 @@ dist/
 # was mutated. The run logs and per-run results are one run's output and
 # belong with the other scratch under .superpowers/.
 tools/*-mutants.results.*.json
+
+# Session tooling state — scheduler locks and the like. Nothing here describes
+# the project, and a committed lock file is a merge conflict waiting for the
+# next person who runs the same tool.
+.claude/
