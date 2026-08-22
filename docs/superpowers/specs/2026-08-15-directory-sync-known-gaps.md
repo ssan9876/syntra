@@ -383,6 +383,55 @@ labelling.
 
 Everything else on this page is closed.
 
+## Seven workers takes PostgreSQL down — measured
+
+Fourteen full suite runs on an eight-core box, chasing what looked like one flaky
+suite and turned out to be two failures with very different meanings.
+
+**The symptom that matters.** A PostgreSQL backend exits with code 2, the
+postmaster terminates every other backend, and the cluster enters recovery. Every
+test in flight fails — eighty, ninety files at a time — and the output reads as a
+catastrophic regression in code that is fine. Not OOM: zero signal terminations,
+`oom_kill 0` in the cgroup, memory ample. No `PANIC`, nothing logged before it.
+The cause of the exit itself is still unidentified.
+
+**The numbers.**
+
+| workers | `max_connections` | platform | result |
+|---|---|---|---|
+| 7 | default 100 | LXC | 1 crash in 5 runs, 1 flaky run |
+| 7 | **300** | LXC | 1 crash in 2 runs |
+| 7 | **300** | KVM | **3 crashes in 3 runs** |
+| 4 | default 100 | KVM | **0 crashes, 0 hook timeouts, 3 runs** |
+
+**Raising `max_connections` made it worse, and that was the wrong lever twice
+over.** Prisma's pool is `cores * 2 + 1` per client and every vitest worker builds
+its own — 231 connections across seven workers, plus pg-boss's own pools. At the
+default ceiling the excess is refused cleanly and concurrency is capped; at 300
+every one of them is established and an eight-core machine is oversubscribed.
+Capping Prisma's pool instead (`connection_limit=10`) failed differently: that
+error is Prisma waiting for a connection in its OWN pool, so a smaller pool
+produces it sooner, and three more files started failing.
+
+**A VM did not help; it hurt.** The whole exercise was moved from an LXC container
+to a KVM guest on the same host, same image, same versions, same tuning, to test
+whether Docker-in-LXC was at fault. It crashed in all three runs — worse than the
+container. The hypervisor is exonerated; the demand is the problem.
+
+**Four workers is the answer this hardware gives.** Three consecutive runs, no
+crashes, no hook timeouts, 3,357 tests. It costs time: ~43 minutes a run against
+~24 at seven. `SYNTRA_TEST_WORKERS` already existed for this and CI now pins it.
+
+**What is still unexplained**, and worth saying rather than papering over: why the
+backend exits with code 2 at all. Oversubscription explains the correlation but not
+the mechanism, and nothing in the PostgreSQL log, the kernel log or the cgroup
+accounting names it.
+
+Left over from the same runs: `transaction-budget.test.ts` fails on a cold database
+— 3241ms and 4579ms against a 2500ms budget on the first run after the container is
+recreated, passing on every run after. The budget is real and worth keeping; the
+first-run measurement is against cold caches.
+
 ## Two load-sensitive tests, outside this subsystem
 
 Found by the whole-repo runs that verified the work above, recorded here because

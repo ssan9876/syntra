@@ -20,6 +20,30 @@ env:
   SEED_ADMIN_PASSWORD: a-long-enough-admin-password
   SEED_USER_PASSWORD: a-long-enough-user-password
 
+  # FOUR, and this number was measured rather than chosen.
+  #
+  # `testWorkerCount()` defaults to `cores - 1`, capped at 8. On an eight-core
+  # machine that is seven workers, each with its own Prisma pool of
+  # `cores * 2 + 1` connections plus pg-boss's own — and at that level this
+  # suite does not merely go slow, it takes PostgreSQL down: a backend exits
+  # with code 2 and the whole cluster enters recovery, failing every test that
+  # was in flight and reading as eighty unrelated bugs.
+  #
+  # Measured over fourteen full runs on an eight-core box, LXC and KVM alike:
+  #
+  #   7 workers, default max_connections  — 1 crash in 5 runs
+  #   7 workers, max_connections=300      — 1 in 2 (LXC), 3 in 3 (KVM)
+  #   4 workers, default max_connections  — 0 crashes, 0 hook timeouts, 3 runs
+  #
+  # Raising `max_connections` made it worse, not better: at the default the
+  # excess connections are refused cleanly and concurrency is capped, while at
+  # 300 they are all established and the machine is oversubscribed. The lever
+  # is the demand, and this is it.
+  #
+  # A GitHub-hosted runner has four cores and would pick three on its own, so
+  # this changes nothing there. It matters on a self-hosted runner with more.
+  SYNTRA_TEST_WORKERS: 4
+
 jobs:
   # ---------------------------------------------------------------------------
   # The unit and integration suite: 167 files, ~3,350 tests, against a real
@@ -77,14 +101,20 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc -b --force
 
-      # KNOWN FLAKY, and not papered over with a retry.
+      # TWO FAILURE MODES WORTH TELLING APART before you suspect your change.
       #
-      # Under load a handful of `resetDatabase()` hooks time out at 30s and take
-      # their files with them; the failing set moves between runs and every one
-      # of them passes in isolation. It was seen on an 8-worker machine roughly
-      # one run in two. A hosted runner has fewer cores and therefore fewer
-      # workers, so it may not appear here at all — but if this step goes red
-      # with `Hook timed out in 30000ms`, that is this and not your change.
+      # `Hook timed out in 30000ms` on a `resetDatabase()` hook: seven workers
+      # truncating every table between every test, contending on one server.
+      # The failing set moves between runs and each file passes alone. Not seen
+      # at all in three runs at four workers, which is why `SYNTRA_TEST_WORKERS`
+      # is pinned above.
+      #
+      # Eighty-odd files failing at once, with `the database system is in
+      # recovery mode` in the output: PostgreSQL crashed. Nothing failed on its
+      # merits and there is no point reading the list. Same cause, same fix.
+      #
+      # Neither is retried. A retry would hide the second one, and the second
+      # one is the important one.
       # See docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md.
       - name: Test
         run: pnpm test

@@ -1,6 +1,28 @@
 services:
   postgres:
     image: postgres:16
+    # `synchronous_commit=off`: a commit no longer waits for WAL to reach disk.
+    # For a throwaway database that is free speed, and it takes fsync latency
+    # out of the truncate storm this suite generates. Deliberately NOT
+    # `fsync=off` or `full_page_writes=off`, which trade crash CORRUPTION for
+    # speed.
+    #
+    # `max_connections` IS LEFT AT THE DEFAULT 100, and that is a correction of
+    # an earlier change here rather than an oversight. Prisma's pool is
+    # `cores * 2 + 1` per client and every vitest worker builds its own — 231
+    # across seven workers on an eight-core box. Raising the ceiling to 300 to
+    # "fix" that made things dramatically worse: at 100 the excess connections
+    # are refused cleanly and concurrency is capped, while at 300 all 231
+    # backends actually get established and oversubscribe the machine.
+    # Measured, over eleven full suite runs: 1 crash in 5 at the default,
+    # 1 in 2 at 300 under LXC, and 3 in 3 at 300 under KVM.
+    #
+    # The ceiling was never the problem. The demand is, and the lever for that
+    # is `SYNTRA_TEST_WORKERS`, not this file.
+    command:
+      - postgres
+      - -c
+      - synchronous_commit=off
     environment:
       POSTGRES_USER: syntra
       POSTGRES_PASSWORD: syntra
