@@ -27,7 +27,31 @@ export default defineConfig({
     // 127.0.0.1 rather than 0.0.0.0: this is a development server, and putting
     // it on every interface to fix a loopback mismatch would be answering the
     // wrong question.
-    host: '127.0.0.1',
+    host: process.env.WEB_HOST ?? '127.0.0.1',
+    // WHICH HOSTNAMES THE DEV SERVER WILL ANSWER FOR.
+    //
+    // Vite refuses an unrecognised Host with 403 "This host is not allowed",
+    // before any Syntra code runs — so pointing a DNS record at an instance
+    // served this way fails at the dev server, and the tenant resolution
+    // underneath never gets a chance to say anything. The default list is
+    // localhost and IPs only, which is why `acme.localhost` works and
+    // `syntra.example.com` does not.
+    //
+    // `WEB_ALLOWED_HOSTS` is a comma-separated list; `true` allows any host,
+    // which is what a private test instance reached by a name that changes
+    // wants. It is deliberately opt-in and deliberately NOT the default: the
+    // protection is against DNS rebinding, and a developer's laptop should
+    // keep it.
+    //
+    // None of this belongs in front of real users. `vite` is a development
+    // server — no production build, HMR sockets open, sources served. An
+    // instance somebody points a domain at should be running `vite build`
+    // output behind a real server.
+    allowedHosts:
+      process.env.WEB_ALLOWED_HOSTS === 'true'
+        ? true
+        : (process.env.WEB_ALLOWED_HOSTS?.split(',').map((h) => h.trim()).filter(Boolean) ??
+          []),
     // Fail rather than silently move to the next free port: a suite pointed at
     // 5173 must not quietly be served by whatever else was already there.
     strictPort: true,

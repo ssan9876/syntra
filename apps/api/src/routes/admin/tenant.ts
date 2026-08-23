@@ -3,6 +3,8 @@ import { tenantSettingsRequest } from '@syntra/contracts';
 import {
   PERMISSIONS,
   enrolledFactorTypes,
+  DomainTakenError,
+  assertDomainsFree,
   hasRecoveryCodes,
   PasskeysWouldBreakError,
   passkeysAtRisk,
@@ -79,6 +81,23 @@ export async function registerAdminTenantRoutes(
         // source owns: 409 carrying the count, then the same request again
         // with the count acknowledged.
         const { ackPasskeys, ...settings } = body;
+
+        // Before anything is written. `resolveTenantId` returns the FIRST
+        // match, so two tenants claiming one hostname is not an error at
+        // request time — it is whichever row the database happened to return,
+        // which is the quietest possible way to serve one organization's data
+        // to another.
+        try {
+          await assertDomainsFree(tx, settings);
+        } catch (cause) {
+          if (cause instanceof DomainTakenError) {
+            throw new ProblemError(409, 'domain-taken', 'That hostname is in use', cause.message, {
+              domain: cause.domain,
+            });
+          }
+          throw cause;
+        }
+
         const atRisk = await passkeysAtRisk(tx, settings.primaryDomain);
         if (atRisk > 0 && ackPasskeys !== atRisk) {
           const error = new PasskeysWouldBreakError(atRisk);
@@ -110,6 +129,7 @@ export async function registerAdminTenantRoutes(
             selfEnrolmentEnabled: saved.selfEnrolmentEnabled,
             passwordMinLength: saved.passwordMinLength,
             primaryDomain: saved.primaryDomain,
+            additionalDomains: saved.additionalDomains,
             // On the event whether or not any broke, so "who moved the domain,
             // when, and what did it cost" is answerable from the log alone.
             passkeysInvalidated: atRisk,

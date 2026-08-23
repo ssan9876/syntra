@@ -10,6 +10,29 @@ import { z } from 'zod';
  * runbook, not checkboxes — and a field that is not in the schema cannot be
  * written by a body that mentions it.
  */
+/**
+ * A bare hostname: no scheme, no port, no path. Lower-cased and trimmed BEFORE
+ * the pattern runs, because `resolveTenantId` lower-cases the Host header
+ * before comparing and a stored `Acme.Example.Com` would simply never match.
+ *
+ * The pattern accepts an IP address as well as a domain, and that is not an
+ * accident: the resolver does a plain string comparison against the hostname,
+ * so `192.168.1.10` is a perfectly good name for an instance reached that way.
+ * Refusing it would invent a rule the product does not have.
+ *
+ * One definition for both the primary and the additional list. Two copies of
+ * a validation rule are two rules as soon as somebody edits one.
+ */
+const hostname = z
+  .string()
+  .max(253)
+  .trim()
+  .toLowerCase()
+  .regex(
+    /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/,
+    'A hostname only — no scheme, port or path',
+  );
+
 export const tenantSettingsRequest = z.object({
   name: z.string().min(1).max(128).optional(),
   adminMfaRequired: z.boolean().optional(),
@@ -30,17 +53,7 @@ export const tenantSettingsRequest = z.object({
    *
    * Nullable clears it, which turns WebAuthn off for the tenant.
    */
-  primaryDomain: z
-    .string()
-    .max(253)
-    .trim()
-    .toLowerCase()
-    .regex(
-      /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/,
-      'A hostname only — no scheme, port or path',
-    )
-    .nullable()
-    .optional(),
+  primaryDomain: hostname.nullable().optional(),
   /**
    * How many registered passkeys the caller was told this would break.
    *
@@ -50,5 +63,11 @@ export const tenantSettingsRequest = z.object({
    * produces the 409.
    */
   ackPasskeys: z.number().int().min(0).optional(),
+  /**
+   * Other hostnames this tenant also answers on. Same validation as the
+   * primary, sent whole rather than as add/remove: the form owns the list, and
+   * a partial update would need a merge rule nobody would remember.
+   */
+  additionalDomains: z.array(hostname).max(20).optional(),
 });
 export type TenantSettingsRequest = z.infer<typeof tenantSettingsRequest>;

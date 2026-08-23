@@ -100,6 +100,33 @@ pnpm dev                                    # api on :3000, web on :5173
 
 Then open **http://acme.localhost:5173** and sign in as `admin`.
 
+### Reaching an instance by more than one name
+
+Syntra picks the tenant from the `Host` header, and a tenant answers on three
+things: its **primary domain**, any of its **additional domains**, and any
+hostname whose leftmost label is its **slug** (so `acme.anything.example.com`
+finds the tenant with slug `acme`). An unrecognised host is a 404 — there is no
+default tenant, because a request landing in the wrong organization's data by
+accident is the worst thing this product could do.
+
+That matters when pointing DNS at an instance. Add the new name to **Also
+answers on** in tenant settings *before* the record propagates, and the cutover
+has no window where the old name has stopped working and the new one has not
+started. An IP address is a valid entry, so an instance being set up can be
+reached by address and by name at once.
+
+Two things the additional names do not do. They are **not** the WebAuthn
+relying party — security keys are bound to the primary domain and a browser
+arriving by another name will not offer them — and they do not get past the
+**development server's** host check. `vite` refuses an unknown `Host` with a 403
+before any Syntra code runs; `WEB_ALLOWED_HOSTS` (a comma-separated list, or
+`true` for any) is the way round that, and it is opt-in because the check exists
+to stop DNS rebinding.
+
+`pnpm dev` is a development server in any case. An instance somebody points a
+real domain at should be serving `vite build` output from behind a real web
+server, which this repository does not yet set up.
+
 The host matters: Syntra picks the tenant from the `Host` header, so
 `localhost:5173` will report an unknown tenant while `acme.localhost:5173`
 resolves to the seeded tenant.

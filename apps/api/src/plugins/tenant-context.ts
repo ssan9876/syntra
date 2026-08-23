@@ -13,10 +13,22 @@ declare module 'fastify' {
 const UNSCOPED_PATHS = new Set(['/health']);
 
 /**
- * Resolves a tenant from the Host header: an exact primary domain first, then
- * the leftmost label as a slug. There is deliberately no default tenant — an
- * unrecognised host is a 404, not a silent fallback that would let a request
- * land in someone else's data.
+ * Resolves a tenant from the Host header, in three passes: the exact primary
+ * domain, then any additional domain, then the leftmost label as a slug.
+ *
+ * There is deliberately no default tenant — an unrecognised host is a 404, not
+ * a silent fallback that would let a request land in someone else's data.
+ *
+ * The middle pass exists because one hostname is not enough for a real
+ * deployment. An instance is reached by IP while it is being set up and by a
+ * DNS name once somebody points one at it, and both have to work across the
+ * change — otherwise pointing a record at the server is a cutover with an
+ * outage in the middle. `primaryDomain` cannot cover it: it is unique, and it
+ * is the WebAuthn relying party, so there can only be one.
+ *
+ * Security keys still only work on the primary domain. That is not this
+ * function's doing — a credential is bound to the relying party it was created
+ * against, and arriving by another name means the browser will not offer it.
  */
 async function resolveTenantId(host: string | undefined): Promise<string | null> {
   if (!host) return null;
@@ -26,6 +38,11 @@ async function resolveTenantId(host: string | undefined): Promise<string | null>
     where: { primaryDomain: hostname, status: 'active' },
   });
   if (byDomain) return byDomain.id;
+
+  const byAdditional = await prisma.tenant.findFirst({
+    where: { additionalDomains: { has: hostname }, status: 'active' },
+  });
+  if (byAdditional) return byAdditional.id;
 
   const slug = hostname.split('.')[0]!;
   const bySlug = await prisma.tenant.findFirst({

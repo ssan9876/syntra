@@ -8,6 +8,7 @@ interface TenantView {
   name: string;
   slug: string;
   primaryDomain: string | null;
+  additionalDomains: string[];
   adminMfaRequired: boolean;
   selfEnrolmentEnabled: boolean;
   passwordMinLength: number;
@@ -58,6 +59,12 @@ export function TenantSettingsPage() {
   const [minLength, setMinLength] = useState('12');
   const [domain, setDomain] = useState('');
   /**
+   * One per line, because that is how somebody pastes a list of hostnames.
+   * Split on save rather than kept as an array in state: an array would need
+   * add and remove controls for something people edit as text.
+   */
+  const [extraDomains, setExtraDomains] = useState('');
+  /**
    * The passkey count the server refused with, held until the operator answers.
    *
    * Sent back verbatim on the next attempt rather than recomputed: it is what
@@ -75,6 +82,7 @@ export function TenantSettingsPage() {
     setSelfEnrolmentEnabled(data.selfEnrolmentEnabled);
     setMinLength(String(data.passwordMinLength));
     setDomain(data.primaryDomain ?? '');
+    setExtraDomains(data.additionalDomains.join('\n'));
   }, [data]);
 
   async function submit(event: FormEvent, acknowledge = false) {
@@ -92,6 +100,10 @@ export function TenantSettingsPage() {
           // Empty clears it, which turns WebAuthn off rather than leaving the
           // old value behind.
           primaryDomain: domain.trim() === '' ? null : domain.trim(),
+          additionalDomains: extraDomains
+            .split('\n')
+            .map((h) => h.trim())
+            .filter((h) => h !== ''),
           ...(acknowledge && atRisk !== null ? { ackPasskeys: atRisk } : {}),
         }),
       });
@@ -181,11 +193,32 @@ export function TenantSettingsPage() {
             placeholder="syntra.example.com"
             className="max-w-md"
           />
+          <label className="block">
+            <span className="mb-1.5 block font-medium text-ink">
+              Also answers on
+            </span>
+            <textarea
+              value={extraDomains}
+              onChange={(e) => setExtraDomains(e.target.value)}
+              rows={3}
+              spellCheck={false}
+              placeholder={'192.168.1.10\nsyntra.example.com'}
+              className="w-full max-w-md rounded-control border border-border-subtle bg-bg px-3 py-2 font-mono text-ink placeholder:text-muted hover:border-border-strong"
+            />
+            <span className="mt-1.5 block text-sm text-muted">
+              One hostname per line. An instance is reached by address while it
+              is being set up and by a DNS name once somebody points one at it —
+              listing both means pointing the record is not a cutover.
+            </span>
+          </label>
+
           {data.webauthnAvailable && (
             <p className="text-sm text-muted">
-              This is also the WebAuthn relying party. Security keys are bound
-              to it and cannot be moved: changing it makes every registered key
-              unusable, and their holders will have to enrol again.
+              The primary domain is also the WebAuthn relying party. Security
+              keys are bound to it and cannot be moved: changing it makes every
+              registered key unusable, and their holders will have to enrol
+              again. Keys do not work on the additional hostnames either — a
+              browser arriving by another name will not offer them.
             </p>
           )}
         </Panel>

@@ -42,6 +42,19 @@ export interface TenantSettings {
    * `webauthnAvailable`.
    */
   primaryDomain: string | null;
+  /**
+   * Other hostnames this tenant also answers on.
+   *
+   * One name is not enough for a real deployment: an instance is reached by IP
+   * while it is being set up and by a DNS name once somebody points one at it,
+   * and both have to work across the change or pointing the record is a
+   * cutover with an outage in the middle.
+   *
+   * Security keys work only on the PRIMARY domain, whatever is in here — a
+   * credential is bound to the relying party it was created against, and a
+   * browser arriving by another name will not offer it.
+   */
+  additionalDomains: string[];
 }
 
 /** What the settings screen reads, plus the one field it must not write. */
@@ -64,6 +77,7 @@ export async function readTenant(tx: TenantClient): Promise<TenantView> {
     name: tenant.name,
     slug: tenant.slug,
     primaryDomain: tenant.primaryDomain,
+    additionalDomains: tenant.additionalDomains,
     adminMfaRequired: tenant.adminMfaRequired,
     selfEnrolmentEnabled: tenant.selfEnrolmentEnabled,
     passwordMinLength: tenant.passwordMinLength,
@@ -110,6 +124,9 @@ export async function updateTenant(
       ...(input.primaryDomain === undefined
         ? {}
         : { primaryDomain: input.primaryDomain }),
+      ...(input.additionalDomains === undefined
+        ? {}
+        : { additionalDomains: input.additionalDomains }),
     },
   });
   return readTenant(tx);
@@ -127,6 +144,62 @@ export async function updateTenant(
  * The same shape as `SourceOwnsObjectsError`, deliberately. That is the
  * conversation this is: here is the number, ask me again.
  */
+/**
+ * Raised when a hostname is already answering for a different tenant.
+ *
+ * The column cannot enforce this. A UNIQUE constraint on an array constrains
+ * the whole array, so it would forbid two tenants sharing a LIST while happily
+ * letting them share a single name — the opposite of the rule wanted. And
+ * `primaryDomain`'s own UNIQUE index cannot see into anybody's additional
+ * list.
+ *
+ * It matters because `resolveTenantId` returns the FIRST match. Two tenants
+ * claiming one hostname does not produce an error at request time; it produces
+ * whichever tenant the database happened to return, which is the quietest
+ * possible way to serve one organization's data to another.
+ */
+export class DomainTakenError extends Error {
+  constructor(readonly domain: string) {
+    super(
+      `the hostname "${domain}" already reaches another tenant — a request ` +
+        `arriving on it would resolve to whichever was found first`,
+    );
+    this.name = 'DomainTakenError';
+  }
+}
+
+/**
+ * Refuses a hostname another tenant already answers on.
+ *
+ * Checked across BOTH columns in both directions: a name being claimed here
+ * must not be another tenant's primary or additional, whichever list it is
+ * being added to.
+ */
+export async function assertDomainsFree(
+  tx: TenantClient,
+  input: { primaryDomain?: string | null | undefined; additionalDomains?: string[] | undefined },
+): Promise<void> {
+  const tenantId = await currentTenant(tx);
+  const wanted = [
+    ...(input.primaryDomain ? [input.primaryDomain] : []),
+    ...(input.additionalDomains ?? []),
+  ];
+  if (wanted.length === 0) return;
+
+  // `findMany` over every other tenant rather than a query per name: the list
+  // is short, and one round trip says which name clashed.
+  const others = await tx.tenant.findMany({
+    where: { NOT: { id: tenantId } },
+    select: { primaryDomain: true, additionalDomains: true },
+  });
+  const taken = new Set(
+    others.flatMap((t) => [...(t.primaryDomain ? [t.primaryDomain] : []), ...t.additionalDomains]),
+  );
+  for (const name of wanted) {
+    if (taken.has(name)) throw new DomainTakenError(name);
+  }
+}
+
 export class PasskeysWouldBreakError extends Error {
   constructor(readonly count: number) {
     super(

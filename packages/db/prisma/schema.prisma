@@ -15,6 +15,12 @@ model Tenant {
   name                 String
   slug                 String   @unique
   primaryDomain        String?  @unique
+  /// Extra hostnames this tenant also answers on. The primary domain is the
+  /// WebAuthn relying party and there can only be one of those; these are for
+  /// reaching the same tenant by another name — an IP address, a DNS record
+  /// somebody added later, a hostname during a migration. Security keys work
+  /// only on the primary domain, because that is what they were bound to.
+  additionalDomains    String[] @default([])
   status               String   @default("active")
   /// When true, elevating to an administrative session requires a second
   /// factor on top of the password. Default false so an existing tenant's
