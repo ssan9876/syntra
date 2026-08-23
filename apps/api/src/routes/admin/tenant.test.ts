@@ -196,15 +196,21 @@ describe('PUT /api/admin/tenant', () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it('will not write the slug or the primary domain', async () => {
+  it('will not write the SLUG, but the primary domain is now writable', async () => {
     await seedAdmin([...ALL_PERMISSIONS]);
     const cookie = await adminCookie();
 
-    // A body naming them is not an error; the fields simply are not in the
-    // schema, so there is nothing for them to reach.
+    // The slug stays out of the schema, and for a sharper reason than before:
+    // it is the fallback `resolveTenantId` uses when the domain does not
+    // match, so it is the way back in when the domain is set wrong. A tenant
+    // able to change both could strand itself with no route to its own
+    // console.
+    //
+    // The domain used to be frozen alongside it, which meant an operator
+    // deploying at their own hostname had no way to say so short of SQL.
     const res = await put(cookie, {
       slug: 'somebody-else',
-      primaryDomain: 'evil.test',
+      primaryDomain: 'syntra.example.com',
       name: 'Acme Care',
     });
     expect(res.statusCode).toBe(200);
@@ -213,8 +219,71 @@ describe('PUT /api/admin/tenant', () => {
       where: { id: ctx.tenantId },
     });
     expect(tenant.slug).toBe('acme');
-    expect(tenant.primaryDomain).toBeNull();
+    expect(tenant.primaryDomain).toBe('syntra.example.com');
     expect(tenant.name).toBe('Acme Care');
+  });
+
+  it('refuses a hostname carrying a scheme, port or path', async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    const cookie = await adminCookie();
+    for (const bad of ['http://x.test', 'x.test:5173', 'x.test/path', 'has space']) {
+      const res = await put(cookie, { primaryDomain: bad });
+      expect(res.statusCode, bad).toBe(400);
+    }
+    // A bare hostname and an IP are both fine: `resolveTenantId` compares the
+    // Host header as a plain string, so an instance reached by address has a
+    // perfectly good primary domain.
+    expect((await put(cookie, { primaryDomain: '192.168.1.10' })).statusCode).toBe(200);
+  });
+
+  it('refuses to move the domain until the passkey count is acknowledged', async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    const cookie = await adminCookie();
+    await put(cookie, { primaryDomain: 'first.example.com' });
+
+    // Through `withTenant`, not the bare client. Every table here is FORCE ROW
+    // LEVEL SECURITY against `current_setting('app.current_tenant')`, so
+    // `prisma.user.findFirst()` outside a bound transaction matches nothing
+    // whatever the database holds — and the create that followed it would fail
+    // for a reason with nothing to do with the code under test.
+    await withTenant(ctx.tenantId, async (tx) => {
+      const user = await tx.user.findFirstOrThrow({});
+      await tx.webAuthnCredential.create({
+        data: {
+          tenantId: ctx.tenantId,
+          userId: user.id,
+          credentialId: `probe-${ctx.tenantId}`,
+          publicKey: Buffer.from([0]),
+          counter: 0,
+          rpId: 'first.example.com',
+          label: 'probe key',
+        },
+      });
+    });
+
+    // WebAuthn binds each credential to the relying party it was created
+    // against. Moving the domain does not migrate them — it makes every one
+    // unusable, silently, at whatever moment its holder next signs in.
+    const refused = await put(cookie, { primaryDomain: 'second.example.com' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().passkeys).toBe(1);
+
+    // A wrong number is not an acknowledgement: it is what a client would send
+    // if it had cached a stale count, and it must not pass for consent.
+    expect(
+      (await put(cookie, { primaryDomain: 'second.example.com', ackPasskeys: 7 })).statusCode,
+    ).toBe(409);
+
+    expect(
+      (await put(cookie, { primaryDomain: 'second.example.com', ackPasskeys: 1 })).statusCode,
+    ).toBe(200);
+
+    const tenant = await prisma.tenant.findUniqueOrThrow({
+      where: { id: ctx.tenantId },
+    });
+    // `Tenant` is the one table that is NOT tenant-scoped — it is the table
+    // tenants are rows of — so the bare client is correct here and only here.
+    expect(tenant.primaryDomain).toBe('second.example.com');
   });
 
   it('rejects a password minimum below the product floor', async () => {

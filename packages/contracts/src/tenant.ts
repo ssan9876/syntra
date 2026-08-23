@@ -17,5 +17,38 @@ export const tenantSettingsRequest = z.object({
   // The floor the password policy enforces. The lower bound is the product's,
   // not the tenant's: a tenant that could set four would have no policy at all.
   passwordMinLength: z.number().int().min(12).max(128).optional(),
+  /**
+   * A bare hostname: no scheme, no port, no path. Lower-cased on the way in,
+   * because `resolveTenantId` lower-cases the Host header before comparing and
+   * a stored `Acme.Example.Com` would simply never match.
+   *
+   * The pattern accepts an IP address as well as a domain, and that is not an
+   * accident: the resolver does a plain string comparison against the
+   * hostname, so `192.168.1.10` is a perfectly good primary domain for an
+   * instance reached that way. Refusing it would be inventing a rule the
+   * product does not have.
+   *
+   * Nullable clears it, which turns WebAuthn off for the tenant.
+   */
+  primaryDomain: z
+    .string()
+    .max(253)
+    .trim()
+    .toLowerCase()
+    .regex(
+      /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/,
+      'A hostname only — no scheme, port or path',
+    )
+    .nullable()
+    .optional(),
+  /**
+   * How many registered passkeys the caller was told this would break.
+   *
+   * Checked against the live count rather than trusted: a key enrolled between
+   * the warning and the confirmation must not be swept into a decision nobody
+   * made about it. Absent means "I have not been warned yet", which is what
+   * produces the 409.
+   */
+  ackPasskeys: z.number().int().min(0).optional(),
 });
 export type TenantSettingsRequest = z.infer<typeof tenantSettingsRequest>;

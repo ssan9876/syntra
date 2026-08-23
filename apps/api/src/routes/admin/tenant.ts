@@ -4,6 +4,8 @@ import {
   PERMISSIONS,
   enrolledFactorTypes,
   hasRecoveryCodes,
+  PasskeysWouldBreakError,
+  passkeysAtRisk,
   readTenant,
   recordEvent,
   updateTenant,
@@ -67,7 +69,29 @@ export async function registerAdminTenantRoutes(
           }
         }
 
-        const saved = await updateTenant(tx, body);
+        // THE DOMAIN IS THE WEBAUTHN RELYING PARTY, and moving it does not
+        // migrate the keys bound to the old one — it makes every one of them
+        // unusable, silently, at whatever moment its holder next tries to
+        // sign in. So the change is refused until somebody has been shown the
+        // number and sent it back.
+        //
+        // The same conversation `DELETE /sources/:id` has about the accounts a
+        // source owns: 409 carrying the count, then the same request again
+        // with the count acknowledged.
+        const { ackPasskeys, ...settings } = body;
+        const atRisk = await passkeysAtRisk(tx, settings.primaryDomain);
+        if (atRisk > 0 && ackPasskeys !== atRisk) {
+          const error = new PasskeysWouldBreakError(atRisk);
+          throw new ProblemError(
+            409,
+            'passkeys-would-break',
+            'Confirmation required',
+            error.message,
+            { passkeys: atRisk },
+          );
+        }
+
+        const saved = await updateTenant(tx, settings);
 
         // Same transaction as the change, like every other admin mutation.
         // Both settings, always, rather than only what the body mentioned: an
@@ -81,10 +105,14 @@ export async function registerAdminTenantRoutes(
           outcome: 'success',
           sourceIp: request.ip,
           payload: {
-            changed: Object.keys(body),
+            changed: Object.keys(settings),
             adminMfaRequired: saved.adminMfaRequired,
             selfEnrolmentEnabled: saved.selfEnrolmentEnabled,
             passwordMinLength: saved.passwordMinLength,
+            primaryDomain: saved.primaryDomain,
+            // On the event whether or not any broke, so "who moved the domain,
+            // when, and what did it cost" is answerable from the log alone.
+            passkeysInvalidated: atRisk,
           },
         });
         return saved;

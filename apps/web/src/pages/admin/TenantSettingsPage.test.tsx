@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { TenantSettingsPage } from './TenantSettingsPage.js';
@@ -132,5 +132,105 @@ describe('TenantSettingsPage', () => {
     expect(
       await screen.findByText(/only an authenticator app can satisfy it/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe('the primary domain, and the passkeys it would break', () => {
+  it('refuses to move the domain until the passkey count is acknowledged', async () => {
+    // WebAuthn binds every credential to the relying party it was created
+    // against. Moving the domain does not migrate them — it makes each one
+    // unusable, silently, at whatever moment its holder next signs in. So the
+    // save is refused with the number, and the number has to come back.
+    let attempt = 0;
+    stub((url, init) => {
+      if (init?.method !== 'PUT') return json(settings);
+      attempt += 1;
+      const body = JSON.parse(String(init.body));
+      if (body.ackPasskeys !== 3) {
+        return json(
+          {
+            type: 'https://syntra.dev/problems/passkeys-would-break',
+            title: 'Confirmation required',
+            status: 409,
+            detail: 'changing the primary domain will invalidate 3 registered security keys',
+            passkeys: 3,
+          },
+          409,
+        );
+      }
+      return json({ ...settings, primaryDomain: 'moved.example.com' });
+    });
+    renderPage();
+
+    const field = await screen.findByLabelText('Primary domain');
+    await userEvent.clear(field);
+    await userEvent.type(field, 'moved.example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+
+    // The count is shown, in the warning, with what it costs.
+    expect(
+      await screen.findByText(/invalidate registered security keys/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/3 keys are/)).toBeInTheDocument();
+
+    // And the confirming control names the price rather than saying "OK".
+    await userEvent.click(
+      screen.getByRole('button', { name: /Change the domain and invalidate 3 keys/ }),
+    );
+
+    await waitFor(() => expect(screen.getByText('Settings saved.')).toBeInTheDocument());
+    expect(attempt).toBe(2);
+    const sent = JSON.parse(String(calls.filter((c) => c.init?.method === 'PUT').at(-1)!.init!.body));
+    expect(sent).toMatchObject({ primaryDomain: 'moved.example.com', ackPasskeys: 3 });
+  });
+
+  it('reopens the question when the domain is edited after the warning', async () => {
+    // The count acknowledged was for the value typed at the time. Editing it
+    // makes that answer stale, and carrying it forward would confirm a
+    // decision about a different change.
+    stub((url, init) => {
+      if (init?.method !== 'PUT') return json(settings);
+      return json(
+        {
+          type: 'https://syntra.dev/problems/passkeys-would-break',
+          title: 'Confirmation required',
+          status: 409,
+          detail: 'would invalidate 3 keys',
+          passkeys: 3,
+        },
+        409,
+      );
+    });
+    renderPage();
+
+    const field = await screen.findByLabelText('Primary domain');
+    await userEvent.clear(field);
+    await userEvent.type(field, 'first.example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+    expect(await screen.findByText(/3 keys are/)).toBeInTheDocument();
+
+    await userEvent.type(field, 'x');
+    expect(screen.queryByText(/3 keys are/)).toBeNull();
+  });
+
+  it('sends null for an empty domain rather than an empty string', async () => {
+    // Empty means "clear it", which turns WebAuthn off. An empty string is a
+    // hostname the resolver would compare against and never match.
+    stub((url, init) => (init?.method === 'PUT' ? json(settings) : json(settings)));
+    renderPage();
+
+    const field = await screen.findByLabelText('Primary domain');
+    // `fireEvent.change`, not `userEvent.clear`. Clearing a controlled input
+    // with `clear()` empties the DOM node without React seeing an onChange, so
+    // the component's state keeps the old value and the form posts it — which
+    // is a property of the harness, not of the page.
+    fireEvent.change(field, { target: { value: '' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+
+    await waitFor(() => expect(calls.some((c) => c.init?.method === 'PUT')).toBe(true));
+    const sent = JSON.parse(
+      String(calls.find((c) => c.init?.method === 'PUT')!.init!.body),
+    );
+    expect(sent.primaryDomain).toBeNull();
   });
 });

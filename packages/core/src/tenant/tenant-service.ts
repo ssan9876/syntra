@@ -24,12 +24,29 @@ export interface TenantSettings {
    */
   selfEnrolmentEnabled: boolean;
   passwordMinLength: number;
+  /**
+   * The hostname this tenant answers on, and the WebAuthn relying party.
+   *
+   * Writable, which it was not: `slug` and this were both frozen as "the two
+   * fields nobody may change from here", and freezing this one meant an
+   * operator deploying Syntra at their own domain had no way to say so short
+   * of SQL. Requiring database access to finish an installation is not a
+   * safety property.
+   *
+   * `slug` stays frozen, and for a better reason: it is the fallback the
+   * resolver uses when the domain does not match, so it is the way back in
+   * when this field is set wrong. A tenant that could change both could
+   * strand itself completely.
+   *
+   * Null clears it, which turns WebAuthn off for the tenant — see
+   * `webauthnAvailable`.
+   */
+  primaryDomain: string | null;
 }
 
-/** What the settings screen reads, plus the two fields it must not write. */
+/** What the settings screen reads, plus the one field it must not write. */
 export interface TenantView extends TenantSettings {
   slug: string;
-  primaryDomain: string | null;
   /**
    * Whether a security key can be registered against this tenant at all.
    * Derived rather than stored: WebAuthn pins the relying party to the
@@ -90,7 +107,53 @@ export async function updateTenant(
       ...(input.passwordMinLength === undefined
         ? {}
         : { passwordMinLength: input.passwordMinLength }),
+      ...(input.primaryDomain === undefined
+        ? {}
+        : { primaryDomain: input.primaryDomain }),
     },
   });
   return readTenant(tx);
+}
+
+/**
+ * Raised when changing the domain would invalidate registered passkeys.
+ *
+ * Not a refusal to act — the same act awaiting a decision, which is why it
+ * carries the count. WebAuthn binds every credential to the relying party it
+ * was created against, so moving the domain does not migrate them: it makes
+ * every one of them unusable, silently, at the next sign-in. The people
+ * holding them find out when their key stops working.
+ *
+ * The same shape as `SourceOwnsObjectsError`, deliberately. That is the
+ * conversation this is: here is the number, ask me again.
+ */
+export class PasskeysWouldBreakError extends Error {
+  constructor(readonly count: number) {
+    super(
+      `changing the primary domain will invalidate ${count} registered security ` +
+        `${count === 1 ? 'key' : 'keys'}: WebAuthn binds each one to the domain it ` +
+        `was created against, and they cannot be migrated. Whoever holds them will ` +
+        `have to enrol again.`,
+    );
+    this.name = 'PasskeysWouldBreakError';
+  }
+}
+
+/**
+ * How many passkeys a domain change would break, or zero.
+ *
+ * Read BEFORE the update and compared against what the caller acknowledged, so
+ * a key registered between the warning and the confirmation is not silently
+ * included in a decision nobody made about it.
+ */
+export async function passkeysAtRisk(
+  tx: TenantClient,
+  nextDomain: string | null | undefined,
+): Promise<number> {
+  if (nextDomain === undefined) return 0;
+  const tenantId = await currentTenant(tx);
+  const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+  // Unchanged is not a change. Setting the same value again breaks nothing.
+  if (tenant.primaryDomain === nextDomain) return 0;
+  return tx.webAuthnCredential.count();
 }

@@ -4,6 +4,14 @@ export interface Problem {
   status: number;
   detail?: string;
   errors?: { path?: string; line?: number; message: string }[];
+  /**
+   * RFC 9457 extension members. Several refusals carry the numbers behind the
+   * decision — the accounts a source owns, the passkeys a domain change would
+   * invalidate — because "confirm this" without the figure is not a question
+   * anybody can answer. Typed loosely because the members differ per problem;
+   * each caller reads the one its own endpoint documents.
+   */
+  [extension: string]: unknown;
 }
 
 export class ApiError extends Error {

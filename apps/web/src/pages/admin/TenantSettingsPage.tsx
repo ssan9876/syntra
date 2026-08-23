@@ -56,6 +56,15 @@ export function TenantSettingsPage() {
   const [adminMfaRequired, setAdminMfaRequired] = useState(false);
   const [selfEnrolmentEnabled, setSelfEnrolmentEnabled] = useState(true);
   const [minLength, setMinLength] = useState('12');
+  const [domain, setDomain] = useState('');
+  /**
+   * The passkey count the server refused with, held until the operator answers.
+   *
+   * Sent back verbatim on the next attempt rather than recomputed: it is what
+   * they were shown, and the server compares it against the live figure so a
+   * key enrolled in between reopens the question instead of being swept in.
+   */
+  const [atRisk, setAtRisk] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -65,9 +74,10 @@ export function TenantSettingsPage() {
     setAdminMfaRequired(data.adminMfaRequired);
     setSelfEnrolmentEnabled(data.selfEnrolmentEnabled);
     setMinLength(String(data.passwordMinLength));
+    setDomain(data.primaryDomain ?? '');
   }, [data]);
 
-  async function submit(event: FormEvent) {
+  async function submit(event: FormEvent, acknowledge = false) {
     event.preventDefault();
     setSaving(true);
     setSaveError(null);
@@ -79,11 +89,26 @@ export function TenantSettingsPage() {
           adminMfaRequired,
           selfEnrolmentEnabled,
           passwordMinLength: Number(minLength),
+          // Empty clears it, which turns WebAuthn off rather than leaving the
+          // old value behind.
+          primaryDomain: domain.trim() === '' ? null : domain.trim(),
+          ...(acknowledge && atRisk !== null ? { ackPasskeys: atRisk } : {}),
         }),
       });
       setSaved(true);
+      setAtRisk(null);
       reload();
     } catch (cause) {
+      // The count, held for the confirmation. This is not a failure to save —
+      // it is the save waiting on a decision, and the decision needs the
+      // number behind it.
+      if (cause instanceof ApiError && cause.kind === 'passkeys-would-break') {
+        const count = cause.problem.passkeys;
+        setAtRisk(typeof count === 'number' ? count : 0);
+        setSaveError(cause.problem.detail ?? cause.problem.title);
+        setSaving(false);
+        return;
+      }
       // The server's own message where it has one. The lock-yourself-out
       // refusal names the fix, and paraphrasing it here would lose that.
       setSaveError(
@@ -142,6 +167,29 @@ export function TenantSettingsPage() {
           )}
         </Panel>
 
+        <Panel title="Address" bodyClassName="p-4 space-y-3">
+          <Field
+            label="Primary domain"
+            value={domain}
+            onChange={(v) => {
+              setDomain(v);
+              // Any edit reopens the question: the count they acknowledged was
+              // for the value they had typed at the time.
+              setAtRisk(null);
+            }}
+            hint="The hostname this tenant answers on — no scheme, port or path. An IP address is fine. Leave it empty to turn security keys off."
+            placeholder="syntra.example.com"
+            className="max-w-md"
+          />
+          {data.webauthnAvailable && (
+            <p className="text-sm text-muted">
+              This is also the WebAuthn relying party. Security keys are bound
+              to it and cannot be moved: changing it makes every registered key
+              unusable, and their holders will have to enrol again.
+            </p>
+          )}
+        </Panel>
+
         <Panel title="Passwords" bodyClassName="p-4">
           <Field
             label="Minimum password length"
@@ -159,15 +207,38 @@ export function TenantSettingsPage() {
         {saveError && <Alert tone="danger">{saveError}</Alert>}
         {saved && !saveError && <Alert>Settings saved.</Alert>}
 
+        {atRisk !== null && atRisk > 0 && (
+          // The count, and a button that says what it costs. Not a second
+          // "Save" — the whole point is that this press is different from the
+          // one that was refused.
+          <Alert tone="warning" title="This will invalidate registered security keys">
+            <p>
+              {atRisk} {atRisk === 1 ? 'key is' : 'keys are'} registered against{' '}
+              <code>{data.primaryDomain ?? 'no domain'}</code>. Moving the domain
+              does not migrate them — whoever holds them will have to enrol
+              again, and will not be told until their key stops working.
+            </p>
+            <Button
+              type="button"
+              variant="danger"
+              loading={saving}
+              onClick={(event) => void submit(event as unknown as FormEvent, true)}
+              className="mt-3"
+            >
+              Change the domain and invalidate {atRisk}{' '}
+              {atRisk === 1 ? 'key' : 'keys'}
+            </Button>
+          </Alert>
+        )}
+
         <div className="flex items-center gap-3">
           <Button type="submit" variant="primary" loading={saving}>
             Save settings
           </Button>
           <p className="text-sm text-muted">
-            Signing in reaches this tenant at <code>{data.slug}</code>
-            {data.primaryDomain ? ` and ${data.primaryDomain}` : ''}. Neither is
-            editable here: changing the domain invalidates every security key
-            registered against it.
+            Signing in also reaches this tenant at <code>{data.slug}</code>, as
+            the leftmost part of any hostname. That fallback is not editable,
+            and it is the way back in if the domain above is set wrong.
           </p>
         </div>
       </form>
