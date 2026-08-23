@@ -184,11 +184,29 @@ test('a manager reviews from the PORTAL, with no administrative session', async 
   await expect(item).toBeVisible();
 
   // A revoke always needs a comment, and the page asks for it before it sends
-  // anything.
-  page.once('dialog', (dialog) => void dialog.accept('Wanda left the ward in January'));
-  await page.getByRole('button', { name: 'Remove' }).first().click();
+  // anything. `on`, not `once`: the loop below decides every item in the queue
+  // and each one asks.
+  page.on('dialog', (dialog) => void dialog.accept('Wanda left the ward in January'));
 
-  // Decided items leave the queue; nothing is left waiting.
+  // DECIDE THE WHOLE QUEUE, not one item.
+  //
+  // The campaign above is scoped to every Syntra group holding in the tenant,
+  // and this spec shares its database with the ones that run before it. So how
+  // many items land in Jo's queue is a property of the whole suite, not of
+  // this test — deciding one and asserting the queue was empty held only while
+  // that number happened to be one, and the Automate spec's fixtures made it
+  // three.
+  //
+  // Draining is also what the assertion below actually means: decided items
+  // leave the queue, and nothing is left waiting.
+  const remove = page.getByRole('button', { name: 'Remove' });
+  for (let left = await remove.count(); left > 0; left -= 1) {
+    await remove.first().click();
+    // Waited for, rather than clicking blind: the decision is a request and
+    // the list re-reads afterwards.
+    await expect(remove).toHaveCount(left - 1);
+  }
+
   // `getByText`, not `getByRole('heading')`. `Empty` renders its title as a
   // `<p>` — there is no heading here, and an assertion that asks for one waits
   // out its timeout against a screen that is showing exactly what it should.

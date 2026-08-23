@@ -460,6 +460,16 @@ test('a team lead adds a member from the portal with no administrative session',
   // The grant landed and the list re-read it.
   await expect(page.getByText(fixture.approverPersonId)).toBeVisible();
 
+  // AND TAKE IT BACK AGAIN. Two reasons, and the second is the one that bit.
+  //
+  // It exercises `revoke`, the other half of what this delegation grants. And
+  // it leaves the tenant as it found it: every spec here shares one database,
+  // and the Govern campaign is scoped to every Syntra group holding in it — so
+  // a membership left behind by this test turns up in somebody else's review
+  // queue, two spec files later, as a failure that says nothing about either.
+  await page.getByRole('button', { name: 'Remove' }).first().click();
+  await expect(page.getByText(fixture.approverPersonId)).toHaveCount(0);
+
   // No elevation prompt appeared anywhere in this test. That is the assertion:
   // this surface works under an ordinary portal session, which is the whole
   // point of delegating a resource to somebody who is not an administrator.
