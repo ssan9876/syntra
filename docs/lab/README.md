@@ -488,6 +488,159 @@ Two things to get right, and they are separate:
 - **Links inside those mails** come from `PUBLIC_URL`, which must be the
   externally reachable name.
 
+## 2.5 Leavers: archive, then delete
+
+Two systems share this, and the split is the point.
+
+```
+Provision  --archive_account-->  OU=Deactivated  --30 days-->  scheduled task deletes
+                                       |
+                                       +-- object has left the sync search base
+                                           => next sync proposes deactivate_user
+```
+
+**Syntra archives. The domain deletes.** Syntra has no delete operation of any
+kind — `write` in the AD connector rejects one before it binds, with a message
+that says so rather than answering "not found":
+
+```
+"delete_account" is not an operation this connector implements;
+there is no delete of any kind
+```
+
+That is deliberate and it stays. An unrecoverable write, driven by a timer,
+issued by a service that holds bind credentials for every tenant's directory,
+is a bad trade — one wrong contract import empties a directory. On the domain
+controller the blast radius is one domain, the operator is the domain's own
+scheduler, and the AD Recycle Bin covers a mistake for the deleted-object
+lifetime.
+
+### The archive OU must be a SIBLING of the sync search base
+
+This is the whole mechanism, and getting it wrong is silent.
+
+| | |
+|---|---|
+| Sync search base | `OU=Company,DC=example,DC=local` |
+| Archive container | `OU=Deactivated,DC=example,DC=local` |
+
+Provision moves the object to the archive; the object thereby leaves the sync's
+search base; the next run reads it as absent and proposes `deactivate_user`
+(`packages/core/src/sync/diff.ts:151`). You review that like any other change
+and apply it.
+
+Nest the archive **inside** `OU=Company` and none of it happens. The sync keeps
+seeing the account, keeps it active, and you have an archive that archives
+nothing. Nothing errors.
+
+This is also the answer to "why can't I deactivate a synced user in the
+console?" The control is withheld because a matched-but-inactive record is read
+as *the account came back*, and the next run proposes reactivating it
+(`diff.ts:104`) — the button would appear to work and quietly undo itself. Move
+the object out of the search base and the deactivation arrives through the
+source, which is the only place it holds.
+
+### Install
+
+```powershell
+# On the domain controller, as a domain administrator.
+.\install-reap.ps1 -Domain example.local
+```
+
+That creates `OU=Deactivated` at the domain root, protects it from accidental
+deletion, enables the AD Recycle Bin, installs `syntra-reap.ps1` into
+`C:\ProgramData\Syntra`, and registers a daily task as SYSTEM.
+
+**It installs in dry run.** The task logs what it would delete and deletes
+nothing. Read `C:\ProgramData\Syntra\reap.log` for a few days, confirm the OU
+and the dates are what you expect, then arm it:
+
+```powershell
+.\install-reap.ps1 -Domain example.local -Apply
+```
+
+Then point Syntra at the same OU and turn on the ladder's archive rung:
+
+```bash
+# archiveContainer must match the OU exactly. Config replaces rather than
+# merges, so send the whole bag; omit bindPassword and the stored secret is
+# left alone.
+curl -b "$J" -X PATCH -H 'Content-Type: application/json' \
+  -d '{"archiveAfterDays": 0}' "$B/api/admin/targets/$TARGET"
+```
+
+`archiveAfterDays: 0` archives on the departure date, so the 30 days of
+retention are served entirely in the OU. Split it differently if you prefer —
+`archiveAfterDays: 7` with `-RetentionDays 23` gives the same total.
+
+### The clock
+
+The retention period is measured from a stamp the sweep writes into
+`adminDescription`:
+
+```
+syntra-reap-after=2026-09-22
+```
+
+`adminDescription` and not `info`, because Syntra writes its provenance note to
+`info` and a sweep that overwrote it would destroy the marker identifying
+accounts Syntra created. The stamp is one line among whatever else the
+attribute holds, so a note written by hand survives a sweep and a sweep
+survives a note written by hand.
+
+On first sight of an unstamped account the due date is `whenChanged` plus the
+retention period — `modifyDN` sets `whenChanged`, so for a freshly archived
+object that is the archive time. It is only an estimate, since any later
+modification bumps it, and one rule makes that safe:
+
+**No account is ever deleted on the run that first stamps it.** However old
+`whenChanged` claims to be, the first sight floors the due date at tomorrow. A
+wrong OU costs a log entry rather than the accounts in it.
+
+A stamp that will not parse is treated as a clock that is *corrupted*, not one
+that is *absent*: the account is held forever rather than silently re-stamped,
+because re-stamping would restart the retention period on every run and the
+account would live indefinitely with nobody noticing.
+
+### What the sweep refuses to do
+
+| | |
+|---|---|
+| An **enabled** account in the archive | Held. Somebody re-enabled it or moved it by hand; it is live, and this does not delete live accounts. |
+| **Protected from accidental deletion** | Held. That flag is an explicit human "not this one". |
+| More than `-MaxDeletesPerRun` due at once | Deletes up to the cap, logs the rest. A bad import upstream arrives here as a flood; the cap turns it into a small loss and a loud log. |
+| Anything at all without `-Apply` | Logs, changes nothing. |
+
+### Testing the clock
+
+`syntra-reap.Tests.ps1` covers the date arithmetic — the part that decides
+whether an account is destroyed — and runs on any machine with no directory:
+
+```powershell
+powershell -NoProfile -File .\syntra-reap.Tests.ps1
+```
+
+It lifts the functions out of `syntra-reap.ps1` by parsing it rather than
+copying them, so a test cannot pass against logic that is no longer shipped.
+
+### Two populations, one archive
+
+The lab keeps synced people and provisioned accounts in different subtrees:
+
+| | |
+|---|---|
+| `OU=Company` | People read **from** AD by the directory source. |
+| `OU=Users,OU=Syntra` | Accounts written **to** AD by Provision. |
+
+They do not overlap, and a domain-root `OU=Deactivated` sits outside both, so
+one archive and one sweep serve them together. Provision moves its own accounts
+there when the ladder fires; a leaver in `OU=Company` gets there by being moved,
+which is also what tells the sync they have gone.
+
+Note that Provision acts on **Persons with contracts**, not on synced users, and
+anchors the ladder on the departure date. Until people are imported with
+contracts there is nothing for it to archive — ending a contract is the button.
+
 ---
 
 ## Rebuilding from nothing
