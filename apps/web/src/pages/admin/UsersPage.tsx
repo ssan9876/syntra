@@ -1,6 +1,7 @@
-import { Alert, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import { useState } from 'react';
+import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
-import { CreatePanel } from './CreatePanel.js';
+import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -24,6 +25,10 @@ export function UsersPage() {
   const { data, error, loading, reload } = useApiResource<{ users: UserRow[] }>(
     '/api/admin/users',
   );
+  // ONE editor for the page, opened by a row — not one collapsed panel per
+  // row, which would put a block-level trigger and a two-column form inside a
+  // table cell.
+  const [editing, setEditing] = useState<UserRow | null>(null);
   // For the org-unit picker on the create form. Same tolerance as the sources
   // read below: a caller without `directory.read` on units gets an empty list
   // and a form that still works, rather than a page that will not render.
@@ -53,7 +58,45 @@ export function UsersPage() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <CreatePanel
+      {editing && (
+        <RecordPanel
+          key={editing.id}
+          title={`Edit ${editing.login}`}
+          submitLabel="Save"
+          method="PATCH"
+          path={`/api/admin/users/${editing.id}/details`}
+          initial={{ displayName: editing.displayName, email: editing.email }}
+          onCancel={() => setEditing(null)}
+          onCreated={() => {
+            setEditing(null);
+            reload();
+          }}
+          build={(v) => ({
+            displayName: v.displayName ?? '',
+            email: v.email ?? '',
+          })}
+          fields={(v, set, errs) => (
+            <>
+              <Field
+                label="Display name"
+                value={v.displayName ?? ''}
+                onChange={(x) => set('displayName', x)}
+                error={errs.displayName}
+              />
+              <Field
+                label="Email"
+                type="email"
+                value={v.email ?? ''}
+                onChange={(x) => set('email', x)}
+                error={errs.email}
+                hint="The login name is not editable — it is what people sign in with and what the audit trail is read by."
+              />
+            </>
+          )}
+        />
+      )}
+
+      <RecordPanel
         title="New user"
         submitLabel="New user"
         path="/api/admin/users"
@@ -206,6 +249,17 @@ export function UsersPage() {
                       )}
                     </td>
                     <td className="px-4 py-2.5 text-right">
+                      {user.sourceId === null && (
+                        <span className="mr-2 inline-block align-middle">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setEditing(user)}
+                          >
+                            Edit
+                          </Button>
+                        </span>
+                      )}
                       {user.sourceId === null ? (
                         <StatusToggle
                           active={user.status === 'active'}

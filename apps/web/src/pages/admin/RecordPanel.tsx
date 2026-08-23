@@ -4,26 +4,34 @@ import { ApiError, api } from '../../session/api.js';
 import { fieldErrors } from './hooks.js';
 
 /**
- * The create form the four directory pages share.
+ * The record form the four directory pages share, for both creating and
+ * editing.
  *
  * `Users`, `Groups`, `Org units` and `People` were read-only: the API has had
  * `POST /users`, `/groups`, `/org-units` and `/persons` since Core, and no
  * screen called any of them. The empty states even described the action —
  * "Create a group to grant the same access to several people at once" — while
- * offering no control to do it.
+ * offering no control to do it. Editing was missing for longer still: a group
+ * named wrongly had to be deactivated and replaced, which loses its
+ * memberships and leaves a permanent inactive row created by a typo.
  *
- * One component rather than four hand-written forms, for the reason `Select`
+ * ONE component rather than eight hand-written forms, for the reason `Select`
  * is shared: the two controls on the sources page had already drifted from
- * each other when they were copied. Everything that differs between the four
- * is a prop; everything that must not differ — where the error goes, when the
- * button is busy, what happens on success — lives here once.
+ * each other when they were copied. Everything that differs is a prop;
+ * everything that must not differ — where the error goes, when the button is
+ * busy, what happens on success — lives here once. Creating and editing differ
+ * by `method` and `initial` and nothing else, which is exactly why they are not
+ * two components.
  *
  * Collapsed by default. These are listing pages first, and a form permanently
  * occupying the top of one pushes the thing you came to read below the fold.
  */
-export function CreatePanel({
+export function RecordPanel({
   title,
   submitLabel,
+  method = 'POST',
+  initial,
+  onCancel,
   fields,
   build,
   path,
@@ -34,6 +42,24 @@ export function CreatePanel({
   /** The panel's heading when open, e.g. "New group". */
   title: string;
   submitLabel: string;
+  /** `PATCH` edits what is there; the default creates. */
+  method?: 'POST' | 'PATCH';
+  /**
+   * Set to render the form ALWAYS OPEN, with no trigger button of its own.
+   *
+   * How the edit forms are used. A listing page keeps one "which row is being
+   * edited" and renders a single panel above the list, rather than giving
+   * every row its own collapsed panel — which put a block-level button with a
+   * bottom margin inside a table cell, and would have opened a two-column
+   * form inside one too.
+   */
+  onCancel?: () => void;
+  /**
+   * The values the form opens with. Re-read every time it opens rather than
+   * held in state from the first render, so a row changed by somebody else and
+   * reloaded does not put stale text back on screen.
+   */
+  initial?: Record<string, string>;
   /**
    * Rendered with the current values and the per-field errors the server
    * returned, so a rejected field is marked where it went wrong rather than
@@ -52,8 +78,9 @@ export function CreatePanel({
   disabled?: boolean;
   disabledReason?: string;
 }) {
+  const controlled = onCancel !== undefined;
   const [open, setOpen] = useState(false);
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string>>(initial ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -63,9 +90,10 @@ export function CreatePanel({
 
   const close = () => {
     setOpen(false);
-    setValues({});
+    setValues(initial ?? {});
     setErrors({});
     setProblem(null);
+    onCancel?.();
   };
 
   async function submit() {
@@ -73,7 +101,7 @@ export function CreatePanel({
     setProblem(null);
     setErrors({});
     try {
-      await api(path, { method: 'POST', body: JSON.stringify(build(values)) });
+      await api(path, { method, body: JSON.stringify(build(values)) });
       close();
       // The list reloads rather than optimistically appending. What the server
       // stored is the truth — a name it trimmed, a default it filled in — and
@@ -96,10 +124,18 @@ export function CreatePanel({
     }
   }
 
-  if (!open) {
+  if (!controlled && !open) {
     return (
       <div className="mb-4 flex items-center gap-3">
-        <Button onClick={() => setOpen(true)} disabled={disabled}>
+        <Button
+          onClick={() => {
+            // Values are taken from `initial` HERE rather than only at mount,
+            // so opening the form after a reload shows what is on the row now.
+            setValues(initial ?? {});
+            setOpen(true);
+          }}
+          disabled={disabled}
+        >
           {submitLabel}
         </Button>
         {disabled && disabledReason && (

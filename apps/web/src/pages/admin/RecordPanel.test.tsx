@@ -13,23 +13,41 @@ const json = (body: unknown, status = 200) =>
 
 /** Records every write, so a test can assert on the BODY and not just the call. */
 function mockApi(overrides: { post?: () => Response } = {}) {
-  const posts: { url: string; body: unknown }[] = [];
-  let groups = [{ id: 'g1', name: 'Existing', description: null }];
+  const writes: { url: string; method: string; body: unknown }[] = [];
+  let groups: Record<string, unknown>[] = [
+    { id: 'g1', name: 'Existing', description: null, status: 'active', statusReason: null, sourceId: null },
+  ];
   vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     const url = String(input);
-    if (init?.method === 'POST') {
-      posts.push({ url, body: JSON.parse(String(init.body)) });
+    const method = init?.method ?? 'GET';
+    if (method === 'POST' || method === 'PATCH') {
+      writes.push({ url, method, body: JSON.parse(String(init!.body)) });
       const response = overrides.post?.();
       if (response) return Promise.resolve(response);
-      groups = [...groups, { id: 'g2', name: 'Ward Nurses', description: null }];
-      return Promise.resolve(json({ id: 'g2' }, 201));
+      if (method === 'POST') {
+        groups = [
+          ...groups,
+          { id: 'g2', name: 'Ward Nurses', description: null, status: 'active', statusReason: null, sourceId: null },
+        ];
+        return Promise.resolve(json({ id: 'g2' }, 201));
+      }
+      groups = groups.map((g) =>
+        g.id === 'g1' ? { ...g, ...(writes.at(-1)!.body as object) } : g,
+      );
+      return Promise.resolve(json(groups[0]!));
     }
     if (url.includes('/org-units')) {
-      return Promise.resolve(json({ orgUnits: [{ id: 'u1', name: 'Head Office', parentId: null }] }));
+      return Promise.resolve(
+        json({
+          orgUnits: [
+            { id: 'u1', name: 'Head Office', parentId: null, status: 'active', statusReason: null, sourceId: null },
+          ],
+        }),
+      );
     }
     return Promise.resolve(json({ groups }));
   });
-  return posts;
+  return writes;
 }
 
 beforeEach(() => {
@@ -132,5 +150,112 @@ describe('creating from a directory listing page', () => {
     // The form stays open with the typed value intact — a refusal that clears
     // the box makes the reader retype what was nearly right.
     expect(screen.getByLabelText('Name')).toHaveValue('Existing');
+  });
+});
+
+describe('editing a record that already exists', () => {
+  it('opens with the current values and PATCHes the change', async () => {
+    // Editing was missing for longer than creating was. A group named wrongly
+    // had to be deactivated and replaced, which loses its memberships and its
+    // assignments and leaves a permanent inactive row created by a typo.
+    const writes = mockApi();
+    render(
+      <MemoryRouter>
+        <GroupsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('Existing');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    // Pre-filled, not blank. A form that opens empty invites somebody to
+    // retype a name that was almost right.
+    const name = screen.getByLabelText('Name');
+    expect(name).toHaveValue('Existing');
+
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]!.method).toBe('PATCH');
+    expect(writes[0]!.url).toContain('/api/admin/groups/g1');
+    expect(writes[0]!.body).toEqual({ name: 'Renamed', description: null });
+  });
+
+  it('sends NULL for a cleared optional, not an omission', async () => {
+    // In a PATCH, an omitted field means "leave alone". Omitting an emptied
+    // description would silently keep the old one — the save would report
+    // success and change nothing.
+    const writes = mockApi();
+    render(
+      <MemoryRouter>
+        <GroupsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('Existing');
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect((writes[0]!.body as { description: unknown }).description).toBeNull();
+  });
+
+  it('marks the field when the server says the name is taken', async () => {
+    mockApi({
+      post: () =>
+        json(
+          {
+            type: 'https://syntra.dev/problems/conflict',
+            title: 'Conflict',
+            status: 409,
+            errors: [{ path: 'name', message: 'group already exists: Payroll' }],
+          },
+          409,
+        ),
+    });
+    render(
+      <MemoryRouter>
+        <GroupsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('Existing');
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(
+      await screen.findByText('group already exists: Payroll'),
+    ).toBeInTheDocument();
+  });
+
+  it('offers no Edit for a source-owned group', async () => {
+    // The API refuses it — the next sync run reads the name out of the
+    // directory and would overwrite the change — so the control is absent
+    // rather than present and rejected.
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/org-units')) return Promise.resolve(json({ orgUnits: [] }));
+      return Promise.resolve(
+        json({
+          groups: [
+            {
+              id: 'g1',
+              name: 'AD Nurses',
+              description: null,
+              status: 'active',
+              statusReason: null,
+              sourceId: 'src-1',
+            },
+          ],
+        }),
+      );
+    });
+    render(
+      <MemoryRouter>
+        <GroupsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('AD Nurses');
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
   });
 });

@@ -1,7 +1,8 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
-import { CreatePanel } from './CreatePanel.js';
+import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -18,6 +19,8 @@ export function PersonsPage() {
   const { data, error, loading, reload } = useApiResource<{ persons: PersonRow[] }>(
     '/api/admin/persons',
   );
+  // ONE editor for the page, opened by a row. See the same note on UsersPage.
+  const [editing, setEditing] = useState<PersonRow | null>(null);
 
   return (
     <>
@@ -28,7 +31,66 @@ export function PersonsPage() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <CreatePanel
+      {editing && (
+        <RecordPanel
+          key={editing.id}
+          title={`Edit ${editing.givenName} ${editing.familyName}`}
+          submitLabel="Save"
+          method="PATCH"
+          path={`/api/admin/persons/${editing.id}`}
+          initial={{
+            givenName: editing.givenName,
+            familyName: editing.familyName,
+            businessEmail: editing.businessEmail ?? '',
+            externalId: editing.externalId ?? '',
+          }}
+          onCancel={() => setEditing(null)}
+          onCreated={() => {
+            setEditing(null);
+            reload();
+          }}
+          build={(v) => ({
+            givenName: v.givenName ?? '',
+            familyName: v.familyName ?? '',
+            // NULL clears; omitting would mean "leave alone" and an emptied
+            // box would keep the old value.
+            businessEmail: v.businessEmail === '' ? null : (v.businessEmail ?? null),
+            externalId: v.externalId === '' ? null : (v.externalId ?? null),
+          })}
+          fields={(v, set, errs) => (
+            <>
+              <Field
+                label="Given name"
+                value={v.givenName ?? ''}
+                onChange={(x) => set('givenName', x)}
+                error={errs.givenName}
+              />
+              <Field
+                label="Family name"
+                value={v.familyName ?? ''}
+                onChange={(x) => set('familyName', x)}
+                error={errs.familyName}
+              />
+              <Field
+                label="Business email"
+                type="email"
+                value={v.businessEmail ?? ''}
+                onChange={(x) => set('businessEmail', x)}
+                error={errs.businessEmail}
+              />
+              <Field
+                label="External id"
+                value={v.externalId ?? ''}
+                onChange={(x) => set('externalId', x)}
+                error={errs.externalId}
+                hint="The key a CSV import matches on. Changing it makes the next import create a second person rather than update this one."
+              />
+            </>
+          )}
+        />
+      )}
+
+      <RecordPanel
         title="New person"
         submitLabel="Add someone"
         path="/api/admin/persons"
@@ -147,6 +209,15 @@ export function PersonsPage() {
                       </Status>
                     </td>
                     <td className="px-4 py-2.5 text-right">
+                      <span className="mr-2 inline-block align-middle">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setEditing(person)}
+                        >
+                          Edit
+                        </Button>
+                      </span>
                       <StatusToggle
                         active={person.status === 'active'}
                         basePath={`/api/admin/persons/${person.id}`}

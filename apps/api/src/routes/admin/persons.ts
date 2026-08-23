@@ -6,6 +6,7 @@ import {
   idParam,
   importRequest,
   linkUserRequest,
+  patchPersonRequest,
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
@@ -307,6 +308,76 @@ export async function registerAdminPersonRoutes(
       // Partial success is reported, never hidden: the caller sees both what
       // landed and every line that did not.
       return { ...result, errors };
+    },
+  );
+
+  /**
+   * Correcting a person's record.
+   *
+   * No source-owned check here, unlike users, groups and org units: a Person
+   * has no `sourceId`. People arrive by CSV import, which matches on
+   * `externalId` and updates in place, so a later import overwrites an edit
+   * to a field the file carries — the import is the authority, not a sync run,
+   * and it only runs when somebody uploads one.
+   */
+  app.patch(
+    '/persons/:id',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = patchPersonRequest.parse(request.body);
+
+      return request.db(async (tx) => {
+        const existing = await tx.person.findUnique({ where: { id } });
+        if (!existing) throw new ProblemError(404, 'not-found', 'Person not found');
+
+        if (
+          body.externalId !== undefined &&
+          body.externalId !== null &&
+          body.externalId !== existing.externalId
+        ) {
+          // Unique per tenant, and the key a CSV import matches on: two people
+          // sharing one would make the next import update whichever it found
+          // first.
+          const clash = await tx.person.findFirst({
+            where: { externalId: body.externalId },
+          });
+          if (clash) {
+            throw new ProblemError(409, 'conflict', 'Conflict', undefined, {
+              errors: [
+                {
+                  path: 'externalId',
+                  message: `another person already has the id ${body.externalId}`,
+                },
+              ],
+            });
+          }
+        }
+
+        const updated = await tx.person.update({
+          where: { id },
+          data: {
+            ...(body.givenName === undefined ? {} : { givenName: body.givenName }),
+            ...(body.familyName === undefined ? {} : { familyName: body.familyName }),
+            ...(body.businessEmail === undefined ? {} : { businessEmail: body.businessEmail }),
+            ...(body.personalEmail === undefined ? {} : { personalEmail: body.personalEmail }),
+            ...(body.externalId === undefined ? {} : { externalId: body.externalId }),
+          },
+        });
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'person.update',
+          targetType: 'Person',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: {
+            from: { givenName: existing.givenName, familyName: existing.familyName },
+            to: { givenName: updated.givenName, familyName: updated.familyName },
+          },
+        });
+        return updated;
+      });
     },
   );
 }

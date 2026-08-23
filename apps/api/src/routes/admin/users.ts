@@ -5,6 +5,7 @@ import {
   createUserRequest,
   deactivateUserRequest,
   idParam,
+  patchUserDetailsRequest,
   patchUserRequest,
 } from '@syntra/contracts';
 import {
@@ -234,6 +235,85 @@ export async function registerAdminUserRoutes(
       });
 
       return reply.status(200).send({ recoveryCodesRevoked: orphanedCodes });
+    },
+  );
+
+  /**
+   * The user's own details: what they are called, where mail reaches them, and
+   * where they sit in the organization.
+   *
+   * Separate from `PATCH /users/:id`, which is about where the PASSWORD lives
+   * and nothing else. Folding the two together would put a field that changes
+   * how authentication works in the same request as a display-name fix, and
+   * the audit rows would stop distinguishing them.
+   *
+   * `login` is not editable here. It is what somebody types to sign in and what
+   * the audit trail is read by; changing it is an account migration, not an
+   * edit.
+   *
+   * A source-owned account is refused: the next sync run reads these fields
+   * from the directory and would overwrite the change.
+   */
+  app.patch(
+    '/users/:id/details',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = patchUserDetailsRequest.parse(request.body);
+
+      return request.db(async (tx) => {
+        const existing = await tx.user.findUnique({ where: { id } });
+        if (!existing) throw new ProblemError(404, 'not-found', 'User not found');
+        if (existing.sourceId) {
+          throw new ProblemError(
+            409,
+            'source-owned',
+            'Managed by a directory source',
+            'This account is read from a directory source, and the next sync run would overwrite the change. Edit it where it comes from.',
+          );
+        }
+
+        if (body.orgUnitId !== undefined && body.orgUnitId !== null) {
+          const unit = await tx.orgUnit.findUnique({ where: { id: body.orgUnitId } });
+          if (!unit) throw new ProblemError(404, 'not-found', 'Org unit not found');
+        }
+
+        const updated = await tx.user.update({
+          where: { id },
+          data: {
+            ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+            ...(body.email === undefined ? {} : { email: body.email }),
+            ...(body.orgUnitId === undefined ? {} : { orgUnitId: body.orgUnitId }),
+          },
+        });
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'user.updateDetails',
+          targetType: 'User',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: {
+            from: {
+              displayName: existing.displayName,
+              email: existing.email,
+              orgUnitId: existing.orgUnitId,
+            },
+            to: {
+              displayName: updated.displayName,
+              email: updated.email,
+              orgUnitId: updated.orgUnitId,
+            },
+          },
+        });
+        return {
+          id: updated.id,
+          login: updated.login,
+          displayName: updated.displayName,
+          email: updated.email,
+          orgUnitId: updated.orgUnitId,
+        };
+      });
     },
   );
 }

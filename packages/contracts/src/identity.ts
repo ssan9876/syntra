@@ -8,6 +8,25 @@ export const createPersonRequest = z.object({
   externalId: z.string().max(128).optional(),
 });
 
+/**
+ * Editing a person. Same rules as the directory patches: every field optional,
+ * at least one required, unknown keys refused.
+ *
+ * The two email fields and `externalId` are nullable so they can be cleared;
+ * the names are not, because a person with no family name is not a correction
+ * anybody meant to make.
+ */
+export const patchPersonRequest = z
+  .object({
+    givenName: z.string().min(1).max(128).optional(),
+    familyName: z.string().min(1).max(128).optional(),
+    businessEmail: z.string().email().nullable().optional(),
+    personalEmail: z.string().email().nullable().optional(),
+    externalId: z.string().max(128).nullable().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
+
 export const createContractRequest = z.object({
   sequence: z.number().int().positive(),
   isPrimary: z.boolean().default(false),
