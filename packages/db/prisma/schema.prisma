@@ -54,6 +54,13 @@ model OrgUnit {
   sourceId     String?          @db.Uuid
   source       DirectorySource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   sourceAnchor String?
+  /// A deactivated unit GRANTS NOTHING -- neither the applications assigned to
+  /// it nor an administrative role scoped to it -- while keeping its name, its
+  /// place in the tree and the users sitting in it. Children are not touched:
+  /// closing a department does not close the ones under it, and reactivating
+  /// puts back exactly what was there.
+  status       String           @default("active")
+  statusReason String?
 
   @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])

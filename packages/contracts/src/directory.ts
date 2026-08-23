@@ -28,6 +28,10 @@ export const deactivatePersonRequest = z.object({
   reason: z.string().min(1).max(512),
 });
 
+export const deactivateOrgUnitRequest = z.object({
+  reason: z.string().min(1).max(512),
+});
+
 export const createGroupRequest = z.object({
   name: z.string().min(1).max(256),
   description: z.string().max(1024).optional(),
@@ -37,6 +41,48 @@ export const createOrgUnitRequest = z.object({
   name: z.string().min(1).max(256),
   parentId: z.string().uuid().optional(),
 });
+
+/**
+ * EDITING what already exists, as opposed to creating it.
+ *
+ * Every field is optional and at least one must be present: a PATCH naming no
+ * field is almost certainly a bug in the caller, and answering it with 200 and
+ * an unchanged row hides that. `strict()` refuses an unknown key for the same
+ * reason — a client sending `displayname` should be told, not silently ignored.
+ *
+ * `login` is deliberately NOT here. It is what somebody types to sign in and
+ * what audit rows are read by; changing it is an account migration, not an
+ * edit, and it needs a decision about the trail that this form is not the
+ * place to make.
+ */
+export const patchGroupRequest = z
+  .object({
+    name: z.string().min(1).max(256).optional(),
+    // Nullable, not merely optional: clearing a description is a thing to do,
+    // and `undefined` cannot say it because it already means "leave alone".
+    description: z.string().max(1024).nullable().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
+
+export const patchOrgUnitRequest = z
+  .object({
+    name: z.string().min(1).max(256).optional(),
+    /** Null moves the unit to the top level. */
+    parentId: z.string().uuid().nullable().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
+
+export const patchUserDetailsRequest = z
+  .object({
+    displayName: z.string().min(1).max(256).optional(),
+    email: z.string().email().optional(),
+    /** Null takes the user out of the hierarchy entirely. */
+    orgUnitId: z.string().uuid().nullable().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
 
 export const idParam = z.object({ id: z.string().uuid() });
 

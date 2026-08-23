@@ -93,6 +93,15 @@ export async function permissionsForUser(
  * An unscoped assignment applies everywhere. A scoped assignment applies only
  * to its own unit — and notably does NOT satisfy a question asked with no
  * scope, because that question is tenant-wide and a scoped grant is not.
+ *
+ * A scoped assignment on a DEACTIVATED unit grants nothing, by the same rule
+ * that stops a deactivated unit handing out applications. Administrative
+ * authority over a department that has been closed is authority over nothing,
+ * and leaving it standing would make deactivation a control that retires a
+ * unit's grants while quietly keeping its administrators.
+ *
+ * The assignment row is untouched: reactivating the unit restores it, and the
+ * record of who administered what survives either way.
  */
 export async function hasPermission(
   tx: TenantClient,
@@ -105,9 +114,33 @@ export async function hasPermission(
     include: { role: true },
   });
 
+  // ONE extra query at most, and only when it can change the answer.
+  //
+  // Only the unit actually being asked about can be the deciding one — a
+  // scoped assignment on any other unit already fails the match below — so
+  // this asks about that unit alone, and only when the caller named a scope
+  // AND the user actually holds an assignment on it. A tenant-wide question,
+  // or a scoped one from somebody whose roles are all tenant-wide, adds
+  // nothing at all, which is the shape of nearly every call.
+  //
+  // `RoleAssignment.scopeOrgUnitId` carries no Prisma relation, so the status
+  // cannot be joined in the query above.
+  const scopeCouldDecide =
+    scopeOrgUnitId !== undefined &&
+    assignments.some((a) => a.scopeOrgUnitId === scopeOrgUnitId);
+  let scopeIsActive = true;
+  if (scopeCouldDecide) {
+    const unit = await tx.orgUnit.findUnique({
+      where: { id: scopeOrgUnitId },
+      select: { status: true },
+    });
+    scopeIsActive = unit?.status === 'active';
+  }
+
   return assignments.some((a) => {
     if (!a.role.permissions.includes(permission)) return false;
     if (a.scopeOrgUnitId === null) return true;
+    if (!scopeIsActive) return false;
     return scopeOrgUnitId !== undefined && a.scopeOrgUnitId === scopeOrgUnitId;
   });
 }
