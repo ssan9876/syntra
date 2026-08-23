@@ -32,7 +32,38 @@ import {
  * 2,000-item campaign — is appended by the last of the campaign tasks, because
  * it cannot compile before those modules exist.
  */
-const BUDGET_MS = 2500;
+/**
+ * 2,500 ms, and OVERRIDABLE — because the number is calibrated against
+ * hardware, not against the code.
+ *
+ * The budget is deliberately half of Prisma's 5,000 ms interactive-transaction
+ * ceiling: a test set at the ceiling only fails once the defect is already
+ * shipping. That reasoning is sound and unchanged. What does not transfer is
+ * the calibration. On a GitHub-hosted runner the BOUNDED cases measured 2,505,
+ * 2,561, 2,633 and 2,959 ms against this 2,500 — one of them missing by five
+ * milliseconds. At that point the assertion is reporting the speed of the
+ * runner, and a suite that goes red on every push for reasons unrelated to the
+ * change is a suite people stop reading.
+ *
+ * Raising it does not blunt the check completely, and the detail matters
+ * because half of it is easy to overclaim. MEASURED at `GOVERN_BUDGET_MS`
+ * = 999999:
+ *
+ *   - slice 1's "fails when the write batch is unbounded" goes RED. It compares
+ *     a measurement against the budget, so an absurd budget makes the mutation
+ *     half unable to breach it, and the file says so.
+ *   - slice 2's "FAILS when reviewer resolution is unbounded" stays green. It
+ *     accepts an abort at Prisma's own 5,000 ms ceiling as the breach, and that
+ *     is budget-independent by construction — it proves the defect is
+ *     detectable, not that this number is meaningful.
+ *
+ * So slice 1 polices the value and slice 2 does not. A budget raised past
+ * 5,000 ms would be caught; one raised to 4,000 would not be. That is the real
+ * guarantee, and it is worth knowing before somebody reaches for this knob.
+ *
+ * The default stays 2,500 so a developer's machine keeps the strict figure.
+ */
+const BUDGET_MS = Number(process.env.GOVERN_BUDGET_MS ?? 2500);
 
 /**
  * FOUR THOUSAND, not the four hundred the plan seeded.
