@@ -104,11 +104,15 @@ describe('what the fallback must NOT swallow', () => {
 
   it('leaves the OIDC provider to answer for its own unknown paths', async () => {
     // Everything under /oidc is oidc-provider's, including what it says about
-    // a path it does not have — which is text, not problem+json. The property
-    // that matters here is the same one as above: the fallback did not take
-    // it and hand back a page.
+    // a path it does not have. What is asserted is ONLY the property this file
+    // is about: the fallback did not take the path and hand back a page.
+    //
+    // Deliberately not the status code. That belongs to oidc-provider, which
+    // answers 404 normally and 500 when it cannot build a provider — and
+    // pinning it made this fail for a reason that had nothing to do with the
+    // fallback, on a run where the database was briefly out of connections.
     const res = await page('/oidc/nope');
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
     expect(res.headers['content-type']).not.toContain('text/html');
     expect(res.body).not.toContain('<title>Syntra</title>');
   });
