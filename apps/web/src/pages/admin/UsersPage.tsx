@@ -1,6 +1,7 @@
 import { Alert, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { CreatePanel } from './CreatePanel.js';
+import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
 
 interface UserRow {
@@ -201,6 +202,27 @@ export function UsersPage() {
                               {user.statusReason}
                             </span>
                           )}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      {user.sourceId === null ? (
+                        <StatusToggle
+                          active={user.status === 'active'}
+                          basePath={`/api/admin/users/${user.id}`}
+                          label="user"
+                          reasonPrompt="Why is this account being deactivated? Every session and refresh token is revoked immediately."
+                          onChanged={reload}
+                        />
+                      ) : (
+                        // A SOURCE-OWNED ACCOUNT IS NOT DEACTIVATED HERE.
+                        // The next run reads the account as present in the
+                        // directory and proposes reactivating it, so the
+                        // button would appear to work and quietly undo itself.
+                        // Deactivate them where they live, or let the sync
+                        // notice they are gone.
+                        <span className="text-sm text-muted">
+                          managed by a directory source
                         </span>
                       )}
                     </td>

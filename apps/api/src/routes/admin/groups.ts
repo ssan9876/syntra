@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   createGroupRequest,
+  deactivateGroupRequest,
   idParam,
   membershipParams,
 } from '@syntra/contracts';
@@ -8,8 +9,10 @@ import {
   PERMISSIONS,
   addMember,
   createGroup,
+  deactivateGroup,
   listGroups,
   listMembers,
+  reactivateGroup,
   recordEvent,
   removeMember,
 } from '@syntra/core';
@@ -21,6 +24,62 @@ export async function registerAdminGroupRoutes(
   app: FastifyInstance,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
+
+  /**
+   * Deactivate, never delete — the rule this whole product runs on.
+   *
+   * A group is what entitlements are granted to, so deleting one silently
+   * revokes access from everybody in it and takes the record of who had what
+   * with it. Deactivating leaves the memberships standing, grants nothing, and
+   * can be undone. Directory Sync already does exactly this when a group
+   * vanishes from its source.
+   */
+  app.post(
+    '/groups/:id/deactivate',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { reason } = deactivateGroupRequest.parse(request.body);
+      return request.db(async (tx) => {
+        const existing = await tx.group.findUnique({ where: { id } });
+        if (!existing) throw new ProblemError(404, 'not-found', 'Group not found');
+        const updated = await deactivateGroup(tx, id, reason);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'group.deactivate',
+          targetType: 'Group',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { name: existing.name, reason },
+        });
+        return updated;
+      });
+    },
+  );
+
+  app.post(
+    '/groups/:id/reactivate',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      return request.db(async (tx) => {
+        const existing = await tx.group.findUnique({ where: { id } });
+        if (!existing) throw new ProblemError(404, 'not-found', 'Group not found');
+        const updated = await reactivateGroup(tx, id);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'group.reactivate',
+          targetType: 'Group',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { name: existing.name },
+        });
+        return updated;
+      });
+    },
+  );
 
   app.get(
     '/groups',

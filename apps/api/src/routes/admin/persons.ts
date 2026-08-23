@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   createContractRequest,
   createPersonRequest,
+  deactivatePersonRequest,
   idParam,
   importRequest,
   linkUserRequest,
@@ -10,12 +11,14 @@ import {
   PERMISSIONS,
   createContract,
   createPerson,
+  deactivatePerson,
   explainPersonAccess,
   importPersons,
   linkUserToPerson,
   listContracts,
   listPersons,
   parsePersonCsv,
+  reactivatePerson,
   recordEvent,
   usersForPerson,
 } from '@syntra/core';
@@ -27,6 +30,67 @@ export async function registerAdminPersonRoutes(
   app: FastifyInstance,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
+
+  /**
+   * Deactivates the PERSON and nothing else.
+   *
+   * Their logins are left alone on purpose. A person and an account are
+   * different things — the distinction this product is built on — and
+   * cascading would make one button do two jobs while naming only one of them.
+   * The accounts are deactivated per account, by whoever owns them.
+   *
+   * `Person` has no `statusReason` column, so the reason lives on the audit
+   * event. That is where "why, and who decided" is looked for anyway.
+   */
+  app.post(
+    '/persons/:id/deactivate',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { reason } = deactivatePersonRequest.parse(request.body);
+      return request.db(async (tx) => {
+        const existing = await tx.person.findUnique({ where: { id } });
+        if (!existing) throw new ProblemError(404, 'not-found', 'Person not found');
+        const updated = await deactivatePerson(tx, id);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'person.deactivate',
+          targetType: 'Person',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: {
+            name: `${existing.givenName} ${existing.familyName}`,
+            reason,
+          },
+        });
+        return updated;
+      });
+    },
+  );
+
+  app.post(
+    '/persons/:id/reactivate',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      return request.db(async (tx) => {
+        const existing = await tx.person.findUnique({ where: { id } });
+        if (!existing) throw new ProblemError(404, 'not-found', 'Person not found');
+        const updated = await reactivatePerson(tx, id);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'person.reactivate',
+          targetType: 'Person',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { name: `${existing.givenName} ${existing.familyName}` },
+        });
+        return updated;
+      });
+    },
+  );
 
   app.get(
     '/persons',

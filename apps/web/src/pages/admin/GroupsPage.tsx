@@ -1,12 +1,15 @@
-import { Alert, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { CreatePanel } from './CreatePanel.js';
+import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
 
 interface GroupRow {
   id: string;
   name: string;
   description: string | null;
+  status: string;
+  statusReason: string | null;
 }
 
 export function GroupsPage() {
@@ -72,12 +75,31 @@ export function GroupsPage() {
               {data.groups.map((group) => (
                 <li
                   key={group.id}
-                  className="flex flex-wrap items-baseline gap-x-3 border-b border-border-subtle px-4 py-3 last:border-0 transition-colors hover:bg-surface"
+                  className="flex flex-wrap items-center gap-x-3 border-b border-border-subtle px-4 py-3 last:border-0 transition-colors hover:bg-surface"
                 >
                   <span className="font-medium text-ink">{group.name}</span>
                   {group.description && (
                     <span className="text-muted">{group.description}</span>
                   )}
+                  {group.status !== 'active' && (
+                    // LABELLED, not hidden. A deactivated group keeps its
+                    // members and grants nothing, and an administrator needs
+                    // to see that it is still there and why.
+                    <Status tone="inactive">
+                      {group.statusReason
+                        ? `inactive — ${group.statusReason}`
+                        : 'inactive'}
+                    </Status>
+                  )}
+                  <span className="ml-auto">
+                    <StatusToggle
+                      active={group.status === 'active'}
+                      basePath={`/api/admin/groups/${group.id}`}
+                      label="group"
+                      reasonPrompt="Why is this group being deactivated? Its members are kept and it will grant nothing."
+                      onChanged={reload}
+                    />
+                  </span>
                 </li>
               ))}
             </ul>

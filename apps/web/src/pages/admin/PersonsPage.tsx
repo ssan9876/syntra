@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { CreatePanel } from './CreatePanel.js';
+import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
 
 interface PersonRow {
@@ -113,6 +114,9 @@ export function PersonsPage() {
                   <th scope="col" className="px-4 py-2.5 font-medium">
                     Status
                   </th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -141,6 +145,15 @@ export function PersonsPage() {
                       >
                         {person.status === 'active' ? 'Active' : 'Inactive'}
                       </Status>
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <StatusToggle
+                        active={person.status === 'active'}
+                        basePath={`/api/admin/persons/${person.id}`}
+                        label="person"
+                        reasonPrompt="Why is this person being deactivated? Their sign-in accounts are NOT changed by this — deactivate those separately."
+                        onChanged={reload}
+                      />
                     </td>
                   </tr>
                 ))}

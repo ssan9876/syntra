@@ -11,6 +11,7 @@ import {
   PERMISSIONS,
   createUser,
   deactivateUser,
+  reactivateUser,
   listUsers,
   recordEvent,
   removeRecoveryCodes,
@@ -100,6 +101,32 @@ export async function registerAdminUserRoutes(
           outcome: 'success',
           sourceIp: request.ip,
           payload: { login: existing.login, reason },
+        });
+        return updated;
+      });
+    },
+  );
+
+  app.post(
+    '/users/:id/reactivate',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      return request.db(async (tx) => {
+        const existing = await tx.user.findUnique({ where: { id } });
+        if (!existing) throw new ProblemError(404, 'not-found', 'User not found');
+        const updated = await reactivateUser(tx, id);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'user.reactivate',
+          targetType: 'User',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          // NO session is restored, and that is not an omission. Deactivation
+          // revoked every session and refresh token; reactivation gives back
+          // the ability to sign in, not the sessions that were killed.
+          payload: { login: existing.login },
         });
         return updated;
       });
