@@ -1,14 +1,15 @@
 import { useState } from 'react';
-import { Alert, Button } from '@syntra/ui';
+import { Alert, Button, Field } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 
 /**
- * Deactivate and reactivate, for the three things that carry a status.
+ * Deactivate and reactivate, for the four things that carry a status.
  *
  * DELETE IS NOT AN OPTION ANYWHERE IN THIS PRODUCT, and this control is why.
  * Deleting a group revokes access from everybody in it and takes the record of
- * who had what with it; deleting a user destroys the trail of what they held.
- * A deactivated row is still listed, still shows its members, and grants
+ * who had what with it; deleting a user destroys the trail of what they held;
+ * deleting an org unit does both and orphans any administrative role scoped to
+ * it. A deactivated row is still listed, still shows its members, and grants
  * nothing — and it can come back. The specs say it in as many words:
  * "Deactivation never deletes."
  *
@@ -34,24 +35,26 @@ export function StatusToggle({
 }) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /**
+   * The reason box, open or not.
+   *
+   * IN THE PAGE, not `window.prompt`. A native dialog blocks the whole tab
+   * while it is open, cannot be styled or validated as you type, and — the
+   * reason it had to go — a browser that has been told to "prevent this page
+   * from creating additional dialogs" returns null from every later call. The
+   * button would then do nothing, for ever, with no error and nothing on
+   * screen to explain it.
+   */
+  const [asking, setAsking] = useState(false);
+  const [reason, setReason] = useState('');
 
-  async function run(verb: 'deactivate' | 'reactivate') {
-    // The reason is collected BEFORE anything is sent, and an empty one
-    // abandons the whole action rather than sending a blank the server will
-    // reject — a refusal after the fact reads as a bug in the button.
-    let reason: string | null = null;
-    if (verb === 'deactivate') {
-      reason = window.prompt(reasonPrompt);
-      if (reason === null || reason.trim() === '') return;
-    }
-
+  async function send(verb: 'deactivate' | 'reactivate', body: object) {
     setBusy(true);
     setProblem(null);
     try {
-      await api(`${basePath}/${verb}`, {
-        method: 'POST',
-        body: JSON.stringify(reason === null ? {} : { reason }),
-      });
+      await api(`${basePath}/${verb}`, { method: 'POST', body: JSON.stringify(body) });
+      setAsking(false);
+      setReason('');
       onChanged();
     } catch (cause) {
       setProblem(
@@ -64,6 +67,48 @@ export function StatusToggle({
     }
   }
 
+  if (asking) {
+    return (
+      // Sized to the space it is given, never wider. Two of the four pages
+      // that use this are TABLES, and a fixed width here pushed the last
+      // column past the viewport and put a horizontal scrollbar on the page.
+      <div className="flex w-full flex-col items-stretch gap-2 text-left">
+        {problem && <Alert tone="danger">{problem}</Alert>}
+        <Field
+          label="Reason"
+          value={reason}
+          onChange={setReason}
+          hint={reasonPrompt}
+        />
+        <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="danger"
+            loading={busy}
+            // Nothing is sent until there is a reason. Posting a blank and
+            // letting the server refuse it reads as a broken button.
+            disabled={busy || reason.trim() === ''}
+            onClick={() => void send('deactivate', { reason: reason.trim() })}
+          >
+            Deactivate
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => {
+              setAsking(false);
+              setReason('');
+              setProblem(null);
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       {problem && <Alert tone="danger">{problem}</Alert>}
@@ -72,7 +117,9 @@ export function StatusToggle({
         variant={active ? 'danger' : 'secondary'}
         loading={busy}
         disabled={busy}
-        onClick={() => void run(active ? 'deactivate' : 'reactivate')}
+        onClick={() =>
+          active ? setAsking(true) : void send('reactivate', {})
+        }
       >
         {/* Named for what it DOES. "Delete" would be a lie, and "disable" is
             a different word for the same thing in a product whose specs,
