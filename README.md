@@ -19,16 +19,19 @@ authentication policy, TOTP and WebAuthn second factors with recovery codes,
 self-service password reset, an application catalog the portal launches from,
 and the federation protocols — Syntra is a SAML 2.0 identity provider and an
 OpenID Connect provider, and can delegate authentication upstream to either.
-The modules after Access are designed but not yet implemented.
+**Provision**, **Automate** and **Govern** are built too: business rules
+evaluated against target systems, a self-service catalog with approval
+workflows and delegated management, and reconciliation, segregation of duties
+and recertification campaigns over the lot.
 
 | Module | Status | Contents |
 |---|---|---|
-| **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications, web console |
+| **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications, web console. Users, groups, org units and people can be created, edited and deactivated from the console — never deleted |
 | **Directory Sync** | built | LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, and console screens for the lot: a source editor with a connection test, a mapping editor, and a run review with per-change skip and partial apply |
 | **Access** | built | Application catalog and assignments, authentication policy, TOTP and WebAuthn second factors, recovery codes, self-service password reset, step-up MFA for the console. **SAML 2.0 identity provider**: both bindings, SP-initiated and IdP-initiated, signed assertions, optional encryption, front-channel single logout, metadata by upload or URL. **OpenID Connect provider**: authorization code with PKCE, refresh-token rotation, discovery, JWKS with overlapping rotation, UserInfo, RP-initiated logout, and a bounded client-credentials grant. **Upstream federation**: Syntra as a SAML service provider and as an OIDC relying party, with just-in-time provisioning and policy-driven routing. Every path reaches the same `authorize()`. See [what it does not do](#what-the-federation-half-does-not-do) |
-| **Provision** | planned | Source systems, business rules, evaluation and enforcement, target systems, entitlements |
-| **Automate** | planned | Product catalog, self-service requests, approval workflows, delegated forms |
-| **Govern** | planned | Reconciliation, segregation of duties, recertification campaigns |
+| **Provision** | built | Source systems, business rules, evaluation and enforcement, target systems and entitlements, previewed runs in the same idiom as Directory Sync |
+| **Automate** | built | Product catalog, self-service requests, approval workflows, resource delegation so a team lead manages a group without an administrative session, and an expiry sweep with a proportional guard |
+| **Govern** | built | Reconciliation, segregation of duties, recertification campaigns, a tamper-evident snapshot chain with optional signing and anchoring |
 
 Design and plan documents live in [`docs/superpowers/`](docs/superpowers).
 
@@ -396,6 +399,40 @@ unattended schedule is precisely when nobody is watching.
 Records the source returned but that could not be mapped are counted and
 named on the run, and are never treated as absent. A missing attribute is our
 failure to understand a record, not evidence that the person has left.
+
+## Deactivate, never delete
+
+There is no Delete anywhere in the directory, and that is a design decision
+rather than an omission. Deleting a group revokes access from everybody in it
+and takes the record of who had what with it; deleting a user destroys the
+trail of what they held; deleting an org unit does both and orphans any
+administrative role scoped to it. A deactivated row is still listed, still
+shows its members, still says why it was deactivated and who did it — and
+grants nothing. Reactivating puts back exactly what was there, because nothing
+was thrown away.
+
+**Grants nothing** is the part that has to be true in the code, not only in the
+copy. A deactivated group is left out of the applications a user resolves to
+and out of the group names asserted into SAML assertions and OIDC tokens; a
+deactivated org unit stops granting the applications assigned to it and stops
+any administrative role scoped to it from carrying authority. Deactivation
+without that is a control that reports success and revokes nothing.
+
+Two deliberate exceptions:
+
+- **The policy engine still sees every group, deactivated or not.** A rule can
+  deny or demand a second factor, not only allow. Dropping a deactivated group
+  there would stop those rules matching, so deactivating a group would quietly
+  *remove* a restriction — the opposite of what the word means.
+- **A deactivated unit does not cut off the units above it.** Somebody in a
+  closed department is still under the division that contains it, and an
+  assignment made there was never deactivated. Its children are untouched for
+  the same reason, and because a cascade could not be undone by reactivating
+  the parent.
+
+Rows owned by a directory source cannot be deactivated or edited here at all.
+The next sync run reads them as present and puts them back, so the console says
+who owns them rather than offering a control that silently reverts.
 
 ## Access: signing in, second factors and policy
 
