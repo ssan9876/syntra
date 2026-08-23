@@ -50,6 +50,13 @@ export async function updateApplication(
       ...(input.name === undefined ? {} : { name: input.name }),
       ...(input.description === undefined ? {} : { description: input.description }),
       ...(input.iconUrl === undefined ? {} : { iconUrl: input.iconUrl }),
+      // `type` was accepted by `updateApplicationRequest` and dropped here, so
+      // PUT answered 200 and changed nothing — and the only way to turn a
+      // bookmark into a SAML application was to delete it and create it again,
+      // losing its assignments. Registering a service provider against an
+      // application somebody had already created was impossible through the
+      // API, and the API said it had worked.
+      ...(input.type === undefined ? {} : { type: input.type }),
       ...(input.launchUrl === undefined ? {} : { launchUrl: input.launchUrl }),
       ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
       ...(input.status === undefined ? {} : { status: input.status }),

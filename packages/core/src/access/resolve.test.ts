@@ -48,6 +48,50 @@ const names = async () => {
   return rows.map((r) => r.slug).sort();
 };
 
+describe('updateApplication', () => {
+  it('CHANGES THE TYPE, so a bookmark can become a service provider', async () => {
+    // `updateApplicationRequest` accepts `type` and the update dropped it, so
+    // PUT answered 200 and changed nothing. The only way to register SAML
+    // against an application somebody had already created was to delete it and
+    // make it again — losing its assignments — and the API reported success
+    // the whole time.
+    const app = await withTenant(tenantId, (tx) =>
+      createApplication(tx, {
+        name: 'Snipe-IT',
+        slug: 'snipe-it',
+        launchUrl: 'https://snipeit.example.test/',
+      }),
+    );
+    expect(app.type).toBe('bookmark');
+
+    const updated = await withTenant(tenantId, (tx) =>
+      updateApplication(tx, app.id, { type: 'saml' }),
+    );
+    expect(updated.type).toBe('saml');
+
+    // And it is the STORED row that changed, not just what the call returned.
+    const reread = await withTenant(tenantId, (tx) =>
+      tx.application.findUniqueOrThrow({ where: { id: app.id } }),
+    );
+    expect(reread.type).toBe('saml');
+  });
+
+  it('leaves the type alone when it is not named', async () => {
+    const app = await withTenant(tenantId, (tx) =>
+      createApplication(tx, {
+        name: 'Rota',
+        slug: 'rota',
+        type: 'saml',
+        launchUrl: 'https://rota.example.test/',
+      }),
+    );
+    const updated = await withTenant(tenantId, (tx) =>
+      updateApplication(tx, app.id, { name: 'Rota planner' }),
+    );
+    expect(updated.type).toBe('saml');
+  });
+});
+
 describe('resolveApplicationsForUser', () => {
   it('returns nothing when nothing is assigned', async () => {
     await app('crm');

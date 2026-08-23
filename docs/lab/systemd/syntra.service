@@ -1,0 +1,28 @@
+[Unit]
+Description=Syntra — identity and access management
+# The database and the mail sink run under Docker on this host, so the API must
+# not start before Docker has brought them up. It retries either way, but a
+# clean boot should not spend its first minute failing.
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=exec
+WorkingDirectory=/root/syntra/apps/api
+# Run from TypeScript source through tsx. The API has no compiled bundle yet —
+# README says so — and tsx is transpile-only, so the cost is startup, not
+# steady state. WEB_ROOT in .env is what makes this one process serve the
+# console and the portal as well as the API.
+ExecStart=/usr/bin/env node --env-file-if-exists=/root/syntra/.env --import tsx src/server.ts
+Restart=always
+RestartSec=5
+# The API installs its own SIGTERM handler: drain HTTP, stop the scheduler,
+# disconnect Prisma. Give it room to finish rather than killing a sync run.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

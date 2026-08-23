@@ -1,0 +1,21 @@
+[Unit]
+Description=Syntra supporting containers (PostgreSQL, mail sink, directory fixtures)
+# The compose file is a DEVELOPMENT one and carries no restart policies — it is
+# meant to be brought up by hand in a checkout. On a server that means nothing
+# comes back after a reboot, and the API then starts against a database that is
+# not there. Rather than edit a file the repository owns, the deployment states
+# the dependency itself.
+After=network-online.target docker.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/root/syntra
+ExecStart=/usr/bin/docker compose -f infra/docker-compose.yml up -d
+ExecStop=/usr/bin/docker compose -f infra/docker-compose.yml stop
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
