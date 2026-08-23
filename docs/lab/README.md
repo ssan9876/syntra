@@ -409,6 +409,65 @@ SSO is served **only on the tenant's primary domain**. Reaching Syntra by IP
 returns a 421 naming the correct host. That is the product refusing correctly —
 SAML entity IDs are bound to the hostname — not a misconfiguration.
 
+### Attribute mapping
+
+An assertion carries no attributes until you say what to put in it. Registering
+the service provider is not enough: the `AttributeStatement` comes out empty,
+the service provider finds nothing to match on, and the sign-in fails with
+nothing written to either side's log. Map the claims explicitly.
+
+```bash
+curl -b "$J" -X POST -H 'Content-Type: application/json' -d '{
+  "protocol": "saml", "claimName": "username",
+  "sourceKind": "user", "sourceField": "login",
+  "nameFormat": "urn:oasis:names:tc:SAML:2.0:attrname-format:basic"
+}' "$B/api/admin/applications/$APP/claims"
+```
+
+Three claims cover most service providers — `username` from `login`, `email`
+from `email`, `displayname` from `displayName`. Read them back at
+`GET /api/admin/applications/<id>/claims`.
+
+**The claim names are the service provider's, not ours.** Snipe-IT reads an
+attribute literally called `username`; another application will want
+`uid`, or the full `http://schemas.xmlsoap.org/...` URI. Take the names from
+the service provider's own documentation and mirror them here.
+
+### The account has to exist on both sides, under the same name
+
+Most service providers match an assertion against a user they already hold, and
+they match on the **username** — not the email address in the NameID. If Syntra
+knows somebody as `a.brennan` and the application knows them as `abrennan`,
+sign-in fails, and it fails silently: the assertion validates, no user matches,
+the browser lands back on the login page.
+
+Both names come from the directory, so fix it there. Set the AD account's
+`sAMAccountName` to whatever the application already uses, re-run the sync, and
+the two agree permanently.
+
+### Testing it without a browser
+
+An assertion can be posted straight at the service provider's ACS URL:
+
+```bash
+curl -b "$J" "$B/saml/start/$APP" -o /tmp/sp.html     # IdP-initiated form
+R=$(grep -oE 'name="SAMLResponse" value="[^"]*"' /tmp/sp.html | sed 's/.*value="//; s/"$//')
+curl -c /tmp/j -b /tmp/j -X POST --data-urlencode "SAMLResponse=$R" https://app.example.com/saml/acs
+curl -c /tmp/j -b /tmp/j https://app.example.com/login    # completes the sign-in
+curl -c /tmp/j -b /tmp/j https://app.example.com/         # should render signed in
+```
+
+The third request is not optional and it is where the test usually goes wrong.
+Several service providers — Snipe-IT among them — do not sign anybody in at the
+ACS; they validate the assertion, stash it in the session, and redirect to
+their own login route, which is what actually establishes the session. A test
+that stops at the ACS sees a 302 back to `/login` and reads it as a rejection
+when the handshake is working.
+
+Two other things that make a clean test look like a failure: `curl -L` will
+re-POST into a route that only accepts GET and return 405, and assertions are
+single-use, so each attempt needs a freshly generated one.
+
 ## 2.4 Email
 
 Syntra sends mail for password resets, factor enrolment, approval requests and
