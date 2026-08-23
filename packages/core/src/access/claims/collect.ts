@@ -1,5 +1,5 @@
 import type { TenantClient } from '@syntra/db';
-import { listGroupsForUser } from '../../directory/group-service.js';
+import { listActiveGroupsForUser } from '../../directory/group-service.js';
 import { resolveContractForMapping } from '../../identity/contract-service.js';
 import type { SubjectFacts } from './types.js';
 
@@ -66,7 +66,11 @@ export async function collectSubjectFacts(
     ? await resolveContractForMapping(tx, user.personId, 'lowestSequence', now)
     : null;
 
-  const groups = await listGroupsForUser(tx, userId);
+  // ACTIVE groups only. This list is asserted into SAML assertions and OIDC
+  // tokens, where the receiving application grants on it — so a deactivated
+  // group named here is access Syntra believes it has revoked and the other
+  // side is still honouring.
+  const groups = await listActiveGroupsForUser(tx, userId);
   const attributeRows = await tx.userAttribute.findMany({ where: { userId } });
 
   const attributes: Record<string, string> = {};

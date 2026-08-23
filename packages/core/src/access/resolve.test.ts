@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { addMember, createGroup } from '../directory/group-service.js';
+import {
+  addMember,
+  createGroup,
+  deactivateGroup,
+  reactivateGroup,
+} from '../directory/group-service.js';
 import { createOrgUnit } from '../directory/org-unit-service.js';
 import { createUser } from '../directory/user-service.js';
 import { createApplication, updateApplication } from './application-service.js';
@@ -74,6 +79,54 @@ describe('resolveApplicationsForUser', () => {
       await assignApplication(tx, crm.id, { type: 'group', id: g.id });
     });
     expect(await names()).toEqual([]);
+  });
+
+  it('grants NOTHING through a deactivated group', async () => {
+    // The console offers Deactivate and never Delete precisely because a
+    // deactivated group is supposed to keep its record and hand out nothing.
+    // Resolution ignored `status` entirely, so the revocation succeeded on the
+    // screen, wrote its reason to the row, and left every application the
+    // group granted still resolving.
+    const crm = await app('crm');
+    await withTenant(tenantId, async (tx) => {
+      const g = await createGroup(tx, 'Nurses');
+      await addMember(tx, g.id, userId);
+      await assignApplication(tx, crm.id, { type: 'group', id: g.id });
+      await deactivateGroup(tx, g.id, 'ward closed');
+    });
+    expect(await names()).toEqual([]);
+  });
+
+  it('gives the access back when the group is reactivated', async () => {
+    // Nothing is deleted, so nothing has to be rebuilt: the memberships and
+    // the assignment are where they were. This is the other half of why the
+    // product deactivates rather than deletes.
+    const crm = await app('crm');
+    const groupId = await withTenant(tenantId, async (tx) => {
+      const g = await createGroup(tx, 'Nurses');
+      await addMember(tx, g.id, userId);
+      await assignApplication(tx, crm.id, { type: 'group', id: g.id });
+      await deactivateGroup(tx, g.id, 'ward closed');
+      return g.id;
+    });
+    expect(await names()).toEqual([]);
+    await withTenant(tenantId, (tx) => reactivateGroup(tx, groupId));
+    expect(await names()).toEqual(['crm']);
+  });
+
+  it('keeps access the user holds by another path', async () => {
+    // Deactivating a group revokes what THAT group granted. A direct
+    // assignment is a different grant and must survive, or one deactivation
+    // becomes a way to cut access nobody meant to touch.
+    const crm = await app('crm');
+    await withTenant(tenantId, async (tx) => {
+      const g = await createGroup(tx, 'Nurses');
+      await addMember(tx, g.id, userId);
+      await assignApplication(tx, crm.id, { type: 'group', id: g.id });
+      await assignApplication(tx, crm.id, { type: 'user', id: userId });
+      await deactivateGroup(tx, g.id, 'ward closed');
+    });
+    expect(await names()).toEqual(['crm']);
   });
 
   it('returns an application assigned to the user org unit', async () => {

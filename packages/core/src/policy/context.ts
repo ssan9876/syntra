@@ -26,6 +26,15 @@ export async function buildAuthContext(
   tx: TenantClient,
   input: AuthContextInput,
 ): Promise<AuthContext> {
+  // EVERY group, including deactivated ones — and deliberately not
+  // `listActiveGroupsForUser`, which is what the two GRANT paths use.
+  //
+  // A policy rule can deny or demand a second factor, not only allow. Dropping
+  // a deactivated group here would stop those rules matching, so deactivating
+  // a group would quietly REMOVE a restriction — the opposite of what the word
+  // means, and a weakening nobody asked for. Access resolution filters because
+  // a group there hands something out; a rule may take something away, so it
+  // sees the membership as it is.
   const groups = await listGroupsForUser(tx, input.userId);
 
   const user = await tx.user.findUnique({

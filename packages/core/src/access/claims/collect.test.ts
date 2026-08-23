@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser } from '../../directory/user-service.js';
-import { createGroup, addMember } from '../../directory/group-service.js';
+import { createGroup, addMember, deactivateGroup } from '../../directory/group-service.js';
 import { createPerson } from '../../identity/person-service.js';
 import { createContract } from '../../identity/contract-service.js';
 import { collectSubjectFacts } from './collect.js';
@@ -108,5 +108,24 @@ describe('collectSubjectFacts', () => {
     });
     expect(facts.groups).toEqual(['Finance']);
     expect(facts.attributes.cost_centre).toBe('CC-1');
+  });
+
+  it('LEAVES OUT a deactivated group, which is asserted access it no longer has', async () => {
+    // These names go into SAML assertions and OIDC tokens, and the receiving
+    // application grants on them. A deactivated group named here is access
+    // Syntra reports as revoked and the other side is still honouring —
+    // revocation that succeeds on the screen and nowhere else.
+    const facts = await withTenant(tenantId, async (tx) => {
+      const user = await createUser(tx, {
+        login: 'jdoe', email: 'j@acme.test', displayName: 'J Doe',
+      });
+      const kept = await createGroup(tx, 'Finance');
+      const gone = await createGroup(tx, 'Contractors');
+      await addMember(tx, kept.id, user.id);
+      await addMember(tx, gone.id, user.id);
+      await deactivateGroup(tx, gone.id, 'engagement ended');
+      return collectSubjectFacts(tx, user.id);
+    });
+    expect(facts.groups).toEqual(['Finance']);
   });
 });

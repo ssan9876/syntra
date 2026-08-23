@@ -1,11 +1,12 @@
 import type { TenantClient } from '@syntra/db';
-import { listGroupsForUser } from '../directory/group-service.js';
+import { listActiveGroupsForUser } from '../directory/group-service.js';
 
 /** A tree deep enough to hit this is a cycle, not an organization. */
 const MAX_ORG_UNIT_DEPTH = 64;
 
 /**
- * The org unit the user sits in, and every unit above it.
+ * The ACTIVE org units that may grant to this user: the one they sit in and
+ * every unit above it, minus any that have been deactivated.
  *
  * An assignment made on Head Office reaches everyone under it; that is what
  * makes the tree worth having. It does not reach downwards: a grant to Care
@@ -23,11 +24,16 @@ async function orgUnitChain(tx: TenantClient, orgUnitId: string | null): Promise
   for (let depth = 0; current && depth < MAX_ORG_UNIT_DEPTH; depth += 1) {
     if (seen.has(current)) break;
     seen.add(current);
-    chain.push(current);
     const row = await tx.orgUnit.findUnique({
       where: { id: current },
-      select: { parentId: true },
+      select: { parentId: true, status: true },
     });
+    // A DEACTIVATED UNIT GRANTS NOTHING, but it is still a link in the chain:
+    // walking stops contributing this unit and carries on upwards. A user in a
+    // closed department is still under the division above it, and an
+    // assignment made there has to keep reaching them — dropping out of the
+    // walk here would revoke access nobody deactivated.
+    if (row?.status === 'active') chain.push(current);
     current = row?.parentId ?? null;
   }
 
@@ -37,10 +43,10 @@ async function orgUnitChain(tx: TenantClient, orgUnitId: string | null): Promise
 /**
  * Every application the user resolves to, by any path.
  *
- * A union of three sets: assignments naming the user, assignments naming a
- * group they belong to, and assignments naming their org unit or one above it.
- * A retired application is excluded; a hidden one is not, because hidden means
- * "no tile", not "no access".
+ * A union of three sets: assignments naming the user, assignments naming an
+ * ACTIVE group they belong to, and assignments naming their org unit or one
+ * above it. A retired application is excluded; a hidden one is not, because
+ * hidden means "no tile", not "no access".
  */
 export async function resolveApplicationIdsForUser(
   tx: TenantClient,
@@ -50,7 +56,10 @@ export async function resolveApplicationIdsForUser(
     where: { id: userId },
     select: { orgUnitId: true },
   });
-  const groups = await listGroupsForUser(tx, userId);
+  // ACTIVE groups only. A deactivated group grants nothing — see
+  // `listActiveGroupsForUser`, and `orgUnitChain` above for the same rule
+  // applied to the tree.
+  const groups = await listActiveGroupsForUser(tx, userId);
   const orgUnitIds = await orgUnitChain(tx, user?.orgUnitId ?? null);
 
   const rows = await tx.appAssignment.findMany({
