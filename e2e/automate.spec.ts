@@ -467,8 +467,21 @@ test('a team lead adds a member from the portal with no administrative session',
   // and the Govern campaign is scoped to every Syntra group holding in it — so
   // a membership left behind by this test turns up in somebody else's review
   // queue, two spec files later, as a failure that says nothing about either.
-  await page.getByRole('button', { name: 'Remove' }).first().click();
+  // THIS person's row, not `.first()`. The leaver is a member of the same
+  // group — granted in `beforeAll` so the sweep has a lapse to find — and
+  // whichever of the two the list happens to put first is not this test's to
+  // decide. Removing the leaver instead leaves the sweep with nothing to
+  // propose, and the failure lands two tests later saying "this sweep stopped"
+  // was never on screen.
+  await page
+    .getByRole('listitem')
+    .filter({ hasText: fixture.approverPersonId })
+    .getByRole('button', { name: 'Remove' })
+    .click();
   await expect(page.getByText(fixture.approverPersonId)).toHaveCount(0);
+
+  // And the leaver is STILL there, which is what the sweep test needs.
+  await expect(page.getByText(fixture.leaverPersonId)).toBeVisible();
 
   // No elevation prompt appeared anywhere in this test. That is the assertion:
   // this surface works under an ordinary portal session, which is the whole
