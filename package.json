@@ -17,6 +17,8 @@
     "db:generate": "pnpm --filter @syntra/db generate",
     "seed": "pnpm --filter @syntra/db seed",
     "dev": "pnpm --parallel --filter @syntra/api --filter @syntra/web dev",
+    "build": "pnpm --filter @syntra/web build",
+    "start": "pnpm --filter @syntra/api start",
     "e2e": "playwright test",
     "db:reset": "pnpm --filter @syntra/db reset",
     "samba:up": "docker compose -f infra/docker-compose.yml up -d samba",

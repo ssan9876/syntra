@@ -13,6 +13,7 @@ import {
   type Transport,
 } from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
+import { registerWebApp } from './plugins/web-app.js';
 import { tenantAndIpKey } from './plugins/rate-limit.js';
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerEnrolRoutes } from './routes/enrol.js';
@@ -108,8 +109,15 @@ export async function buildApp(
     keyGenerator: tenantAndIpKey,
   });
 
-  registerProblemJson(app);
-  registerTenantContext(app);
+  // The built application, where one is configured. Registered FIRST, because
+  // both of the plugins below take a piece of it: the not-found handler that
+  // serves a deep link, and the page shown when no tenant claims the hostname.
+  // Fastify permits one not-found handler per context, so it has to be known
+  // before `registerProblemJson` sets it — not bolted on afterwards.
+  const web = config.webRoot ? await registerWebApp(app, config.webRoot) : null;
+
+  registerProblemJson(app, web ? { notFound: web.notFound } : {});
+  registerTenantContext(app, web ? { unknownHostPage: web.unknownHostPage } : {});
 
   app.get('/health', async () => ({ status: 'ok' }));
 

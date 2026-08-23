@@ -51,7 +51,24 @@ async function resolveTenantId(host: string | undefined): Promise<string | null>
   return bySlug?.id ?? null;
 }
 
-export function registerTenantContext(app: FastifyInstance): void {
+export interface TenantContextOptions {
+  /**
+   * The page a BROWSER is shown when no tenant answers for the hostname it
+   * arrived on. Only set where this process also serves the application.
+   *
+   * The refusal itself does not change — an unrecognised host is a 404 either
+   * way. What changes is who is being answered. `{"title":"Not Found"}` in the
+   * address bar is true and useless, and the moment somebody sees it is
+   * usually the moment after they pointed a DNS record here and before they
+   * listed the name on the tenant. The page says that.
+   */
+  unknownHostPage?: (hostname: string) => string;
+}
+
+export function registerTenantContext(
+  app: FastifyInstance,
+  options: TenantContextOptions = {},
+): void {
   app.decorateRequest('tenantId', '');
   // Declared here so the property exists on every request; the real
   // implementation is bound per request in the hook below.
@@ -59,11 +76,26 @@ export function registerTenantContext(app: FastifyInstance): void {
     throw new Error('request.db used before the tenant hook ran');
   } as FastifyRequest['db']);
 
-  app.addHook('onRequest', async (request: FastifyRequest) => {
+  app.addHook('onRequest', async (request: FastifyRequest, reply) => {
     if (UNSCOPED_PATHS.has(request.url.split('?')[0]!)) return;
 
     const tenantId = await resolveTenantId(request.headers.host);
     if (!tenantId) {
+      // A document request from a browser gets the explanation; everything
+      // else gets the machine-readable refusal it can act on. `Accept` must
+      // name text/html explicitly — `fetch` defaults to `*/*`, and answering
+      // an API call with a page would turn a clear 404 into a parse error.
+      const wantsPage =
+        options.unknownHostPage &&
+        request.method === 'GET' &&
+        (request.headers.accept ?? '').includes('text/html');
+      if (wantsPage) {
+        const host = request.headers.host ?? '';
+        return reply
+          .status(404)
+          .type('text/html; charset=utf-8')
+          .send(options.unknownHostPage!(host.split(':')[0] ?? host));
+      }
       throw new ProblemError(404, 'unknown-tenant', 'Unknown tenant');
     }
 

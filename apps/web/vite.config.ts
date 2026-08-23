@@ -57,13 +57,18 @@ export default defineConfig({
     strictPort: true,
     // Everything the API owns, not only `/api`.
     //
-    // In production both halves sit behind one origin and this file is not
-    // involved. In development Vite is the origin, and a prefix missing from
-    // this list is served the single-page application instead: the router owns
-    // none of these paths, so its catch-all quietly redirects to the portal.
-    // That is what happened to every protocol endpoint — a SAML tile opened
-    // `/saml/start/:id` and the browser landed on `/` with no error anywhere,
-    // which reads as "the tile does nothing" rather than as a proxy gap.
+    // This list must match `SERVER_PATH_PREFIXES` in @syntra/contracts, which
+    // is what the production fallback uses to decide the same question — and
+    // `server-prefixes.test.ts` fails if the two ever disagree. It cannot be
+    // imported from there: Vite loads this file through Node's own ESM
+    // resolver, which will not follow the package's `.js` specifiers to their
+    // `.ts` sources.
+    //
+    // A prefix missing from this side is served the single-page application
+    // instead, and since the router owns none of these paths its catch-all
+    // quietly redirects to the portal — which is what happened to every
+    // protocol endpoint once: a SAML tile opened `/saml/start/:id`, the
+    // browser landed on `/`, and no error appeared anywhere.
     //
     // Must NOT change origin, in any of them. Syntra resolves the tenant from
     // the Host header, and Vite's string-shorthand proxy rewrites it to the

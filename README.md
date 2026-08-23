@@ -121,15 +121,52 @@ arriving by another name will not offer them — and they do not get past the
 **development server's** host check. `vite` refuses an unknown `Host` with a 403
 before any Syntra code runs; `WEB_ALLOWED_HOSTS` (a comma-separated list, or
 `true` for any) is the way round that, and it is opt-in because the check exists
-to stop DNS rebinding.
+to stop DNS rebinding. Neither limit applies to the served build below, which
+has no host check of its own — the tenant lookup is the check.
 
-`pnpm dev` is a development server in any case. An instance somebody points a
-real domain at should be serving `vite build` output from behind a real web
-server, which this repository does not yet set up.
-
-The host matters: Syntra picks the tenant from the `Host` header, so
-`localhost:5173` will report an unknown tenant while `acme.localhost:5173`
+The host matters in development too: Syntra picks the tenant from the `Host`
+header, so `localhost:5173` reports an unknown tenant while `acme.localhost:5173`
 resolves to the seeded tenant.
+
+## Running it for real
+
+`pnpm dev` is a **development** server: it compiles on demand, holds a
+hot-reload socket open and serves the source tree. Nothing about it belongs in
+front of real users. Build the application instead and let the API serve it:
+
+```bash
+pnpm build                                  # vite build -> apps/web/dist
+WEB_ROOT=apps/web/dist pnpm start           # one process, one origin, on PORT
+```
+
+Then open **http://acme.localhost:3000**. There is no second port and no proxy:
+the same process answers `/api`, `/saml`, `/oidc`, `/federation` and every
+screen. That is not only tidiness — the session cookie, the WebAuthn relying
+party and the tenant's own hostname all have to agree about the origin, and one
+origin makes that true by construction instead of by configuration.
+
+What the served build does that the dev server does not:
+
+- **Deep links work.** `/admin/users` typed into the address bar, or reloaded,
+  reaches the router instead of a 404. Anything the *server* owns is left
+  alone, so a mistyped API path still answers `problem+json` rather than a page
+  of HTML that a client would fail to parse.
+- **Hashed bundles are cached forever and `index.html` never is.** A cached
+  `index.html` after a deploy names bundles that no longer exist, and the
+  application fails to boot with nothing on screen to say why.
+- **An unrecognised hostname gets a page, not `{"title":"Not Found"}`.** It
+  names the host that was asked for and says to add it under *Tenant settings →
+  Address*. It does not list the hostnames that would have worked.
+
+`WEB_ROOT` is unset by default, which is the API-only deployment the test suite
+and `pnpm dev` both use. Set it to a path that is not a build and the server
+refuses to start and says which of the two problems it is — a wrong path
+otherwise produces a server that looks healthy and 404s every page, which reads
+as a routing bug for as long as it takes somebody to check.
+
+Still to do here: the API runs from TypeScript source through `tsx` rather than
+a compiled bundle, and there is no container image or service unit in this
+repository.
 
 ### Continuous integration
 

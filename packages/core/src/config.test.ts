@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 
@@ -118,3 +119,27 @@ describe('the Govern checkpoint signer and anchor sinks', () => {
   });
 });
 
+
+describe('WEB_ROOT', () => {
+  it('is null when unset, which is the API-only deployment', () => {
+    // `pnpm dev` and the whole test suite run this way: Vite is the origin and
+    // proxies the server's prefixes here. Nothing about serving pages is
+    // switched on by accident.
+    expect(loadConfig({ ...valid, WEB_ROOT: undefined }).webRoot).toBeNull();
+  });
+
+  it('resolves a relative path at load rather than at use', () => {
+    // The working directory when a module happens to read this is not
+    // something the value should depend on — a scheduler job and a request
+    // handler must not disagree about where the application lives.
+    const config = loadConfig({ ...valid, WEB_ROOT: 'apps/web/dist' });
+    expect(isAbsolute(config.webRoot!)).toBe(true);
+    expect(config.webRoot).toBe(resolve('apps/web/dist'));
+  });
+
+  it('refuses an empty value instead of resolving it to the working directory', () => {
+    // `WEB_ROOT=` in an env file is a variable somebody meant to set. Resolved,
+    // it becomes the repository root and the server serves the source tree.
+    expect(() => loadConfig({ ...valid, WEB_ROOT: '   ' })).toThrow(/WEB_ROOT/);
+  });
+});

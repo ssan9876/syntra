@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import { isIpRangeUsable } from './policy/ip-match.js';
 
@@ -89,6 +90,21 @@ const schema = z.object({
    * A self-hosted deployment federating to an on-premises identity provider
    * genuinely needs this on, which is why it is a switch and not a rule.
    */
+  /**
+   * Where the built single-page application lives, so this process serves the
+   * console and the portal as well as the API.
+   *
+   * Unset means it serves the API alone, which is what the test suite and
+   * `pnpm dev` want — in development Vite is the origin and proxies the
+   * server's prefixes here. Set, this becomes the whole deployment: one
+   * origin, one port, no proxy in front, and no `vite` in front of real users.
+   *
+   * A path, not a switch, because the answer depends on how the tree was
+   * laid out — a container copies `dist` somewhere flat, a checkout leaves it
+   * under `apps/web`. A relative path is resolved against the working
+   * directory.
+   */
+  WEB_ROOT: z.string().trim().min(1).optional(),
   OUTBOUND_ALLOW_PRIVATE: z
     .enum(['true', 'false'])
     .default('false')
@@ -142,6 +158,8 @@ export interface Config {
   /** false, a hop count, or a comma-separated list of trusted proxies. */
   trustProxy: false | number | string;
   outboundAllowPrivate: boolean;
+  /** Absolute path to the built web application, or null to serve the API alone. */
+  webRoot: string | null;
 }
 
 /**
@@ -191,5 +209,9 @@ export function loadConfig(
       v.AUTH_RATE_LIMIT_TENANT_MAX ?? v.AUTH_RATE_LIMIT_MAX * 10,
     trustProxy,
     outboundAllowPrivate: v.OUTBOUND_ALLOW_PRIVATE,
+    // Resolved here rather than where it is used, so the value the rest of the
+    // process sees does not depend on the working directory at the moment it
+    // is read.
+    webRoot: v.WEB_ROOT === undefined ? null : resolve(v.WEB_ROOT),
   };
 }

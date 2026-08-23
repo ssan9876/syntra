@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 
 const BASE = 'https://syntra.dev/problems/';
@@ -25,7 +25,23 @@ export class ProblemError extends Error {
   }
 }
 
-export function registerProblemJson(app: FastifyInstance): void {
+export interface ProblemJsonOptions {
+  /**
+   * What answers a request no route claimed.
+   *
+   * Fastify allows ONE not-found handler per encapsulation context, and this
+   * plugin owns it. A deployment that also serves the single-page application
+   * needs that handler to send the application for a path the router owns, so
+   * it is passed in here rather than set a second time somewhere else — which
+   * Fastify would refuse at startup.
+   */
+  notFound?: (request: FastifyRequest, reply: FastifyReply) => unknown;
+}
+
+export function registerProblemJson(
+  app: FastifyInstance,
+  options: ProblemJsonOptions = {},
+): void {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ProblemError) {
       return reply
@@ -75,11 +91,13 @@ export function registerProblemJson(app: FastifyInstance): void {
     });
   });
 
-  app.setNotFoundHandler((_request, reply) =>
-    reply.status(404).type('application/problem+json').send({
-      type: `${BASE}not-found`,
-      title: 'Not Found',
-      status: 404,
-    }),
-  );
+  const notFound =
+    options.notFound ??
+    ((_request: FastifyRequest, reply: FastifyReply) =>
+      reply.status(404).type('application/problem+json').send({
+        type: `${BASE}not-found`,
+        title: 'Not Found',
+        status: 404,
+      }));
+  app.setNotFoundHandler(notFound);
 }
