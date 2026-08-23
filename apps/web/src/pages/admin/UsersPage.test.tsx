@@ -158,4 +158,29 @@ describe('UsersPage', () => {
       /do not have permission/i,
     );
   });
+
+  it('prefers the REASON the server gave over the generic refusal', async () => {
+    // The portal refuses an account with no linked person with a 403 that
+    // says exactly that. Flattening it to "you do not have permission" sends
+    // the reader to an administrator to be given a permission that was never
+    // the problem — the account needs a person record, which is a different
+    // request entirely.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json(
+        {
+          type: 'https://syntra.dev/problems/no-person',
+          title: 'Not available to you',
+          status: 403,
+          detail:
+            'This account is not linked to a person record, so it cannot ask for anything or hold anything.',
+        },
+        403,
+      ),
+    );
+    renderPage();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/not linked to a person record/i);
+    expect(alert).not.toHaveTextContent(/do not have permission/i);
+  });
 });
