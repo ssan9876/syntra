@@ -45,17 +45,22 @@ env:
   SYNTRA_TEST_WORKERS: 4
 
   # A hosted runner is slower than the machine this budget was calibrated on,
-  # and the BOUNDED halves of the transaction-budget pairs were missing 2,500 ms
-  # by between five and four hundred milliseconds — reporting the runner's speed
-  # rather than the code's. 3,500 keeps a full 1,500 ms of headroom under
-  # Prisma's 5,000 ms interactive-transaction ceiling, which is the thing the
-  # budget exists to stay clear of.
+  # and the BOUNDED halves of the transaction-budget pairs report the runner's
+  # speed rather than the code's. Measured here: 2,505, 2,561, 2,633 and 2,959 ms
+  # for slice 1, and 3,560 ms for slice 2 — which is why 3,500 was not enough.
+  # It was calibrated from slice 1's numbers alone, and slice 2's bounded case
+  # is the heavier of the two.
   #
-  # Slice 1's mutation half still polices this value — it compares a measurement
+  # 4,500 still leaves 500 ms under Prisma's 5,000 ms interactive-transaction
+  # ceiling, and the defect this pair exists to catch does not merely exceed
+  # the budget — it ABORTS at that ceiling. So any figure below 5,000 catches
+  # it, and the check keeps its teeth.
+  #
+  # Slice 1's mutation half polices this value — it compares a measurement
   # against the budget, so a figure raised past Prisma's ceiling makes that test
-  # red. Slice 2's does not: it accepts an abort at the 5,000 ms ceiling, which
-  # is budget-independent. Measured, not assumed.
-  GOVERN_BUDGET_MS: 3500
+  # red. Slice 2's does not: it accepts an abort at the ceiling, which is
+  # budget-independent. Measured, not assumed.
+  GOVERN_BUDGET_MS: 4500
 
 jobs:
   # ---------------------------------------------------------------------------

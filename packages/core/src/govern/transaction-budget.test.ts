@@ -45,6 +45,11 @@ import {
  * runner, and a suite that goes red on every push for reasons unrelated to the
  * change is a suite people stop reading.
  *
+ * CI was then set to 3,500 and slice 2's bounded case measured 3,560. The
+ * figure had been calibrated from slice 1's numbers alone and slice 2's
+ * bounded case is the heavier of the two; CI now allows 4,500. Worth knowing
+ * before calibrating from one half again.
+ *
  * Raising it does not blunt the check completely, and the detail matters
  * because half of it is easy to overclaim. MEASURED at `GOVERN_BUDGET_MS`
  * = 999999:
