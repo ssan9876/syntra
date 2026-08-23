@@ -1,6 +1,6 @@
-import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell.js';
-import { useSession } from '../../session/SessionProvider.js';
+import { AdminNav } from './AdminNav.js';
 import { UsersPage } from './UsersPage.js';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
@@ -41,73 +41,14 @@ import { GovernCampaignDetailPage } from './GovernCampaignDetailPage.js';
 import { GovernBatchPage } from './GovernBatchPage.js';
 import { GovernSodPage } from './GovernSodPage.js';
 
-interface NavItem {
-  to: string;
-  label: string;
-  permission: string;
-}
-
-const NAV: NavItem[] = [
-  { to: '/admin/users', label: 'Users', permission: 'directory.read' },
-  { to: '/admin/groups', label: 'Groups', permission: 'directory.read' },
-  { to: '/admin/org-units', label: 'Org units', permission: 'directory.read' },
-  { to: '/admin/applications', label: 'Applications', permission: 'access.read' },
-  { to: '/admin/policy', label: 'Authentication policy', permission: 'policy.read' },
-  { to: '/admin/people', label: 'People', permission: 'identity.read' },
-  { to: '/admin/import', label: 'Import', permission: 'identity.write' },
-  { to: '/admin/sources', label: 'Directory sources', permission: 'sync.read' },
-  { to: '/admin/sync-runs', label: 'Sync runs', permission: 'sync.read' },
-  { to: '/admin/targets', label: 'Target systems', permission: 'provision.read' },
-  { to: '/admin/automate/products', label: 'Catalog', permission: 'automate.read' },
-  { to: '/admin/automate/workflows', label: 'Approval workflows', permission: 'automate.read' },
-  { to: '/admin/automate/requests', label: 'Requests', permission: 'automate.read' },
-  { to: '/admin/automate/sweeps', label: 'Expiry sweeps', permission: 'automate.read' },
-  // Findings first: the dashboard leads with what is wrong, not with a
-  // certification rate.
-  { to: '/admin/govern/findings', label: 'Findings', permission: 'govern.read' },
-  { to: '/admin/govern/snapshots', label: 'Snapshots', permission: 'govern.read' },
-  { to: '/admin/govern/reports', label: 'Access reports', permission: 'govern.read' },
-  { to: '/admin/govern/campaigns', label: 'Access reviews', permission: 'govern.read' },
-  { to: '/admin/govern/sod', label: 'Segregation of duties', permission: 'govern.read' },
-  { to: '/admin/govern/orphans', label: 'Orphan accounts', permission: 'govern.read' },
-  { to: '/admin/govern/integrity', label: 'Audit integrity', permission: 'govern.read' },
-  { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
-  { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
-];
-
 export function AdminApp() {
-  const { can } = useSession();
-  // Hiding a link the caller cannot use is courtesy, not enforcement: the
-  // server refuses the request either way.
-  const visible = NAV.filter((item) => can(item.permission));
-
   return (
-    <AppShell>
-      <div className="mx-auto flex w-full max-w-7xl gap-8 px-6 py-8 max-lg:flex-col">
-        <nav aria-label="Administration" className="w-48 shrink-0 max-lg:w-full">
-          <ul className="space-y-0.5 max-lg:flex max-lg:flex-wrap max-lg:gap-1 max-lg:space-y-0">
-            {visible.map((item) => (
-              <li key={item.to}>
-                <NavLink
-                  to={item.to}
-                  className={({ isActive }) =>
-                    [
-                      'block rounded-control px-3 py-1.5 font-medium',
-                      'transition-colors duration-150',
-                      isActive
-                        ? 'bg-primary-soft text-primary'
-                        : 'text-muted hover:bg-surface-2 hover:text-ink',
-                    ].join(' ')
-                  }
-                >
-                  {item.label}
-                </NavLink>
-              </li>
-            ))}
-          </ul>
-        </nav>
-
-        <div className="min-w-0 flex-1">
+    <AppShell sidebar={<AdminNav />}>
+      {/* Capped, and LEFT-ALIGNED against the rail rather than centred in what
+          is left. Centring opened a gap between the navigation and the content
+          that grew with the monitor, so on a wide screen the page looked like
+          it had come loose. A console reads left to right from its rail. */}
+      <div className="w-full max-w-6xl">
           <Routes>
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
@@ -166,7 +107,6 @@ export function AdminApp() {
             <Route path="settings" element={<TenantSettingsPage />} />
             <Route path="*" element={<Navigate to="/admin/users" replace />} />
           </Routes>
-        </div>
       </div>
     </AppShell>
   );

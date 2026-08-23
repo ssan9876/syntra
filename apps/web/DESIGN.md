@@ -63,6 +63,47 @@ columns of dates and counts align.
 No page-load choreography — the user arrives mid-task. All of it disabled
 under `prefers-reduced-motion`.
 
+## Shell
+
+Two shapes, one header.
+
+**The console is a workspace.** A rail anchored to the left edge of the
+viewport on `--surface-2` — the token this system already assigned to
+"sidebar, toolbars, table head", and which the tables had always used while
+the sidebar sat on the page background with nothing separating it from the
+content. Content is capped at `max-w-6xl` and LEFT-ALIGNED against the rail;
+centring it opened a gap that grew with the monitor, so on a wide screen the
+page looked as though it had come loose.
+
+Navigation is grouped into the product's own modules — Directory, Access,
+Connected systems, Requests, Governance, System — in the order somebody meets
+them: the directory first because that is where a ticket starts, governance
+last because it is periodic rather than daily. Twenty-three links in one flat
+list is a list of routes, not a navigation. A group whose every item is hidden
+by permission takes its heading with it.
+
+**The portal is a page.** Centred, narrow, tile-first, with a slim row of
+links above the tiles at the weight of a caption. Its reader opens it, taps
+the tile for the rostering system and leaves; the navigation is there when it
+is wanted and silent when it is not. It exists because the catalog, requests,
+access, approvals, managed resources and reviews were reachable only by typing
+the URL.
+
+## Destructive actions
+
+`danger` is a filled red button and belongs to the step that actually
+destroys something. A destructive action offered on every row of a table uses
+`danger-quiet` — the danger colour on the page background — because a column
+of filled red buttons is the loudest thing on the screen for an action nobody
+arrived intending to take, and after four rows it stops reading as a warning
+at all.
+
+## Containers
+
+`Empty` and the other in-panel states carry no border of their own. A dashed
+box drawn inside a panel's border is a card inside a card: two containers
+describing one absence, with the padding counted twice.
+
 ## Component rules
 
 - Every interactive element ships default, hover, focus-visible, active,

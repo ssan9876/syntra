@@ -128,6 +128,10 @@ export function RecordPanel({
     return (
       <div className="mb-4 flex items-center gap-3">
         <Button
+          // The page's ONE primary action. Restrained means the accent is
+          // spent on the primary action, the current selection and state —
+          // and "New user" on the users page is exactly that.
+          variant="primary"
           onClick={() => {
             // Values are taken from `initial` HERE rather than only at mount,
             // so opening the form after a reload shows what is on the row now.

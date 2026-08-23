@@ -114,7 +114,9 @@ export function StatusToggle({
       {problem && <Alert tone="danger">{problem}</Alert>}
       <Button
         size="sm"
-        variant={active ? 'danger' : 'secondary'}
+        // Quiet here, filled inside the reason form. This button opens the
+        // decision; the one down there takes it.
+        variant={active ? 'danger-quiet' : 'secondary'}
         loading={busy}
         disabled={busy}
         onClick={() =>

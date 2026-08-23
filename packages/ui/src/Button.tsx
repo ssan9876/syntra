@@ -1,6 +1,11 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type Variant =
+  | 'primary'
+  | 'secondary'
+  | 'ghost'
+  | 'danger'
+  | 'danger-quiet';
 type Size = 'sm' | 'md';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -21,6 +26,21 @@ const VARIANTS: Record<Variant, string> = {
     'bg-transparent text-muted border-transparent hover:bg-surface-2 hover:text-ink',
   danger:
     'bg-danger text-bg hover:brightness-90 active:brightness-90 border-transparent',
+  /**
+   * A destructive action that is NOT the page's main event.
+   *
+   * `danger` is a filled red button, and a filled red button repeated on every
+   * row of a table is the loudest thing on the screen — which is exactly wrong
+   * for an action nobody arrived intending to take. It reads as a warning
+   * about the data rather than as one control among several, and after four
+   * rows it stops reading as a warning at all.
+   *
+   * The weight belongs on the step that actually destroys something. This is
+   * the control that OPENS that step; `danger` stays for the one that
+   * completes it.
+   */
+  'danger-quiet':
+    'bg-bg text-danger border-border-subtle hover:bg-danger-soft hover:border-danger active:bg-danger-soft',
 };
 
 const SIZES: Record<Size, string> = {
