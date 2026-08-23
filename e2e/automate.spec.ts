@@ -410,7 +410,12 @@ test('a refusal names the reason and the requester reads it', async ({ page }) =
   await page.goto('/requests');
   await expect(page.getByText(/refused/i)).toBeVisible();
   await page.getByRole('link', { name: /finance folder/i }).first().click();
-  await expect(page.getByText('not for this project')).toBeVisible();
+  // `.first()`: the reason appears TWICE on this screen, and both are right —
+  // once as the request's own status reason at the top, and once in the
+  // decision trail beside who refused it and when. Asking for it unqualified
+  // is a strict-mode violation, and the test then fails saying the reason was
+  // not visible when it is on screen twice over.
+  await expect(page.getByText('not for this project').first()).toBeVisible();
 });
 
 /**
@@ -452,13 +457,24 @@ test('a team lead adds a member from the portal with no administrative session',
   await signIn(page, 'jdoe', USER!);
   await page.goto('/managed');
   await expect(page.getByText(/resources you manage/i)).toBeVisible();
-  await expect(page.getByText(fixture.wardGroupId)).toBeVisible();
 
-  await page.getByLabel(/add somebody/i).fill(fixture.approverPersonId);
-  await page.getByRole('button', { name: 'Add' }).click();
+  // SCOPED TO THIS RESOURCE'S PANEL, not the page.
+  //
+  // The screen renders one panel per resource the delegate manages, each with
+  // its own "add somebody" field. Reaching for the page's copy works only
+  // while there is exactly one — and there is not, whenever `beforeAll` has
+  // run twice. Playwright starts a fresh worker after a failed test, which
+  // re-runs the fixture and builds a second catalog, so an unrelated failure
+  // upstream turned into a strict-mode violation here that said nothing about
+  // either.
+  const panel = page.locator('section').filter({ hasText: fixture.wardGroupId });
+  await expect(panel).toBeVisible();
+
+  await panel.getByLabel(/add somebody/i).fill(fixture.approverPersonId);
+  await panel.getByRole('button', { name: 'Add' }).click();
 
   // The grant landed and the list re-read it.
-  await expect(page.getByText(fixture.approverPersonId)).toBeVisible();
+  await expect(panel.getByText(fixture.approverPersonId)).toBeVisible();
 
   // AND TAKE IT BACK AGAIN. Two reasons, and the second is the one that bit.
   //
@@ -473,15 +489,15 @@ test('a team lead adds a member from the portal with no administrative session',
   // decide. Removing the leaver instead leaves the sweep with nothing to
   // propose, and the failure lands two tests later saying "this sweep stopped"
   // was never on screen.
-  await page
+  await panel
     .getByRole('listitem')
     .filter({ hasText: fixture.approverPersonId })
     .getByRole('button', { name: 'Remove' })
     .click();
-  await expect(page.getByText(fixture.approverPersonId)).toHaveCount(0);
+  await expect(panel.getByText(fixture.approverPersonId)).toHaveCount(0);
 
   // And the leaver is STILL there, which is what the sweep test needs.
-  await expect(page.getByText(fixture.leaverPersonId)).toBeVisible();
+  await expect(panel.getByText(fixture.leaverPersonId)).toBeVisible();
 
   // No elevation prompt appeared anywhere in this test. That is the assertion:
   // this surface works under an ordinary portal session, which is the whole
