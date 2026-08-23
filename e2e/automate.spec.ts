@@ -40,6 +40,28 @@ async function elevateTo(page: Page, path: string) {
 
 
 const STAMP = Date.now();
+/** Matched on by the CSV import that later ends this person's contract. */
+const LEAVER_EXTERNAL_ID = `E-LEAVER-${STAMP}`;
+
+/**
+ * What `buildCatalog` made, for the tests that need to name it.
+ *
+ * Written once in `beforeAll` and read afterwards. The suite runs with
+ * `workers: 1` and `fullyParallel: false`, so there is exactly one of these.
+ */
+const fixture = {
+  /** Jo Doe — `jdoe`'s person, and the delegate who manages the group below. */
+  joPersonId: '',
+  /** Ada Approver, the person the team-lead test adds. */
+  approverPersonId: '',
+  /** A group Jo manages directly, with no product behind it. */
+  wardGroupId: '',
+  /**
+   * Employed when they are granted, and a leaver by the time the sweep runs.
+   * That order is forced — see `endTheLeaverContract`.
+   */
+  leaverPersonId: '',
+};
 
 /**
  * THE FIXTURE THE SEED DOES NOT HAVE.
@@ -76,6 +98,7 @@ async function buildCatalog(page: import('@playwright/test').Page): Promise<void
     'create the approver person',
   );
   const approverPersonId = (await approver.json()).id as string;
+  fixture.approverPersonId = approverPersonId;
   await ok(
     await page.request.post(`/api/admin/persons/${approverPersonId}/link-user`, {
       data: { userId: adminUserId },
@@ -153,6 +176,154 @@ async function buildCatalog(page: import('@playwright/test').Page): Promise<void
       `create ${name}`,
     );
   }
+
+  // ---- What the delegation tests need -----------------------------------
+  //
+  // A team lead is a PERSON holding a `ResourceDelegation`, acting under an
+  // ordinary portal session. The only portal login the seed gives a password
+  // to is `jdoe`, so Jo Doe is the team lead — which is also the honest
+  // shape of the thing: a delegate is a colleague, not a second administrator.
+  const persons = await ok(await page.request.get('/api/admin/persons'), 'list persons');
+  fixture.joPersonId = ((await persons.json()).persons as {
+    id: string;
+    externalId: string | null;
+  }[]).find((p) => p.externalId === 'E1001')!.id;
+
+  // A group with NO product behind it, deliberately. `delegatedGrant` applies
+  // the product's audience where there is one and the delegation's own where
+  // there is not, and it is the second path this exercises — the one that
+  // stops delegation being a hole underneath the catalog's visibility model.
+  const ward = await ok(
+    await page.request.post('/api/admin/groups', {
+      data: { name: `Ward rota ${STAMP}`, description: 'Managed by a team lead.' },
+    }),
+    'create the delegated group',
+  );
+  fixture.wardGroupId = (await ward.json()).id as string;
+
+  await ok(
+    await page.request.post('/api/admin/automate/resource-delegations', {
+      data: {
+        resourceType: 'group',
+        resourceId: fixture.wardGroupId,
+        delegatePersonId: fixture.joPersonId,
+        capabilities: ['view_members', 'grant', 'revoke'],
+        // `{ all: [] }` is an empty AND: everybody is inside the audience.
+        // Narrowing it would refuse the grant for a reason that has nothing to
+        // do with what these tests are about.
+        audienceCondition: { all: [] },
+        startsAt: '2024-01-01',
+      },
+    }),
+    'delegate the group to Jo',
+  );
+
+  // A LEAVER, for the sweep — created here EMPLOYED, and made a leaver later.
+  //
+  // The order is forced and it is worth saying why. A grant can only be made
+  // to somebody the audience admits, and `{ all: [] }` still does not admit a
+  // person with no active contract — an empty AND is not "no rules", it is
+  // still asked whether this person is anybody. So the leaver must hold a live
+  // contract at the moment they are granted, and lose it afterwards.
+  //
+  // They also need a Syntra ACCOUNT. A group grant adds a user to a group, so
+  // fulfilment refuses a person with none — `the subject holds no active
+  // Syntra account` — and the request lands in `fulfilment_failed` with no
+  // grant behind it and nothing for the sweep to find.
+  const leaver = await ok(
+    await page.request.post('/api/admin/persons', {
+      data: {
+        givenName: 'Lee',
+        familyName: 'Aver',
+        businessEmail: `lee${STAMP}@acme.test`,
+        externalId: LEAVER_EXTERNAL_ID,
+      },
+    }),
+    'create the leaver',
+  );
+  fixture.leaverPersonId = (await leaver.json()).id as string;
+  await ok(
+    await page.request.post(`/api/admin/persons/${fixture.leaverPersonId}/contracts`, {
+      data: {
+        sequence: 1,
+        isPrimary: true,
+        startDate: '2024-01-01',
+        jobTitle: 'Bank Nurse',
+        department: 'Care',
+        employer: 'Acme Care',
+      },
+    }),
+    'employ the leaver, for now',
+  );
+
+  const leaverUser = await ok(
+    await page.request.post('/api/admin/users', {
+      data: {
+        login: `lee${STAMP}`,
+        email: `lee${STAMP}@acme.test`,
+        displayName: 'Lee Aver',
+      },
+    }),
+    'create the leaver login',
+  );
+  await ok(
+    await page.request.post(`/api/admin/persons/${fixture.leaverPersonId}/link-user`, {
+      data: { userId: (await leaverUser.json()).id as string },
+    }),
+    'link the leaver to their account',
+  );
+}
+
+/**
+ * The leaver leaves — through the CSV import, which is how a real deployment
+ * records it.
+ *
+ * There is no endpoint that ends a contract. The import is the path: it
+ * matches an existing contract on `(person, sequence)` and updates it in
+ * place, end date included, which is exactly what an HR export carrying a
+ * leaver looks like. Using it here means the fixture is doing something the
+ * product actually supports rather than reaching behind it.
+ */
+async function endTheLeaverContract(
+  page: import('@playwright/test').Page,
+): Promise<void> {
+  const csv = [
+    'externalId,givenName,familyName,businessEmail,sequence,startDate,endDate',
+    `${LEAVER_EXTERNAL_ID},Lee,Aver,lee${STAMP}@acme.test,1,2024-01-01,2025-01-31`,
+  ].join('\n');
+  const res = await page.request.post('/api/admin/persons/import', { data: { csv } });
+  expect(res.status(), `end the contract: ${await res.text()}`).toBeLessThan(300);
+  expect((await res.json()).errors, 'the import reported errors').toEqual([]);
+}
+
+/**
+ * Jo grants the leaver the group she manages, through the PORTAL API under her
+ * own session.
+ *
+ * Done here rather than in a test so the sweep has something to sweep whatever
+ * order the tests run in, and done as Jo rather than as an administrator
+ * because there is no admin endpoint that writes an `AccessGrant` directly —
+ * grants come from an approved request, and a delegated act is one.
+ */
+async function grantLeaverAccess(browser: import('@playwright/test').Browser): Promise<void> {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await signIn(page, 'jdoe', USER!);
+    const res = await page.request.post(
+      `/api/portal/automate/managed-resources/group/${fixture.wardGroupId}/grant`,
+      {
+        data: {
+          subjectPersonIds: [fixture.leaverPersonId],
+          justification: 'covering nights',
+          durationDays: null,
+        },
+      },
+    );
+    expect(res.status(), `grant to the leaver: ${await res.text()}`).toBeLessThan(300);
+  } finally {
+    await context.close();
+  }
 }
 
 test.beforeAll(async ({ browser }) => {
@@ -164,6 +335,20 @@ test.beforeAll(async ({ browser }) => {
     await buildCatalog(page);
   } finally {
     await context.close();
+  }
+  // ORDER MATTERS, and it is the whole shape of the sweep fixture: employed,
+  // then granted, then gone. Reversed, the grant is refused for being outside
+  // the audience and the sweep has nothing to propose.
+  await grantLeaverAccess(browser);
+
+  const closing = await browser.newContext();
+  const closingPage = await closing.newPage();
+  try {
+    await signIn(closingPage, 'admin', ADMIN!);
+    await elevateTo(closingPage, '/admin/persons');
+    await endTheLeaverContract(closingPage);
+  } finally {
+    await closing.close();
   }
 });
 
@@ -229,41 +414,75 @@ test('a refusal names the reason and the requester reads it', async ({ page }) =
 });
 
 /**
- * THE LAST TWO, and why each is still `fixme`.
+ * The two that were `fixme`, and what unblocked each.
  *
- * **The team lead** signs in as `lead`, and fills a field from
- * `process.env.SEED_MEMBER_PERSON_ID` — an environment variable that is set
- * nowhere in this repository. `lead` cannot be created either: `POST /users`
- * makes a login with no password and there is no admin endpoint that sets one,
- * so the only accounts that can reach the portal are the two the seed gives a
- * password to. Covering this needs either a seeded second portal user or an
- * administrative way to set a password, and both are product decisions rather
- * than test ones.
+ * **The team lead** was blocked on a portal login that could not be created:
+ * `POST /users` makes an account with no password and no admin endpoint sets
+ * one, so only the two accounts the seed gives a password to can reach the
+ * portal. The answer was not a new endpoint — it was to stop needing one. A
+ * team lead is a PERSON holding a `ResourceDelegation`, and Jo Doe is already
+ * a person with a password, so the fixture delegates a group to her. That is
+ * also the truer shape: a delegate is a colleague, not a second administrator.
  *
- * **The blocked sweep** needs a population of grants close enough to expiry to
- * trip the sweep's own guard. That is a fixture of a different kind — time, and
- * enough of it — and it is exercised at the service layer in
- * `automate/sweep-service.test.ts`.
+ * **The blocked sweep** was thought to need "grants near expiry" — a fixture
+ * made of time. It does not. The guard is PROPORTIONAL: one lapse out of a
+ * handful of grants is far past the 10% default, so one leaver is enough, and
+ * the verdict is confirmable rather than flatly blocked. Leaning on the
+ * proportion rather than on "the first sweep in this tenant" is also what
+ * keeps this idempotent: the first-sweep reason stops applying the moment
+ * this test applies one, and the proportional reason does not.
+ *
+ * Three things about the leaver were assumptions until they were measured
+ * against a running stack, and all three were wrong:
+ *
+ *   - a person with no live contract CANNOT be granted anything, even against
+ *     an `{ all: [] }` audience — an empty AND is still asked whether this
+ *     person is anybody, and the refusal is `outside-audience`;
+ *   - fulfilment refuses a person with no Syntra account, so the request ends
+ *     `fulfilment_failed` with no grant for the sweep to find;
+ *   - no endpoint ends a contract. The CSV import does, by updating one in
+ *     place on `(person, sequence)`, which is how a real deployment records a
+ *     leaver anyway.
+ *
+ * Hence: employed, granted, then gone.
  */
-test.fixme('a team lead adds a member from the portal with no administrative session', async ({
+test('a team lead adds a member from the portal with no administrative session', async ({
   page,
 }) => {
-  await signIn(page, 'lead', USER!);
+  await signIn(page, 'jdoe', USER!);
   await page.goto('/managed');
   await expect(page.getByText(/resources you manage/i)).toBeVisible();
-  await page.getByLabel(/add somebody/i).fill(process.env.SEED_MEMBER_PERSON_ID ?? '');
+  await expect(page.getByText(fixture.wardGroupId)).toBeVisible();
+
+  await page.getByLabel(/add somebody/i).fill(fixture.approverPersonId);
   await page.getByRole('button', { name: 'Add' }).click();
+
+  // The grant landed and the list re-read it.
+  await expect(page.getByText(fixture.approverPersonId)).toBeVisible();
+
   // No elevation prompt appeared anywhere in this test. That is the assertion:
-  // this surface works under an ordinary portal session.
+  // this surface works under an ordinary portal session, which is the whole
+  // point of delegating a resource to somebody who is not an administrator.
   await expect(page.getByRole('heading', { name: /confirm your password/i })).toHaveCount(0);
 });
 
-test.fixme('a blocked sweep is reviewed and confirmed', async ({ page }) => {
+test('a blocked sweep is reviewed and confirmed', async ({ page }) => {
   await signIn(page, 'admin', ADMIN!);
   await elevateTo(page, '/admin/automate/sweeps');
   await page.getByRole('button', { name: /run a preview now/i }).click();
-  await page.getByRole('link').first().click();
+
+  // Scoped to the LIST, not `getByRole('link').first()` — which picks up the
+  // console's own navigation and walks off to another page entirely, then
+  // fails on an assertion about a sweep it never opened.
+  const list = page.getByRole('list').filter({ hasText: /lapsing/ }).first();
+  await expect(list).toBeVisible();
+  await list.getByRole('link').first().click();
+
+  // The sweep proposes something and refuses to apply it unattended: one
+  // lapse out of a handful of grants is far past the 10% default.
   await expect(page.getByText(/this sweep stopped/i)).toBeVisible();
+  await expect(page.getByText(/threshold 10%/)).toBeVisible();
+
   await page.getByRole('button', { name: /apply the ticked rows/i }).click();
   await expect(page.getByText(/applied/i).first()).toBeVisible();
 });

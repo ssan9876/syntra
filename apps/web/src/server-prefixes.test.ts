@@ -1,3 +1,13 @@
+/**
+ * @vitest-environment node
+ *
+ * This file is picked up by two configs — the repository-wide one, which runs
+ * in node, and `apps/web/vitest.config.ts`, which runs the component tests in
+ * jsdom. Loading the Vite config below means loading esbuild, and esbuild
+ * refuses to start under jsdom: its `TextEncoder` does not produce a real
+ * `Uint8Array`, which esbuild checks for and rejects as a broken environment.
+ * The pragma pins this one file back to node in both.
+ */
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';

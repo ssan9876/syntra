@@ -53,6 +53,35 @@ const stub = (
   );
 };
 
+/**
+ * The primary-domain field, loaded and then set to `value` in one step.
+ *
+ * TWO harness traps live here, and every test that types into this field has
+ * to avoid both.
+ *
+ * The field renders as soon as `data` exists, but the effect that copies
+ * `data` into form state runs after that render — so an edit made in between
+ * is overwritten a moment later, and the test fails claiming the page ignored
+ * it. Waiting for the loaded value first closes that window. (The symptom is
+ * a value like `acme.localhostmoved.example.com`: the clear landed on an empty
+ * field, the effect then filled it, and the typing appended.)
+ *
+ * And `userEvent.clear` empties a controlled input's DOM node without React
+ * seeing an onChange, so the component keeps the old value and the form posts
+ * it — a property of the harness, not of the page. `fireEvent.change` is what
+ * a controlled input actually responds to.
+ *
+ * Both were found the expensive way: as an intermittent failure that passed on
+ * re-run. Anything typing into this field goes through here.
+ */
+async function setDomain(value: string): Promise<HTMLInputElement> {
+  const field = (await screen.findByLabelText('Primary domain')) as HTMLInputElement;
+  await waitFor(() => expect(field.value).toBe(settings.primaryDomain));
+  fireEvent.change(field, { target: { value } });
+  await waitFor(() => expect(field.value).toBe(value));
+  return field;
+}
+
 describe('TenantSettingsPage', () => {
   it('shows the settings the chokepoint actually reads', async () => {
     stub();
@@ -163,9 +192,7 @@ describe('the primary domain, and the passkeys it would break', () => {
     });
     renderPage();
 
-    const field = await screen.findByLabelText('Primary domain');
-    await userEvent.clear(field);
-    await userEvent.type(field, 'moved.example.com');
+    await setDomain('moved.example.com');
     await userEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
     // The count is shown, in the warning, with what it costs.
@@ -204,9 +231,7 @@ describe('the primary domain, and the passkeys it would break', () => {
     });
     renderPage();
 
-    const field = await screen.findByLabelText('Primary domain');
-    await userEvent.clear(field);
-    await userEvent.type(field, 'first.example.com');
+    const field = await setDomain('first.example.com');
     await userEvent.click(screen.getByRole('button', { name: 'Save settings' }));
     expect(await screen.findByText(/3 keys are/)).toBeInTheDocument();
 
@@ -220,22 +245,7 @@ describe('the primary domain, and the passkeys it would break', () => {
     stub((url, init) => (init?.method === 'PUT' ? json(settings) : json(settings)));
     renderPage();
 
-    const field = (await screen.findByLabelText('Primary domain')) as HTMLInputElement;
-    // WAIT FOR THE LOADED VALUE BEFORE EDITING IT.
-    //
-    // The field renders as soon as `data` exists, but the effect that copies
-    // `data` into form state runs after that render — so an edit made in
-    // between is overwritten by the effect a moment later, and the test fails
-    // claiming the page ignored it. Observing the loaded value first closes
-    // that window.
-    await waitFor(() => expect(field.value).toBe('acme.localhost'));
-
-    // `fireEvent.change`, not `userEvent.clear`. Clearing a controlled input
-    // with `clear()` empties the DOM node without React seeing an onChange, so
-    // the component's state keeps the old value and the form posts it — which
-    // is a property of the harness, not of the page.
-    fireEvent.change(field, { target: { value: '' } });
-    await waitFor(() => expect(field.value).toBe(''));
+    await setDomain('');
     await userEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
     await waitFor(() => expect(calls.some((c) => c.init?.method === 'PUT')).toBe(true));
