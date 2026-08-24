@@ -1,6 +1,6 @@
 # Syntra Update — Design
 
-**Status:** proposed
+**Status:** implemented except the lab rehearsal; deviations in §13
 **Date:** 2026-08-24
 **Covers:** an administrator updating Syntra from inside Syntra — check, apply, verify, and roll back — for a self-hosted install.
 
@@ -265,3 +265,48 @@ Core: `checkForUpdate()` (queries the release API, caches for an hour), `request
 7. **Lab rehearsal**, including deliberately breaking a release.
 
 Steps 1 and 2 stand alone and ship first. Nothing before step 5 can break an existing install.
+
+---
+
+## 13. What changed during implementation
+
+**The release token is configuration, not a vault secret.** §D4 proposed the
+vault; the vault turned out to be the wrong home. It is *tenant*-scoped, and
+this is a deployment-wide secret — filing it under whichever tenant's
+administrator happened to configure it would make one customer's keyring the
+thing the whole installation depends on, and would leave the updater guessing
+which tenant to read. It sits in `.env` beside `MASTER_KEY` instead, which is
+the key that unseals that vault: anybody who can read the file already holds
+strictly more than this token grants, and what it grants is read-only access to
+release assets in one repository. `RELEASE_REPO`, `RELEASE_TOKEN` and
+`RELEASE_ROOT`, all optional — an install that sets none simply has no update
+button, which is right for a development checkout.
+
+**`UpdateRun` was not built.** The design gave it a table; the updater's status
+file plus the two audit events (`deployment.update_requested`,
+`deployment.rollback_requested`) carry everything the console actually reads,
+and the table would have been a second record of the same thing that the
+updater cannot write to — it runs detached, outside the API, with no Prisma
+client and no tenant context. The audit trail answers "who asked, and when";
+the status file answers "what is it doing"; nothing asked a question needing a
+third.
+
+**`deployment.manage` is a new permission** rather than a reuse of
+`tenant.manage`. Not in the original text, and it should have been: one
+tenant's administrator restarting the installation, migrating everybody's
+database and signing everybody out is not the same authority as configuring
+their own tenant. In a single-tenant deployment the two are held by the same
+person and this costs nothing; in a shared one, conflating them is a mistake
+that only becomes visible after somebody makes it.
+
+**Migrations are not listed before download.** `RELEASE.json` carries them, but
+`RELEASE.json` is inside the tarball — so until a release is fetched, the
+console cannot say whether it migrates. It says nothing rather than "none":
+claiming a release does not touch the database when nobody has looked is the
+wrong way round to be wrong. The confirmation warns about database changes
+unconditionally instead.
+
+**The old tree is copied, not moved, by `syntra-install`.** Recovery from a bad
+conversion is then pointing systemd back at a tree that is still sitting there
+— a one-line change somebody can make over a serial console — rather than
+restoring a backup.
