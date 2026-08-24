@@ -1020,6 +1020,114 @@ this exists to end.
 
 ---
 
+## 2.8 Updating Syntra from the console
+
+Settings → **Updates** shows the running version, what is available, and a
+button. Getting there needs three one-time steps, and one thing to understand
+first.
+
+### Why this is not an ordinary update button
+
+Syntra is what you sign in with. An update that breaks authentication takes
+away the console you would use to undo it, and the SSO it fronts goes with it —
+in this lab, Snipe-IT. Three things follow, and they are the whole design:
+
+- **The updater is not part of Syntra.** It runs as its own transient systemd
+  unit. A child process of the API would be killed by the restart the update
+  itself causes, between the migration and the symlink swap — the least
+  recoverable state this system has.
+- **The rollback needs nobody.** If the new version does not come up, the
+  updater puts the old one back — code *and* database — on its own. "Sign in
+  and click rollback" is exactly what a broken sign-in prevents.
+- **What it checks can fail.** `/health` is a constant: it returns 200 with the
+  database unreachable and the migration half-applied. `/health/ready` is the
+  gate, and it tests the database, the migration state, whether `MASTER_KEY`
+  still unseals the vault, and whether the console bundle exists.
+
+### One-time: convert to the release layout
+
+An install that runs from one directory has nothing to roll back *to* — the old
+files are the ones an update overwrites.
+
+```bash
+cd /root/syntra
+./ops/syntra-install --dry-run     # read what it will do
+./ops/syntra-install
+```
+
+It copies `/root/syntra` to `/opt/syntra/releases/dev`, moves `.env` into
+`/opt/syntra/shared/`, points `current` at the release, and rewrites the
+systemd unit. **The old tree is left exactly where it is**, so recovery is
+restoring `syntra.service.pre-release-layout` and restarting.
+
+### One-time: a token
+
+A fine-grained GitHub token, **read-only**, scoped to this repository only, with
+`Contents: Read`. Nothing else. In `/opt/syntra/shared/.env`:
+
+```
+RELEASE_REPO=ssan9876/syntra
+RELEASE_TOKEN=github_pat_…
+RELEASE_ROOT=/opt/syntra
+```
+
+Not a git credential, and not `git clone`: the host never gains the ability to
+read source history, only to download release assets. Revoke it from GitHub
+without touching the box.
+
+### One-time: cut a release
+
+Nothing is updatable until something has been released — until then the page
+says so and points at `deploy.sh`, because a working tree has no version to
+update from.
+
+```bash
+git tag -a v1.0.0 -m "First release."
+git push origin v1.0.0
+```
+
+The tag message becomes the notes an operator reads before deciding. CI runs
+first: **a tag whose tests fail produces no release.**
+
+### What pressing Update does
+
+1. Downloads the release and checks its SHA-256.
+2. Unpacks it beside the running one and installs its dependencies.
+3. **Dumps the database — and stops if that fails.** Migrating without a
+   backup is the one step here that cannot be undone.
+4. Applies migrations, swaps the `current` symlink, restarts.
+5. Polls `/health/ready` for 90 seconds.
+6. If it does not go green: puts the old release back, restores the dump,
+   restarts, and records why.
+
+Signing in stops working for about a minute. Sessions already open survive.
+
+### Doing it by hand
+
+```bash
+/opt/syntra/bin/syntra-update --check      # what is running, what is available
+/opt/syntra/bin/syntra-update 1.5.0        # update
+/opt/syntra/bin/syntra-update --rollback   # go back deliberately
+cat /opt/syntra/var/update.status          # what it is doing right now
+```
+
+### Things worth knowing before you need them
+
+- **`deploy.sh` still works** and is still the right tool for iterating. It
+  writes into `current`, which leaves the tree no longer matching its release —
+  the updater notices and refuses rather than discarding your pushed work.
+- **A rollback does not undo what happened during the update.** The dump is
+  from just before the migration; a login or a sync run in the minute since is
+  not in it.
+- **Three releases and three dumps are kept.** The one you are running is never
+  pruned, because deleting it is how a rollback becomes impossible at the
+  moment it is needed.
+- **`/health` and `/health/ready` are different questions.** Keep the tunnel
+  and any external monitoring pointed at `/health`: a liveness probe that fails
+  when Postgres blips restarts a healthy API.
+
+---
+
 ## Rebuilding from nothing
 
 1. Create the DC VM; wait for 389/88/53.
