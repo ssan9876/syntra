@@ -7,6 +7,7 @@ import {
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
+  LadderConfigurationError,
   PairedDirectorySourceNotFoundError,
   TargetNotFoundError,
   createTarget,
@@ -147,6 +148,18 @@ export async function registerAdminTargetRoutes(
         // editor can highlight. Unhandled it would be a bare 500 — which is
         // how a mistyped pairing used to look only if you were lucky, since
         // before the existence read it looked like a 201.
+        if (cause instanceof LadderConfigurationError) {
+          // 422, matching how core's other configuration refusals surface: the
+          // body parsed and the values are individually in range -- what fails
+          // is the order they put the rungs in.
+          throw new ProblemError(
+            422,
+            cause.code,
+            'Cannot be saved',
+            cause.message,
+            { errors: [{ path: cause.field, message: cause.message }] },
+          );
+        }
         if (cause instanceof PairedDirectorySourceNotFoundError) {
           throw new ProblemError(
             400,
@@ -192,6 +205,18 @@ export async function registerAdminTargetRoutes(
       } catch (cause) {
         if (cause instanceof TargetNotFoundError) {
           throw new ProblemError(404, 'not-found', 'Target not found');
+        }
+        if (cause instanceof LadderConfigurationError) {
+          // 422, matching how core's other configuration refusals surface: the
+          // body parsed and the values are individually in range -- what fails
+          // is the order they put the rungs in.
+          throw new ProblemError(
+            422,
+            cause.code,
+            'Cannot be saved',
+            cause.message,
+            { errors: [{ path: cause.field, message: cause.message }] },
+          );
         }
         if (cause instanceof PairedDirectorySourceNotFoundError) {
           // The target exists; the source it was asked to pair with does not.

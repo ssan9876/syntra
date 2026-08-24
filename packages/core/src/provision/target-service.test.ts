@@ -8,6 +8,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { putSecret } from '../vault/vault-service.js';
 import {
+  LadderConfigurationError,
   createTarget,
   deleteBusinessRule,
   deleteTarget,
@@ -94,6 +95,44 @@ describe('updateTarget', () => {
         ladder: { disableGraceDays: 30, archiveAfterDays: 30 },
       }),
     ).rejects.toThrow(/archive must fall strictly after the disable/);
+  });
+
+  // The two tests above assert the message and would pass just as well against
+  // a bare `Error` -- which is what this used to throw, and why a caller who
+  // ordered the rungs wrongly got a 500 with an empty body while the server
+  // logged the exact sentence explaining it. What makes the message reach them
+  // is the TYPE, so that is what this pins.
+  it('refuses a mis-ordered ladder as a coded configuration error, not a fault', async () => {
+    const { id } = await create();
+
+    // `updateTarget` resolves to void, so catching the rejection gives a
+    // `void | Error` union. Failing the test on the resolve path is what
+    // narrows it -- and is worth asserting anyway: an update that quietly
+    // succeeded here would be the same defect wearing different clothes.
+    const refusal = async (
+      ladder: NonNullable<Parameters<typeof updateTarget>[4]['ladder']>,
+    ) => {
+      try {
+        await updateTarget(tenantId, provider, null, id, { ladder });
+      } catch (cause) {
+        expect(cause).toBeInstanceOf(LadderConfigurationError);
+        return cause as LadderConfigurationError;
+      }
+      throw new Error('expected the update to be refused, but it was accepted');
+    };
+
+    const archive = await refusal({ disableGraceDays: 0, archiveAfterDays: 0 });
+    expect(archive.code).toBe('ladder-archive-not-after-disable');
+    // The field the console highlights. A message with nowhere to put it sends
+    // an administrator hunting through a form of seven numbers.
+    expect(archive.field).toBe('ladder.archiveAfterDays');
+
+    const revocation = await refusal({
+      entitlementRevocationDelayDays: 14,
+      disableGraceDays: 3,
+    });
+    expect(revocation.code).toBe('ladder-revocation-after-disable');
+    expect(revocation.field).toBe('ladder.entitlementRevocationDelayDays');
   });
 
   it('accepts a valid ladder and audits it', async () => {

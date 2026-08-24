@@ -264,12 +264,36 @@ const runSettingsSchema = z
   .strict();
 
 /**
+ * A ladder whose rungs are out of order, with a code the API turns into a
+ * problem type and the console can put against the field that caused it.
+ *
+ * The same shape as `ProductConfigurationError` and `WorkflowConfigurationError`
+ * elsewhere in core, and for the same reason.
+ */
+export class LadderConfigurationError extends Error {
+  constructor(
+    readonly code: string,
+    readonly field: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'LadderConfigurationError';
+  }
+}
+
+/**
  * Validates the ladder before it reaches the database.
  *
  * The CHECK constraint is the backstop; this is the message. An account whose
  * entitlements were stripped a week before it was disabled belongs to somebody
  * who is still employed as far as the directory is concerned and cannot do
  * anything.
+ *
+ * A BARE `Error` HERE MEANT THE MESSAGE NEVER ARRIVED. Fastify has no reason
+ * to treat one as anything but a fault, so a caller who set the rungs in the
+ * wrong order got a 500 with an empty problem body -- while the server held,
+ * and logged, the exact sentence explaining what was wrong. The whole point of
+ * this function is the message, and it was the one thing that did not escape.
  */
 function assertLadder(ladder: {
   entitlementRevocationDelayDays: number;
@@ -277,7 +301,9 @@ function assertLadder(ladder: {
   archiveAfterDays: number | null;
 }): void {
   if (ladder.entitlementRevocationDelayDays > ladder.disableGraceDays) {
-    throw new Error(
+    throw new LadderConfigurationError(
+      'ladder-revocation-after-disable',
+      'ladder.entitlementRevocationDelayDays',
       'entitlement revocations cannot be delayed past the disable: that describes an account whose holder is still employed as far as the directory is concerned and cannot do anything',
     );
   }
@@ -285,7 +311,9 @@ function assertLadder(ladder: {
     ladder.archiveAfterDays !== null &&
     ladder.archiveAfterDays <= ladder.disableGraceDays
   ) {
-    throw new Error(
+    throw new LadderConfigurationError(
+      'ladder-archive-not-after-disable',
+      'ladder.archiveAfterDays',
       'the archive must fall strictly after the disable: archiving moves the object and strips its remaining entitlements',
     );
   }
