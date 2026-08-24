@@ -1,5 +1,4 @@
 import { Client } from 'ldapts';
-import { z } from 'zod';
 import type {
   Connector,
   ConnectionResult,
@@ -11,14 +10,16 @@ import type {
 import { normaliseAnchor } from './anchor.js';
 import { RANGE_STEP, readRangedAttribute } from './range.js';
 import { ldapConfigSchema, type LdapConfig } from './config.js';
+import { openBound, type ResolvedLdapConfig } from './connection.js';
 
 // `LdapConfig` (see config.ts) is the schema's *input* type: defaulted
 // fields (orgUnitFilter, pageSize, ...) are optional there, matching what a
-// caller is actually allowed to omit. `ResolvedConfig` is the *output* type
-// instead -- every defaulted field guaranteed present -- which is what
-// `normalise()` below produces and everything past it operates on.
+// caller is actually allowed to omit. `ResolvedConfig` -- every defaulted
+// field guaranteed present -- is what `normalise()` below produces and
+// everything past it operates on. It lives in connection.ts because
+// write-back operates on the same resolved shape.
 type Config = LdapConfig & { bindPassword: string };
-type ResolvedConfig = z.output<typeof ldapConfigSchema> & { bindPassword: string };
+type ResolvedConfig = ResolvedLdapConfig;
 
 interface Search {
   base: string;
@@ -67,42 +68,8 @@ function searches(config: ResolvedConfig): Search[] {
  * the one thing worth securing. There is a test asserting the order for that
  * reason.
  */
-async function connect(config: ResolvedConfig): Promise<Client> {
-  const tlsOptions = { rejectUnauthorized: config.rejectUnauthorized };
-
-  // ldapts treats the mere presence of `tlsOptions` (any defined key) as a
-  // request for an implicit-TLS connection, independent of the URL scheme.
-  // Only pass it to the constructor for `ldaps`; a `starttls` connection
-  // starts out as plaintext and takes its options from startTLS() below, and
-  // a `plain` one would get a TLS ClientHello thrown at a plaintext listener
-  // and the socket would drop.
-  const client = new Client({
-    url: config.url,
-    // Without these ldapts waits forever, and "forever" is reachable from
-    // outside: a host that black-holes packets, or one that accepts the
-    // connection and never answers the bind, holds this call — and the
-    // request handler that made it — open until something else gives up.
-    connectTimeout: config.connectTimeoutMs,
-    timeout: config.timeoutMs,
-    ...(config.tlsMode === 'ldaps' ? { tlsOptions } : {}),
-  });
-  try {
-    if (config.tlsMode === 'starttls') {
-      await client.startTLS(tlsOptions);
-    }
-    await client.bind(config.bindDn, config.bindPassword);
-  } catch (cause) {
-    // A rejected bind (bad credentials) throws without ldapts destroying the
-    // socket underneath it -- unlike a connection-level failure (refused,
-    // timed out), which the library self-cleans. Left alone, this leaves a
-    // live, authenticated-at-the-TCP-level-but-not-bound socket open to the
-    // server on every failed bind. unbind() tears down the socket even though
-    // the client was never successfully bound.
-    await client.unbind().catch(() => undefined);
-    throw cause;
-  }
-  return client;
-}
+const connect = (config: ResolvedConfig): Promise<Client> =>
+  openBound(config, config.bindDn, config.bindPassword);
 
 /** Every LDAP value arrives as a string or a Buffer; normalise to string[]. */
 function toArray(value: unknown): string[] {

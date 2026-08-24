@@ -29,6 +29,17 @@ const ldapConfigObject = z.object({
   orgUnitFilter: z.string().default('(objectClass=organizationalUnit)'),
   /** objectGUID on Active Directory, entryUUID on OpenLDAP. */
   anchorAttribute: z.string().default('objectGUID'),
+  /**
+   * Where a write-back records WHY it acted, merged into whatever the
+   * attribute already held rather than replacing it.
+   *
+   * Named rather than hardcoded, and defaulted to the same `info` the AD
+   * target connector uses, so an account disabled by the admin console and one
+   * disabled by the leaver ladder carry their reason in the same place. Two
+   * conventions for the same fact is how an administrator ends up trusting
+   * neither.
+   */
+  noteAttribute: z.string().min(1).default('info'),
   pageSize: z.number().int().positive().max(5000).default(1000),
   /**
    * Left out, this is derived from the URL scheme -- `ldaps://` means

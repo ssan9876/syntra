@@ -38,6 +38,41 @@ export function escapeDnValue(value: string): string {
 }
 
 /**
+ * Escapes a value for an LDAP filter, per RFC 4515.
+ *
+ * Here rather than in `ad/connector.ts` for the reason this module exists:
+ * it imports nothing, and `anchor.ts` needs this too. A second copy would be
+ * a second place for an escape to be got subtly wrong.
+ *
+ * The correlation key reaching `findByCorrelationKey` is produced by
+ * `generateCorrelationKey`, whose `[a-z0-9.-]` allow-list already makes an
+ * injection impossible today -- but that is a property of a function in
+ * another package, enforced by nobody at this boundary. A connector that
+ * builds a filter must not depend on a caller two packages away staying
+ * careful.
+ */
+export function escapeFilterValue(value: string): string {
+  return [...value]
+    .map((character) => {
+      switch (character) {
+        case '\\':
+          return '\\5c';
+        case '*':
+          return '\\2a';
+        case '(':
+          return '\\28';
+        case ')':
+          return '\\29';
+        case '\0':
+          return '\\00';
+        default:
+          return character;
+      }
+    })
+    .join('');
+}
+
+/**
  * Splits a DN into its first RDN and the container that holds it.
  *
  * `dn.indexOf(',')` is wrong here and the failure is silent:

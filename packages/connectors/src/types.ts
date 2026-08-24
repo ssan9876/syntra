@@ -166,6 +166,73 @@ export type WriteOperation =
     };
 
 /**
+ * Writing back to the system a user was READ from.
+ *
+ * Deliberately not part of `WriteOperation`. That union is documented as
+ * "every action Provision can propose" and carries a safety argument these
+ * operations do not share: every action in it has to be one that four thousand
+ * instances of can be walked back, which is why it contains no delete. A
+ * password change is one person, initiated by that person, and is not
+ * something a misconfigured rule can propose four thousand of. Folding it in
+ * would also hand it Provision's retry policy, under which a retried change
+ * carrying a stale current password fails identically on every attempt while
+ * looking transient.
+ *
+ * Neither password is ever logged, returned, or included in a message. The
+ * failure classification here is deliberately coarse for the same reason: the
+ * directory's own diagnostic text for a rejected password can quote policy
+ * detail, and it is mapped to one of these before it goes anywhere.
+ */
+export type WritebackFailure =
+  /** The bind as the user was refused: the current password is wrong. */
+  | 'wrong_password'
+  /** The directory refused the new password: complexity, history, min age. */
+  | 'policy'
+  /** The bind cannot do this -- rights, or an unencrypted connection. */
+  | 'unauthorized'
+  /** The anchor resolves to no object, or to more than one. */
+  | 'not_found'
+  /** This source cannot do this at all. */
+  | 'unsupported'
+  | 'transient';
+
+export interface WritebackResult {
+  ok: boolean;
+  /**
+   * Safe to show a user and safe to log. Never the directory's raw diagnostic,
+   * and never anything derived from either password.
+   */
+  message: string;
+  failure?: WritebackFailure;
+}
+
+export interface ChangePasswordInput {
+  anchor: string;
+  /** Verified by the directory, never by us. */
+  currentPassword: string;
+  newPassword: string;
+}
+
+export interface SetEnabledInput {
+  anchor: string;
+  enabled: boolean;
+  /** Recorded on the object where the target offers somewhere to put it. */
+  reason: string;
+}
+
+/**
+ * A source connector that can write a narrow, closed set of changes back.
+ *
+ * Separate from `Connector` because most sources cannot do this and should not
+ * have to pretend: a source is configured for reading, and write-back is an
+ * explicit opt-in with its own rights and its own failure modes.
+ */
+export interface SourceWriteback<C> {
+  changePassword(config: C, input: ChangePasswordInput): Promise<WritebackResult>;
+  setEnabled(config: C, input: SetEnabledInput): Promise<WritebackResult>;
+}
+
+/**
  * A closed set decided by the connector, not a string the run pattern-matches.
  * Only the connector knows whether an LDAP `busy` or an HTTP 429 is worth
  * another attempt; getting the classification into the connector, where the

@@ -15,7 +15,11 @@ import {
   withProvenanceNote,
 } from './provenance.js';
 import { objectSidRid } from './sid.js';
-import { escapeDnValue, splitDn } from '../ldap/dn.js';
+import { escapeDnValue, escapeFilterValue, splitDn } from '../ldap/dn.js';
+
+// Re-exported so moving this next to `escapeDnValue` -- where its own comment
+// argues it belongs -- does not change the package's public surface.
+export { escapeFilterValue };
 import { CONNECTOR_ACTION_TYPES } from '../types.js';
 import type {
   ConnectionResult,
@@ -156,36 +160,6 @@ export function encodeUnicodePwd(password: string): Buffer {
   return Buffer.from(`"${password}"`, 'utf16le');
 }
 
-/**
- * Escapes a value for an LDAP filter, per RFC 4515.
- *
- * The correlation key reaching `findByCorrelationKey` is produced by
- * `generateCorrelationKey`, whose `[a-z0-9.-]` allow-list already makes an
- * injection impossible today -- but that is a property of a function in
- * another package, enforced by nobody at this boundary. A connector that
- * builds a filter must not depend on a caller two packages away staying
- * careful.
- */
-export function escapeFilterValue(value: string): string {
-  return [...value]
-    .map((character) => {
-      switch (character) {
-        case '\\':
-          return '\\5c';
-        case '*':
-          return '\\2a';
-        case '(':
-          return '\\28';
-        case ')':
-          return '\\29';
-        case '\0':
-          return '\\00';
-        default:
-          return character;
-      }
-    })
-    .join('');
-}
 
 /**
  * Both moved to `../ldap/dn.js` so that `@syntra/connectors/testing`'s

@@ -2,6 +2,7 @@ export * from './types.js';
 export * from './ldap/config.js';
 export * from './ldap/connector.js';
 export * from './ldap/anchor.js';
+export * from './ldap/writeback.js';
 export * from './ldap/range.js';
 export * from './ad/uac.js';
 export * from './ad/config.js';
