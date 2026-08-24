@@ -551,6 +551,29 @@ That creates `OU=Deactivated` at the domain root, protects it from accidental
 deletion, enables the AD Recycle Bin, installs `syntra-reap.ps1` into
 `C:\ProgramData\Syntra`, and registers a daily task as SYSTEM.
 
+**Enabling the Recycle Bin cannot be undone**, and it is the reason this design
+puts deletion here rather than in Syntra. Without it, a wrong sweep is
+unrecoverable. It needs a 2008 R2 forest functional level or better.
+
+**The archive has to be somewhere the provisioning account can write.** The
+domain root is the natural home — one archive serving every population — but
+Provision moves objects into it with `modifyDN`, and a service account
+delegated over a single subtree cannot write to the root:
+
+```
+CREATED refused: 00000005: SecErr: DSID-03152DE3, problem 4003 (INSUFF_ACCESS_RIGHTS)
+```
+
+That refusal is correct and worth keeping. Either delegate the archive OU to
+the provisioning account, or put the archive inside the subtree the account
+already holds — it only has to sit outside the *sync* search base, not at the
+root:
+
+```powershell
+.\install-reap.ps1 -Domain example.local `
+    -ArchiveOu "OU=Deactivated,OU=Syntra,DC=example,DC=local"
+```
+
 **It installs in dry run.** The task logs what it would delete and deletes
 nothing. Read `C:\ProgramData\Syntra\reap.log` for a few days, confirm the OU
 and the dates are what you expect, then arm it:

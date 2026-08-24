@@ -23,13 +23,20 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $Domain,
 
-    # A SIBLING OF THE SYNC SEARCH BASE, NEVER A CHILD OF IT. The whole chain
-    # depends on this: Provision moves the object here, the object leaves the
-    # sync's search base, the next run reads it as absent and proposes
-    # deactivating the Syntra user. Put this inside OU=Company and the sync
-    # keeps seeing the account, keeps it active, and the archive achieves
-    # nothing.
-    [string] $ArchiveOuName = 'Deactivated',
+    # OUTSIDE THE SYNC SEARCH BASE, ALWAYS. The whole chain depends on it:
+    # Provision moves the object here, the object leaves the sync's search
+    # base, the next run reads it as absent and proposes deactivating the
+    # Syntra user. Put this inside the search base and the sync keeps seeing
+    # the account, keeps it active, and the archive achieves nothing.
+    #
+    # A FULL DN, not a name. The domain root is the natural home -- one
+    # archive serving every population -- but the provisioning account has to
+    # be able to move objects INTO it, and a service account delegated over
+    # one subtree cannot write to the root. Rather than force a delegation
+    # change to install this, take the DN and let the archive live wherever
+    # the account's existing rights already reach. Defaults to the root when
+    # omitted; its parent must already exist.
+    [string] $ArchiveOu = '',
 
     [ValidateRange(1, 3650)]
     [int] $RetentionDays = 30,
@@ -52,15 +59,23 @@ Set-StrictMode -Version Latest
 Import-Module ActiveDirectory -ErrorAction Stop
 
 $domainDn = (Get-ADDomain -Identity $Domain).DistinguishedName
-$archiveOu = "OU=$ArchiveOuName,$domainDn"
+if ($ArchiveOu -eq '') { $ArchiveOu = "OU=Deactivated,$domainDn" }
+
+# Split once, on the first unescaped comma: everything left of it is this OU's
+# own RDN, everything right of it is the parent to create it under.
+if ($ArchiveOu -notmatch '^OU=(?<name>(?:[^,\\]|\\.)+),(?<parent>.+)$') {
+    throw "ArchiveOu must be a full OU distinguished name, got: $ArchiveOu"
+}
+$ouName = $Matches['name']
+$ouParent = $Matches['parent']
 
 Write-Host "domain     : $domainDn"
-Write-Host "archive OU : $archiveOu"
+Write-Host "archive OU : $ArchiveOu"
 
 # --- the archive OU ------------------------------------------------------
 
-$existing = Get-ADOrganizationalUnit -Filter "Name -eq '$ArchiveOuName'" -SearchBase $domainDn `
-    -SearchScope OneLevel -ErrorAction SilentlyContinue
+$existing = $null
+try { $existing = Get-ADOrganizationalUnit -Identity $ArchiveOu } catch { }
 if ($existing) {
     Write-Host "OU exists, leaving it alone"
 } else {
@@ -68,7 +83,7 @@ if ($existing) {
     # it. The sweep refuses to delete a protected object, so protecting the
     # accounts would disable the very thing being installed -- but an OU
     # deleted by a slipped click takes every leaver's record with it.
-    New-ADOrganizationalUnit -Name $ArchiveOuName -Path $domainDn `
+    New-ADOrganizationalUnit -Name $ouName -Path $ouParent `
         -ProtectedFromAccidentalDeletion $true
     Write-Host "OU created"
 }
@@ -104,7 +119,7 @@ Write-Host "installed  : $target"
 $taskArgs = @(
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', "`"$target`"",
-    '-ArchiveOu', "`"$archiveOu`"",
+    '-ArchiveOu', "`"$ArchiveOu`"",
     '-RetentionDays', $RetentionDays,
     '-MaxDeletesPerRun', $MaxDeletesPerRun,
     '-LogPath', "`"$(Join-Path $InstallDir 'reap.log')`""
@@ -131,4 +146,4 @@ Write-Host "retention  : $RetentionDays days, at most $MaxDeletesPerRun deletion
 Write-Host "log        : $(Join-Path $InstallDir 'reap.log')"
 Write-Host ""
 Write-Host "Set the target system's archiveContainer to exactly:"
-Write-Host "  $archiveOu"
+Write-Host "  $ArchiveOu"
