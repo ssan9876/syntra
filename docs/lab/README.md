@@ -225,7 +225,7 @@ Point a Cloudflare tunnel (or any reverse proxy) at `192.168.88.20:3000` over
 an identical `Request failed` at the connector: an `https://` service URL when
 the origin speaks HTTP, and a stale origin address.
 
-## 1.4 Four traps
+## 1.4 Five traps
 
 **`TRUST_PROXY` must name the connector.** Without it every request carries
 the connector's address: policy source-address conditions match everyone or
@@ -250,6 +250,30 @@ and is the resolver following the RFC. Windows clients are unaffected.
 MulticastDNS=no
 LLMNR=no
 ```
+
+**A public resolver listed behind the DC breaks internal names at random.**
+Not "when the DC is down" — at random. Listing two nameservers looks like a
+primary and a fallback, and `systemd-resolved` does not read them that way: it
+treats every server on a link as equivalent for every name, picks one as its
+Current DNS Server and switches between them freely.
+
+```
+       DNS Servers: 192.168.88.21 1.1.1.1
+Current DNS Server: 1.1.1.1              <- and every ssander.local lookup NXDOMAINs
+```
+
+Whenever it settles on the public one, LDAP and Kerberos lookups fail with
+nothing wrong at either end and nothing in any log to say why. The DC forwards
+what it cannot answer, so name it alone:
+
+```yaml
+      nameservers:
+        addresses: [192.168.88.21]        # the DC, and only the DC
+        search: [ssander.local]
+```
+
+Losing the public resolver loses nothing real. If the DC is down, a host whose
+whole job is talking to that DC has no work to do either.
 
 **Node ignores the system CA store.** `update-ca-certificates` satisfies
 `openssl` and `curl` and does nothing for Node, which carries its own bundled

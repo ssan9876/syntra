@@ -1,0 +1,33 @@
+# Static, because a service other machines are pointed at should not move.
+#
+# DNS IS THE DOMAIN CONTROLLER, AND ONLY THE DOMAIN CONTROLLER.
+#
+# This listed 1.1.1.1 behind it as "a fallback for when the DC is down, not a
+# second opinion -- Debian tries these in order and accepts the first answer".
+# That is not what happens. systemd-resolved treats every server on a link as
+# equivalent for every name, picks one as its Current DNS Server and switches
+# between them freely; it does not reserve the second for when the first is
+# unreachable. So roughly whenever it chose the public resolver, every lookup
+# of example.local came back NXDOMAIN -- the sync losing its directory, with
+# nothing wrong at either end and nothing in any log to say why.
+#
+# The DC forwards what it cannot answer, so nothing is lost by removing the
+# public resolver: internal names resolve because the DC is authoritative, and
+# external ones resolve because it forwards. If the DC is down this host has no
+# DNS at all, which is the honest state of a machine whose entire job is
+# talking to that DC.
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: "<MAC_ADDRESS>"
+      set-name: eth0
+      dhcp4: false
+      addresses: [<SYNTRA_IP>/24]
+      routes:
+        - to: default
+          via: <GATEWAY_IP>
+      nameservers:
+        addresses: [<DC_IP>]
+        search: [example.local]
