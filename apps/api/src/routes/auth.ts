@@ -1,7 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { elevateRequest, loginRequest } from '@syntra/contracts';
-import { authorize, isAdministrator, recordEvent, revokeSession } from '@syntra/core';
+import {
+  changePasswordRequest,
+  elevateRequest,
+  loginRequest,
+} from '@syntra/contracts';
+import { changeOwnPassword, authorize, isAdministrator, recordEvent, revokeSession } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
+import { passwordRejectionMessage } from './password-rejection.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
@@ -184,6 +189,84 @@ export async function registerAuthRoutes(
       );
 
       return issueSession(request, reply, decision);
+    },
+  );
+
+  /**
+   * Self-service password change.
+   *
+   * `requireSession('portal')` and not `'admin'`: this is the one security
+   * action every user has, and gating it behind elevation would make it
+   * unreachable for the people who need it most.
+   *
+   * Rate limited exactly as `/login` and `/elevate` are. It takes a password
+   * and answers whether it was right, which is the same oracle a sign-in is,
+   * and the fact that the caller already holds a session does not change that.
+   */
+  app.post(
+    '/password',
+    { preHandler: requireSession('portal'), ...PASSWORD_RATE_LIMIT },
+    async (request) => {
+      const body = changePasswordRequest.parse(request.body);
+      const { userId, sessionId } = request.session;
+
+      const outcome = await changeOwnPassword(request.tenantId, {
+        userId,
+        currentPassword: body.currentPassword,
+        newPassword: body.newPassword,
+        sessionId,
+        sourceIp: request.ip,
+      });
+
+      if (outcome.ok) {
+        return { ok: true, otherSessionsRevoked: outcome.otherSessionsRevoked };
+      }
+
+      switch (outcome.reason) {
+        case 'upstream':
+          // 409, not 403: nothing about the caller is wrong. The account's
+          // password is simply held somewhere else, and the useful part of
+          // the answer is where.
+          throw new ProblemError(
+            409,
+            'password-held-upstream',
+            'Password is managed elsewhere',
+            outcome.hint
+              ? `This account signs in through ${outcome.hint}. Change the password there.`
+              : 'This account signs in through an external provider. Change the password there.',
+          );
+        case 'no_password':
+          throw new ProblemError(
+            409,
+            'no-password-set',
+            'No password to change',
+            'This account signs in without a password. Ask an administrator to set one.',
+          );
+        case 'wrong_password':
+          throw new ProblemError(
+            403,
+            'wrong-password',
+            'Current password is incorrect',
+            'The current password does not match.',
+            { errors: [{ path: 'currentPassword', message: 'Incorrect' }] },
+          );
+        case 'weak_password':
+          throw new ProblemError(
+            422,
+            'weak-password',
+            'Password rejected',
+            passwordRejectionMessage(outcome.detail),
+            { errors: [{ path: 'newPassword', message: outcome.detail }] },
+          );
+        case 'unchanged':
+          throw new ProblemError(
+            422,
+            'password-unchanged',
+            'Password rejected',
+            'That is already your password. Choose a different one.',
+            { errors: [{ path: 'newPassword', message: 'unchanged' }] },
+          );
+      }
     },
   );
 

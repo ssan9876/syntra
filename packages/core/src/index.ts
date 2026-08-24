@@ -20,6 +20,7 @@ export * from './rbac/rbac-service.js';
 export * from './auth/password.js';
 export * from './auth/password-policy.js';
 export * from './auth/refresh-token.js';
+export * from './auth/password-change.js';
 export * from './auth/password-reset.js';
 export * from './auth/session-service.js';
 // authenticate() is deliberately NOT exported. It is the password half of

@@ -1,9 +1,13 @@
 import type { ReactNode } from 'react';
 
-type Tone = 'info' | 'warning' | 'danger';
+type Tone = 'info' | 'success' | 'warning' | 'danger';
 
 const TONES: Record<Tone, { box: string; title: string }> = {
   info: { box: 'border-border-subtle bg-surface', title: 'text-ink' },
+  // The `--color-success` tokens already existed and `Status` already used
+  // them for `active`; this tone was simply missing, so confirming a completed
+  // action had to borrow `info` and read as a notice rather than a result.
+  success: { box: 'border-success/35 bg-success-soft', title: 'text-success' },
   warning: { box: 'border-warning/35 bg-warning-soft', title: 'text-warning' },
   danger: { box: 'border-danger/35 bg-danger-soft', title: 'text-danger' },
 };

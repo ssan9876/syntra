@@ -596,6 +596,105 @@ curl -b "$J" -X PATCH -H 'Content-Type: application/json' \
 retention are served entirely in the OU. Split it differently if you prefer —
 `archiveAfterDays: 7` with `-RetentionDays 23` gives the same total.
 
+### Watching a leaver, end to end
+
+Provision acts on **Persons with contracts**, not on synced users, and anchors
+the ladder on the departure date. Import people and the whole chain becomes
+testable in a few minutes.
+
+```csv
+externalId,givenName,familyName,businessEmail,sequence,isPrimary,startDate,endDate,jobTitle,department
+P-1001,Rowan,Ellis,rowan.ellis@example.com,1,true,2024-03-04,,Registered Nurse,Care
+P-1002,Nadia,Okonjo,nadia.okonjo@example.com,1,true,2025-01-13,,Healthcare Assistant,Care
+P-1003,Tomas,Brandt,tomas.brandt@example.com,1,true,2023-06-01,,Registered Nurse,Care
+P-1004,Priya,Raman,priya.raman@example.com,1,true,2025-09-01,2027-09-30,Senior Nurse,Care
+P-1005,Ivo,Marek,ivo.marek@example.com,1,true,2024-11-18,,Management Accountant,Finance
+```
+
+```bash
+curl -b "$J" -X POST -H 'Content-Type: application/json' \
+  -d "$(python -c "import json,io;print(json.dumps({'csv':io.open('people.csv').read()}))")" \
+  "$B/api/admin/persons/import"
+# {"created":5,"updated":0,"errors":[]}
+```
+
+Ivo is the control. With one business rule of `contract.department == Care`,
+the plan proposes **four** creates, not five — which is the rule being read
+rather than assumed.
+
+```bash
+curl -b "$J" -X POST -H 'Content-Type: application/json' -d '{}' \
+  "$B/api/admin/targets/$TARGET/runs"          # 202 with a jobId; the run is async
+curl -b "$J" "$B/api/admin/targets/$TARGET/runs"          # newest first
+curl -b "$J" "$B/api/admin/targets/$TARGET/runs/$RUN"
+```
+
+Then end somebody's contract — re-import the one row with an `endDate` in the
+past — and run it again. The ladder produces the two steps in order:
+
+```
+disable_account   [applied] disabled
+archive_account   [applied] archived
+```
+
+Read the directory afterwards and the object has moved:
+
+```
+live         rowan.ellis / nadia.okonjo / priya.raman     enabled
+deactivated  tomas.brandt                                 DISABLED
+```
+
+The next sweep stamps `syntra-reap-after=<departure + 30 days>` and, on the day
+that arrives, deletes the object.
+
+#### Expect the guard to stop you, twice
+
+Both refusals below are the guard working. Neither is a misconfiguration.
+
+**"the target returned no accounts at all, and a run has been applied against
+it before"** — this one is **not confirmable**, deliberately: an empty target
+and an unreachable one look identical from Syntra, and the safe reading is the
+second. It fires on a target whose accounts were deleted by hand after a
+successful run. `TargetSystem.lastAppliedRunAt` is the input; clearing it says
+"this target has never had a successful apply", which is what is actually true
+once nothing that run created survives. Clear only that — the run rows and
+their audit events are the record, and are not the guard's business.
+
+**"would disable 1 of 4 active accounts (25.0%), above the 10% threshold"** —
+this one **is** confirmable. In a lab of four people one leaver is 25% of the
+population, and every departure will trip it. Send `confirm: true`:
+
+```bash
+curl -b "$J" -X POST -H 'Content-Type: application/json' \
+  -d '{"confirm":true}' "$B/api/admin/targets/$TARGET/runs/$RUN/apply"
+```
+
+#### Proving the delete without waiting a month
+
+Put a throwaway in the archive OU with a stamp already in the past, and another
+that is **enabled**, then run the sweep once. One pass covers all three paths:
+
+```
+[STAMP]  tomas.brandt: due 2026-09-23
+[DELETE] zz.reaptest (…) -- due 2026-07-01
+[HOLD]   zz.reaplive: enabled -- not a leaver, skipping
+=== APPLY done: stamped=1 deleted=1 held=1 waiting=0 ===
+```
+
+The overdue disabled account is destroyed, the overdue **enabled** one is held,
+and the real leaver — having no stamp yet — is given the full retention period
+rather than destroyed on the run that first noticed it.
+
+Then restore the deleted one, which is the recoverability the whole placement
+argument rests on:
+
+```powershell
+$d = Get-ADObject -Filter 'SamAccountName -eq "zz.reaptest"' -IncludeDeletedObjects
+Restore-ADObject -Identity $d.DistinguishedName
+```
+
+It comes back in its original OU with its attributes intact.
+
 ### The clock
 
 The retention period is measured from a stamp the sweep writes into
@@ -663,6 +762,87 @@ which is also what tells the sync they have gone.
 Note that Provision acts on **Persons with contracts**, not on synced users, and
 anchors the ladder on the departure date. Until people are imported with
 contracts there is nothing for it to archive — ending a contract is the button.
+
+## 2.6 Self-service
+
+Everything under `/security`, reachable by any signed-in user from the header.
+No administrator, no ticket.
+
+| | |
+|---|---|
+| Password | Change it, given the current one |
+| Authenticator app | Enrol a TOTP code |
+| Security keys and passkeys | Register a WebAuthn credential |
+| Recovery codes | Issue a fresh set |
+
+### Changing a password
+
+```
+POST /api/auth/password
+{ "currentPassword": "…", "newPassword": "…" }
+→ 200 { "ok": true, "otherSessionsRevoked": 2 }
+```
+
+**A change is not a reset, and does not borrow its machinery.** A reset starts
+from an unauthenticated stranger holding a mailbox link, so it spends a token,
+demands a second factor and revokes everything. A change starts from somebody
+already signed in who re-types the password they hold — a different and
+stronger claim — and it should not cost them a trip through their inbox.
+
+The current password is re-entered rather than trusted from the session, the
+same way `/elevate` treats elevation as a fresh authentication rather than a
+flag flip. The endpoint is rate-limited exactly as `/login` is: it takes a
+password and answers whether it was right, which is the same oracle a sign-in
+is, and holding a session already does not change that.
+
+No second factor is demanded. The request carries two independent things
+already — a live session and the current password — and an attacker with a
+stolen session still cannot pass the second. Requiring a factor as well would
+strand a user who has enrolled one and is on a device that cannot present it.
+
+### Which sessions survive
+
+**Every other session is signed out. The one making the change is not.**
+
+That session is the evidence the whole request rests on; revoking it would sign
+somebody out of the tab they are looking at, at the moment they are told it
+worked. The others go, because evicting whoever else has the password is the
+entire reason for changing it — leaving them alive makes the change cosmetic.
+Refresh tokens go too: one outliving a change hands back exactly the access the
+change existed to end.
+
+The response says how many, so the confirmation can be specific rather than
+reassuring in the abstract.
+
+### The refusals
+
+| Response | Meaning |
+|---|---|
+| `403 wrong-password` | The current password does not match |
+| `422 weak-password` | Below `passwordMinLength`, over 1024, or predictable |
+| `422 password-unchanged` | The new password is the one already set |
+| `409 password-held-upstream` | `passwordSource` is not `local` |
+| `409 no-password-set` | The account signs in without a password at all |
+
+`password-unchanged` exists because re-typing the same password reads as
+success and changes nothing — the worst possible outcome for somebody changing
+it *because* it leaked. It is compared against the stored hash, not the string.
+
+`password-held-upstream` carries `passwordSourceHint` in the detail, so the
+user is told **which** system owns their password rather than being left to
+guess. Writing a local hash for an upstream account would create a second,
+divergent password that authenticates nowhere they expect.
+
+### What a synced account can and cannot do here
+
+An account synced from Active Directory holds a Syntra password only if one was
+set for it — the directory owns the identity, not the credential. Changing that
+Syntra password **does not change the password in AD**, and vice versa.
+
+If you want one password, put the account's real authentication upstream: set
+`passwordSource` to `upstream` with a `passwordSourceHint`, and this screen
+sends the user to the provider instead of quietly maintaining a second
+credential that works in one place.
 
 ---
 

@@ -201,7 +201,7 @@ export async function revokeSession(
 }
 
 /**
- * Used after a password change or a deactivation: every existing session stops
+ * Used after a password reset or a deactivation: every existing session stops
  * working.
  */
 export async function revokeAllForUser(
@@ -212,4 +212,30 @@ export async function revokeAllForUser(
     where: { userId, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+}
+
+/**
+ * Every session except the one asking. Used by a self-service password change.
+ *
+ * A CHANGE IS NOT A RESET. A reset is somebody proving control of a mailbox
+ * from an unknown place, so nothing that existed beforehand is trusted and
+ * `revokeAllForUser` is right. A change is somebody already signed in who
+ * typed their current password; the session in their hand is the one piece of
+ * evidence the whole request rests on, and revoking it logs them out of the
+ * tab they are looking at at the very moment they are told it worked.
+ *
+ * The other sessions still go. That is the point of changing a password after
+ * somebody else has learned it, and leaving them alive would make the change
+ * cosmetic.
+ */
+export async function revokeAllForUserExcept(
+  tx: TenantClient,
+  userId: string,
+  sessionId: string,
+): Promise<number> {
+  const { count } = await tx.session.updateMany({
+    where: { userId, revokedAt: null, id: { not: sessionId } },
+    data: { revokedAt: new Date() },
+  });
+  return count;
 }

@@ -3,6 +3,7 @@ import { Alert, Button, Field, Panel, Status } from '@syntra/ui';
 import { AppShell } from '../components/AppShell.js';
 import { ApiError, api } from '../session/api.js';
 import { startWebAuthnRegistration } from '../mfa/webauthn.js';
+import { PasswordPanel } from './security/PasswordPanel.js';
 
 interface MfaStatus {
   totp: { enrolled: boolean };
@@ -124,12 +125,14 @@ export function Security() {
         <header>
           <h1 className="text-xl font-semibold text-ink">Security</h1>
           <p className="mt-1 text-muted">
-            A second factor keeps your account usable only by you, even if your
-            password is guessed.
+            Your password, and the second factors that keep the account usable
+            only by you even if it is guessed.
           </p>
         </header>
 
         {error && <Alert tone="danger">{error}</Alert>}
+
+        <PasswordPanel />
 
         <Panel
           title="Authenticator app"

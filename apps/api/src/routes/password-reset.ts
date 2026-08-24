@@ -12,6 +12,7 @@ import {
   type Transport,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
+import { passwordRejectionMessage } from './password-rejection.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
 
@@ -95,11 +96,7 @@ export async function registerPasswordResetRoutes(
         400,
         'weak-password',
         'That password does not meet the policy',
-        outcome.detail === 'too_short'
-          ? 'Choose a longer password.'
-          : outcome.detail === 'too_long'
-            ? 'Choose a shorter password.'
-            : 'Choose something less predictable than your own name or login.',
+        passwordRejectionMessage(outcome.detail),
       );
     }
     if (outcome.reason === 'factor_required') {
