@@ -167,6 +167,15 @@ model Person {
 
   @@unique([tenantId, externalId])
   @@index([tenantId])
+  /// An administrative departure: a human deactivated this person's account,
+  /// as distinct from a departure derived from contract end dates.
+  /// `departureDate()` prefers this when set, because somebody who clicked
+  /// Deactivate knows something the contract table does not -- the
+  /// resignation nobody has keyed yet, the compromised account, the person
+  /// walked out this morning. Cleared by reactivation.
+  departureOverride     DateTime?
+  departureOverrideBy   String?   @db.Uuid
+  departureOverrideNote String?
 }
 
 /// One employment or engagement relationship held by a Person. A person may
@@ -301,6 +310,21 @@ model DirectorySource {
   autoApply                    Boolean   @default(false)
   deactivationThresholdPercent Int       @default(10)
   enabled                      Boolean   @default(true)
+
+  /// Whether Syntra may write back to this source at all, and which writes it
+  /// may make. All three default to false: a source configured before
+  /// write-back existed must not acquire the ability to change passwords or
+  /// disable accounts because it was upgraded. Turning them on is a
+  /// deliberate act, and `test` reports whether the bind can actually
+  /// exercise what has been claimed for it.
+  ///
+  /// Split rather than one flag because they are genuinely separate
+  /// decisions: a tenant may want the console to disable a leaver without
+  /// handing the self-service portal a path into domain passwords, or the
+  /// reverse.
+  writebackEnabled             Boolean   @default(false)
+  writebackPassword            Boolean   @default(false)
+  writebackDisable             Boolean   @default(false)
   lastRunAt                    DateTime?
   createdAt                    DateTime  @default(now())
   updatedAt                    DateTime  @updatedAt

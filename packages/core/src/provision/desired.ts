@@ -127,7 +127,21 @@ export function activeOn(contracts: ContractFacts[], on: Date): ContractFacts[] 
  * and the ladder anchors to it rather than treating them as a mover and
  * disabling them now — which is what the timers are for.
  */
-export function departureDate(contracts: ContractFacts[], on: Date): Date | null {
+export function departureDate(
+  contracts: ContractFacts[],
+  on: Date,
+  override?: Date | null,
+): Date | null {
+  // An administrative departure wins over the contract table unconditionally.
+  //
+  // Somebody who clicked Deactivate knows something the contracts do not: the
+  // resignation nobody has keyed yet, the compromised account, the person
+  // walked out this morning. Letting an open-ended contract overrule that
+  // would make the button a no-op for precisely the population it is most
+  // needed for -- permanent employees, whose `endDate` is null and who
+  // therefore read as "not leaving" forever.
+  if (override) return override;
+
   const started = contracts.filter((c) => c.startDate.getTime() <= on.getTime());
   if (started.length === 0) return null;
   if (started.some((c) => c.endDate === null)) return null;

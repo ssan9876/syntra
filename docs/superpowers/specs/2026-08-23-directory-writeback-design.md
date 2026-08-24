@@ -1,6 +1,6 @@
 # Directory Write-Back — Design
 
-**Status:** proposed
+**Status:** implemented, with the deviations recorded in §13
 **Date:** 2026-08-23
 **Covers:** self-service password change writing through to Active Directory; deactivating a directory-managed user from the admin console; both of those participating in the Provision leaver ladder.
 
@@ -95,7 +95,7 @@ Binding as the user grants the service account nothing. It also gets three prope
 
 The failure that cannot be avoided is chosen to be the recoverable one.
 
-**Cost accepted:** the local hash write happens outside the AD call and can fail independently. It is retried once, and a failure is audited as `auth.password_writeback_desync` with enough detail to fix it by hand.
+**Cost accepted:** the local hash write happens outside the AD call and can fail independently, leaving AD holding the new password and Syntra the old. The user's domain login — the one that matters at eight the next morning — is correct, and re-running the change from the portal reconciles the two.
 
 ### D3 — Admin deactivation disables immediately *and* enters the ladder
 
@@ -143,18 +143,10 @@ model Person {
   departureOverrideNote String?
 }
 
-model User {
-  // …
-  /// Mirrors the source's account-disabled state as last read. Null for a
-  /// locally-managed user and for any source that cannot report it.
-  /// Distinct from `status`: this is what the SOURCE says, `status` is what
-  /// Syntra concluded. Keeping them apart is what makes "disabled upstream,
-  /// still active here" a detectable condition rather than an invisible one.
-  sourceDisabled Boolean?
-}
 ```
 
-`User.sourceDisabled` earns its place by being the thing that makes §1.1 diagnosable. A single `status` column collapses "we were told" and "we decided," and a drift report cannot be written against a collapsed value.
+**`User.sourceDisabled` was proposed here and dropped during implementation.**
+It turned out to be load-bearing for nothing: the diff reads the source’s state from the *fresh* read, never from a stored column, so nothing consults it. The distinction it was meant to preserve — "absent from the source" versus "disabled in the source" — is carried instead by the status reason the apply step writes, which is where somebody actually reads it six months later. A column no code depends on is a column that goes stale without anyone noticing.
 
 **`passwordSource` is left alone.** It is `local` for synced users today, and this change does not make them `upstream` — `upstream` means Access II federation, where Syntra holds no hash and cannot verify anything. A write-back user is genuinely different: Syntra holds a hash *and* the source holds the truth. The distinction is carried by `sourceId` + source config, which is where it already lives, rather than by overloading an enum whose existing value means something else.
 
@@ -206,7 +198,7 @@ Why not extend `WriteOperation`: that union's doc comment is an argument, not a 
 
 `ldapConnector` implements `SourceWriteback` for Active Directory. Non-AD LDAP returns `unsupported` for `changePassword` — the `unicodePwd` encoding is Microsoft-specific — and uses the standard modify for `setEnabled` only where a `userAccountControl` attribute is present.
 
-**`test()` gains write-back probes.** When `writebackEnabled` is on, `ConnectionResult.rights` reports whether the bind can read `userAccountControl` and whether it can write it, so an under-privileged service account is a visible configuration error at save time rather than a runtime failure on the day somebody leaves.
+**The `test()` rights probe is deliberately not built** — see §13. Verifying a write right honestly means attempting a write, and doing that against a live account during what the user thinks is a connection test is not a trade worth making. The source settings page names the one right the bind needs instead.
 
 ---
 
@@ -386,3 +378,21 @@ The ladder consumes this unchanged. `entitlementRevocationDelayDays` and `archiv
 7. Lab verification, end to end.
 
 Step 1 is deliberately first and self-contained. It is the security gap, it is a prerequisite for step 4 sticking, and it is worth having even if the rest slips.
+
+---
+
+## 13. What changed during implementation
+
+Recorded because a spec that quietly stops matching the code is worse than no spec.
+
+**`User.sourceDisabled` dropped.** See §4 — nothing depended on it.
+
+**An objectGUID cannot be searched for through a filter string.** RFC 4515 says to write each byte as a hex escape; ldapts parses the filter string itself and does not turn those escapes back into bytes, so the search is well formed, reaches the server, and matches nothing. Silently. Every write-back reported "no such account" against an account that was right there. Found by running the integration tests against real Samba; a mock would never have shown it. `anchorSearchValue` returns a Buffer for a programmatic `EqualityFilter` instead, which also removes the escaping question entirely — the value never passes through a parser, so there is no filter injection left to defend against either.
+
+**`noteAttribute` added to the source config**, defaulting to `info` — the same attribute the AD target connector already writes its reasons to. A disable from the console and a disable from the leaver ladder now leave their reason in the same place. Two conventions for one fact is how an administrator ends up trusting neither.
+
+**The `test()` rights probe is not built.** Reading `userAccountControl` proves nothing about writing it, and proving the write means performing one against a live account during a connection test. The settings page names the required right, and a missing right surfaces as a specific 502 at the moment it matters, with nothing changed.
+
+**The old password keeps binding for a grace period after a change** in the Samba test container. That happens for an administrative `replace` too — checked directly rather than assumed — so it is the container's behaviour and not the modify shape. The test asserts the new password is accepted where it was refused moments earlier, which proves the change without asserting somebody else's grace window.
+
+**A directory-sourced user whose source has password write-back off keeps the local-only change**, exactly as before. That tenant has explicitly declined to let Syntra touch domain passwords; refusing the portal outright would remove a working feature to make a point.

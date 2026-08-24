@@ -4,6 +4,7 @@ export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
 export * from './directory/user-service.js';
+export * from './directory/directory-writeback.js';
 export * from './directory/group-service.js';
 export * from './directory/org-unit-service.js';
 export * from './audit/audit-service.js';

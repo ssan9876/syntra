@@ -802,6 +802,8 @@ export async function previewProvisionRun(
 
     const desired: DesiredState[] = [];
     const contractsByPerson = new Map<string, ContractFacts[]>();
+    // Only the people who have one, which is almost nobody.
+    const departureOverrideByPerson = new Map<string, Date>();
 
     // Indexed ONCE, outside the loop. A per-person query here would be one
     // round trip per person against a 5000 ms transaction budget.
@@ -833,6 +835,9 @@ export async function previewProvisionRun(
         fte: c.fte === null ? null : Number(c.fte),
       }));
       contractsByPerson.set(person.id, contracts);
+      if (person.departureOverride) {
+        departureOverrideByPerson.set(person.id, person.departureOverride);
+      }
 
       // The columns Person actually has. There is no `email` and no
       // `displayName` on the model, and spec section 15 forbids adding one.
@@ -945,6 +950,7 @@ export async function previewProvisionRun(
       desired,
       actual: reconciled.actual,
       contractsByPerson,
+      departureOverrideByPerson,
       syntraUserByPerson,
       pairedDirectorySource: prepared.target.pairedDirectorySourceId !== null,
       revocationOrders,

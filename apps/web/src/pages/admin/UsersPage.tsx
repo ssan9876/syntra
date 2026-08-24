@@ -19,6 +19,13 @@ interface UserRow {
 interface SourceRow {
   id: string;
   name: string;
+  /**
+   * Whether Syntra may disable an account in this directory. Both are needed:
+   * `writebackEnabled` is the master switch and `writebackDisable` the
+   * individual permission, and the server checks the same pair.
+   */
+  writebackEnabled: boolean;
+  writebackDisable: boolean;
 }
 
 export function UsersPage() {
@@ -46,6 +53,15 @@ export function UsersPage() {
   );
   const sourceNames = new Map(
     (sourcesData?.sources ?? []).map((source) => [source.id, source.name]),
+  );
+  // Which sources Syntra may disable an account in. A caller who cannot read
+  // sources gets an empty set and therefore no buttons, which is the right way
+  // round: the server would refuse the write anyway, and offering a control
+  // that always fails is worse than not offering it.
+  const writesDisable = new Set(
+    (sourcesData?.sources ?? [])
+      .filter((source) => source.writebackEnabled && source.writebackDisable)
+      .map((source) => source.id),
   );
   const anySynced = (data?.users ?? []).some((user) => Boolean(user.sourceId));
 
@@ -260,23 +276,40 @@ export function UsersPage() {
                           </Button>
                         </span>
                       )}
-                      {user.sourceId === null ? (
+                      {user.sourceId === null || writesDisable.has(user.sourceId) ? (
+                        // A source-owned account used to be refused here, and
+                        // the refusal was honest: the next run read it as
+                        // present in the directory and proposed reactivating
+                        // it, so the button would have undone itself. It works
+                        // now because the deactivation is written THROUGH to
+                        // the directory and sync no longer resurrects an
+                        // account the source reports disabled.
                         <StatusToggle
                           active={user.status === 'active'}
                           basePath={`/api/admin/users/${user.id}`}
                           label="user"
-                          reasonPrompt="Why is this account being deactivated? Every session and refresh token is revoked immediately."
+                          reasonPrompt={
+                            user.sourceId === null
+                              ? 'Why is this account being deactivated? Every session and refresh token is revoked immediately.'
+                              : // Says what actually happens, in order. A
+                                // confirmation that asks "are you sure?"
+                                // without saying what follows is one people
+                                // click through without reading.
+                                `Why is this account being deactivated? The account is disabled in ${
+                                  sourceNames.get(user.sourceId) ?? 'the directory'
+                                } immediately, every session is revoked, and the leaver steps configured on the target follow from today.`
+                          }
                           onChanged={reload}
                         />
                       ) : (
-                        // A SOURCE-OWNED ACCOUNT IS NOT DEACTIVATED HERE.
-                        // The next run reads the account as present in the
-                        // directory and proposes reactivating it, so the
-                        // button would appear to work and quietly undo itself.
-                        // Deactivate them where they live, or let the sync
-                        // notice they are gone.
+                        // Write-back is off for this source, so a status
+                        // changed here would be undone by the next run. Naming
+                        // the source and the setting is the difference between
+                        // a dead end and something an administrator can act
+                        // on.
                         <span className="text-sm text-muted">
-                          managed by a directory source
+                          {sourceNames.get(user.sourceId) ?? 'A directory source'}{' '}
+                          owns this account, and write-back is off
                         </span>
                       )}
                     </td>

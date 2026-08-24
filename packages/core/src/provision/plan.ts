@@ -54,6 +54,14 @@ export interface PlanInput {
   actual: Map<string, ActualState>;
   contractsByPerson: ReadonlyMap<string, ContractFacts[]>;
   /**
+   * Administrative departures, keyed on `personId`.
+   *
+   * Set when a human deactivated the person's account from the console rather
+   * than a contract ending. Absent for everybody else, which is almost
+   * everybody.
+   */
+  departureOverrideByPerson: ReadonlyMap<string, Date>;
+  /**
    * EVERY Syntra login linked to a person, keyed on `personId`.
    *
    * A list per person, not one login, and that is the whole point of the
@@ -194,7 +202,8 @@ export function planActions(input: PlanInput): PlannedAction[] {
       ? (input.syntraUserByPerson.get(personId) ?? [])
       : [];
     const contracts = input.contractsByPerson.get(personId) ?? [];
-    const endDate = departureDate(contracts, now);
+    const departureOverride = input.departureOverrideByPerson.get(personId) ?? null;
+    const endDate = departureDate(contracts, now, departureOverride);
     // A departure is having stopped being employed, and `endDate` is the day
     // it happened — which during a gap between two fixed-term contracts is the
     // end of the one that just ended, NOT the end of one that has not started.
@@ -526,9 +535,22 @@ export function planActions(input: PlanInput): PlannedAction[] {
       // If the person is still employed this is a mover and it happens now,
       // with no grace: the ladder's timers are anchored to a contract end date
       // and this person does not have one.
-      const disableDue = departed
-        ? due(addDays(endDate!, ladder.disableGraceDays), now)
-        : true;
+      // `disableGraceDays` exists to delay the disable after a SCHEDULED
+      // departure -- the contract that ends on the 31st, where nobody wants
+      // the account dead at 00:01. An administrative deactivation is not a
+      // scheduled departure: the two reasons somebody clicks Deactivate are
+      // "they left today" and "this account is compromised", and both want it
+      // dead now. A button that appears to do nothing for seven days is a
+      // button people work around.
+      //
+      // The console has already written the disable through to the directory
+      // by the time this runs, so honouring a grace period here would mean
+      // re-ENABLING an account somebody deliberately killed.
+      const disableDue = departureOverride
+        ? true
+        : departed
+          ? due(addDays(endDate!, ladder.disableGraceDays), now)
+          : true;
 
       if (disableDue) {
         // `enabledAtTarget` is false whenever there is no object at the

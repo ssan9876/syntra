@@ -4,7 +4,14 @@ import {
   elevateRequest,
   loginRequest,
 } from '@syntra/contracts';
-import { changeOwnPassword, authorize, isAdministrator, recordEvent, revokeSession } from '@syntra/core';
+import {
+  changeOwnPassword,
+  authorize,
+  isAdministrator,
+  localMasterKeyProvider,
+  recordEvent,
+  revokeSession,
+} from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { passwordRejectionMessage } from './password-rejection.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
@@ -42,6 +49,11 @@ export interface AuthRouteOptions {
    * WebAuthn assertion.
    */
   publicUrl: string;
+  /**
+   * Needed to unseal a directory source's bind credential, so a password
+   * change on a write-back source can reach the directory.
+   */
+  masterKey: Buffer;
 }
 
 export async function registerAuthRoutes(
@@ -49,6 +61,7 @@ export async function registerAuthRoutes(
   options: AuthRouteOptions,
 ): Promise<void> {
   const PASSWORD_RATE_LIMIT = passwordRateLimit(app, options);
+  const provider = localMasterKeyProvider(options.masterKey);
 
   const relyingPartyFor = async (request: FastifyRequest) => {
     const tenant = await request.db((tx) =>
@@ -210,7 +223,7 @@ export async function registerAuthRoutes(
       const body = changePasswordRequest.parse(request.body);
       const { userId, sessionId } = request.session;
 
-      const outcome = await changeOwnPassword(request.tenantId, {
+      const outcome = await changeOwnPassword(request.tenantId, provider, {
         userId,
         currentPassword: body.currentPassword,
         newPassword: body.newPassword,
@@ -249,6 +262,29 @@ export async function registerAuthRoutes(
             'Current password is incorrect',
             'The current password does not match.',
             { errors: [{ path: 'currentPassword', message: 'Incorrect' }] },
+          );
+        case 'directory_policy':
+          // The DOMAIN refused it, not Syntra, and saying so is the whole
+          // value of the message: somebody told "password rejected" by a
+          // portal that just accepted the same rule has no idea their
+          // employer's policy is the one talking.
+          throw new ProblemError(
+            422,
+            'directory-password-policy',
+            'The directory refused the new password',
+            'Your organisation’s directory rejected this password. It may be too ' +
+              'simple, one you have used before, or changed too recently.',
+            { errors: [{ path: 'newPassword', message: 'directory_policy' }] },
+          );
+        case 'directory_unavailable':
+          // 503, not 500: nothing is broken here, something else is
+          // unreachable, and it is worth trying again shortly.
+          throw new ProblemError(
+            503,
+            'directory-unavailable',
+            'The directory could not be reached',
+            'This password is held in your organisation’s directory, which ' +
+              'could not be reached just now. Nothing was changed. Try again shortly.',
           );
         case 'weak_password':
           throw new ProblemError(

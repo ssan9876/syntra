@@ -34,6 +34,9 @@ interface SourceDetail {
   config: Record<string, unknown>;
   schedule: string | null;
   autoApply: boolean;
+  writebackEnabled: boolean;
+  writebackPassword: boolean;
+  writebackDisable: boolean;
   enabled: boolean;
   deactivationThresholdPercent: number;
   lastRunAt: string | null;
@@ -64,6 +67,9 @@ interface Form {
   schedule: string;
   enabled: boolean;
   autoApply: boolean;
+  writebackEnabled: boolean;
+  writebackPassword: boolean;
+  writebackDisable: boolean;
   deactivationThresholdPercent: string;
 }
 
@@ -84,6 +90,11 @@ const BLANK: Form = {
   schedule: '',
   enabled: true,
   autoApply: false,
+  // Off for a new source too. Write-back is something somebody turns on
+  // having decided to, never something a source arrives holding.
+  writebackEnabled: false,
+  writebackPassword: false,
+  writebackDisable: false,
   deactivationThresholdPercent: '10',
 };
 
@@ -162,6 +173,9 @@ function formFrom(source: SourceDetail): Form {
     schedule: source.schedule ?? '',
     enabled: source.enabled,
     autoApply: source.autoApply,
+    writebackEnabled: source.writebackEnabled,
+    writebackPassword: source.writebackPassword,
+    writebackDisable: source.writebackDisable,
     deactivationThresholdPercent: String(source.deactivationThresholdPercent),
   };
 }
@@ -356,6 +370,13 @@ export function SourceDetailPage() {
             bindPassword: form.bindPassword,
             ...(form.schedule.trim() ? { schedule: form.schedule.trim() } : {}),
             autoApply: form.autoApply,
+            writebackEnabled: form.writebackEnabled,
+            // Sent as false whenever the master switch is off, so the stored
+            // row can never say "may change passwords" while write-back is
+            // disabled. A pair that disagrees is one somebody eventually
+            // trusts the wrong half of.
+            writebackPassword: form.writebackEnabled && form.writebackPassword,
+            writebackDisable: form.writebackEnabled && form.writebackDisable,
             enabled: form.enabled,
             deactivationThresholdPercent: threshold,
           }),
@@ -398,6 +419,13 @@ export function SourceDetailPage() {
           ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
           schedule: form.schedule.trim() ? form.schedule.trim() : null,
           autoApply: form.autoApply,
+          writebackEnabled: form.writebackEnabled,
+          // Sent as false whenever the master switch is off, so a stored row
+          // can never say "may change passwords" while write-back is
+          // disabled. A pair that disagrees is one somebody eventually trusts
+          // the wrong half of.
+          writebackPassword: form.writebackEnabled && form.writebackPassword,
+          writebackDisable: form.writebackEnabled && form.writebackDisable,
           enabled: form.enabled,
           deactivationThresholdPercent: threshold,
         }),
@@ -697,6 +725,44 @@ export function SourceDetailPage() {
             label="Apply scheduled runs automatically"
             hint="A scheduled run applies its own diff without review. A run the guard held back is never applied this way — nobody is watching an unattended schedule."
           />
+        </Panel>
+
+        <Panel
+          title="Write-back"
+          description="Whether Syntra may change accounts in this directory, rather than only read them."
+        >
+          <div className="grid gap-4 p-4 sm:grid-cols-2">
+            <Check
+              className="sm:col-span-2"
+              checked={form.writebackEnabled}
+              onChange={(v) => set('writebackEnabled', v)}
+              label="Allow Syntra to write to this directory"
+              // Says what the bind needs, because that is the part that
+              // actually stops working. An administrator who turns this on
+              // without delegating the rights gets a refusal at the moment
+              // somebody leaves, which is the worst possible time to find out.
+              hint="Off, this source is read-only and nothing here can change an account in it. On, the bind account needs permission to write userAccountControl on the accounts in scope. Changing a password needs no extra rights: Syntra binds as the user."
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.writebackEnabled && form.writebackDisable}
+              disabled={!form.writebackEnabled}
+              onChange={(v) => set('writebackDisable', v)}
+              label="Deactivating a user disables their account here"
+              hint="Lets an administrator deactivate a directory-managed user from the Users page. The account is disabled in the directory immediately, and the leaver steps configured on the paired target follow from that day."
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.writebackEnabled && form.writebackPassword}
+              disabled={!form.writebackEnabled}
+              onChange={(v) => set('writebackPassword', v)}
+              label="Self-service password change writes through to this directory"
+              // The consequence people do not expect: the directory's policy
+              // starts applying, including the minimum age, and it will refuse
+              // things Syntra's own policy would have accepted.
+              hint="Off, changing a password in the portal changes it only in Syntra, and the user keeps a different password for this directory. On, the directory verifies the current password and applies its own rules for the new one — complexity, history and minimum age."
+            />
+          </div>
         </Panel>
 
         {!isNew && (

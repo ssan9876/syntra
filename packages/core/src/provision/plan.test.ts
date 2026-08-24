@@ -72,6 +72,7 @@ const plan = (over: Partial<Parameters<typeof planActions>[0]> = {}) =>
     desired: [desired()],
     actual: new Map([['person-1', actual()]]),
     contractsByPerson: new Map([['person-1', [contract()]]]),
+    departureOverrideByPerson: new Map(),
     syntraUserByPerson: new Map(),
     pairedDirectorySource: false,
     ladder,
@@ -337,6 +338,7 @@ describe('planActions — the leaver and the grace ladder', () => {
      * silently, on both halves. Route nine to access outliving employment.
      */
     const actions = planActions({
+      departureOverrideByPerson: new Map(),
       desired: [
         desired({
           account: {
@@ -2124,5 +2126,75 @@ describe('planActions — what the re-create of a vanished account carries', () 
       enabled: false,
     });
     expect(actions[0]!.requiresConfirmation).toBe(true);
+  });
+});
+
+describe('an administrative deactivation on the ladder', () => {
+  const deactivated = (over = {}) =>
+    plan({
+      // No account is required: the person has been deactivated.
+      desired: [
+        desired({
+          account: null,
+          entitlements: new Set(),
+          attribution: new Map(),
+        }),
+      ],
+      // Open-ended contract. Nothing here says they are leaving, which is the
+      // whole point -- a permanent employee never departs on contracts alone.
+      contractsByPerson: new Map([['person-1', [contract({ endDate: null })]]]),
+      departureOverrideByPerson: new Map([['person-1', NOW]]),
+      ...over,
+    });
+
+  /**
+   * `disableGraceDays` delays the disable after a SCHEDULED departure -- the
+   * contract ending on the 31st, where nobody wants the account dead at 00:01.
+   * A human clicking Deactivate is not that. The two reasons anyone clicks it
+   * are "they left today" and "this account is compromised", and a button that
+   * appears to do nothing for a week is a button people work around.
+   */
+  it('disables now rather than waiting out the grace period', () => {
+    const actions = deactivated({
+      ladder: { ...ladder, disableGraceDays: 7 },
+    });
+    expect(actions.map((a) => a.actionType)).toContain('disable_account');
+  });
+
+  /**
+   * ...while a contract-derived departure still waits, which is what proves
+   * the bypass is scoped to the override and has not simply disabled the
+   * grace period for everybody.
+   */
+  it('leaves the grace period intact for a contract-derived departure', () => {
+    const actions = plan({
+      desired: [
+        desired({ account: null, entitlements: new Set(), attribution: new Map() }),
+      ],
+      contractsByPerson: new Map([
+        ['person-1', [contract({ endDate: day('2026-06-14') })]],
+      ]),
+      departureOverrideByPerson: new Map(),
+      ladder: { ...ladder, disableGraceDays: 7 },
+    });
+    expect(actions.map((a) => a.actionType)).not.toContain('disable_account');
+  });
+
+  /**
+   * The rest of the ladder still measures from the departure date. The
+   * override changes WHEN somebody departed, not what happens afterwards.
+   */
+  it('anchors the archive on the override, not on the contracts', () => {
+    const actions = deactivated({
+      ladder: { ...ladder, archiveAfterDays: 0 },
+    });
+    expect(actions.map((a) => a.actionType)).toContain('archive_account');
+  });
+
+  it('does not archive before the archive delay has run', () => {
+    const actions = deactivated({
+      ladder: { ...ladder, archiveAfterDays: 30 },
+    });
+    expect(actions.map((a) => a.actionType)).not.toContain('archive_account');
   });
 });

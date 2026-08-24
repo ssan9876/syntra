@@ -1,10 +1,15 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ldapWriteback } from '@syntra/connectors';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser } from '../directory/user-service.js';
+import { createSource } from '../sync/source-service.js';
 import { createSession, resolveSession } from './session-service.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import { changeOwnPassword } from './password-change.js';
+import { localMasterKeyProvider } from '../vault/master-key.js';
+
+const provider = localMasterKeyProvider(Buffer.alloc(32, 13));
 
 let tenantId: string;
 let userId: string;
@@ -52,7 +57,7 @@ const change = async (
   currentPassword = PASSWORD,
   newPassword = NEW_PASSWORD,
 ) =>
-  changeOwnPassword(tenantId, {
+  changeOwnPassword(tenantId, provider, {
     userId,
     currentPassword,
     newPassword,
@@ -236,5 +241,160 @@ describe('changeOwnPassword', () => {
       tx.auditEvent.findMany({ where: { action: 'auth.password_change_failed' } }),
     );
     expect(events).toHaveLength(2);
+  });
+});
+
+/**
+ * The account's password lives in Active Directory, so the directory decides.
+ *
+ * The local hash is deliberately NOT consulted on this path: Syntra's hash and
+ * the domain's password can already have diverged, and checking locally would
+ * accept a password the domain rejects and reject one it accepts.
+ *
+ * The connector is stubbed here. What it does against a real directory is
+ * proved by `writeback.integration.test.ts` against live Samba; what this file
+ * is about is the ORDER of the two writes and what survives a failure of
+ * either, which no directory can demonstrate.
+ */
+describe('changeOwnPassword writing through to a directory', () => {
+  const changePassword = vi.spyOn(ldapWriteback, 'changePassword');
+
+  beforeEach(async () => {
+    changePassword.mockReset();
+    changePassword.mockResolvedValue({ ok: true, message: 'changed' });
+    await withTenant(tenantId, async (tx) => {
+      const source = await createSource(tx, provider, {
+        name: 'Head office AD',
+        config: {
+          url: 'ldaps://ad.acme.test',
+          bindDn: 'cn=svc,dc=acme,dc=test',
+          userSearchBase: 'ou=People,dc=acme,dc=test',
+          groupSearchBase: 'ou=Groups,dc=acme,dc=test',
+          anchorAttribute: 'objectGUID',
+        },
+        bindPassword: 'bind-secret',
+        writebackEnabled: true,
+        writebackPassword: true,
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: { sourceId: source.id, sourceAnchor: 'anchor-guid' },
+      });
+    });
+  });
+
+  afterEach(() => changePassword.mockReset());
+
+  it('sends the change to the directory and then stores the hash', async () => {
+    const { sessionId } = await signIn();
+    const outcome = await change(sessionId);
+
+    expect(outcome.ok).toBe(true);
+    expect(changePassword).toHaveBeenCalledWith(
+      expect.objectContaining({ bindPassword: 'bind-secret' }),
+      {
+        anchor: 'anchor-guid',
+        currentPassword: PASSWORD,
+        newPassword: NEW_PASSWORD,
+      },
+    );
+    expect(await verifyPassword((await storedHash()).hash, NEW_PASSWORD)).toBe(true);
+  });
+
+  /**
+   * Directory first. If it refuses, the local hash must be untouched -- the
+   * other ordering leaves Syntra accepting a password the domain rejects, and
+   * the support call that follows has no visible cause.
+   */
+  it('leaves the local hash alone when the directory refuses', async () => {
+    changePassword.mockResolvedValue({
+      ok: false,
+      failure: 'policy',
+      message: 'refused',
+    });
+    const { sessionId } = await signIn();
+    const before = await storedHash();
+
+    const outcome = await change(sessionId);
+
+    expect(outcome).toEqual({ ok: false, reason: 'directory_policy' });
+    expect((await storedHash()).hash).toBe(before.hash);
+  });
+
+  it('reports a wrong current password from the directory, not from the hash', async () => {
+    changePassword.mockResolvedValue({
+      ok: false,
+      failure: 'wrong_password',
+      message: 'no',
+    });
+    const { sessionId } = await signIn();
+    expect(await change(sessionId)).toEqual({ ok: false, reason: 'wrong_password' });
+  });
+
+  /**
+   * Never a quiet fall back to a local-only change. That is exactly the
+   * divergence this path exists to remove, and it would be invisible to the
+   * person doing it.
+   */
+  it('refuses rather than changing locally when the directory is unreachable', async () => {
+    changePassword.mockResolvedValue({
+      ok: false,
+      failure: 'transient',
+      message: 'unreachable',
+    });
+    const { sessionId } = await signIn();
+    const before = await storedHash();
+
+    expect(await change(sessionId)).toEqual({
+      ok: false,
+      reason: 'directory_unavailable',
+    });
+    expect((await storedHash()).hash).toBe(before.hash);
+  });
+
+  /**
+   * The local check runs FIRST and short-circuits: a password the tenant
+   * policy already refuses must not spend a round trip, and above all must not
+   * spend an attempt against the domain's lockout counter.
+   */
+  it('refuses a weak password without asking the directory', async () => {
+    const { sessionId } = await signIn();
+    expect(await change(sessionId, PASSWORD, 'short')).toMatchObject({
+      reason: 'weak_password',
+    });
+    expect(changePassword).not.toHaveBeenCalled();
+  });
+
+  it('stays local when the source does not have password write-back', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.directorySource.updateMany({ data: { writebackPassword: false } }),
+    );
+    const { sessionId } = await signIn();
+
+    expect((await change(sessionId)).ok).toBe(true);
+    expect(changePassword).not.toHaveBeenCalled();
+    expect(await verifyPassword((await storedHash()).hash, NEW_PASSWORD)).toBe(true);
+  });
+
+  it('still revokes the other sessions on the write-back path', async () => {
+    const elsewhere = await signIn();
+    const mine = await signIn();
+
+    expect(await change(mine.sessionId)).toMatchObject({ otherSessionsRevoked: 1 });
+    const resolved = await withTenant(tenantId, (tx) =>
+      resolveSession(tx, elsewhere.token),
+    );
+    expect(resolved).toBeNull();
+  });
+
+  it('records neither password nor the bind credential in the audit trail', async () => {
+    const { sessionId } = await signIn();
+    await change(sessionId);
+
+    const events = await withTenant(tenantId, (tx) => tx.auditEvent.findMany());
+    const serialised = JSON.stringify(events);
+    expect(serialised).not.toContain(PASSWORD);
+    expect(serialised).not.toContain(NEW_PASSWORD);
+    expect(serialised).not.toContain('bind-secret');
   });
 });

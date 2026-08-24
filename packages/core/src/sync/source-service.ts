@@ -22,6 +22,17 @@ export interface CreateSourceInput {
    * only way to save a cron expression and its attribute mappings without the
    * schedule firing between the two.
    */
+  /**
+   * Write-back, off by default and off for every source that already exists.
+   *
+   * `writebackEnabled` is the master switch; the other two are the individual
+   * writes. Split because they are separate decisions: a tenant may want the
+   * console to disable a leaver without handing the self-service portal a path
+   * into domain passwords, or the reverse.
+   */
+  writebackEnabled?: boolean | undefined;
+  writebackPassword?: boolean | undefined;
+  writebackDisable?: boolean | undefined;
   enabled?: boolean | undefined;
 }
 
@@ -45,6 +56,9 @@ export async function createSource(
       autoApply: input.autoApply ?? false,
       deactivationThresholdPercent: input.deactivationThresholdPercent ?? 10,
       enabled: input.enabled ?? true,
+      writebackEnabled: input.writebackEnabled ?? false,
+      writebackPassword: input.writebackPassword ?? false,
+      writebackDisable: input.writebackDisable ?? false,
     },
   });
 
@@ -66,6 +80,9 @@ export interface UpdateSourceInput {
   autoApply?: boolean | undefined;
   deactivationThresholdPercent?: number | undefined;
   enabled?: boolean | undefined;
+  writebackEnabled?: boolean | undefined;
+  writebackPassword?: boolean | undefined;
+  writebackDisable?: boolean | undefined;
 }
 
 /**
@@ -112,6 +129,15 @@ export async function updateSource(
         ? { deactivationThresholdPercent: input.deactivationThresholdPercent }
         : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.writebackEnabled !== undefined
+        ? { writebackEnabled: input.writebackEnabled }
+        : {}),
+      ...(input.writebackPassword !== undefined
+        ? { writebackPassword: input.writebackPassword }
+        : {}),
+      ...(input.writebackDisable !== undefined
+        ? { writebackDisable: input.writebackDisable }
+        : {}),
     },
   });
 }

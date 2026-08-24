@@ -126,6 +126,7 @@ export async function buildApp(
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
     publicUrl: config.publicUrl,
+    masterKey: config.masterKey,
   });
 
   // Factor verifiers are installed once per process, before any route can ask
@@ -187,7 +188,10 @@ export async function buildApp(
   // Every route below requires an administrative session; the guard is
   // applied inside each plugin so a new admin route cannot forget it.
   await app.register(registerAdminTenantRoutes, { prefix: '/api/admin' });
-  await app.register(registerAdminUserRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminUserRoutes, {
+    prefix: '/api/admin',
+    masterKey: config.masterKey,
+  });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminOrgUnitRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminPersonRoutes, { prefix: '/api/admin' });

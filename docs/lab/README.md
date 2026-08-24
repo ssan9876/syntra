@@ -860,13 +860,146 @@ divergent password that authenticates nowhere they expect.
 ### What a synced account can and cannot do here
 
 An account synced from Active Directory holds a Syntra password only if one was
-set for it — the directory owns the identity, not the credential. Changing that
-Syntra password **does not change the password in AD**, and vice versa.
+set for it — the directory owns the identity, not the credential. By default,
+changing that Syntra password **does not change the password in AD**, and vice
+versa: the user ends up with two, and only finds out which is which at the
+Windows login prompt.
 
-If you want one password, put the account's real authentication upstream: set
-`passwordSource` to `upstream` with a `passwordSourceHint`, and this screen
-sends the user to the provider instead of quietly maintaining a second
-credential that works in one place.
+Turn on **write-back** and they become one. See §2.7.
+
+---
+
+## 2.7 Write-back: changing Active Directory from Syntra
+
+Everything above this point is one-way. Syntra reads the directory and never
+writes to it, which is the safe default and the wrong one for two jobs people
+actually need: changing a password once rather than twice, and deactivating a
+leaver from the console.
+
+### Turn it on
+
+**Directory sources → (your source) → Write-back.** Three switches, all off
+until somebody turns them on, and off for every source that existed before the
+feature did:
+
+| Switch | What it allows | What the bind needs |
+|---|---|---|
+| Allow Syntra to write to this directory | the master switch; nothing below works without it | — |
+| Deactivating a user disables their account here | the Deactivate button on a directory-managed user | write `userAccountControl` on accounts in scope |
+| Self-service password change writes through | the portal changes the domain password | **nothing extra** |
+
+That last row is the important one. Syntra changes a password by binding **as
+the user**, with the password they just typed, and performing the standard LDAP
+change on their own object. The service account is not involved and gains
+nothing.
+
+The alternative would be to bind as `svc-syntra` and reset the password
+administratively, which needs the **Reset Password** right across the user OU.
+Do not grant that. A bind credential that can reset any password in the OU is a
+full account-takeover primitive sitting in a vault, and everything it buys you
+here is already available without it.
+
+### Delegating the disable right
+
+`svc-syntra` needs to write `userAccountControl` inside `OU=Syntra`. On the DC:
+
+```powershell
+$ou   = [ADSI]"LDAP://OU=Syntra,DC=ssander,DC=local"
+$acct = New-Object System.Security.Principal.NTAccount("SSANDER\svc-syntra")
+$sid  = $acct.Translate([System.Security.Principal.SecurityIdentifier])
+
+# userAccountControl, on descendant user objects only.
+$uac  = [Guid]"bf967a68-0de6-11d0-a285-00aa003049e2"
+$user = [Guid]"bf967aba-0de6-11d0-a285-00aa003049e2"
+
+$ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
+  $sid, "WriteProperty", "Allow", $uac, "Descendents", $user)
+$ou.ObjectSecurity.AddAccessRule($ace)
+$ou.CommitChanges()
+```
+
+Scoped to one attribute on one object class in one OU. `GenericWrite` on the OU
+would also work and is four words shorter; it also lets the same credential
+rewrite everybody's group memberships, which is not what it is for.
+
+### What deactivating actually does
+
+Pressing **Deactivate** on a directory-managed user, in order:
+
+1. sets the disable bit in AD — immediately, not after the grace period,
+2. marks the user inactive in Syntra and revokes every session and refresh
+   token,
+3. stamps an administrative departure on the linked person, which puts them on
+   the ordinary leaver ladder: entitlements revoked, archived into
+   `OU=Deactivated,OU=Syntra`, and reaped by the scheduled task after 30 days.
+
+The directory is written **first**. If AD refuses, nothing changes anywhere and
+the console says why — rather than Syntra believing something the domain never
+agreed to.
+
+`disableGraceDays` is deliberately bypassed here. It exists to delay the
+disable after a *scheduled* departure, the contract ending on the 31st that
+nobody wants killed at 00:01. A human clicking Deactivate means now: the two
+reasons anyone clicks it are "they left today" and "this account is
+compromised". Everything after the disable still runs on the configured timers.
+
+**Reactivate** reverses all three. Inside the 30-day window nothing has been
+deleted, and the sweep independently refuses to delete an enabled account.
+
+### The disabled-in-AD gap this closed
+
+Before write-back existed there was a hole worth knowing about, because the
+instinct it punished is the correct one.
+
+Directory Sync read every account AD returned and never looked at
+`userAccountControl`. So an account **disabled in AD** — the first line of
+every offboarding runbook — stayed `active` in Syntra indefinitely. Syntra
+refuses a login only when the status is not active, so that check never fired:
+the leaver kept their portal login and their SSO into everything Syntra fronts,
+including Snipe-IT. Nothing was logged, because nothing was wrong. AD reported a
+disabled account, Syntra reported an active user, and both were telling the
+truth about themselves.
+
+Sync now reads the bit. Disable somebody in AD, run a sync, and Syntra
+deactivates them with the reason `Disabled in directory source`. To see it:
+
+```bash
+# On the DC
+Disable-ADAccount -Identity someone
+
+# Then run a sync from Directory sources -> Run now, and check:
+#   the user shows Inactive, reason "Disabled in directory source, run <id>"
+#   their portal login is refused
+#   their Snipe-IT SSO no longer works
+```
+
+It also stops sync fighting the console: the reactivate branch will not
+resurrect an account the source still reports disabled, which is exactly why
+the Deactivate button could not exist before.
+
+### When a password change is refused
+
+With password write-back on, **the domain's policy applies, not Syntra's**, and
+it is stricter in ways people do not expect:
+
+- **Minimum password age.** AD's default is one day. A user whose password was
+  set or changed yesterday cannot change it again today, and the portal says
+  the directory refused it. This is not a bug and it is the evidence the change
+  is being done properly — an administrative reset would bypass it.
+- **Password history.** 24 by default. Changing back to a recent password is
+  refused by the DC; Syntra has no idea what the last 24 were and does not need
+  to.
+- **Complexity and length.** The domain's, checked after Syntra's own.
+
+The portal checks the tenant policy first, so an obviously weak password is
+refused locally without spending an attempt against the domain's lockout
+counter. A wrong *current* password does count against lockout, and should: a
+portal that let someone grind a domain password without ever tripping lockout
+would be a hole, not a convenience.
+
+If the DC is unreachable the change is refused with "nothing was changed" —
+never quietly applied locally, which would recreate the two-password problem
+this exists to end.
 
 ---
 

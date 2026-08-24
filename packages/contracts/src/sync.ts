@@ -57,6 +57,17 @@ export const createSourceRequest = z.object({
    * is scheduled the moment it commits.
    */
   enabled: z.boolean().optional(),
+  /**
+   * Write-back. All three default to false, and a source that omits them
+   * stays read-only: an upgrade must not hand an existing source the ability
+   * to change passwords or disable accounts.
+   *
+   * `writebackEnabled` is the master switch; the other two are the individual
+   * writes, separate because they are separate decisions.
+   */
+  writebackEnabled: z.boolean().optional(),
+  writebackPassword: z.boolean().optional(),
+  writebackDisable: z.boolean().optional(),
 });
 
 /**
@@ -77,6 +88,9 @@ export const updateSourceRequest = z
     autoApply: z.boolean().optional(),
     deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
     enabled: z.boolean().optional(),
+    writebackEnabled: z.boolean().optional(),
+    writebackPassword: z.boolean().optional(),
+    writebackDisable: z.boolean().optional(),
   })
   .refine((body) => Object.keys(body).length > 0, {
     message: 'nothing to update',

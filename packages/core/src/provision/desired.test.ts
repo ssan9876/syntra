@@ -245,6 +245,64 @@ describe('departureDate', () => {
   });
 });
 
+describe('departureDate with an administrative override', () => {
+  const contract = (
+    startDate: string,
+    endDate: string | null,
+  ): ContractFacts => ({
+    id: `c-${startDate}`,
+    sequence: 1,
+    isPrimary: true,
+    startDate: new Date(startDate),
+    endDate: endDate === null ? null : new Date(endDate),
+    department: null,
+    jobTitle: null,
+    costCentre: null,
+    employer: null,
+    location: null,
+    fte: null,
+  });
+
+  const OVERRIDE = new Date('2026-08-23T00:00:00Z');
+  const NOW = new Date('2026-08-23T12:00:00Z');
+
+  /**
+   * The case the whole feature turns on. A permanent employee has no end date,
+   * so the contract table says "not leaving" forever. If contracts won, the
+   * Deactivate button would be a no-op for exactly the people it is most often
+   * used on.
+   */
+  it('wins over an open-ended contract, which otherwise never departs', () => {
+    const contracts = [contract('2020-01-01', null)];
+    expect(departureDate(contracts, NOW)).toBeNull();
+    expect(departureDate(contracts, NOW, OVERRIDE)).toEqual(OVERRIDE);
+  });
+
+  it('wins over a later contract end date', () => {
+    const contracts = [contract('2020-01-01', '2027-12-31')];
+    expect(departureDate(contracts, NOW, OVERRIDE)).toEqual(OVERRIDE);
+  });
+
+  it('wins over an earlier contract end date too', () => {
+    // Not "the earlier of the two". A human said today; today is the answer.
+    const contracts = [contract('2020-01-01', '2021-01-31')];
+    expect(departureDate(contracts, NOW, OVERRIDE)).toEqual(OVERRIDE);
+  });
+
+  it('falls back to the contracts when the override is cleared', () => {
+    const contracts = [contract('2020-01-01', '2026-06-30')];
+    expect(departureDate(contracts, NOW, null)).toEqual(new Date('2026-06-30'));
+    expect(departureDate(contracts, NOW, undefined)).toEqual(new Date('2026-06-30'));
+  });
+
+  it('departs somebody with no contracts at all', () => {
+    // A directory-only person: nothing in the HR feed to derive a date from,
+    // which is precisely when a human has to supply one.
+    expect(departureDate([], NOW)).toBeNull();
+    expect(departureDate([], NOW, OVERRIDE)).toEqual(OVERRIDE);
+  });
+});
+
 describe('personDisplayName', () => {
   it('joins the two name parts and trims them', () => {
     expect(personDisplayName({ ...person, givenName: ' Anna ', familyName: 'Novak' })).toBe(

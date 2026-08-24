@@ -11,13 +11,15 @@ import {
 import {
   PERMISSIONS,
   createUser,
-  deactivateUser,
-  reactivateUser,
+  deactivateDirectoryUser,
+  reactivateDirectoryUser,
   listUsers,
+  localMasterKeyProvider,
   recordEvent,
   removeRecoveryCodes,
   removeTotp,
   revokeOrphanedRecoveryCodes,
+  type DeactivateOutcome,
   type UserStatus,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -28,10 +30,62 @@ const listQuery = z.object({
   status: z.enum(['active', 'inactive']).optional(),
 });
 
+export interface AdminUserRouteOptions {
+  /** Unseals a directory source's bind credential for a write-back. */
+  masterKey: Buffer;
+}
+
+/**
+ * Turns a refusal from the write-back service into the HTTP answer for it.
+ *
+ * Separate from the routes because deactivate and reactivate refuse for
+ * exactly the same reasons, and two copies of this mapping is how one of them
+ * ends up answering 500 for a case the other explains.
+ */
+function raiseIfRefused(outcome: DeactivateOutcome): void {
+  if (outcome.ok) return;
+  switch (outcome.reason) {
+    case 'not_found':
+      throw new ProblemError(404, 'not-found', 'User not found');
+    case 'writeback_not_enabled':
+      // 409, not 403: the caller has the permission, the configuration does
+      // not allow the write. Refusing rather than doing it locally is
+      // deliberate -- a local-only status change on a directory-managed
+      // account is undone by the next sync run, which is a button that
+      // appears to work and does not.
+      throw new ProblemError(
+        409,
+        'writeback-not-enabled',
+        'Write-back is not enabled for this source',
+        `This account is owned by ${outcome.sourceName}, and Syntra is not ` +
+          `permitted to change accounts there. Enable write-back on that ` +
+          `source, or disable the account in the directory itself.`,
+      );
+    case 'no_credential':
+      throw new ProblemError(
+        500,
+        'source-credential-missing',
+        'The source credential could not be read',
+        `The stored bind credential for ${outcome.sourceName} could not be ` +
+          `unsealed, so nothing was changed.`,
+      );
+    case 'directory_failed':
+      // 502: an upstream system answered, and said no.
+      throw new ProblemError(
+        502,
+        'directory-write-failed',
+        'The directory refused the change',
+        `Nothing was changed. The directory reported: ${outcome.message}.`,
+      );
+  }
+}
+
 export async function registerAdminUserRoutes(
   app: FastifyInstance,
+  options: AdminUserRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
+  const provider = localMasterKeyProvider(options.masterKey);
 
   app.get(
     '/users',
@@ -87,24 +141,14 @@ export async function registerAdminUserRoutes(
       const { id } = idParam.parse(request.params);
       const { reason } = deactivateUserRequest.parse(request.body);
 
-      return request.db(async (tx) => {
-        const existing = await tx.user.findUnique({ where: { id } });
-        if (!existing) {
-          throw new ProblemError(404, 'not-found', 'User not found');
-        }
-
-        const updated = await deactivateUser(tx, id, reason);
-        await recordEvent(tx, {
-          actorUserId: request.session.userId,
-          action: 'user.deactivate',
-          targetType: 'User',
-          targetId: id,
-          outcome: 'success',
-          sourceIp: request.ip,
-          payload: { login: existing.login, reason },
-        });
-        return updated;
+      const outcome = await deactivateDirectoryUser(request.tenantId, provider, {
+        userId: id,
+        reason,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
       });
+      raiseIfRefused(outcome);
+      return request.db((tx) => tx.user.findUniqueOrThrow({ where: { id } }));
     },
   );
 
@@ -113,24 +157,17 @@ export async function registerAdminUserRoutes(
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      return request.db(async (tx) => {
-        const existing = await tx.user.findUnique({ where: { id } });
-        if (!existing) throw new ProblemError(404, 'not-found', 'User not found');
-        const updated = await reactivateUser(tx, id);
-        await recordEvent(tx, {
-          actorUserId: request.session.userId,
-          action: 'user.reactivate',
-          targetType: 'User',
-          targetId: id,
-          outcome: 'success',
-          sourceIp: request.ip,
-          // NO session is restored, and that is not an omission. Deactivation
-          // revoked every session and refresh token; reactivation gives back
-          // the ability to sign in, not the sessions that were killed.
-          payload: { login: existing.login },
-        });
-        return updated;
+      // NO session is restored, and that is not an omission. Deactivation
+      // revoked every session and refresh token; reactivation gives back the
+      // ability to sign in, not the sessions that were killed.
+      const outcome = await reactivateDirectoryUser(request.tenantId, provider, {
+        userId: id,
+        reason: 'reactivated by an administrator',
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
       });
+      raiseIfRefused(outcome);
+      return request.db((tx) => tx.user.findUniqueOrThrow({ where: { id } }));
     },
   );
 
