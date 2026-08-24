@@ -17,6 +17,13 @@ export type ChangeType =
 
 export type TargetType = 'User' | 'Group' | 'OrgUnit' | 'GroupMembership';
 
+/**
+ * Marks a deactivation caused by the source reporting the account disabled,
+ * as opposed to the source no longer returning it at all. Shared with `apply`
+ * so the two ends cannot drift into disagreeing about the spelling.
+ */
+export const DISABLED_IN_SOURCE = 'disabled_in_source';
+
 export interface ProposedChange {
   changeType: ChangeType;
   targetType: TargetType;
@@ -90,6 +97,42 @@ export function diffObjects(
 
     const existing = correlation.existing;
 
+    // The source says this account is disabled and Syntra still thinks it is
+    // active. Until this existed, Directory Sync had no representation of
+    // "disabled upstream" at all: `userAccountControl` arrived on every read
+    // and nothing looked at it, so an account disabled in Active Directory --
+    // the first thing every offboarding runbook does -- stayed `active` here
+    // forever. `login-service` only refuses a login when status is not active,
+    // so that leaver kept their portal login and their SSO into every
+    // application Syntra fronts, with both systems reporting truthfully on
+    // their own state and neither one wrong enough to notice.
+    //
+    // Proposed like any other change, so the run's guard thresholds apply. A
+    // misread that would deactivate half the directory trips the same limit
+    // that a mass disappearance does.
+    if (
+      object.objectType === 'user' &&
+      object.sourceDisabled === true &&
+      existing.status === 'active'
+    ) {
+      changes.push({
+        changeType: 'deactivate_user',
+        targetType,
+        targetId: existing.id,
+        sourceAnchor: object.anchor,
+        before: { status: existing.status },
+        // `reason` rides on `after` because that is what `apply` receives; it
+        // is what tells the two deactivation paths apart when the status
+        // reason is written, and "absent from the source" and "disabled in
+        // the source" are different enough that somebody reading the row a
+        // month later needs to know which one happened.
+        after: { status: 'inactive', reason: DISABLED_IN_SOURCE },
+        status: 'proposed',
+        message: 'the directory source reports this account as disabled',
+      });
+      continue;
+    }
+
     // A matched object that is inactive has reappeared in the source. Propose
     // restoring it; nothing is applied without an explicit apply step.
     // Org units have no status column, so only users and groups can be reactivated.
@@ -101,7 +144,20 @@ export function diffObjects(
     // the group stayed dead with its memberships intact and granting nothing.
     // Deactivation is chosen over deletion precisely because it is
     // recoverable; a group that cannot come back is deleted in all but name.
-    if (existing.status !== 'active' && object.objectType !== 'orgUnit') {
+    //
+    // `sourceDisabled !== true` and not `=== false`: `undefined` means the
+    // source never said, which is every non-AD directory, and those must keep
+    // reactivating exactly as they did before.
+    //
+    // This guard is what makes a deactivation stick. Without it an account
+    // disabled in the source -- whether by an administrator in AD or by
+    // Syntra's own write-back -- is resurrected on the very next run, which is
+    // why the admin console refused to offer the button in the first place.
+    if (
+      existing.status !== 'active' &&
+      object.sourceDisabled !== true &&
+      object.objectType !== 'orgUnit'
+    ) {
       changes.push({
         changeType:
           object.objectType === 'user' ? 'reactivate_user' : 'reactivate_group',

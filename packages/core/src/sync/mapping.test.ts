@@ -3,6 +3,7 @@ import type { SourceRecord } from '@syntra/connectors';
 import {
   isMappingFailure,
   mapRecord,
+  readSourceDisabled,
   type MappingRule,
 } from './mapping.js';
 
@@ -131,5 +132,69 @@ describe('mapRecord', () => {
     );
     if (isMappingFailure(result)) throw new Error('expected success');
     expect(result.memberDns).toEqual([]);
+  });
+});
+
+/**
+ * Real `userAccountControl` values. `512` is an ordinary enabled account and
+ * `514` is that account disabled, but `66048` is just as ordinary -- an
+ * enabled account whose password does not expire -- which is why the bit is
+ * read with a mask and never by comparing against 512.
+ */
+describe('readSourceDisabled', () => {
+  it('reads a disabled account from the disable bit', () => {
+    expect(readSourceDisabled(record({ userAccountControl: ['514'] }))).toBe(true);
+  });
+
+  it('reads an ordinary enabled account', () => {
+    expect(readSourceDisabled(record({ userAccountControl: ['512'] }))).toBe(false);
+  });
+
+  it('reads an enabled account carrying other flags', () => {
+    expect(readSourceDisabled(record({ userAccountControl: ['66048'] }))).toBe(false);
+    expect(readSourceDisabled(record({ userAccountControl: ['66050'] }))).toBe(true);
+  });
+
+  /**
+   * `undefined`, never `false`. A directory that does not report this must not
+   * have silence read as "every account is enabled" -- the diff would act on
+   * the assertion, and on a source that never says, it would act on it for
+   * every account at once.
+   */
+  it('says nothing when the attribute is absent', () => {
+    expect(readSourceDisabled(record({ mail: ['jo@acme.test'] }))).toBeUndefined();
+  });
+
+  it('says nothing for an empty value, which Number() would read as enabled', () => {
+    expect(readSourceDisabled(record({ userAccountControl: [''] }))).toBeUndefined();
+  });
+
+  it('says nothing for a value that is not a number', () => {
+    expect(readSourceDisabled(record({ userAccountControl: ['NORMAL'] }))).toBeUndefined();
+  });
+
+  it('says nothing for a group or an org unit, which have no such state', () => {
+    for (const objectType of ['group', 'orgUnit'] as const) {
+      expect(
+        readSourceDisabled({
+          ...record({ userAccountControl: ['514'] }),
+          objectType,
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it('carries the derived value onto the mapped object', () => {
+    const mapped = mapRecord(
+      record({ sAMAccountName: ['jdoe'], userAccountControl: ['514'] }),
+      rules,
+    );
+    expect(isMappingFailure(mapped)).toBe(false);
+    expect(mapped).toMatchObject({ sourceDisabled: true });
+  });
+
+  it('leaves the key off entirely when the source did not say', () => {
+    const mapped = mapRecord(record({ sAMAccountName: ['jdoe'] }), rules);
+    expect(mapped).not.toHaveProperty('sourceDisabled');
   });
 });

@@ -1,4 +1,4 @@
-import { first, type ObjectType, type SourceRecord } from '@syntra/connectors';
+import { first, isEnabled, type ObjectType, type SourceRecord } from '@syntra/connectors';
 
 export interface MappingRule {
   objectType: ObjectType;
@@ -15,6 +15,39 @@ export interface DirectoryObject {
   fields: Record<string, string>;
   correlationValue?: string;
   memberDns: string[];
+  /**
+   * Whether the SOURCE reports this account disabled. `undefined` means the
+   * source did not say -- an OpenLDAP directory with no such attribute, a user
+   * the bind cannot read it on -- and is not the same as `false`.
+   *
+   * That difference is the whole point. Collapsing "not disabled" and "we were
+   * not told" into one boolean would make every non-AD source assert that
+   * every account is enabled, and the diff would act on the assertion.
+   */
+  sourceDisabled?: boolean;
+}
+
+/**
+ * Whether the source reports this account as disabled.
+ *
+ * DERIVED, never mapped. `rejectUnassignable` refuses to let a mapping write
+ * `status`, because a source attribute that an administrator can point at
+ * anything is a way to deactivate people by typo. The same argument applies
+ * here, so this reads the one attribute that means this and nothing else.
+ *
+ * Active Directory returns `userAccountControl` under the ordinary `*`
+ * selector, so nothing extra is requested to get it -- it has been arriving in
+ * every read all along, and only ever been ignored.
+ */
+export function readSourceDisabled(record: SourceRecord): boolean | undefined {
+  if (record.objectType !== 'user') return undefined;
+  const raw = first(record, 'userAccountControl');
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const uac = Number(raw);
+  // `Number('')` is 0 and would read as a perfectly enabled account, which is
+  // why the empty case is caught above rather than left to this line.
+  if (!Number.isInteger(uac)) return undefined;
+  return !isEnabled(uac);
 }
 
 /**
@@ -103,6 +136,8 @@ export function mapRecord(
     };
   }
 
+  const sourceDisabled = readSourceDisabled(record);
+
   return {
     anchor: record.anchor,
     objectType: record.objectType,
@@ -110,5 +145,6 @@ export function mapRecord(
     fields,
     correlationValue,
     memberDns: record.memberDns ?? [],
+    ...(sourceDisabled === undefined ? {} : { sourceDisabled }),
   };
 }

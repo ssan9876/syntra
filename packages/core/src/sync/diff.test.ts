@@ -96,6 +96,111 @@ describe('diffObjects', () => {
     expect(changes.map((c) => c.changeType)).toEqual(['reactivate_user']);
   });
 
+  /**
+   * The gap this closes: `userAccountControl` has arrived on every Active
+   * Directory read since the connector was written, and nothing looked at it.
+   * An account disabled in AD -- the first move in every offboarding runbook
+   * -- stayed `active` in Syntra forever, and `login-service` only refuses a
+   * login when status is not active. The leaver kept their portal login and
+   * their SSO into every application Syntra fronts.
+   */
+  it('proposes a deactivation for a matched account the source reports disabled', () => {
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: { ...object('a1', { login: 'jdoe' }), sourceDisabled: true },
+          existing: existing('u1', 'active'),
+        },
+      ],
+      [],
+      new Map([['u1', { login: 'jdoe' }]]),
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      changeType: 'deactivate_user',
+      targetId: 'u1',
+      after: { status: 'inactive', reason: 'disabled_in_source' },
+      status: 'proposed',
+    });
+  });
+
+  /**
+   * The guard that makes a deactivation stick. Without it, an account disabled
+   * in the source -- by an administrator in AD, or by Syntra's own write-back
+   * -- is resurrected on the very next run, which is exactly why the admin
+   * console refused to offer a Deactivate button at all.
+   */
+  it('does not resurrect an inactive account the source still reports disabled', () => {
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: { ...object('a1', { login: 'jdoe' }), sourceDisabled: true },
+          existing: existing('u1', 'inactive'),
+        },
+      ],
+      [],
+      new Map([['u1', { login: 'jdoe' }]]),
+    );
+    expect(changes).toEqual([]);
+  });
+
+  it('reactivates once the source reports the account enabled again', () => {
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: { ...object('a1', { login: 'jdoe' }), sourceDisabled: false },
+          existing: existing('u1', 'inactive'),
+        },
+      ],
+      [],
+      new Map([['u1', { login: 'jdoe' }]]),
+    );
+    expect(changes.map((c) => c.changeType)).toEqual(['reactivate_user']);
+  });
+
+  /**
+   * `undefined` is not `false`. A source that cannot report the state -- every
+   * non-AD directory -- must keep reactivating exactly as it did before, and
+   * must never have silence read as an assertion that the account is enabled.
+   */
+  it('reactivates as before when the source does not report a disabled state', () => {
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: object('a1', { login: 'jdoe' }),
+          existing: existing('u1', 'inactive'),
+        },
+      ],
+      [],
+      new Map([['u1', { login: 'jdoe' }]]),
+    );
+    expect(changes.map((c) => c.changeType)).toEqual(['reactivate_user']);
+  });
+
+  /**
+   * An already-inactive account is not re-deactivated: the disabled branch is
+   * gated on the Syntra status still being active, so a steady state produces
+   * a run with nothing in it rather than the same change on every run forever.
+   */
+  it('proposes nothing for an account disabled at both ends', () => {
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: { ...object('a1', { login: 'jdoe' }), sourceDisabled: true },
+          existing: existing('u1', 'inactive'),
+        },
+      ],
+      [],
+      new Map([['u1', { login: 'jdoe' }]]),
+    );
+    expect(changes).toEqual([]);
+  });
+
   it('proposes a deactivation for an absent object', () => {
     const changes = diffObjects([], [existing('u2')], new Map());
     expect(changes).toHaveLength(1);

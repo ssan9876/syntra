@@ -5,6 +5,7 @@ import { recordEvent } from '../audit/audit-service.js';
 import { revokeAllForUser } from '../auth/session-service.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { unassignableFields } from './mapping.js';
+import { DISABLED_IN_SOURCE } from './diff.js';
 
 interface ChangeRow {
   id: string;
@@ -213,11 +214,20 @@ async function performChange(
     }
 
     case 'deactivate_user': {
+      // Two different facts reach this branch. "The source stopped returning
+      // this object" is the original one; "the source returned it and says it
+      // is disabled" is the other, and the two read identically in the status
+      // column unless they are written differently here. Somebody auditing why
+      // an account is dead needs to be able to tell an offboarding from a
+      // broken search base.
+      const disabledInSource = after.reason === DISABLED_IN_SOURCE;
       await tx.user.update({
         where: { id: change.targetId! },
         data: {
           status: 'inactive',
-          statusReason: `Absent from directory source, run ${runId}`,
+          statusReason: disabledInSource
+            ? `Disabled in directory source, run ${runId}`
+            : `Absent from directory source, run ${runId}`,
         },
       });
       // A leaver dropping out of the HR feed is the commonest offboarding
