@@ -901,26 +901,43 @@ here is already available without it.
 
 ### Delegating the disable right
 
-`svc-syntra` needs to write `userAccountControl` inside `OU=Syntra`. On the DC:
+`svc-syntra` needs to write `userAccountControl` on the accounts it manages.
+
+**On the OU the directory SOURCE reads — not the one the target writes to.**
+They are different OUs here and the mistake is silent: everything saves,
+everything looks configured, and the first refusal arrives on the day somebody
+leaves. In this lab the source's `userSearchBase` is `OU=Company` and Provision
+creates accounts under `OU=Users,OU=Syntra`; deactivating a *synced* user
+touches the first. Delegate on both if you want either to work.
 
 ```powershell
-$ou   = [ADSI]"LDAP://OU=Syntra,DC=ssander,DC=local"
-$acct = New-Object System.Security.Principal.NTAccount("SSANDER\svc-syntra")
-$sid  = $acct.Translate([System.Security.Principal.SecurityIdentifier])
+Import-Module ActiveDirectory
+$sid      = (Get-ADUser -Identity "svc-syntra").SID
+$uacGuid  = [Guid]"bf967a68-0de6-11d0-a285-00aa003049e2"   # userAccountControl
+$userGuid = [Guid]"bf967aba-0de6-11d0-a285-00aa003049e2"   # the user class
 
-# userAccountControl, on descendant user objects only.
-$uac  = [Guid]"bf967a68-0de6-11d0-a285-00aa003049e2"
-$user = [Guid]"bf967aba-0de6-11d0-a285-00aa003049e2"
-
-$ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
-  $sid, "WriteProperty", "Allow", $uac, "Descendents", $user)
-$ou.ObjectSecurity.AddAccessRule($ace)
-$ou.CommitChanges()
+foreach ($ouDn in @(
+  "OU=Company,DC=ssander,DC=local",   # what the directory source reads
+  "OU=Syntra,DC=ssander,DC=local"     # what Provision writes to
+)) {
+  $ou  = [ADSI]"LDAP://$ouDn"
+  $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
+    $sid, "WriteProperty", "Allow", $uacGuid, "Descendents", $userGuid)
+  $ou.ObjectSecurity.AddAccessRule($ace)
+  $ou.CommitChanges()
+}
 ```
 
-Scoped to one attribute on one object class in one OU. `GenericWrite` on the OU
-would also work and is four words shorter; it also lets the same credential
+Scoped to one attribute, on one object class, in named OUs. `GenericWrite` on
+the OU also works and is shorter to type; it also lets the same credential
 rewrite everybody's group memberships, which is not what it is for.
+
+To check it took:
+
+```powershell
+(Get-Acl "AD:OU=Company,DC=ssander,DC=local").Access |
+  Where-Object { $_.IdentityReference -like "*svc-syntra*" }
+```
 
 ### What deactivating actually does
 
