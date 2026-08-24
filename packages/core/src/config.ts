@@ -105,6 +105,26 @@ const schema = z.object({
    * directory.
    */
   WEB_ROOT: z.string().trim().min(1).optional(),
+
+  /**
+   * Where the in-console updater looks for releases, and what it authenticates
+   * with. Both optional: an install that never sets them simply has no update
+   * button, which is the correct behaviour for a development checkout and for
+   * anybody who would rather update by hand.
+   *
+   * The token belongs here rather than in the vault, and the reason is worth
+   * writing down because the spec proposed the vault. The vault is
+   * TENANT-scoped, and this is a deployment-wide secret: filing it under
+   * whichever tenant's administrator happened to configure it would make one
+   * customer's keyring the thing the whole installation depends on. It also
+   * sits beside MASTER_KEY, which unseals that vault -- so anybody who can
+   * read this file already holds strictly more than this token grants, and
+   * what it grants is read-only access to release assets in one repository.
+   */
+  RELEASE_REPO: z.string().trim().min(1).optional(),
+  RELEASE_TOKEN: z.string().trim().min(1).optional(),
+  /** Where the release layout lives. Only meaningful once syntra-install has run. */
+  RELEASE_ROOT: z.string().trim().min(1).default('/opt/syntra'),
   OUTBOUND_ALLOW_PRIVATE: z
     .enum(['true', 'false'])
     .default('false')
@@ -160,6 +180,10 @@ export interface Config {
   outboundAllowPrivate: boolean;
   /** Absolute path to the built web application, or null to serve the API alone. */
   webRoot: string | null;
+  /** Null disables the update button entirely rather than offering a broken one. */
+  releaseRepo: string | null;
+  releaseToken: string | null;
+  releaseRoot: string;
 }
 
 /**
@@ -213,5 +237,8 @@ export function loadConfig(
     // process sees does not depend on the working directory at the moment it
     // is read.
     webRoot: v.WEB_ROOT === undefined ? null : resolve(v.WEB_ROOT),
+    releaseRepo: v.RELEASE_REPO ?? null,
+    releaseToken: v.RELEASE_TOKEN ?? null,
+    releaseRoot: v.RELEASE_ROOT,
   };
 }

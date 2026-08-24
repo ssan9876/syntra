@@ -4,6 +4,7 @@ export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
 export * from './health/readiness.js';
+export * from './update/update-service.js';
 export * from './health/version.js';
 export * from './directory/user-service.js';
 export * from './directory/directory-writeback.js';

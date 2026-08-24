@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+#
+# Move an in-place Syntra install onto the release layout, once.
+#
+# An install that runs from a single directory has nothing to roll back TO:
+# the old files are the ones an update overwrites. This converts
+#
+#   /root/syntra                      (a tree, running in place)
+#
+# into
+#
+#   /opt/syntra/releases/<version>/   (immutable, one per release)
+#   /opt/syntra/current -> releases/<version>
+#   /opt/syntra/shared/.env           (survives every update and rollback)
+#   /opt/syntra/shared/backups/       (pre-migration dumps)
+#   /opt/syntra/bin/syntra-update
+#   /opt/syntra/var/                  (status, lock, downloads)
+#
+# after which an update is a symlink swap and a rollback is the same in
+# reverse.
+#
+#   ./syntra-install                  # migrate, keeping the old tree in place
+#   ./syntra-install --dry-run        # say what it would do
+#
+# The old tree is NOT deleted. It is left exactly where it is until you are
+# satisfied, because the recovery from a bad conversion is to point systemd
+# back at it.
+
+set -euo pipefail
+
+SRC="${SYNTRA_SRC:-/root/syntra}"
+ROOT="${SYNTRA_ROOT:-/opt/syntra}"
+SERVICE="${SYNTRA_SERVICE:-syntra}"
+UNIT="/etc/systemd/system/$SERVICE.service"
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+say()  { echo "==> $*"; }
+run()  { if [ "$DRY" -eq 1 ]; then echo "    would: $*"; else eval "$@"; fi; }
+die()  { echo "error: $*" >&2; exit 1; }
+
+# --- checks before anything moves -------------------------------------------
+
+[ -d "$SRC" ]        || die "$SRC does not exist; set SYNTRA_SRC"
+[ -f "$SRC/.env" ]   || die "$SRC/.env does not exist; this is not a configured install"
+[ -f "$UNIT" ]       || die "$UNIT does not exist; this expects a systemd install"
+command -v systemctl >/dev/null || die "systemd is required"
+
+if [ -e "$ROOT/current" ]; then
+  die "$ROOT/current already exists; this install has already been converted"
+fi
+
+# The version being converted. An in-place tree has no RELEASE.json, so it is
+# `dev` -- and that is correct and important: the console will refuse to update
+# it and point at deploy.sh until a real release is installed over it. Naming
+# it 0.0.0 here would let the updater compare against a number that stands for
+# nothing.
+VERSION="dev"
+if [ -f "$SRC/RELEASE.json" ]; then
+  VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SRC/RELEASE.json" | head -1)
+fi
+say "converting $SRC (version: $VERSION) to $ROOT"
+
+# Enough room for a full second copy, plus room to unpack a release later.
+NEED=$(( $(du -sk "$SRC" | cut -f1) * 2 ))
+FREE=$(df -k "$(dirname "$ROOT")" | tail -1 | awk '{print $4}')
+[ "$FREE" -gt "$NEED" ] || die "not enough space: need ~${NEED}K, have ${FREE}K"
+
+# --- do it ------------------------------------------------------------------
+
+say "creating the layout"
+run "mkdir -p '$ROOT/releases' '$ROOT/shared/backups' '$ROOT/bin' '$ROOT/var'"
+
+say "copying the tree to releases/$VERSION"
+# COPY, not move. The old tree stays put so that recovery from a bad
+# conversion is pointing systemd back at it, which is a one-line change
+# somebody can make over a serial console.
+run "cp -a '$SRC' '$ROOT/releases/$VERSION'"
+
+say "moving .env into shared/"
+# The configuration is the one thing that must NOT be versioned: an update
+# would replace it and a rollback would revert it, and either is how a
+# deployment loses its master key. Moved once, then symlinked into every
+# release.
+run "cp -a '$SRC/.env' '$ROOT/shared/.env'"
+run "rm -f '$ROOT/releases/$VERSION/.env'"
+run "ln -sfn '$ROOT/shared/.env' '$ROOT/releases/$VERSION/.env'"
+
+say "pointing current at releases/$VERSION"
+run "ln -sfn '$ROOT/releases/$VERSION' '$ROOT/current'"
+
+say "installing the updater"
+if [ -f "$ROOT/releases/$VERSION/ops/syntra-update" ]; then
+  run "install -m 0755 '$ROOT/releases/$VERSION/ops/syntra-update' '$ROOT/bin/syntra-update'"
+else
+  say "  (no ops/syntra-update in this tree -- deploy a release that has one)"
+fi
+
+say "rewriting $UNIT"
+run "cp -a '$UNIT' '$UNIT.pre-release-layout'"
+# WorkingDirectory follows the symlink, and systemd resolves it at start --
+# so a restart after a swap picks up the new release with no unit change.
+run "sed -i 's#^WorkingDirectory=.*#WorkingDirectory=$ROOT/current/apps/api#' '$UNIT'"
+run "sed -i 's#--env-file-if-exists=[^ ]*#--env-file-if-exists=$ROOT/shared/.env#' '$UNIT'"
+
+say "restarting $SERVICE"
+run "systemctl daemon-reload"
+run "systemctl restart '$SERVICE'"
+
+if [ "$DRY" -eq 1 ]; then
+  say "dry run: nothing was changed"
+  exit 0
+fi
+
+say "waiting for it to come back"
+for _ in $(seq 1 30); do
+  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/health/ready || echo 000)
+  if [ "$code" = "200" ]; then
+    say "ready. Running from $ROOT/current"
+    echo
+    echo "The old tree is untouched at $SRC."
+    echo "If anything is wrong: restore $UNIT.pre-release-layout, daemon-reload, restart."
+    exit 0
+  fi
+  sleep 2
+done
+
+# Deliberately NOT rolled back automatically. This is a person at a keyboard
+# running a one-time conversion, not an unattended update at 2am, and the
+# recovery is one command they can see.
+die "it did not become ready. Restore $UNIT.pre-release-layout, daemon-reload, restart $SERVICE."

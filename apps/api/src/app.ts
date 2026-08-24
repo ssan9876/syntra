@@ -28,6 +28,7 @@ import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
 import { registerAdminPersonRoutes } from './routes/admin/persons.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
+import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
 import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
 import { registerAdminApplicationRoutes } from './routes/admin/applications.js';
@@ -220,6 +221,12 @@ export async function buildApp(
   await app.register(registerAdminOrgUnitRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminPersonRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminAuditRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminUpdateRoutes, {
+    prefix: '/api/admin',
+    releaseRepo: config.releaseRepo,
+    releaseToken: config.releaseToken,
+    releaseRoot: config.releaseRoot,
+  });
   await app.register(registerAdminSourceRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,

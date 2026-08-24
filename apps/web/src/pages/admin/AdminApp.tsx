@@ -8,6 +8,7 @@ import { PersonsPage } from './PersonsPage.js';
 import { PersonDetailPage } from './PersonDetailPage.js';
 import { ImportPage } from './ImportPage.js';
 import { AuditPage } from './AuditPage.js';
+import { UpdatesPage } from './UpdatesPage.js';
 import { SourcesPage } from './SourcesPage.js';
 import { SourceDetailPage } from './SourceDetailPage.js';
 import { SyncRunsPage } from './SyncRunsPage.js';
@@ -105,6 +106,7 @@ export function AdminApp() {
             <Route path="policy" element={<PoliciesPage />} />
             <Route path="audit" element={<AuditPage />} />
             <Route path="settings" element={<TenantSettingsPage />} />
+            <Route path="updates" element={<UpdatesPage />} />
             <Route path="*" element={<Navigate to="/admin/users" replace />} />
           </Routes>
       </div>

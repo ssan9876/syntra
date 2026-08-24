@@ -12,6 +12,18 @@ export const PERMISSIONS = {
   SECRETS_WRITE: 'secrets.write',
   RBAC_MANAGE: 'rbac.manage',
   TENANT_MANAGE: 'tenant.manage',
+  /**
+   * Updating the deployment itself: the version every tenant runs.
+   *
+   * Deliberately separate from `tenant.manage`, which is authority over ONE
+   * tenant's configuration. This is authority over the installation -- one
+   * customer's administrator restarting everybody, migrating everybody's
+   * database, and choosing when everybody is signed out for a minute. In a
+   * single-tenant deployment the two are held by the same person and the
+   * distinction costs nothing; in a shared one, conflating them is a mistake
+   * that only becomes visible after somebody makes it.
+   */
+  DEPLOYMENT_MANAGE: 'deployment.manage',
   SYNC_READ: 'sync.read',
   SYNC_MANAGE: 'sync.manage',
   ACCESS_READ: 'access.read',

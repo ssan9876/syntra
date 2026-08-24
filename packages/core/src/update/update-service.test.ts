@@ -1,0 +1,192 @@
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  checkForUpdate,
+  fetchLatestRelease,
+  isNewer,
+  readProgress,
+} from './update-service.js';
+
+/**
+ * The comparison the whole feature rests on. Get it wrong and the console
+ * offers a DOWNGRADE as an update — and gets it wrong first at version 10,
+ * long after anyone is still watching for it.
+ */
+describe('isNewer', () => {
+  it('compares ordinary versions', () => {
+    expect(isNewer('1.4.1', '1.4.0')).toBe(true);
+    expect(isNewer('1.4.0', '1.4.1')).toBe(false);
+    expect(isNewer('1.4.0', '1.4.0')).toBe(false);
+  });
+
+  /** `'1.10.0' > '1.9.0'` is false as strings. This is that test. */
+  it('orders numerically, not lexically', () => {
+    expect(isNewer('1.10.0', '1.9.0')).toBe(true);
+    expect(isNewer('1.9.0', '1.10.0')).toBe(false);
+    expect(isNewer('2.0.0', '1.99.99')).toBe(true);
+    expect(isNewer('1.0.10', '1.0.9')).toBe(true);
+  });
+
+  it('treats a missing field as zero', () => {
+    expect(isNewer('1.4', '1.4.0')).toBe(false);
+    expect(isNewer('1.4.1', '1.4')).toBe(true);
+  });
+
+  /**
+   * `dev` is never newer and never older. An install that is somebody's
+   * working tree must be refused, not compared — the alternative is an
+   * updater that overwrites uncommitted work with a release.
+   */
+  it('refuses to order dev against anything', () => {
+    expect(isNewer('1.4.0', 'dev')).toBe(false);
+    expect(isNewer('dev', '1.4.0')).toBe(false);
+  });
+
+  it('refuses anything that is not a number', () => {
+    expect(isNewer('1.4.0-rc1', '1.4.0')).toBe(false);
+    expect(isNewer('latest', '1.4.0')).toBe(false);
+  });
+});
+
+const release = (over: Record<string, unknown> = {}) => ({
+  tag_name: 'v1.5.0',
+  published_at: '2026-08-24T19:02:11Z',
+  body: 'Directory write-back.',
+  ...over,
+});
+
+const jsonResponse = (body: unknown, ok = true, status = 200) =>
+  ({ ok, status, json: async () => body }) as unknown as Response;
+
+describe('fetchLatestRelease', () => {
+  it('reads the version, notes and date', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(release()));
+    const latest = await fetchLatestRelease('tok', 'acme/syntra', fetchImpl as never);
+
+    expect(latest).toMatchObject({
+      version: '1.5.0',
+      released: '2026-08-24T19:02:11Z',
+      notes: 'Directory write-back.',
+    });
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toContain('acme/syntra/releases/latest');
+    expect((init as RequestInit).headers).toMatchObject({
+      authorization: 'Bearer tok',
+    });
+  });
+
+  it('strips the v from the tag', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(release({ tag_name: 'v2.0.0' })));
+    expect((await fetchLatestRelease('t', 'r', fetchImpl as never))?.version).toBe('2.0.0');
+  });
+
+  /**
+   * A GitHub outage, a revoked token or a rate limit must not take the
+   * settings page down. "We could not check" is a fine answer; a 500 because
+   * a third party is unreachable is not.
+   */
+  it('returns null rather than throwing when the forge is unreachable', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('ENOTFOUND'));
+    expect(await fetchLatestRelease('t', 'r', fetchImpl as never)).toBeNull();
+  });
+
+  it('returns null on an error response', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}, false, 401));
+    expect(await fetchLatestRelease('t', 'r', fetchImpl as never)).toBeNull();
+  });
+
+  it('returns null for a response with no tag', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ body: 'notes' }));
+    expect(await fetchLatestRelease('t', 'r', fetchImpl as never)).toBeNull();
+  });
+});
+
+describe('checkForUpdate', () => {
+  /**
+   * This repository is a checkout, so `buildInfo()` reports `dev` and the
+   * answer must be a refusal with somewhere to go — not an offer to overwrite
+   * it with a release.
+   */
+  it('refuses a working tree and says what to use instead', async () => {
+    const result = await checkForUpdate({
+      repo: 'acme/syntra',
+      token: 'tok',
+      root: '/opt/syntra',
+      fetchImpl: vi.fn() as never,
+    });
+
+    expect(result.updatable).toBe(false);
+    expect(result.current).toBe('dev');
+    expect(result.reason).toContain('deploy.sh');
+    expect(result.updateAvailable).toBe(false);
+  });
+
+  it('does not call the forge for a working tree', async () => {
+    const fetchImpl = vi.fn();
+    await checkForUpdate({
+      repo: 'r',
+      token: 'tok',
+      root: '/opt/syntra',
+      fetchImpl: fetchImpl as never,
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('says so when no token is configured', async () => {
+    const result = await checkForUpdate({ repo: 'r', token: null, root: '/opt/syntra' });
+    expect(result.updatable).toBe(false);
+    expect(result.reason).toContain('token');
+  });
+});
+
+describe('readProgress', () => {
+  const withStatus = (line: string): string => {
+    const root = mkdtempSync(join(tmpdir(), 'syntra-root-'));
+    mkdirSync(join(root, 'var'));
+    writeFileSync(join(root, 'var', 'update.status'), line);
+    return root;
+  };
+
+  it('reads the step and detail the updater wrote', () => {
+    const root = withStatus('2026-08-24T19:10:00Z\tmigrating\tapplying migrations\n');
+    expect(readProgress(root)).toEqual({
+      at: '2026-08-24T19:10:00Z',
+      step: 'migrating',
+      detail: 'applying migrations',
+      running: true,
+    });
+  });
+
+  it('knows which steps mean the updater has stopped', () => {
+    for (const [step, running] of [
+      ['downloading', true],
+      ['migrating', true],
+      ['rolling-back', true],
+      ['succeeded', false],
+      ['failed', false],
+      ['rolled_back', false],
+    ] as const) {
+      const root = withStatus(`2026-08-24T19:10:00Z\t${step}\tx\n`);
+      expect(readProgress(root)?.running, step).toBe(running);
+    }
+  });
+
+  /**
+   * The status file lives on the far side of a restart. Its absence is the
+   * ordinary state of an install that has never been updated, not an error.
+   */
+  it('is null when no update has ever run', () => {
+    expect(readProgress(mkdtempSync(join(tmpdir(), 'syntra-empty-')))).toBeNull();
+  });
+
+  it('is null rather than a broken record for a malformed line', () => {
+    expect(readProgress(withStatus('nonsense\n'))).toBeNull();
+  });
+
+  it('tolerates a status with no detail', () => {
+    const root = withStatus('2026-08-24T19:10:00Z\tsucceeded\t\n');
+    expect(readProgress(root)).toMatchObject({ step: 'succeeded', detail: '' });
+  });
+});

@@ -81,6 +81,9 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
       { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
+      // `deployment.manage`, not `tenant.manage`: this updates the
+      // installation every tenant shares, not one tenant's configuration.
+      { to: '/admin/updates', label: 'Updates', permission: 'deployment.manage' },
     ],
   },
 ];
