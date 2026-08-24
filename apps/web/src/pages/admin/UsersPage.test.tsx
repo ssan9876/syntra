@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { UsersPage } from './UsersPage.js';
 
@@ -37,7 +38,15 @@ const synced = {
 /** The users list and the source list are separate reads, as on the run pages. */
 function mockBoth(
   rows: Record<string, unknown>[],
-  sources: { id: string; name: string }[] = [{ id: 's1', name: 'Corporate LDAP' }],
+  sources: Record<string, unknown>[] = [
+    {
+      id: 's1',
+      name: 'Corporate LDAP',
+      writebackEnabled: false,
+      writebackPassword: false,
+      writebackDisable: false,
+    },
+  ],
 ) {
   vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
     Promise.resolve(
@@ -182,5 +191,80 @@ describe('UsersPage', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/not linked to a person record/i);
     expect(alert).not.toHaveTextContent(/do not have permission/i);
+  });
+});
+
+/**
+ * The button that could not exist before. A source-owned account used to be
+ * refused outright, because the next sync run would read it as present in the
+ * directory and propose reactivating it -- so the control would have appeared
+ * to work and quietly undone itself.
+ */
+describe('UsersPage — deactivating a directory-managed account', () => {
+  const writingSource = [
+    {
+      id: 's1',
+      name: 'Corporate LDAP',
+      writebackEnabled: true,
+      writebackPassword: false,
+      writebackDisable: true,
+    },
+  ];
+
+  it('offers Deactivate when the source allows write-back', async () => {
+    mockBoth([synced], writingSource);
+    renderPage();
+
+    expect(await screen.findByText('nhaddad')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /deactivate/i })).toBeInTheDocument();
+  });
+
+  /**
+   * ...and does not when it does not. Naming the source and the setting is the
+   * difference between a dead end and something an administrator can act on --
+   * the old copy said only "managed by a directory source", which is a fact
+   * with nowhere to go.
+   */
+  it('says which source owns the account and that write-back is off', async () => {
+    mockBoth([synced]);
+    renderPage();
+
+    expect(
+      await screen.findByText(/Corporate LDAP owns this account, and write-back is off/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /deactivate/i })).toBeNull();
+  });
+
+  it('needs BOTH the master switch and the disable permission', async () => {
+    mockBoth([synced], [
+      {
+        id: 's1',
+        name: 'Corporate LDAP',
+        writebackEnabled: false,
+        writebackPassword: false,
+        writebackDisable: true,
+      },
+    ]);
+    renderPage();
+
+    await screen.findByText('nhaddad');
+    expect(screen.queryByRole('button', { name: /deactivate/i })).toBeNull();
+  });
+
+  /**
+   * The confirmation says what actually happens, in order. One that asks "are
+   * you sure?" without saying what follows is one people click through.
+   */
+  it('spells out the consequences before the deactivation is taken', async () => {
+    mockBoth([synced], writingSource);
+    renderPage();
+
+    await screen.findByText('nhaddad');
+    await userEvent.click(screen.getByRole('button', { name: /deactivate/i }));
+
+    expect(
+      await screen.findByText(/disabled in Corporate LDAP immediately/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/leaver steps configured on the target/i)).toBeInTheDocument();
   });
 });
