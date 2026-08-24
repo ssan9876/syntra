@@ -417,6 +417,19 @@ describe('ldapWriteback.setEnabled', () => {
     expect(note).toContain('deactivated by an administrator');
   });
 
+  /**
+   * A user row carrying a source but no anchor. The answer is "no such
+   * account", not a search for the empty string -- which some servers accept
+   * and answer with whatever the first match happens to be.
+   */
+  it('reports an empty anchor as not found rather than searching for it', async () => {
+    for (const anchor of ['', '   ']) {
+      expect(
+        await ldapWriteback.setEnabled(config, { anchor, enabled: false, reason: 'x' }),
+      ).toMatchObject({ failure: 'not_found' });
+    }
+  });
+
   it('reports an anchor that names nothing', async () => {
     const result = await ldapWriteback.setEnabled(config, {
       anchor: normaliseAnchor(

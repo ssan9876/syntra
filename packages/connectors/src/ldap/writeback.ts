@@ -123,6 +123,12 @@ async function locate(
   config: ResolvedLdapConfig,
   anchor: string,
 ): Promise<Located | null> {
+  // A user carrying a source but no anchor should not reach here, and if one
+  // does, the answer is "no such account" rather than a search for the empty
+  // string -- which is a filter the server may accept and answer with
+  // something arbitrary.
+  if (anchor.trim() === '') return null;
+
   const { searchEntries } = await client.search(config.userSearchBase, {
     // A programmatic filter, not a string. An objectGUID is sixteen raw
     // bytes, and a filter STRING cannot carry them: ldapts parses the string
