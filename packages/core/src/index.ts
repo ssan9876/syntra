@@ -3,6 +3,8 @@ export * from './net/outbound.js';
 export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
+export * from './health/readiness.js';
+export * from './health/version.js';
 export * from './directory/user-service.js';
 export * from './directory/directory-writeback.js';
 export * from './directory/group-service.js';

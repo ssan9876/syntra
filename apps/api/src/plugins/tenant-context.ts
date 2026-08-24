@@ -9,8 +9,16 @@ declare module 'fastify' {
   }
 }
 
-/** Routes that answer before a tenant is known. */
-const UNSCOPED_PATHS = new Set(['/health']);
+/**
+ * Routes that answer before a tenant is known.
+ *
+ * `/health/ready` is here for a reason worth writing down: it is what the
+ * updater's automatic rollback hangs on, and it is polled with whatever Host
+ * header curl happens to send on localhost. Left tenant-scoped it would 404
+ * on an unrecognised host -- and a rollback gate that fails for the WRONG
+ * reason rolls back every update, including the good ones.
+ */
+const UNSCOPED_PATHS = new Set(['/health', '/health/ready']);
 
 /**
  * Resolves a tenant from the Host header, in three passes: the exact primary

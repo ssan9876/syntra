@@ -7,6 +7,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Callable from release.yml, so a tag is gated on exactly the checks a push
+  # is. A second, drifting copy of this suite is how a release comes to be
+  # gated on something nobody maintains.
+  workflow_call:
 
 concurrency:
   # A second push to the same branch cancels the first: a 30-minute suite that

@@ -2,11 +2,13 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import {
+  buildInfo,
   installRecoveryCodeVerifier,
   installTotpVerifier,
   installWebAuthnVerifier,
   localMasterKeyProvider,
   onSigningKeysChanged,
+  readiness,
   smtpTransport,
   type Config,
   type Scheduler,
@@ -119,7 +121,29 @@ export async function buildApp(
   registerProblemJson(app, web ? { notFound: web.notFound } : {});
   registerTenantContext(app, web ? { unknownHostPage: web.unknownHostPage } : {});
 
+  // LIVENESS. Deliberately a constant, and deliberately cheap: it answers "is
+  // a process listening", which is the question the tunnel and `deploy.sh`
+  // ask. It is not, and must not become, a check that touches the database --
+  // a liveness probe that fails when Postgres blips restarts a healthy API.
   app.get('/health', async () => ({ status: 'ok' }));
+
+  // READINESS. A different question -- "can this process do its job" -- and
+  // the only one of the two that can answer no.
+  //
+  // 503 rather than 200-with-a-flag, so anything that speaks HTTP can gate on
+  // it without parsing a body: the updater's automatic rollback hangs on this
+  // status code. Unauthenticated for the same reason the updater needs it --
+  // it holds no session and cannot obtain one while the thing it is checking
+  // is broken -- and it discloses nothing a caller could not learn by trying
+  // to sign in.
+  app.get('/health/ready', async (_request, reply) => {
+    const report = await readiness({
+      provider: localMasterKeyProvider(config.masterKey),
+      webRoot: config.webRoot ?? undefined,
+      version: buildInfo().version,
+    });
+    return reply.status(report.ready ? 200 : 503).send(report);
+  });
 
   await app.register(registerAuthRoutes, {
     prefix: '/api/auth',

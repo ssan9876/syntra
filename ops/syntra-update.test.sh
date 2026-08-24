@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+#
+# Tests for the decision-making inside `syntra-update`.
+#
+# The functions are SOURCED OUT OF THE SHIPPED SCRIPT rather than copied here,
+# for the same reason `syntra-reap.Tests.ps1` parses the reap script: a test
+# that carries its own copy of the logic passes forever while the shipped code
+# does something else entirely.
+#
+#   ./ops/syntra-update.test.sh
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The guard at the bottom of the script means sourcing it defines the helpers
+# and runs nothing.
+SYNTRA_UPDATE_SOURCE_ONLY=1
+export SYNTRA_UPDATE_SOURCE_ONLY
+# shellcheck source=/dev/null
+. "$HERE/syntra-update"
+
+pass=0
+fail=0
+
+ok() {
+  if [ "$2" = "$3" ]; then
+    pass=$(( pass + 1 ))
+  else
+    fail=$(( fail + 1 ))
+    printf 'FAIL: %s\n  expected: %s\n  actual:   %s\n' "$1" "$3" "$2" >&2
+  fi
+}
+
+yes_no() { if "$@"; then echo yes; else echo no; fi; }
+
+# --- version_newer ----------------------------------------------------------
+
+ok "1.4.1 is newer than 1.4.0"      "$(yes_no version_newer 1.4.1 1.4.0)" yes
+ok "1.4.0 is not newer than 1.4.1"  "$(yes_no version_newer 1.4.0 1.4.1)" no
+ok "a version is not newer than itself" "$(yes_no version_newer 1.4.0 1.4.0)" no
+
+# The one a lexical comparison gets backwards, silently, and which would make
+# the console offer a DOWNGRADE as an update.
+ok "1.10.0 is newer than 1.9.0"     "$(yes_no version_newer 1.10.0 1.9.0)" yes
+ok "1.9.0 is not newer than 1.10.0" "$(yes_no version_newer 1.9.0 1.10.0)" no
+ok "2.0.0 is newer than 1.99.99"    "$(yes_no version_newer 2.0.0 1.99.99)" yes
+
+# `dev` must never compare as older than a release: an install that is somebody's
+# working tree has to be refused, not quietly overwritten.
+ok "a release is not newer than dev" "$(yes_no version_newer 1.4.0 dev)" no
+
+# --- version_valid ----------------------------------------------------------
+
+ok "an ordinary version is accepted" "$(yes_no version_valid 1.4.0)" yes
+ok "a two-part version is accepted"  "$(yes_no version_valid 2026.8)" yes
+
+# This value is concatenated into a filesystem path. Every one of these would
+# put the unpacked tree somewhere nobody chose.
+ok "traversal is refused"            "$(yes_no version_valid ../../etc)" no
+ok "a slash is refused"              "$(yes_no version_valid 1.4/0)" no
+ok "an absolute path is refused"     "$(yes_no version_valid /etc/passwd)" no
+ok "a leading dot is refused"        "$(yes_no version_valid .ssh)" no
+ok "a dot-dot anywhere is refused"   "$(yes_no version_valid 1..4)" no
+ok "an empty version is refused"     "$(yes_no version_valid '')" no
+ok "a command substitution is refused" "$(yes_no version_valid '1.0;rm -rf /')" no
+ok "dev is refused as a target"      "$(yes_no version_valid dev)" no
+
+# --- releases_to_prune ------------------------------------------------------
+
+ok "nothing is pruned below the limit" \
+  "$(releases_to_prune 3 1.4.0 1.2.0 1.3.0 1.4.0 | tr '\n' ' ' | sed 's/ $//')" ""
+
+ok "the oldest goes first" \
+  "$(releases_to_prune 3 1.5.0 1.1.0 1.2.0 1.3.0 1.4.0 1.5.0 | tr '\n' ' ' | sed 's/ $//')" \
+  "1.1.0 1.2.0"
+
+# Deleting the release you are running is how a rollback becomes impossible at
+# the moment it is needed.
+ok "the protected release is never pruned" \
+  "$(releases_to_prune 1 1.1.0 1.1.0 1.2.0 1.3.0 | tr '\n' ' ' | sed 's/ $//')" \
+  "1.2.0"
+
+ok "versions are ordered numerically, not lexically" \
+  "$(releases_to_prune 2 1.10.0 1.2.0 1.9.0 1.10.0 | tr '\n' ' ' | sed 's/ $//')" \
+  "1.2.0"
+
+# --- status_line ------------------------------------------------------------
+
+ok "the status line is three tab-separated fields" \
+  "$(status_line migrating 'applying migrations' | awk -F'\t' '{print NF}')" "3"
+
+ok "the status line carries the step" \
+  "$(status_line migrating 'applying migrations' | cut -f2)" "migrating"
+
+ok "the status line carries the detail" \
+  "$(status_line migrating 'applying migrations' | cut -f3)" "applying migrations"
+
+# --- report -----------------------------------------------------------------
+
+printf '\n%d passed, %d failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ]

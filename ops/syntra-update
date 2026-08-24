@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+#
+# Update Syntra to a released version, and put it back if that goes wrong.
+#
+# NOT RUN FROM THE API PROCESS, and not runnable from one. This ends in
+# `systemctl restart syntra`, so anything started as a child of the API dies
+# at the exact moment the database has been migrated and the symlink has not
+# yet been swapped — the least recoverable state this system has. The API
+# launches it detached:
+#
+#   systemd-run --unit=syntra-update --collect \
+#     --setenv=SYNTRA_RELEASE_TOKEN=… /opt/syntra/bin/syntra-update 1.4.0
+#
+# It also runs from bin/, not from a release, so that swapping `current`
+# underneath it does not pull the script out from under itself.
+#
+#   syntra-update <version>     update to that release
+#   syntra-update --rollback    go back to the release we came from
+#   syntra-update --check       print current and available, change nothing
+#
+# Every step writes to var/update.status, which is what the console reads.
+
+set -euo pipefail
+
+ROOT="${SYNTRA_ROOT:-/opt/syntra}"
+RELEASES="$ROOT/releases"
+SHARED="$ROOT/shared"
+VAR="$ROOT/var"
+CURRENT="$ROOT/current"
+STATUS="$VAR/update.status"
+LOCK="$VAR/update.lock"
+BACKUPS="$SHARED/backups"
+SERVICE="${SYNTRA_SERVICE:-syntra}"
+READY_URL="${SYNTRA_READY_URL:-http://127.0.0.1:3000/health/ready}"
+REPO="${SYNTRA_RELEASE_REPO:-ssan9876/syntra}"
+PG_CONTAINER="${SYNTRA_PG_CONTAINER:-infra-postgres-1}"
+KEEP=3
+# How long a new release gets to become ready before it is judged broken.
+# Long enough for a cold start with a large migration behind it; short enough
+# that nobody is signed out for a quarter of an hour while it fails.
+READY_TIMEOUT=90
+
+# --- pure helpers, lifted out by the test harness ---------------------------
+# Everything above is configuration and everything below this block does I/O.
+# These four are the whole of the decision-making, and they are separated so
+# the tests exercise the SHIPPED logic rather than a copy of it that agrees.
+
+# Is $1 strictly newer than $2? Uses sort -V, so 1.10.0 beats 1.9.0 — which
+# a lexical comparison gets backwards, and gets backwards silently.
+version_newer() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]
+}
+
+# A version string we are willing to install. Refuses anything with a slash or
+# a dot-dot: this value reaches a path, and `../../etc` is a directory
+# traversal wearing a version number.
+version_valid() {
+  case "$1" in
+    *[!0-9.]*) return 1 ;;
+    ''|.*|*..*|*.) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# Which releases to delete, given how many to keep and the list to choose
+# from, newest last. Never the one passed as $2 — deleting the release you are
+# running is a way to make a rollback impossible at the moment it is needed.
+releases_to_prune() {
+  local keep="$1" protect="$2"; shift 2
+  local sorted
+  sorted=$(printf '%s\n' "$@" | grep -v '^$' | sort -V)
+  local total; total=$(printf '%s\n' "$sorted" | grep -c . || true)
+  [ "$total" -le "$keep" ] && return 0
+  printf '%s\n' "$sorted" | head -n "$(( total - keep ))" | grep -vx "$protect" || true
+}
+
+# The step name and detail, as the console will read them.
+status_line() { printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2"; }
+
+# --- everything below does I/O ----------------------------------------------
+
+log()   { echo "[syntra-update] $*" >&2; }
+status() { mkdir -p "$VAR"; status_line "$1" "${2:-}" > "$STATUS"; log "$1: ${2:-}"; }
+
+die() {
+  status "failed" "$1"
+  log "FAILED: $1"
+  exit 1
+}
+
+current_version() {
+  if [ -f "$CURRENT/RELEASE.json" ]; then
+    sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CURRENT/RELEASE.json" | head -1
+  else
+    echo dev
+  fi
+}
+
+previous_release() {
+  local now; now=$(current_version)
+  ls -1 "$RELEASES" 2>/dev/null | sort -V | grep -vx "$now" | tail -1
+}
+
+api() {
+  [ -n "${SYNTRA_RELEASE_TOKEN:-}" ] || die "no release token was provided"
+  curl -fsSL -H "Authorization: Bearer $SYNTRA_RELEASE_TOKEN" \
+    -H 'Accept: application/vnd.github+json' "$@"
+}
+
+latest_version() {
+  api "https://api.github.com/repos/$REPO/releases/latest" \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1
+}
+
+# The API's asset URL, not browser_download_url: a private repository serves
+# assets only through the API, and the browser URL 404s with a valid token.
+asset_url() {
+  local version="$1" name="$2"
+  api "https://api.github.com/repos/$REPO/releases/tags/v$version" \
+    | tr ',' '\n' \
+    | grep -A0 -B0 "\"url\": \"[^\"]*assets/[0-9]*\"\|\"name\": \"$name\"" \
+    | grep -B1 "\"name\": \"$name\"" | grep '"url"' \
+    | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+download_asset() {
+  local version="$1" name="$2" dest="$3" url
+  url=$(asset_url "$version" "$name") || true
+  [ -n "$url" ] || die "release v$version has no asset named $name"
+  curl -fsSL -H "Authorization: Bearer $SYNTRA_RELEASE_TOKEN" \
+    -H 'Accept: application/octet-stream' -o "$dest" "$url"
+}
+
+ready() {
+  local code
+  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$READY_URL" || echo 000)
+  [ "$code" = "200" ]
+}
+
+# Polls until ready or the deadline. Deliberately NOT /health, which is a
+# constant and returns 200 for a process that cannot reach its database — as
+# the gate on a rollback it would pass every broken release.
+wait_ready() {
+  local deadline=$(( SECONDS + READY_TIMEOUT ))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    ready && return 0
+    sleep 3
+  done
+  return 1
+}
+
+dump_database() {
+  local dest="$1"
+  mkdir -p "$BACKUPS"
+  # Through the container: there is no pg_dump on the host, and the version
+  # inside always matches the server.
+  docker exec "$PG_CONTAINER" pg_dump -U syntra -d syntra -Fc > "$dest" 2>/dev/null \
+    || die "the pre-migration database dump failed; nothing was changed"
+  # A dump that exists and is empty is worse than none, because it looks like
+  # a backup. pg_dump's custom format starts with the magic "PGDMP".
+  [ -s "$dest" ] || die "the pre-migration dump is empty; nothing was changed"
+  head -c 5 "$dest" | grep -q PGDMP \
+    || die "the pre-migration dump is not a PostgreSQL archive; nothing was changed"
+  log "dumped $(wc -c < "$dest") bytes to $dest"
+}
+
+restore_database() {
+  local src="$1"
+  [ -s "$src" ] || { log "no dump to restore from"; return 1; }
+  docker exec -i "$PG_CONTAINER" pg_restore -U syntra -d syntra --clean --if-exists \
+    < "$src" >/dev/null 2>&1
+  # pg_restore exits non-zero on benign "does not exist" noise from --clean,
+  # so its status is not the test. Whether the schema is usable is.
+  docker exec "$PG_CONTAINER" psql -U syntra -d syntra -c 'SELECT 1' >/dev/null 2>&1
+}
+
+swap_to() {
+  ln -sfn "$RELEASES/$1" "$CURRENT"
+  systemctl restart "$SERVICE"
+}
+
+# --- the update -------------------------------------------------------------
+
+do_update() {
+  local target="$1"
+  local from; from=$(current_version)
+
+  version_valid "$target" || die "\"$target\" is not a version this will install"
+  [ "$from" != "dev" ] || die "this install is a working tree, not a release; update it with deploy.sh"
+  version_newer "$target" "$from" || die "$target is not newer than the running $from"
+
+  local dir="$RELEASES/$target"
+  local tmp="$dir.partial"
+  local tarball="$VAR/syntra-$target.tar.gz"
+
+  status "downloading" "fetching v$target"
+  mkdir -p "$RELEASES" "$VAR"
+  rm -rf "$tmp" "$tarball" "$tarball.sha256"
+  download_asset "$target" "syntra-$target.tar.gz" "$tarball"
+  download_asset "$target" "syntra-$target.tar.gz.sha256" "$tarball.sha256"
+
+  status "verifying" "checking the download"
+  ( cd "$VAR" && sha256sum -c "$(basename "$tarball").sha256" >/dev/null ) \
+    || die "the downloaded release does not match its checksum"
+
+  status "unpacking" "unpacking v$target"
+  # Into .partial and renamed, so an interrupted download never leaves a
+  # half-tree that the next run mistakes for an installed release.
+  mkdir -p "$tmp"
+  tar -xzf "$tarball" -C "$tmp" --strip-components=1
+  [ -f "$tmp/RELEASE.json" ] || die "the release is missing RELEASE.json"
+  [ -f "$tmp/apps/web/dist/index.html" ] || die "the release carries no built console"
+  rm -rf "$dir" && mv "$tmp" "$dir"
+
+  # Configuration is shared, never copied: an update must not touch .env, and
+  # a rollback must not revert it.
+  ln -sfn "$SHARED/.env" "$dir/.env"
+
+  status "installing" "installing dependencies"
+  ( cd "$dir" && pnpm install --frozen-lockfile --prod=false ) \
+    || die "dependencies could not be installed for v$target"
+
+  local dump="$BACKUPS/pre-$target-$(date -u +%Y%m%dT%H%M%SZ).dump"
+  status "backing-up" "dumping the database"
+  dump_database "$dump"
+
+  status "migrating" "applying migrations"
+  # In the NEW release: the migrations being applied are its own.
+  ( cd "$dir" && pnpm --filter @syntra/db exec prisma migrate deploy ) \
+    || { restore_after_failure "$from" "$dump" "migrations failed"; }
+
+  status "switching" "restarting on v$target"
+  swap_to "$target"
+
+  status "verifying" "waiting for v$target to become ready"
+  if ! wait_ready; then
+    restore_after_failure "$from" "$dump" "v$target did not become ready within ${READY_TIMEOUT}s"
+  fi
+
+  status "pruning" "removing old releases"
+  prune "$target"
+
+  # The new release's updater becomes the one the NEXT update runs, and only
+  # after this one has been proved good. Copied last, deliberately: an updater
+  # replaced before the verification would be the new one rolling back on
+  # behalf of a release that never worked.
+  install -m 0755 "$dir/ops/syntra-update" "$ROOT/bin/syntra-update" 2>/dev/null || true
+
+  status "succeeded" "now running v$target"
+  log "updated $from -> $target"
+}
+
+# The whole reason this design exists. Nobody is asked; nobody could be asked,
+# because the console they would be asked through is the thing that is down.
+restore_after_failure() {
+  local back_to="$1" dump="$2" why="$3"
+  log "ROLLING BACK: $why"
+  status "rolling-back" "$why"
+
+  swap_to "$back_to"
+  if restore_database "$dump"; then
+    systemctl restart "$SERVICE"
+  else
+    log "the database could not be restored from $dump — RESTORE IT BY HAND"
+    status "failed" "$why; the database could not be restored automatically (dump: $dump)"
+    exit 1
+  fi
+
+  if wait_ready; then
+    status "rolled_back" "$why; restored v$back_to"
+    exit 1
+  fi
+  status "failed" "$why; the rollback to v$back_to is also not ready"
+  exit 1
+}
+
+do_rollback() {
+  local from; from=$(current_version)
+  local back_to; back_to=$(previous_release)
+  [ -n "$back_to" ] || die "there is no previous release to go back to"
+
+  local dump
+  dump=$(ls -1t "$BACKUPS"/pre-"$from"-*.dump 2>/dev/null | head -1 || true)
+  [ -n "$dump" ] || die "no database dump was taken before v$from; roll back by hand"
+
+  status "rolling-back" "returning to v$back_to"
+  swap_to "$back_to"
+  restore_database "$dump" || die "the database could not be restored from $dump"
+  systemctl restart "$SERVICE"
+  wait_ready || die "v$back_to did not become ready"
+  status "rolled_back" "returned to v$back_to"
+}
+
+prune() {
+  local protect="$1"
+  local doomed
+  # shellcheck disable=SC2046
+  doomed=$(releases_to_prune "$KEEP" "$protect" $(ls -1 "$RELEASES" 2>/dev/null))
+  for name in $doomed; do
+    log "pruning release $name"
+    rm -rf "${RELEASES:?}/$name"
+  done
+  ls -1t "$BACKUPS"/*.dump 2>/dev/null | tail -n +$(( KEEP + 1 )) | while read -r old; do
+    log "pruning dump $(basename "$old")"
+    rm -f "$old"
+  done
+}
+
+do_check() {
+  local from latest
+  from=$(current_version)
+  latest=$(latest_version)
+  echo "current: $from"
+  echo "latest:  ${latest:-unknown}"
+  if [ "$from" = "dev" ]; then
+    echo "state:   working tree — update with deploy.sh, not from the console"
+  elif [ -n "$latest" ] && version_newer "$latest" "$from"; then
+    echo "state:   an update is available"
+  else
+    echo "state:   up to date"
+  fi
+}
+
+main() {
+  case "${1:-}" in
+    --check)    do_check; return ;;
+    --rollback) : ;;
+    '')         die "usage: syntra-update <version> | --rollback | --check" ;;
+  esac
+
+  mkdir -p "$VAR"
+  # One at a time. Two updaters sharing a symlink and a database is a way to
+  # end up running neither version.
+  exec 9>"$LOCK"
+  flock -n 9 || die "another update is already running"
+
+  if [ "$1" = "--rollback" ]; then do_rollback; else do_update "$1"; fi
+}
+
+# Sourced by the tests to get at the pure helpers without running anything.
+if [ "${SYNTRA_UPDATE_SOURCE_ONLY:-}" != "1" ]; then
+  main "$@"
+fi

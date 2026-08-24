@@ -1,0 +1,165 @@
+name: Release
+
+# Cutting a release: tag it, and this produces the artefact the in-console
+# updater installs.
+#
+#   git tag -a v1.4.0 -m "…what changed…"
+#   git push origin v1.4.0
+#
+# The tag message becomes the release notes an operator reads before deciding
+# whether to update now or on Saturday, so it is worth writing.
+
+on:
+  push:
+    tags: ['v*']
+  # For re-cutting an artefact when the tag is right and the build was not.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build (e.g. v1.4.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The gate. An update button whose whole promise is "this was tested" must
+  # not be able to install something that was not, so the release job depends
+  # on the same suite CI runs and a red tag produces no artefact at all.
+  #
+  # `workflow_call` rather than a copy: a second, drifting definition of the
+  # suite is how a release comes to be gated on checks nobody maintains.
+  # ---------------------------------------------------------------------------
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # The tag's own message is the release notes, and a shallow checkout
+          # does not have it.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # `packageManager` in package.json pins the version. A newer pnpm installs
+      # without running build scripts for Prisma and argon2, reports success,
+      # and leaves nothing able to reach the database.
+      - run: corepack enable
+
+      - run: pnpm install --frozen-lockfile
+
+      # Generated, not committed. The client is derived from schema.prisma and
+      # a stale one in the tarball is a client that disagrees with the
+      # migrations shipped beside it.
+      - run: pnpm db:generate
+
+      # THE BUNDLE IS BUILT HERE, not on the target.
+      #
+      # `deploy.sh` rebuilds on the host, which is right for a developer push
+      # and wrong for an update: it would make every install depend on a build
+      # toolchain being present and on a build succeeding at two in the
+      # morning, on a machine with no console attached. A release carries a
+      # bundle that already exists.
+      - run: pnpm --filter @syntra/web build
+
+      - name: Work out what this release is
+        id: meta
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Which migrations this release adds over the PREVIOUS tag. This is
+          # the one fact that decides whether an operator updates during the
+          # working day, so it is computed rather than remembered.
+          PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+            ADDED=$(git diff --name-only --diff-filter=A "$PREV" "$TAG" \
+              -- packages/db/prisma/migrations \
+              | awk -F/ '/migration.sql$/ {print $(NF-1)}' | sort -u)
+          else
+            ADDED=$(ls packages/db/prisma/migrations | grep -v migration_lock || true)
+          fi
+          echo "previous=$PREV" >> "$GITHUB_OUTPUT"
+          {
+            echo 'migrations<<EOF'
+            echo "$ADDED"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write RELEASE.json and VERSION
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${{ steps.meta.outputs.version }}" > VERSION
+          MIGRATIONS=$(printf '%s\n' "${{ steps.meta.outputs.migrations }}" \
+            | sed '/^$/d' | jq -R . | jq -s .)
+          jq -n \
+            --arg version  "${{ steps.meta.outputs.version }}" \
+            --arg released "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg commit   "${{ github.sha }}" \
+            --argjson migrations "$MIGRATIONS" \
+            '{version: $version, released: $released, commit: $commit, migrations: $migrations}' \
+            > RELEASE.json
+          cat RELEASE.json
+
+      - name: Assemble the runtime tree
+        run: |
+          set -euo pipefail
+          # The tracked tree MINUS what a running system has no use for -- the
+          # same exclusions docs/lab/deploy.sh applies, for the same reason --
+          # PLUS the built bundle and the release metadata.
+          #
+          # node_modules is deliberately NOT here. It is platform- and
+          # architecture-specific, it would multiply the artefact by two orders
+          # of magnitude, and `pnpm install --frozen-lockfile` on the target is
+          # both faster and correct.
+          git ls-files -- . \
+            ':(exclude)docs/**' \
+            ':(exclude)e2e/**' \
+            ':(exclude).github/**' \
+            ':(exclude)*.md' \
+            > /tmp/manifest.txt
+          {
+            cat /tmp/manifest.txt
+            echo VERSION
+            echo RELEASE.json
+            find apps/web/dist -type f
+          } | sort -u > /tmp/files.txt
+
+          NAME="syntra-${{ steps.meta.outputs.version }}"
+          tar -czf "$NAME.tar.gz" --transform "s,^,$NAME/," -T /tmp/files.txt
+          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+
+          # Proof the thing is intact and contains what the updater will look
+          # for. A tarball missing its bundle or its metadata is a release that
+          # fails on the target instead of here.
+          tar -tzf "$NAME.tar.gz" | grep -q "^$NAME/RELEASE.json$"
+          tar -tzf "$NAME.tar.gz" | grep -q "^$NAME/apps/web/dist/index.html$"
+          tar -tzf "$NAME.tar.gz" | grep -q "^$NAME/pnpm-lock.yaml$"
+          ls -lh "$NAME.tar.gz"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          NAME="syntra-${{ steps.meta.outputs.version }}"
+          # The tag's annotation is the notes. An empty one is allowed but
+          # unhelpful, and shows as such in the console.
+          git tag -l --format='%(contents)' "$TAG" > /tmp/notes.md
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/notes.md \
+            "$NAME.tar.gz" "$NAME.tar.gz.sha256"
