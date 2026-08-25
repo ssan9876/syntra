@@ -79,6 +79,8 @@ const GROUPS: NavGroup[] = [
   {
     label: 'System',
     items: [
+      // `rbac.manage`, which until the role API existed gated nothing at all.
+      { to: '/admin/roles', label: 'Roles', permission: 'rbac.manage' },
       { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
       { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
       // `deployment.manage`, not `tenant.manage`: this updates the

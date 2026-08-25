@@ -16,6 +16,7 @@ import { SyncRunDetailPage } from './SyncRunDetailPage.js';
 import { ApplicationsPage } from './ApplicationsPage.js';
 import { ApplicationDetailPage } from './ApplicationDetailPage.js';
 import { PoliciesPage } from './PoliciesPage.js';
+import { RolesPage } from './RolesPage.js';
 import { TenantSettingsPage } from './TenantSettingsPage.js';
 import { TargetsPage } from './TargetsPage.js';
 import { TargetDetailPage } from './TargetDetailPage.js';
@@ -105,6 +106,7 @@ export function AdminApp() {
             <Route path="applications/:id" element={<ApplicationDetailPage />} />
             <Route path="policy" element={<PoliciesPage />} />
             <Route path="audit" element={<AuditPage />} />
+            <Route path="roles" element={<RolesPage />} />
             <Route path="settings" element={<TenantSettingsPage />} />
             <Route path="updates" element={<UpdatesPage />} />
             <Route path="*" element={<Navigate to="/admin/users" replace />} />
