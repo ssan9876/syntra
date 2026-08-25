@@ -4,6 +4,7 @@ export * from './net/guarded-fetch.js';
 export * from './scim/config.js';
 export * from './scim/client.js';
 export * from './scim/connector.js';
+export * from './registry.js';
 export * from './ldap/config.js';
 export * from './ldap/connector.js';
 export * from './ldap/anchor.js';
