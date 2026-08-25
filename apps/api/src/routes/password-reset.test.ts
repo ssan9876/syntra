@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { withTenant } from '@syntra/db';
+import { prisma, withTenant } from '@syntra/db';
 import { createUser, generateRecoveryCodes, hashPassword, setPasswordHash } from '@syntra/core';
-import { buildTestApp } from '../test-support.js';
+import { buildTestApp, TEST_HOST } from '../test-support.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 let userId: string;
@@ -23,6 +23,13 @@ const PASSWORD_HASH = await hashPassword(PASSWORD);
 beforeEach(async () => {
   ctx = await buildTestApp();
   await ctx.app.ready();
+  // The RP id assertion below needs the tenant's own domain, not a guess off
+  // the Host header -- the endpoint under test is unauthenticated, and Host
+  // is the one thing it must never trust.
+  await prisma.tenant.update({
+    where: { id: ctx.tenantId },
+    data: { primaryDomain: TEST_HOST },
+  });
   userId = await withTenant(ctx.tenantId, async (tx) => {
     const u = await createUser(tx, {
       login: 'jdoe',
@@ -41,6 +48,12 @@ const post = (url: string, payload: unknown) =>
     headers: { host: ctx.host },
     payload: payload as object,
   });
+
+/** A live reset token for `userId`, read out of the memory transport. */
+const liveResetToken = async () => {
+  await post('/api/auth/password-reset/request', { login: 'jdoe' });
+  return tokenFromMail();
+};
 
 const tokenFromMail = () => {
   const match = /token=([A-Za-z0-9_-]+)/.exec(ctx.mail.sent[0]?.text ?? '');
@@ -203,5 +216,37 @@ describe('POST /api/auth/password-reset/complete', () => {
       headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
     });
     expect(probe.statusCode).toBe(401);
+  });
+});
+/**
+ * The endpoint that makes a passkey reset possible at all.
+ *
+ * Separate from `/api/auth/mfa/webauthn/challenge` rather than a flag on it,
+ * because the two are authenticated by different credentials -- an attempt
+ * token there, a reset token here -- and one endpoint taking either is how a
+ * reset token comes to satisfy a rule written about a sign-in attempt.
+ */
+describe('POST /api/auth/password-reset/webauthn/challenge', () => {
+  it('mints a challenge for the holder of a live reset token', async () => {
+    const token = await liveResetToken();
+
+    const res = await post('/api/auth/password-reset/webauthn/challenge', { token });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { challenge?: string; rpId?: string };
+    expect(typeof body.challenge).toBe('string');
+    // The RELYING PARTY IS THE TENANT'S, never the Host header. This endpoint
+    // is unauthenticated; it is the last place that should trust one.
+    expect(body.rpId).toBe(ctx.host);
+  });
+
+  it('refuses an unknown token in the same words as a spent one', async () => {
+    const res = await post('/api/auth/password-reset/webauthn/challenge', {
+      token: 'not-a-real-token',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      type: expect.stringContaining('invalid-reset-token'),
+    });
   });
 });
