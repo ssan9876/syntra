@@ -511,6 +511,97 @@ describe('an administrator deciding a blocked request', () => {
     ).catch((e: unknown) => e);
     expect((failure as DecisionRefusedError).code).toBe('not-blocked');
   });
+
+  /**
+   * The two-stage blocked request, which nothing tested.
+   *
+   * `recordDecision` returns `pending_approval` for it and used to leave the
+   * row on `blocked_no_approver`, so the mail went out to stage 2's approvers
+   * and every one of them was refused `not-open` on arrival. The request could
+   * then only be moved by a second administrative override -- which is refused
+   * too, because the step it would take is `open` rather than `waiting`.
+   */
+  it('leaves a request PENDING, not blocked, when the administrator opens a second stage', async () => {
+    const requestId = await open();
+    await withTenant(tenantId, async (tx) => {
+      await tx.accessRequest.update({
+        where: { id: requestId },
+        data: { status: 'blocked_no_approver' },
+      });
+      // Stage 1 blocked: nobody materialized on it.
+      await tx.approvalStepApprover.deleteMany({ where: { step: { requestId } } });
+      await tx.approvalStep.updateMany({
+        where: { requestId, sequence: 1 },
+        data: { status: 'waiting' },
+      });
+      const role = await tx.role.create({
+        data: { tenantId, name: 'Automate admin', permissions: [PERMISSIONS.AUTOMATE_MANAGE] },
+      });
+      await tx.roleAssignment.create({ data: { tenantId, roleId: role.id, userId: boUserId } });
+    });
+
+    const result = await recordDecision(
+      tenantId,
+      {
+        requestId,
+        deciderPersonId: janPersonId,
+        deciderUserId: janUserId,
+        decision: 'approve',
+        comment: 'stage one has nobody; approving by hand',
+        shortenedToDays: null,
+        sourceIp: null,
+      },
+      { now: LATER, asAdministrator: true },
+    );
+    expect(result.status).toBe('pending_approval');
+
+    const state = await withTenant(tenantId, async (tx) => ({
+      request: await tx.accessRequest.findUniqueOrThrow({ where: { id: requestId } }),
+      steps: await tx.approvalStep.findMany({
+        where: { requestId },
+        orderBy: { sequence: 'asc' },
+      }),
+    }));
+    expect(state.request.status).toBe('pending_approval');
+    expect(state.request.statusReason).toBeNull();
+    expect(state.steps.map((s) => s.status)).toEqual(['approved', 'open']);
+  });
+
+  /**
+   * And stage 2's approver can actually decide it. This is the assertion the
+   * defect was really about: the mail was sent either way, and what the
+   * recipient met was a 'not-open' refusal.
+   */
+  it('lets the second stage approver decide after an administrative unblock', async () => {
+    const requestId = await open();
+    await withTenant(tenantId, async (tx) => {
+      await tx.accessRequest.update({
+        where: { id: requestId },
+        data: { status: 'blocked_no_approver' },
+      });
+      await tx.approvalStepApprover.deleteMany({ where: { step: { requestId } } });
+      await tx.approvalStep.updateMany({
+        where: { requestId, sequence: 1 },
+        data: { status: 'waiting' },
+      });
+      const role = await tx.role.create({
+        data: { tenantId, name: 'Automate admin', permissions: [PERMISSIONS.AUTOMATE_MANAGE] },
+      });
+      await tx.roleAssignment.create({ data: { tenantId, roleId: role.id, userId: janUserId } });
+    });
+    await recordDecision(
+      tenantId,
+      { requestId, deciderPersonId: janPersonId, deciderUserId: janUserId, decision: 'approve', comment: 'by hand', shortenedToDays: null, sourceIp: null },
+      { now: LATER, asAdministrator: true },
+    );
+
+    const second = await recordDecision(
+      tenantId,
+      { requestId, deciderPersonId: boPersonId, deciderUserId: boUserId, decision: 'approve', comment: null, shortenedToDays: null, sourceIp: null },
+      { now: LATER },
+    );
+    expect(second.status).toBe('fulfilled');
+  });
 });
 
 describe('cancelRequest', () => {
