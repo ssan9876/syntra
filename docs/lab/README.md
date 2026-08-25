@@ -799,6 +799,30 @@ No administrator, no ticket.
 | Security keys and passkeys | Register a WebAuthn credential |
 | Recovery codes | Issue a fresh set |
 
+### Giving a joiner their first password
+
+A person who arrives through Directory sync or Provision has a login and no
+password, and neither self-service route reaches them: the change form below
+needs the password they do not have, and the reset form needs a mailbox that
+may not exist yet. Syntra verifies against its own hash and never binds to the
+directory, so the domain password Provision generated does nothing here.
+
+Users → the row → **Password link** mints a link and shows it to copy. It lasts
+24 hours, works once, and minting a second one kills the first — there is one
+live link per user, and a self-service reset the person requests themselves
+supersedes an admin-minted link just the same.
+
+It is offered for synced accounts as well as local ones, because a
+directory-owned user still signs in against Syntra's own hash. The one case it
+refuses is a user whose `passwordSource` is `upstream`: that password lives at
+the federated provider, and the console says so rather than minting a link that
+could not work.
+
+The link is a bearer credential — whoever holds it can set that password until
+it expires or is spent. Every issuance is audited as
+`auth.password_setup_issued`, naming the administrator who minted it, so a link
+that is later misused is attributable.
+
 ### Changing a password
 
 ```

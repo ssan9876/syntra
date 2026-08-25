@@ -14,6 +14,17 @@ interface UserRow {
   statusReason: string | null;
   /** Set when a directory source owns this account. Null means locally managed. */
   sourceId: string | null;
+  /**
+   * Where the password lives: 'local' means Syntra holds the hash, 'upstream'
+   * means an external provider does.
+   *
+   * Optional here rather than required, because the guard below reads it as
+   * "not upstream" rather than "is local". The server is the authority and
+   * answers 409 for a user it cannot set a password for; a UI guard that
+   * silently hid the button on an unrecognised value would leave an
+   * administrator with no control and no explanation.
+   */
+  passwordSource?: string;
 }
 
 interface SourceRow {
@@ -36,6 +47,14 @@ export function UsersPage() {
   // row, which would put a block-level trigger and a two-column form inside a
   // table cell.
   const [editing, setEditing] = useState<UserRow | null>(null);
+  // One at a time, like the editor above: a setup link is a credential, and a
+  // page holding several of them at once invites pasting the wrong one.
+  const [setupLink, setSetupLink] = useState<{
+    login: string;
+    url: string;
+    expiresAt: string;
+  } | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   // For the org-unit picker on the create form. Same tolerance as the sources
   // read below: a caller without `directory.read` on units gets an empty list
   // and a form that still works, rather than a page that will not render.
@@ -73,6 +92,44 @@ export function UsersPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+
+      {linkError && <Alert tone="danger">{linkError}</Alert>}
+
+      {setupLink && (
+        <Panel>
+          <h2 className="font-medium text-ink">
+            Password setup link for {setupLink.login}
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            Send this to them. It can be used once, expires{' '}
+            {new Date(setupLink.expiresAt).toLocaleString()}, and generating
+            another one stops the previous link working.
+          </p>
+          {/*
+            A read-only input, not an anchor. An administrator who clicks a
+            link to check it has spent the token, and the joiner they send it
+            to gets a dead page.
+          */}
+          <input
+            readOnly
+            aria-label="Password setup link"
+            value={setupLink.url}
+            onFocus={(e) => e.currentTarget.select()}
+            className="mt-3 w-full rounded border border-line bg-surface px-3 py-2 font-mono text-sm"
+          />
+          <div className="mt-3 flex gap-2">
+            <Button
+              size="sm"
+              onClick={() => navigator.clipboard?.writeText(setupLink.url)}
+            >
+              Copy
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => setSetupLink(null)}>
+              Done
+            </Button>
+          </div>
+        </Panel>
+      )}
 
       {editing && (
         <RecordPanel
@@ -273,6 +330,45 @@ export function UsersPage() {
                             onClick={() => setEditing(user)}
                           >
                             Edit
+                          </Button>
+                        </span>
+                      )}
+                      {/*
+                        Offered for a synced account as well as a local one:
+                        a directory-owned user still authenticates against
+                        Syntra's own hash, so they need this exactly as much.
+                        It is the federated user, whose password lives
+                        somewhere else entirely, who cannot use it.
+                      */}
+                      {user.passwordSource !== 'upstream' && (
+                        <span className="mr-2 inline-block align-middle">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={async () => {
+                              setLinkError(null);
+                              const res = await fetch(
+                                `/api/admin/users/${user.id}/password-setup`,
+                                { method: 'POST' },
+                              );
+                              if (!res.ok) {
+                                const problem = await res.json().catch(() => ({}));
+                                setLinkError(
+                                  problem.detail ??
+                                    problem.title ??
+                                    'Could not create a setup link.',
+                                );
+                                return;
+                              }
+                              const body = await res.json();
+                              setSetupLink({
+                                login: user.login,
+                                url: body.url,
+                                expiresAt: body.expiresAt,
+                              });
+                            }}
+                          >
+                            Password link
                           </Button>
                         </span>
                       )}
