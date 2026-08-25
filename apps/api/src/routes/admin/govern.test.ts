@@ -289,18 +289,34 @@ describe('the org-unit scope on EVERY read path — §21', () => {
     }
   });
 
-  it('EVERY read route in the module is enumerated — the list is the control', () => {
-    // The scoping test iterates `GOVERN_READ_ROUTES`, so a read route missing
-    // from the list is invisible to it: the enumeration protects nothing
-    // against the one thing it exists to protect against, which is somebody
-    // adding a route. Seven slice-2 reads landed before this case did.
+  it('EVERY route guarded by requireGovernRead is enumerated — the list is the control', () => {
+    // The scoping test iterates `GOVERN_READ_ROUTES`, so a route missing from
+    // the list is invisible to it. It used to scan `app.get(` only, and three
+    // POST previews -- campaign scope, campaign reviewers, SoD rule impact --
+    // were guarded by `requireGovernRead()` with no scope filter and appeared
+    // in neither the list nor the scan. They returned tenant-wide holding
+    // counts, person counts and subject-key samples to a department-scoped
+    // reader.
+    //
+    // Guarded-by, not method: `POST /govern/exports/csv` was always in the
+    // list, so the enumeration was never really about GET. What makes a route
+    // this test's business is `requireGovernRead`, which is what admits a
+    // scoped holder in the first place.
     const source = readFileSync(new URL('./govern.ts', import.meta.url), 'utf8');
     const body = source.slice(source.indexOf('export async function registerAdminGovernRoutes'));
     const declared = new Set(GOVERN_READ_ROUTES.map((r) => r.path));
-    const found = [...body.matchAll(/app\.get\(\s*'([^']+)'/g)].map((m) => `GET ${m[1]!}`);
+
+    const found = [
+      // `\s` already spans newlines, so the pattern does not need to say so.
+      ...body.matchAll(
+        /app\.(get|post)\(\s*'([^']+)',\s*\{[^}]*requireGovernRead\(/g,
+      ),
+    ].map((m) => `${m[1]!.toUpperCase()} ${m[2]!}`);
+
     expect(found.length).toBeGreaterThan(10);
     for (const path of found) {
-      expect(declared, `${path} is a read route and must be in GOVERN_READ_ROUTES`).toContain(path);
+      expect(declared, `${path} is admitted by govern.read and must be in GOVERN_READ_ROUTES`)
+        .toContain(path);
     }
   });
 
