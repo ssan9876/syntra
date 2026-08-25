@@ -722,7 +722,7 @@ Spec §7.4, **H3**. `POST /mfa/totp/begin` refuses with "Remove the existing one
 - Consumes: `removeTotp`, `revokeOrphanedRecoveryCodes`, `recordEvent`, `hasTotp` from `@syntra/core`; `requireSession('portal')` (already applied to the `secured` sub-register).
 - Produces: `DELETE /api/auth/mfa/totp` — 200 `{ recoveryCodesRevoked: number }`, or 409 `no-totp` when none is enrolled. Mirrors `DELETE /api/auth/mfa/webauthn/:credentialId` exactly.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Append to `apps/api/src/routes/mfa.test.ts`:
 
@@ -790,12 +790,12 @@ describe('removing an authenticator app', () => {
 
 `enrolTotp(cookie)` is the file's existing helper that begins and confirms an enrolment with `OTPAuth` — reuse it; the file already imports `otpauth` and `confirmTotpEnrolment` for exactly this.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/mfa.test.ts -t 'removing an authenticator app'`
 Expected: FAIL — 404 on `DELETE /api/auth/mfa/totp`.
 
-- [ ] **Step 3: Add the route**
+- [x] **Step 3: Add the route**
 
 In `apps/api/src/routes/mfa.ts`, add `removeTotp` to the `@syntra/core` import block, and insert after the `secured.delete('/webauthn/:credentialId', …)` handler ends (line 427):
 
@@ -859,12 +859,12 @@ In `apps/api/src/routes/mfa.ts`, add `removeTotp` to the `@syntra/core` import b
 
 `tellOwnerAFactorWasRemoved` is added in Task 5. **Do Task 5 before this step**, or add the function first and land both together — the two are the same screen and the same route file, and splitting the mail out would ship a removal nobody is told about.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/mfa.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Give the screen the control**
+- [x] **Step 5: Give the screen the control**
 
 In `apps/web/src/pages/Security.tsx`, add beside `removeKey`:
 
@@ -937,7 +937,7 @@ Replace the authenticator panel's `actions` (lines 140–148) with:
           }
 ```
 
-- [ ] **Step 6: Write the web test**
+- [x] **Step 6: Write the web test**
 
 Create `apps/web/src/pages/Security.test.tsx`:
 
@@ -1039,12 +1039,12 @@ describe('the authenticator app can be removed without an administrator', () => 
 });
 ```
 
-- [ ] **Step 7: Run the web test**
+- [x] **Step 7: Run the web test**
 
 Run: `cd apps/web && npx vitest run src/pages/Security.test.tsx; cd ../..`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -1097,7 +1097,7 @@ Spec §7.4, **H4**. The session cookie's `secure` flag and the federation bindin
   - `export function sessionCookieOptions(secure: boolean)` replaces the `SESSION_COOKIE_OPTIONS` constant
   - `samlBindingCookieOptions(secure: boolean)` replaces `SAML_BINDING_COOKIE_OPTIONS` (module-private)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/core/src/cookie-security.test.ts`:
 
@@ -1140,12 +1140,12 @@ describe('cookiesAreSecure', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/cookie-security.test.ts`
 Expected: FAIL — `Cannot find module './cookie-security.js'`.
 
-- [ ] **Step 3: Write the helper**
+- [x] **Step 3: Write the helper**
 
 Create `packages/core/src/cookie-security.ts`:
 
@@ -1181,12 +1181,12 @@ export function cookiesAreSecure(publicUrl: string): boolean {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run packages/core/src/cookie-security.test.ts`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 5: Put it on the config**
+- [x] **Step 5: Put it on the config**
 
 In `packages/core/src/config.ts`, add the import `import { cookiesAreSecure } from './cookie-security.js';`, add to the `Config` interface after `publicUrl` (line 167):
 
@@ -1210,7 +1210,7 @@ and to the returned object after `publicUrl: v.PUBLIC_URL,` (line 220):
 
 Add `export * from './cookie-security.js';` to `packages/core/src/index.ts` beside the other top-level exports.
 
-- [ ] **Step 6: Decorate the app and rewrite the three cookie definitions**
+- [x] **Step 6: Decorate the app and rewrite the three cookie definitions**
 
 In `apps/api/src/routes/session-reply.ts`, replace lines 11–25:
 
@@ -1293,13 +1293,13 @@ const samlBindingCookieOptions = (secure: boolean) => ({
 
 In `apps/api/src/routes/federation.ts`, delete the module-level constant at lines 146–148 and call `federationBindingCookieOptions(request.server.cookieSecure)` at each `setCookie` site. `federationBindingCookieOptions` already takes the flag as a parameter, so its body and its comment stay exactly as they are.
 
-- [ ] **Step 7: Verify nothing that reads these cookies broke**
+- [x] **Step 7: Verify nothing that reads these cookies broke**
 
 Run: `npx vitest run apps/api/src/routes/auth.test.ts apps/api/src/routes/federation-saml.test.ts apps/api/src/routes/saml-sso-post.test.ts`
 
 Expected: PASS. `buildTestApp` configures `PUBLIC_URL: http://acme.syntra.test`, so `cookieSecure` is false throughout the suite — identical to the behaviour NODE_ENV gave, which is what makes this a safe swap.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -1352,7 +1352,7 @@ Three findings, one screen, one route file. Landing them apart would ship a remo
   - `export async function tellOwnerAFactorWasRemoved(request: FastifyRequest, transport: Transport, userId: string, factor: string): Promise<void>`
   - `DELETE /api/auth/mfa/webauthn/:credentialId` keeps its 200 `{ recoveryCodesRevoked }` shape and now also sends mail.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Append to `apps/api/src/routes/mfa.test.ts`:
 
@@ -1402,12 +1402,12 @@ describe('a factor leaving an account is told to its owner', () => {
 
 `enrolWebAuthn(cookie)` is the file's existing helper for registering a credential; reuse it.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/mfa.test.ts -t 'told to its owner'`
 Expected: FAIL — the first case sees zero messages sent. The second passes already.
 
-- [ ] **Step 3: Add the template**
+- [x] **Step 3: Add the template**
 
 In `packages/core/src/notify/templates/index.ts`, after the `factor-added` entry (line 26):
 
@@ -1419,7 +1419,7 @@ In `packages/core/src/notify/templates/index.ts`, after the `factor-added` entry
   },
 ```
 
-- [ ] **Step 4: Add the sender and call it**
+- [x] **Step 4: Add the sender and call it**
 
 In `apps/api/src/routes/mfa.ts`, after `tellOwnerAFactorWasAdded` ends (line 125):
 
@@ -1499,12 +1499,12 @@ In the `secured.delete('/webauthn/:credentialId', …)` handler, replace the fin
       return reply.status(200).send({ recoveryCodesRevoked: revoked });
 ```
 
-- [ ] **Step 5: Run the route test to verify it passes**
+- [x] **Step 5: Run the route test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/mfa.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 6: Make the console show the answer and report the refusal**
+- [x] **Step 6: Make the console show the answer and report the refusal**
 
 In `apps/web/src/pages/Security.tsx`, replace `removeKey` (lines 97–100):
 
@@ -1548,7 +1548,7 @@ In `apps/web/src/pages/Security.tsx`, replace `removeKey` (lines 97–100):
   }
 ```
 
-- [ ] **Step 7: Extend the web test**
+- [x] **Step 7: Extend the web test**
 
 Append to `apps/web/src/pages/Security.test.tsx`:
 
@@ -1610,7 +1610,7 @@ describe('removing a security key says what it cost', () => {
 
 The `[1]` index is deliberate: the authenticator panel from Task 3 renders the first `Remove` and the key list renders the second. If the ordering changes, scope the query to the panel with `within()` rather than adjusting the index.
 
-- [ ] **Step 8: Run the web test and typecheck**
+- [x] **Step 8: Run the web test and typecheck**
 
 ```bash
 cd apps/web && npx vitest run src/pages/Security.test.tsx; cd ../..
@@ -1619,7 +1619,7 @@ npx tsc -b
 
 Expected: PASS, 5 tests; `tsc -b` exits 0.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add packages/core/src/notify/templates/index.ts \
