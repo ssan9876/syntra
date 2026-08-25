@@ -249,7 +249,12 @@ export async function buildApp(
     publicUrl: config.publicUrl,
   });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
-  await app.register(registerAdminOrgUnitRoutes, { prefix: '/api/admin' });
+  // `masterKey`, because deleting a source-owned unit unseals that source's
+  // bind credential to remove the container from the directory first.
+  await app.register(registerAdminOrgUnitRoutes, {
+    prefix: '/api/admin',
+    masterKey: config.masterKey,
+  });
   await app.register(registerAdminPersonRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminAuditRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminUpdateRoutes, {

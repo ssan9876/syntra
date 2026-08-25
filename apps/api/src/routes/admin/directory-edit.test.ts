@@ -440,3 +440,81 @@ describe('editing a person', () => {
     expect(res.json().errors[0].path).toBe('externalId');
   });
 });
+
+describe('deleting an org unit', () => {
+  const del = (url: string) =>
+    ctx.app.inject({ method: 'DELETE', url, headers: { host: ctx.host, cookie } });
+
+  it('deletes a unit that is empty', async () => {
+    const unit = await withTenant(ctx.tenantId, (tx) => createOrgUnit(tx, 'Finance'));
+
+    const res = await del(`/api/admin/org-units/${unit.id}`);
+
+    expect(res.statusCode).toBe(204);
+    await withTenant(ctx.tenantId, (tx) =>
+      expect(tx.orgUnit.findUnique({ where: { id: unit.id } })).resolves.toBeNull(),
+    );
+  });
+
+  it('refuses a unit that still holds users, and says how many', async () => {
+    const unit = await withTenant(ctx.tenantId, async (tx) => {
+      const created = await createOrgUnit(tx, 'Nursing');
+      const user = await createUser(tx, {
+        login: 'nurse',
+        email: 'nurse@acme.test',
+        displayName: 'Nurse',
+      });
+      await tx.user.update({ where: { id: user.id }, data: { orgUnitId: created.id } });
+      return created;
+    });
+
+    const res = await del(`/api/admin/org-units/${unit.id}`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/1 user/);
+    await withTenant(ctx.tenantId, (tx) =>
+      expect(tx.orgUnit.findUnique({ where: { id: unit.id } })).resolves.not.toBeNull(),
+    );
+  });
+
+  it('refuses a unit that still has child units', async () => {
+    const parent = await withTenant(ctx.tenantId, async (tx) => {
+      const created = await createOrgUnit(tx, 'Clinical');
+      await createOrgUnit(tx, 'Theatres', created.id);
+      return created;
+    });
+
+    const res = await del(`/api/admin/org-units/${parent.id}`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/1 child unit/);
+  });
+
+  it('counts a DEACTIVATED user as still occupying the unit', async () => {
+    const unit = await withTenant(ctx.tenantId, async (tx) => {
+      const created = await createOrgUnit(tx, 'Records');
+      const user = await createUser(tx, {
+        login: 'gone',
+        email: 'gone@acme.test',
+        displayName: 'Gone',
+      });
+      await tx.user.update({
+        where: { id: user.id },
+        data: { orgUnitId: created.id, status: 'inactive', statusReason: 'left' },
+      });
+      return created;
+    });
+
+    const res = await del(`/api/admin/org-units/${unit.id}`);
+
+    // Emptiness is about occupancy, not activity. A deactivated user still
+    // sits in the unit, and deleting around them orphans the row.
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/1 user/);
+  });
+
+  it('answers 404 for a unit that is not there', async () => {
+    const res = await del('/api/admin/org-units/00000000-0000-4000-8000-000000000000');
+    expect(res.statusCode).toBe(404);
+  });
+});

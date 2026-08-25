@@ -356,6 +356,142 @@ export async function deleteDirectoryUser(
   return { ok: true, viaDirectory: resolved.sourceId !== null };
 }
 
+export type DeleteOrgUnitOutcome =
+  | { ok: true; viaDirectory: boolean }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'not_empty'; users: number; children: number }
+  | { ok: false; reason: 'delete_not_enabled'; sourceName: string }
+  | { ok: false; reason: 'no_credential'; sourceName: string }
+  | { ok: false; reason: 'directory_failed'; failure: WritebackFailure; message: string };
+
+export interface DeleteOrgUnitInput {
+  orgUnitId: string;
+  actorUserId: string;
+  sourceIp?: string | undefined;
+}
+
+/**
+ * Deleting an organizational unit, which is refused unless it is empty.
+ *
+ * Emptiness counts EVERY user and child unit, not only the active ones. A
+ * deactivated user still sits in the unit — that is the entire point of
+ * deactivation, which keeps the row and its place — and deleting around them
+ * leaves a row pointing at a unit that is gone.
+ *
+ * Refusing rather than reparenting is what the directory itself does: an OU
+ * with children cannot be removed without a recursive tree delete, and a
+ * recursive delete driven from a console button is the same mass-removal shape
+ * the provisioning invariant exists to prevent, differing only in being
+ * triggered by hand rather than computed. Moving the contents somewhere is a
+ * decision for whoever knows where they belong.
+ *
+ * Directory first, then Syntra, for the reason `deleteDirectoryUser` is.
+ */
+export async function deleteDirectoryOrgUnit(
+  tenantId: string,
+  provider: MasterKeyProvider,
+  input: DeleteOrgUnitInput,
+): Promise<DeleteOrgUnitOutcome> {
+  const resolved = await withTenant(tenantId, async (tx) => {
+    const unit = await tx.orgUnit.findUnique({
+      where: { id: input.orgUnitId },
+      select: { id: true, name: true, parentId: true, sourceId: true, sourceAnchor: true },
+    });
+    if (!unit) return null;
+
+    const [users, children] = await Promise.all([
+      tx.user.count({ where: { orgUnitId: input.orgUnitId } }),
+      tx.orgUnit.count({ where: { parentId: input.orgUnitId } }),
+    ]);
+
+    if (unit.sourceId === null) {
+      return { unit, users, children, sourceName: '', deletes: false };
+    }
+    const source = await tx.directorySource.findUnique({
+      where: { id: unit.sourceId },
+      select: { name: true, writebackEnabled: true, writebackDelete: true },
+    });
+    return {
+      unit,
+      users,
+      children,
+      sourceName: source?.name ?? 'the directory source',
+      deletes: Boolean(source?.writebackEnabled && source.writebackDelete),
+    };
+  });
+
+  if (!resolved) return { ok: false, reason: 'not_found' };
+
+  // Checked before anything is written anywhere. A directory delete that
+  // succeeded and then found the unit occupied would have destroyed the
+  // container and left Syntra holding the users that were in it.
+  if (resolved.users > 0 || resolved.children > 0) {
+    return {
+      ok: false,
+      reason: 'not_empty',
+      users: resolved.users,
+      children: resolved.children,
+    };
+  }
+
+  if (resolved.unit.sourceId !== null) {
+    if (!resolved.deletes) {
+      return { ok: false, reason: 'delete_not_enabled', sourceName: resolved.sourceName };
+    }
+    const config = await withTenant(tenantId, (tx) =>
+      sourceWithPassword(tx, provider, resolved.unit.sourceId!),
+    );
+    if (config === null) {
+      return { ok: false, reason: 'no_credential', sourceName: resolved.sourceName };
+    }
+
+    const result = await ldapWriteback.deleteObject(config, {
+      anchor: resolved.unit.sourceAnchor ?? '',
+    });
+    if (!result.ok) {
+      await withTenant(tenantId, (tx) =>
+        recordEvent(tx, {
+          actorUserId: input.actorUserId,
+          action: 'orgUnit.delete',
+          targetType: 'OrgUnit',
+          targetId: input.orgUnitId,
+          outcome: 'failure',
+          sourceIp: input.sourceIp ?? null,
+          payload: {
+            name: resolved.unit.name,
+            failure: result.failure ?? 'transient',
+          },
+        }),
+      );
+      return {
+        ok: false,
+        reason: 'directory_failed',
+        failure: result.failure ?? 'transient',
+        message: result.message,
+      };
+    }
+  }
+
+  await withTenant(tenantId, async (tx) => {
+    await recordEvent(tx, {
+      actorUserId: input.actorUserId,
+      action: 'orgUnit.delete',
+      targetType: 'OrgUnit',
+      targetId: input.orgUnitId,
+      outcome: 'success',
+      sourceIp: input.sourceIp ?? null,
+      payload: {
+        name: resolved.unit.name,
+        parentId: resolved.unit.parentId,
+        viaDirectory: resolved.unit.sourceId !== null,
+      },
+    });
+    await tx.orgUnit.delete({ where: { id: input.orgUnitId } });
+  });
+
+  return { ok: true, viaDirectory: resolved.unit.sourceId !== null };
+}
+
 async function auditDelete(
   tx: TenantClient,
   input: DeleteInput,

@@ -9,7 +9,9 @@ import {
   PERMISSIONS,
   createOrgUnit,
   deactivateOrgUnit,
+  deleteDirectoryOrgUnit,
   listOrgUnits,
+  localMasterKeyProvider,
   reactivateOrgUnit,
   recordEvent,
   wouldCycle,
@@ -18,10 +20,17 @@ import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 
+export interface AdminOrgUnitRouteOptions {
+  /** Unseals a directory source's bind credential for a write-back delete. */
+  masterKey: Buffer;
+}
+
 export async function registerAdminOrgUnitRoutes(
   app: FastifyInstance,
+  options: AdminOrgUnitRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
+  const provider = localMasterKeyProvider(options.masterKey);
 
   app.get(
     '/org-units',
@@ -93,6 +102,78 @@ export async function registerAdminOrgUnitRoutes(
         });
         return updated;
       });
+    },
+  );
+
+  /**
+   * Deleting a unit, refused unless it is empty.
+   *
+   * The note on deactivate above still stands for the ordinary case: deleting
+   * a populated unit takes the record of who was in it, drops every
+   * application assignment made on it and orphans any role scoped to it. That
+   * is what the emptiness check is protecting, and it is why the refusal names
+   * what is still inside rather than saying "not empty" — the reader's next
+   * question is what to move.
+   */
+  app.delete(
+    '/org-units/:id',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_DELETE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+
+      const outcome = await deleteDirectoryOrgUnit(request.tenantId, provider, {
+        orgUnitId: id,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
+      });
+
+      if (!outcome.ok) {
+        switch (outcome.reason) {
+          case 'not_found':
+            throw new ProblemError(404, 'not-found', 'Org unit not found');
+          case 'not_empty': {
+            const holds = [
+              outcome.users > 0
+                ? `${outcome.users} user${outcome.users === 1 ? '' : 's'}`
+                : null,
+              outcome.children > 0
+                ? `${outcome.children} child unit${outcome.children === 1 ? '' : 's'}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' and ');
+            throw new ProblemError(
+              409,
+              'org-unit-not-empty',
+              'This unit is not empty',
+              `it still holds ${holds}; move them before deleting it. A deactivated user still occupies the unit`,
+            );
+          }
+          case 'delete_not_enabled':
+            throw new ProblemError(
+              409,
+              'delete-not-enabled',
+              'This unit cannot be deleted',
+              `${outcome.sourceName} is not configured to let Syntra delete objects in it, and removing only the Syntra record would leave the next sync run free to create the unit again`,
+            );
+          case 'no_credential':
+            throw new ProblemError(
+              409,
+              'no-credential',
+              'This unit cannot be deleted',
+              `the bind credential for ${outcome.sourceName} could not be unsealed`,
+            );
+          case 'directory_failed':
+            throw new ProblemError(
+              502,
+              'directory-failed',
+              'The directory refused the delete',
+              `${outcome.message}; nothing was changed in Syntra either`,
+            );
+        }
+      }
+
+      return reply.status(204).send();
     },
   );
 
