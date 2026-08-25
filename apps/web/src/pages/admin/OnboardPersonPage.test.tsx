@@ -122,6 +122,75 @@ describe('OnboardPersonPage', () => {
     expect(screen.queryByText('person page')).not.toBeInTheDocument();
   });
 
+  it('creates and links a login only when asked for one', async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    const bodies: Record<string, unknown> = {};
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/persons': () => {
+        calls.push('person');
+        return json({ id: 'p1' }, 201);
+      },
+      '/api/admin/persons/p1/contracts': () => {
+        calls.push('contract');
+        return json({ id: 'c1' }, 201);
+      },
+      '/api/admin/users': (init) => {
+        calls.push('user');
+        bodies.user = JSON.parse(String(init?.body));
+        return json({ id: 'u1' }, 201);
+      },
+      '/api/admin/persons/p1/link-user': (init) => {
+        calls.push('link');
+        bodies.link = JSON.parse(String(init?.body));
+        return new Response(null, { status: 204 }) as never;
+      },
+    });
+
+    renderPage();
+    await fillMinimum(user);
+    await user.click(screen.getByLabelText(/Also create a Syntra login/i));
+    await user.type(screen.getByLabelText('Login'), 'mokafor');
+    await user.type(screen.getByLabelText('Email'), 'maya@acme.test');
+    await user.click(screen.getByRole('button', { name: 'Add someone' }));
+
+    await waitFor(() =>
+      expect(calls).toEqual(['person', 'contract', 'user', 'link']),
+    );
+    // The display name falls back to the person's name rather than being sent
+    // empty: the schema requires one.
+    expect(bodies.user).toMatchObject({
+      login: 'mokafor',
+      email: 'maya@acme.test',
+      displayName: 'Maya Okafor',
+    });
+    expect(bodies.link).toEqual({ userId: 'u1' });
+  });
+
+  it('creates no login when the box is left alone', async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/persons': () => {
+        calls.push('person');
+        return json({ id: 'p1' }, 201);
+      },
+      '/api/admin/persons/p1/contracts': () => {
+        calls.push('contract');
+        return json({ id: 'c1' }, 201);
+      },
+    });
+
+    renderPage();
+    await fillMinimum(user);
+    await user.click(screen.getByRole('button', { name: 'Add someone' }));
+
+    // An unmocked POST /api/admin/users would reject and fail this.
+    await waitFor(() => expect(calls).toEqual(['person', 'contract']));
+  });
+
   it('reports a refused person without claiming anything was created', async () => {
     const user = userEvent.setup();
     mockRoutes({

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Field, Panel } from '@syntra/ui';
+import { Alert, Button, Check, Field, Panel, Select } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
-import { fieldErrors } from './hooks.js';
+import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
 /**
@@ -29,6 +29,7 @@ interface Progress {
   personId: string | null;
   personName: string;
   contract: boolean;
+  user: boolean;
 }
 
 export function OnboardPersonPage() {
@@ -42,6 +43,12 @@ export function OnboardPersonPage() {
   const [problem, setProblem] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [busy, setBusy] = useState(false);
+  const [wantsLogin, setWantsLogin] = useState(false);
+  // Tolerated failure: a caller who may write people but not read the
+  // directory gets an empty picker and a form that still works.
+  const { data: unitsData } = useApiResource<{
+    orgUnits: { id: string; name: string }[];
+  }>('/api/admin/org-units');
 
   const set = (key: string, value: string) =>
     setV((current) => ({ ...current, [key]: value }));
@@ -58,7 +65,12 @@ export function OnboardPersonPage() {
     setProgress(null);
 
     const personName = `${v.givenName ?? ''} ${v.familyName ?? ''}`.trim();
-    const done: Progress = { personId: null, personName, contract: false };
+    const done: Progress = {
+      personId: null,
+      personName,
+      contract: false,
+      user: false,
+    };
 
     try {
       const person = await api<{ id: string }>('/api/admin/persons', {
@@ -108,6 +120,37 @@ export function OnboardPersonPage() {
       return;
     }
 
+    if (wantsLogin) {
+      try {
+        const created = await api<{ id: string }>('/api/admin/users', {
+          method: 'POST',
+          body: JSON.stringify({
+            login: v.login ?? '',
+            email: v.loginEmail ?? '',
+            // Falls back to the person's name rather than being sent empty:
+            // the schema requires a display name, and "what shall I call this
+            // account" has an obvious answer when nobody typed one.
+            displayName:
+              `${v.givenName ?? ''} ${v.familyName ?? ''}`.trim() || (v.login ?? ''),
+            ...(v.orgUnitId ? { orgUnitId: v.orgUnitId } : {}),
+          }),
+        });
+        // Linked immediately. An account created and not linked is the orphan
+        // this page exists to stop producing.
+        await api(`/api/admin/persons/${done.personId}/link-user`, {
+          method: 'POST',
+          body: JSON.stringify({ userId: created.id }),
+        });
+        done.user = true;
+      } catch (cause) {
+        setProgress({ ...done });
+        setErrors(fieldErrors(cause));
+        setProblem(describe(cause));
+        setBusy(false);
+        return;
+      }
+    }
+
     setBusy(false);
     navigate(`/admin/people/${done.personId}`);
   }
@@ -126,9 +169,11 @@ export function OnboardPersonPage() {
       {progress?.personId && (
         <div className="mb-4">
           <Alert tone="warning" title="Partly done">
-            {progress.personName} was created, but their contract was not.
-            Nothing will be provisioned for them until one exists — add it on
-            their page.
+            {progress.personName} was created
+            {progress.contract
+              ? ', with their contract, but the login was not'
+              : ', but their contract was not. Nothing will be provisioned for them until one exists'}
+            . Finish the rest on their page.
           </Alert>
         </div>
       )}
@@ -242,6 +287,56 @@ export function OnboardPersonPage() {
               hint="Between 0 and 2. Rules can compare on it."
               placeholder="1.0"
             />
+          </div>
+        </Panel>
+
+        <Panel title="Syntra sign-in">
+          <div className="space-y-4 p-4">
+            {/* Off by default, and the hint says why rather than leaving it to
+                be discovered. In a deployment where Syntra is the front door,
+                provisioning creates the directory account and the sync brings
+                the login back on its own — so ticking this for an ordinary
+                joiner produces a second account nobody needed and which the
+                sync did not create. */}
+            <Check
+              label="Also create a Syntra login"
+              checked={wantsLogin}
+              onChange={setWantsLogin}
+              hint="Not needed for most people: provisioning creates their directory account and their login appears on the next sync. Tick it for an administrator, or somebody with no directory presence."
+            />
+            {wantsLogin && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field
+                  label="Login"
+                  value={v.login ?? ''}
+                  onChange={(x) => set('login', x)}
+                  error={errors.login}
+                  hint="How they sign in. Unique within this tenant."
+                  placeholder="mokafor"
+                />
+                <Field
+                  label="Email"
+                  type="email"
+                  value={v.loginEmail ?? ''}
+                  onChange={(x) => set('loginEmail', x)}
+                  error={errors.email}
+                />
+                <Select
+                  label="Org unit"
+                  value={v.orgUnitId ?? ''}
+                  onChange={(x) => set('orgUnitId', x)}
+                  error={errors.orgUnitId}
+                  hint="Scopes administrative roles and org-unit application grants. Unrelated to the directory container the account is created in, which comes from the contract."
+                  options={[
+                    { value: '', label: 'None' },
+                    ...(unitsData?.orgUnits ?? []).map((u) => ({
+                      value: u.id,
+                      label: u.name,
+                    })),
+                  ]}
+                />
+              </div>
+            )}
           </div>
         </Panel>
 
