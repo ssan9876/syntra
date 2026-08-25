@@ -1,6 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
-import type { Permission } from './permissions.js';
+import { isPermission, type Permission } from './permissions.js';
 
 export async function createRole(
   tx: TenantClient,
@@ -155,4 +155,177 @@ export async function isAdministrator(
 ): Promise<boolean> {
   const count = await tx.roleAssignment.count({ where: { userId } });
   return count > 0;
+}
+
+
+/**
+ * A role change the domain will not make, with a code the API turns into a
+ * problem type.
+ *
+ * The same shape `CampaignRefusedError` and `DecisionRefusedError` use: these
+ * are decisions this module made about a well-formed request, not faults, and a
+ * 500 would tell the caller nothing they can act on.
+ */
+export class RoleRefusedError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RoleRefusedError';
+  }
+}
+
+/**
+ * The permission names, checked against the closed catalogue.
+ *
+ * THE CATALOGUE LIVES HERE, and this is the one place it is enforced on the
+ * way in. The obvious alternative -- a `z.enum` in the contract built from
+ * `ALL_PERMISSIONS` -- would put a second copy of the list at the edge, and a
+ * second copy is a second thing to keep in step with `hasPermission`, which
+ * compares against this one. It is also what `isPermission` was written for:
+ * the function existed, was tested, and had no caller anywhere in the tree.
+ *
+ * The offending value is named in the message because the caller is an
+ * administrator looking at a list of checkboxes and a typo in a permission
+ * string is otherwise indistinguishable from a permission that does not exist
+ * yet.
+ */
+export function assertPermissionNames(values: readonly string[]): Permission[] {
+  const unknown = values.filter((value) => !isPermission(value));
+  if (unknown.length > 0) {
+    throw new RoleRefusedError(
+      'unknown-permission',
+      `not permissions this product has: ${unknown.join(', ')}`,
+    );
+  }
+  return values as Permission[];
+}
+
+export async function readRole(tx: TenantClient, roleId: string) {
+  return tx.role.findUniqueOrThrow({
+    where: { id: roleId },
+    include: { assignments: true },
+  });
+}
+
+/**
+ * Every role with how many people hold it.
+ *
+ * The count is what makes the screen readable: "Owner -- 1 holder" and
+ * "Auditor -- 0 holders" are different facts about whether a permission change
+ * matters, and a list of names without them is a list somebody has to click
+ * through one row at a time.
+ */
+export async function listRolesWithAssignmentCounts(tx: TenantClient) {
+  const roles = await tx.role.findMany({
+    orderBy: { name: 'asc' },
+    include: { assignments: { select: { userId: true } } },
+  });
+  return roles.map(({ assignments, ...role }) => ({
+    ...role,
+    assignmentCount: new Set(assignments.map((a) => a.userId)).size,
+  }));
+}
+
+/**
+ * Changes a role's name, description or permission set.
+ *
+ * The permission set is REPLACED WHOLE rather than merged, and the caller
+ * sends the whole thing. A merge would need an add/remove vocabulary the
+ * screen does not have, and "the permissions are what the boxes say" is the
+ * only rule an administrator can predict from looking at the form.
+ *
+ * A built-in role is editable HERE, deliberately, and that is the point of the
+ * whole task: `Role.permissions` is a snapshot the seed wrote once, the
+ * catalogue grew in six later commits, and the Owner of an upgraded
+ * installation got 403 on every new module with no way to grant itself the
+ * permission but raw SQL. Deletion is a different question -- see below.
+ */
+export async function updateRole(
+  tx: TenantClient,
+  roleId: string,
+  input: {
+    name?: string;
+    description?: string | null;
+    permissions?: readonly string[];
+  },
+): Promise<void> {
+  const role = await tx.role.findUniqueOrThrow({ where: { id: roleId } });
+
+  await tx.role.update({
+    where: { id: role.id },
+    data: {
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.description === undefined ? {} : { description: input.description }),
+      ...(input.permissions === undefined
+        ? {}
+        : { permissions: assertPermissionNames(input.permissions) }),
+    },
+  });
+}
+
+/**
+ * Deletes a role nobody holds.
+ *
+ * Two refusals, both of them about damage that is not visible from the button.
+ * `RoleAssignment` cascades from `Role`, so deleting a held role silently
+ * revokes administrative authority from however many people held it, with no
+ * record of what they had; and a built-in role is the one the seed wrote and
+ * the one the permission backfill migration targets, so deleting it makes the
+ * installation unrepairable by the mechanism that repairs it.
+ *
+ * The holder count is in the message because "it is in use" without a number
+ * is not something the reader can act on.
+ */
+export async function deleteRole(tx: TenantClient, roleId: string): Promise<void> {
+  const role = await tx.role.findUniqueOrThrow({
+    where: { id: roleId },
+    include: { assignments: { select: { userId: true } } },
+  });
+
+  if (role.builtIn) {
+    throw new RoleRefusedError(
+      'built-in-role',
+      `"${role.name}" is a built-in role: it is what the seed created and what the permission backfill targets, so it cannot be deleted. Change its permissions instead.`,
+    );
+  }
+  const holders = new Set(role.assignments.map((a) => a.userId)).size;
+  if (holders > 0) {
+    throw new RoleRefusedError(
+      'role-in-use',
+      `${holders} ${holders === 1 ? 'person holds' : 'people hold'} "${role.name}". Deleting it would revoke that authority with no record of what it was; take the role off them first.`,
+    );
+  }
+
+  await tx.role.delete({ where: { id: role.id } });
+}
+
+/**
+ * How many people hold this permission TENANT-WIDE.
+ *
+ * The denominator behind the lockout guard the role API applies: a change that
+ * leaves nobody able to administer roles leaves an installation that can only
+ * be repaired with SQL, which is exactly the state this whole task exists to
+ * get out of.
+ *
+ * Unscoped assignments only, and that is not an oversight. `hasPermission`
+ * deliberately refuses a scoped grant asked with no scope -- a tenant-wide
+ * question is not answered by authority over one department -- so a
+ * department-scoped `rbac.manage` cannot reach the role API at all and must
+ * not count towards "somebody can still do this".
+ */
+export async function countHoldersOf(
+  tx: TenantClient,
+  permission: Permission,
+): Promise<number> {
+  const assignments = await tx.roleAssignment.findMany({
+    where: { scopeOrgUnitId: null },
+    include: { role: true },
+  });
+  return new Set(
+    assignments
+      .filter((a) => a.role.permissions.includes(permission))
+      .map((a) => a.userId),
+  ).size;
 }
