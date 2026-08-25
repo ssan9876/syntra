@@ -140,7 +140,7 @@ export type IssueSetupOutcome =
   | { ok: false; reason: 'unknown_user' | 'not_local' };
 
 export async function issuePasswordSetup(
-  tenantId: string,
+  tx: TenantClient,
   input: {
     userId: string;
     actorUserId: string;
@@ -150,6 +150,12 @@ export async function issuePasswordSetup(
   },
 ): Promise<IssueSetupOutcome>;
 ```
+
+It takes a `TenantClient` rather than a `tenantId`, unlike
+`requestPasswordReset` beside it. That function opens its own transactions
+specifically so an SMTP round trip cannot happen inside one; this sends no mail,
+does two indexed writes, and is called from `request.db(...)` like every other
+mutation on the admin users route.
 
 It mints a token the same way the reset flow does — random bytes, stored as a
 digest, raw value returned once and never persisted — writes the row, and
@@ -194,12 +200,15 @@ flows land on one route and there is one page to keep working.
 
 ## 7. Console
 
-A **Send password setup link** action on the user detail page, visible with
-`directory.write`. It shows the returned URL with a copy control and states the
+A **Password link** row action on `apps/web/src/pages/admin/UsersPage.tsx`,
+visible with `directory.write`. There is no user detail page — that table's last
+cell already carries Edit and the status toggle, and this belongs beside them.
+
+The result opens a dialog showing the returned URL with a copy control and the
 expiry in plain words. It must render the link as something to copy, not as a
 navigable anchor an administrator can click and thereby consume.
 
-Because issuance supersedes (section 5), the panel must say that generating
+Because issuance supersedes (section 5), the dialog must say that generating
 a new link stops the previous one working. An administrator who sends two links
 and expects both to be usable is the failure this copy exists to prevent.
 
