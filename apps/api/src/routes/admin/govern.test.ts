@@ -750,3 +750,19 @@ describe('the integrity buttons', () => {
     expect((await post('/api/admin/govern/integrity/verify-full', cookie)).statusCode).toBe(403);
   });
 });
+
+it('refuses an early exception revocation to somebody with no standing', async () => {
+  // §15's authority lives in the service, not on the route, because the rule
+  // OWNER need not hold govern.accept_risk. So the route must still refuse a
+  // plain reader — and it does, from the service rather than the guard.
+  await seedAdmin('gov-ex-reader', [PERMISSIONS.GOVERN_READ]);
+  const cookie = await cookieFor('gov-ex-reader');
+  const res = await post(
+    `/api/admin/govern/sod/exceptions/${'00000000-0000-0000-0000-000000000001'}/revoke`,
+    cookie,
+    { reason: 'no' },
+  );
+  // A 404-shaped failure from findUniqueOrThrow is acceptable here, because the
+  // id does not exist. What must NOT happen is a 204.
+  expect(res.statusCode).not.toBe(204);
+});

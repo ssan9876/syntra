@@ -282,6 +282,14 @@ export const decideExceptionBody = z.object({
   comment: z.string().min(1),
 });
 
+/**
+ * §15: an exception may be ended early "by an approver or the rule owner, with
+ * a reason". The reason is required for the same purpose the justification is:
+ * a risk acceptance that ends with no recorded reason is a decision nobody can
+ * re-read.
+ */
+export const revokeExceptionBody = z.object({ reason: z.string().min(1) }).strict();
+
 export const graphQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });

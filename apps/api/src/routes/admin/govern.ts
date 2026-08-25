@@ -17,6 +17,7 @@ import {
   confirmBatchBody,
   createCampaignBody,
   decideExceptionBody,
+  revokeExceptionBody,
   extendCampaignBody,
   graphQuery,
   idParam,
@@ -46,6 +47,7 @@ import {
   confirmRevocationBatch,
   createCampaign,
   decideSodException,
+  revokeSodException,
   extendCampaign,
   previewCampaignScope,
   previewReviewerResolution,
@@ -1046,6 +1048,37 @@ export async function registerAdminGovernRoutes(
       } catch (error) {
         if (error instanceof ExceptionRefusedError) {
           throw new ProblemError(409, error.code, 'Exception refused', error.message);
+        }
+        throw error;
+      }
+      return reply.status(204).send();
+    },
+  );
+
+  app.post(
+    '/govern/sod/exceptions/:id/revoke',
+    // `govern.read` at the gate and the AUTHORITY DECIDED IN THE SERVICE.
+    //
+    // §15 admits "an approver or the rule owner", and the rule owner is the
+    // owner of a business function -- who need not hold `govern.accept_risk` at
+    // all. A `requirePermission` gate here would 403 them before the service
+    // could recognise them, and a gate that admits everybody with `govern.read`
+    // would be no gate; the service refuses anyone who is not an acceptor, the
+    // approver, or the rule owner.
+    { preHandler: requireGovernRead() },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = revokeExceptionBody.parse(request.body);
+      try {
+        await revokeSodException(request.tenantId, request.session.userId, id, body.reason);
+      } catch (error) {
+        if (error instanceof ExceptionRefusedError) {
+          throw new ProblemError(
+            error.code === 'not_an_acceptor' ? 403 : 409,
+            error.code,
+            'Exception refused',
+            error.message,
+          );
         }
         throw error;
       }

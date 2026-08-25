@@ -35,7 +35,9 @@ export class ExceptionRefusedError extends Error {
       | "too_long"
       | "beneficiary_is_approver"
       | "blocked_no_approver"
-      | "missing_justification",
+      | "missing_justification"
+      | "not_an_acceptor"
+      | "not_active",
     message: string,
   ) {
     super(message);
@@ -229,7 +231,11 @@ export async function decideSodException(
   await withTenant(tenantId, async (tx) => {
     const exception = await tx.sodException.findUniqueOrThrow({
       where: { id: exceptionId },
-      include: { rule: true },
+      // `functionA` as well as the rule: §14 routes a refused risk acceptance
+      // to the RULE OWNER, and `SodRule` has no owner column -- the owner of a
+      // rule is the owner of the business function it constrains, which is
+      // where `ownerPersonId` lives.
+      include: { rule: { include: { functionA: true } } },
     });
     if (exception.status !== "pending") {
       throw new ExceptionRefusedError(
@@ -311,13 +317,32 @@ export async function decideSodException(
             } as never,
           },
         });
+        const actorNames = await displayNames(tx, {
+          personIds: actor.personId === null ? [] : [actor.personId],
+        });
+        const actorName =
+          actor.personId === null
+            ? "an administrator"
+            : (actorNames.get(`person:${actor.personId}`) ?? "an approver");
+
         await createRemediationItem(tx, tenantId, {
           kind: "sod_violation_unaccepted",
-          ownerPersonId: exception.personId,
+          // THE RULE OWNER, not the beneficiary.
+          //
+          // §14 routes this to the rule owner and the approver who allowed the
+          // grant. It went to `exception.personId` -- the person the control
+          // exists to CONSTRAIN -- so the beneficiary was handed a task whose
+          // completion means giving up their own access, and the one person who
+          // can change what the rule names was never told there was work to do.
+          //
+          // A `RemediationItem` carries ONE owner, so the approver is named in
+          // the description rather than given a second row: two rows for one
+          // piece of work is two people each assuming the other has it.
+          ownerPersonId: exception.rule.functionA.ownerPersonId,
           dueAt: new Date(Date.now() + 30 * 86_400_000),
           findingId: finding.id,
           description:
-            `The risk acceptance for "${exception.rule.name}" was refused: ${comment}. ` +
+            `The risk acceptance for "${exception.rule.name}" was refused by ${actorName}: ${comment}. ` +
             "Nothing was removed. The incompatible access has to be separated by a person, " +
             "through a campaign decision or a change to what grants it.",
           deepLink: `/admin/govern/sod/violations/${exception.violationId}`,
@@ -345,6 +370,22 @@ export async function decideSodException(
 }
 
 /** An early ending by a person. Same tail as the timer, and same guarantee. */
+/**
+ * An early ending by a person. Same tail as the timer, and same guarantee:
+ * NOTHING IS REVOKED. The violation reopens, everybody involved is told, and
+ * the audit event says in words that no access moved.
+ *
+ * §15 names who may do it: "an approver or the rule owner". Neither was
+ * checked, because nothing called this function -- it was exported, tested, and
+ * reachable from no route and no job, so the capability was in the codebase and
+ * not in the product.
+ *
+ * THE BENEFICIARY IS REFUSED, at the other end of the exception's life from
+ * where the self-approval invariant usually applies. They gain nothing by
+ * ending their own acceptance -- it reopens a finding against them -- but the
+ * person who accepts a risk is the person who carries it, and ending the
+ * acceptance is the same decision in reverse.
+ */
 export async function revokeSodException(
   tenantId: string,
   actorUserId: string,
@@ -354,7 +395,47 @@ export async function revokeSodException(
   await withTenant(tenantId, async (tx) => {
     const exception = await tx.sodException.findUniqueOrThrow({
       where: { id: exceptionId },
+      include: { rule: { include: { functionA: true } } },
     });
+    if (exception.status !== "active") {
+      throw new ExceptionRefusedError(
+        "not_active",
+        `this exception is ${exception.status}; only an active one can be ended early`,
+      );
+    }
+
+    const actor = await tx.user.findUniqueOrThrow({
+      where: { id: actorUserId },
+      select: { personId: true },
+    });
+    if (actor.personId === null) {
+      throw new ExceptionRefusedError(
+        "not_an_acceptor",
+        "this account is linked to no person, so it cannot end a risk acceptance",
+      );
+    }
+    if (actor.personId === exception.personId) {
+      throw new ExceptionRefusedError(
+        "not_an_acceptor",
+        "the beneficiary of an exception may not end it on their own behalf",
+      );
+    }
+
+    // RE-RESOLVED at the decision, never trusted from the request, and the same
+    // resolver the acceptance used -- so a rule that names a workflow is ended
+    // by the same people who could have approved it.
+    const acceptors = await resolveAcceptors(tx, exception.rule, exception.personId, new Date());
+    const permitted =
+      acceptors.includes(actor.personId) ||
+      actor.personId === exception.approvedByPersonId ||
+      actor.personId === exception.rule.functionA.ownerPersonId;
+    if (!permitted) {
+      throw new ExceptionRefusedError(
+        "not_an_acceptor",
+        "only an approver of this exception, or the owner of the rule it covers, may end it early",
+      );
+    }
+
     await lapse(tx, tenantId, exception, new Date(), reason, "revoked");
     await tx.sodException.update({
       where: { id: exceptionId },
@@ -367,6 +448,7 @@ export async function revokeSodException(
       targetId: exceptionId,
       outcome: "success",
       sourceIp: null,
+      // Stated in the event, as on every other ending: no access moved.
       payload: {
         reason,
         violationId: exception.violationId,
@@ -401,6 +483,38 @@ export async function revokeSodException(
  * committed, so an abort here retries the whole job and builds a second
  * snapshot -- which is how one slow sweep turned into two nights of inventory.
  */
+/**
+ * The warning threshold this exception has crossed and not yet passed below,
+ * or null.
+ *
+ * EDGE-TRIGGERED ON AN EXACT DAY COUNT IS WHAT THIS REPLACES. The old form was
+ * `if (!warningDays.includes(daysLeft)) continue;` with defaults of `[14, 3]`,
+ * and the sweep runs daily -- so ONE skipped run lost the warning entirely. A
+ * restart, a failed job, or a paused cadence (which, until the schedule switch
+ * was fixed, is what pausing SNAPSHOTS did) meant the three-day warning was
+ * never sent and the exception lapsed with nobody told. §15's entire point is
+ * that somebody is told BEFORE it lapses.
+ *
+ * The LOWEST threshold crossed, so an exception with one day left reports the
+ * three-day warning rather than the fourteen-day one: the message that matters
+ * is the near one, and reporting the far one would mask it.
+ *
+ * PURE, so the arithmetic is tested as plain values rather than by seeding a
+ * database and moving a clock.
+ */
+export function shouldWarn(
+  endsAt: Date,
+  now: Date,
+  warningDays: readonly number[],
+): number | null {
+  const daysLeft = Math.ceil((endsAt.getTime() - now.getTime()) / 86_400_000);
+  // Already over. The lapse branch owns it, and a warning about something that
+  // has ended is a notification nobody can act on.
+  if (daysLeft <= 0) return null;
+  const crossed = [...warningDays].filter((threshold) => daysLeft <= threshold);
+  return crossed.length === 0 ? null : Math.min(...crossed);
+}
+
 export const EXCEPTION_SWEEP_BATCH = 100;
 
 export async function sweepExceptions(
@@ -480,10 +594,35 @@ export async function sweepExceptions(
           continue;
         }
 
-        const daysLeft = Math.ceil(
-          (exception.endsAt.getTime() - now.getTime()) / 86_400_000,
-        );
-        if (!settings.exceptionWarningDays.includes(daysLeft)) continue;
+        const threshold = shouldWarn(exception.endsAt, now, settings.exceptionWarningDays);
+        if (threshold === null) continue;
+
+        // DE-DUPLICATED AGAINST WHAT WAS ACTUALLY SENT, because a bucket fires
+        // every day inside itself and §15 asks for a warning, not a daily nag.
+        //
+        // The outbox is the record: it holds the template, a `renewUrl` naming
+        // this exception, and -- written for exactly this purpose --
+        // `warningDays`, the threshold that row was sent for. A `lastWarnedAt`
+        // column would be tidier and would need a migration for a fact already
+        // written down.
+        //
+        // KEYED ON THE THRESHOLD, NOT ON A TIME WINDOW. The obvious form is
+        // "any warning since this bucket opened", and it is wrong here: the
+        // outbox row's `createdAt` is the database's wall clock, while the
+        // bucket is derived from `endsAt` and the sweep's INJECTED `now`. Those
+        // two agree in production and diverge in every test that moves the
+        // clock, which is every test of this function. The threshold is the
+        // fact being de-duplicated on, so it is the thing to store.
+        const alreadySent = await tx.notificationOutbox.count({
+          where: {
+            template: "govern-exception-expiring",
+            AND: [
+              { vars: { path: ["renewUrl"], string_contains: exception.id } },
+              { vars: { path: ["warningDays"], equals: String(threshold) } },
+            ],
+          },
+        });
+        if (alreadySent > 0) continue;
 
         const parties = await recipientsForPersons(
           tx,
@@ -509,6 +648,10 @@ export async function sweepExceptions(
               // the old justification. Never auto-renewal, which is approval by
               // inattention wearing a different hat.
               renewUrl: `${options.publicUrl ?? ""}/admin/govern/sod/exceptions/new?renew=${exception.id}`,
+              // Not rendered by the template. Written so the next sweep can
+              // tell WHICH warning this row was, which is what makes the
+              // bucket fire once rather than every day inside itself.
+              warningDays: String(threshold),
             },
             requestId: null,
             userId: recipient.userId,
