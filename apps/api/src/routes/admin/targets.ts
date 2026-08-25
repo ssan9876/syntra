@@ -5,6 +5,7 @@ import {
   testTargetRequestSchema,
   updateTargetRequestSchema,
 } from '@syntra/contracts';
+import { targetConnectorFor } from '@syntra/connectors';
 import {
   PERMISSIONS,
   LadderConfigurationError,
@@ -302,10 +303,16 @@ export async function registerAdminTargetRoutes(
       // missing" — which is a real fault and must stay distinguishable from a
       // typo in a URL.
       const target = await request.db((tx) =>
-        tx.targetSystem.findUnique({ where: { id }, select: { id: true } }),
+        tx.targetSystem.findUnique({ where: { id }, select: { id: true, type: true } }),
       );
       if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
-      return refreshEntitlements(request.tenantId, provider, request.session.userId, id);
+      return refreshEntitlements(
+        request.tenantId,
+        provider,
+        request.session.userId,
+        id,
+        targetConnectorFor(target.type),
+      );
     },
   );
 

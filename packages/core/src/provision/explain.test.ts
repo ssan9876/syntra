@@ -47,6 +47,7 @@ beforeEach(async () => {
   tenantId = t.id;
   targetId = (
     await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
       name: 'Acme AD',
       config,
       bindPassword: 'secret',
@@ -373,6 +374,7 @@ describe('explainPersonAccess', () => {
   it('ignores a rule that names the entitlement at another target', async () => {
     const otherTargetId = (
       await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
         name: 'Other AD',
         config,
         bindPassword: 'secret',
@@ -536,6 +538,7 @@ describe('previewRuleImpact', () => {
   it('ignores a holding of the same entitlement at another target', async () => {
     const otherTargetId = (
       await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
         name: 'Other AD',
         config,
         bindPassword: 'secret',

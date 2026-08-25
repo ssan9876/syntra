@@ -40,6 +40,7 @@ beforeEach(async () => {
 
 const create = () =>
   createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
     name: 'Acme AD',
     config,
     bindPassword: 'super-secret',
@@ -70,6 +71,7 @@ describe('createTarget', () => {
   it('refuses a target configured to write in the clear', async () => {
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: 'Plain',
         config: { ...config, tlsMode: 'plain', url: 'ldap://dc.acme.test:389' },
         bindPassword: 'x',
@@ -355,6 +357,7 @@ describe('upsertBusinessRule', () => {
   it('refuses an entitlement belonging to a different target', async () => {
     const { id } = await create();
     const other = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Other AD',
       config,
       bindPassword: 'x',
@@ -393,6 +396,7 @@ describe('createTarget, beyond the brief', () => {
   it('refuses a blank name', async () => {
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: '   ',
         config,
         bindPassword: 'x',
@@ -421,6 +425,7 @@ describe('createTarget, beyond the brief', () => {
     // choose, displayed back to them as the mode they typed.
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: 'Typo',
         config,
         bindPassword: 'x',
@@ -590,6 +595,7 @@ describe('deleteTarget, beyond the brief', () => {
   it('leaves another target credential alone', async () => {
     const { id } = await create();
     const other = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Other AD',
       config,
       bindPassword: 'other-secret',
@@ -610,6 +616,7 @@ describe('deleteTarget, beyond the brief', () => {
   it('counts only this target rows', async () => {
     const { id } = await create();
     const other = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Other AD',
       config,
       bindPassword: 'x',
@@ -655,7 +662,11 @@ describe('testTargetConfiguration', () => {
     // refuses this over HTTP already, and the point of the check here is that
     // the service refuses it for the callers the route does not speak for.
     await expect(
-      testTargetConfiguration(tenantId, provider, { config, bindPassword: '' }),
+      testTargetConfiguration(tenantId, provider, {
+        type: 'activeDirectory',
+        config,
+        bindPassword: '',
+      }),
     ).rejects.toThrow(/at least 1 character/);
   });
 
@@ -665,6 +676,7 @@ describe('testTargetConfiguration', () => {
     // route turns into a 500.
     await expect(
       testTargetConfiguration(tenantId, provider, {
+      type: 'activeDirectory',
         config,
         borrowFromTargetId: 'the head office one',
       }),
@@ -672,7 +684,10 @@ describe('testTargetConfiguration', () => {
   });
 
   it('refuses when no credential was supplied and none was named', async () => {
-    const result = await testTargetConfiguration(tenantId, provider, { config });
+    const result = await testTargetConfiguration(tenantId, provider, {
+      type: 'activeDirectory',
+      config,
+    });
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/none to borrow/);
   });
@@ -685,29 +700,33 @@ describe('testTargetConfiguration', () => {
     // naming a socket they control.
     const { id } = await create();
     const result = await testTargetConfiguration(tenantId, provider, {
+      type: 'activeDirectory',
       config: { ...config, url: 'ldaps://attacker.example:636' },
       borrowFromTargetId: id,
     });
     expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/only be borrowed for the transport/);
+    expect(result.message).toMatch(/only be borrowed for a target of the same type/);
   });
 
   it('refuses to borrow with the certificate check turned off', async () => {
     const { id } = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Strict',
       config: { ...config, rejectUnauthorized: true },
       bindPassword: 'x',
     });
     const result = await testTargetConfiguration(tenantId, provider, {
+      type: 'activeDirectory',
       config: { ...config, rejectUnauthorized: false },
       borrowFromTargetId: id,
     });
     expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/only be borrowed for the transport/);
+    expect(result.message).toMatch(/only be borrowed for a target of the same type/);
   });
 
   it('refuses to borrow from a target that is not there', async () => {
     const result = await testTargetConfiguration(tenantId, provider, {
+      type: 'activeDirectory',
       config,
       borrowFromTargetId: '00000000-0000-4000-8000-000000000000',
     });
@@ -719,6 +738,7 @@ describe('testTargetConfiguration', () => {
     const { id } = await create();
     const other = await prisma.tenant.create({ data: { name: 'Other', slug: 'other' } });
     const result = await testTargetConfiguration(other.id, provider, {
+      type: 'activeDirectory',
       config,
       borrowFromTargetId: id,
     });
@@ -733,11 +753,13 @@ describe('testTargetConfiguration', () => {
     // Reaching a connection failure rather than a borrow refusal is what
     // proves the credential was handed over.
     const created = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Unreachable',
       config: unreachable,
       bindPassword: 'x',
     });
     const result = await testTargetConfiguration(tenantId, provider, {
+      type: 'activeDirectory',
       config: unreachable,
       borrowFromTargetId: created.id,
     });
@@ -748,6 +770,7 @@ describe('testTargetConfiguration', () => {
   it('refuses a configuration that would write in the clear before anything else', async () => {
     await expect(
       testTargetConfiguration(tenantId, provider, {
+      type: 'activeDirectory',
         config: { ...config, tlsMode: 'plain', url: 'ldap://dc.acme.test:389' },
         bindPassword: 'x',
       }),
@@ -852,6 +875,7 @@ describe('upsertBusinessRule, beyond the brief', () => {
     // the one path the check does not look at.
     const a = await create();
     const b = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Other AD',
       config,
       bindPassword: 'x',
@@ -1062,6 +1086,7 @@ describe('the gaps the mutation pass found', () => {
 
   it('honours an explicit disabled, non-additive create', async () => {
     const created = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Staged',
       config,
       bindPassword: 'x',
@@ -1097,6 +1122,7 @@ describe('the gaps the mutation pass found', () => {
   it('refuses a name longer than the column should hold', async () => {
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: 'x'.repeat(201),
         config,
         bindPassword: 'x',
@@ -1107,6 +1133,7 @@ describe('the gaps the mutation pass found', () => {
   it('refuses a paired directory source that is not a uuid', async () => {
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: 'Paired',
         config,
         bindPassword: 'x',
@@ -1128,6 +1155,7 @@ describe('the gaps the mutation pass found', () => {
       }),
     );
     const created = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Paired',
       config,
       bindPassword: 'x',
@@ -1150,6 +1178,7 @@ describe('the gaps the mutation pass found', () => {
     // with a constraint name in it.
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: 'Paired',
         config,
         bindPassword: 'x',
@@ -1178,6 +1207,7 @@ describe('the gaps the mutation pass found', () => {
     );
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: 'Paired',
         config,
         bindPassword: 'x',
@@ -1199,6 +1229,7 @@ describe('the gaps the mutation pass found', () => {
       }),
     );
     const created = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Paired',
       config,
       bindPassword: 'x',
@@ -1234,6 +1265,7 @@ describe('the gaps the mutation pass found', () => {
       }),
     );
     const created = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Paired',
       config,
       bindPassword: 'x',
@@ -1304,6 +1336,7 @@ describe('the gaps the mutation pass found', () => {
     // that will never fire.
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: 'Nightly',
         config,
         bindPassword: 'x',
@@ -1506,6 +1539,7 @@ describe('the second gaps the mutation pass found', () => {
     // message is asserted.
     await expect(
       createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
         name: 'Paired',
         config,
         bindPassword: 'x',
@@ -1524,6 +1558,7 @@ describe('the second gaps the mutation pass found', () => {
     // different statement -- changed nothing anybody looked at.
     const { id } = await create();
     const other = await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Other AD',
       config,
       bindPassword: 'x',

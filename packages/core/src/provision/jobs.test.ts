@@ -61,6 +61,7 @@ beforeEach(async () => {
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
   tenantId = t.id;
   const created = await createTarget(tenantId, provider, null, {
+  type: 'activeDirectory',
     name: 'Acme AD',
     config,
     bindPassword: 'secret',
@@ -183,6 +184,7 @@ describe('the schedule follows the target through create, update and delete', ()
       null,
       {
         name: 'Second AD',
+        type: 'activeDirectory',
         config,
         bindPassword: 'secret',
         schedule: '*/15 * * * *',
@@ -203,7 +205,7 @@ describe('the schedule follows the target through create, update and delete', ()
       tenantId,
       provider,
       null,
-      { name: 'Third AD', config, bindPassword: 'secret' },
+      { name: 'Third AD', type: 'activeDirectory', config, bindPassword: 'secret' },
       scheduler as never,
     );
     expect(scheduler.schedule).not.toHaveBeenCalled();

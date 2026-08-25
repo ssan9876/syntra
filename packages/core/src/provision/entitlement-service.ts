@@ -1,10 +1,5 @@
 import { withTenant, type TenantClient } from '@syntra/db';
-import {
-  adTargetConnector,
-  type AdTargetConfig,
-  type DiscoveredEntitlement,
-  type TargetConnector,
-} from '@syntra/connectors';
+import type { DiscoveredEntitlement, TargetConnector } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
@@ -126,10 +121,7 @@ export class EmptyEntitlementReadError extends Error {
 }
 
 /** The one member of the connector this function uses. */
-type EntitlementReader = Pick<
-  TargetConnector<AdTargetConfig & { bindPassword: string }>,
-  'listEntitlements'
->;
+type EntitlementReader = Pick<TargetConnector<never>, 'listEntitlements'>;
 
 /**
  * Reads the target's entitlement catalog and reconciles it with Syntra's.
@@ -144,16 +136,20 @@ type EntitlementReader = Pick<
  * revoking it from everybody. `missing` makes those rules unresolvable
  * instead, which is loud.
  *
- * `connector` is injectable so this can be exercised against a fake. The
- * default is the real Active Directory connector, so no caller has to know
- * that it is injectable.
+ * `connector` is required rather than defaulted: which connector reads this
+ * target's catalog depends on `TargetSystem.type`, which is not knowable at
+ * this function's own definition — a default *value* cannot be "resolved by
+ * type" without a type to resolve from. Every caller already has the target
+ * row in scope (entitlement refresh is always invoked with a `targetId` a
+ * caller has just loaded the target for), so this asks for
+ * `targetConnectorFor(target.type)` rather than assuming one.
  */
 export async function refreshEntitlements(
   tenantId: string,
   provider: MasterKeyProvider,
   actorUserId: string | null,
   targetId: string,
-  connector: EntitlementReader = adTargetConnector,
+  connector: EntitlementReader,
 ): Promise<{ present: number; missing: number; unidentifiable: number }> {
   // Phase 1: read the configuration out, then close the transaction.
   const config = await withTenant(tenantId, (tx) =>
@@ -163,7 +159,7 @@ export async function refreshEntitlements(
 
   // Phase 2: the network read. No transaction is held.
   const discovered: DiscoveredEntitlement[] = [];
-  for await (const entitlement of connector.listEntitlements(config)) {
+  for await (const entitlement of connector.listEntitlements(config as never)) {
     discovered.push(entitlement);
   }
 

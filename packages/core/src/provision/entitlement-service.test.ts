@@ -71,6 +71,7 @@ beforeEach(async () => {
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
   tenantId = t.id;
   const created = await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
     name: 'Acme AD',
     config,
     bindPassword: 'super-secret',
@@ -446,6 +447,7 @@ describe('refreshEntitlements', () => {
 
   it('leaves another target’s catalog alone', async () => {
     const other = await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
       name: 'Other AD',
       config,
       bindPassword: 'x',
@@ -611,6 +613,7 @@ describe('remitFor', () => {
     // for revocation. Reading across targets would revoke on one target
     // because a rule on another mentioned something.
     const other = await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
       name: 'Other AD',
       config,
       bindPassword: 'x',
@@ -685,6 +688,7 @@ describe('the gaps the mutation pass found', () => {
     // other target has a catalog, which is a target that can never be
     // populated at all.
     const other = await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
       name: 'Other AD',
       config,
       bindPassword: 'x',

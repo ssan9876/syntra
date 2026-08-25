@@ -59,6 +59,43 @@ export const targetConfigSchema = z
   .strict();
 
 /**
+ * The SCIM 2.0 target's own config shape, kept in parallel with
+ * `@syntra/connectors`' `scim2TargetConfigSchema` for the same reason
+ * `targetConfigSchema` above is kept in parallel with `adTargetConfigSchema`:
+ * this one is what an administrator's save is checked against at the outer
+ * boundary, the connector's own copy parses the stored object again before
+ * every run, and `.strict()` here is what turns a typo'd field name into a
+ * 400 instead of a save that silently reverts that field to its default.
+ */
+export const scim2TargetConfigSchema = z
+  .object({
+    baseUrl: directoryString.refine(
+      (v) => v.startsWith('http://') || v.startsWith('https://'),
+      { message: 'baseUrl must start with http:// or https://' },
+    ),
+    userResourcePath: directoryString.default('/Users'),
+    groupResourcePath: directoryString.default('/Groups'),
+    pageSize: z.number().int().positive().max(1000).default(200),
+    connectTimeoutMs: z.number().int().positive().max(120_000).default(10_000),
+    timeoutMs: z.number().int().positive().max(600_000).default(60_000),
+    allowPrivateAddresses: z.boolean().default(false),
+  })
+  .strict();
+
+/** Every `TargetSystem.type` the API accepts, kept in step with `@syntra/connectors`' `TARGET_CONNECTOR_TYPES`. */
+export const targetTypeSchema = z.enum(['activeDirectory', 'scim2']);
+
+/**
+ * Either connector's config shape. Not a discriminated union on `type`
+ * because `type` lives as a sibling field on the request body, not inside
+ * `config` itself — the route layer's own re-validation via
+ * `targetConfigSchemaFor(type)` in `@syntra/core` is what actually ties the
+ * two together; this union exists so a mistyped field name is still a 400 at
+ * this outer boundary rather than silently accepted as `unknown`.
+ */
+const anyTargetConfigSchema = z.union([targetConfigSchema, scim2TargetConfigSchema]);
+
+/**
  * `.strict()` on the request bodies, and it is not decoration.
  *
  * `TargetSystem.concurrency` is stored, validated and rendered, and the apply
@@ -75,7 +112,8 @@ export const targetConfigSchema = z
 export const createTargetRequestSchema = z
   .object({
     name: z.string().min(1),
-    config: targetConfigSchema,
+    type: targetTypeSchema,
+    config: anyTargetConfigSchema,
     bindPassword: z.string().min(1).max(1024),
     pairedDirectorySourceId: z.string().uuid().nullable().optional(),
     /**
@@ -140,7 +178,8 @@ export type UpdateTargetRequest = z.input<typeof updateTargetRequestSchema>;
 
 export const testTargetRequestSchema = z
   .object({
-    config: targetConfigSchema,
+    type: targetTypeSchema,
+    config: anyTargetConfigSchema,
     bindPassword: z.string().min(1).max(1024).optional(),
     borrowFromTargetId: z.string().uuid().optional(),
   })

@@ -9,7 +9,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 // `@syntra/connectors/testing` and not a deep `src/ad/...` path: the package
 // declares an `exports` map, and an `exports` map denies every unlisted
 // subpath (TS2307).
-import { isEnabled } from '@syntra/connectors';
+import { adTargetConnector, isEnabled } from '@syntra/connectors';
 import {
   connectAsSambaAdmin,
   purgeSubtree,
@@ -72,13 +72,14 @@ beforeEach(async () => {
   tenantId = t.id;
   targetId = (
     await createTarget(tenantId, provider, null, {
+      type: 'activeDirectory',
       name: 'Samba AD',
       config,
       bindPassword: samba.bindPassword,
     })
   ).id;
 
-  await refreshEntitlements(tenantId, provider, null, targetId);
+  await refreshEntitlements(tenantId, provider, null, targetId, adTargetConnector);
   const entitlementId = await withTenant(
     tenantId,
     async (tx) =>
