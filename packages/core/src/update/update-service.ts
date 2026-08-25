@@ -44,6 +44,7 @@ const IN_FLIGHT = new Set([
   'verifying',
   'unpacking',
   'installing',
+  'generating',
   'backing-up',
   'migrating',
   'switching',

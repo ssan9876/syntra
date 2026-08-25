@@ -30,6 +30,7 @@ const STEP_TEXT: Record<string, string> = {
   verifying: 'Checking it is intact',
   unpacking: 'Unpacking',
   installing: 'Installing dependencies',
+  generating: 'Preparing the database client',
   'backing-up': 'Backing up the database',
   migrating: 'Applying database changes',
   switching: 'Restarting on the new version',

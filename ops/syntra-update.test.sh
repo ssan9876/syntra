@@ -95,6 +95,58 @@ ok "the status line carries the step" \
 ok "the status line carries the detail" \
   "$(status_line migrating 'applying migrations' | cut -f3)" "applying migrations"
 
+# --- env_value --------------------------------------------------------------
+#
+# The updater has to learn the deployment's connection string, its port and its
+# container name from the same file the service is started with. It must NOT
+# learn them by sourcing it: that file holds MASTER_KEY and RELEASE_TOKEN, whose
+# values are chosen by base64 and by GitHub rather than by anybody thinking
+# about shell quoting.
+
+ENVFILE="$(mktemp)"
+cat > "$ENVFILE" <<'EOF'
+# A comment, and a commented-out key that must not be found.
+# PORT=9999
+DATABASE_URL=postgresql://syntra_app:syntra_app@localhost:5432/syntra
+PORT=3000
+QUOTED="quoted value"
+SINGLE='single value'
+export EXPORTED=exported
+TRAILING=value   
+EOF
+
+ok "reads a plain value"        "$(env_value DATABASE_URL "$ENVFILE")" \
+  "postgresql://syntra_app:syntra_app@localhost:5432/syntra"
+ok "reads a numeric value"      "$(env_value PORT "$ENVFILE")" "3000"
+ok "strips double quotes"       "$(env_value QUOTED "$ENVFILE")" "quoted value"
+ok "strips single quotes"       "$(env_value SINGLE "$ENVFILE")" "single value"
+ok "reads an exported key"      "$(env_value EXPORTED "$ENVFILE")" "exported"
+ok "strips trailing whitespace" "$(env_value TRAILING "$ENVFILE")" "value"
+ok "ignores a commented key"    "$(env_value PORT "$ENVFILE")" "3000"
+ok "an absent key is empty"     "$(env_value NOPE "$ENVFILE")" ""
+# Not an error: an install may legitimately not have the file yet, and the
+# caller decides what a missing value means. Exiting non-zero here would take
+# the whole updater down under `set -e` for a key nobody required.
+ok "an absent file is empty"    "$(env_value PORT /nonexistent/env)" ""
+rm -f "$ENVFILE"
+
+# --- pg_url_field -----------------------------------------------------------
+#
+# The dump, the restore and the migration all need to know WHICH database, and
+# the answer is in DATABASE_URL rather than in this script.
+
+PGURL="postgresql://syntra_app:s3cr3t@localhost:5432/syntra"
+ok "reads the role"    "$(pg_url_field user "$PGURL")" "syntra_app"
+ok "reads the database" "$(pg_url_field db  "$PGURL")" "syntra"
+ok "drops query parameters" \
+  "$(pg_url_field db 'postgresql://u:p@h:5432/syntra?schema=public&sslmode=require')" "syntra"
+ok "reads a url with no password" "$(pg_url_field user 'postgresql://syntra@h:5432/syntra')" "syntra"
+# Refused rather than guessed. A default database name is how a restore lands
+# somewhere nobody chose.
+ok "refuses a url with no database" "$(pg_url_field db 'postgresql://u:p@h:5432' || echo ERR)" "ERR"
+ok "refuses a url with no role"     "$(pg_url_field user 'postgresql://h:5432/syntra' || echo ERR)" "ERR"
+ok "refuses an unknown field"       "$(pg_url_field port "$PGURL" || echo ERR)" "ERR"
+
 # --- report -----------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

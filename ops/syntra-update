@@ -77,6 +77,59 @@ releases_to_prune() {
 # The step name and detail, as the console will read them.
 status_line() { printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2"; }
 
+# The value of KEY in an env file, WITHOUT sourcing it.
+#
+# `. "$SHARED/.env"` would EXECUTE that file, and it holds MASTER_KEY and
+# RELEASE_TOKEN -- values produced by base64 and by GitHub, not by anybody
+# thinking about shell quoting. Sourcing it to learn a port number is a way to
+# run whatever a stray backtick happens to spell, as root, from a unit nobody
+# is watching.
+#
+# Always exits 0, including for a file that does not exist. An absent key and
+# an empty key are the same answer here, and the CALLER decides what that
+# means -- a missing PORT is a default, a missing DATABASE_URL is fatal.
+env_value() {
+  local key="$1" file="$2"
+  [ -f "$file" ] || return 0
+  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}${key}[[:space:]]*=[[:space:]]*\(.*\)\$/\2/p" "$file" \
+    | tail -1 \
+    | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+# One field out of a PostgreSQL connection URL.
+#
+#   pg_url_field user postgresql://syntra_app:pw@localhost:5432/syntra -> syntra_app
+#   pg_url_field db   postgresql://syntra_app:pw@localhost:5432/syntra -> syntra
+#
+# Refuses rather than defaults. `pg_dump -d syntra` when the URL named
+# something else is a backup of the wrong database, and it looks like a
+# backup right up to the moment it is restored over the right one.
+pg_url_field() {
+  local field="$1" url="$2" rest
+  rest="${url#*://}"
+  case "$field" in
+    user)
+      case "$rest" in
+        *@*) rest="${rest%%@*}"; printf '%s\n' "${rest%%:*}"; return 0 ;;
+        *)   return 1 ;;
+      esac
+      ;;
+    db)
+      case "$rest" in
+        */*)
+          rest="${rest#*/}"
+          rest="${rest%%\?*}"
+          [ -n "$rest" ] || return 1
+          printf '%s\n' "$rest"
+          return 0
+          ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 2 ;;
+  esac
+}
+
 # --- everything below does I/O ----------------------------------------------
 
 log()   { echo "[syntra-update] $*" >&2; }
@@ -179,6 +232,29 @@ swap_to() {
   systemctl restart "$SERVICE"
 }
 
+# What this deployment's database actually is, read from the configuration the
+# SERVICE is started with rather than assumed.
+#
+# `resolve_environment` is called from main(), after the lock and never at
+# source time: the test harness sources this file to reach the pure helpers
+# above, and a script that read files on import would make the tests depend on
+# a machine that has been installed.
+DB_URL=""
+SHADOW_URL=""
+
+resolve_environment() {
+  DB_URL="${SYNTRA_DATABASE_URL:-$(env_value DATABASE_URL "$SHARED/.env")}"
+  [ -n "$DB_URL" ] \
+    || die "no DATABASE_URL in $SHARED/.env, so the migration step has nothing to connect to"
+
+  # Named in the datasource block, so the schema does not LOAD without it --
+  # even though `migrate deploy` never connects to it and only `migrate dev`
+  # does. Falling back to the real URL is therefore correct rather than a
+  # compromise: nothing will open it.
+  SHADOW_URL="${SYNTRA_SHADOW_DATABASE_URL:-$(env_value SHADOW_DATABASE_URL "$SHARED/.env")}"
+  [ -n "$SHADOW_URL" ] || SHADOW_URL="$DB_URL"
+}
+
 # --- the update -------------------------------------------------------------
 
 do_update() {
@@ -220,13 +296,36 @@ do_update() {
   ( cd "$dir" && pnpm install --frozen-lockfile --prod=false ) \
     || die "dependencies could not be installed for v$target"
 
+  status "generating" "generating the database client"
+  # U2. `node_modules` is deliberately not in the tarball, and @prisma/client's
+  # postinstall cannot find packages/db/prisma/schema.prisma from the release
+  # root -- so `pnpm install` alone leaves a release whose every query throws
+  # "@prisma/client did not initialize yet". The API starts fine, `/health`
+  # answers 200 throughout, readiness stays 503 for the full 90 seconds, and
+  # the rollback then discards anything written in between.
+  #
+  # Before the dump, deliberately: this is the last step that can fail with
+  # nothing to undo.
+  ( cd "$dir" && env DATABASE_URL="$DB_URL" SHADOW_DATABASE_URL="$SHADOW_URL" \
+      pnpm --filter @syntra/db exec prisma generate ) \
+    || die "the database client could not be generated for v$target"
+
   local dump="$BACKUPS/pre-$target-$(date -u +%Y%m%dT%H%M%SZ).dump"
   status "backing-up" "dumping the database"
   dump_database "$dump"
 
   status "migrating" "applying migrations"
   # In the NEW release: the migrations being applied are its own.
-  ( cd "$dir" && pnpm --filter @syntra/db exec prisma migrate deploy ) \
+  #
+  # DATABASE_URL is passed IN, and that is the whole of U1. The Prisma CLI
+  # reads `.env` from ITS OWN working directory -- `packages/db`, under
+  # `pnpm --filter` -- and `packages/db/.env` is gitignored, so it is not in
+  # the tarball and never will be. The root `.env` symlinked into the release
+  # is not in scope for it. Every console update reached this line and failed
+  # with "Environment variable not found: DATABASE_URL", and every one of them
+  # rolled back.
+  ( cd "$dir" && env DATABASE_URL="$DB_URL" SHADOW_DATABASE_URL="$SHADOW_URL" \
+      pnpm --filter @syntra/db exec prisma migrate deploy ) \
     || { restore_after_failure "$from" "$dump" "migrations failed"; }
 
   status "switching" "restarting on v$target"
@@ -333,6 +432,8 @@ main() {
   # end up running neither version.
   exec 9>"$LOCK"
   flock -n 9 || die "another update is already running"
+
+  resolve_environment
 
   if [ "$1" = "--rollback" ]; then do_rollback; else do_update "$1"; fi
 }
