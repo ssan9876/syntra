@@ -96,18 +96,18 @@ const DEFAULT_AUTHN_CONTEXT =
  */
 const SAML_BINDING_COOKIE = 'syntra_saml_bind';
 
-const SAML_BINDING_COOKIE_OPTIONS = {
+const samlBindingCookieOptions = (secure: boolean) => ({
   httpOnly: true,
   sameSite: 'lax' as const,
   path: '/saml',
-  // Follows NODE_ENV for the same reason the session cookie does: a
-  // development server runs on plain HTTP and a Secure cookie would never come
-  // back, which reads as "single sign-on is broken".
-  secure: process.env.NODE_ENV === 'production',
+  // From PUBLIC_URL's scheme, for the reason `sessionCookieOptions` gives:
+  // NODE_ENV is set nowhere in the lab deployment, so this cookie went out
+  // without `Secure` on the one instance that is actually behind TLS.
+  secure,
   // Comfortably longer than a parked request's ten minutes, so the row is what
   // expires the flow and not the cookie, and re-issued on every park.
   maxAge: 30 * 60,
-};
+});
 
 /**
  * The binding digest to park a request under, setting the cookie if this
@@ -124,7 +124,11 @@ function bindBrowser(request: FastifyRequest, reply: FastifyReply): string {
     return browserBindingDigest(existing);
   }
   const { nonce, digest } = newBrowserBinding();
-  reply.setCookie(SAML_BINDING_COOKIE, nonce, SAML_BINDING_COOKIE_OPTIONS);
+  reply.setCookie(
+    SAML_BINDING_COOKIE,
+    nonce,
+    samlBindingCookieOptions(request.server.cookieSecure),
+  );
   return digest;
 }
 

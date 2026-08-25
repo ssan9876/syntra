@@ -11,7 +11,7 @@ import {
   setPasswordHash,
 } from '@syntra/core';
 import * as OTPAuth from 'otpauth';
-import { buildTestApp } from '../test-support.js';
+import { buildTestApp, TEST_HOST } from '../test-support.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 
@@ -571,5 +571,40 @@ describe('POST /api/auth/elevate and admin MFA', () => {
     });
     expect(verified.statusCode).toBe(200);
     expect(verified.json().scope).toBe('admin');
+  });
+});
+
+/**
+ * The wiring, not the derivation.
+ *
+ * `cookiesAreSecure` is unit-tested next to itself, but the defect this fixes
+ * was never in the arithmetic -- it was that three cookie definitions read
+ * `process.env.NODE_ENV`, a variable `config.ts` has no say in and the lab
+ * deployment exports nowhere. A pure test of the helper would have passed
+ * happily while every cookie still went out unmarked, so the assertion that
+ * matters is made against a real response from a real app.
+ */
+describe('the session cookie takes Secure from PUBLIC_URL', () => {
+  it('marks it Secure when the deployment is reached over https', async () => {
+    ctx = await buildTestApp({ env: { PUBLIC_URL: `https://${TEST_HOST}` } });
+    await ctx.app.ready();
+    await seedUser();
+
+    const cookie = cookieOf(await login(PASSWORD)) as unknown as { secure?: boolean };
+    expect(cookie).toBeDefined();
+    expect(cookie.secure).toBe(true);
+  });
+
+  /**
+   * And plain HTTP must NOT, or a development server sets a cookie the browser
+   * never sends back -- which reads as "sign-in is broken" rather than as a
+   * cookie policy. This is also the behaviour the whole existing suite relies
+   * on, which is what makes the swap safe.
+   */
+  it('leaves it unmarked on plain http', async () => {
+    await seedUser();
+    const cookie = cookieOf(await login(PASSWORD)) as unknown as { secure?: boolean };
+    expect(cookie).toBeDefined();
+    expect(cookie.secure).toBeFalsy();
   });
 });

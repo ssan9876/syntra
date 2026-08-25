@@ -100,6 +100,9 @@ export async function buildApp(
     trustProxy: config.trustProxy,
   });
 
+  // Read once, from configuration, and available wherever a cookie is written.
+  app.decorate('cookieSecure', config.cookieSecure);
+
   await app.register(cookie, { secret: config.sessionSecret });
   // Off by default; applied per route, since a blanket limit would throttle
   // ordinary reads as hard as password attempts.

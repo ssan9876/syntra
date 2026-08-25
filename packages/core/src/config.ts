@@ -1,3 +1,4 @@
+import { cookiesAreSecure } from './cookie-security.js';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { isIpRangeUsable } from './policy/ip-match.js';
@@ -165,6 +166,15 @@ export interface Config {
   databaseUrl: string;
   port: number;
   publicUrl: string;
+  /**
+   * Whether cookies carry `Secure`, derived from `publicUrl`'s scheme.
+   *
+   * On the config rather than read from `process.env` at three cookie
+   * definitions, which is what it replaced: NODE_ENV is a variable this
+   * product's own configuration loader never sees, and the lab deployment
+   * exports it nowhere.
+   */
+  cookieSecure: boolean;
   sessionSecret: string;
   masterKey: Buffer;
   smtpUrl: string;
@@ -218,6 +228,7 @@ export function loadConfig(
     databaseUrl: v.DATABASE_URL,
     port: v.PORT,
     publicUrl: v.PUBLIC_URL,
+    cookieSecure: cookiesAreSecure(v.PUBLIC_URL),
     sessionSecret: v.SESSION_SECRET,
     masterKey: Buffer.from(v.MASTER_KEY, 'base64'),
     smtpUrl: v.SMTP_URL,

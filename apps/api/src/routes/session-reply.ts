@@ -8,21 +8,42 @@ import {
 } from '@syntra/core';
 import { SESSION_COOKIE } from '../plugins/require-session.js';
 
+declare module 'fastify' {
+  interface FastifyInstance {
+    /**
+     * Whether this deployment's cookies carry `Secure`, from `PUBLIC_URL`.
+     *
+     * A decoration rather than an option threaded through four route
+     * registrations, because `issueSession` is called from `auth.ts`,
+     * `mfa.ts`, `enrol.ts` and `federation.ts` and none of them take options
+     * of their own. One value, set once in `buildApp`, read where the cookie
+     * is written.
+     */
+    cookieSecure: boolean;
+  }
+}
+
 /**
  * How a session cookie is written. One definition, because four routes set the
  * same cookie and a fifth will, and the attribute that matters most —
  * `httpOnly` — is the one nobody notices missing from a copy.
  *
- * `secure` follows NODE_ENV rather than being hard-wired: a development server
- * runs on plain HTTP and a cookie marked secure would simply never come back,
- * which reads as "sign-in is broken" rather than as a misconfiguration.
+ * `secure` comes from `PUBLIC_URL`'s scheme, not from NODE_ENV. The variable it
+ * used to read is one `config.ts` has no say in and the lab deployment sets
+ * nowhere, so an instance behind TLS sent session tokens without `Secure` and
+ * nothing anywhere reported a misconfiguration. The scheme of the URL the
+ * deployment is reached at is the fact this actually wanted, and it is
+ * validated at startup.
+ *
+ * Still false on plain HTTP: a development server would otherwise set a cookie
+ * that never comes back, which reads as "sign-in is broken".
  */
-export const SESSION_COOKIE_OPTIONS = {
+export const sessionCookieOptions = (secure: boolean) => ({
   httpOnly: true,
   sameSite: 'lax' as const,
   path: '/',
-  secure: process.env.NODE_ENV === 'production',
-};
+  secure,
+});
 
 export interface SessionBody {
   userId: string;
@@ -76,7 +97,7 @@ export async function issueSession(
   decision: SessionAllowance,
 ): Promise<{ status: 'authenticated' } & SessionBody> {
   const { token } = await request.db((tx) => createSession(tx, decision));
-  reply.setCookie(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS);
+  reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions(request.server.cookieSecure));
   return {
     status: 'authenticated',
     ...(await sessionBody(request, decision.userId, decision.scope)),
