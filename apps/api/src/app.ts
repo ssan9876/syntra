@@ -42,6 +42,7 @@ import { registerAdminProfileRoutes } from './routes/admin/profiles.js';
 import { registerAdminRuleRoutes } from './routes/admin/rules.js';
 import { registerAdminProvisionRunRoutes } from './routes/admin/provision-runs.js';
 import { registerAdminGovernRoutes } from './routes/admin/govern.js';
+import { configuredCheckpointSigner } from './govern-signer.js';
 import { registerPortalRoutes } from './routes/portal.js';
 import { registerAutomatePortalRoutes } from './routes/automate-portal.js';
 import { registerGovernPortalRoutes } from './routes/govern-portal.js';
@@ -308,6 +309,9 @@ export async function buildApp(
     // §12: starting a campaign emails every resolved reviewer a link. Without
     // this the link is relative and nobody can click it from a mail client.
     publicUrl: config.publicUrl,
+    // The SAME signer the scheduler uses. See govern-signer.ts for what
+    // happened when these two were constructed separately.
+    checkpointSigner: () => configuredCheckpointSigner(config),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminRuleRoutes, { prefix: '/api/admin' });

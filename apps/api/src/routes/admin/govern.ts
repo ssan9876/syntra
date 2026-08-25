@@ -17,6 +17,7 @@ import {
   confirmBatchBody,
   createCampaignBody,
   decideExceptionBody,
+  revokeExceptionBody,
   extendCampaignBody,
   graphQuery,
   idParam,
@@ -46,6 +47,7 @@ import {
   confirmRevocationBatch,
   createCampaign,
   decideSodException,
+  revokeSodException,
   extendCampaign,
   previewCampaignScope,
   previewReviewerResolution,
@@ -59,6 +61,8 @@ import {
   buildSnapshot,
   confirmProposal,
   createEvidencePack,
+  type CheckpointSigner,
+  fetchEvidencePack,
   denyProposal,
   exportReportCsv,
   governReadScope,
@@ -73,6 +77,7 @@ import {
   setResourceClassification,
   syncJobPayload,
   updateGovernSettings,
+  verifyFull,
   verifyIncremental,
   whatChanged,
   whatDoesPersonHold,
@@ -137,6 +142,11 @@ function requireGovernRead(alsoRequire?: Permission) {
  * the scope is then a test failure rather than a disclosure.
  */
 export const GOVERN_READ_ROUTES: readonly { path: string; scoped: boolean; why?: string }[] = [
+  {
+    path: 'GET /govern/evidence/:id',
+    scoped: false,
+    why: 'a bundle is a signed artifact over a campaign or a snapshot as a whole; it cannot be partially disclosed and is gated on govern.export instead',
+  },
   {
     path: 'GET /govern/snapshots',
     scoped: false,
@@ -241,7 +251,16 @@ const scopeOf = (request: FastifyRequest): GovernScope =>
 
 export async function registerAdminGovernRoutes(
   app: FastifyInstance,
-  options: { scheduler?: () => Scheduler | null; publicUrl?: string } = {},
+  options: {
+    scheduler?: () => Scheduler | null;
+    publicUrl?: string;
+    /**
+     * The deployment's checkpoint signer, the SAME one the scheduler uses.
+     * Without it `verifyIncremental` is handed `null` here and condemns a
+     * checkpoint this deployment signed itself.
+     */
+    checkpointSigner?: () => CheckpointSigner | null;
+  } = {},
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
@@ -452,6 +471,23 @@ export async function registerAdminGovernRoutes(
     },
   );
 
+  app.get(
+    '/govern/evidence/:id',
+    // `govern.export` rather than `govern.read`: this returns the whole signed
+    // document, which is the same act as creating one. "Reading a screen and
+    // walking out with a file are different acts with different consequences,
+    // and only one of them is a copy."
+    { preHandler: requireGovernRead(PERMISSIONS.GOVERN_EXPORT) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { bundle, digestMatches } = await fetchEvidencePack(request.tenantId, id);
+      // Returned, never thrown. A bundle that no longer digests to what was
+      // stored is the most interesting thing this route can say, and a 500
+      // would say it as "something went wrong".
+      return { bundle, digestMatches };
+    },
+  );
+
   // ---- findings and remediation -------------------------------------------
   app.get('/govern/findings', { preHandler: requireGovernRead() }, async (request) => {
     const query = findingQuery.parse(request.query);
@@ -599,7 +635,33 @@ export async function registerAdminGovernRoutes(
   app.post(
     '/govern/integrity/verify',
     { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
-    async (request) => verifyIncremental(request.tenantId),
+    async (request) =>
+      // THE SIGNER, which this route did not pass. `verifyIncremental` defaults
+      // it to null, `checkpointTrust` then answers `unknown_key` for a
+      // legitimately signed checkpoint, the result is forced to `broken`, a
+      // `critical` finding is raised and mailed, a genesis walk runs inside
+      // this request -- and the recovery branch writes the new head checkpoint
+      // UNSIGNED, so the scheduled run that night refuses to seed on it and
+      // walks from genesis again. Pressing "Verify now" made the integrity
+      // story permanently worse.
+      verifyIncremental(request.tenantId, { signer: options.checkpointSigner?.() ?? null }),
+  );
+
+  app.post(
+    '/govern/integrity/verify-full',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) =>
+      // §17: "Full verification from genesis remains available as a separate,
+      // explicitly invoked, paged job -- for an investigation, and on a slow
+      // schedule." It was exported, tested and reachable from nothing, so the
+      // one thing an investigation actually wants was not in the product.
+      //
+      // NO SIGNER PARAMETER, and that is not an omission: a full walk starts at
+      // genesis and seeds on `GENESIS_HASH`, so there is no checkpoint to
+      // trust or refuse. It writes an `AuditChainCheck` with `mode: 'full'` and
+      // deliberately writes no checkpoint -- `verifyIncremental` remains the
+      // only writer of those.
+      verifyFull(request.tenantId),
   );
 
   // ---- settings and classification ----------------------------------------
@@ -664,7 +726,14 @@ export async function registerAdminGovernRoutes(
         counts: {
           total: campaign.totalItems,
           certified: campaign.certifiedItems,
+          // §10's definition, and the four states that are NOT it, each on
+          // their own line. A campaign that closes with 91 revoke decisions, 0
+          // applied and 3 Govern cannot execute has to be able to say all
+          // three numbers; one combined figure is the report §13 forbids.
           revoked: campaign.revokedItems,
+          revokeDecided: campaign.revokeDecidedItems,
+          dispatched: campaign.dispatchedItems,
+          failed: campaign.failedItems,
           requiresChange: campaign.requiresChangeItems,
           moot: campaign.mootItems,
           undecided: campaign.undecidedItems,
@@ -979,6 +1048,37 @@ export async function registerAdminGovernRoutes(
       } catch (error) {
         if (error instanceof ExceptionRefusedError) {
           throw new ProblemError(409, error.code, 'Exception refused', error.message);
+        }
+        throw error;
+      }
+      return reply.status(204).send();
+    },
+  );
+
+  app.post(
+    '/govern/sod/exceptions/:id/revoke',
+    // `govern.read` at the gate and the AUTHORITY DECIDED IN THE SERVICE.
+    //
+    // §15 admits "an approver or the rule owner", and the rule owner is the
+    // owner of a business function -- who need not hold `govern.accept_risk` at
+    // all. A `requirePermission` gate here would 403 them before the service
+    // could recognise them, and a gate that admits everybody with `govern.read`
+    // would be no gate; the service refuses anyone who is not an acceptor, the
+    // approver, or the rule owner.
+    { preHandler: requireGovernRead() },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = revokeExceptionBody.parse(request.body);
+      try {
+        await revokeSodException(request.tenantId, request.session.userId, id, body.reason);
+      } catch (error) {
+        if (error instanceof ExceptionRefusedError) {
+          throw new ProblemError(
+            error.code === 'not_an_acceptor' ? 403 : 409,
+            error.code,
+            'Exception refused',
+            error.message,
+          );
         }
         throw error;
       }

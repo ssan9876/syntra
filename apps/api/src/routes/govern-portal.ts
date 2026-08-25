@@ -4,6 +4,7 @@ import {
   CampaignDecisionRefusedError,
   bulkCertify,
   openItem,
+  parseSubjectKey,
   recordCampaignDecision,
   summariseAttributions,
   type AttributionDraft,
@@ -74,7 +75,10 @@ export async function registerGovernPortalRoutes(app: FastifyInstance): Promise<
           // Tuesday it was sitting there — and must not keep the work.
           reviewers: { some: { personId, unassignedAt: null } },
           campaign: {
-            status: { in: ['open', 'executing'] },
+            // `open`, and only `open`. `executing` was in this list and is
+            // written by nothing in the tree; `closeDueCampaigns` closes `open`
+            // alone, so a campaign that reached it would never close.
+            status: 'open',
             ...(query.campaignId === undefined ? {} : { id: query.campaignId }),
           },
         },
@@ -122,8 +126,32 @@ export async function registerGovernPortalRoutes(app: FastifyInstance): Promise<
               where: { id: { in: systemIds } },
               select: { id: true, name: true },
             }),
+        // THE BARE REF, which is what `projectCertification` writes.
+        //
+        // This queried `subjectRefId: { in: rows.map(r => r.subjectKey) }` --
+        // `person:<uuid>` -- and keyed its map the same way, so no row ever
+        // matched and every item on every reviewer's screen read "never
+        // certified". §12 puts this line on the screen precisely so a reviewer
+        // is not re-attesting blind, and it was blank for everybody.
+        // report-service.ts and snapshot-service.ts both build the key from the
+        // bare ref: the writer was right and this was the wrong side.
         tx.holdingCertification.findMany({
-          where: { subjectRefId: { in: rows.map((r) => r.subjectKey) } },
+          where: {
+            subjectRefId: {
+              in: [
+                ...new Set(
+                  rows.map((r) => {
+                    const subject = parseSubjectKey(r.subjectKey);
+                    return subject === null
+                      ? r.subjectKey
+                      : subject.kind === 'person'
+                        ? subject.personId
+                        : subject.accountRef;
+                  }),
+                ),
+              ],
+            },
+          },
         }),
         tx.snapshotSource.findMany({ where: { snapshotId: { in: snapshotIds } } }),
       ]);
@@ -148,12 +176,18 @@ export async function registerGovernPortalRoutes(app: FastifyInstance): Promise<
           c,
         ]),
       );
+      /** The bare ref for a row, matching what `projectCertification` writes. */
+      const refOf = (subjectKey: string): string => {
+        const subject = parseSubjectKey(subjectKey);
+        if (subject === null) return subjectKey;
+        return subject.kind === 'person' ? subject.personId : subject.accountRef;
+      };
       const sourceByKey = new Map(sources.map((src) => [`${src.snapshotId}|${src.sourceId}`, src]));
 
       return {
         items: rows.map((row) => {
           const cert = certByKey.get(
-            `${row.subjectKey}|${row.systemId}|${row.resourceKind}|${row.resourceId}`,
+            `${refOf(row.subjectKey)}|${row.systemId}|${row.resourceKind}|${row.resourceId}`,
           );
           const source = sourceByKey.get(`${row.campaign.snapshotId}|${row.systemId}`);
           return {

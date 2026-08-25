@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { asDatabaseSuperuser, resetDatabase } from '@syntra/db/src/test-support.js';
@@ -6,6 +7,7 @@ import { verifyIncremental } from './audit-integrity.js';
 import type { CollectedTenant } from './collect.js';
 import { SnapshotNotReadableError, readableSnapshot } from './readable.js';
 import {
+  GAIN_LINK_BATCH,
   SNAPSHOT_STALL_MINUTES,
   beginSnapshot,
   buildSnapshot,
@@ -455,6 +457,151 @@ describe('pruneSnapshots', () => {
     const result = await pruneSnapshots(tenantId, { now: NOW, retentionDays: 30 });
     expect(result).toEqual({ pruned: 0, retainedForReference: 1 });
   });
+
+  /**
+   * THE PROMISE IN THIS FUNCTION'S OWN DOCSTRING, which the code kept for two
+   * of the three references and not for the third.
+   *
+   * A campaign closed 400 days ago is precisely the campaign an auditor asks
+   * about. `Campaign.snapshotId` is a bare uuid with no foreign key, so nothing
+   * stopped the delete at the database either -- the campaign was simply left
+   * pointing at a snapshot that no longer exists, and `readableSnapshot` then
+   * throws `not_found` for its report, its re-base and its evidence pack. The
+   * attestation somebody signed can no longer be shown against the facts it was
+   * signed about, which is the destruction of evidence this whole module exists
+   * to prevent.
+   */
+  it('NEVER prunes a snapshot a campaign points at', async () => {
+    const old = await buildSnapshot(tenantId, {
+      now: day('2024-01-01'),
+      collect: async () => emptyCollection({ asOf: day('2024-01-01') }),
+    });
+    const owner = await withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Ola', familyName: 'Berg' } }),
+    );
+    await withTenant(tenantId, (tx) =>
+      tx.campaign.create({
+        data: {
+          tenantId,
+          name: 'Q1 2024 review',
+          scope: {},
+          snapshotId: old.snapshotId,
+          reviewerSelector: 'manager',
+          fallbackSelector: 'campaign_owner',
+          ownerPersonId: owner.id,
+          opensAt: day('2024-01-01'),
+          dueAt: day('2024-02-01'),
+          originalDueAt: day('2024-02-01'),
+          status: 'closed_complete',
+        },
+      }),
+    );
+
+    const result = await pruneSnapshots(tenantId, { now: NOW, retentionDays: 30 });
+    expect(result).toEqual({ pruned: 0, retainedForReference: 1 });
+    expect(
+      await withTenant(tenantId, (tx) =>
+        tx.accessSnapshot.count({ where: { id: old.snapshotId } }),
+      ),
+    ).toBe(1);
+  });
+
+  /**
+   * A re-based campaign points at TWO snapshots and both are evidence: the one
+   * it was generated from and the one it was moved onto. §8 rule 2 records the
+   * re-base "with counts" precisely so the pair can be compared later, and a
+   * comparison with one side deleted is not a comparison.
+   */
+  it('retains the snapshot a re-based campaign came FROM as well', async () => {
+    const from = await buildSnapshot(tenantId, {
+      now: day('2024-01-01'),
+      collect: async () => emptyCollection({ asOf: day('2024-01-01') }),
+    });
+    const onto = await buildSnapshot(tenantId, {
+      now: day('2024-02-01'),
+      collect: async () => emptyCollection({ asOf: day('2024-02-01') }),
+    });
+    const owner = await withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Ola', familyName: 'Berg' } }),
+    );
+    await withTenant(tenantId, (tx) =>
+      tx.campaign.create({
+        data: {
+          tenantId,
+          name: 'Q1 2024 review',
+          scope: {},
+          snapshotId: onto.snapshotId,
+          rebasedFromSnapshotId: from.snapshotId,
+          reviewerSelector: 'manager',
+          fallbackSelector: 'campaign_owner',
+          ownerPersonId: owner.id,
+          opensAt: day('2024-01-01'),
+          dueAt: day('2024-02-01'),
+          originalDueAt: day('2024-02-01'),
+          status: 'closed_complete',
+        },
+      }),
+    );
+
+    const result = await pruneSnapshots(tenantId, { now: NOW, retentionDays: 30 });
+    expect(result).toEqual({ pruned: 0, retainedForReference: 2 });
+  });
+
+  /**
+   * And the item's OWN snapshot, which a re-base moves per item -- so a
+   * campaign whose items sit on three different snapshots holds all three.
+   * `CampaignItem.holdingSnapshotId` is the snapshot the copied attribution set
+   * came from, and it is what "attested against these facts" means.
+   */
+  it('retains a snapshot only a campaign ITEM points at', async () => {
+    const itemSnapshot = await buildSnapshot(tenantId, {
+      now: day('2024-01-01'),
+      collect: async () => emptyCollection({ asOf: day('2024-01-01') }),
+    });
+    const campaignSnapshot = await buildSnapshot(tenantId, {
+      now: day('2024-02-01'),
+      collect: async () => emptyCollection({ asOf: day('2024-02-01') }),
+    });
+    const owner = await withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Ola', familyName: 'Berg' } }),
+    );
+    await withTenant(tenantId, async (tx) => {
+      const campaign = await tx.campaign.create({
+        data: {
+          tenantId,
+          name: 'Q1 2024 review',
+          scope: {},
+          snapshotId: campaignSnapshot.snapshotId,
+          reviewerSelector: 'manager',
+          fallbackSelector: 'campaign_owner',
+          ownerPersonId: owner.id,
+          opensAt: day('2024-01-01'),
+          dueAt: day('2024-02-01'),
+          originalDueAt: day('2024-02-01'),
+          status: 'closed_complete',
+        },
+      });
+      await tx.campaignItem.create({
+        data: {
+          tenantId,
+          campaignId: campaign.id,
+          holdingSnapshotId: itemSnapshot.snapshotId,
+          subjectKey: `person:${owner.id}`,
+          personId: owner.id,
+          systemId: 'syntra',
+          resourceKind: 'syntraGroup',
+          resourceId: 'g1',
+          resourceName: 'Ward Nurses',
+          observedAt: day('2024-01-01'),
+          coverageStatus: 'complete',
+          status: 'certified',
+        },
+      });
+    });
+
+    const result = await pruneSnapshots(tenantId, { now: NOW, retentionDays: 30 });
+    expect(result).toEqual({ pruned: 0, retainedForReference: 2 });
+  });
 });
 
 describe('the audit integrity finding and the nightly detect stage (C-a)', () => {
@@ -619,5 +766,162 @@ describe('a person holding one resource through two accounts', () => {
     );
     expect(holding.attributions).toHaveLength(2);
     expect(holding.attributionCount).toBe(2);
+  });
+});
+
+/**
+ * The cross-reference that used to end the build.
+ *
+ * `explained = false` on a gain is, in this file's own words, "the most
+ * valuable row this system produces": access appeared and SYNTRA DID NOT CAUSE
+ * IT. It was produced by a loop issuing one `update` per gain inside a single
+ * transaction -- so after a bulk provisioning run, which is the day the change
+ * report matters most, it blew the 5000 ms ceiling, `buildSnapshot`'s catch
+ * marked the whole snapshot `failed`, and the night's holdings, findings and
+ * diff went with it.
+ */
+describe('the gain / audit cross-reference', () => {
+  const holdingOf = (personId: string, resourceId: string, asOf: Date) => ({
+    subject: { kind: 'person' as const, personId },
+    systemKind: 'syntraInternal' as const,
+    systemId: 'syntra',
+    systemName: 'Syntra',
+    resourceKind: 'syntraGroup' as const,
+    resourceId,
+    resourceName: `Group ${resourceId}`,
+    state: 'held' as const,
+    observedAt: asOf,
+    observedVia: 'syntra',
+    attribution: {
+      rules: [],
+      requests: [],
+      directAssignments: [],
+      groupInheritance: [],
+      orgUnitInheritance: [],
+      directorySources: [],
+      discovered: [],
+      manual: [],
+    },
+  });
+
+  const personNamed = async (name: string): Promise<string> =>
+    withTenant(tenantId, async (tx) => {
+      const p = await tx.person.create({ data: { tenantId, givenName: name, familyName: 'Okafor' } });
+      return p.id;
+    });
+
+  it('marks a gain EXPLAINED when an audit event accounts for it', async () => {
+    const personId = await personNamed('Maya');
+
+    await buildSnapshot(tenantId, { now: NOW, collect: async () => emptyCollection() });
+
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null,
+        action: 'rbac.role.assign',
+        targetType: 'User',
+        targetId: null,
+        outcome: 'success',
+        sourceIp: null,
+        payload: { personId, resourceId: 'g1' },
+      }),
+    );
+
+    const later = new Date(NOW.getTime() + 3_600_000);
+    const built = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () =>
+        emptyCollection({
+          asOf: later,
+          personIds: [personId],
+          personsWithActiveContract: 1,
+          holdings: [holdingOf(personId, 'g1', later)],
+        }),
+    });
+
+    const events = await withTenant(tenantId, (tx) =>
+      tx.holdingEvent.findMany({ where: { toSnapshotId: built.snapshotId, change: 'gained' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.explained).toBe(true);
+    expect(events[0]!.auditEventSequence).not.toBeNull();
+  });
+
+  it('leaves a gain UNEXPLAINED when nothing accounts for it', async () => {
+    // The row this whole pass exists to produce.
+    const personId = await personNamed('Maya');
+
+    await buildSnapshot(tenantId, { now: NOW, collect: async () => emptyCollection() });
+    const later = new Date(NOW.getTime() + 3_600_000);
+    const built = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () =>
+        emptyCollection({
+          asOf: later,
+          personIds: [personId],
+          personsWithActiveContract: 1,
+          holdings: [holdingOf(personId, 'g2', later)],
+        }),
+    });
+
+    const events = await withTenant(tenantId, (tx) =>
+      tx.holdingEvent.findMany({ where: { toSnapshotId: built.snapshotId, change: 'gained' } }),
+    );
+    expect(events[0]!.explained).toBe(false);
+    expect(events[0]!.auditEventSequence).toBeNull();
+  });
+
+  it('links every gain when there are more of them than one batch', async () => {
+    // The batching itself, over a population larger than `GAIN_LINK_BATCH`, so
+    // a paging bug shows as a count rather than as a slow test.
+    // ONE `createMany` with pre-generated ids, not 205 sequential creates.
+    // This file's `beforeEach` truncates every table, and a test that spends
+    // 205 round trips on its fixture pushes the ones after it past the 30 s
+    // hook timeout -- which reads as an unrelated failure somewhere else in the
+    // file. The ids have to be known up front because the holdings and the
+    // audit payloads both reference them.
+    const people = Array.from({ length: GAIN_LINK_BATCH + 5 }, () => randomUUID());
+    await withTenant(tenantId, (tx) =>
+      tx.person.createMany({
+        data: people.map((id, i) => ({
+          id,
+          tenantId,
+          givenName: `Person${i}`,
+          familyName: 'Okafor',
+        })),
+      }),
+    );
+
+    await buildSnapshot(tenantId, { now: NOW, collect: async () => emptyCollection() });
+    await withTenant(tenantId, async (tx) => {
+      for (const id of people) {
+        await recordEvent(tx, {
+          actorUserId: null,
+          action: 'rbac.role.assign',
+          targetType: 'User',
+          targetId: null,
+          outcome: 'success',
+          sourceIp: null,
+          payload: { personId: id, resourceId: 'g1' },
+        });
+      }
+    });
+
+    const later = new Date(NOW.getTime() + 3_600_000);
+    const built = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () =>
+        emptyCollection({
+          asOf: later,
+          personIds: people,
+          personsWithActiveContract: people.length,
+          holdings: people.map((id) => holdingOf(id, 'g1', later)),
+        }),
+    });
+
+    const explained = await withTenant(tenantId, (tx) =>
+      tx.holdingEvent.count({ where: { toSnapshotId: built.snapshotId, explained: true } }),
+    );
+    expect(explained).toBe(people.length);
   });
 });

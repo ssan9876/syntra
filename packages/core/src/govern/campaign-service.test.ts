@@ -16,6 +16,7 @@ import {
 // function that writes the projection in PRODUCTION, never a hand-built row.
 import { recordCampaignDecision } from './decision-service.js';
 import { buildSnapshot } from './snapshot-service.js';
+import type { CollectedTenant } from './collect.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
 const DUE = new Date('2026-07-15T09:00:00Z');
@@ -131,6 +132,35 @@ const draft = (over: Record<string, unknown> = {}) => ({
   dueAt: DUE,
   allowBulkCertify: true,
   ...over,
+});
+
+/**
+ * A collection with no holdings, for the cases that need the world to have
+ * MOVED ON rather than merely to have been re-read. `buildSnapshot`'s default
+ * `collect` reads the seeded tenant, so a second build produces the same
+ * holdings and nothing re-opens.
+ */
+const emptyCollectionAt = (asOf: Date): CollectedTenant => ({
+  asOf,
+  holdings: [],
+  gaps: [],
+  sources: [
+    {
+      sourceKind: 'syntraInternal',
+      sourceId: 'syntra',
+      sourceName: 'Syntra',
+      lastRunId: null,
+      lastSuccessfulReadAt: asOf,
+      lastAttemptedReadAt: asOf,
+      completeness: 'complete',
+      freshnessSlaHours: 24,
+      gapCount: 0,
+    },
+  ],
+  personIds: [],
+  personsWithActiveContract: 0,
+  unattributedAccountKeys: [],
+  queryCount: 9,
 });
 
 describe('the scope language', () => {
@@ -579,7 +609,7 @@ describe('re-basing re-opens only what changed', () => {
     const result = await rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId);
 
     // A certification of a holding that has not changed is STILL GOOD.
-    expect(result).toEqual({ reopened: 0, kept: 1 });
+    expect(result).toEqual({ reopened: 0, kept: 1, untouched: 0 });
     const after = await withTenant(tenantId, (tx) =>
       tx.campaignItem.findUniqueOrThrow({ where: { id: item.id } }),
     );
@@ -618,6 +648,87 @@ describe('re-basing re-opens only what changed', () => {
       tx.campaignItem.findUniqueOrThrow({ where: { id: item.id } }),
     );
     expect(after.status).toBe('pending');
+  });
+
+  /**
+   * §11 calls `undecided` TERMINAL: "the campaign closed and nobody decided
+   * this item. It was NOT attested." Re-base had no status filter at all, so it
+   * put terminal items back to `pending` -- resurrecting a decision nobody
+   * made, deleting the record that nobody made it, and leaving the
+   * `undecided_item` remediation row pointing at an item that is no longer
+   * undecided.
+   */
+  it('leaves a terminal undecided item alone', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    const item = await withTenant(tenantId, (tx) => tx.campaignItem.findFirstOrThrow());
+    await withTenant(tenantId, (tx) =>
+      tx.campaignItem.update({ where: { id: item.id }, data: { status: 'undecided' } }),
+    );
+
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const rebuilt = await buildSnapshot(tenantId, { now: later });
+    const result = await rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId);
+
+    expect(result).toEqual({ reopened: 0, kept: 0, untouched: 1 });
+    const after = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: item.id } }),
+    );
+    expect(after.status).toBe('undecided');
+  });
+
+  /**
+   * A dispatched revocation that Provision APPLIED is absent from the next
+   * snapshot -- which is the outcome, not a disappearance. Overwriting it to
+   * `moot` erased the one thing §13's whole dispatch vocabulary exists to
+   * record, and the campaign then reported the removal it caused as a holding
+   * that happened to stop existing.
+   */
+  it('leaves a dispatched revocation alone even though the holding is gone', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    const item = await withTenant(tenantId, (tx) => tx.campaignItem.findFirstOrThrow());
+    await withTenant(tenantId, (tx) =>
+      tx.campaignItem.update({
+        where: { id: item.id },
+        data: { status: 'revocation_dispatched' },
+      }),
+    );
+
+    // A snapshot with no holdings at all: the removal landed.
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const rebuilt = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () => emptyCollectionAt(later),
+    });
+    const result = await rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId);
+
+    expect(result.untouched).toBe(1);
+    const after = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: item.id } }),
+    );
+    expect(after.status).toBe('revocation_dispatched');
+  });
+
+  it('refuses to re-base a campaign that is not open', async () => {
+    // Re-basing exists so a stale campaign's revocations can execute (§8 rule
+    // 2). A closed campaign has no revocations left to unblock, and re-opening
+    // its items would put a queue in front of reviewers for a campaign whose
+    // coverage figure is already signed.
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    await withTenant(tenantId, (tx) =>
+      tx.campaign.update({ where: { id }, data: { status: 'closed_complete' } }),
+    );
+
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const rebuilt = await buildSnapshot(tenantId, { now: later });
+    await expect(
+      rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId),
+    ).rejects.toMatchObject({ code: 'not_open' });
   });
 });
 
@@ -669,7 +780,7 @@ describe('the certification projection and the re-base composition hazard', () =
     const later = new Date(NOW.getTime() + 86_400_000);
     const rebuilt = await buildSnapshot(tenantId, { now: later });
     const result = await rebaseCampaign(tenantId, actorUserId, campaignId, rebuilt.snapshotId);
-    expect(result).toEqual({ reopened: 0, kept: 1 });
+    expect(result).toEqual({ reopened: 0, kept: 1, untouched: 0 });
 
     const after = await withTenant(tenantId, (tx) => tx.holdingCertification.findFirstOrThrow());
     expect(after.lastCertifiedAt).toEqual(before.lastCertifiedAt);
@@ -679,6 +790,49 @@ describe('the certification projection and the re-base composition hazard', () =
       tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
     );
     expect(item.status).toBe('certified');
+  });
+
+  /**
+   * The other half of the composition hazard this function's docstring names.
+   *
+   * An item it KEEPS must keep its projection -- rolling that back would make a
+   * certification that is still good read as never made. An item it RE-OPENS is
+   * the opposite case: the holding changed, so what was certified is not what
+   * is there now, and a `HoldingCertification` left behind says a named human
+   * attested to facts nobody showed them.
+   */
+  it('drops the certification projection for a certified item it re-opens', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    const item = await withTenant(tenantId, (tx) => tx.campaignItem.findFirstOrThrow());
+    await recordCampaignDecision(
+      tenantId,
+      {
+        itemId: item.id,
+        deciderPersonId: managerPersonId,
+        deciderUserId: managerUserId,
+        decision: 'certify',
+        // The seeded holding is UNATTRIBUTABLE, and certifying one of those
+        // requires a comment saying who said it was fine. That refusal is the
+        // subject of its own test elsewhere; here it is just the price of
+        // getting a projection row to exist at all.
+        comment: 'the finance lead confirmed this is required for the year-end close',
+      },
+      { now: NOW },
+    );
+    expect(await withTenant(tenantId, (tx) => tx.holdingCertification.count())).toBe(1);
+
+    // A snapshot in which the holding is gone: the item re-opens as `moot`.
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const rebuilt = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () => emptyCollectionAt(later),
+    });
+    const result = await rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId);
+
+    expect(result.reopened).toBe(1);
+    expect(await withTenant(tenantId, (tx) => tx.holdingCertification.count())).toBe(0);
   });
 });
 
@@ -694,4 +848,140 @@ describe('coverageOf', () => {
   it('is unknown for an EMPTY campaign rather than 0% or 100%', () => {
     expect(coverageOf({ total: 0, decided: 0, moot: 0 }).known).toBe(false);
   });
+});
+
+/**
+ * A value stored, shown on the screen, and consulted by nothing.
+ *
+ * `opensAt` is `REQUIRED` on the row and is the first half of the reminder
+ * cadence -- `runCampaignReminders` computes `elapsed / total` from it -- so a
+ * campaign scheduled to open next month was live the moment somebody pressed
+ * start, and its reminder share was NEGATIVE until the opening date passed.
+ * "Scheduled for next quarter" was a label, not a behaviour.
+ */
+describe('opensAt', () => {
+  it('refuses to start a campaign before it opens', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(
+      tenantId,
+      actorUserId,
+      draft({ opensAt: new Date(NOW.getTime() + 7 * 86_400_000) }),
+    );
+    await expect(
+      startCampaign(tenantId, actorUserId, id, { now: NOW }),
+    ).rejects.toMatchObject({ code: 'not_open_yet' });
+
+    const campaign = await withTenant(tenantId, (tx) =>
+      tx.campaign.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(campaign.status).toBe('draft');
+  });
+
+  it('starts it once the opening date has passed', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(
+      tenantId,
+      actorUserId,
+      draft({ opensAt: new Date(NOW.getTime() - 86_400_000) }),
+    );
+    const started = await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    expect(started.status).toBe('open');
+  });
+});
+
+/**
+ * "A due date that can be moved quietly is not a due date" -- and a due date
+ * that can be moved after the campaign closed is not a due date either. The
+ * function checked only that the new date was later, so a closed campaign's
+ * `dueAt` could be pushed out, its `extensionCount` raised, and its reviewers
+ * re-notified about a queue nobody can decide in. The evidence bundle then
+ * carries a due date the campaign never actually ran to.
+ */
+describe('extendCampaign', () => {
+  it('refuses to extend a campaign that has closed', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await withTenant(tenantId, (tx) =>
+      tx.campaign.update({ where: { id }, data: { status: 'closed_incomplete' } }),
+    );
+    await expect(
+      extendCampaign(tenantId, actorUserId, id, new Date(DUE.getTime() + 30 * 86_400_000)),
+    ).rejects.toMatchObject({ code: 'not_open' });
+  });
+});
+
+/**
+ * §8 rule 3: "no aggregation path exists that collapses `unknown` into
+ * `not_held`" -- and a campaign item is the aggregation path that ends in a
+ * signature.
+ *
+ * `holdingsInScope` did not filter on state, unlike every revocation path, and
+ * `CampaignItem` carries no state column. So a holding nobody could read
+ * appeared on the reviewer's screen indistinguishable from one somebody had,
+ * and was certified as held. Nothing is lost by leaving it out: the region is
+ * already a CoverageGap, already counted on the campaign's own header, and
+ * already what makes a report answer `unknown`.
+ */
+describe('a holding whose state is unknown', () => {
+  it('generates no campaign item', async () => {
+    const built = await buildSnapshot(tenantId, { now: NOW });
+    await withTenant(tenantId, (tx) =>
+      tx.holding.updateMany({
+        where: { snapshotId: built.snapshotId },
+        data: { state: 'unknown' },
+      }),
+    );
+
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    // An empty scope is refused rather than started: "starting it would email
+    // reviewers about an empty queue".
+    await expect(
+      startCampaign(tenantId, actorUserId, id, { now: NOW }),
+    ).rejects.toMatchObject({ code: 'empty_scope' });
+  });
+
+  it('is not counted in the scope preview either', async () => {
+    // The preview and the generation call the SAME function, which is the only
+    // reason the screen can be trusted. That property is what made the
+    // riskFlags gap invisible: the preview agreed with the wrong reality.
+    const built = await buildSnapshot(tenantId, { now: NOW });
+    const before = await previewCampaignScope(
+      tenantId,
+      { resourceKinds: ['targetEntitlement'] },
+      built.snapshotId,
+    );
+    expect(before.holdings).toBeGreaterThan(0);
+
+    await withTenant(tenantId, (tx) =>
+      tx.holding.updateMany({
+        where: { snapshotId: built.snapshotId },
+        data: { state: 'unknown' },
+      }),
+    );
+    const after = await previewCampaignScope(
+      tenantId,
+      { resourceKinds: ['targetEntitlement'] },
+      built.snapshotId,
+    );
+    expect(after.holdings).toBe(0);
+  });
+});
+
+/**
+ * The field was in the type, the schema and the public contract, was persisted
+ * on `Campaign.scope`, and was read by NOTHING -- so a campaign scoped to risky
+ * holdings silently covered every holding of those kinds, and the preview
+ * agreed with it because they share a function.
+ *
+ * Removed rather than implemented. The flags are computed AT GENERATION from a
+ * snapshot the scope has not read yet, so "scope to risky holdings" would have
+ * had to mean something different from what the item flags mean -- and nobody
+ * has asked for either meaning.
+ */
+it('no longer accepts a riskFlags scope at all', () => {
+  const parsed = campaignScopeSchema.parse({
+    resourceKinds: ['targetEntitlement'],
+    riskFlags: ['privileged'],
+  });
+  expect(parsed).not.toHaveProperty('riskFlags');
 });

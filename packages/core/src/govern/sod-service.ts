@@ -1,17 +1,21 @@
-import { withTenant, type TenantClient } from '@syntra/db';
-import { recordEvent } from '../audit/audit-service.js';
+import { withTenant, type TenantClient } from "@syntra/db";
+import { recordEvent } from "../audit/audit-service.js";
 // `reconcileFindings`, not `upsertFindings`: `detectSodViolations` is
 // authoritative for the three SoD kinds and must close the ones that have gone.
 // A whole-tenant sweep from here would close every standing finding the
 // snapshot build opened minutes earlier.
-import { reconcileFindings, upsertFindings, type FindingDraft } from './finding-service.js';
+import {
+  reconcileFindings,
+  upsertFindings,
+  type FindingDraft,
+} from "./finding-service.js";
 import {
   buildDecisionGraph,
   type DecisionEdge,
   type GraphInput,
-} from './graph.js';
-import { governSettings } from './settings-service.js';
-import { readableSnapshot, SnapshotNotReadableError } from './readable.js';
+} from "./graph.js";
+import { governSettings } from "./settings-service.js";
+import { readableSnapshot, SnapshotNotReadableError } from "./readable.js";
 import {
   evaluateSodRules,
   sodImpact,
@@ -20,8 +24,8 @@ import {
   type SodImpactInput,
   type SodRuleFacts,
   type UnevaluableResource,
-} from './sod.js';
-import type { ResourceKind, Severity } from './types.js';
+} from "./sod.js";
+import { resourceKey, type ResourceKind, type Severity } from "./types.js";
 
 export async function upsertBusinessFunction(
   tenantId: string,
@@ -40,7 +44,7 @@ export async function upsertBusinessFunction(
   // thing a later task might replace.
   if (input.resources.length === 0) {
     throw new Error(
-      'a business function must name at least one resource; a function with none can never be held, and a rule over it would silently never fire',
+      "a business function must name at least one resource; a function with none can never be held, and a rule over it would silently never fire",
     );
   }
 
@@ -64,17 +68,19 @@ export async function upsertBusinessFunction(
             },
           });
 
-    await tx.businessFunctionResource.deleteMany({ where: { functionId: fn.id } });
+    await tx.businessFunctionResource.deleteMany({
+      where: { functionId: fn.id },
+    });
     await tx.businessFunctionResource.createMany({
       data: input.resources.map((r) => ({ tenantId, functionId: fn.id, ...r })),
     });
 
     await recordEvent(tx, {
       actorUserId,
-      action: 'govern.business_function.upsert',
-      targetType: 'BusinessFunction',
+      action: "govern.business_function.upsert",
+      targetType: "BusinessFunction",
       targetId: fn.id,
-      outcome: 'success',
+      outcome: "success",
       sourceIp: null,
       payload: { name: input.name, resourceCount: input.resources.length },
     });
@@ -97,11 +103,13 @@ export async function upsertSodRule(
   },
 ): Promise<{ id: string }> {
   if (input.functionAId === input.functionBId) {
-    throw new Error('a rule may not name the same business function on both sides');
+    throw new Error(
+      "a rule may not name the same business function on both sides",
+    );
   }
   if (input.rationale.trim().length === 0) {
     throw new Error(
-      'a rule needs a rationale saying what the risk actually is; a rule nobody can explain is a rule nobody will defend when it fires',
+      "a rule needs a rationale saying what the risk actually is; a rule nobody can explain is a rule nobody will defend when it fires",
     );
   }
 
@@ -113,12 +121,16 @@ export async function upsertSodRule(
         : await tx.sodRule.update({ where: { id }, data: { ...fields } });
     await recordEvent(tx, {
       actorUserId,
-      action: 'govern.sod_rule.upsert',
-      targetType: 'SodRule',
+      action: "govern.sod_rule.upsert",
+      targetType: "SodRule",
       targetId: rule.id,
-      outcome: 'success',
+      outcome: "success",
       sourceIp: null,
-      payload: { name: input.name, severity: input.severity, enabled: input.enabled },
+      payload: {
+        name: input.name,
+        severity: input.severity,
+        enabled: input.enabled,
+      },
     });
     return { id: rule.id };
   });
@@ -139,26 +151,40 @@ export interface SodFacts extends SodImpactInput {
  * hole in the SoD picture as well as a finding in its own right, and why the
  * SoD dashboard carries the orphan count in its header.
  */
-export async function loadSodFacts(tx: TenantClient, snapshotId?: string): Promise<SodFacts> {
+export async function loadSodFacts(
+  tx: TenantClient,
+  snapshotId?: string,
+): Promise<SodFacts> {
   const snapshot = await readableSnapshot(tx, snapshotId);
 
-  const functions = await tx.businessFunction.findMany({ include: { resources: true } });
+  const functions = await tx.businessFunction.findMany({
+    include: { resources: true },
+  });
   const rules = await tx.sodRule.findMany();
   const holdings = await tx.holding.findMany({
-    where: { snapshotId: snapshot.id, personId: { not: null }, state: 'held' },
+    where: {
+      snapshotId: snapshot.id,
+      personId: { not: null },
+      // BOTH STATES. `state: 'held'` alone made an unknown holding
+      // indistinguishable from one the person does not have, which §8 rule 3
+      // forbids in every aggregation path in this product -- and this is the
+      // path whose output is somebody signing that duties are separated.
+      state: { in: ["held", "unknown"] },
+    },
     select: {
       personId: true,
       systemId: true,
       resourceKind: true,
       resourceId: true,
       resourceName: true,
+      state: true,
       attributions: { select: { detail: true, kind: true } },
     },
   });
   const gaps = await tx.coverageGap.findMany({
     where: {
       snapshotId: snapshot.id,
-      kind: { in: ['resource_unreadable', 'source_unread', 'source_stale'] },
+      kind: { in: ["resource_unreadable", "source_unread", "source_stale"] },
     },
     select: { systemId: true, resourceId: true, reason: true },
   });
@@ -196,8 +222,8 @@ export async function loadSodFacts(tx: TenantClient, snapshotId?: string): Promi
     const contractIds = [
       ...new Set(
         h.attributions
-          .map((a) => (a.detail as Record<string, unknown>)['contractId'])
-          .filter((c): c is string => typeof c === 'string'),
+          .map((a) => (a.detail as Record<string, unknown>)["contractId"])
+          .filter((c): c is string => typeof c === "string"),
       ),
     ];
     const list = holdingsByPerson.get(h.personId) ?? [];
@@ -207,6 +233,7 @@ export async function loadSodFacts(tx: TenantClient, snapshotId?: string): Promi
       resourceId: h.resourceId,
       resourceName: h.resourceName,
       contractIds,
+      state: h.state === "unknown" ? "unknown" : "held",
     });
     holdingsByPerson.set(h.personId, list);
   }
@@ -254,8 +281,14 @@ export async function detectSodViolations(
   options: { now?: Date } = {},
 ): Promise<{ open: number; unevaluable: number; resolved: number }> {
   const now = options.now ?? new Date();
-  const facts = await withTenant(tenantId, (tx) => loadSodFacts(tx, snapshotId));
-  const results = evaluateSodRules(facts.rules, facts.holdingsByPerson, facts.unevaluable);
+  const facts = await withTenant(tenantId, (tx) =>
+    loadSodFacts(tx, snapshotId),
+  );
+  const results = evaluateSodRules(
+    facts.rules,
+    facts.holdingsByPerson,
+    facts.unevaluable,
+  );
 
   const seen = new Set<string>();
   const findings: FindingDraft[] = [];
@@ -268,49 +301,80 @@ export async function detectSodViolations(
       const rule = facts.rules.find((r) => r.ruleId === ruleId)!;
 
       await withTenant(tenantId, async (tx) => {
-        const existing = await tx.sodViolation.findUnique({
-          where: { tenantId_ruleId_personId: { tenantId, ruleId, personId } },
-        });
         const data = {
           severity: rule.severity,
-          status: outcome.kind === 'unevaluable' ? 'unevaluable' : 'open',
-          holdingsA: (outcome.kind === 'violation' ? outcome.holdingsA : []) as never,
-          holdingsB: (outcome.kind === 'violation' ? outcome.holdingsB : []) as never,
-          contractsA: (outcome.kind === 'violation' ? outcome.contractsA : []) as never,
-          contractsB: (outcome.kind === 'violation' ? outcome.contractsB : []) as never,
+          status: outcome.kind === "unevaluable" ? "unevaluable" : "open",
+          holdingsA: (outcome.kind === "violation"
+            ? outcome.holdingsA
+            : []) as never,
+          holdingsB: (outcome.kind === "violation"
+            ? outcome.holdingsB
+            : []) as never,
+          contractsA: (outcome.kind === "violation"
+            ? outcome.contractsA
+            : []) as never,
+          contractsB: (outcome.kind === "violation"
+            ? outcome.contractsB
+            : []) as never,
           lastSeenAt: now,
           lastSnapshotId: snapshotId,
         };
 
-        if (existing === null) {
-          await tx.sodViolation.create({
-            data: { tenantId, ruleId, personId, firstSeenAt: now, ...data },
-          });
-        } else if (existing.status === 'excepted' && outcome.kind === 'violation') {
-          // An active exception holds. Reopening it every night would make a
-          // deliberate risk acceptance a decision somebody re-makes daily.
+        // AN ACTIVE EXCEPTION HOLDS, and it has to be checked before the write
+        // rather than instead of it. Reopening an `excepted` violation every
+        // night would make a deliberate risk acceptance a decision somebody
+        // re-makes daily; §15 says a lapse is the only thing that reopens one.
+        const existing = await tx.sodViolation.findUnique({
+          where: { tenantId_ruleId_personId: { tenantId, ruleId, personId } },
+          select: { id: true, status: true },
+        });
+        if (
+          existing !== null &&
+          existing.status === "excepted" &&
+          outcome.kind === "violation"
+        ) {
           await tx.sodViolation.update({
             where: { id: existing.id },
             data: { lastSeenAt: now, lastSnapshotId: snapshotId },
           });
-        } else {
-          await tx.sodViolation.update({ where: { id: existing.id }, data });
+          return;
         }
+
+        // UPSERT ON THE NATURAL KEY, which was there all along.
+        //
+        // `findUnique` then `create` raised P2002 the moment two detection
+        // passes overlapped -- an administrator pressing "Build snapshot" while
+        // the nightly job runs is all it takes. The job threw,
+        // `reconcileFindings` never ran, and the rows for persons earlier in the
+        // iteration were already committed, so the tenant was left with half a
+        // detection pass and no reconciliation.
+        //
+        // NOT a singletonKey on the queue instead. Serialising would make a
+        // manual snapshot wait behind an hour-long nightly build, and the
+        // read-then-create is wrong on its own terms whatever schedules it: the
+        // unique index exists and the code was not using it. `Scheduler.enqueue`
+        // has no singleton option either, and adding one would touch every
+        // subsystem's job registration for a defect that lives here.
+        await tx.sodViolation.upsert({
+          where: { tenantId_ruleId_personId: { tenantId, ruleId, personId } },
+          create: { tenantId, ruleId, personId, firstSeenAt: now, ...data },
+          update: data,
+        });
       });
 
-      if (outcome.kind === 'unevaluable') {
+      if (outcome.kind === "unevaluable") {
         unevaluable += 1;
         continue;
       }
       // `evaluateSodRules` returns only non-clear outcomes, so this narrows to
       // `violation` — but the type does not say so and the compiler is right
       // to insist rather than let a future change through silently.
-      if (outcome.kind !== 'violation') continue;
+      if (outcome.kind !== "violation") continue;
       open += 1;
       findings.push({
-        kind: 'sod_violation',
+        kind: "sod_violation",
         severity: rule.severity,
-        subjectRefType: 'sod_violation',
+        subjectRefType: "sod_violation",
         subjectRefId: `${ruleId}:${personId}`,
         detail: {
           ruleName: rule.name,
@@ -331,14 +395,16 @@ export async function detectSodViolations(
   // gone, never deleted.
   const resolved = await withTenant(tenantId, async (tx) => {
     const live = await tx.sodViolation.findMany({
-      where: { status: { in: ['open', 'unevaluable'] } },
+      where: { status: { in: ["open", "unevaluable"] } },
       select: { id: true, ruleId: true, personId: true },
     });
-    const gone = live.filter((v) => !seen.has(`${v.ruleId}|${v.personId}`)).map((v) => v.id);
+    const gone = live
+      .filter((v) => !seen.has(`${v.ruleId}|${v.personId}`))
+      .map((v) => v.id);
     if (gone.length === 0) return 0;
     const result = await tx.sodViolation.updateMany({
       where: { id: { in: gone } },
-      data: { status: 'resolved', lastSeenAt: now, lastSnapshotId: snapshotId },
+      data: { status: "resolved", lastSeenAt: now, lastSnapshotId: snapshotId },
     });
     return result.count;
   });
@@ -351,7 +417,7 @@ export async function detectSodViolations(
   await reconcileFindings(
     tenantId,
     snapshotId,
-    ['sod_violation', 'sod_laundering', 'approval_reciprocity'],
+    ["sod_violation", "sod_laundering", "approval_reciprocity"],
     findings,
     { now },
   );
@@ -374,7 +440,8 @@ export async function previewSodRuleImpact(
     });
     const a = functions.find((f) => f.id === input.functionAId);
     const b = functions.find((f) => f.id === input.functionBId);
-    if (a === undefined || b === undefined) throw new Error('both business functions must exist');
+    if (a === undefined || b === undefined)
+      throw new Error("both business functions must exist");
 
     const toFn = (f: (typeof functions)[number]) => ({
       functionId: f.id,
@@ -386,17 +453,21 @@ export async function previewSodRuleImpact(
       })),
     });
     const candidate: SodRuleFacts = {
-      ruleId: 'preview',
-      name: 'preview',
+      ruleId: "preview",
+      name: "preview",
       functionA: toFn(a),
       functionB: toFn(b),
       severity: input.severity,
       enabled: true,
     };
 
-    const results = evaluateSodRules([candidate], facts.holdingsByPerson, facts.unevaluable);
+    const results = evaluateSodRules(
+      [candidate],
+      facts.holdingsByPerson,
+      facts.unevaluable,
+    );
     const violating = [...results]
-      .filter(([, r]) => r[0]?.outcome.kind === 'violation')
+      .filter(([, r]) => r[0]?.outcome.kind === "violation")
       .map(([p]) => p);
     const persons = await tx.person.findMany({
       where: { id: { in: violating.slice(0, 25) } },
@@ -411,8 +482,9 @@ export async function previewSodRuleImpact(
         personId: p.id,
         displayName: `${p.givenName} ${p.familyName}`.trim(),
       })),
-      unevaluableSubjects: [...results].filter(([, r]) => r[0]?.outcome.kind === 'unevaluable')
-        .length,
+      unevaluableSubjects: [...results].filter(
+        ([, r]) => r[0]?.outcome.kind === "unevaluable",
+      ).length,
     };
   });
 }
@@ -449,7 +521,11 @@ export function evaluateGrantImpact(
     wouldGrant: new Map([
       [
         subjectPersonId,
-        resources.map((r) => ({ ...r, resourceName: r.resourceId, contractIds: [] })),
+        resources.map((r) => ({
+          ...r,
+          resourceName: r.resourceId,
+          contractIds: [],
+        })),
       ],
     ]),
     unevaluable: facts.unevaluable,
@@ -463,28 +539,36 @@ export function evaluateGrantImpact(
       // grant puts them on one side; naming the holdings on the other is what
       // makes the warning actionable — "you violate this rule" is not.
       const aKeys = new Set(
-        rule.functionA.resources.map((r) => `${r.systemId}|${r.resourceKind}|${r.resourceId}`),
+        rule.functionA.resources.map(
+          (r) => `${r.systemId}|${r.resourceKind}|${r.resourceId}`,
+        ),
       );
       const bKeys = new Set(
-        rule.functionB.resources.map((r) => `${r.systemId}|${r.resourceKind}|${r.resourceId}`),
+        rule.functionB.resources.map(
+          (r) => `${r.systemId}|${r.resourceKind}|${r.resourceId}`,
+        ),
       );
       const grantedKeys = new Set(
         resources.map((r) => `${r.systemId}|${r.resourceKind}|${r.resourceId}`),
       );
-      const otherSide = [...grantedKeys].some((k) => aKeys.has(k)) ? bKeys : aKeys;
+      const otherSide = [...grantedKeys].some((k) => aKeys.has(k))
+        ? bKeys
+        : aKeys;
       return {
         ruleId: i.ruleId,
         ruleName: i.ruleName,
         severity: i.severity,
         otherSideHoldings: held
-          .filter((h) => otherSide.has(`${h.systemId}|${h.resourceKind}|${h.resourceId}`))
+          .filter((h) =>
+            otherSide.has(`${h.systemId}|${h.resourceKind}|${h.resourceId}`),
+          )
           .map((h) => h.resourceName),
       };
     });
 
   return {
     violations,
-    hasCritical: violations.some((v) => v.severity === 'critical'),
+    hasCritical: violations.some((v) => v.severity === "critical"),
     hasActiveException: exceptedRuleIds.size > 0,
   };
 }
@@ -511,7 +595,9 @@ export function evaluateGrantImpact(
  * guard -- which need the same degradation for the same reason: neither may
  * refuse to preview a plan because Govern has never run.
  */
-export async function loadSodFactsIfEvaluable(tx: TenantClient): Promise<SodFacts | null> {
+export async function loadSodFactsIfEvaluable(
+  tx: TenantClient,
+): Promise<SodFacts | null> {
   const ruleCount = await tx.sodRule.count({ where: { enabled: true } });
   if (ruleCount === 0) return null;
   try {
@@ -528,7 +614,7 @@ async function activeExceptionRuleIds(
   now: Date,
 ): Promise<Set<string>> {
   const exceptions = await tx.sodException.findMany({
-    where: { personId: subjectPersonId, status: 'active', endsAt: { gt: now } },
+    where: { personId: subjectPersonId, status: "active", endsAt: { gt: now } },
     select: { ruleId: true },
   });
   return new Set(exceptions.map((e) => e.ruleId));
@@ -549,7 +635,8 @@ export async function sodImpactForGrant(
 ): Promise<SodGrantImpact> {
   const now = options.now ?? new Date();
   const facts = await loadSodFactsIfEvaluable(tx);
-  if (facts === null) return { violations: [], hasCritical: false, hasActiveException: false };
+  if (facts === null)
+    return { violations: [], hasCritical: false, hasActiveException: false };
   const excepted = await activeExceptionRuleIds(tx, subjectPersonId, now);
   return evaluateGrantImpact(facts, subjectPersonId, [resource], excepted);
 }
@@ -567,7 +654,11 @@ export async function sodImpactForProducts(
   subjectPersonId: string,
   products: readonly {
     id: string;
-    grants: readonly { targetSystemId: string | null; resourceType: string; resourceId: string }[];
+    grants: readonly {
+      targetSystemId: string | null;
+      resourceType: string;
+      resourceId: string;
+    }[];
   }[],
   options: { now?: Date } = {},
 ): Promise<Map<string, SodGrantImpact>> {
@@ -598,13 +689,13 @@ export function grantResource(grant: {
   resourceId: string;
 }): FunctionResource {
   return {
-    systemId: grant.targetSystemId ?? 'syntra',
+    systemId: grant.targetSystemId ?? "syntra",
     resourceKind:
-      grant.resourceType === 'entitlement'
-        ? 'targetEntitlement'
-        : grant.resourceType === 'application'
-          ? 'application'
-          : 'syntraGroup',
+      grant.resourceType === "entitlement"
+        ? "targetEntitlement"
+        : grant.resourceType === "application"
+          ? "application"
+          : "syntraGroup",
     resourceId: grant.resourceId,
   };
 }
@@ -641,16 +732,31 @@ export async function detectDecisionGraph(
 }> {
   const now = options.now ?? new Date();
 
-  const input = await withTenant(tenantId, async (tx): Promise<GraphInput> => {
-    const settings = await governSettings(tx);
-    const cutoff = new Date(now.getTime() - settings.reciprocityWindowDays * 86_400_000);
+  // FIVE SHORT TRANSACTIONS RETURNING PLAIN DATA, not one.
+  //
+  // This function read every approval decision, every delegated request, every
+  // auto-granted request, every unattributed request, every live grant and the
+  // FULL SNAPSHOT HOLDINGS inside a single `withTenant`. It runs inside
+  // `runSnapshotJob` after earlier stages have committed, so exceeding the 5000
+  // ms ceiling retried the whole job and built a second snapshot.
+  //
+  // `loadSodFacts` still takes a `tx` and still runs in one: Provision calls it
+  // from inside its own transactions (`explain.ts`, `run-service.ts`) and
+  // changing its shape would reach into a subsystem this plan does not touch.
+  // What it costs here is one transaction of reads rather than one transaction
+  // of everything.
+  const settings = await withTenant(tenantId, (tx) => governSettings(tx));
+  const cutoff = new Date(
+    now.getTime() - settings.reciprocityWindowDays * 86_400_000,
+  );
 
-    // ---- edge 1: somebody decided somebody else's request -----------------
-    // `(tenantId, decidedAt)` is indexed for exactly this read. Rejections are
-    // excluded: refusing somebody's request is not a favour, and a pair who
-    // each rejected the other three times is a disagreement, not a ring.
-    const decisions = await tx.approvalDecision.findMany({
-      where: { decision: 'approve', decidedAt: { gte: cutoff } },
+  // ---- edge 1: somebody decided somebody else's request -----------------
+  // `(tenantId, decidedAt)` is indexed for exactly this read. Rejections are
+  // excluded: refusing somebody's request is not a favour, and a pair who
+  // each rejected the other three times is a disagreement, not a ring.
+  const decisions = await withTenant(tenantId, (tx) =>
+    tx.approvalDecision.findMany({
+      where: { decision: "approve", decidedAt: { gte: cutoff } },
       select: {
         personId: true,
         via: true,
@@ -662,125 +768,150 @@ export async function detectDecisionGraph(
           },
         },
       },
-    });
+    }),
+  );
 
-    const edges: DecisionEdge[] = decisions.map((row) => ({
-      kind: 'decided_for',
-      fromPersonId: row.personId,
-      toPersonId: row.step.request.subjectPersonId,
-      requestId: row.step.request.id,
-      decidedAt: row.decidedAt,
-      via: row.via,
-      selector: ((row.step.stageSnapshot as { selector?: string }).selector ?? null) as
-        | string
-        | null,
-    }));
+  const edges: DecisionEdge[] = decisions.map((row) => ({
+    kind: "decided_for",
+    fromPersonId: row.personId,
+    toPersonId: row.step.request.subjectPersonId,
+    requestId: row.step.request.id,
+    decidedAt: row.decidedAt,
+    via: row.via,
+    selector: ((row.step.stageSnapshot as { selector?: string }).selector ??
+      null) as string | null,
+  }));
 
-    // ---- edge 2: QUALIFICATION ONE, the delegated grant -------------------
-    // A graph built only from `ApprovalDecision` cannot see a pair of team
-    // leads who each granted the other access to the resource they manage —
-    // the same laundering pattern with LESS friction than the two-stage one,
-    // since it needs no approvals at all. The row exists; it is an
-    // `AccessRequest` with `origin: 'delegated_admin'` that never had a step.
-    const delegated = await tx.accessRequest.findMany({
-      where: { origin: 'delegated_admin', decidedAt: { gte: cutoff } },
+  // ---- edge 2: QUALIFICATION ONE, the delegated grant -------------------
+  // A graph built only from `ApprovalDecision` cannot see a pair of team
+  // leads who each granted the other access to the resource they manage —
+  // the same laundering pattern with LESS friction than the two-stage one,
+  // since it needs no approvals at all. The row exists; it is an
+  // `AccessRequest` with `origin: 'delegated_admin'` that never had a step.
+  const delegated = await withTenant(tenantId, (tx) =>
+    tx.accessRequest.findMany({
+      where: { origin: "delegated_admin", decidedAt: { gte: cutoff } },
       select: {
         id: true,
         subjectPersonId: true,
         requestedByPersonId: true,
         decidedAt: true,
       },
+    }),
+  );
+  for (const row of delegated) {
+    edges.push({
+      kind: "delegated_grant",
+      fromPersonId: row.requestedByPersonId,
+      toPersonId: row.subjectPersonId,
+      requestId: row.id,
+      decidedAt: row.decidedAt ?? now,
+      via: "delegated_admin",
+      selector: null,
     });
-    for (const row of delegated) {
-      edges.push({
-        kind: 'delegated_grant',
-        fromPersonId: row.requestedByPersonId,
-        toPersonId: row.subjectPersonId,
-        requestId: row.id,
-        decidedAt: row.decidedAt ?? now,
-        via: 'delegated_admin',
-        selector: null,
-      });
-    }
+  }
 
-    // ---- edge 3: QUALIFICATION TWO, the auto-granted request --------------
-    // A product with an EMPTY stage list is approved on submission. Nobody
-    // decided it, so it can neither reciprocate nor complete a cycle — and
-    // counting it as a decision would put a person's name on a decision they
-    // did not make. It is its own class: access nobody decided is precisely
-    // the access a recertification exists to have somebody decide.
-    const autoGranted = await tx.accessRequest.findMany({
+  // ---- edge 3: QUALIFICATION TWO, the auto-granted request --------------
+  // A product with an EMPTY stage list is approved on submission. Nobody
+  // decided it, so it can neither reciprocate nor complete a cycle — and
+  // counting it as a decision would put a person's name on a decision they
+  // did not make. It is its own class: access nobody decided is precisely
+  // the access a recertification exists to have somebody decide.
+  const autoGranted = await withTenant(tenantId, (tx) =>
+    tx.accessRequest.findMany({
       where: {
-        origin: 'catalog',
-        status: { in: ['approved', 'fulfilled'] },
+        origin: "catalog",
+        status: { in: ["approved", "fulfilled"] },
         decidedAt: { gte: cutoff },
         steps: { none: {} },
       },
       select: { id: true, subjectPersonId: true, decidedAt: true },
+    }),
+  );
+  for (const row of autoGranted) {
+    edges.push({
+      kind: "auto_granted",
+      fromPersonId: null,
+      toPersonId: row.subjectPersonId,
+      requestId: row.id,
+      decidedAt: row.decidedAt ?? now,
+      via: "auto",
+      selector: null,
     });
-    for (const row of autoGranted) {
-      edges.push({
-        kind: 'auto_granted',
-        fromPersonId: null,
-        toPersonId: row.subjectPersonId,
-        requestId: row.id,
-        decidedAt: row.decidedAt ?? now,
-        via: 'auto',
-        selector: null,
-      });
-    }
+  }
 
-    // ---- QUALIFICATION THREE: the actor with no linked person -------------
-    // A service account submitting requests on people's behalf is either an
-    // integration worth knowing about or a problem worth knowing about, and
-    // either way silence is the wrong answer. It is REPORTED, never dropped
-    // and never quietly merged onto the subject.
-    const unattributedRequests = await tx.accessRequest.findMany({
+  // ---- QUALIFICATION THREE: the actor with no linked person -------------
+  // A service account submitting requests on people's behalf is either an
+  // integration worth knowing about or a problem worth knowing about, and
+  // either way silence is the wrong answer. It is REPORTED, never dropped
+  // and never quietly merged onto the subject.
+  const unattributedRequests = await withTenant(tenantId, (tx) =>
+    tx.accessRequest.findMany({
       where: { requestedByPersonId: null, submittedAt: { gte: cutoff } },
       select: { id: true, requestedByUserId: true },
-    });
-    const byUser = new Map<string, string[]>();
-    for (const row of unattributedRequests) {
-      byUser.set(row.requestedByUserId, [
-        ...(byUser.get(row.requestedByUserId) ?? []),
-        row.id,
-      ]);
-    }
+    }),
+  );
+  const byUser = new Map<string, string[]>();
+  for (const row of unattributedRequests) {
+    byUser.set(row.requestedByUserId, [
+      ...(byUser.get(row.requestedByUserId) ?? []),
+      row.id,
+    ]);
+  }
 
-    // ---- the SoD rules, and what each request actually granted ------------
-    // The laundering pattern is detectable ONLY with the rules in hand, which
-    // is why it lands beside them rather than in the inventory.
-    const facts = await loadSodFacts(tx, snapshotId);
-    const grants = await tx.accessGrant.findMany({
+  // ---- the SoD rules, and what each request actually granted ------------
+  // The laundering pattern is detectable ONLY with the rules in hand, which
+  // is why it lands beside them rather than in the inventory.
+  const { facts, grants } = await withTenant(tenantId, async (tx) => ({
+    facts: await loadSodFacts(tx, snapshotId),
+    grants: await tx.accessGrant.findMany({
       where: { requestId: { not: null } },
-      select: { requestId: true, targetSystemId: true, resourceType: true, resourceId: true },
-    });
-    const grantedResourceByRequest = new Map<string, string>();
-    for (const grant of grants) {
-      if (grant.requestId === null) continue;
-      grantedResourceByRequest.set(grant.requestId, grantResource(grant).resourceId);
-    }
+      select: {
+        requestId: true,
+        targetSystemId: true,
+        resourceType: true,
+        resourceId: true,
+      },
+    }),
+  }));
+  const grantedResourceKeyByRequest = new Map<string, string>();
+  for (const grant of grants) {
+    if (grant.requestId === null) continue;
+    // THE FULL KEY. This used to store `grantResource(grant).resourceId` --
+    // the bare id -- which made two resources sharing an id in different
+    // systems the same resource to the laundering scan.
+    grantedResourceKeyByRequest.set(
+      grant.requestId,
+      resourceKey({ systemKind: "targetSystem", ...grantResource(grant) }),
+    );
+  }
 
-    return {
-      edges,
-      unmergeable: [...byUser].map(([userId, requestIds]) => ({ userId, requestIds })),
-      // Disabled rules are excluded: a rule switched off is a rule the
-      // organization is not asserting, and `evaluateSodRules` skips it too.
-      sodPairs: facts.rules
-        .filter((rule) => rule.enabled)
-        .map((rule) => ({
-          ruleId: rule.ruleId,
-          ruleName: rule.name,
-          severity: rule.severity,
-          sideAResourceIds: rule.functionA.resources.map((resource) => resource.resourceId),
-          sideBResourceIds: rule.functionB.resources.map((resource) => resource.resourceId),
-        })),
-      grantedResourceByRequest,
-      minReciprocalDecisions: settings.minReciprocalDecisions,
-      reciprocityWindowDays: settings.reciprocityWindowDays,
-      now,
-    };
-  });
+  const input: GraphInput = {
+    edges,
+    unmergeable: [...byUser].map(([userId, requestIds]) => ({
+      userId,
+      requestIds,
+    })),
+    // Disabled rules are excluded: a rule switched off is a rule the
+    // organization is not asserting, and `evaluateSodRules` skips it too.
+    sodPairs: facts.rules
+      .filter((rule) => rule.enabled)
+      .map((rule) => ({
+        ruleId: rule.ruleId,
+        ruleName: rule.name,
+        severity: rule.severity,
+        sideAResourceKeys: rule.functionA.resources.map((resource) =>
+          resourceKey({ systemKind: "targetSystem", ...resource }),
+        ),
+        sideBResourceKeys: rule.functionB.resources.map((resource) =>
+          resourceKey({ systemKind: "targetSystem", ...resource }),
+        ),
+      })),
+    grantedResourceKeyByRequest,
+    minReciprocalDecisions: settings.minReciprocalDecisions,
+    reciprocityWindowDays: settings.reciprocityWindowDays,
+    now,
+  };
 
   const report = buildDecisionGraph(input);
   const drafts: FindingDraft[] = [];
@@ -794,15 +925,15 @@ export async function detectDecisionGraph(
    * in words what it is.
    */
   const CONTEXT =
-    'In a small team mutual approval is normal and expected. This is context for a ' +
-    'human to look at, not an accusation, and nothing has been blocked or removed.';
+    "In a small team mutual approval is normal and expected. This is context for a " +
+    "human to look at, not an accusation, and nothing has been blocked or removed.";
 
   for (const pair of report.reciprocity) {
     drafts.push({
-      kind: 'approval_reciprocity',
-      severity: 'medium',
-      subjectRefType: 'person_pair',
-      subjectRefId: [pair.a, pair.b].sort().join(':'),
+      kind: "approval_reciprocity",
+      severity: "medium",
+      subjectRefType: "person_pair",
+      subjectRefId: [pair.a, pair.b].sort().join(":"),
       detail: {
         a: pair.a,
         b: pair.b,
@@ -818,30 +949,30 @@ export async function detectDecisionGraph(
 
   for (const cycle of report.cycles) {
     drafts.push({
-      kind: 'approval_reciprocity',
-      severity: 'medium',
-      subjectRefType: 'person_cycle',
-      subjectRefId: [...cycle.path].sort().join(':'),
+      kind: "approval_reciprocity",
+      severity: "medium",
+      subjectRefType: "person_cycle",
+      subjectRefId: [...cycle.path].sort().join(":"),
       detail: {
         path: cycle.path,
         requestIds: cycle.requestIds,
         statement:
           `${CONTEXT} A cycle is reported because a pairwise check cannot see one: ` +
-          'A approves for B, B for C, and C for A.',
+          "A approves for B, B for C, and C for A.",
       },
     });
   }
 
   for (const found of report.laundering) {
     drafts.push({
-      kind: 'sod_laundering',
+      kind: "sod_laundering",
       // The RULE's own severity, and NOT soft-pedalled. This is the pattern
       // that is a finding rather than a signal: two people put each other on
       // opposite sides of a rule the organization wrote down, and the sentence
       // above would be an excuse here rather than context.
       severity: found.severity,
-      subjectRefType: 'sod_laundering',
-      subjectRefId: `${found.ruleId}:${[found.a, found.b].sort().join(':')}`,
+      subjectRefType: "sod_laundering",
+      subjectRefId: `${found.ruleId}:${[found.a, found.b].sort().join(":")}`,
       detail: {
         ruleId: found.ruleId,
         ruleName: found.ruleName,
@@ -850,40 +981,40 @@ export async function detectDecisionGraph(
         requestIds: found.requestIds,
         statement:
           `Each of these two people decided the other onto the opposite side of "${found.ruleName}". ` +
-          'Neither request violates the rule on its own, and neither person holds both sides; ' +
-          'together they put the organization where the rule says it must not be.',
+          "Neither request violates the rule on its own, and neither person holds both sides; " +
+          "together they put the organization where the rule says it must not be.",
       },
     });
   }
 
   for (const auto of report.autoGranted) {
     drafts.push({
-      kind: 'no_human_decision',
-      severity: 'low',
-      subjectRefType: 'person',
+      kind: "no_human_decision",
+      severity: "low",
+      subjectRefType: "person",
       subjectRefId: auto.toPersonId,
       detail: {
         requestIds: auto.requestIds,
         statement:
-          'This access was granted by a product with no approval stages, so no human decided it. ' +
-          'That is a configuration choice rather than a fault; it is listed here because access ' +
-          'nobody decided is precisely the access a recertification exists to have somebody decide.',
+          "This access was granted by a product with no approval stages, so no human decided it. " +
+          "That is a configuration choice rather than a fault; it is listed here because access " +
+          "nobody decided is precisely the access a recertification exists to have somebody decide.",
       },
     });
   }
 
   for (const actor of report.unmergeableActors) {
     drafts.push({
-      kind: 'unmergeable_actor',
-      severity: 'low',
-      subjectRefType: 'user',
+      kind: "unmergeable_actor",
+      severity: "low",
+      subjectRefType: "user",
       subjectRefId: actor.userId,
       detail: {
         requestIds: actor.requestIds,
         statement:
-          'This account submitted requests and is not linked to a person, so its requests cannot ' +
-          'be placed in the decision graph. It is either an integration worth knowing about or a ' +
-          'problem worth knowing about, and either way silence is the wrong answer.',
+          "This account submitted requests and is not linked to a person, so its requests cannot " +
+          "be placed in the decision graph. It is either an integration worth knowing about or a " +
+          "problem worth knowing about, and either way silence is the wrong answer.",
       },
     });
   }

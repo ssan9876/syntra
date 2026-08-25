@@ -45,10 +45,19 @@ export interface GraphInput {
     ruleId: string;
     ruleName: string;
     severity: Severity;
-    sideAResourceIds: readonly string[];
-    sideBResourceIds: readonly string[];
+    /**
+     * FULL RESOURCE KEYS -- `${systemId}|${resourceKind}|${resourceId}` -- not
+     * bare ids. Every id in this platform is the target's OWN object
+     * identifier, unique within a target and meaningless across them, so
+     * matching on the id alone made `e1` in the finance target and `e1` in the
+     * HR target the same resource. On a tenant with two connectors that is not
+     * a corner case, and the finding it produces names two people and a
+     * critical rule.
+     */
+    sideAResourceKeys: readonly string[];
+    sideBResourceKeys: readonly string[];
   }[];
-  grantedResourceByRequest: ReadonlyMap<string, string>;
+  grantedResourceKeyByRequest: ReadonlyMap<string, string>;
   minReciprocalDecisions: number;
   reciprocityWindowDays: number;
   now: Date;
@@ -150,34 +159,61 @@ export function buildDecisionGraph(input: GraphInput): GraphReport {
   // ---- SoD laundering -----------------------------------------------------
   // The pattern that is actually a finding rather than a signal, and it is
   // detectable ONLY with the SoD rules in hand.
+  //
+  // INDEXED BY PAIR, ONCE. The previous shape was
+  // `for rule { for forward { for back { ... } } }` with the pair filter INSIDE
+  // the inner loop, so it walked every edge against every other edge for every
+  // rule: 10,000 decisions and 20 rules is about 2 x 10^9 iterations,
+  // synchronous, on the nightly job's event loop, starving every other job --
+  // and it cost that whether or not any laundering existed. The rules do not
+  // change the pairs, so the pairs are built first and each is tested against
+  // each rule: O(E + P x R) instead of O(E^2 x R).
+  const byPair = new Map<string, DecisionEdge[]>();
+  for (const e of directed) {
+    const key = `${e.fromPersonId}>${e.toPersonId}`;
+    byPair.set(key, [...(byPair.get(key) ?? []), e]);
+  }
+
   const laundering: GraphReport['laundering'] = [];
-  for (const rule of input.sodPairs) {
-    const sideA = new Set(rule.sideAResourceIds);
-    const sideB = new Set(rule.sideBResourceIds);
-    for (const forward of directed) {
-      const forwardResource = input.grantedResourceByRequest.get(forward.requestId);
-      if (forwardResource === undefined) continue;
-      for (const back of directed) {
-        if (back.fromPersonId !== forward.toPersonId || back.toPersonId !== forward.fromPersonId) continue;
-        const backResource = input.grantedResourceByRequest.get(back.requestId);
-        if (backResource === undefined) continue;
-        const opposite =
-          (sideA.has(forwardResource) && sideB.has(backResource)) ||
-          (sideB.has(forwardResource) && sideA.has(backResource));
-        if (!opposite) continue;
-        const key = [forward.fromPersonId, forward.toPersonId].sort().join('|');
-        if (laundering.some((l) => l.ruleId === rule.ruleId && [l.a, l.b].sort().join('|') === key)) {
-          continue;
+  const seenLaundering = new Set<string>();
+  for (const [key, forwards] of byPair) {
+    const [a, b] = key.split('>') as [string, string];
+    const backs = byPair.get(`${b}>${a}`);
+    if (backs === undefined) continue;
+
+    for (const rule of input.sodPairs) {
+      const unordered = `${rule.ruleId}|${[a, b].sort().join('|')}`;
+      if (seenLaundering.has(unordered)) continue;
+      const sideA = new Set(rule.sideAResourceKeys);
+      const sideB = new Set(rule.sideBResourceKeys);
+
+      let found: { forward: DecisionEdge; back: DecisionEdge } | null = null;
+      for (const forward of forwards) {
+        const forwardResource = input.grantedResourceKeyByRequest.get(forward.requestId);
+        if (forwardResource === undefined) continue;
+        for (const back of backs) {
+          const backResource = input.grantedResourceKeyByRequest.get(back.requestId);
+          if (backResource === undefined) continue;
+          const opposite =
+            (sideA.has(forwardResource) && sideB.has(backResource)) ||
+            (sideB.has(forwardResource) && sideA.has(backResource));
+          if (!opposite) continue;
+          found = { forward, back };
+          break;
         }
-        laundering.push({
-          ruleId: rule.ruleId,
-          ruleName: rule.ruleName,
-          severity: rule.severity,
-          a: forward.fromPersonId!,
-          b: forward.toPersonId,
-          requestIds: [forward.requestId, back.requestId],
-        });
+        if (found !== null) break;
       }
+      if (found === null) continue;
+
+      seenLaundering.add(unordered);
+      laundering.push({
+        ruleId: rule.ruleId,
+        ruleName: rule.ruleName,
+        severity: rule.severity,
+        a,
+        b,
+        requestIds: [found.forward.requestId, found.back.requestId],
+      });
     }
   }
 

@@ -43,6 +43,21 @@ export interface PersonHolding {
   resourceName: string;
   /** The contracts that produced this holding, for the concurrent-contract case. */
   contractIds: readonly string[];
+  /**
+   * THREE-VALUED, and absent means `held`.
+   *
+   * §8 rule 3: "no aggregation path exists that collapses `unknown` into
+   * `not_held`." `loadSodFacts` used to read `state: 'held'` only, so a person
+   * whose payments entitlement sat behind an unreadable region evaluated as
+   * CLEAR on a critical rule -- the false-assurance defect this module exists
+   * to avoid, in the one place where the output is somebody signing that duties
+   * are separated.
+   *
+   * Optional because Provision's `sodImpact` builds `wouldGrant` holdings by
+   * hand and has no state to give: what a rule WOULD grant is held by
+   * construction.
+   */
+  state?: 'held' | 'unknown' | undefined;
 }
 
 export interface UnevaluableResource {
@@ -100,11 +115,45 @@ export function evaluateSodRule(
       }
     }
   }
+  // A RULE WHOSE TWO FUNCTIONS NAME THE SAME RESOURCE CANNOT SEPARATE THEM.
+  //
+  // The rule says "these two duties must not be held by one person". If one
+  // resource is in both functions, a person holding only that resource
+  // satisfies both sides and is reported in violation of a rule they cannot
+  // possibly breach -- and a rule with real overlap fires against every holder
+  // of the shared resource, which on a `critical` rule is the whole department
+  // and a board nobody reads by the second morning.
+  //
+  // Refused, not silently narrowed. Excluding the shared resource would leave a
+  // rule that means something different from what its author wrote, and the
+  // author is the only person who can say which side it belongs on.
+  const bResourceKeys = rule.functionB.resources.map(keyOf);
+  const sharedKeys = rule.functionA.resources
+    .map(keyOf)
+    .filter((key) => bResourceKeys.includes(key));
+  for (const key of sharedKeys) {
+    reasons.push(
+      `the resource ${key} is named by BOTH "${rule.functionA.name}" and ` +
+        `"${rule.functionB.name}", so this rule cannot say the two duties are separated`,
+    );
+  }
+
   const aKeys = new Set(rule.functionA.resources.map(keyOf));
   const bKeys = new Set(rule.functionB.resources.map(keyOf));
 
   const holdingsA = holdings.filter((h) => aKeys.has(keyOf(h)));
   const holdingsB = holdings.filter((h) => bKeys.has(keyOf(h)));
+
+  // An UNKNOWN holding on either side makes the answer unknown, never clear.
+  // The person genuinely may hold both; nobody read the region that would say.
+  for (const holding of [...holdingsA, ...holdingsB]) {
+    if (holding.state === 'unknown') {
+      reasons.push(
+        `"${holding.resourceName}" is held-or-not-held as far as anybody knows: ` +
+          'the region that would say has not been read, so this rule cannot be evaluated for this person',
+      );
+    }
+  }
 
   if (reasons.length > 0) {
     // UNEVALUABLE only for somebody with exposure. A person who holds nothing

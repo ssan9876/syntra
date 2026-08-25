@@ -155,7 +155,12 @@ export const campaignScopeInput = z.object({
   systemIds: z.array(z.string().min(1)).min(1).optional(),
   privilegedOnly: z.boolean().optional(),
   orgUnitIds: z.array(z.string().uuid()).min(1).optional(),
-  riskFlags: z.array(z.string().min(1)).min(1).optional(),
+  // No `riskFlags`. It was accepted here, stored on `Campaign.scope`, and read
+  // by nothing -- so a campaign scoped to risky holdings covered everything.
+  // See `CampaignScope` in packages/core/src/govern/campaign-service.ts for why
+  // it is removed rather than implemented. This schema is not `.strict()`, so a
+  // caller still sending it has the field stripped, which is exactly what
+  // happened to it before.
   // `conditionRequestSchema`, not a second recursive schema written here. It
   // is the BOUNDED wrapper — a depth and width cap applied iteratively, before
   // any recursive schema sees the value — and a scope condition arrives from
@@ -281,6 +286,14 @@ export const decideExceptionBody = z.object({
   decision: z.enum(['approve', 'refuse']),
   comment: z.string().min(1),
 });
+
+/**
+ * §15: an exception may be ended early "by an approver or the rule owner, with
+ * a reason". The reason is required for the same purpose the justification is:
+ * a risk acceptance that ends with no recorded reason is a decision nobody can
+ * re-read.
+ */
+export const revokeExceptionBody = z.object({ reason: z.string().min(1) }).strict();
 
 export const graphQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),

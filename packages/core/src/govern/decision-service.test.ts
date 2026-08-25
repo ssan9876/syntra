@@ -7,6 +7,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser } from '../directory/user-service.js';
 import {
   CERTIFYING_TRANSITIONS,
+  CampaignDecisionRefusedError,
   DECISION_ENTRY_POINTS,
   HIGH_RISK_FLAGS,
   bulkCertify,
@@ -770,5 +771,175 @@ describe('quality signals', () => {
     const later = new Date(NOW.getTime() + 60_000);
     const second = await openItem(tenantId, person['Jan']!, itemId, later);
     expect(second.openedAt).toEqual(NOW);
+  });
+});
+
+/**
+ * TWO REVIEWERS, ONE ITEM, AT THE SAME MOMENT.
+ *
+ * `quorum: 'any'` is the normal shape for a role or group selector and it is
+ * true of EVERY escalated item, because escalation ADDS a reviewer rather than
+ * replacing one. So two people holding one item is ordinary, not exotic.
+ *
+ * The old form read the status here and then wrote with
+ * `update({ where: { id } })` -- no predicate, under READ COMMITTED. Both
+ * transactions read `pending`, both committed, and the item ended up carrying a
+ * certify AND a revoke: `HoldingCertification` said "certified" for a holding
+ * on its way into a revocation batch, and `closeDueCampaigns` broke the tie on
+ * `decidedAt`, which is identical within a second.
+ */
+describe('two reviewers deciding one item at once', () => {
+  const race = async (itemId: string) =>
+    Promise.allSettled([
+      recordCampaignDecision(
+        tenantId,
+        {
+          itemId,
+          deciderPersonId: person['Bram']!,
+          deciderUserId: user['Bram']!,
+          decision: 'certify',
+          comment: null,
+        },
+        { now: NOW },
+      ),
+      recordCampaignDecision(
+        tenantId,
+        {
+          itemId,
+          deciderPersonId: person['Jan']!,
+          deciderUserId: user['Jan']!,
+          decision: 'revoke',
+          comment: 'not needed any more',
+        },
+        { now: NOW },
+      ),
+    ]);
+
+  it('lets exactly one of them through', async () => {
+    const itemId = await seedItem('Anna');
+    await assign(itemId, 'Bram');
+    await assign(itemId, 'Jan');
+
+    const outcomes = await race(itemId);
+    expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
+    const rejected = outcomes.find((o) => o.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(CampaignDecisionRefusedError);
+    expect(rejected.reason.code).toBe('item_not_pending');
+  });
+
+  it('records ONE decision row, and the projection agrees with the item', async () => {
+    const itemId = await seedItem('Anna');
+    await assign(itemId, 'Bram');
+    await assign(itemId, 'Jan');
+
+    await race(itemId);
+
+    const decisions = await withTenant(tenantId, (tx) =>
+      tx.campaignDecision.findMany({ where: { itemId } }),
+    );
+    expect(decisions).toHaveLength(1);
+
+    // The half that made the race visible to an AUDITOR rather than only to
+    // the database: a certification row for an item in `revoke_decided`.
+    const item = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
+    );
+    const certifications = await withTenant(tenantId, (tx) =>
+      tx.holdingCertification.findMany(),
+    );
+    expect(certifications).toHaveLength(item.status === 'certified' ? 1 : 0);
+  });
+});
+
+/**
+ * §11's item table has no `blocked_no_reviewer -> certified` transition, and
+ * `CERTIFYING_TRANSITIONS` -- the constant the structural test asserts over --
+ * names `pending` as the only `from`. The gate admitted both, which is
+ * unreachable today ONLY because a blocked item has no active reviewer row so
+ * the `not_reviewer` refusal fires first. Two guards, one of them wrong, is one
+ * move away from the wrong one being the only guard.
+ */
+describe('a blocked item', () => {
+  it('cannot be certified even by somebody assigned to it', async () => {
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) =>
+      tx.campaignItem.update({ where: { id: itemId }, data: { status: 'blocked_no_reviewer' } }),
+    );
+    await assign(itemId, 'Bram');
+
+    await expect(
+      recordCampaignDecision(
+        tenantId,
+        {
+          itemId,
+          deciderPersonId: person['Bram']!,
+          deciderUserId: user['Bram']!,
+          decision: 'certify',
+          comment: null,
+        },
+        { now: NOW },
+      ),
+    ).rejects.toMatchObject({ code: 'item_not_pending' });
+  });
+});
+
+/**
+ * `bulkCertify` checked NEITHER of the two gates `recordCampaignDecision`
+ * refuses on: the campaign's status, and a departed subject.
+ *
+ * A leaver's items stay `pending` until the nightly `mootDepartedSubjects`
+ * sweep runs, so between the departure and that sweep their manager could
+ * bulk-certify a person who has left -- which the single path treats as false
+ * assurance and refuses in words.
+ */
+describe('bulkCertify honours the gates the single path enforces', () => {
+  it('refuses a campaign that is not open', async () => {
+    const itemId = await seedItem('Anna');
+    await assign(itemId, 'Bram');
+    await withTenant(tenantId, (tx) =>
+      tx.campaign.update({ where: { id: campaignId }, data: { status: 'closed_incomplete' } }),
+    );
+
+    await expect(
+      bulkCertify(
+        tenantId,
+        {
+          campaignId,
+          itemIds: [itemId],
+          deciderPersonId: person['Bram']!,
+          deciderUserId: user['Bram']!,
+        },
+        { now: NOW },
+      ),
+    ).rejects.toMatchObject({ code: 'campaign_not_open' });
+  });
+
+  it('refuses a departed subject and MOOTS the item, as the single path does', async () => {
+    const itemId = await seedItem('Anna');
+    await assign(itemId, 'Bram');
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({
+        where: { personId: person['Anna']! },
+        data: { endDate: day('2026-01-01') },
+      }),
+    );
+
+    const result = await bulkCertify(
+      tenantId,
+      {
+        campaignId,
+        itemIds: [itemId],
+        deciderPersonId: person['Bram']!,
+        deciderUserId: user['Bram']!,
+      },
+      { now: NOW },
+    );
+
+    expect(result.certified).toBe(0);
+    expect(result.refused[0]!.reason).toMatch(/has left/);
+    const item = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
+    );
+    expect(item.status).toBe('moot');
   });
 });

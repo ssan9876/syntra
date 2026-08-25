@@ -7,6 +7,7 @@ import {
   decideSodException,
   requestSodException,
   revokeSodException,
+  shouldWarn,
   sweepExceptions,
 } from './exception-service.js';
 
@@ -19,6 +20,7 @@ let violationId: string;
 let beneficiaryId: string;
 let acceptorUserId: string;
 let acceptorPersonId: string;
+let beneficiaryUserId: string;
 let teachingContractId: string;
 let researchContractId: string;
 
@@ -39,7 +41,7 @@ beforeEach(async () => {
     await tx.contract.create({
       data: { tenantId, personId: dirk.id, sequence: 1, isPrimary: true, startDate: new Date('2020-01-01') },
     });
-    await tx.user.create({
+    const annaUser = await tx.user.create({
       data: { tenantId, login: 'anna', email: 'anna@a.test', displayName: 'Anna Novak', personId: anna.id },
     });
     const dirkUser = await tx.user.create({
@@ -92,6 +94,7 @@ beforeEach(async () => {
     return {
       ruleId: rule.id, violationId: violation.id, beneficiaryId: anna.id,
       acceptorUserId: dirkUser.id, acceptorPersonId: dirk.id,
+      beneficiaryUserId: annaUser.id,
       teachingContractId: teaching.id, researchContractId: research.id,
     };
   });
@@ -101,6 +104,7 @@ beforeEach(async () => {
   beneficiaryId = seeded.beneficiaryId;
   acceptorUserId = seeded.acceptorUserId;
   acceptorPersonId = seeded.acceptorPersonId;
+  beneficiaryUserId = seeded.beneficiaryUserId;
   teachingContractId = seeded.teachingContractId;
   researchContractId = seeded.researchContractId;
 });
@@ -375,5 +379,118 @@ describe('when it lapses', () => {
     expect(exception.status).toBe('revoked');
     expect(violation.status).toBe('open');
     await grantsUntouched();
+  });
+});
+
+/**
+ * §14 says the remediation item goes to the RULE OWNER and the approver who
+ * allowed the grant. It went to `exception.personId` -- the beneficiary. The
+ * person the control exists to constrain was handed a task whose completion
+ * means giving up their own access, and the rule owner, the one person who can
+ * change what the rule names, was never told there was work to do.
+ */
+describe('a refused risk acceptance', () => {
+  it('routes the remediation to the rule owner, not the beneficiary', async () => {
+    const { id } = await requestSodException(tenantId, acceptorUserId, request());
+    await decideSodException(tenantId, acceptorUserId, id, 'refuse', 'no');
+
+    const item = await withTenant(tenantId, (tx) =>
+      tx.remediationItem.findFirstOrThrow({ where: { kind: 'sod_violation_unaccepted' } }),
+    );
+    // The rule's function A owner is Dirk; the beneficiary is Anna.
+    expect(item.ownerPersonId).toBe(acceptorPersonId);
+    expect(item.ownerPersonId).not.toBe(beneficiaryId);
+    // The approver is named in the description, because §14 wants them told and
+    // a RemediationItem carries one owner.
+    expect(item.description).toContain('refused by');
+  });
+});
+
+/**
+ * §15: "An exception may also be revoked early by an approver or the rule
+ * owner, with a reason, which is a recorded decision and produces the same
+ * reopening immediately." The function existed, was tested, and had no route --
+ * so the capability was in the codebase and not in the product.
+ *
+ * It also had no authority check, because nothing called it.
+ */
+describe('revoking an exception early', () => {
+  async function activeException(): Promise<string> {
+    const { id } = await requestSodException(tenantId, acceptorUserId, request());
+    await decideSodException(tenantId, acceptorUserId, id, 'approve', 'ok');
+    return id;
+  }
+
+  it('reopens the violation and revokes nothing', async () => {
+    const id = await activeException();
+
+    await revokeSodException(tenantId, acceptorUserId, id, 'no longer needed');
+
+    const [exception, violation] = await withTenant(tenantId, async (tx) => [
+      await tx.sodException.findUniqueOrThrow({ where: { id } }),
+      await tx.sodViolation.findUniqueOrThrow({ where: { id: violationId } }),
+    ]);
+    expect(exception.status).toBe('revoked');
+    expect(violation.status).toBe('open');
+    await grantsUntouched();
+
+    // NOTHING WAS REMOVED, and the event says so.
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'govern.exception.revoke' } }),
+    );
+    expect(event.payload).toMatchObject({ accessRevoked: false });
+  });
+
+  it('refuses the beneficiary', async () => {
+    // The self-approval invariant, at the other end of the exception's life. A
+    // beneficiary who could revoke their own exception could not gain anything
+    // by it -- but the person who accepts a risk is the person who carries it,
+    // and ending the acceptance is the same decision in reverse.
+    const id = await activeException();
+    await expect(
+      revokeSodException(tenantId, beneficiaryUserId, id, 'not mine'),
+    ).rejects.toMatchObject({ code: 'not_an_acceptor' });
+  });
+
+  it('refuses an exception that is not active', async () => {
+    const id = await activeException();
+    await revokeSodException(tenantId, acceptorUserId, id, 'done');
+    await expect(
+      revokeSodException(tenantId, acceptorUserId, id, 'again'),
+    ).rejects.toMatchObject({ code: 'not_active' });
+  });
+});
+
+/**
+ * EDGE-TRIGGERED ON AN EXACT DAY COUNT, with defaults of [14, 3].
+ *
+ * The sweep runs daily, so one skipped run -- a restart, a paused cadence
+ * (which until the schedule fix was what pausing SNAPSHOTS did), a failed job
+ * -- meant the 3-day warning was never sent and the exception lapsed with
+ * nobody told. §15's entire point is that somebody is told BEFORE it lapses.
+ */
+describe('shouldWarn', () => {
+  const at = (n: number) => new Date(NOW.getTime() + n * 86_400_000);
+
+  it('fires on the exact day, as it always did', () => {
+    expect(shouldWarn(at(14), NOW, [14, 3])).toBe(14);
+    expect(shouldWarn(at(3), NOW, [14, 3])).toBe(3);
+  });
+
+  it('fires on the day AFTER a missed sweep, for the threshold that was missed', () => {
+    // 13 days left: the 14-day warning was due yesterday and did not go.
+    expect(shouldWarn(at(13), NOW, [14, 3])).toBe(14);
+    // 2 days left: the 3-day warning was due yesterday.
+    expect(shouldWarn(at(2), NOW, [14, 3])).toBe(3);
+  });
+
+  it('reports the LOWEST threshold crossed, so an urgent warning is not masked', () => {
+    // 1 day left has crossed both. The message that matters is the near one.
+    expect(shouldWarn(at(1), NOW, [14, 3])).toBe(3);
+  });
+
+  it('says nothing before the first threshold, or after the end', () => {
+    expect(shouldWarn(at(20), NOW, [14, 3])).toBeNull();
+    expect(shouldWarn(at(-1), NOW, [14, 3])).toBeNull();
   });
 });

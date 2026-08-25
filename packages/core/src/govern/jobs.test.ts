@@ -104,14 +104,38 @@ describe('applyGovernSchedules', () => {
     expect(new Set(scheduled.map((s) => s.key)).size).toBe(GOVERN_PURPOSES.length);
   });
 
-  it('UNSCHEDULES every purpose when the cadence is cleared', async () => {
+  it('unschedules ONLY the snapshot purpose when the cadence is cleared', async () => {
     // Scheduling and unscheduling are two halves of one decision. pg-boss keeps
     // schedules in the database, so a tenant that turned snapshots off while
     // this process was down still has rows waiting for it.
+    //
+    // But pausing snapshots is a documented operation -- the obvious thing to
+    // do while a directory migration runs -- and it used to switch off six
+    // unrelated controls with it.
+    //
+    // `govern.audit.verify`, so a broken hash chain is never detected.
+    // `govern.exception.sweep`, so an approved SoD exception stays `active`
+    // past its `endsAt` FOREVER and its violation stays `excepted`, invisible
+    // on the default `open` filter -- and §15's expiry is enforced by nothing
+    // else. Campaign close and reminders, so every open campaign silently stops
+    // asking and never reaches its due date.
     const { scheduler, scheduled, unscheduled } = fakeScheduler();
     await applyGovernSchedules(scheduler, tenantId, null);
-    expect(scheduled).toHaveLength(0);
-    expect(unscheduled).toHaveLength(GOVERN_PURPOSES.length);
+
+    expect(unscheduled).toHaveLength(1);
+    expect(unscheduled[0]!.name).toBe(GOVERN_SNAPSHOT_JOB);
+    expect(unscheduled[0]!.key).toBe(governScheduleKey(tenantId, 'snapshot'));
+    // Every other purpose is still scheduled, on its own key.
+    expect(scheduled).toHaveLength(GOVERN_PURPOSES.length - 1);
+    expect(scheduled.map((s) => s.name)).not.toContain(GOVERN_SNAPSHOT_JOB);
+    expect(new Set(scheduled.map((s) => s.key)).size).toBe(GOVERN_PURPOSES.length - 1);
+  });
+
+  it('still reconciles the other six when a cadence IS set', async () => {
+    const { scheduler, scheduled, unscheduled } = fakeScheduler();
+    await applyGovernSchedules(scheduler, tenantId, '0 1 * * *');
+    expect(scheduled).toHaveLength(GOVERN_PURPOSES.length);
+    expect(unscheduled).toHaveLength(0);
   });
 });
 

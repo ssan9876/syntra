@@ -309,3 +309,82 @@ describe('collectTenant', () => {
     expect(collected.sources.map((s) => s.sourceKind)).toEqual(['syntraInternal']);
   });
 });
+
+/**
+ * §6: an orphan account's holdings ARE holdings, held by somebody Syntra
+ * cannot name.
+ *
+ * `collect` skipped any user with no `personId` for groups, applications and
+ * roles, so a service account holding `tenant.manage` produced a
+ * `subject_unresolvable` gap and NO `syntraRole` holding -- it appeared in no
+ * report, no campaign and no SoD evaluation. An account that can sign in to the
+ * identity platform, belongs to nobody, and holds the permission to administer
+ * tenants is the single most interesting row an access review can put in front
+ * of somebody, and it was the one row that was never there.
+ */
+describe('an account with no person behind it', () => {
+  async function seedUnlinkedUserHoldingEverything(): Promise<{ userId: string }> {
+    return withTenant(tenantId, async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          tenantId,
+          login: 'svc-payments',
+          email: 'svc-payments@a.test',
+          displayName: 'Payments service account',
+          // THE WHOLE POINT: no person behind it.
+          personId: null,
+        },
+      });
+      const group = await tx.group.create({ data: { tenantId, name: 'Ward Nurses' } });
+      await tx.groupMembership.create({
+        data: { tenantId, groupId: group.id, userId: user.id },
+      });
+      const application = await tx.application.create({
+        data: { tenantId, name: 'Payments', slug: 'payments' },
+      });
+      await tx.appAssignment.create({
+        data: {
+          tenantId,
+          applicationId: application.id,
+          subjectType: 'user',
+          userId: user.id,
+        },
+      });
+      const role = await tx.role.create({ data: { tenantId, name: 'Owner' } });
+      await tx.roleAssignment.create({ data: { tenantId, roleId: role.id, userId: user.id } });
+      return { userId: user.id };
+    });
+  }
+
+  it('still contributes its group, application and role holdings', async () => {
+    const seeded = await seedUnlinkedUserHoldingEverything();
+
+    const collected = await collectTenant(tenantId, { asOf: NOW });
+    const mine = collected.holdings.filter(
+      (h) => h.subject.kind === 'account' && h.subject.accountRef === seeded.userId,
+    );
+
+    expect([...new Set(mine.map((h) => h.resourceKind))].sort()).toEqual([
+      'application',
+      'syntraGroup',
+      'syntraRole',
+    ]);
+    // The subject is the ACCOUNT, named by what it is. `subjectKey` is
+    // `account:syntra:<userId>`, which is what every report and every campaign
+    // groups on.
+    expect(mine.every((h) => h.subject.kind === 'account')).toBe(true);
+  });
+
+  it('still records the gap, because the account is ALSO unresolvable', async () => {
+    // The holding and the gap are two different facts and both are true. The
+    // gap says "Govern cannot name who holds this"; the holdings say what they
+    // hold. Dropping either is a different kind of dishonesty.
+    const seeded = await seedUnlinkedUserHoldingEverything();
+    const collected = await collectTenant(tenantId, { asOf: NOW });
+    expect(
+      collected.gaps.some(
+        (g) => g.kind === 'subject_unresolvable' && g.accountRef === seeded.userId,
+      ),
+    ).toBe(true);
+  });
+});

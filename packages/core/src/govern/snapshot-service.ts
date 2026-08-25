@@ -45,6 +45,22 @@ export const SNAPSHOT_WRITE_BATCH = 500;
 export const EVENT_WRITE_BATCH = 500;
 
 /**
+ * GAINS PER CROSS-REFERENCE TRANSACTION.
+ *
+ * Smaller than `EVENT_WRITE_BATCH` because that constant sizes a `createMany`
+ * -- one statement per page -- while this one sizes a page whose worst case is
+ * one `updateMany` per DISTINCT audit sequence in it. 200 keeps that under the
+ * 5000 ms ceiling with room for a loaded machine.
+ *
+ * It used to be one `update` per gain inside a single transaction covering the
+ * whole snapshot. After a bulk provisioning run -- the day the change report
+ * matters most -- that exceeded the ceiling, `buildSnapshot`'s catch marked the
+ * snapshot `failed`, and the night's holdings, findings and diff were lost with
+ * it.
+ */
+export const GAIN_LINK_BATCH = 200;
+
+/**
  * How old a `building` snapshot must be before a new build supersedes it.
  *
  * A code constant, not a setting: a tenant that could raise it could brick its
@@ -456,13 +472,14 @@ export async function buildSnapshot(
       // system produces: access appeared, and SYNTRA DID NOT CAUSE IT. It is
       // only meaningful once this pass has run, which is why
       // `detectUnexplainedGains` is called here rather than in the detect stage.
-      await withTenant(tenantId, async (tx) => {
-        const gains = await tx.holdingEvent.findMany({
-          where: { toSnapshotId: snapshotId, change: 'gained' },
-          select: { id: true, personId: true, resourceId: true },
-        });
-        if (gains.length === 0) return;
-
+      //
+      // THREE SHAPES, NOT ONE TRANSACTION. The explanation map is built once in
+      // its own short transaction; the gains are then paged; and each page's
+      // writes are grouped BY SEQUENCE so a page costs one `updateMany` per
+      // distinct explaining event rather than one `update` per gain. A bulk
+      // provisioning run produces thousands of gains that share a handful of
+      // sequences, which is exactly the shape the grouping is for.
+      const bySubject = await withTenant(tenantId, async (tx) => {
         const since = previous === null ? new Date(0) : collected.asOf;
         const candidates = await tx.auditEvent.findMany({
           where: {
@@ -479,7 +496,7 @@ export async function buildSnapshot(
           },
           select: { sequence: true, targetId: true, payload: true },
         });
-        const bySubject = new Map<string, number>();
+        const map = new Map<string, number>();
         for (const event of candidates) {
           const payload = event.payload as Record<string, unknown>;
           const person = typeof payload['personId'] === 'string' ? payload['personId'] : null;
@@ -489,19 +506,49 @@ export async function buildSnapshot(
               : typeof payload['entitlementId'] === 'string'
                 ? payload['entitlementId']
                 : null;
-          if (person !== null && resource !== null) bySubject.set(`${person}|${resource}`, event.sequence);
+          if (person !== null && resource !== null) map.set(`${person}|${resource}`, event.sequence);
         }
+        return map;
+      });
 
-        for (const gain of gains) {
-          if (gain.personId === null) continue;
-          const sequence = bySubject.get(`${gain.personId}|${gain.resourceId}`);
-          if (sequence === undefined) continue;
-          await tx.holdingEvent.update({
-            where: { id: gain.id },
-            data: { auditEventSequence: sequence, explained: true },
+      if (bySubject.size > 0) {
+        let gainCursor: string | null = null;
+        for (;;) {
+          const page: { id: string; personId: string | null; resourceId: string }[] =
+            await withTenant(tenantId, (tx) =>
+              tx.holdingEvent.findMany({
+                where: {
+                  toSnapshotId: snapshotId,
+                  change: 'gained',
+                  ...(gainCursor === null ? {} : { id: { gt: gainCursor } }),
+                },
+                select: { id: true, personId: true, resourceId: true },
+                orderBy: { id: 'asc' },
+                take: GAIN_LINK_BATCH,
+              }),
+            );
+          if (page.length === 0) break;
+          gainCursor = page[page.length - 1]!.id;
+
+          const idsBySequence = new Map<number, string[]>();
+          for (const gain of page) {
+            if (gain.personId === null) continue;
+            const sequence = bySubject.get(`${gain.personId}|${gain.resourceId}`);
+            if (sequence === undefined) continue;
+            idsBySequence.set(sequence, [...(idsBySequence.get(sequence) ?? []), gain.id]);
+          }
+          if (idsBySequence.size === 0) continue;
+
+          await withTenant(tenantId, async (tx) => {
+            for (const [sequence, ids] of idsBySequence) {
+              await tx.holdingEvent.updateMany({
+                where: { id: { in: ids } },
+                data: { auditEventSequence: sequence, explained: true },
+              });
+            }
           });
         }
-      });
+      }
 
       const gainRows = await withTenant(tenantId, (tx) =>
         tx.holdingEvent.findMany({
@@ -706,13 +753,61 @@ export async function pruneSnapshots(
     if (candidates.length === 0) return { pruned: 0, retainedForReference: 0 };
     const ids = candidates.map((c) => c.id);
 
+    // THE THREE REFERENCE KINDS THE DOCSTRING PROMISES, and the third of them
+    // was missing.
+    //
+    // `Campaign.snapshotId`, `Campaign.rebasedFromSnapshotId` and
+    // `CampaignItem.holdingSnapshotId` are bare uuid columns with NO foreign
+    // key, so nothing stopped the delete at the database either: the campaign
+    // was left pointing at a snapshot that no longer exists, and
+    // `readableSnapshot` then throws `not_found` for its report, its re-base
+    // and its evidence pack. A campaign closed 400 days ago is exactly the one
+    // an auditor asks about, so the window this defect fires in is the window
+    // the evidence matters in.
+    //
+    // A foreign key was considered and rejected in both forms. `RESTRICT` turns
+    // the prune into an exception rather than a retention -- the job dies and
+    // nothing else is pruned either -- and `SET NULL` silently unlinks a
+    // campaign from its own evidence, which is the same data loss wearing a
+    // constraint.
     const referenced = new Set<string>();
+
     for (const pack of await tx.evidencePack.findMany({
       where: { snapshotId: { in: ids } },
       select: { snapshotId: true },
     })) {
       if (pack.snapshotId !== null) referenced.add(pack.snapshotId);
     }
+
+    // EVERY campaign, not only open ones. A closed campaign is the one whose
+    // evidence somebody comes back for; an open one still has reviewers looking
+    // at it. Neither may lose the picture it was generated from.
+    for (const campaign of await tx.campaign.findMany({
+      where: {
+        OR: [{ snapshotId: { in: ids } }, { rebasedFromSnapshotId: { in: ids } }],
+      },
+      select: { snapshotId: true, rebasedFromSnapshotId: true },
+    })) {
+      if (ids.includes(campaign.snapshotId)) referenced.add(campaign.snapshotId);
+      if (campaign.rebasedFromSnapshotId !== null && ids.includes(campaign.rebasedFromSnapshotId)) {
+        referenced.add(campaign.rebasedFromSnapshotId);
+      }
+    }
+
+    // And the item's OWN snapshot, which a re-base moves per item -- so a
+    // campaign whose items sit on three snapshots holds all three.
+    // `holdingSnapshotId` names where the copied attribution set came from, and
+    // that is what "attested against these facts" means. `distinct` rather than
+    // a read of every item: a 50,000-item campaign has at most a handful of
+    // distinct values and this transaction has a 5000 ms budget.
+    for (const item of await tx.campaignItem.findMany({
+      where: { holdingSnapshotId: { in: ids } },
+      select: { holdingSnapshotId: true },
+      distinct: ['holdingSnapshotId'],
+    })) {
+      referenced.add(item.holdingSnapshotId);
+    }
+
     for (const finding of await tx.governFinding.findMany({
       where: { status: { not: 'resolved' }, subjectRefType: 'snapshot', subjectRefId: { in: ids } },
       select: { subjectRefId: true },

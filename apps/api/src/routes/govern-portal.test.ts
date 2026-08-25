@@ -252,3 +252,56 @@ describe('bulk certify', () => {
     expect(body.refused[0]!.reason).toContain('one at a time');
   });
 });
+
+it('shows when an item’s holding was last certified, and by whom', async () => {
+  // §12 puts this on the reviewer's screen so they are not re-attesting blind,
+  // and it was ALWAYS BLANK. `projectCertification` writes `subjectRefId` as
+  // the bare person id; the portal queried it with `subjectKey` --
+  // `person:<uuid>` -- and keyed its map the same way, so nothing ever matched.
+  // report-service and snapshot-service both build the key from the bare ref,
+  // so the writer was right and the reader was the wrong side.
+  await withTenant(ctx.tenantId, async (tx) => {
+    // `HoldingCertification` carries the campaign and the decision it came
+    // from, so the fixture builds a real decision rather than inventing ids:
+    // the projection is provenance, and a row that points at nothing would not
+    // be the row production writes.
+    const priorDecision = await tx.campaignDecision.create({
+      data: {
+        tenantId: ctx.tenantId,
+        itemId: unrelatedItemId,
+        personId: person['Ola']!,
+        decision: 'certify',
+        comment: null,
+        itemOpenedAt: NOW,
+        decidedAt: new Date('2026-01-15T09:00:00Z'),
+        sessionDecisionOrdinal: 1,
+        coverageAtDecision: {},
+      },
+    });
+    await tx.holdingCertification.create({
+      data: {
+        tenantId: ctx.tenantId,
+        subjectRefType: 'person',
+        subjectRefId: person['Anna']!,
+        systemId: 'sys-1',
+        resourceKind: 'targetEntitlement',
+        resourceId: 'ent-1',
+        lastCertifiedAt: new Date('2026-01-15T09:00:00Z'),
+        lastCertifiedByPersonId: person['Ola']!,
+        lastCampaignId: campaignId,
+        lastDecisionId: priorDecision.id,
+      },
+    });
+  });
+
+  const cookie = await portalCookie('jan');
+  const res = await get('/api/portal/govern/reviews', cookie);
+  expect(res.statusCode).toBe(200);
+  const item = (
+    res.json() as {
+      items: { resourceId: string; lastCertifiedAt: string | null; lastCertifiedBy: string | null }[];
+    }
+  ).items.find((i) => i.resourceId === 'ent-1')!;
+  expect(item.lastCertifiedAt).toBe('2026-01-15T09:00:00.000Z');
+  expect(item.lastCertifiedBy).toBeTruthy();
+});

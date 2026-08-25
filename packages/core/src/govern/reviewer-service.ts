@@ -22,10 +22,36 @@ import { PERMISSIONS } from '../rbac/permissions.js';
 // from here.
 import { computeReviewQualitySignals } from './decision-service.js';
 import { createRemediationItem, upsertFindings } from './finding-service.js';
+// §13: revoke decisions "accumulate, and at campaign close -- or at an explicit
+// Execute revocations action before it -- they are computed into a
+// RevocationBatch". Nothing computed one, so a campaign closed with its
+// decisions sitting untouched forever.
+//
+// The edge is one-way: `revocation-service.ts` imports nothing from this file,
+// so nothing here closes a cycle.
+import { computeRevocationBatch } from './revocation-service.js';
 import { readableSnapshot } from './readable.js';
 import { governSettings } from './settings-service.js';
 
 export const REVIEWER_BATCH = 200;
+
+/**
+ * ITEM IDS PER ESCALATION TRANSACTION.
+ *
+ * Separate from `REVIEWER_BATCH`, which bounds how many REVIEWERS one reminder
+ * transaction handles. Escalation is bounded by the ITEMS a single reviewer
+ * holds, which is a different number entirely: one reviewer with 4,000 pending
+ * items is one row in the reminder batch and 4,000 units of work here.
+ *
+ * That is the defect this constant exists for. The escalation block used to run
+ * inside the reminder batch transaction, looping over every pending item the
+ * reviewer held with a `findFirst` plus a `create` per (item, approver) --
+ * roughly 40,000 sequential statements for a 20,000-item campaign over 50
+ * reviewers, inside one 5000 ms budget. It aborted, and the abort rolled back
+ * the `lastRemindedAt` writes with it, so the next run rebuilt the identical
+ * batch and failed identically. No reminder and no escalation ever went out.
+ */
+export const ESCALATION_BATCH = 200;
 
 /**
  * Automate's selector machinery, REUSED rather than reimplemented.
@@ -571,10 +597,16 @@ export async function mootVanishedHoldings(
  */
 export async function runCampaignReminders(
   tenantId: string,
-  options: { now?: Date; publicUrl?: string; batchSize?: number } = {},
+  options: {
+    now?: Date;
+    publicUrl?: string;
+    batchSize?: number;
+    escalationBatchSize?: number;
+  } = {},
 ): Promise<{ reminded: number; escalated: number }> {
   const now = options.now ?? new Date();
   const batchSize = options.batchSize ?? REVIEWER_BATCH;
+  const escalationBatchSize = options.escalationBatchSize ?? ESCALATION_BATCH;
   let reminded = 0;
   let escalated = 0;
 
@@ -647,12 +679,22 @@ export async function runCampaignReminders(
       byReviewer.set(row.personId, entry);
     }
 
+    // Who actually got a reminder, and over which items. Escalation is phase
+    // two and runs over exactly this set: a reviewer whose reminder was skipped
+    // -- because they are no longer a valid approver -- must not be escalated
+    // past either.
+    const remindedThisRun: { personId: string; itemIds: string[] }[] = [];
+
     const reviewers = [...byReviewer];
     for (let i = 0; i < reviewers.length; i += batchSize) {
       const batch = reviewers.slice(i, i + batchSize);
       const outcome = await withTenant(tenantId, async (tx) => {
         let sent = 0;
-        let raised = 0;
+        // Accumulated INSIDE the transaction and merged by the caller only
+        // after it commits. Pushing straight into `remindedThisRun` from here
+        // would leave phase two escalating for a reminder a rolled-back
+        // transaction never actually sent.
+        const reminded: { personId: string; itemIds: string[] }[] = [];
 
         for (const [personId, entry] of batch) {
           // A reminder in a leaver's mailbox is a campaign asking somebody who
@@ -683,86 +725,103 @@ export async function runCampaignReminders(
             where: { id: { in: entry.reviewerRowIds } },
             data: { lastRemindedAt: now },
           });
+          reminded.push({ personId, itemIds: entry.itemIds });
           sent += 1;
-
-          if (escalating) {
-            // Escalation ADDS a reviewer and never replaces one, and it tells
-            // the original they were escalated past.
-            //
-            // THE SUBJECT IS THE REVIEWER, NOT THE ITEM. §12: escalation goes
-            // to "`Contract.managerPersonId` on THE REVIEWER'S OWN RESOLVED
-            // CONTRACT". Passing the first pending item's subject resolves an
-            // arbitrary person's manager and grants them review authority over
-            // items they have no relationship to — and if that arbitrary
-            // subject's manager is themselves the subject of one of the
-            // escalated items, they now review their own access, which the
-            // self-review invariant is only re-checked for against the ITEM's
-            // own subject.
-            const escalation = await resolveEscalationApprovers(
-              tx,
-              stageFor(campaign),
-              reviewerAsSubject(personId),
-              now,
-            );
-            const added = escalation.approvers.filter((a) => a.personId !== personId);
-            if (added.length === 0) continue;
-
-            for (const itemId of entry.itemIds) {
-              for (const approver of added) {
-                // `findFirst` then `create`, with NO swallowed error.
-                //
-                // An `upsert` on a synthesised `id` like `${itemId}:${personId}`
-                // is not a uuid, so the query errors before `create` is
-                // reached; and a query error inside a Prisma interactive
-                // transaction leaves the Postgres transaction ABORTED, so a
-                // `.catch(() => undefined)` does not rescue the one escalation
-                // — it kills the whole reminder run with "current transaction
-                // is aborted" on the next statement.
-                const existing = await tx.campaignItemReviewer.findFirst({
-                  where: { itemId, personId: approver.personId, unassignedAt: null },
-                  select: { id: true },
-                });
-                if (existing !== null) continue;
-                await tx.campaignItemReviewer.create({
-                  data: {
-                    tenantId,
-                    itemId,
-                    personId: approver.personId,
-                    via: 'escalation',
-                    assignedAt: now,
-                  },
-                });
-              }
-            }
-
-            const names = await displayNames(tx, { personIds: added.map((a) => a.personId) });
-            await enqueueOutbox(
-              tx,
-              recipients.map((recipient) => ({
-                template: 'govern-review-escalated' as const,
-                to: recipient.email,
-                vars: {
-                  displayName: recipient.displayName,
-                  campaignName: campaign.name,
-                  itemCount: String(entry.itemIds.length),
-                  escalatedTo: added
-                    .map((a) => names.get(`person:${a.personId}`) ?? 'their manager')
-                    .join(', '),
-                  reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaign.id}`,
-                },
-                requestId: null,
-                userId: recipient.userId,
-              })),
-            );
-            raised += 1;
-          }
         }
 
-        return { sent, raised };
+        return { sent, reminded };
       });
 
       reminded += outcome.sent;
-      escalated += outcome.raised;
+      remindedThisRun.push(...outcome.reminded);
+    }
+
+    // ---- phase two: escalation, in its own transactions -------------------
+    //
+    // §12: escalation ADDS a reviewer and never replaces one, and it tells the
+    // original they were escalated past. THE SUBJECT IS THE REVIEWER, NOT THE
+    // ITEM -- `Contract.managerPersonId` on the reviewer's own resolved
+    // contract. Passing the first pending item's subject would resolve an
+    // arbitrary person's manager and grant them review authority over items
+    // they have no relationship to, and if that arbitrary subject's manager is
+    // themselves the subject of one of the escalated items they would then
+    // review their own access.
+    //
+    // SEPARATE FROM THE REMINDER, and that is the whole of this task. The
+    // reminder's `lastRemindedAt` is committed by the time this runs, so an
+    // escalation that fails costs one night's escalation rather than every
+    // reminder in the campaign forever.
+    if (escalating) {
+      for (const { personId, itemIds } of remindedThisRun) {
+        const resolved = await withTenant(tenantId, async (tx) => {
+          const escalation = await resolveEscalationApprovers(
+            tx,
+            stageFor(campaign),
+            reviewerAsSubject(personId),
+            now,
+          );
+          return escalation.approvers
+            .filter((a) => a.personId !== personId)
+            .map((a) => a.personId);
+        });
+        if (resolved.length === 0) continue;
+
+        // ONE existence read and ONE createMany per page of items, instead of a
+        // `findFirst` plus a `create` per (item, approver). The unique index is
+        // `(itemId, personId, assignedAt)` and `assignedAt` is `now`, so
+        // `skipDuplicates` alone would not stop a SECOND row for an escalation
+        // made on an earlier run at a different `now` -- which is why the read
+        // is still here, and why it is set-based.
+        for (let i = 0; i < itemIds.length; i += escalationBatchSize) {
+          const page = itemIds.slice(i, i + escalationBatchSize);
+          await withTenant(tenantId, async (tx) => {
+            const existing = await tx.campaignItemReviewer.findMany({
+              where: { itemId: { in: page }, personId: { in: resolved }, unassignedAt: null },
+              select: { itemId: true, personId: true },
+            });
+            const held = new Set(existing.map((row) => `${row.itemId}|${row.personId}`));
+            const missing = page.flatMap((itemId) =>
+              resolved
+                .filter((approverId) => !held.has(`${itemId}|${approverId}`))
+                .map((approverId) => ({
+                  tenantId,
+                  itemId,
+                  personId: approverId,
+                  via: 'escalation',
+                  assignedAt: now,
+                })),
+            );
+            if (missing.length === 0) return;
+            await tx.campaignItemReviewer.createMany({ data: missing, skipDuplicates: true });
+          });
+        }
+
+        // The original is told, once, after the rows are in. Telling them
+        // before would name an escalation that a failed page never made.
+        await withTenant(tenantId, async (tx) => {
+          const recipients = await recipientsForPersons(tx, [personId]);
+          const names = await displayNames(tx, { personIds: resolved });
+          await enqueueOutbox(
+            tx,
+            recipients.map((recipient) => ({
+              template: 'govern-review-escalated' as const,
+              to: recipient.email,
+              vars: {
+                displayName: recipient.displayName,
+                campaignName: campaign.name,
+                itemCount: String(itemIds.length),
+                escalatedTo: resolved
+                  .map((id) => names.get(`person:${id}`) ?? 'their manager')
+                  .join(', '),
+                reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaign.id}`,
+              },
+              requestId: null,
+              userId: recipient.userId,
+            })),
+          );
+        });
+        escalated += 1;
+      }
     }
   }
 
@@ -778,11 +837,12 @@ export async function runCampaignReminders(
 export async function closeDueCampaigns(
   tenantId: string,
   options: { now?: Date; publicUrl?: string; batchSize?: number } = {},
-): Promise<{ closed: number; undecided: number }> {
+): Promise<{ closed: number; undecided: number; batches: number }> {
   const now = options.now ?? new Date();
   const batchSize = options.batchSize ?? REVIEWER_BATCH;
   let closed = 0;
   let undecidedTotal = 0;
+  let batches = 0;
 
   // A SHORT TRANSACTION RETURNING PLAIN DATA, not a transaction held open
   // across every campaign and every item. §17 contemplates 50,000-item
@@ -839,6 +899,60 @@ export async function closeDueCampaigns(
       // next page without needing a cursor.
     }
 
+    // ---- the revocation batch, BEFORE the close ---------------------------
+    //
+    // §13: revoke decisions "accumulate, and at campaign close -- or at an
+    // explicit Execute revocations action before it -- they are computed into a
+    // RevocationBatch". Nothing computed one. `computeRevocationBatch`'s only
+    // caller was an admin route the console never invokes, so a campaign closed
+    // with 91 revoke decisions sitting as rows nobody would ever act on: the
+    // report said `revoke_decided` and the target still held everything. That
+    // is the silent-drop failure this platform keeps rediscovering, wearing the
+    // clothes of a completed audit.
+    //
+    // COMPUTING IS NOT APPLYING. §13: "`autoApply` does not exist for a batch."
+    // What this produces is `previewed` or `blocked` -- a proposal on a screen,
+    // with per-row skip, that a named human must confirm. So doing it
+    // unattended takes nothing away from anybody, which is the only reason an
+    // unattended path may touch this at all.
+    //
+    // BEFORE the status flip, not after, and that ordering is the whole safety
+    // property. `closeDueCampaigns` selects `status: 'open'`, so a batch that
+    // failed after the close would be a batch nothing would ever build. Failing
+    // here leaves the campaign open and the next nightly tick retries; the
+    // compute is idempotent by construction, because it supersedes a stale
+    // non-terminal batch at the head of itself.
+    const toRevoke = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.count({ where: { campaignId: campaign.id, status: 'revoke_decided' } }),
+    );
+    if (toRevoke > 0) {
+      // `actorUserId: null` -- a background job has no request and therefore no
+      // actor, and naming one would put a person's id on a computation they did
+      // not ask for. The audit event records the campaign and the verdict, and
+      // the CONFIRMATION is where a named human enters the record.
+      const batch = await computeRevocationBatch(tenantId, null, campaign.id, { now });
+      batches += 1;
+
+      // A batch the guard refused outright is not a screen somebody will
+      // happen upon. §13's four blocking conditions are all "re-base and let
+      // the reviewers look at what changed", which is work with a deadline, so
+      // it goes in the remediation queue with the campaign's owner on it.
+      if (batch.status === 'blocked') {
+        await withTenant(tenantId, (tx) =>
+          createRemediationItem(tx, tenantId, {
+            kind: 'revocation_batch_blocked',
+            ownerPersonId: campaign.ownerPersonId,
+            dueAt: new Date(now.getTime() + 7 * 86_400_000),
+            description:
+              `The revocations decided in "${campaign.name}" cannot be executed: ` +
+              `${batch.blockedReason ?? 'the guard refused the batch'}. ` +
+              'Nothing was removed and nothing will be until this is resolved.',
+            deepLink: `/admin/govern/campaigns/${campaign.id}`,
+          }),
+        );
+      }
+    }
+
     // ---- the counts, computed from what they are DEFINED as ----------------
     //
     // §12: `coveragePercent = (decided + moot) / total` where `decided` is
@@ -855,13 +969,52 @@ export async function closeDueCampaigns(
     // on it".
     const counts = await withTenant(tenantId, async (tx) => {
       const total = await tx.campaignItem.count({ where: { campaignId: campaign.id } });
-      const moot = await tx.campaignItem.count({
-        where: { campaignId: campaign.id, status: 'moot' },
-      });
-      const requiresChange = await tx.campaignItem.count({
-        where: { campaignId: campaign.id, status: 'revocation_requires_change' },
-      });
 
+      // ---- the OUTCOME counts, from the statuses that define them ----------
+      //
+      // §10 defines "revoked" once and this is the whole of it: the removal was
+      // APPLIED at the system that holds it, confirmed by that system, and
+      // observed by a subsequent read. `revocation_applied` is the status that
+      // means exactly that, and it is the only one that may be counted here.
+      //
+      // The previous form counted "items whose latest decision is revoke",
+      // which swept in `revocation_requires_change` -- the case §13 says is
+      // NEVER counted in a revoked figure and calls "a lie with a signature on
+      // it" -- plus `revocation_failed`, plus every item still in
+      // `revoke_decided` with nothing dispatched at all. At close time NOTHING
+      // has been dispatched yet, so the honest `revoked` figure on a campaign
+      // that has just closed is normally ZERO, and that is the point: the
+      // removals have been decided, not done.
+      //
+      // ONE grouped query, not seven counts. This runs per campaign inside the
+      // close loop and seven round trips per campaign is seven times the work
+      // for the same answer.
+      const byStatus = await tx.campaignItem.groupBy({
+        by: ['status'],
+        where: { campaignId: campaign.id },
+        _count: { _all: true },
+      });
+      const countOf = (status: string): number =>
+        byStatus.find((row) => row.status === status)?._count._all ?? 0;
+
+      const moot = countOf('moot');
+      const requiresChange = countOf('revocation_requires_change');
+      const revoked = countOf('revocation_applied');
+      const revokeDecided = countOf('revoke_decided');
+      // `dispatched` and `confirmed` together: §13 calls `confirmed` "an honest
+      // intermediate state" -- the subsystem said it applied and no snapshot has
+      // observed it gone -- and the one thing both share is that they are NOT
+      // revoked. Reporting them apart would put a distinction on the campaign
+      // report that only the next snapshot can resolve.
+      const dispatched = countOf('revocation_dispatched') + countOf('revocation_confirmed');
+      const failed = countOf('revocation_failed');
+
+      // ---- `decided`, which is a different question -------------------------
+      //
+      // §12: `coveragePercent = (decided + moot) / total` where `decided` is
+      // EVERY ITEM CARRYING A CampaignDecision. Deriving it from statuses
+      // instead omits the outcome statuses, so a campaign that dispatched 91
+      // revocations would report them as uncovered.
       const decidedGroups = await tx.campaignDecision.groupBy({
         by: ['itemId'],
         where: { item: { campaignId: campaign.id } },
@@ -869,8 +1022,8 @@ export async function closeDueCampaigns(
       });
       const decided = decidedGroups.length;
 
-      // The LATEST decision per item decides which side of the line it is on.
-      // An item revoked and then re-certified on appeal is certified. Ordered
+      // `certified` stays decision-derived, and stays on the LATEST decision:
+      // an item revoked and then re-certified on appeal is certified. Ordered
       // ascending and overwritten, because `CampaignDecision` is append-only
       // and `sessionDecisionOrdinal` is per session rather than per item.
       const history = await tx.campaignDecision.findMany({
@@ -881,13 +1034,21 @@ export async function closeDueCampaigns(
       const decisionByItem = new Map<string, string>();
       for (const row of history) decisionByItem.set(row.itemId, row.decision);
       let certified = 0;
-      let revoked = 0;
       for (const decision of decisionByItem.values()) {
         if (decision === 'certify') certified += 1;
-        if (decision === 'revoke') revoked += 1;
       }
 
-      return { total, moot, requiresChange, decided, certified, revoked };
+      return {
+        total,
+        moot,
+        requiresChange,
+        decided,
+        certified,
+        revoked,
+        revokeDecided,
+        dispatched,
+        failed,
+      };
     });
 
     const coverage =
@@ -902,6 +1063,9 @@ export async function closeDueCampaigns(
           status: undecided === 0 ? 'closed_complete' : 'closed_incomplete',
           certifiedItems: counts.certified,
           revokedItems: counts.revoked,
+          revokeDecidedItems: counts.revokeDecided,
+          dispatchedItems: counts.dispatched,
+          failedItems: counts.failed,
           requiresChangeItems: counts.requiresChange,
           mootItems: counts.moot,
           undecidedItems: undecided,
@@ -920,6 +1084,9 @@ export async function closeDueCampaigns(
         payload: {
           certified: counts.certified,
           revoked: counts.revoked,
+          revokeDecided: counts.revokeDecided,
+          dispatched: counts.dispatched,
+          failed: counts.failed,
           requiresChange: counts.requiresChange,
           moot: counts.moot,
           undecided,
@@ -951,6 +1118,9 @@ export async function closeDueCampaigns(
               minimum: settings.minimumCoveragePercent,
               certified: counts.certified,
               revoked: counts.revoked,
+              revokeDecided: counts.revokeDecided,
+              dispatched: counts.dispatched,
+              failed: counts.failed,
               requiresChange: counts.requiresChange,
               moot: counts.moot,
               undecided,
@@ -972,7 +1142,7 @@ export async function closeDueCampaigns(
     undecidedTotal += undecided;
   }
 
-  return { closed, undecided: undecidedTotal };
+  return { closed, undecided: undecidedTotal, batches };
 }
 
 export interface ReviewerResolutionPreview {

@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { collectTenant } from './collect.js';
+import { collectTenant, type CollectedTenant } from './collect.js';
 import { buildSnapshot } from './snapshot-service.js';
-import { createCampaign, startCampaign } from './campaign-service.js';
+import { createCampaign, rebaseCampaign, startCampaign } from './campaign-service.js';
 import { computeReviewQualitySignals } from './decision-service.js';
+import { sweepExceptions } from './exception-service.js';
+import { sweepAcceptedFindings } from './finding-service.js';
 import {
   closeDueCampaigns,
   mootDepartedSubjects,
@@ -13,11 +15,44 @@ import {
   reassignInvalidReviewers,
   runCampaignReminders,
 } from './reviewer-service.js';
+import { detectDecisionGraph } from './sod-service.js';
 import {
   computeRevocationBatch,
   confirmRevocationBatch,
   reflectRevocationOutcomes,
 } from './revocation-service.js';
+
+/**
+ * A collection with NO HOLDINGS, so a re-base onto it re-opens every item.
+ *
+ * The re-base budget cases need the world to have MOVED ON rather than merely
+ * to have been re-read: `rebaseCampaign` only writes for items whose holding
+ * CHANGED, so re-basing onto a snapshot of the same tenant keeps all 2,000 and
+ * issues no update at all -- which would measure the traversal and call it the
+ * loop.
+ */
+const emptyCollectionAt = (asOf: Date): CollectedTenant => ({
+  asOf,
+  holdings: [],
+  gaps: [],
+  sources: [
+    {
+      sourceKind: 'syntraInternal',
+      sourceId: 'syntra',
+      sourceName: 'Syntra',
+      lastRunId: null,
+      lastSuccessfulReadAt: asOf,
+      lastAttemptedReadAt: asOf,
+      completeness: 'complete',
+      freshnessSlaHours: 24,
+      gapCount: 0,
+    },
+  ],
+  personIds: [],
+  personsWithActiveContract: 0,
+  unattributedAccountKeys: [],
+  queryCount: 9,
+});
 
 /**
  * Section 23: "No `withTenant` call encloses a loop over an unbounded
@@ -296,6 +331,113 @@ describe('the transaction budget — slice 2', () => {
    */
   let seedSeq = 0;
 
+  /**
+   * `n` lapsing exceptions and `n` lapsing accepted findings, in bulk.
+   *
+   * EVERY ROW THROUGH `createMany`. A seed written row by row inside one
+   * `withTenant` would itself exceed the budget this file measures, and a seed
+   * that trips the instrument tells you nothing about the code.
+   *
+   * One rule and one function pair: the exceptions differ by PERSON, which is
+   * what `sweepExceptions` pages over. Every exception is `active` with an
+   * `endsAt` in the past, so the sweep lapses all of them -- the heaviest path,
+   * which updates the exception, updates the violation, reads and updates the
+   * finding, resolves recipients, enqueues outbox rows, and calls `recordEvent`.
+   */
+  async function seedManyExceptionsAndAcceptedFindings(n: number): Promise<void> {
+    seedSeq += 1;
+    const tag = seedSeq;
+    const personIds = Array.from({ length: n }, () => randomUUID());
+    const functionAId = randomUUID();
+    const functionBId = randomUUID();
+    const ruleId = randomUUID();
+    const violationIds = Array.from({ length: n }, () => randomUUID());
+    const past = new Date(NOW.getTime() - 86_400_000);
+
+    await withTenant(tenantId, async (tx) => {
+      await tx.person.createMany({
+        data: personIds.map((id, i) => ({
+          id,
+          tenantId,
+          givenName: `Sweep${tag}-${i}`,
+          familyName: 'Subject',
+        })),
+      });
+      await tx.contract.createMany({
+        data: personIds.map((personId) => ({
+          tenantId,
+          personId,
+          sequence: 1,
+          isPrimary: true,
+          startDate: new Date('2020-01-01'),
+        })),
+      });
+      await tx.businessFunction.createMany({
+        data: [
+          { id: functionAId, tenantId, name: `Raise payments ${tag}`, ownerPersonId: personIds[0]! },
+          { id: functionBId, tenantId, name: `Approve payments ${tag}`, ownerPersonId: personIds[0]! },
+        ],
+      });
+      await tx.sodRule.createMany({
+        data: [
+          {
+            id: ruleId,
+            tenantId,
+            name: `Raise vs approve ${tag}`,
+            functionAId,
+            functionBId,
+            severity: 'high',
+            rationale: 'one person must not both raise and approve a payment',
+          },
+        ],
+      });
+      await tx.sodViolation.createMany({
+        data: violationIds.map((id, i) => ({
+          id,
+          tenantId,
+          ruleId,
+          personId: personIds[i]!,
+          holdingsA: [],
+          holdingsB: [],
+          severity: 'high',
+          status: 'excepted',
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+          lastSnapshotId: snapshotId,
+        })),
+      });
+      await tx.sodException.createMany({
+        data: violationIds.map((violationId, i) => ({
+          tenantId,
+          ruleId,
+          personId: personIds[i]!,
+          violationId,
+          justification: 'the team is two people this quarter',
+          compensatingControl: 'every payment over 10k is reviewed by finance',
+          startsAt: new Date('2026-01-01'),
+          // In the past, so the sweep lapses it.
+          endsAt: past,
+          status: 'active',
+        })),
+      });
+      await tx.governFinding.createMany({
+        data: personIds.map((personId, i) => ({
+          tenantId,
+          kind: 'sod_violation',
+          severity: 'high',
+          subjectRefType: 'person',
+          subjectRefId: `${personId}-${i}`,
+          status: 'accepted',
+          acceptedReason: 'accepted for the quarter',
+          // In the past, so the sweep lapses it.
+          acceptedUntil: past,
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+        })),
+      });
+    });
+  }
+
   /** Seeds the ordinary 2,000-item campaign and binds the three ids. */
   async function seedOrdinaryCampaign(): Promise<void> {
     const seeded = await seedLargeCampaign(PER_SUBJECT);
@@ -392,12 +534,22 @@ describe('the transaction budget — slice 2', () => {
     await withTenant(tenantId, (tx) =>
       tx.contract.createMany({
         data: [
-          ...reviewerIds.map((personId) => ({
+          ...reviewerIds.map((personId, i) => ({
             tenantId,
             personId,
             sequence: 1,
             isPrimary: true,
             startDate: new Date('2020-01-01'),
+            // THE REVIEWERS HAVE MANAGERS NOW, and that is what this seed was
+            // missing. `resolveEscalationApprovers` reads
+            // `Contract.managerPersonId` on the REVIEWER's own contract, so
+            // reviewers with none resolved to nobody and the escalation loop
+            // never executed -- which is why this file measured the reminder
+            // run as bounded while the escalation inside it was unbounded.
+            // Chained, so every reviewer has one and the fiftieth has the
+            // first: escalating to a person outside the campaign would only
+            // measure a lookup that misses.
+            managerPersonId: reviewerIds[(i + 1) % REVIEWERS]!,
           })),
           // Spread across the 50 reviewers, so the `manager` selector is a real
           // cost rather than one lookup repeated 2,000 times.
@@ -540,10 +692,15 @@ describe('the transaction budget — slice 2', () => {
   it('closes a 2,000-item campaign with no transaction over the budget', async () => {
     await seedOrdinaryCampaign();
     await startCampaign(tenantId, actorUserId, campaignId, { now: NOW });
-    await decideEveryItem('certify');
-    const { slowest } = await timedTransactions(() =>
+    // REVOKE, not certify. The close now computes the revocation batch §13 says
+    // it must, and that is one transaction for the whole batch by design -- so
+    // certifying every item would measure a close that skips the heaviest thing
+    // it does.
+    await decideEveryItem('revoke');
+    const { result, slowest } = await timedTransactions(() =>
       closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) }),
     );
+    expect(result.batches).toBe(1);
     expect(slowest).toBeLessThan(BUDGET_MS);
   }, 300_000);
 
@@ -615,6 +772,158 @@ describe('the transaction budget — slice 2', () => {
       reflectRevocationOutcomes(tenantId, snapshotId, { now: NOW }),
     );
     expect(reflectTiming.slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  it('reminds AND escalates a 2,000-item campaign within the budget', async () => {
+    await seedOrdinaryCampaign();
+    await startCampaign(tenantId, actorUserId, campaignId, { now: NOW });
+    // The last day before `dueAt` is when escalation fires, and it is the only
+    // window in which this code path runs at all.
+    const { result, slowest } = await timedTransactions(() =>
+      runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 3_600_000) }),
+    );
+    expect(result.escalated).toBeGreaterThan(0);
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  /**
+   * THERE IS NO UNBOUNDED MUTATION FOR ESCALATION, and the reason is the same
+   * one the `UNBOUNDED_PER_SUBJECT` note gives for item creation.
+   *
+   * The defect this task fixed was a `findFirst` plus a `create` PER (item,
+   * approver), inside the reviewer batch transaction -- roughly 40,000
+   * sequential statements for a 20,000-item campaign over 50 reviewers, which
+   * aborted and rolled the reminder's `lastRemindedAt` writes back with it, so
+   * the next run rebuilt the identical batch and failed identically forever.
+   *
+   * The replacement is ONE set-based existence read and ONE `createMany` per
+   * page. `escalationBatchSize` therefore bounds how many rows go into a bulk
+   * write, not how many round trips are made -- and writing rows in bulk is
+   * what a database is fast at. Measured here: unbounding it against this same
+   * 2,000-item campaign completes in ~13 s of wall clock with a slowest
+   * transaction WELL under the budget, so a mutation case on that knob asserts
+   * nothing and would sit permanently red-if-inverted for the wrong reason.
+   *
+   * What guards the regression is the bounded case above -- restoring per-item
+   * round trips would blow through the budget at this size -- together with the
+   * three correctness cases in `reviewer-service.test.ts`, which pin the two
+   * phases apart: `lastRemindedAt` is stamped even when escalation adds nobody,
+   * and a second run adds no duplicate row.
+   */
+
+  it('re-bases a 2,000-item campaign with no transaction over the budget', async () => {
+    await seedOrdinaryCampaign();
+    await startCampaign(tenantId, actorUserId, campaignId, { now: NOW });
+    // Onto an EMPTY snapshot, so every one of the 2,000 items is RE-OPENED and
+    // the per-item `update` actually runs. Re-basing onto the same snapshot
+    // measures the traversal and nothing else -- every item is `kept`, no row
+    // is written, and the figure that comes back says nothing about the loop
+    // this budget exists to bound.
+    const empty = await buildSnapshot(tenantId, {
+      now: new Date(NOW.getTime() + 86_400_000),
+      collect: async () => emptyCollectionAt(new Date(NOW.getTime() + 86_400_000)),
+    });
+    const { result, slowest } = await timedTransactions(() =>
+      rebaseCampaign(tenantId, actorUserId, campaignId, empty.snapshotId),
+    );
+    expect(result.reopened).toBe(ITEMS);
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  /**
+   * MEASURED AT A LARGER SIZE THAN THE ORDINARY CAMPAIGN, and the number is why.
+   *
+   * A re-base does per-item work -- a comparison and an `update` each -- but
+   * only for items whose holding CHANGED, so the campaign has to be re-based
+   * onto an EMPTY snapshot for the loop to run at all. Even then, 2,000 items
+   * unbounded measured **1,859 ms** on a 16-core box against CI's 4,500 ms
+   * budget: real per-item cost, comfortably inside the ceiling, and therefore
+   * useless as a mutation.
+   *
+   * The cost is linear in items, so the knob is the campaign rather than the
+   * assertion. 8,000 items is roughly 7.4 s by that measurement -- past the
+   * budget and past Prisma's own 5,000 ms ceiling, which is the form the defect
+   * actually takes in production.
+   */
+  const REBASE_UNBOUNDED_PER_SUBJECT = 40;
+
+  it('FAILS when the re-base is unbounded — the mutation this case exists for', async () => {
+    // EXECUTED, not documented. §8 rule 2 makes this the trap rather than the
+    // slowdown: a campaign past `maxSnapshotAgeDays` MUST be re-based before
+    // its revocations can execute, so a re-base that cannot finish leaves the
+    // batch permanently unexecutable -- the only way out of the block is the
+    // function that cannot complete.
+    const big = await seedLargeCampaign(REBASE_UNBOUNDED_PER_SUBJECT);
+    await startCampaign(tenantId, big.actorUserId, big.campaignId, { now: NOW });
+
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const empty = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () => emptyCollectionAt(later),
+    });
+
+    let aborted = false;
+    const { slowest } = await timedTransactions(async () => {
+      try {
+        await rebaseCampaign(tenantId, big.actorUserId, big.campaignId, empty.snapshotId, {
+          batchSize: Number.MAX_SAFE_INTEGER,
+        });
+      } catch {
+        // Prisma's own 5,000 ms interactive-transaction ceiling ends it first,
+        // which is the same finding arriving as an exception instead of a
+        // number.
+        aborted = true;
+      }
+    });
+
+    const breached = aborted || slowest > BUDGET_MS;
+    expect(breached).toBe(true);
+  }, 300_000);
+
+  it('sweeps exceptions and accepted findings within the budget', async () => {
+    // These two run inside `runSnapshotJob`, AFTER earlier stages have
+    // committed, so an abort retries the whole job and builds a SECOND
+    // snapshot. Both wrapped a per-row loop in one transaction, and `lapse`
+    // calls `recordEvent` per row -- which takes a per-tenant advisory lock for
+    // the duration of its transaction, so the loop serialises every other
+    // audited action in the tenant behind it.
+    await seedOrdinaryCampaign();
+    await seedManyExceptionsAndAcceptedFindings(600);
+    const after = new Date(NOW.getTime() + 400 * 86_400_000);
+
+    const sweepTiming = await timedTransactions(() => sweepExceptions(tenantId, { now: after }));
+    expect(sweepTiming.result.lapsed).toBe(600);
+    expect(sweepTiming.slowest).toBeLessThan(BUDGET_MS);
+
+    const findingTiming = await timedTransactions(() => sweepAcceptedFindings(tenantId, after));
+    expect(findingTiming.result.lapsed).toBe(600);
+    expect(findingTiming.slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  it('FAILS when the exception sweep is unbounded — the mutation this case exists for', async () => {
+    await seedOrdinaryCampaign();
+    await seedManyExceptionsAndAcceptedFindings(600);
+
+    let aborted = false;
+    const { slowest } = await timedTransactions(async () => {
+      try {
+        await sweepExceptions(tenantId, {
+          now: new Date(NOW.getTime() + 400 * 86_400_000),
+          batchSize: Number.MAX_SAFE_INTEGER,
+        });
+      } catch {
+        aborted = true;
+      }
+    });
+    expect(aborted || slowest > BUDGET_MS).toBe(true);
+  }, 300_000);
+
+  it('builds the decision graph over the seeded tenant within the budget', async () => {
+    await seedOrdinaryCampaign();
+    const { slowest } = await timedTransactions(() =>
+      detectDecisionGraph(tenantId, snapshotId, { now: NOW }),
+    );
+    expect(slowest).toBeLessThan(BUDGET_MS);
   }, 300_000);
 
   it('FAILS when reviewer resolution is unbounded — the mutation this half exists for', async () => {

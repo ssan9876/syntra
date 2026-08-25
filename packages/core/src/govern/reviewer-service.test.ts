@@ -791,27 +791,37 @@ describe('closing', () => {
     expect((finding.detail as { reviewers?: string[] }).reviewers).toContain(person['Jan']);
   });
 
-  it('NEVER counts a revocation_requires_change item as revoked, and counts dispatched ones as decided', async () => {
-    // `'revocation_dispatched'.startsWith('revoke')` is FALSE — "revocation"
-    // begins "revoca" — so a string test matches `revoke_decided` alone and
-    // excludes all four `revocation_*` outcome statuses, while explicitly
-    // INCLUDING `revocation_requires_change`. Two rules broken at once: the
-    // vocabulary rule says `revocation_requires_change` is never counted in a
-    // revoked figure, and §13 calls a rule-attributed holding counted as
-    // revoked "a lie with a signature on it".
-    const dispatched = await seedItem('Anna');
-    const requiresChange = await seedItem('Bram');
+  it('counts REVOKED as applied, and every other outcome on its own line', async () => {
+    // §10 defines the word, and this is the whole of the definition:
+    // "'Revoked' means the removal was APPLIED at the system that holds it,
+    // confirmed by that system, and observed by a subsequent read."
+    //
+    // The old form counted "items whose latest decision is revoke", which swept
+    // in `revocation_requires_change` -- the case §13 says is NEVER counted in a
+    // revoked figure and calls "a lie with a signature on it" -- plus
+    // `revocation_failed`, plus every item still in `revoke_decided` with
+    // nothing dispatched at all. A campaign that removed nothing reported 91
+    // revocations.
+    const applied = await seedItem('Anna');
+    const dispatched = await seedItem('Bram');
+    const requiresChange = await seedItem('Anna');
+    const failed = await seedItem('Bram');
+    const stillDecided = await seedItem('Anna');
+
     await withTenant(tenantId, async (tx) => {
-      for (const [itemId, status, personId] of [
-        [dispatched, 'revocation_dispatched', person['Jan']!],
-        [requiresChange, 'revocation_requires_change', person['Ola']!],
+      for (const [itemId, status] of [
+        [applied, 'revocation_applied'],
+        [dispatched, 'revocation_dispatched'],
+        [requiresChange, 'revocation_requires_change'],
+        [failed, 'revocation_failed'],
+        [stillDecided, 'revoke_decided'],
       ] as const) {
         await tx.campaignItem.update({ where: { id: itemId }, data: { status } });
         await tx.campaignDecision.create({
           data: {
             tenantId,
             itemId,
-            personId,
+            personId: person['Jan']!,
             decision: 'revoke',
             comment: 'no longer needed',
             itemOpenedAt: NOW,
@@ -828,13 +838,53 @@ describe('closing', () => {
       tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
     );
 
-    // Both carry a decision, so both are DECIDED and coverage is 100.
+    // All five carry a decision, so all five are DECIDED and coverage is 100.
     expect(campaign.coveragePercent).toBe(100);
     expect(campaign.status).toBe('closed_complete');
-    // Both decisions were `revoke`, so both count as revoked...
-    expect(campaign.revokedItems).toBe(2);
-    // ...and the one Govern could not execute is ALSO reported on its own line.
+
+    // ONE was actually removed.
+    expect(campaign.revokedItems).toBe(1);
+    // And the other four are each visible, each on their own line, because a
+    // number nobody can decompose is a number an auditor cannot check.
+    expect(campaign.dispatchedItems).toBe(1);
     expect(campaign.requiresChangeItems).toBe(1);
+    expect(campaign.failedItems).toBe(1);
+    expect(campaign.revokeDecidedItems).toBe(1);
+  });
+
+  it('counts a CONFIRMED dispatch as dispatched, not as revoked', async () => {
+    // §13's honest intermediate state: "the owning subsystem reported the
+    // removal applied, and no snapshot has been built since". Two conditions,
+    // not one, "because a write that reported success and did not land is a
+    // case Provision's convergence logic exists for and Govern should not be
+    // more credulous than Provision is".
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({
+        where: { id: itemId },
+        data: { status: 'revocation_confirmed' },
+      });
+      await tx.campaignDecision.create({
+        data: {
+          tenantId,
+          itemId,
+          personId: person['Jan']!,
+          decision: 'revoke',
+          comment: 'no longer needed',
+          itemOpenedAt: NOW,
+          decidedAt: NOW,
+          sessionDecisionOrdinal: 1,
+          coverageAtDecision: {},
+        },
+      });
+    });
+
+    await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    const campaign = await withTenant(tenantId, (tx) =>
+      tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
+    );
+    expect(campaign.revokedItems).toBe(0);
+    expect(campaign.dispatchedItems).toBe(1);
   });
 
   it('counts `decided` from CampaignDecision rows, not from statuses', async () => {
@@ -849,7 +899,17 @@ describe('closing', () => {
       tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
     );
     expect(campaign.coveragePercent).toBe(0);
-    expect(campaign.revokedItems).toBe(0);
+
+    // And this fixture is exactly where the two measures diverge, deliberately.
+    // `revoked` is a statement about the WORLD -- §10: the removal was applied
+    // at the system that holds it and observed by a subsequent read -- so an
+    // item sitting in `revocation_applied` is revoked whether or not anybody
+    // signed for it. `decided` is a statement about the REVIEW, and it counts
+    // CampaignDecision rows. A holding that vanished with nobody deciding it is
+    // both: removed, and uncertified -- and `coveragePercent` above, which is
+    // 0, is the half that says so. Collapsing the two is what let a campaign
+    // report work it had not done.
+    expect(campaign.revokedItems).toBe(1);
   });
 
   it('writes ReviewQualitySignal rows when the campaign closes', async () => {
@@ -901,5 +961,196 @@ describe('closing', () => {
     );
     expect(campaign.status).toBe('closed_complete');
     expect(campaign.coveragePercent).toBe(100);
+  });
+
+  /**
+   * §13: revoke decisions "accumulate, and at campaign close -- or at an
+   * explicit Execute revocations action before it -- they are computed into a
+   * RevocationBatch".
+   *
+   * Nothing computed one. `computeRevocationBatch`'s only caller was an admin
+   * route the console never invokes, so a campaign closed with its revoke
+   * decisions sitting untouched forever and the reviewers' 91 revocations were
+   * a set of rows nobody would ever act on. The campaign report said
+   * `revoke_decided`; the target still held everything.
+   */
+  it('computes the revocation batch at close', async () => {
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({ where: { id: itemId }, data: { status: 'revoke_decided' } });
+      await tx.campaignDecision.create({
+        data: {
+          tenantId,
+          itemId,
+          personId: person['Jan']!,
+          decision: 'revoke',
+          comment: 'no longer needed',
+          itemOpenedAt: NOW,
+          decidedAt: NOW,
+          sessionDecisionOrdinal: 1,
+          coverageAtDecision: {},
+        },
+      });
+    });
+
+    const result = await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    expect(result.batches).toBe(1);
+
+    const batch = await withTenant(tenantId, (tx) =>
+      tx.revocationBatch.findFirstOrThrow({ where: { campaignId } }),
+    );
+    // NOTHING AUTO-APPLIES. §13: "`autoApply` does not exist for a batch."
+    // The first batch in a tenant always requires confirmation regardless of
+    // size, because every denominator is zero and no percentage can say
+    // anything about it.
+    expect(batch.status).toBe('previewed');
+    expect(batch.requiresConfirmation).toBe(true);
+
+    const dispatches = await withTenant(tenantId, (tx) =>
+      tx.revocationDispatch.findMany({ where: { batchId: batch.id } }),
+    );
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]!.status).toBe('proposed');
+
+    // And the item has NOT moved. A computed batch is a proposal.
+    const item = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
+    );
+    expect(item.status).toBe('revoke_decided');
+  });
+
+  it('computes NO batch for a campaign with nothing to revoke', async () => {
+    // An empty `RevocationBatch` row per closed campaign is a confirmation
+    // screen with nothing on it, on the dashboard, for every campaign that ever
+    // ran clean.
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) =>
+      tx.campaignItem.update({ where: { id: itemId }, data: { status: 'certified' } }),
+    );
+
+    const result = await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    expect(result.batches).toBe(0);
+    expect(await withTenant(tenantId, (tx) => tx.revocationBatch.count())).toBe(0);
+  });
+
+  /**
+   * The batch is computed BEFORE the campaign closes, so a failure leaves the
+   * campaign `open` and the next nightly tick retries. `closeDueCampaigns`
+   * selects `status: 'open'`, so a batch that failed AFTER the close would be a
+   * batch nothing would ever build -- the same silent drop, one step later.
+   */
+  it('leaves the campaign open when the batch cannot be computed', async () => {
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({ where: { id: itemId }, data: { status: 'revoke_decided' } });
+      // The campaign's snapshot is made unreadable, which is what
+      // `computeRevocationBatch` refuses on first.
+      await tx.accessSnapshot.update({ where: { id: snapshotId }, data: { status: 'failed' } });
+    });
+
+    await expect(
+      closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) }),
+    ).rejects.toThrow();
+
+    const campaign = await withTenant(tenantId, (tx) =>
+      tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
+    );
+    expect(campaign.status).toBe('open');
+  });
+});
+
+/**
+ * THE FAILURE THAT NEVER RECOVERS.
+ *
+ * Escalation ran INSIDE the reviewer batch transaction, looping over every
+ * pending item the reviewer held -- bounded by campaign size and by nothing
+ * else -- with a `findFirst` plus a `create` per (item, approver). At 20,000
+ * items over 50 reviewers that is roughly 40,000 sequential statements inside
+ * one 5000 ms budget.
+ *
+ * The abort took the `lastRemindedAt` writes with it, so the next run rebuilt
+ * the identical batch from the identical `lastRemindedAt: null` rows and failed
+ * identically. No reminder and no escalation ever went out, for the life of the
+ * campaign, on the last day before the due date.
+ *
+ * The budget suite could not see it: its reviewers carry no `managerPersonId`,
+ * so `resolveEscalationApprovers` returns nobody and the loop never runs.
+ */
+describe('reminders and escalation are two phases', () => {
+  it('stamps lastRemindedAt even when escalation adds nobody', async () => {
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+
+    // The last day before `dueAt`, which is when escalation fires.
+    const escalatingAt = new Date(DUE.getTime() - 3_600_000);
+    const result = await runCampaignReminders(tenantId, { now: escalatingAt });
+    expect(result.reminded).toBe(1);
+
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { itemId } }),
+    );
+    expect(rows.every((r) => r.lastRemindedAt !== null)).toBe(true);
+  });
+
+  it('escalates to the REVIEWER’s own manager, once per item', async () => {
+    // §12: escalation goes to `Contract.managerPersonId` on THE REVIEWER'S OWN
+    // resolved contract. `Jan` is the seeded reviewer; give Jan a manager.
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({
+        where: { personId: person['Jan']! },
+        data: { managerPersonId: person['Ola']! },
+      }),
+    );
+    // BOTH items subject-Anna, so both resolve to the SAME reviewer. The
+    // selector is `manager` and Anna's manager is Jan while Bram's is Ola, so a
+    // Bram item would land on a different reviewer entirely -- and this case is
+    // about one silent reviewer's WHOLE queue being escalated, not about two
+    // reviewers each getting one.
+    const first = await seedItem('Anna');
+    const second = await seedItem('Anna');
+    await withTenant(tenantId, (tx) =>
+      resolveItemReviewers(tx, campaignId, [first, second], NOW),
+    );
+
+    const escalatingAt = new Date(DUE.getTime() - 3_600_000);
+    const result = await runCampaignReminders(tenantId, { now: escalatingAt });
+    expect(result.escalated).toBe(1);
+
+    const escalations = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { via: 'escalation' } }),
+    );
+    // ADDS a reviewer and never replaces one, on every item the silent reviewer
+    // held.
+    expect(escalations.map((e) => e.itemId).sort()).toEqual([first, second].sort());
+    expect(new Set(escalations.map((e) => e.personId))).toEqual(new Set([person['Ola']]));
+
+    // And the original is told they were escalated past.
+    const mail = await withTenant(tenantId, (tx) =>
+      tx.notificationOutbox.findMany({ where: { template: 'govern-review-escalated' } }),
+    );
+    expect(mail.length).toBeGreaterThan(0);
+  });
+
+  it('adds no second row on the run after an escalation', async () => {
+    // The `findFirst`-then-`create` this replaces was the only thing stopping a
+    // duplicate, and it cost one round trip per (item, approver). A second row
+    // would double-count the reviewer in every coverage figure and mail them
+    // twice a day until the campaign closed.
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({
+        where: { personId: person['Jan']! },
+        data: { managerPersonId: person['Ola']! },
+      }),
+    );
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+
+    await runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 3_600_000) });
+    await runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 1_800_000) });
+
+    const escalations = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { itemId, via: 'escalation' } }),
+    );
+    expect(escalations).toHaveLength(1);
   });
 });
