@@ -163,6 +163,40 @@ ok "refuses a url with no database" "$(pg_url_field db 'postgresql://u:p@h:5432'
 ok "refuses a url with no role"     "$(pg_url_field user 'postgresql://h:5432/syntra' || echo ERR)" "ERR"
 ok "refuses an unknown field"       "$(pg_url_field port "$PGURL" || echo ERR)" "ERR"
 
+# --- rewritten_web_root -----------------------------------------------------
+#
+# WEB_ROOT is what makes one process serve the console as well as the API, and
+# syntra-install used to copy .env verbatim. An absolute path kept serving the
+# OLD tree's bundle forever -- with the readiness `web` probe passing, because
+# a file was there -- and a relative one resolved against the new working
+# directory and failed readiness, so every update rolled back.
+
+ok "an absolute path under the old tree is re-anchored" \
+  "$(rewritten_web_root /root/syntra/apps/web/dist /root/syntra /opt/syntra)" \
+  "/opt/syntra/current/apps/web/dist"
+
+# A relative WEB_ROOT resolves against the process's working directory, which
+# systemd sets to <root>/apps/api. Made absolute here rather than left to
+# resolve somewhere new.
+ok "a relative path is made absolute against the release" \
+  "$(rewritten_web_root apps/web/dist /root/syntra /opt/syntra)" \
+  "/opt/syntra/current/apps/web/dist"
+
+ok "a trailing slash does not double up" \
+  "$(rewritten_web_root /root/syntra/apps/web/dist/ /root/syntra /opt/syntra)" \
+  "/opt/syntra/current/apps/web/dist"
+
+# Somebody serving a bundle from outside the tree meant it. Re-anchoring that
+# would point the console at a directory that does not exist.
+ok "a path outside the old tree is left alone" \
+  "$(rewritten_web_root /srv/syntra-console /root/syntra /opt/syntra || echo LEAVE)" "LEAVE"
+
+ok "a path already under the new root is left alone" \
+  "$(rewritten_web_root /opt/syntra/current/apps/web/dist /root/syntra /opt/syntra || echo LEAVE)" "LEAVE"
+
+ok "an unset WEB_ROOT is left alone" \
+  "$(rewritten_web_root '' /root/syntra /opt/syntra || echo LEAVE)" "LEAVE"
+
 # --- report -----------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

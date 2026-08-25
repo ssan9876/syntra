@@ -28,6 +28,19 @@
 
 set -euo pipefail
 
+# The pure helpers out of the updater, which lives beside this file.
+#
+# Sourced rather than copied, and the guard at the bottom of that script means
+# sourcing defines the functions and runs nothing. One copy of the logic and
+# one test harness: a version of `rewritten_web_root` that lived here would be
+# a second opinion nothing tests, which is how the two come to disagree.
+#
+# It must come BEFORE this script's own say/run/die, because syntra-update
+# defines a `die` that writes an update status file -- which is exactly wrong
+# for a conversion that has not started an update.
+SYNTRA_UPDATE_SOURCE_ONLY=1 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/syntra-update"
+unset SYNTRA_UPDATE_SOURCE_ONLY
+
 SRC="${SYNTRA_SRC:-/root/syntra}"
 ROOT="${SYNTRA_ROOT:-/opt/syntra}"
 SERVICE="${SYNTRA_SERVICE:-syntra}"
@@ -85,6 +98,23 @@ say "moving .env into shared/"
 run "cp -a '$SRC/.env' '$ROOT/shared/.env'"
 run "rm -f '$ROOT/releases/$VERSION/.env'"
 run "ln -sfn '$ROOT/shared/.env' '$ROOT/releases/$VERSION/.env'"
+
+# WEB_ROOT follows the install; nothing else in .env does.
+#
+# It is the one key whose value is a path INTO the tree being moved. An
+# absolute one keeps serving /root/syntra's bundle after the conversion --
+# with readiness passing, because a bundle is there -- and a relative one
+# resolves against the new working directory and fails readiness, which rolls
+# back every update that follows.
+OLD_WEB_ROOT=$(env_value WEB_ROOT "$SRC/.env")
+if NEW_WEB_ROOT=$(rewritten_web_root "$OLD_WEB_ROOT" "$SRC" "$ROOT"); then
+  say "rewriting WEB_ROOT: $OLD_WEB_ROOT -> $NEW_WEB_ROOT"
+  run "sed -i 's#^\([[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}WEB_ROOT[[:space:]]*=\).*#\1$NEW_WEB_ROOT#' '$ROOT/shared/.env'"
+elif [ -n "$OLD_WEB_ROOT" ]; then
+  say "leaving WEB_ROOT as it is ($OLD_WEB_ROOT) -- it is not inside $SRC"
+else
+  say "no WEB_ROOT set; this install serves the API alone"
+fi
 
 say "pointing current at releases/$VERSION"
 run "ln -sfn '$ROOT/releases/$VERSION' '$ROOT/current'"
