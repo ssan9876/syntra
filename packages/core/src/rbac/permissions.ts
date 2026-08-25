@@ -6,6 +6,17 @@
 export const PERMISSIONS = {
   DIRECTORY_READ: 'directory.read',
   DIRECTORY_WRITE: 'directory.write',
+  /**
+   * Removing a directory object outright, rather than deactivating it.
+   *
+   * Separate from `directory.write` because editing the directory and
+   * destroying part of it are different acts, and only one of them can be
+   * undone by doing the opposite. Everything else in this product
+   * deactivates; this is the only permission that does not, and somebody
+   * trusted to fix a misspelt display name has not thereby been trusted to
+   * delete the account.
+   */
+  DIRECTORY_DELETE: 'directory.delete',
   IDENTITY_READ: 'identity.read',
   IDENTITY_WRITE: 'identity.write',
   AUDIT_READ: 'audit.read',
