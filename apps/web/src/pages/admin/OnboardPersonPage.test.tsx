@@ -191,6 +191,73 @@ describe('OnboardPersonPage', () => {
     await waitFor(() => expect(calls).toEqual(['person', 'contract']));
   });
 
+  it('applies only the new person actions and leaves the rest of the run alone', async () => {
+    const user = userEvent.setup();
+    let applied: unknown = null;
+    let listed = 0;
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () =>
+        json({ targets: [{ id: 't1', name: 'AD', enabled: true }] }),
+      '/api/admin/persons': () => json({ id: 'p1' }, 201),
+      '/api/admin/persons/p1/contracts': () => json({ id: 'c1' }, 201),
+      '/api/admin/targets/t1/runs': (init) => {
+        if (init?.method === 'POST') return json({ jobId: 'j1' }, 202);
+        listed += 1;
+        // The FIRST read happens before the run is enqueued and returns the
+        // previous run, which must not be mistaken for this one.
+        return listed === 1
+          ? json({ runs: [{ id: 'r0', status: 'previewed' }] })
+          : json({ runs: [{ id: 'r1', status: 'previewed' }] });
+      },
+      '/api/admin/targets/t1/runs/r1': () =>
+        json({
+          id: 'r1',
+          status: 'previewed',
+          actions: [
+            { id: 'a1', personId: 'p1', actionType: 'create_account' },
+            { id: 'a2', personId: 'p9', actionType: 'disable_account' },
+          ],
+        }),
+      '/api/admin/targets/t1/runs/r1/apply': (init) => {
+        applied = JSON.parse(String(init?.body));
+        return json({ ok: true });
+      },
+    });
+
+    renderPage();
+    await fillMinimum(user);
+    await user.click(screen.getByRole('button', { name: 'Add someone' }));
+
+    // a2 belongs to somebody else. Applying the run wholesale would have
+    // disabled them on the strength of somebody else being hired.
+    await waitFor(() => expect(applied).toEqual({ only: ['a1'] }), {
+      timeout: 5000,
+    });
+  });
+
+  // The stale-run and never-plans cases live in provision-on-create.test.ts,
+  // where the poll interval is injectable and they cost milliseconds rather
+  // than the real thirty-second bound.
+
+  it('skips a disabled target', async () => {
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () =>
+        json({ targets: [{ id: 't1', name: 'Retired AD', enabled: false }] }),
+      '/api/admin/persons': () => json({ id: 'p1' }, 201),
+      '/api/admin/persons/p1/contracts': () => json({ id: 'c1' }, 201),
+      // No handler for t1's runs: touching them rejects and fails the test.
+    });
+
+    renderPage();
+    await fillMinimum(user);
+    await user.click(screen.getByRole('button', { name: 'Add someone' }));
+
+    expect(await screen.findByText('person page')).toBeInTheDocument();
+  });
+
   it('reports a refused person without claiming anything was created', async () => {
     const user = userEvent.setup();
     mockRoutes({

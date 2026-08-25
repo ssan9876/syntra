@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Check, Field, Panel, Select } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
+import { provisionForPerson } from './provision-on-create.js';
 import { PageHeader } from './PageHeader.js';
 
 /**
@@ -49,6 +50,9 @@ export function OnboardPersonPage() {
   const { data: unitsData } = useApiResource<{
     orgUnits: { id: string; name: string }[];
   }>('/api/admin/org-units');
+  const { data: targetsData } = useApiResource<{
+    targets: { id: string; name: string; enabled: boolean }[];
+  }>('/api/admin/targets');
 
   const set = (key: string, value: string) =>
     setV((current) => ({ ...current, [key]: value }));
@@ -145,6 +149,22 @@ export function OnboardPersonPage() {
       } catch (cause) {
         setProgress({ ...done });
         setErrors(fieldErrors(cause));
+        setProblem(describe(cause));
+        setBusy(false);
+        return;
+      }
+    }
+
+    // A disabled target is skipped deliberately: a new person should not be
+    // the thing that quietly reactivates a target somebody switched off.
+    for (const target of (targetsData?.targets ?? []).filter((t) => t.enabled)) {
+      try {
+        await provisionForPerson(target.id, done.personId!);
+      } catch (cause) {
+        // The person, their contract and their login are already written. A
+        // provisioning failure is reported and undoes none of them — the run
+        // page is where it gets diagnosed.
+        setProgress({ ...done });
         setProblem(describe(cause));
         setBusy(false);
         return;
