@@ -40,6 +40,24 @@ export const ITEM_BATCH = 500;
  */
 export const REBASE_BATCH = 200;
 
+/**
+ * NO `riskFlags`. It was here, in the schema, and in the public contract; it
+ * was persisted on `Campaign.scope`; and it was read by nothing. A campaign
+ * scoped to risky holdings silently generated items over EVERY holding of those
+ * kinds -- and `previewCampaignScope` calls the same unfiltered function, so
+ * the screen that exists to catch exactly this confirmed the wrong answer.
+ *
+ * Removed rather than implemented, deliberately. The flags on a
+ * `CampaignItem` -- privileged, unattributable, stale, needs_review,
+ * sod_violation, no_human_decision -- are computed AT GENERATION, from the
+ * snapshot and from `AccessGrant` and `SodViolation` rows the scope has not
+ * looked at. So a scope filter over them would have to mean something
+ * different from what the item flags mean, and nobody has asked for either.
+ *
+ * `CampaignItem.riskFlags` is untouched and is a different thing: a live
+ * column, written by `startCampaign`, read by `isBulkCertifiable` and by the
+ * reviewer's screen.
+ */
 export interface CampaignScope {
   /** AT LEAST ONE. An empty list means NOTHING, never everything. */
   resourceKinds: ResourceKind[];
@@ -51,7 +69,6 @@ export interface CampaignScope {
   privilegedOnly?: boolean | undefined;
   orgUnitIds?: string[] | undefined;
   subjectCondition?: Condition | undefined;
-  riskFlags?: string[] | undefined;
 }
 
 const leafScopeSchema = z.object({
@@ -64,7 +81,6 @@ const leafScopeSchema = z.object({
   systemIds: z.array(z.string().min(1)).min(1).optional(),
   privilegedOnly: z.boolean().optional(),
   orgUnitIds: z.array(z.string().uuid()).min(1).optional(),
-  riskFlags: z.array(z.string().min(1)).min(1).optional(),
 });
 
 export const campaignScopeSchema = leafScopeSchema.extend({
@@ -175,6 +191,18 @@ async function holdingsInScope(
   const holdingRows = await tx.holding.findMany({
     where: {
       snapshotId: snapshot.id,
+      // `held`, and only `held`. §8 rule 3: "no aggregation path exists that
+      // collapses `unknown` into `not_held`" -- and a campaign item is the
+      // aggregation path that ends in a signature. `CampaignItem` carries no
+      // state column, so an unknown holding reached the reviewer's screen
+      // indistinguishable from a real one and was certified as held.
+      //
+      // Nothing is lost by leaving it out. The region is already a
+      // `CoverageGap`, it is already counted on the campaign's own header, and
+      // it is already what makes a report over that scope answer `unknown`
+      // rather than a number. Every revocation path in this module filters the
+      // same way; this was the one that did not.
+      state: 'held',
       resourceKind: { in: scope.resourceKinds },
       ...(scope.systemIds === undefined ? {} : { systemId: { in: scope.systemIds } }),
       ...(scope.privilegedOnly === true ? { privileged: true } : {}),

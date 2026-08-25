@@ -909,3 +909,79 @@ describe('extendCampaign', () => {
     ).rejects.toMatchObject({ code: 'not_open' });
   });
 });
+
+/**
+ * §8 rule 3: "no aggregation path exists that collapses `unknown` into
+ * `not_held`" -- and a campaign item is the aggregation path that ends in a
+ * signature.
+ *
+ * `holdingsInScope` did not filter on state, unlike every revocation path, and
+ * `CampaignItem` carries no state column. So a holding nobody could read
+ * appeared on the reviewer's screen indistinguishable from one somebody had,
+ * and was certified as held. Nothing is lost by leaving it out: the region is
+ * already a CoverageGap, already counted on the campaign's own header, and
+ * already what makes a report answer `unknown`.
+ */
+describe('a holding whose state is unknown', () => {
+  it('generates no campaign item', async () => {
+    const built = await buildSnapshot(tenantId, { now: NOW });
+    await withTenant(tenantId, (tx) =>
+      tx.holding.updateMany({
+        where: { snapshotId: built.snapshotId },
+        data: { state: 'unknown' },
+      }),
+    );
+
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    // An empty scope is refused rather than started: "starting it would email
+    // reviewers about an empty queue".
+    await expect(
+      startCampaign(tenantId, actorUserId, id, { now: NOW }),
+    ).rejects.toMatchObject({ code: 'empty_scope' });
+  });
+
+  it('is not counted in the scope preview either', async () => {
+    // The preview and the generation call the SAME function, which is the only
+    // reason the screen can be trusted. That property is what made the
+    // riskFlags gap invisible: the preview agreed with the wrong reality.
+    const built = await buildSnapshot(tenantId, { now: NOW });
+    const before = await previewCampaignScope(
+      tenantId,
+      { resourceKinds: ['targetEntitlement'] },
+      built.snapshotId,
+    );
+    expect(before.holdings).toBeGreaterThan(0);
+
+    await withTenant(tenantId, (tx) =>
+      tx.holding.updateMany({
+        where: { snapshotId: built.snapshotId },
+        data: { state: 'unknown' },
+      }),
+    );
+    const after = await previewCampaignScope(
+      tenantId,
+      { resourceKinds: ['targetEntitlement'] },
+      built.snapshotId,
+    );
+    expect(after.holdings).toBe(0);
+  });
+});
+
+/**
+ * The field was in the type, the schema and the public contract, was persisted
+ * on `Campaign.scope`, and was read by NOTHING -- so a campaign scoped to risky
+ * holdings silently covered every holding of those kinds, and the preview
+ * agreed with it because they share a function.
+ *
+ * Removed rather than implemented. The flags are computed AT GENERATION from a
+ * snapshot the scope has not read yet, so "scope to risky holdings" would have
+ * had to mean something different from what the item flags mean -- and nobody
+ * has asked for either meaning.
+ */
+it('no longer accepts a riskFlags scope at all', () => {
+  const parsed = campaignScopeSchema.parse({
+    resourceKinds: ['targetEntitlement'],
+    riskFlags: ['privileged'],
+  });
+  expect(parsed).not.toHaveProperty('riskFlags');
+});
