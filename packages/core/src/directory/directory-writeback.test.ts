@@ -7,6 +7,7 @@ import { createSource } from '../sync/source-service.js';
 import { createUser } from './user-service.js';
 import {
   deactivateDirectoryUser,
+  deleteDirectoryUser,
   reactivateDirectoryUser,
 } from './directory-writeback.js';
 
@@ -37,11 +38,14 @@ const sourceInput = {
  * left behind when one of them fails, which no directory can demonstrate.
  */
 const setEnabled = vi.spyOn(ldapWriteback, 'setEnabled');
+const deleteObject = vi.spyOn(ldapWriteback, 'deleteObject');
 
 beforeEach(async () => {
   await resetDatabase();
   setEnabled.mockReset();
   setEnabled.mockResolvedValue({ ok: true, message: 'disabled' });
+  deleteObject.mockReset();
+  deleteObject.mockResolvedValue({ ok: true, message: 'deleted' });
 
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
   tenantId = t.id;
@@ -79,7 +83,10 @@ beforeEach(async () => {
   });
 });
 
-afterEach(() => setEnabled.mockReset());
+afterEach(() => {
+  setEnabled.mockReset();
+  deleteObject.mockReset();
+});
 
 const deactivate = () =>
   deactivateDirectoryUser(tenantId, provider, {
@@ -296,5 +303,141 @@ describe('reactivateDirectoryUser', () => {
     expect(outcome).toMatchObject({ ok: false, reason: 'directory_failed' });
     expect((await readUser()).status).toBe('inactive');
     expect((await readPerson()).departureOverride).toBeInstanceOf(Date);
+  });
+});
+
+describe('deleteDirectoryUser', () => {
+  const remove = () =>
+    deleteDirectoryUser(tenantId, provider, { userId, actorUserId });
+
+  const findUser = () =>
+    withTenant(tenantId, (tx) => tx.user.findUnique({ where: { id: userId } }));
+
+  it('deletes in the directory first, then in Syntra', async () => {
+    await setFlags({ writebackEnabled: true, writebackDelete: true });
+
+    const outcome = await remove();
+
+    expect(outcome).toEqual({ ok: true, viaDirectory: true });
+    expect(deleteObject).toHaveBeenCalledWith(
+      expect.objectContaining({ bindPassword: 'bind-secret' }),
+      { anchor: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
+    );
+    expect(await findUser()).toBeNull();
+  });
+
+  it('keeps the person, their contracts and the audit trail', async () => {
+    await setFlags({ writebackEnabled: true, writebackDelete: true });
+    await withTenant(tenantId, (tx) =>
+      tx.contract.create({
+        data: { tenantId, personId, sequence: 1, startDate: new Date('2026-01-01') },
+      }),
+    );
+
+    await remove();
+
+    // The login goes; the record of who held it does not. "Who had this
+    // access in March" has to stay answerable after an account is destroyed,
+    // and that is the whole reason this delete is safe to offer.
+    expect(await findUser()).toBeNull();
+    await withTenant(tenantId, async (tx) => {
+      expect(await tx.person.findUnique({ where: { id: personId } })).not.toBeNull();
+      expect(await tx.contract.count({ where: { personId } })).toBe(1);
+      expect(
+        await tx.auditEvent.count({
+          where: { action: 'user.delete', targetId: userId, outcome: 'success' },
+        }),
+      ).toBe(1);
+    });
+  });
+
+  it('changes nothing when the directory refuses', async () => {
+    await setFlags({ writebackEnabled: true, writebackDelete: true });
+    deleteObject.mockResolvedValue({
+      ok: false,
+      failure: 'unauthorized',
+      message: 'the bind may not delete',
+    });
+
+    const outcome = await remove();
+
+    expect(outcome).toMatchObject({ ok: false, reason: 'directory_failed' });
+    // Still here. Deleting the Syntra row after a refused directory write
+    // would leave Syntra having forgotten an account the directory still
+    // holds -- and the next sync run reads that as a new object and creates
+    // it again.
+    expect(await findUser()).not.toBeNull();
+    // Audited even so: a run of these is how a broken bind gets noticed.
+    await withTenant(tenantId, async (tx) => {
+      expect(
+        await tx.auditEvent.count({
+          where: { action: 'user.delete', targetId: userId, outcome: 'failure' },
+        }),
+      ).toBe(1);
+    });
+  });
+
+  it('refuses when the source does not allow deletion, without touching either side', async () => {
+    await setFlags({ writebackEnabled: true, writebackDelete: false });
+
+    const outcome = await remove();
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      reason: 'delete_not_enabled',
+      sourceName: 'Head office AD',
+    });
+    expect(deleteObject).not.toHaveBeenCalled();
+    expect(await findUser()).not.toBeNull();
+  });
+
+  it('deletes a locally managed account without calling the directory', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.user.update({
+        where: { id: userId },
+        data: { sourceId: null, sourceAnchor: null },
+      }),
+    );
+
+    const outcome = await remove();
+
+    // No source owns it, so there is no directory object and never was the
+    // problem this ordering exists for.
+    expect(outcome).toEqual({ ok: true, viaDirectory: false });
+    expect(deleteObject).not.toHaveBeenCalled();
+    expect(await findUser()).toBeNull();
+  });
+
+  it('takes the credentials and sessions with it', async () => {
+    await setFlags({ writebackEnabled: true, writebackDelete: true });
+    await withTenant(tenantId, (tx) =>
+      tx.session.create({
+        data: {
+          tenantId,
+          userId,
+          tokenHash: 'hash-for-delete-test',
+          scope: 'portal',
+          absoluteExpiresAt: new Date(Date.now() + 3_600_000),
+        },
+      }),
+    );
+
+    await remove();
+
+    // Session and credential rows carry userId as a bare column with no
+    // foreign key, so the delete does not cascade to them. Left behind they
+    // are rows granting access to an account that no longer exists.
+    await withTenant(tenantId, async (tx) => {
+      expect(await tx.session.count({ where: { userId } })).toBe(0);
+    });
+  });
+
+  it('answers not_found for a user that is not there', async () => {
+    const outcome = await deleteDirectoryUser(tenantId, provider, {
+      userId: '00000000-0000-4000-8000-000000000000',
+      actorUserId,
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: 'not_found' });
   });
 });
