@@ -31,15 +31,37 @@ def versions():
     return sorted(found, key=lambda v: [int(p) for p in v.split('.')])
 
 
+def asset_id(version, index):
+    # A bare, monotonically-increasing integer, matching the shape of
+    # GitHub's real asset "url" field (.../releases/assets/<digits>).
+    # `syntra-update`'s asset_url() regex (assets/[0-9]*") requires exactly
+    # that -- a version/index path segment like "1.0.0/0" does not match,
+    # and this only surfaced when something actually ran the real download
+    # path against this stub for the first time.
+    return versions().index(version) * 2 + index
+
+
+def resolve_asset_id(asset_id_value):
+    all_versions = versions()
+    v_index, index = divmod(asset_id_value, 2)
+    if v_index >= len(all_versions):
+        return None
+    return all_versions[v_index], index
+
+
 def assets(version):
     out = []
     for index, name in enumerate(
         [f'syntra-{version}.tar.gz', f'syntra-{version}.tar.gz.sha256']
     ):
         out.append(
+            # `url` before `name`: real GitHub release-asset objects list
+            # `url` first, and syntra-update's asset_url() finds a name's
+            # url by grepping one line *before* the matching "name" line
+            # after a comma-split -- reversing this order breaks that.
             {
+                'url': f'http://127.0.0.1:{PORT}/assets/{asset_id(version, index)}',
                 'name': name,
-                'url': f'http://127.0.0.1:{PORT}/assets/{version}/{index}',
             }
         )
     return out
@@ -50,9 +72,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        m = re.fullmatch(r'/assets/([0-9.]+)/([01])', self.path)
+        m = re.fullmatch(r'/assets/([0-9]+)', self.path)
         if m:
-            version, index = m.group(1), int(m.group(2))
+            resolved = resolve_asset_id(int(m.group(1)))
+            if resolved is None:
+                self.send_error(404)
+                return
+            version, index = resolved
             name = [f'syntra-{version}.tar.gz', f'syntra-{version}.tar.gz.sha256'][index]
             path = os.path.join(DIR, name)
             if not os.path.exists(path):

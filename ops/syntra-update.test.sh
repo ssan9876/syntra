@@ -149,6 +149,65 @@ ok "refuses when there is nowhere to go" \
 ok "never answers with a release newer than now" \
   "$(previous_release_of 1.4.0 1.4.0 1.5.0 || echo NONE)" "NONE"
 
+# --- previous_release ---------------------------------------------------------
+#
+# previous_release_of() above is pure -- it only sees a list already believed
+# to be real releases. previous_release() is what actually builds that list,
+# by default from ls -1 on releases/ -- and a directory there means something
+# was UNPACKED, not that it ever ran. Update rehearsal Step 10 (a migration
+# that fails on purpose) leaves exactly that kind of orphan: a release
+# directory sitting on disk, numerically between the true previous version
+# and the one that failed to replace it, that no unit test above this line
+# can tell apart from a real one. Running the full rehearsal in the plan's own
+# order hit this for real -- `--rollback` after Step 10's orphan landed on
+# v1.0.2's code paired with v1.0.1's restored data, a genuine version
+# mismatch, rather than the v1.0.1 the plan asserts. record_previous() and the
+# PREVIOUS_FILE it writes are the fix; these tests are against
+# previous_release() itself, with real files, because the bug lived in how it
+# gathers its candidates, not in how they are compared.
+
+PR_ROOT="$(mktemp -d)"
+mkdir -p "$PR_ROOT/releases/1.0.1" "$PR_ROOT/releases/1.0.2" "$PR_ROOT/releases/1.0.3" \
+  "$PR_ROOT/current" "$PR_ROOT/var"
+printf '{"version": "1.0.3"}' > "$PR_ROOT/current/RELEASE.json"
+RELEASES="$PR_ROOT/releases"
+CURRENT="$PR_ROOT/current"
+VAR="$PR_ROOT/var"
+PREVIOUS_FILE="$VAR/previous-version"
+
+# THE BUG, reproduced: releases/1.0.2 is an orphan (unpacked, never adopted --
+# nothing ever recorded a successful transition), and with no history to
+# consult, the scan has no way to tell it from a real predecessor.
+ok "with no recorded history, an orphaned unpack is indistinguishable from a real predecessor (the bug)" \
+  "$(previous_release)" "1.0.2"
+
+# THE FIX: a prior successful update recorded 1.0.1 as the version it left.
+printf '1.0.1\n' > "$PREVIOUS_FILE"
+ok "recorded history is trusted over the directory scan" \
+  "$(previous_release)" "1.0.1"
+
+# A recorded version that is no longer on disk (pruned, or never real) must
+# not be trusted blindly -- that would point --rollback at nothing.
+printf '9.9.9\n' > "$PREVIOUS_FILE"
+ok "a recorded version missing from disk falls back to the scan" \
+  "$(previous_release)" "1.0.2"
+
+# A recorded version equal to the one currently running is stale -- left over
+# from before the update that is running now -- and must not be echoed back
+# as its own rollback target.
+printf '1.0.3\n' > "$PREVIOUS_FILE"
+ok "a recorded version matching the current one falls back to the scan" \
+  "$(previous_release)" "1.0.2"
+
+# The state immediately after --adopt: no PREVIOUS_FILE would exist this
+# early in the real sequence, but a recorded "dev" must still resolve, since
+# that IS the correct answer immediately after a first adoption.
+printf 'dev\n' > "$PREVIOUS_FILE"
+ok "a recorded dev is trusted like any other recorded version" \
+  "$(previous_release)" "dev"
+
+rm -rf "$PR_ROOT"
+
 # --- status_line ------------------------------------------------------------
 
 ok "the status line is three tab-separated fields" \

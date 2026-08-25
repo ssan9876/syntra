@@ -31,6 +31,11 @@ VAR="$ROOT/var"
 CURRENT="$ROOT/current"
 STATUS="$VAR/update.status"
 LOCK="$VAR/update.lock"
+# The version that was actually running before the one running now -- as
+# opposed to guessed from whatever version-numbered directories happen to be
+# sitting in releases/, which is what a failed update's orphaned unpack looks
+# exactly like. See record_previous() and previous_release().
+PREVIOUS_FILE="$VAR/previous-version"
 BACKUPS="$SHARED/backups"
 SERVICE="${SYNTRA_SERVICE:-syntra}"
 # Resolved in resolve_environment() from shared/.env, or overridden by the
@@ -260,6 +265,15 @@ pg_url_field() {
 log()   { echo "[syntra-update] $*" >&2; }
 status() { mkdir -p "$VAR"; status_line "$1" "${2:-}" > "$STATUS"; log "$1: ${2:-}"; }
 
+# Records the version a successful forward update just left, so a later
+# `--rollback` knows where "back" actually means. Written only here, at the
+# one moment a transition is confirmed rather than merely attempted: after
+# `wait_ready` has already passed for the new version. Deliberately not
+# written on a rollback itself -- there is no well-defined "one before that"
+# without a full history stack, so an operator who rolls back twice in a row
+# lands on the same target twice rather than somewhere invented.
+record_previous() { mkdir -p "$VAR"; printf '%s\n' "$1" > "$PREVIOUS_FILE"; }
+
 die() {
   status "failed" "$1"
   log "FAILED: $1"
@@ -279,6 +293,24 @@ current_version() {
 
 previous_release() {
   local now; now=$(current_version)
+
+  # Trust actual history first. A directory in releases/ says a version was
+  # unpacked, not that it ever ran -- Step 10 of the update rehearsal is the
+  # proof: a migration that fails on purpose leaves exactly this kind of
+  # orphan, sitting between the real previous version and the one it failed
+  # to become, for previous_release_of()'s disk scan to walk straight into.
+  if [ -s "$PREVIOUS_FILE" ]; then
+    local recorded; recorded=$(head -1 "$PREVIOUS_FILE")
+    if [ -n "$recorded" ] && [ "$recorded" != "$now" ] \
+       && { [ "$recorded" = dev ] || [ -d "$RELEASES/$recorded" ]; }; then
+      printf '%s\n' "$recorded"
+      return 0
+    fi
+  fi
+
+  # No history yet (nothing has ever completed an update on this install), or
+  # the recorded version is no longer on disk to roll back to. Best-effort
+  # guess from what is actually present, same as before this file existed.
   # shellcheck disable=SC2046
   previous_release_of "$now" $(ls -1 "$RELEASES" 2>/dev/null) || true
 }
@@ -614,6 +646,7 @@ do_update() {
   # behalf of a release that never worked.
   install -m 0755 "$dir/ops/syntra-update" "$ROOT/bin/syntra-update" 2>/dev/null || true
 
+  record_previous "$from"
   status "succeeded" "now running v$target"
   log "updated $from -> $target"
 }
