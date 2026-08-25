@@ -30,6 +30,7 @@ export function Security() {
   const [keyLabel, setKeyLabel] = useState('Security key');
   const [codes, setCodes] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -94,9 +95,84 @@ export function Security() {
     }
   }
 
+  /**
+   * Removing a security key.
+   *
+   * Two things were missing and both were silent. The response carries
+   * `recoveryCodesRevoked` and this function threw it away, so a user whose
+   * printed codes had just stopped working was never told -- and there is no
+   * other screen that would tell them. And there was no error handling at all:
+   * a refusal was an unhandled rejection and the button simply appeared not to
+   * work.
+   */
   async function removeKey(id: string) {
-    await api(`/api/auth/mfa/webauthn/${id}`, { method: 'DELETE' });
-    await load();
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api<{ recoveryCodesRevoked: number }>(
+        `/api/auth/mfa/webauthn/${id}`,
+        { method: 'DELETE' },
+      );
+      if (result.recoveryCodesRevoked > 0) {
+        setNotice(
+          `That key was removed, and ${result.recoveryCodesRevoked} unused recovery code${
+            result.recoveryCodesRevoked === 1 ? '' : 's'
+          } stopped working with it. Set up a factor and generate new ones.`,
+        );
+      }
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That key could not be removed.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Removing the authenticator app.
+   *
+   * The panel used to render a bare "Set up" badge once one was enrolled, so
+   * the only way to move to a new phone was through an administrator -- for a
+   * control the rest of this screen manages without one.
+   *
+   * The count of revoked recovery codes is SHOWN rather than discarded. It is
+   * the one thing the user cannot find out any other way: the codes they
+   * printed have just stopped working, and a screen that quietly said nothing
+   * would send them to a drawer full of dead codes in six months.
+   */
+  async function removeTotp() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api<{ recoveryCodesRevoked: number }>(
+        '/api/auth/mfa/totp',
+        { method: 'DELETE' },
+      );
+      if (result.recoveryCodesRevoked > 0) {
+        setNotice(
+          `Your authenticator app was removed, and ${result.recoveryCodesRevoked} unused recovery code${
+            result.recoveryCodesRevoked === 1 ? '' : 's'
+          } stopped working with it. Set up a factor and generate new ones.`,
+        );
+      } else {
+        setNotice('Your authenticator app was removed.');
+      }
+      await load();
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That could not be removed.',
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function issueCodes() {
@@ -131,6 +207,7 @@ export function Security() {
         </header>
 
         {error && <Alert tone="danger">{error}</Alert>}
+        {notice && <Alert tone="warning">{notice}</Alert>}
 
         <PasswordPanel />
 
@@ -139,7 +216,12 @@ export function Security() {
           description="A six-digit code that changes every thirty seconds."
           actions={
             status?.totp.enrolled ? (
-              <Status tone="active">Set up</Status>
+              <span className="flex items-center gap-2">
+                <Status tone="active">Set up</Status>
+                <Button size="sm" variant="ghost" loading={busy} onClick={removeTotp}>
+                  Remove
+                </Button>
+              </span>
             ) : (
               <Button size="sm" variant="primary" loading={busy} onClick={beginTotp}>
                 Set up

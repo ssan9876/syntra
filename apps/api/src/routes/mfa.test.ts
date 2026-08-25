@@ -579,3 +579,63 @@ describe('a factor leaving an account is told to its owner', () => {
     });
   });
 });
+
+describe('removing an authenticator app', () => {
+  /**
+   * `POST /mfa/totp/begin` refuses with "Remove the existing one before
+   * setting up another", and until this route existed nothing could. A person
+   * who replaced their phone had to raise a ticket to use a control the rest
+   * of this screen treats as self-service.
+   */
+  it('removes it, so a new one can be set up', async () => {
+    await seedUser();
+    const cookie = await portalCookie();
+    await enrolTotpOverHttp(cookie);
+
+    const removed = await call('DELETE', '/api/auth/mfa/totp', { cookie });
+    expect(removed.statusCode).toBe(200);
+
+    const status = await call('GET', '/api/auth/mfa', { cookie });
+    expect(status.json()).toMatchObject({ totp: { enrolled: false } });
+
+    // And the refusal that motivated all of this is gone.
+    const begin = await call('POST', '/api/auth/mfa/totp/begin', { cookie });
+    expect(begin.statusCode).toBe(200);
+  });
+
+  /**
+   * Removing the last real factor takes the recovery codes with it, exactly as
+   * the passkey removal does. Holding a factor is a precondition of issuing
+   * codes; leaving them behind here reaches the state that gate exists to
+   * prevent, from the other side.
+   */
+  it('revokes orphaned recovery codes and says how many', async () => {
+    await seedUser();
+    const cookie = await portalCookie();
+    await enrolTotpOverHttp(cookie);
+    const issued = await call('POST', '/api/auth/mfa/recovery-codes', { cookie });
+    expect(issued.statusCode).toBe(200);
+
+    const removed = await call('DELETE', '/api/auth/mfa/totp', { cookie });
+    expect(removed.json()).toEqual({
+      recoveryCodesRevoked: (issued.json() as { codes: string[] }).codes.length,
+    });
+    const remaining = await withTenant(ctx.tenantId, (tx) =>
+      countUnusedRecoveryCodes(tx, userId),
+    );
+    expect(remaining).toBe(0);
+  });
+
+  it('refuses when nothing is enrolled, rather than reporting a removal', async () => {
+    await seedUser();
+    const cookie = await portalCookie();
+    const res = await call('DELETE', '/api/auth/mfa/totp', { cookie });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('needs a session', async () => {
+    await seedUser();
+    const res = await call('DELETE', '/api/auth/mfa/totp', {});
+    expect(res.statusCode).toBe(401);
+  });
+});

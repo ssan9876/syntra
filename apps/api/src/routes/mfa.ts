@@ -23,6 +23,7 @@ import {
   listWebAuthnCredentials,
   localMasterKeyProvider,
   recordEvent,
+  removeTotp,
   removeWebAuthnCredential,
   renderMessage,
   revokeOrphanedRecoveryCodes,
@@ -490,6 +491,67 @@ export async function registerMfaRoutes(
         options.transport,
         request.session.userId,
         'security key',
+        revoked,
+      );
+      return reply.status(200).send({ recoveryCodesRevoked: revoked });
+    });
+
+    /**
+     * Takes the authenticator app off your own account.
+     *
+     * `POST /totp/begin` refuses a second enrolment with "Remove the existing
+     * one before setting up another", and nothing could: the only removal was
+     * the admin-gated `DELETE /admin/users/:id/factors/totp`, so somebody who
+     * had replaced their phone had to raise a ticket to use a control this
+     * screen otherwise treats as self-service.
+     *
+     * The session is the whole authorisation, and that is the same trade the
+     * passkey removal above makes: a factor is a control over the account, and
+     * an account whose holder cannot manage its controls without a ticket
+     * pushes people towards not enrolling one at all. What makes it acceptable
+     * is the mail -- see `tellOwnerAFactorWasRemoved` -- which reaches the one
+     * person who can tell a legitimate removal from an attacker's.
+     *
+     * A 409 rather than a silent 204 when nothing is enrolled: "removed" and
+     * "there was nothing there" are different answers, and reporting the
+     * second as the first hides a client that is out of step with the server.
+     */
+    secured.delete('/totp', async (request, reply) => {
+      const revoked = await request.db(async (tx) => {
+        if (!(await hasTotp(tx, request.session.userId))) {
+          throw new ProblemError(
+            409,
+            'no-totp',
+            'No authenticator app is set up',
+            'There is nothing to remove.',
+          );
+        }
+        await removeTotp(tx, request.session.userId);
+        // The same rule the passkey removal follows: recovery codes are a way
+        // back in when a real factor is lost, not a factor of their own, so
+        // the last real factor leaving takes them with it.
+        const dropped = await revokeOrphanedRecoveryCodes(tx, request.session.userId);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'mfa.removed',
+          targetType: 'User',
+          targetId: request.session.userId,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { factor: 'totp', recoveryCodesRevoked: dropped },
+        });
+        return dropped;
+      });
+
+      // The count is passed, unlike the plan's snippet: this removal revokes
+      // codes exactly as the passkey one does, and a mail that omitted the
+      // sentence explaining why the printed codes died would be the same
+      // silence this task exists to end.
+      await tellOwnerAFactorWasRemoved(
+        request,
+        options.transport,
+        request.session.userId,
+        'authenticator app',
         revoked,
       );
       return reply.status(200).send({ recoveryCodesRevoked: revoked });
