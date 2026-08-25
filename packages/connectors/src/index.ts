@@ -1,4 +1,6 @@
 export * from './types.js';
+export * from './net/outbound.js';
+export * from './net/guarded-fetch.js';
 export * from './ldap/config.js';
 export * from './ldap/connector.js';
 export * from './ldap/anchor.js';
