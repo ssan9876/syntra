@@ -800,3 +800,41 @@ describe('detectDecisionGraph', () => {
     expect(await withTenant(tenantId, (tx) => tx.governFinding.count())).toBe(0);
   });
 });
+
+/**
+ * TWO DETECTION PASSES AT ONCE, which is not exotic: an administrator pressing
+ * "Build snapshot" while the nightly job is running produces exactly this.
+ *
+ * `detectSodViolations` did `findUnique` then `create` per violation with no
+ * upsert, so the second pass raised P2002 on
+ * `@@unique([tenantId, ruleId, personId])`. The job threw,
+ * `reconcileFindings` never ran, and the rows for persons earlier in the
+ * iteration were already committed -- so the tenant was left with half a
+ * detection pass and no reconciliation, and the SoD board showed a number
+ * nobody could explain.
+ *
+ * THIS CASE DOES NOT DETERMINISTICALLY REPRODUCE THAT RACE, and saying so is
+ * the point. It was written expecting to go red against the read-then-create
+ * and it does not: two passes launched together still serialise far enough
+ * apart on this machine that the second sees the committed row and takes the
+ * update branch. The window is real but it is narrow, and a test that only
+ * sometimes opens it is a test that will one day be deleted as flaky.
+ *
+ * What it DOES pin is the invariant the upsert guarantees whatever the
+ * interleaving: two passes over one snapshot leave ONE row, and both report it.
+ * A regression that reintroduced a second row -- or that let one pass throw and
+ * skip `reconcileFindings` -- fails here. The read-then-create was wrong on its
+ * own terms regardless: the unique index existed and the code was not using it.
+ */
+describe('two overlapping detection passes', () => {
+  it('converge on one violation row, whatever the interleaving', async () => {
+    const [first, second] = await Promise.all([
+      detectSodViolations(tenantId, snapshotId, { now: NOW }),
+      detectSodViolations(tenantId, snapshotId, { now: NOW }),
+    ]);
+
+    expect(first.open).toBe(1);
+    expect(second.open).toBe(1);
+    expect(await withTenant(tenantId, (tx) => tx.sodViolation.count())).toBe(1);
+  });
+});

@@ -268,9 +268,6 @@ export async function detectSodViolations(
       const rule = facts.rules.find((r) => r.ruleId === ruleId)!;
 
       await withTenant(tenantId, async (tx) => {
-        const existing = await tx.sodViolation.findUnique({
-          where: { tenantId_ruleId_personId: { tenantId, ruleId, personId } },
-        });
         const data = {
           severity: rule.severity,
           status: outcome.kind === 'unevaluable' ? 'unevaluable' : 'open',
@@ -282,20 +279,42 @@ export async function detectSodViolations(
           lastSnapshotId: snapshotId,
         };
 
-        if (existing === null) {
-          await tx.sodViolation.create({
-            data: { tenantId, ruleId, personId, firstSeenAt: now, ...data },
-          });
-        } else if (existing.status === 'excepted' && outcome.kind === 'violation') {
-          // An active exception holds. Reopening it every night would make a
-          // deliberate risk acceptance a decision somebody re-makes daily.
+        // AN ACTIVE EXCEPTION HOLDS, and it has to be checked before the write
+        // rather than instead of it. Reopening an `excepted` violation every
+        // night would make a deliberate risk acceptance a decision somebody
+        // re-makes daily; §15 says a lapse is the only thing that reopens one.
+        const existing = await tx.sodViolation.findUnique({
+          where: { tenantId_ruleId_personId: { tenantId, ruleId, personId } },
+          select: { id: true, status: true },
+        });
+        if (existing !== null && existing.status === 'excepted' && outcome.kind === 'violation') {
           await tx.sodViolation.update({
             where: { id: existing.id },
             data: { lastSeenAt: now, lastSnapshotId: snapshotId },
           });
-        } else {
-          await tx.sodViolation.update({ where: { id: existing.id }, data });
+          return;
         }
+
+        // UPSERT ON THE NATURAL KEY, which was there all along.
+        //
+        // `findUnique` then `create` raised P2002 the moment two detection
+        // passes overlapped -- an administrator pressing "Build snapshot" while
+        // the nightly job runs is all it takes. The job threw,
+        // `reconcileFindings` never ran, and the rows for persons earlier in the
+        // iteration were already committed, so the tenant was left with half a
+        // detection pass and no reconciliation.
+        //
+        // NOT a singletonKey on the queue instead. Serialising would make a
+        // manual snapshot wait behind an hour-long nightly build, and the
+        // read-then-create is wrong on its own terms whatever schedules it: the
+        // unique index exists and the code was not using it. `Scheduler.enqueue`
+        // has no singleton option either, and adding one would touch every
+        // subsystem's job registration for a defect that lives here.
+        await tx.sodViolation.upsert({
+          where: { tenantId_ruleId_personId: { tenantId, ruleId, personId } },
+          create: { tenantId, ruleId, personId, firstSeenAt: now, ...data },
+          update: data,
+        });
       });
 
       if (outcome.kind === 'unevaluable') {
