@@ -148,6 +148,28 @@ export interface UpdateEnvironment {
 }
 
 /**
+ * The last successful release lookup, and when it was taken.
+ *
+ * The design said "caches for an hour" and nothing did, so the settings page,
+ * the POST that starts an update and every tick of the console's poll each
+ * spent a round trip re-learning a release list that had not moved. Sixty
+ * seconds rather than an hour: an operator who has just cut a release and
+ * refreshes the page should see it, and an hour of "there is nothing new" is
+ * the kind of stale that gets diagnosed as a broken button.
+ *
+ * Keyed on repository and token together, so a configuration change is not
+ * answered from the previous configuration's cache. Failures are NOT cached --
+ * "we could not check" is a fine answer once and a poor one for a minute.
+ */
+const RELEASE_CACHE_MS = 60_000;
+let releaseCache: { key: string; at: number; value: AvailableRelease } | null = null;
+
+/** Test seam. Never called by the product. */
+export function resetUpdateCache(): void {
+  releaseCache = null;
+}
+
+/**
  * Why this install may or may not be updated from the console.
  *
  * A working tree is refused and told to use `deploy.sh`. It is not a failure:
@@ -182,7 +204,17 @@ export async function checkForUpdate(
     };
   }
 
-  const latest = await fetchLatestRelease(env.token, env.repo, env.fetchImpl);
+  // `\u0000` as the separator, written as an escape rather than a raw byte:
+  // it cannot occur in a repository name or a token, so no pair of values
+  // can collide by concatenating to the same string.
+  const key = `${env.repo}\u0000${env.token}`;
+  let latest: AvailableRelease | null = null;
+  if (releaseCache !== null && releaseCache.key === key && Date.now() - releaseCache.at < RELEASE_CACHE_MS) {
+    latest = releaseCache.value;
+  } else {
+    latest = await fetchLatestRelease(env.token, env.repo, env.fetchImpl);
+    if (latest !== null) releaseCache = { key, at: Date.now(), value: latest };
+  }
   return {
     current: build.version,
     updatable: true,

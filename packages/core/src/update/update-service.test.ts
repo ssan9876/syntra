@@ -9,6 +9,7 @@ import {
   isNewer,
   launchUpdater,
   readProgress,
+  resetUpdateCache,
 } from './update-service.js';
 import * as version from '../health/version.js';
 
@@ -171,6 +172,66 @@ describe('checkForUpdate', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+/**
+ * The design says the check caches for an hour; nothing did. So the settings
+ * page, the POST that starts an update, and every tick of the console's
+ * three-second poll each made their own round trip to GitHub -- which is a
+ * rate limit spent on re-learning a release list that cannot change during an
+ * update, and a settings page whose load time is somebody else's uptime.
+ */
+describe('checkForUpdate caching', () => {
+  it('asks the forge once for repeated checks', async () => {
+    resetUpdateCache();
+    vi.spyOn(version, 'buildInfo').mockReturnValue({
+      version: '1.4.0',
+      isRelease: true,
+      commit: null,
+      released: null,
+      migrations: [],
+    });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(release())));
+    const env = {
+      repo: 'acme/syntra',
+      token: 'tok',
+      root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+
+    await checkForUpdate(env);
+    await checkForUpdate(env);
+    await checkForUpdate(env);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  /** A failure must not be remembered: "we could not check" for an hour after
+   *  a blip is worse than checking again. */
+  it('does not cache a failure', async () => {
+    resetUpdateCache();
+    vi.spyOn(version, 'buildInfo').mockReturnValue({
+      version: '1.4.0',
+      isRelease: true,
+      commit: null,
+      released: null,
+      migrations: [],
+    });
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 503 }));
+    const env = {
+      repo: 'acme/syntra',
+      token: 'tok',
+      root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+
+    await checkForUpdate(env);
+    await checkForUpdate(env);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
 
