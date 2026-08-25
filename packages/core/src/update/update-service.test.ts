@@ -8,6 +8,7 @@ import {
   isNewer,
   readProgress,
 } from './update-service.js';
+import * as version from '../health/version.js';
 
 /**
  * The comparison the whole feature rests on. Get it wrong and the console
@@ -135,9 +136,23 @@ describe('checkForUpdate', () => {
   });
 
   it('says so when no token is configured', async () => {
-    const result = await checkForUpdate({ repo: 'r', token: null, root: '/opt/syntra' });
-    expect(result.updatable).toBe(false);
-    expect(result.reason).toContain('token');
+    // On a RELEASE install. In this checkout `buildInfo()` reports `dev`, and
+    // the working-tree refusal above wins before the token is ever looked at —
+    // so the release case has to be arranged, not assumed.
+    const spy = vi.spyOn(version, 'buildInfo').mockReturnValue({
+      version: '1.4.0',
+      isRelease: true,
+      commit: null,
+      released: null,
+      migrations: [],
+    });
+    try {
+      const result = await checkForUpdate({ repo: 'r', token: null, root: '/opt/syntra' });
+      expect(result.updatable).toBe(false);
+      expect(result.reason).toContain('token');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

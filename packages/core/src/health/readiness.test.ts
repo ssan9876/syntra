@@ -134,16 +134,30 @@ describe('readiness', () => {
     });
 
     it('fails when the database is not reachable by this process', async () => {
-      vi.spyOn(prisma, '$queryRawUnsafe').mockRejectedValue(
-        new Error('Connection refused\nat somewhere internal'),
-      );
+      // NOT vi.spyOn. `prisma` is a Proxy that materialises its methods on
+      // access, and restoring a spy installed through it leaves
+      // `$queryRawUnsafe` undefined — every later test in this file then
+      // failed with "$queryRawUnsafe is not a function" in the database and
+      // migrations probes. Swap the method by hand and put the materialised
+      // original back in a finally instead.
+      type RawQuery = typeof prisma.$queryRawUnsafe;
+      const target = prisma as unknown as { $queryRawUnsafe: RawQuery };
+      const original = prisma.$queryRawUnsafe.bind(prisma) as RawQuery;
+      target.$queryRawUnsafe = (() =>
+        Promise.reject(
+          new Error('Connection refused\nat somewhere internal'),
+        )) as unknown as RawQuery;
 
-      const report = await readiness(deps());
+      try {
+        const report = await readiness(deps());
 
-      expect(report.ready).toBe(false);
-      expect(probe(report, 'database').status).toBe('fail');
-      // One line, not a stack: this answer is served unauthenticated.
-      expect(probe(report, 'database').detail).not.toContain('\n');
+        expect(report.ready).toBe(false);
+        expect(probe(report, 'database').status).toBe('fail');
+        // One line, not a stack: this answer is served unauthenticated.
+        expect(probe(report, 'database').detail).not.toContain('\n');
+      } finally {
+        target.$queryRawUnsafe = original;
+      }
     });
   });
 

@@ -175,7 +175,11 @@ describe('deactivate, never delete', () => {
     await screen.findByText('mokafor');
 
     expect(screen.queryByRole('button', { name: 'Deactivate' })).toBeNull();
-    expect(screen.getByText('managed by a directory source')).toBeInTheDocument();
+    // Since write-back, the copy names the owner and the setting; with no
+    // readable sources the page falls back to "A directory source".
+    expect(
+      screen.getByText(/owns this account, and write-back is off/),
+    ).toBeInTheDocument();
   });
 
   it('offers it for a locally managed account', async () => {
