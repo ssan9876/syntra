@@ -375,8 +375,9 @@ Expected: FAIL — 404 from Fastify because the route does not exist yet.
 
 - [ ] **Step 3: Implement**
 
-In `apps/api/src/routes/admin/users.ts`, add `issuePasswordSetup` to the
-existing `@syntra/core` import list. Extend the options interface:
+In `apps/api/src/routes/admin/users.ts`, add `issuePasswordSetup` and
+`type IssueSetupOutcome` to the existing `@syntra/core` import list. Extend the
+options interface:
 
 ```ts
 export interface AdminUserRouteOptions {
@@ -408,13 +409,34 @@ Add the route beside the other `DIRECTORY_WRITE` mutations:
     async (request) => {
       const { id } = idParam.parse(request.params);
 
-      const issued = await request.db((tx) =>
-        issuePasswordSetup(tx, {
-          userId: id,
-          actorUserId: request.session.userId,
-          sourceIp: request.ip,
-        }),
-      );
+      let issued: IssueSetupOutcome;
+      try {
+        issued = await request.db((tx) =>
+          issuePasswordSetup(tx, {
+            userId: id,
+            actorUserId: request.session.userId,
+            sourceIp: request.ip,
+          }),
+        );
+      } catch (cause) {
+        // Two issuances for the same user at once: one wins the partial unique
+        // index `password_reset_token_one_live` and the other violates it.
+        //
+        // The reset path swallows this and sends nothing, because surfacing it
+        // there builds an account-existence oracle out of an error page. That
+        // argument buys nothing against a caller who already holds
+        // `directory.write`, and swallowing it here would return a success
+        // carrying a link that was invalidated before it reached the caller.
+        // A 409 says "that raced, do it again", which is true and actionable.
+        if ((cause as { code?: string }).code === 'P2002') {
+          throw new ProblemError(
+            409,
+            'conflict',
+            'Another setup link was being created for this user at the same time. Try again.',
+          );
+        }
+        throw cause;
+      }
 
       if (!issued.ok) {
         if (issued.reason === 'unknown_user') {
@@ -631,11 +653,13 @@ this change adds no code path that could alter it, and a duplicate test would
 assert the neighbour's behaviour rather than this one's. The second cannot be
 provoked deterministically through a Fastify inject: the supersede-then-create
 happens inside one transaction, so a real `P2002` requires two racing
-transactions. **The route as written therefore has no explicit `P2002` handler**
-— if the executor wants the spec's 409 for that case, it needs a `catch` around
-the `request.db` call mapping Prisma code `P2002` to
-`ProblemError(409, 'conflict', …)`. Flag this to the reviewer rather than
-silently skipping it.
+transactions.
+
+**The handler is implemented anyway, and is deliberately untested.** Task 2
+maps Prisma `P2002` to a 409, because the alternative is a 500 on a race that
+two administrators clicking at once can genuinely produce. Its absence of a
+test is a limit of the harness, not an oversight — a reviewer should read the
+`catch` on its own terms rather than looking for the case that covers it.
 
 **Placeholder scan.** No TBD/TODO, and no conditional instructions — the three
 that were in the first draft were resolved against the code: `index.ts:28` is a
