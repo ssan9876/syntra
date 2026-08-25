@@ -37,6 +37,7 @@ const STEP_TEXT: Record<string, string> = {
   'backing-up': 'Backing up the database',
   migrating: 'Applying database changes',
   switching: 'Restarting on the new version',
+  checking: 'Checking the new version works',
   'rolling-back': 'Putting the previous version back',
   pruning: 'Tidying up',
   succeeded: 'Update complete',

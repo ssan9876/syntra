@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { buildInfo } from '../health/version.js';
+import { guardedFetch } from '../net/guarded-fetch.js';
 
 /**
  * What the console needs to offer an update, and how it starts one.
@@ -48,6 +49,7 @@ const IN_FLIGHT = new Set([
   'backing-up',
   'migrating',
   'switching',
+  'checking',
   'rolling-back',
   'pruning',
 ]);
@@ -82,6 +84,19 @@ interface ReleaseApi {
 }
 
 /**
+ * The forge, reached through the same outbound guard every other
+ * administrator-influenced request uses.
+ *
+ * `RELEASE_REPO` is configuration, so the URL this builds is partly somebody's
+ * input -- and the bare global `fetch` that was here followed redirects and
+ * would connect to whatever address the name resolved to, including this
+ * deployment's own network. `guardedFetch` checks every resolved address, pins
+ * the connection to the one it checked, and refuses redirects. It is not a
+ * second opinion about which addresses may be reached; it is the same one.
+ */
+const forgeFetch: typeof fetch = guardedFetch({ timeoutMs: 10_000 }) as typeof fetch;
+
+/**
  * The newest published release, as the forge reports it.
  *
  * Any failure returns null rather than throwing. A GitHub outage, a revoked
@@ -92,7 +107,10 @@ interface ReleaseApi {
 export async function fetchLatestRelease(
   token: string,
   repo: string,
-  fetchImpl: typeof fetch = fetch,
+  // `GuardedFetch` is deliberately narrower than `typeof fetch` -- it follows
+  // no redirects and streams no bodies. The cast is safe here and only here,
+  // because this call site is one GET whose whole response is JSON.
+  fetchImpl: typeof fetch = forgeFetch,
 ): Promise<AvailableRelease | null> {
   try {
     const response = await fetchImpl(
@@ -283,6 +301,31 @@ export function launchUpdater(
     ],
     { detached: true, stdio: 'ignore' },
   );
+
+  // `spawn` reports a missing executable asynchronously, on 'error'. Without a
+  // handler that is an unhandled 'error' on an EventEmitter, which Node turns
+  // into a thrown exception with nothing to catch it -- so a host with no
+  // systemd-run took the whole API down, after this route had already answered
+  // 202 and audited that an update was beginning.
+  //
+  // It writes the failure where the console is already looking. The updater
+  // owns that file, but the updater is precisely what did not start, and a
+  // console left watching a spinner for an update that never began is the
+  // worst of the available answers.
+  child.on('error', (cause: Error) => {
+    try {
+      mkdirSync(`${env.root}/var`, { recursive: true });
+      writeFileSync(
+        `${env.root}/var/update.status`,
+        `${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}\tfailed\t` +
+          `the updater could not be started: ${cause.message}\n`,
+      );
+    } catch {
+      // A root that cannot be written to is a deployment that was never
+      // installed. There is nowhere left to report this to; the log line
+      // below is the record.
+    }
+  });
   child.unref();
 
   // Not awaited. `systemd-run` returns as soon as the unit is queued, and

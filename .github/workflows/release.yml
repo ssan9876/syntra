@@ -13,16 +13,38 @@ on:
   push:
     tags: ['v*']
   # For re-cutting an artefact when the tag is right and the build was not.
+  #
+  # NO `tag` INPUT. A reusable workflow called with `uses: ./…` runs at the
+  # CALLER's ref, so a dispatch from a branch ran the gate against branch HEAD
+  # while the build below packaged the input tag -- releasing a tag whose tests
+  # nobody ran, which is the one thing this workflow exists to prevent.
+  #
+  # Run it from the tag instead: GitHub's ref picker lists tags, and then the
+  # gate, the checkout and the artefact are all the same commit by
+  # construction rather than by agreement.
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Existing tag to build (e.g. v1.4.0)'
-        required: true
 
 permissions:
   contents: write
 
 jobs:
+  # A dispatch from a branch would build something that is not a release.
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse anything that is not a tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "This workflow builds a RELEASE, and ${{ github.ref }} is not a tag." >&2
+            echo "Re-run it with a tag selected as the ref." >&2
+            exit 1
+          fi
+          case "${{ github.ref_name }}" in
+            v*) : ;;
+            *) echo "Tag ${{ github.ref_name }} does not look like a release tag (v*)." >&2; exit 1 ;;
+          esac
+
   # ---------------------------------------------------------------------------
   # The gate. An update button whose whole promise is "this was tested" must
   # not be able to install something that was not, so the release job depends
@@ -32,16 +54,17 @@ jobs:
   # suite is how a release comes to be gated on checks nobody maintains.
   # ---------------------------------------------------------------------------
   verify:
+    needs: guard
     uses: ./.github/workflows/ci.yml
 
   build:
-    needs: verify
+    needs: [guard, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.ref }}
           # The tag's own message is the release notes, and a shallow checkout
           # does not have it.
           fetch-depth: 0
@@ -75,7 +98,7 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
           echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"

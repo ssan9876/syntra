@@ -312,4 +312,37 @@ describe('launchUpdater', () => {
     const args = spawn.mock.calls[0]![1] as string[];
     expect(args).toContain('--setenv=SYNTRA_READY_URL=http://127.0.0.1:8443/health/ready');
   });
+
+  /**
+   * `spawn` reports a missing executable ASYNCHRONOUSLY, on the child's
+   * 'error' event. With no handler that is an unhandled 'error' on an
+   * EventEmitter, which in Node is a thrown exception with nothing to catch it
+   * -- so a host without systemd-run took the API down, having already
+   * answered 202 and written an audit event saying an update had begun.
+   */
+  it('records a failure instead of crashing when systemd-run is missing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'syntra-launch-'));
+    mkdirSync(join(root, 'var'), { recursive: true });
+
+    const handlers: Record<string, (cause: Error) => void> = {};
+    vi.spyOn(child, 'spawn').mockReturnValue({
+      unref: () => {},
+      on: (event: string, handler: (cause: Error) => void) => {
+        handlers[event] = handler;
+      },
+    } as never);
+
+    launchUpdater(
+      { repo: 'a/b', token: 't', root, readyUrl: 'http://127.0.0.1:3000/health/ready' },
+      '1.5.0',
+    );
+
+    expect(handlers.error).toBeDefined();
+    expect(() => handlers.error!(new Error('spawn systemd-run ENOENT'))).not.toThrow();
+
+    const progress = readProgress(root);
+    expect(progress?.step).toBe('failed');
+    expect(progress?.running).toBe(false);
+    expect(progress?.detail).toContain('systemd-run');
+  });
 });

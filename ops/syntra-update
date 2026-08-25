@@ -560,7 +560,11 @@ do_update() {
   status "switching" "restarting on v$target"
   swap_to "$target"
 
-  status "verifying" "waiting for v$target to become ready"
+  # NOT `verifying`, which is the checksum. This is a different question asked
+  # at a different time -- "does the release that is now running actually
+  # work?" -- and reusing the label meant the console told an operator their
+  # download was being checked while their service was down.
+  status "checking" "waiting for v$target to become ready"
   if ! wait_ready; then
     restore_after_failure "$from" "$dump" "v$target did not become ready within ${READY_TIMEOUT}s"
   fi
