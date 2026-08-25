@@ -44,6 +44,11 @@ PG_ROLE="${SYNTRA_PG_ROLE:-}"
 PG_DB="${SYNTRA_PG_DB:-}"
 APP_ROLE="${SYNTRA_PG_APP_ROLE:-}"
 REPO="${SYNTRA_RELEASE_REPO:-ssan9876/syntra}"
+# The forge. Configurable for one reason: the rehearsal has to install
+# releases that must never exist on the real repository -- a migration that
+# fails, and a release whose readiness never goes green -- and a rehearsal that
+# cannot stage its own failures is a rehearsal of the happy path.
+RELEASE_API="${SYNTRA_RELEASE_API:-https://api.github.com}"
 KEEP=3
 # How long a new release gets to become ready before it is judged broken.
 # Long enough for a cold start with a large migration behind it; short enough
@@ -275,7 +280,7 @@ api() {
 }
 
 latest_version() {
-  api "https://api.github.com/repos/$REPO/releases/latest" \
+  api "$RELEASE_API/repos/$REPO/releases/latest" \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1
 }
 
@@ -283,7 +288,7 @@ latest_version() {
 # assets only through the API, and the browser URL 404s with a valid token.
 asset_url() {
   local version="$1" name="$2"
-  api "https://api.github.com/repos/$REPO/releases/tags/v$version" \
+  api "$RELEASE_API/repos/$REPO/releases/tags/v$version" \
     | tr ',' '\n' \
     | grep -A0 -B0 "\"url\": \"[^\"]*assets/[0-9]*\"\|\"name\": \"$name\"" \
     | grep -B1 "\"name\": \"$name\"" | grep '"url"' \
