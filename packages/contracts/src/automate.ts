@@ -144,6 +144,23 @@ export const decideRequestBody = z
   });
 export type DecideRequestBody = z.input<typeof decideRequestBody>;
 
+/**
+ * Withdrawing a grant administratively.
+ *
+ * `.strict()`, and the reason is the one `provision.ts` writes out: this route
+ * was reading `(request.body ?? {}) as { reason?: string }`, so a `resaon`
+ * typo silently became the default reason and a number became a number in the
+ * audit payload. The default is preserved -- an API caller who says nothing is
+ * still saying "withdrawn by an administrator" -- but a caller who says
+ * something wrong is now told.
+ */
+export const revokeGrantBody = z
+  .object({
+    reason: z.string().min(1).max(1000).default('withdrawn by an administrator'),
+  })
+  .strict();
+export type RevokeGrantBody = z.input<typeof revokeGrantBody>;
+
 export const audiencePreviewBody = z.object({
   audienceCondition: opaqueJson.nullable(),
   // Optional and UNBOUNDED by default. The console's copy is "412 of 1,180 —

@@ -3,10 +3,12 @@ import { idParam } from '@syntra/contracts';
 import {
   approvalDelegationBody,
   audiencePreviewBody,
+  decideRequestBody,
   productBody,
   resolutionPreviewBody,
   resourceDelegationBody,
   resourceOwnerBody,
+  revokeGrantBody,
   settingsBody,
   sweepApplyBody,
   workflowBody,
@@ -237,7 +239,16 @@ export async function registerAdminAutomateRoutes(
     { preHandler: requirePermission(PERMISSIONS.AUTOMATE_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      const body = (request.body ?? {}) as { decision: 'approve' | 'reject'; comment: string };
+      // PARSED, not cast, and that distinction was an authorization bug rather
+      // than a tidiness one. `recordDecision` branches on `=== 'reject'`, so a
+      // capitalised "Reject" took the approval path: it skipped the
+      // comment-required guard on the schema, fulfilled the grants, and put
+      // the literal string where a decision belongs -- in the decision row and
+      // the audit payload, where it reads as a rejection to anybody looking
+      // later. A missing field reached Prisma as `undefined` and became a 500.
+      //
+      // `decideRequestBody` existed and was exported and had no importer.
+      const body = decideRequestBody.parse(request.body);
       const person = await request.db((tx) =>
         tx.user.findUnique({
           where: { id: request.session.userId },
@@ -262,8 +273,11 @@ export async function registerAdminAutomateRoutes(
             deciderPersonId: person.personId,
             deciderUserId: request.session.userId,
             decision: body.decision,
-            comment: body.comment ?? null,
-            shortenedToDays: null,
+            // The schema defaults both. `shortenedToDays` was hard-coded to
+            // null here while the contract has always carried it, so an
+            // approver shortening a grant was silently granting the full term.
+            comment: body.comment,
+            shortenedToDays: body.shortenedToDays,
             sourceIp: request.ip,
           },
           { asAdministrator: true, scheduler: scheduler(), publicUrl: options.publicUrl },
@@ -410,12 +424,12 @@ export async function registerAdminAutomateRoutes(
     { preHandler: requirePermission(PERMISSIONS.AUTOMATE_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      const body = (request.body ?? {}) as { reason?: string };
+      const body = revokeGrantBody.parse(request.body ?? {});
       await revokeGrant(
         request.tenantId,
         request.session.userId,
         id,
-        body.reason ?? 'withdrawn by an administrator',
+        body.reason,
         { scheduler: scheduler(), publicUrl: options.publicUrl },
       );
       return reply.status(204).send();

@@ -361,3 +361,261 @@ describe('tenant isolation', () => {
     expect(products).toEqual([]);
   });
 });
+
+/**
+ * Fixtures for the two routes below.
+ *
+ * The plan assumed `pendingRequest()` and `liveGrant()` helpers this file
+ * already had; it has neither, and no coverage of `/decide` or `/grants` at
+ * all -- which is why N2 survived. Both need more than a request: the decide
+ * route refuses an actor with no linked person, and a request only reaches
+ * `pending_approval` if its workflow has a stage somebody has to answer.
+ */
+const linkPerson = (login: string, givenName: string, familyName: string) =>
+  withTenant(ctx.tenantId, async (tx) => {
+    const person = await tx.person.create({
+      data: { tenantId: ctx.tenantId, givenName, familyName },
+    });
+    // The DECIDER needs one: `/decide` refuses an account that can no longer
+    // decide requests (`no_active_contract`).
+    await tx.contract.create({
+      data: {
+        tenantId: ctx.tenantId,
+        personId: person.id,
+        sequence: 1,
+        isPrimary: true,
+        startDate: new Date('2020-01-01T00:00:00Z'),
+      },
+    });
+    const user = await tx.user.findFirstOrThrow({ where: { login } });
+    await tx.user.update({ where: { id: user.id }, data: { personId: person.id } });
+    return person.id;
+  });
+
+/** A request sitting on an approval stage the admin is the approver for. */
+async function pendingRequest() {
+  await linkPerson('admin', 'Ada', 'Byron');
+
+  // The stage names somebody who holds NO contract, so it resolves to nobody
+  // and the request lands on `blocked_no_approver`. That is the one state
+  // `/decide` acts on -- it is the administrative override for a request the
+  // workflow cannot route -- and it is the state N2 was reachable in.
+  const unreachableApproverId = await withTenant(ctx.tenantId, async (tx) => {
+    const person = await tx.person.create({
+      data: { tenantId: ctx.tenantId, givenName: 'Gone', familyName: 'Away' },
+    });
+    return person.id;
+  });
+
+  const requesterPersonId = await withTenant(ctx.tenantId, async (tx) => {
+    const person = await tx.person.create({
+      data: { tenantId: ctx.tenantId, givenName: 'Ren', familyName: 'Sato' },
+    });
+    await tx.contract.create({
+      data: {
+        tenantId: ctx.tenantId,
+        personId: person.id,
+        sequence: 1,
+        isPrimary: true,
+        // In force, because `subject_departed` refuses a request from somebody
+        // who holds no contract -- a real rule, not fixture ceremony.
+        startDate: new Date('2020-01-01T00:00:00Z'),
+      },
+    });
+    const user = await createUser(tx, {
+      login: 'ren',
+      email: 'ren@acme.test',
+      displayName: 'Ren Sato',
+    });
+    await setPasswordHash(tx, user.id, PASSWORD_HASH);
+    await tx.user.update({ where: { id: user.id }, data: { personId: person.id } });
+    return person.id;
+  });
+
+  // One stage, one named approver: the admin. `person` rather than `manager`
+  // because the fixture must not depend on a contract hierarchy.
+  const approvalWorkflow = await call('POST', '/api/admin/automate/workflows', {
+    name: 'Needs Ada',
+    description: null,
+    enabled: true,
+    stages: [
+      {
+        sequence: 1,
+        name: 'Approval',
+        selector: 'person',
+        selectorConfig: { personId: unreachableApproverId },
+      },
+    ],
+  });
+  const product = await call(
+    'POST',
+    '/api/admin/automate/products',
+    productPayload({
+      name: 'Reviewed licence',
+      slug: 'reviewed-licence',
+      workflowId: approvalWorkflow.json().id,
+    }),
+  );
+
+  const signed = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    headers: { host: ctx.host },
+    payload: { login: 'ren', password: PASSWORD },
+  });
+  const renCookie = signed.cookies.find((c) => c.name === 'syntra_session')!.value;
+  const created = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/portal/automate/requests',
+    headers: { host: ctx.host, cookie: `syntra_session=${renCookie}` },
+    payload: {
+      productId: product.json().id,
+      subjectPersonId: requesterPersonId,
+      // Required once a product routes to an approver, and the refusal says
+      // why: somebody asked to decide with no stated reason decides badly or
+      // not at all.
+      justification: 'Needed for the quarterly close.',
+      formValues: {},
+    },
+  });
+  expect(created.statusCode, created.body).toBe(201);
+  // `{ ok, requestId, status }` -- the submit outcome, not the request row.
+  //
+  // `blocked_no_approver`, deliberately: `/decide` is the ADMINISTRATIVE
+  // OVERRIDE and refuses anything else with "Only a request with nobody to
+  // approve it can be decided by an administrator." The stage names a person
+  // who holds no contract in force, so it resolves to nobody -- which is the
+  // state the route exists for, and the state N2 was reachable in.
+  expect(created.json()).toMatchObject({ status: 'blocked_no_approver' });
+  return { requestId: created.json().requestId as string };
+}
+
+/** A grant that exists, from the immediately-granted workflow. */
+async function liveGrant() {
+  const personId = await withTenant(ctx.tenantId, async (tx) => {
+    const person = await tx.person.create({
+      data: { tenantId: ctx.tenantId, givenName: 'Kit', familyName: 'Ono' },
+    });
+    await tx.contract.create({
+      data: {
+        tenantId: ctx.tenantId,
+        personId: person.id,
+        sequence: 1,
+        isPrimary: true,
+        // In force, because `subject_departed` refuses a request from somebody
+        // who holds no contract -- a real rule, not fixture ceremony.
+        startDate: new Date('2020-01-01T00:00:00Z'),
+      },
+    });
+    const user = await createUser(tx, {
+      login: 'kit',
+      email: 'kit@acme.test',
+      displayName: 'Kit Ono',
+    });
+    await setPasswordHash(tx, user.id, PASSWORD_HASH);
+    await tx.user.update({ where: { id: user.id }, data: { personId: person.id } });
+    return person.id;
+  });
+  await call('POST', '/api/admin/automate/products', productPayload());
+
+  const signed = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    headers: { host: ctx.host },
+    payload: { login: 'kit', password: PASSWORD },
+  });
+  const kitCookie = signed.cookies.find((c) => c.name === 'syntra_session')!.value;
+  const products = await call('GET', '/api/admin/automate/products');
+  const created = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/portal/automate/requests',
+    headers: { host: ctx.host, cookie: `syntra_session=${kitCookie}` },
+    payload: {
+      productId: products.json().products[0].id,
+      subjectPersonId: personId,
+      justification: null,
+      formValues: {},
+    },
+  });
+  expect(created.statusCode, created.body).toBe(201);
+
+  const grantId = await withTenant(ctx.tenantId, async (tx) => {
+    const grant = await tx.accessGrant.findFirstOrThrow({
+      where: { subjectPersonId: personId },
+    });
+    return grant.id;
+  });
+  return { grantId };
+}
+
+describe('the admin decide route parses its body', () => {
+  /**
+   * THE ONE THAT MATTERS, and it is an authorization bug rather than a
+   * validation one. The body was cast, not parsed, and `recordDecision` only
+   * branches on `=== 'reject'` -- so a capitalised "Reject" APPROVED the
+   * request: it skipped the comment-required guard, fulfilled the grants, and
+   * wrote the literal string into the decision row and the audit payload,
+   * where it reads as a rejection to anybody looking later.
+   */
+  it('refuses a capitalised Reject rather than approving it', async () => {
+    const { requestId } = await pendingRequest();
+
+    const res = await call('POST', `/api/admin/automate/requests/${requestId}/decide`, {
+      decision: 'Reject',
+      comment: 'no',
+    });
+    expect(res.statusCode).toBe(400);
+
+    const after = await call('GET', '/api/admin/automate/requests');
+    const row = (after.json().requests as { id: string; status: string }[]).find(
+      (r) => r.id === requestId,
+    );
+    expect(row?.status).toBe('blocked_no_approver');
+  });
+
+  /**
+   * The comment-required refinement lives on the schema, so skipping the parse
+   * skipped it: a rejection with no reason is a request the person will raise
+   * again, and the guard existed and was never reached from this route.
+   */
+  it('applies the comment-required rule on a rejection', async () => {
+    const { requestId } = await pendingRequest();
+
+    const res = await call('POST', `/api/admin/automate/requests/${requestId}/decide`, {
+      decision: 'reject',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('comment');
+  });
+
+  it('is a 400, not a 500, when the field is missing entirely', async () => {
+    const { requestId } = await pendingRequest();
+    const res = await call('POST', `/api/admin/automate/requests/${requestId}/decide`, {});
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('still approves a well-formed approval', async () => {
+    const { requestId } = await pendingRequest();
+    const res = await call('POST', `/api/admin/automate/requests/${requestId}/decide`, {
+      decision: 'approve',
+      comment: null,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+});
+
+describe('the grant revoke route parses its body', () => {
+  it('refuses a reason of the wrong type instead of storing it', async () => {
+    const { grantId } = await liveGrant();
+    const res = await call('POST', `/api/admin/automate/grants/${grantId}/revoke`, {
+      reason: 42,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts an absent reason and records the default', async () => {
+    const { grantId } = await liveGrant();
+    const res = await call('POST', `/api/admin/automate/grants/${grantId}/revoke`, {});
+    expect(res.statusCode).toBe(204);
+  });
+});
