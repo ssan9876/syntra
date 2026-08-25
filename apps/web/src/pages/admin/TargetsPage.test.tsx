@@ -24,6 +24,7 @@ const hoursAgo = (n: number) =>
 const target = (overrides: Record<string, unknown> = {}) => ({
   id: 't1',
   name: 'Samba AD',
+  type: 'activeDirectory',
   enabled: true,
   enforcementMode: 'additive',
   schedule: '0 3 * * *',
@@ -173,6 +174,17 @@ describe('TargetsPage', () => {
     const additive = await screen.findByText('additive');
     const authoritative = screen.getByText('authoritative');
     expect(additive.className).not.toBe(authoritative.className);
+  });
+
+  it('badges each target with its connector type', async () => {
+    mockFetch([
+      target(),
+      target({ id: 't2', name: 'Example SaaS', type: 'scim2' }),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText('Active Directory')).toBeVisible();
+    expect(screen.getByText('SCIM 2.0')).toBeVisible();
   });
 
   it('says a target with no schedule runs by hand only', async () => {

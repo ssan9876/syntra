@@ -14,6 +14,7 @@ export interface SelectProps {
   hint?: string | undefined;
   error?: string | undefined;
   className?: string | undefined;
+  disabled?: boolean | undefined;
 }
 
 /**
@@ -34,6 +35,7 @@ export function Select({
   hint,
   error,
   className = '',
+  disabled = false,
 }: SelectProps) {
   const id = useId();
   return (
@@ -45,11 +47,13 @@ export function Select({
         id={id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
         className={[
           'h-9 w-full rounded-control border bg-bg px-3 text-ink',
           'transition-colors duration-150',
+          disabled ? 'cursor-not-allowed opacity-60' : '',
           error
             ? 'border-danger'
             : 'border-border-subtle hover:border-border-strong',

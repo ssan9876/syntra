@@ -827,6 +827,26 @@ describe('upsertAccountProfile, beyond the brief', () => {
     ).rejects.toThrow(/may not write/);
   });
 
+  it('accepts a dotted attribute name, widened for SCIM sub-attributes like name.givenName', async () => {
+    const { id } = await create();
+    await expect(
+      upsertAccountProfile(tenantId, null, id, {
+        ...profile,
+        attributeTemplates: { 'name.givenName': '%person.givenName%' },
+      }),
+    ).resolves.not.toThrow();
+  });
+
+  it('still refuses a name that is not RFC 4512 descr shape even with the dot allowed', async () => {
+    const { id } = await create();
+    await expect(
+      upsertAccountProfile(tenantId, null, id, {
+        ...profile,
+        attributeTemplates: { '..bad': 'x' },
+      }),
+    ).rejects.toThrow(/not an LDAP attribute name/);
+  });
+
   it('audits against the target, so the event can be found from the target', async () => {
     const { id } = await create();
     await upsertAccountProfile(tenantId, null, id, profile);

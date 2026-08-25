@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { TargetDetailPage } from './TargetDetailPage.js';
@@ -384,5 +384,70 @@ describe('TargetDetailPage', () => {
 
     expect(await screen.findByDisplayValue('CN=svc,DC=acme,DC=test')).toBeVisible();
     expect(screen.getByLabelText(/bind password/i)).toHaveValue('');
+  });
+
+  it('shows the SCIM field group instead of the Active Directory fields when scim2 is selected', async () => {
+    vi.spyOn(globalThis, 'fetch');
+    renderNew();
+
+    expect(await screen.findByLabelText(/^type$/i)).toBeVisible();
+    expect(screen.getByLabelText(/bind dn/i)).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText(/^type$/i), 'scim2');
+
+    expect(screen.getByLabelText(/base url/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/bind dn/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^url$/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/bearer token/i)).toBeInTheDocument();
+  });
+
+  it('submits a scim2 create with the scim2-shaped config', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'POST' && String(input).endsWith('/api/admin/targets')) {
+        return Promise.resolve(json({ id: 't1' }));
+      }
+      if (init?.method === 'PATCH') return Promise.resolve(json(null));
+      return Promise.resolve(json(target({ type: 'scim2' })));
+    });
+
+    renderNew();
+
+    await userEvent.type(await screen.findByLabelText(/^name$/i), 'Example SaaS');
+    await userEvent.selectOptions(screen.getByLabelText(/^type$/i), 'scim2');
+    await userEvent.clear(screen.getByLabelText(/base url/i));
+    await userEvent.type(
+      screen.getByLabelText(/base url/i),
+      'https://api.example.test/scim/v2',
+    );
+    await userEvent.type(screen.getByLabelText(/bearer token/i), 'a-token');
+    await userEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await waitFor(() =>
+      expect(
+        (fetchMock.mock.calls as [unknown, RequestInit | undefined][]).some(
+          ([input, init]) =>
+            String(input).endsWith('/api/admin/targets') && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+
+    const create = (
+      fetchMock.mock.calls as [unknown, RequestInit | undefined][]
+    ).find(
+      ([input, init]) =>
+        String(input).endsWith('/api/admin/targets') && init?.method === 'POST',
+    );
+    expect(create).toBeDefined();
+    const body = JSON.parse(String(create![1]!.body));
+    expect(body.type).toBe('scim2');
+    expect(body.config).toEqual({ baseUrl: 'https://api.example.test/scim/v2' });
+    expect(body.bindPassword).toBe('a-token');
+  });
+
+  it('cannot change type once a target exists', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(target()));
+
+    renderExisting();
+
+    expect(await screen.findByLabelText(/^type$/i)).toBeDisabled();
   });
 });

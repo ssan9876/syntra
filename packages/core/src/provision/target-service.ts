@@ -821,8 +821,15 @@ export const initialPasswordPolicySchema = z
   })
   .strict();
 
-/** RFC 4512 `descr`: a letter, then letters, digits and hyphens. */
-const LDAP_ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9-]*$/;
+/**
+ * RFC 4512 `descr` (a letter, then letters, digits and hyphens) — Active
+ * Directory's attribute names — OR a dotted path of the same shape (SCIM's
+ * `name.givenName`, `name.familyName`). Active Directory never produces a
+ * dotted name, so widening this to allow one changes nothing for that
+ * connector; it is what lets a `scim2` target's attribute profile name a
+ * sub-attribute of SCIM's core User schema at all.
+ */
+const LDAP_ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9-]*(\.[A-Za-z][A-Za-z0-9-]*)*$/;
 
 const attributeTemplatesSchema = z
   .record(

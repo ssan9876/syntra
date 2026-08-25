@@ -13,6 +13,7 @@ import { PageHeader } from './PageHeader.js';
 interface TargetRow {
   id: string;
   name: string;
+  type: string;
   enabled: boolean;
   enforcementMode: 'additive' | 'authoritative';
   schedule: string | null;
@@ -25,6 +26,9 @@ interface TargetRow {
 
 const when = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString() : 'Never run';
+
+/** How each connector type reads on the list, so targets are distinguishable at a glance. */
+const typeLabel = (type: string) => (type === 'scim2' ? 'SCIM 2.0' : 'Active Directory');
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -259,6 +263,9 @@ export function TargetsPage() {
                         >
                           {target.name}
                         </Link>
+                        <span className="ml-2">
+                          <Status tone="neutral">{typeLabel(target.type)}</Status>
+                        </span>
                       </td>
                       <td className="px-4 py-2.5">
                         {/* Ruling P2: the mode is per target and visible on
