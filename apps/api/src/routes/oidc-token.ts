@@ -50,17 +50,24 @@ interface ClientCredentials {
 function presentedCredentials(
   request: FastifyRequest,
   params: URLSearchParams,
-): ClientCredentials | null {
+): ClientCredentials | 'malformed' | null {
   const header = request.headers.authorization;
   if (header?.startsWith('Basic ')) {
     const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
     const index = decoded.indexOf(':');
-    if (index <= 0) return null;
-    return {
-      clientId: decodeURIComponent(decoded.slice(0, index)),
-      secret: decodeURIComponent(decoded.slice(index + 1)),
-      via: 'basic',
-    };
+    if (index <= 0) return 'malformed';
+    try {
+      return {
+        clientId: decodeURIComponent(decoded.slice(0, index)),
+        secret: decodeURIComponent(decoded.slice(index + 1)),
+        via: 'basic',
+      };
+    } catch {
+      // A URIError, and nothing else can be thrown here. The bytes are not
+      // repeated back: an error_description quoting what arrived would echo
+      // half a credential into whatever logs the client's response.
+      return 'malformed';
+    }
   }
   const clientId = params.get('client_id');
   const secret = params.get('client_secret');
@@ -228,8 +235,11 @@ async function guardClientCredentials(
   // The credential itself was already verified against the stored hash by the
   // handler below; what this establishes is that there WAS one. A caller that
   // presented nothing has been past no check at all.
+  //
+  // `'malformed'` lands here too, and must: it is not an object, so letting it
+  // through would read `.clientId` off the string.
   const credentials = presentedCredentials(request, params);
-  if (credentials === null) {
+  if (credentials === null || credentials === 'malformed') {
     return { error: 'invalid_client', error_description: 'Client authentication failed' };
   }
 
@@ -304,7 +314,17 @@ export async function registerOidcTokenRoutes(
       const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
       const params = new URLSearchParams(body.toString('utf8'));
 
-      const credentials = presentedCredentials(request, params);
+      const presented = presentedCredentials(request, params);
+      if (presented === 'malformed') {
+        // The refusal OAuth names for this, in the words it names. Identical
+        // to the one a wrong secret gets, so an attacker learns nothing about
+        // which half of the credential was rejected.
+        return reply.status(401).type('application/json').send({
+          error: 'invalid_client',
+          error_description: 'Client authentication failed',
+        });
+      }
+      const credentials = presented;
       if (credentials !== null) {
         // Constant-time, against the stored SHA-256 hash. oidc-provider never
         // sees the real secret.

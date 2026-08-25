@@ -567,3 +567,37 @@ async function providerForCached(tenantId: string) {
   const { providerFor } = await import('@syntra/protocols');
   return providerFor(tenantId, `http://${TEST_HOST}/oidc`, null as never);
 }
+
+describe('malformed client credentials', () => {
+  const tokenWith = (header: string) =>
+    ctx.app.inject({
+      method: 'POST',
+      url: '/oidc/token',
+      headers: {
+        host: ctx.host,
+        authorization: `Basic ${Buffer.from(header, 'utf8').toString('base64')}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+    });
+
+  /**
+   * RFC 6749 2.3.1 percent-encodes both halves of a Basic credential, so this
+   * decodes them -- and `decodeURIComponent('%zz')` throws URIError. The token
+   * endpoint answered 500 where the specification requires invalid_client, so
+   * a client with a broken encoder got an unexplained server error instead of
+   * the one refusal that tells it what is wrong.
+   */
+  it('answers invalid_client for percent-encoding that cannot be read', async () => {
+    const res = await tokenWith('client%zz:secret');
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'invalid_client' });
+  });
+
+  /** A header with no colon at all is the same answer, not a different one. */
+  it('answers invalid_client for a Basic header with no separator', async () => {
+    const res = await tokenWith('nocolonhere');
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'invalid_client' });
+  });
+});
