@@ -193,9 +193,17 @@ jobs:
       # and leaves the last one's fixtures behind, which is enough to fool the
       # seed's idempotence guard into doing nothing — and the browser tests then
       # look at a directory with no people in it.
+      #
+      # `SYNTRA_ALLOW_RESET` names the database deliberately: `db:reset`
+      # refuses anything that is not a scratch `syntra_test_*` database unless
+      # told which one it is emptying. The development and lab databases are
+      # both called `syntra`, so the name cannot tell them apart, and the
+      # NODE_ENV guard this replaced protected neither. CI names its own for
+      # the same reason anybody else has to.
+      # See packages/db/src/reset-guard.ts.
       - name: Seed
         run: |
-          pnpm db:reset
+          SYNTRA_ALLOW_RESET=syntra pnpm db:reset
           pnpm seed
 
       - name: Start the application
