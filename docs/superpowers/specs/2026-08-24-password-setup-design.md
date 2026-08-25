@@ -155,9 +155,28 @@ It mints a token the same way the reset flow does — random bytes, stored as a
 digest, raw value returned once and never persisted — writes the row, and
 records `auth.password_setup_issued` naming the actor and the subject.
 
-Outstanding tokens for that user are **not** invalidated. Issuing a second link
-because the first went astray is the common case, and both should work until one
-is spent or expires; `completePasswordReset` already consumes exactly one.
+Issuance supersedes: every unconsumed token for that user is stamped
+`consumedAt` before the new row is written, exactly as `attemptPasswordReset`
+already does. This is not a preference. A **partial unique index allows one live
+token per user**, so a design that left the old one valid alongside the new one
+would not merely be undesirable — it would violate the index and throw `P2002`.
+
+Two consequences worth stating plainly, because they follow from the shared
+table rather than from anything this change invents:
+
+- An admin minting a setup link **consumes an outstanding reset the user
+  requested for themselves**, and vice versa. There is one live link per user
+  across both flows.
+- The last link issued is the only one that works. An administrator who sends
+  two and then tells the joiner to use the first has broken their own
+  onboarding, so the console copy should say so (section 7).
+
+`P2002` is handled differently here than in the reset path. There, a
+simultaneous request is swallowed and the loser sends nothing, because
+surfacing it would turn an error page into an account-existence oracle. No such
+oracle exists for a caller holding `directory.write`, so the loser of a
+concurrent issuance gets a `409` and can try again — silently returning success
+without a usable link would be worse than saying what happened.
 
 ## 6. API
 
@@ -180,14 +199,22 @@ A **Send password setup link** action on the user detail page, visible with
 expiry in plain words. It must render the link as something to copy, not as a
 navigable anchor an administrator can click and thereby consume.
 
+Because issuance supersedes (section 5), the panel must say that generating
+a new link stops the previous one working. An administrator who sends two links
+and expects both to be usable is the failure this copy exists to prevent.
+
 ## 8. Testing
 
 - A user with no credential: issue, complete, sign in. The whole point.
 - A user with an enrolled TOTP factor: completion still demands the factor.
 - Unknown user is 404; an `upstream` user is 409 and no token is written.
 - An expired token is refused, and a consumed token is refused a second time.
-- Two outstanding tokens: spending one leaves the other spendable, and spending
-  it a second time does not work.
+- Issuing twice supersedes: the first link no longer works, the second does.
+- Issuing a setup link consumes an outstanding self-service reset token, and a
+  self-service reset consumes an outstanding setup link. One live link per user
+  across both flows.
+- Concurrent issuance: the loser gets 409 rather than a success carrying a link
+  that was invalidated before it was returned.
 - The audit event names the actor, not the subject, as the actor.
 - Permission: a caller without `directory.write` gets 403 and no token exists.
 
