@@ -315,6 +315,28 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   await page.getByRole('button', { name: 'Save rule' }).click();
   await expect(page.getByText('Saved.')).toBeVisible();
 
+  // The compound-condition editor, end to end: group the just-saved leaf
+  // with AND and add a second leaf naming the SAME department, so the
+  // resulting condition matches exactly the same population as the single
+  // leaf did — this step verifies the editor and the round-trip through the
+  // API, without changing what the rest of this test provisions.
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByRole('button', { name: 'Group with AND' }).click();
+  await page.getByRole('button', { name: 'Add condition' }).click();
+  const compoundValues = page.getByLabel('Value');
+  await expect(compoundValues).toHaveCount(2);
+  await compoundValues.nth(1).fill(DEPARTMENT);
+  await page.getByRole('button', { name: 'Preview impact' }).click();
+  await expect(impact).toContainText(/matches\s*1\s*of/);
+  await page.getByRole('button', { name: 'Save rule' }).click();
+  await expect(page.getByText('Saved.')).toBeVisible();
+  await expect(
+    page.getByText(
+      `(contract.department is ${DEPARTMENT}) AND (contract.department is ${DEPARTMENT})`,
+      { exact: false },
+    ),
+  ).toBeVisible();
+
   // EXACT, and from the target's own page.
   //
   // `getByRole('link', { name: 'Runs' })` is a SUBSTRING match, and the admin
