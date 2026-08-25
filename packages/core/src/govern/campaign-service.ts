@@ -12,9 +12,33 @@ import { checkSnapshotAge, checkSourceFreshness } from './freshness.js';
 import { REVIEWER_BATCH, resolveItemReviewers } from './reviewer-service.js';
 import { governSettings } from './settings-service.js';
 import { readableSnapshot, type ReadableSnapshot } from './readable.js';
-import { RESOURCE_KINDS, known, percentOf, type ResourceKind, type Tri } from './types.js';
+import {
+  RESOURCE_KINDS,
+  known,
+  parseSubjectKey,
+  percentOf,
+  type ResourceKind,
+  type Tri,
+} from './types.js';
 
 export const ITEM_BATCH = 500;
+
+/**
+ * ITEMS PER RE-BASE TRANSACTION.
+ *
+ * Smaller than `ITEM_BATCH` because a re-base does per-item WORK -- a
+ * comparison and an `update` each -- where item creation is one `createMany`
+ * per page. It is `REVIEWER_BATCH`'s number for `REVIEWER_BATCH`'s reason.
+ *
+ * The whole function used to be one transaction with an update per item, and
+ * §8 rule 2 makes that a trap rather than a slowdown: a campaign whose snapshot
+ * has aged past `maxSnapshotAgeDays` MUST be re-based before its revocations
+ * can execute, and §13's guard refuses the batch outright otherwise. So a
+ * 20,000-item campaign that hit P2028 partway and rolled back entirely had a
+ * revocation batch that was permanently unexecutable: the only path out of the
+ * block was the function that could not finish.
+ */
+export const REBASE_BATCH = 200;
 
 export interface CampaignScope {
   /** AT LEAST ONE. An empty list means NOTHING, never everything. */
@@ -700,78 +724,186 @@ export async function extendCampaign(
 }
 
 /**
- * Re-basing RE-OPENS ONLY THE ITEMS WHOSE HOLDING ACTUALLY CHANGED.
+ * Re-basing RE-OPENS ONLY THE ITEMS WHOSE HOLDING ACTUALLY CHANGED, and only
+ * the items whose STATUS leaves a re-base anything to say.
  *
  * A certification of a holding that has since changed is not a certification of
  * the current holding; a certification of one that has not is still good.
  * Re-opening everything would make a re-base a punishment for the reviewers who
  * answered on time.
  *
- * COMPOSITION HAZARD: this pairs with the `HoldingCertification` projection in
- * `decision-service.ts`. An item that is NOT re-opened must keep its projection
- * row; rolling the projection back for every item of a re-based campaign would
- * make a certification that is still good read as never made. So this function
- * never writes to `HoldingCertification` at all.
+ * STATUS IS PART OF THAT, and it used not to be considered at all:
+ *
+ *   - `undecided` is TERMINAL (§11): "the campaign closed and nobody decided
+ *     this item. It was NOT attested." Putting it back to `pending` resurrected
+ *     a decision nobody made and deleted the record that nobody made it, while
+ *     leaving its `undecided_item` remediation row pointing at an item that is
+ *     no longer undecided.
+ *   - A `revocation_*` item has an OUTCOME. A dispatched revocation Provision
+ *     applied is absent from the next snapshot -- which is the outcome, not a
+ *     disappearance -- and overwriting it to `moot` erased the one thing §13's
+ *     whole dispatch vocabulary exists to record.
+ *   - `moot` is terminal too: the holding stopped existing or the subject left,
+ *     and neither un-happens because a newer snapshot was built.
+ *
+ * COMPOSITION HAZARD, both directions. This pairs with the `HoldingCertification`
+ * projection in `decision-service.ts`. An item that is NOT re-opened must keep
+ * its projection row -- rolling it back for every item of a re-based campaign
+ * would make a certification that is still good read as never made. An item
+ * that IS re-opened from `certified` must LOSE it: the holding changed, so the
+ * row would claim a named human attested to facts nobody showed them.
+ *
+ * BATCHED, in `REBASE_BATCH` items per transaction, for the reason that
+ * constant gives.
  */
+export const REBASABLE_STATUSES: readonly string[] = [
+  'pending',
+  'certified',
+  'revoke_decided',
+  'blocked_no_reviewer',
+];
+
 export async function rebaseCampaign(
   tenantId: string,
   actorUserId: string | null,
   campaignId: string,
   newSnapshotId: string,
-): Promise<{ reopened: number; kept: number }> {
-  return withTenant(tenantId, async (tx) => {
+  options: { batchSize?: number } = {},
+): Promise<{ reopened: number; kept: number; untouched: number }> {
+  const batchSize = options.batchSize ?? REBASE_BATCH;
+
+  // ---- one short transaction for the two facts the loop needs -------------
+  const prepared = await withTenant(tenantId, async (tx) => {
     const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: campaignId } });
-    const snapshot = await readableSnapshot(tx, newSnapshotId);
-    const items = await tx.campaignItem.findMany({ where: { campaignId } });
-
-    const fresh = await tx.holding.findMany({
-      where: { snapshotId: snapshot.id, subjectKey: { in: items.map((i) => i.subjectKey) } },
-      include: { attributions: { select: { kind: true, refId: true } } },
-    });
-    const byKey = new Map(
-      fresh.map((h) => [`${h.subjectKey}|${h.systemId}|${h.resourceKind}|${h.resourceId}`, h]),
-    );
-
-    let reopened = 0;
-    let kept = 0;
-
-    for (const item of items) {
-      const key = `${item.subjectKey}|${item.systemId}|${item.resourceKind}|${item.resourceId}`;
-      const current = byKey.get(key);
-
-      const before = (item.attributions as { kind: string; refId?: string | null }[]).map(
-        (a) => `${a.kind}:${a.refId ?? ''}`,
+    // Re-basing exists so a stale campaign's revocations can execute (§8 rule
+    // 2). A closed campaign has no revocations left to unblock and its coverage
+    // figure is already signed; re-opening its items would put a queue in front
+    // of reviewers for a campaign that is over, and `recordCampaignDecision`
+    // would then refuse every one of them.
+    if (campaign.status !== 'open') {
+      throw new CampaignRefusedError(
+        'not_open',
+        null,
+        `this campaign is ${campaign.status}; only a running campaign can be re-based`,
       );
-      const after = (current?.attributions ?? []).map((a) => `${a.kind}:${a.refId ?? ''}`);
-      const changed =
-        current === undefined ||
-        current.state !== 'held' ||
-        before.length !== after.length ||
-        [...before].sort().join('|') !== [...after].sort().join('|');
-
-      if (!changed) {
-        kept += 1;
-        continue;
-      }
-      reopened += 1;
-      await tx.campaignItem.update({
-        where: { id: item.id },
-        data: {
-          status: current === undefined ? 'moot' : 'pending',
-          statusReason:
-            current === undefined
-              ? `the holding no longer exists as of snapshot ${snapshot.id}`
-              : 'the holding changed between the original snapshot and the re-base',
-          holdingSnapshotId: snapshot.id,
-          attributions: (current?.attributions ?? []) as never,
-          ...(current === undefined ? {} : { observedAt: current.observedAt }),
-        },
-      });
     }
+    const snapshot = await readableSnapshot(tx, newSnapshotId);
+    return { fromSnapshotId: campaign.snapshotId, snapshot };
+  });
 
+  let reopened = 0;
+  let kept = 0;
+  let untouched = 0;
+
+  // Paged by id, not by offset: `createdAt` defaults to `now()`, which in
+  // PostgreSQL is TRANSACTION START TIME, so every row of one `createMany`
+  // carries an identical one and ordering by it imposes no order.
+  let cursor: string | null = null;
+  for (;;) {
+    const page: { id: string }[] = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findMany({
+        where: { campaignId, ...(cursor === null ? {} : { id: { gt: cursor } }) },
+        orderBy: { id: 'asc' },
+        take: batchSize,
+        select: { id: true },
+      }),
+    );
+    if (page.length === 0) break;
+    cursor = page[page.length - 1]!.id;
+
+    const outcome = await withTenant(tenantId, async (tx) => {
+      const items = await tx.campaignItem.findMany({
+        where: { id: { in: page.map((p) => p.id) } },
+      });
+
+      // Everything outside `REBASABLE_STATUSES` is counted and left exactly as
+      // it is, including its `holdingSnapshotId` -- which is what "attested
+      // against these facts" means and must keep naming the snapshot the
+      // decision was made against.
+      const rebasable = items.filter((i) => REBASABLE_STATUSES.includes(i.status));
+      const skipped = items.length - rebasable.length;
+      if (rebasable.length === 0) return { reopened: 0, kept: 0, untouched: skipped };
+
+      const fresh = await tx.holding.findMany({
+        where: {
+          snapshotId: prepared.snapshot.id,
+          subjectKey: { in: rebasable.map((i) => i.subjectKey) },
+        },
+        include: { attributions: { select: { kind: true, refId: true } } },
+      });
+      const byKey = new Map(
+        fresh.map((h) => [`${h.subjectKey}|${h.systemId}|${h.resourceKind}|${h.resourceId}`, h]),
+      );
+
+      let pageReopened = 0;
+      let pageKept = 0;
+
+      for (const item of rebasable) {
+        const key = `${item.subjectKey}|${item.systemId}|${item.resourceKind}|${item.resourceId}`;
+        const current = byKey.get(key);
+        const before = (item.attributions as { kind: string; refId?: string | null }[]).map(
+          (a) => `${a.kind}:${a.refId ?? ''}`,
+        );
+        const after = (current?.attributions ?? []).map((a) => `${a.kind}:${a.refId ?? ''}`);
+        const changed =
+          current === undefined ||
+          current.state !== 'held' ||
+          before.length !== after.length ||
+          [...before].sort().join('|') !== [...after].sort().join('|');
+
+        if (!changed) {
+          pageKept += 1;
+          continue;
+        }
+        pageReopened += 1;
+
+        // The projection goes only for an item re-opened FROM `certified`.
+        // See the docstring: keeping it would claim an attestation of facts
+        // nobody was shown; deleting it for a KEPT item would erase one that is
+        // still good.
+        if (item.status === 'certified') {
+          const subject = parseSubjectKey(item.subjectKey);
+          if (subject !== null) {
+            await tx.holdingCertification.deleteMany({
+              where: {
+                subjectRefType: subject.kind,
+                subjectRefId: subject.kind === 'person' ? subject.personId : subject.accountRef,
+                systemId: item.systemId,
+                resourceKind: item.resourceKind,
+                resourceId: item.resourceId,
+              },
+            });
+          }
+        }
+
+        await tx.campaignItem.update({
+          where: { id: item.id },
+          data: {
+            status: current === undefined ? 'moot' : 'pending',
+            statusReason:
+              current === undefined
+                ? `the holding no longer exists as of snapshot ${prepared.snapshot.id}`
+                : 'the holding changed between the original snapshot and the re-base',
+            holdingSnapshotId: prepared.snapshot.id,
+            attributions: (current?.attributions ?? []) as never,
+            ...(current === undefined ? {} : { observedAt: current.observedAt }),
+          },
+        });
+      }
+
+      return { reopened: pageReopened, kept: pageKept, untouched: skipped };
+    });
+
+    reopened += outcome.reopened;
+    kept += outcome.kept;
+    untouched += outcome.untouched;
+  }
+
+  // ---- one short transaction to move the campaign and record it -----------
+  await withTenant(tenantId, async (tx) => {
     await tx.campaign.update({
       where: { id: campaignId },
-      data: { snapshotId: snapshot.id, rebasedFromSnapshotId: campaign.snapshotId },
+      data: { snapshotId: prepared.snapshot.id, rebasedFromSnapshotId: prepared.fromSnapshotId },
     });
 
     await recordEvent(tx, {
@@ -782,13 +914,17 @@ export async function rebaseCampaign(
       outcome: 'success',
       sourceIp: null,
       payload: {
-        fromSnapshotId: campaign.snapshotId,
-        toSnapshotId: snapshot.id,
+        fromSnapshotId: prepared.fromSnapshotId,
+        toSnapshotId: prepared.snapshot.id,
         reopened,
         kept,
+        // Named on the event as well as returned. "1,840 items, 61 re-opened,
+        // 1,700 kept" reads as complete until somebody asks what happened to
+        // the other 79.
+        untouched,
       },
     });
-
-    return { reopened, kept };
   });
+
+  return { reopened, kept, untouched };
 }

@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { collectTenant } from './collect.js';
+import { collectTenant, type CollectedTenant } from './collect.js';
 import { buildSnapshot } from './snapshot-service.js';
-import { createCampaign, startCampaign } from './campaign-service.js';
+import { createCampaign, rebaseCampaign, startCampaign } from './campaign-service.js';
 import { computeReviewQualitySignals } from './decision-service.js';
 import {
   closeDueCampaigns,
@@ -18,6 +18,38 @@ import {
   confirmRevocationBatch,
   reflectRevocationOutcomes,
 } from './revocation-service.js';
+
+/**
+ * A collection with NO HOLDINGS, so a re-base onto it re-opens every item.
+ *
+ * The re-base budget cases need the world to have MOVED ON rather than merely
+ * to have been re-read: `rebaseCampaign` only writes for items whose holding
+ * CHANGED, so re-basing onto a snapshot of the same tenant keeps all 2,000 and
+ * issues no update at all -- which would measure the traversal and call it the
+ * loop.
+ */
+const emptyCollectionAt = (asOf: Date): CollectedTenant => ({
+  asOf,
+  holdings: [],
+  gaps: [],
+  sources: [
+    {
+      sourceKind: 'syntraInternal',
+      sourceId: 'syntra',
+      sourceName: 'Syntra',
+      lastRunId: null,
+      lastSuccessfulReadAt: asOf,
+      lastAttemptedReadAt: asOf,
+      completeness: 'complete',
+      freshnessSlaHours: 24,
+      gapCount: 0,
+    },
+  ],
+  personIds: [],
+  personsWithActiveContract: 0,
+  unattributedAccountKeys: [],
+  queryCount: 9,
+});
 
 /**
  * Section 23: "No `withTenant` call encloses a loop over an unbounded
@@ -668,6 +700,75 @@ describe('the transaction budget — slice 2', () => {
    * phases apart: `lastRemindedAt` is stamped even when escalation adds nobody,
    * and a second run adds no duplicate row.
    */
+
+  it('re-bases a 2,000-item campaign with no transaction over the budget', async () => {
+    await seedOrdinaryCampaign();
+    await startCampaign(tenantId, actorUserId, campaignId, { now: NOW });
+    // Onto an EMPTY snapshot, so every one of the 2,000 items is RE-OPENED and
+    // the per-item `update` actually runs. Re-basing onto the same snapshot
+    // measures the traversal and nothing else -- every item is `kept`, no row
+    // is written, and the figure that comes back says nothing about the loop
+    // this budget exists to bound.
+    const empty = await buildSnapshot(tenantId, {
+      now: new Date(NOW.getTime() + 86_400_000),
+      collect: async () => emptyCollectionAt(new Date(NOW.getTime() + 86_400_000)),
+    });
+    const { result, slowest } = await timedTransactions(() =>
+      rebaseCampaign(tenantId, actorUserId, campaignId, empty.snapshotId),
+    );
+    expect(result.reopened).toBe(ITEMS);
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  /**
+   * MEASURED AT A LARGER SIZE THAN THE ORDINARY CAMPAIGN, and the number is why.
+   *
+   * A re-base does per-item work -- a comparison and an `update` each -- but
+   * only for items whose holding CHANGED, so the campaign has to be re-based
+   * onto an EMPTY snapshot for the loop to run at all. Even then, 2,000 items
+   * unbounded measured **1,859 ms** on a 16-core box against CI's 4,500 ms
+   * budget: real per-item cost, comfortably inside the ceiling, and therefore
+   * useless as a mutation.
+   *
+   * The cost is linear in items, so the knob is the campaign rather than the
+   * assertion. 8,000 items is roughly 7.4 s by that measurement -- past the
+   * budget and past Prisma's own 5,000 ms ceiling, which is the form the defect
+   * actually takes in production.
+   */
+  const REBASE_UNBOUNDED_PER_SUBJECT = 40;
+
+  it('FAILS when the re-base is unbounded — the mutation this case exists for', async () => {
+    // EXECUTED, not documented. §8 rule 2 makes this the trap rather than the
+    // slowdown: a campaign past `maxSnapshotAgeDays` MUST be re-based before
+    // its revocations can execute, so a re-base that cannot finish leaves the
+    // batch permanently unexecutable -- the only way out of the block is the
+    // function that cannot complete.
+    const big = await seedLargeCampaign(REBASE_UNBOUNDED_PER_SUBJECT);
+    await startCampaign(tenantId, big.actorUserId, big.campaignId, { now: NOW });
+
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const empty = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () => emptyCollectionAt(later),
+    });
+
+    let aborted = false;
+    const { slowest } = await timedTransactions(async () => {
+      try {
+        await rebaseCampaign(tenantId, big.actorUserId, big.campaignId, empty.snapshotId, {
+          batchSize: Number.MAX_SAFE_INTEGER,
+        });
+      } catch {
+        // Prisma's own 5,000 ms interactive-transaction ceiling ends it first,
+        // which is the same finding arriving as an exception instead of a
+        // number.
+        aborted = true;
+      }
+    });
+
+    const breached = aborted || slowest > BUDGET_MS;
+    expect(breached).toBe(true);
+  }, 300_000);
 
   it('FAILS when reviewer resolution is unbounded — the mutation this half exists for', async () => {
     // EXECUTED, not documented. `REVIEWER_BATCH` was exported by the reviewer

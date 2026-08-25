@@ -16,6 +16,7 @@ import {
 // function that writes the projection in PRODUCTION, never a hand-built row.
 import { recordCampaignDecision } from './decision-service.js';
 import { buildSnapshot } from './snapshot-service.js';
+import type { CollectedTenant } from './collect.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
 const DUE = new Date('2026-07-15T09:00:00Z');
@@ -131,6 +132,35 @@ const draft = (over: Record<string, unknown> = {}) => ({
   dueAt: DUE,
   allowBulkCertify: true,
   ...over,
+});
+
+/**
+ * A collection with no holdings, for the cases that need the world to have
+ * MOVED ON rather than merely to have been re-read. `buildSnapshot`'s default
+ * `collect` reads the seeded tenant, so a second build produces the same
+ * holdings and nothing re-opens.
+ */
+const emptyCollectionAt = (asOf: Date): CollectedTenant => ({
+  asOf,
+  holdings: [],
+  gaps: [],
+  sources: [
+    {
+      sourceKind: 'syntraInternal',
+      sourceId: 'syntra',
+      sourceName: 'Syntra',
+      lastRunId: null,
+      lastSuccessfulReadAt: asOf,
+      lastAttemptedReadAt: asOf,
+      completeness: 'complete',
+      freshnessSlaHours: 24,
+      gapCount: 0,
+    },
+  ],
+  personIds: [],
+  personsWithActiveContract: 0,
+  unattributedAccountKeys: [],
+  queryCount: 9,
 });
 
 describe('the scope language', () => {
@@ -579,7 +609,7 @@ describe('re-basing re-opens only what changed', () => {
     const result = await rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId);
 
     // A certification of a holding that has not changed is STILL GOOD.
-    expect(result).toEqual({ reopened: 0, kept: 1 });
+    expect(result).toEqual({ reopened: 0, kept: 1, untouched: 0 });
     const after = await withTenant(tenantId, (tx) =>
       tx.campaignItem.findUniqueOrThrow({ where: { id: item.id } }),
     );
@@ -618,6 +648,87 @@ describe('re-basing re-opens only what changed', () => {
       tx.campaignItem.findUniqueOrThrow({ where: { id: item.id } }),
     );
     expect(after.status).toBe('pending');
+  });
+
+  /**
+   * §11 calls `undecided` TERMINAL: "the campaign closed and nobody decided
+   * this item. It was NOT attested." Re-base had no status filter at all, so it
+   * put terminal items back to `pending` -- resurrecting a decision nobody
+   * made, deleting the record that nobody made it, and leaving the
+   * `undecided_item` remediation row pointing at an item that is no longer
+   * undecided.
+   */
+  it('leaves a terminal undecided item alone', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    const item = await withTenant(tenantId, (tx) => tx.campaignItem.findFirstOrThrow());
+    await withTenant(tenantId, (tx) =>
+      tx.campaignItem.update({ where: { id: item.id }, data: { status: 'undecided' } }),
+    );
+
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const rebuilt = await buildSnapshot(tenantId, { now: later });
+    const result = await rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId);
+
+    expect(result).toEqual({ reopened: 0, kept: 0, untouched: 1 });
+    const after = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: item.id } }),
+    );
+    expect(after.status).toBe('undecided');
+  });
+
+  /**
+   * A dispatched revocation that Provision APPLIED is absent from the next
+   * snapshot -- which is the outcome, not a disappearance. Overwriting it to
+   * `moot` erased the one thing §13's whole dispatch vocabulary exists to
+   * record, and the campaign then reported the removal it caused as a holding
+   * that happened to stop existing.
+   */
+  it('leaves a dispatched revocation alone even though the holding is gone', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    const item = await withTenant(tenantId, (tx) => tx.campaignItem.findFirstOrThrow());
+    await withTenant(tenantId, (tx) =>
+      tx.campaignItem.update({
+        where: { id: item.id },
+        data: { status: 'revocation_dispatched' },
+      }),
+    );
+
+    // A snapshot with no holdings at all: the removal landed.
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const rebuilt = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () => emptyCollectionAt(later),
+    });
+    const result = await rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId);
+
+    expect(result.untouched).toBe(1);
+    const after = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: item.id } }),
+    );
+    expect(after.status).toBe('revocation_dispatched');
+  });
+
+  it('refuses to re-base a campaign that is not open', async () => {
+    // Re-basing exists so a stale campaign's revocations can execute (§8 rule
+    // 2). A closed campaign has no revocations left to unblock, and re-opening
+    // its items would put a queue in front of reviewers for a campaign whose
+    // coverage figure is already signed.
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    await withTenant(tenantId, (tx) =>
+      tx.campaign.update({ where: { id }, data: { status: 'closed_complete' } }),
+    );
+
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const rebuilt = await buildSnapshot(tenantId, { now: later });
+    await expect(
+      rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId),
+    ).rejects.toMatchObject({ code: 'not_open' });
   });
 });
 
@@ -669,7 +780,7 @@ describe('the certification projection and the re-base composition hazard', () =
     const later = new Date(NOW.getTime() + 86_400_000);
     const rebuilt = await buildSnapshot(tenantId, { now: later });
     const result = await rebaseCampaign(tenantId, actorUserId, campaignId, rebuilt.snapshotId);
-    expect(result).toEqual({ reopened: 0, kept: 1 });
+    expect(result).toEqual({ reopened: 0, kept: 1, untouched: 0 });
 
     const after = await withTenant(tenantId, (tx) => tx.holdingCertification.findFirstOrThrow());
     expect(after.lastCertifiedAt).toEqual(before.lastCertifiedAt);
@@ -679,6 +790,49 @@ describe('the certification projection and the re-base composition hazard', () =
       tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
     );
     expect(item.status).toBe('certified');
+  });
+
+  /**
+   * The other half of the composition hazard this function's docstring names.
+   *
+   * An item it KEEPS must keep its projection -- rolling that back would make a
+   * certification that is still good read as never made. An item it RE-OPENS is
+   * the opposite case: the holding changed, so what was certified is not what
+   * is there now, and a `HoldingCertification` left behind says a named human
+   * attested to facts nobody showed them.
+   */
+  it('drops the certification projection for a certified item it re-opens', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    const item = await withTenant(tenantId, (tx) => tx.campaignItem.findFirstOrThrow());
+    await recordCampaignDecision(
+      tenantId,
+      {
+        itemId: item.id,
+        deciderPersonId: managerPersonId,
+        deciderUserId: managerUserId,
+        decision: 'certify',
+        // The seeded holding is UNATTRIBUTABLE, and certifying one of those
+        // requires a comment saying who said it was fine. That refusal is the
+        // subject of its own test elsewhere; here it is just the price of
+        // getting a projection row to exist at all.
+        comment: 'the finance lead confirmed this is required for the year-end close',
+      },
+      { now: NOW },
+    );
+    expect(await withTenant(tenantId, (tx) => tx.holdingCertification.count())).toBe(1);
+
+    // A snapshot in which the holding is gone: the item re-opens as `moot`.
+    const later = new Date(NOW.getTime() + 86_400_000);
+    const rebuilt = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () => emptyCollectionAt(later),
+    });
+    const result = await rebaseCampaign(tenantId, actorUserId, id, rebuilt.snapshotId);
+
+    expect(result.reopened).toBe(1);
+    expect(await withTenant(tenantId, (tx) => tx.holdingCertification.count())).toBe(0);
   });
 });
 
