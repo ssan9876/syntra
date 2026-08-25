@@ -326,6 +326,29 @@ Stated plainly, because the list above is long. Each was specifically probed.
 
 ---
 
+## 10b. Found during remediation, not during the review
+
+**G28 — `upsertFindings` reads then creates, exactly as `detectSodViolations` did.**
+`packages/core/src/govern/finding-service.ts:302` did `findUnique` then
+`create` against `GovernFinding`'s `(tenantId, kind, subjectRefType,
+subjectRefId)` unique index. Two detection passes over one tenant -- an
+administrator pressing "Build snapshot" while the nightly job runs -- both read
+null and both create; the second raises P2002, the job throws, and
+`reconcileFindings` never runs.
+
+This is the same defect as **G23** in a second table, and the review missed it
+because it was looking at the SoD write. It surfaced only when G23's fix let the
+two passes get further and collide here instead -- which is the argument against
+fixing one half of a read-then-create: the failure mode is unchanged, one table
+along. Fixed in remediation 2, task 8, by upserting on the key the read already
+used.
+
+The general lesson is worth carrying into plans 3 and 4: **grep for
+`findUnique` followed by `create` on the same natural key** rather than
+treating each report as its own finding.
+
+---
+
 ## 11. Migration timestamp allocation
 
 The remediation plans were written in parallel and three of them independently
