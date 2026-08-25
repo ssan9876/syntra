@@ -100,6 +100,49 @@ ok "versions are ordered numerically, not lexically" \
   "$(releases_to_prune 2 1.10.0 1.2.0 1.9.0 1.10.0 | tr '\n' ' ' | sed 's/ $//')" \
   "1.2.0"
 
+# `sort -V` puts the literal `dev` and any `<v>.partial` AFTER real versions,
+# so both used to land in the newest-three and count against the limit -- which
+# means a half-unpacked download could evict a release somebody may need to
+# roll back to, and the conversion's copy of the working tree was never pruned
+# at all.
+
+ok "a partial directory is not a release" \
+  "$(releases_to_prune 2 1.3.0 1.1.0 1.2.0 1.3.0 1.4.0.partial | tr '\n' ' ' | sed 's/ $//')" \
+  "1.1.0"
+
+ok "dev does not count against the limit" \
+  "$(releases_to_prune 2 1.3.0 dev 1.1.0 1.2.0 1.3.0 | tr '\n' ' ' | sed 's/ $//')" \
+  "1.1.0"
+
+# It is the recovery point for a bad conversion. Deleting it is how somebody
+# loses the tree they were told was still sitting there.
+ok "dev is never pruned" \
+  "$(releases_to_prune 1 1.3.0 dev 1.1.0 1.2.0 1.3.0 | tr '\n' ' ' | sed 's/ $//')" \
+  "1.1.0 1.2.0"
+
+# --- previous_release_of ----------------------------------------------------
+#
+# Where a rollback goes. Sorting the raw listing meant it could go to a
+# half-unpacked download that failed its checksum, or to an unversioned copy
+# of somebody's working tree.
+
+ok "the newest older release" \
+  "$(previous_release_of 1.5.0 1.3.0 1.4.0 1.5.0)" "1.4.0"
+
+ok "ordered numerically, not lexically" \
+  "$(previous_release_of 1.10.0 1.2.0 1.9.0 1.10.0)" "1.9.0"
+
+ok "a partial download is never a rollback target" \
+  "$(previous_release_of 1.5.0 1.4.0 1.5.0 1.6.0.partial)" "1.4.0"
+
+# After an adoption there is exactly one release and the tree it replaced.
+# Going back to that tree is the correct and only answer.
+ok "falls back to the adopted working tree" \
+  "$(previous_release_of 1.0.0 dev 1.0.0)" "dev"
+
+ok "refuses when there is nowhere to go" \
+  "$(previous_release_of 1.0.0 1.0.0 || echo NONE)" "NONE"
+
 # --- status_line ------------------------------------------------------------
 
 ok "the status line is three tab-separated fields" \

@@ -137,16 +137,51 @@ rewritten_web_root() {
   esac
 }
 
+# The entries in a releases directory that name a release we could actually
+# run, `sort -V` ordered, newest last.
+#
+# `sort -V` orders the literal `dev` and any `<v>.partial` AFTER every real
+# version, so both used to land in the newest-three: a rollback could target a
+# half-unpacked download that had failed its checksum, a partial could evict a
+# real release from the retention limit, and the conversion's copy of the
+# working tree was never pruned at all.
+release_candidates() {
+  printf '%s\n' "$@" | grep -v '^$' | grep -Ex '[0-9]+(\.[0-9]+)*' | sort -V || true
+}
+
 # Which releases to delete, given how many to keep and the list to choose
-# from, newest last. Never the one passed as $2 — deleting the release you are
-# running is a way to make a rollback impossible at the moment it is needed.
+# from. Never the one passed as $2 — deleting the release you are running is a
+# way to make a rollback impossible at the moment it is needed — and never
+# `dev`, which is the recovery point for a bad conversion and is not a release
+# anybody is counting.
 releases_to_prune() {
   local keep="$1" protect="$2"; shift 2
   local sorted
-  sorted=$(printf '%s\n' "$@" | grep -v '^$' | sort -V)
+  sorted=$(release_candidates "$@")
   local total; total=$(printf '%s\n' "$sorted" | grep -c . || true)
   [ "$total" -le "$keep" ] && return 0
   printf '%s\n' "$sorted" | head -n "$(( total - keep ))" | grep -vx "$protect" || true
+}
+
+# Where a rollback goes: the newest release that is not the running one.
+#
+# Falls back to `dev` when there is no numeric candidate, and only then. That
+# is the state immediately after an adoption — one release, plus the working
+# tree it was installed over — and going back to that tree is both the correct
+# answer and the only one.
+previous_release_of() {
+  local now="$1"; shift
+  local candidate
+  candidate=$(release_candidates "$@" | grep -vx "$now" | tail -1)
+  if [ -n "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if [ "$now" != "dev" ] && printf '%s\n' "$@" | grep -qx dev; then
+    printf 'dev\n'
+    return 0
+  fi
+  return 1
 }
 
 # The step name and detail, as the console will read them.
@@ -229,7 +264,8 @@ current_version() {
 
 previous_release() {
   local now; now=$(current_version)
-  ls -1 "$RELEASES" 2>/dev/null | sort -V | grep -vx "$now" | tail -1
+  # shellcheck disable=SC2046
+  previous_release_of "$now" $(ls -1 "$RELEASES" 2>/dev/null) || true
 }
 
 api() {
@@ -591,6 +627,15 @@ prune() {
   for name in $doomed; do
     log "pruning release $name"
     rm -rf "${RELEASES:?}/$name"
+  done
+  # Partial directories are no longer counted as releases, which also means
+  # nothing was ever removing them. An interrupted download leaves one behind,
+  # and the next attempt at the same version starts with `rm -rf "$tmp"` -- but
+  # an attempt at a DIFFERENT version never touches it.
+  for partial in "$RELEASES"/*.partial; do
+    [ -d "$partial" ] || continue
+    log "removing abandoned $(basename "$partial")"
+    rm -rf "$partial"
   done
   ls -1t "$BACKUPS"/*.dump 2>/dev/null | tail -n +$(( KEEP + 1 )) | while read -r old; do
     log "pruning dump $(basename "$old")"
