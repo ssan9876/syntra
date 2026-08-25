@@ -47,7 +47,7 @@ The fix is not to clear the flag. `forceAuthn` means "re-authenticate for *this*
   - `interface ResolvedSession` gains `createdAt: Date`
   - No route signature changes. `GET /saml/sso`, `POST /saml/sso` and `GET /saml/continue` keep their shapes.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `apps/api/src/routes/saml-force-authn.test.ts`:
 
@@ -207,13 +207,13 @@ describe('ForceAuthn', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/saml-force-authn.test.ts`
 
 Expected: FAIL. The second case gets a 302 to `/login?next=…` instead of a 200 carrying a form — the fresh session does not satisfy the flag, because nothing compares the two times. Cases one, three and four pass already.
 
-- [ ] **Step 3: Carry `createdAt` out of the parked row**
+- [x] **Step 3: Carry `createdAt` out of the parked row**
 
 In `packages/core/src/access/saml-request-service.ts`, add the field to the interface (currently lines 5–13):
 
@@ -240,7 +240,7 @@ export interface ParkedAuthnRequest {
 
 Then add `createdAt: row.createdAt,` to the object returned by `parkAuthnRequest` (after `forceAuthn: row.forceAuthn,`, line 62) and to the one returned by `findParkedAuthnRequest` (after `forceAuthn: row.forceAuthn,`, line 97). The column already exists — `SamlAuthnRequest.createdAt DateTime @default(now())`, `schema.prisma:1027` — so there is no migration here.
 
-- [ ] **Step 4: Carry `createdAt` out of the session**
+- [x] **Step 4: Carry `createdAt` out of the session**
 
 In `packages/core/src/auth/session-service.ts`, add to `ResolvedSession` after `satisfiedFactor` (line 43):
 
@@ -273,7 +273,7 @@ const toResolved = (row: SessionRow): ResolvedSession => ({
 
 Both readers (`resolveSession`, `readSession`) select whole rows, so the column arrives with no query change. `Session.createdAt` already exists at `schema.prisma:293`.
 
-- [ ] **Step 5: Make the refusal ask the real question**
+- [x] **Step 5: Make the refusal ask the real question**
 
 In `apps/api/src/routes/saml-idp.ts`, replace the block at lines 664–670:
 
@@ -306,18 +306,18 @@ In `apps/api/src/routes/saml-idp.ts`, replace the block at lines 664–670:
     }
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/saml-force-authn.test.ts`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 7: Run the suites that read these two types**
+- [x] **Step 7: Run the suites that read these two types**
 
 Run: `npx vitest run apps/api/src/routes/saml-sso-post.test.ts apps/api/src/routes/saml-sso-redirect.test.ts apps/api/src/routes/auth.test.ts`
 
 Expected: PASS. These are the callers of `ParkedAuthnRequest` and `ResolvedSession`; a widened interface with a construction site left behind would show here.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -372,7 +372,7 @@ It fails closed, so this is a lockout rather than a hole. The fix is a second ch
   - `POST /api/auth/password-reset/webauthn/challenge` — body `{ token: string }`, answers `PublicKeyCredentialRequestOptionsJSON`, or 400 `invalid-reset-token`
   - `export async function assertWebAuthnForReset(token: string): Promise<Record<string, unknown>>`
 
-- [ ] **Step 1: Write the failing core test**
+- [x] **Step 1: Write the failing core test**
 
 Create `packages/core/src/auth/password-reset-webauthn.test.ts`:
 
@@ -471,12 +471,12 @@ describe('userForResetToken', () => {
 
 Before running it, open `packages/core/src/auth/password-change.test.ts` and copy its tenant fixture verbatim in place of the `freshTenant()` placeholder — the directory has one convention for that and this file must use it rather than inventing a second.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/auth/password-reset-webauthn.test.ts`
 Expected: FAIL — `userForResetToken` is not exported from `./password-reset.js`.
 
-- [ ] **Step 3: Add the lookup**
+- [x] **Step 3: Add the lookup**
 
 In `packages/core/src/auth/password-reset.ts`, immediately after `preflightPasswordReset` ends (line 363):
 
@@ -510,12 +510,12 @@ export async function userForResetToken(
 }
 ```
 
-- [ ] **Step 4: Run the core test to verify it passes**
+- [x] **Step 4: Run the core test to verify it passes**
 
 Run: `npx vitest run packages/core/src/auth/password-reset-webauthn.test.ts`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 5: Write the failing route test**
+- [x] **Step 5: Write the failing route test**
 
 Read the top of `apps/api/src/routes/password-reset.test.ts` and reuse its existing helper for obtaining a live reset token (it already requests one and reads it out of `ctx.mail`). Append:
 
@@ -564,12 +564,12 @@ describe('POST /api/auth/password-reset/webauthn/challenge', () => {
 
 The RP id assertion requires the tenant's `primaryDomain` to be the test host; if the file does not already set it in its `beforeEach`, add `await prisma.tenant.update({ where: { id: ctx.tenantId }, data: { primaryDomain: TEST_HOST } });` there, as `saml-force-authn.test.ts` does.
 
-- [ ] **Step 6: Run the route test to verify it fails**
+- [x] **Step 6: Run the route test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/password-reset.test.ts`
 Expected: FAIL — both new cases get 404, because the route does not exist.
 
-- [ ] **Step 7: Add the route**
+- [x] **Step 7: Add the route**
 
 In `apps/api/src/routes/password-reset.ts`, add `beginWebAuthnAuthentication` and `userForResetToken` to the `@syntra/core` import block (lines 8–13), then insert after the `/preflight` handler (line 65):
 
@@ -623,12 +623,12 @@ In `apps/api/src/routes/password-reset.ts`, add `beginWebAuthnAuthentication` an
   });
 ```
 
-- [ ] **Step 8: Run the route test to verify it passes**
+- [x] **Step 8: Run the route test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/password-reset.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 9: Point the browser at the right endpoint**
+- [x] **Step 9: Point the browser at the right endpoint**
 
 Append to `apps/web/src/mfa/webauthn.ts`:
 
@@ -661,7 +661,7 @@ In `apps/web/src/pages/ResetPassword.tsx`, change line 6 to `import { assertWebA
           ? { type: 'webauthn' as const, assertion: await assertWebAuthnForReset(token) }
 ```
 
-- [ ] **Step 10: Verify the web suite and the typecheck**
+- [x] **Step 10: Verify the web suite and the typecheck**
 
 ```bash
 cd apps/web && npx vitest run src/pages/ResetPassword.test.tsx; cd ../..
@@ -670,7 +670,7 @@ npx tsc -b
 
 Expected: PASS, and `tsc -b` exits 0.
 
-- [ ] **Step 11: Commit — and check what is staged first**
+- [x] **Step 11: Commit — and check what is staged first**
 
 ```bash
 git add packages/core/src/auth/password-reset.ts \
