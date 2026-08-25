@@ -24,7 +24,7 @@ env:
   SEED_ADMIN_PASSWORD: a-long-enough-admin-password
   SEED_USER_PASSWORD: a-long-enough-user-password
 
-  # FOUR, and this number was measured rather than chosen.
+  # TWO, and this number was measured rather than chosen.
   #
   # `testWorkerCount()` defaults to `cores - 1`, capped at 8. On an eight-core
   # machine that is seven workers, each with its own Prisma pool of
@@ -44,9 +44,23 @@ env:
   # 300 they are all established and the machine is oversubscribed. The lever
   # is the demand, and this is it.
   #
-  # A GitHub-hosted runner has four cores and would pick three on its own, so
-  # this changes nothing there. It matters on a self-hosted runner with more.
-  SYNTRA_TEST_WORKERS: 4
+  # THE FOUR ABOVE WAS WRONG FOR THIS RUNNER, on the second premise, not the
+  # first: this is a PRIVATE repository, and GitHub gives those standard
+  # Linux runners two vCPUs, not four -- `testWorkerCount()`'s own default
+  # would pick ONE here (`cores - 1`), leaving a core free for Postgres and
+  # this process exactly as its comment says. Pinning to four forced FOUR
+  # workers onto TWO cores, and the suite's own test data survived that fine
+  # -- it was vitest's own worker<->main RPC heartbeat that did not: a
+  # hardcoded 60s timeout in the `birpc` layer vitest uses internally
+  # (unrelated to `testTimeout`/`hookTimeout` above, and not configurable —
+  # see vitest-dev/vitest#6479, #4497, #8164), tripped by workers too
+  # CPU-starved to answer a status ping in time. First seen cutting v1.0.1,
+  # the first tag ever built for real: "Test Files 181 passed (181)", "Tests
+  # 3644 passed (3644)", and the job still failed on an unrelated RPC
+  # timeout, identically on two consecutive attempts. Two workers halves the
+  # oversubscription without reintroducing the Postgres-crash risk `SYNTRA_
+  # TEST_WORKERS` was pinned to guard against in the first place.
+  SYNTRA_TEST_WORKERS: 2
 
   # A hosted runner is slower than the machine this budget was calibrated on,
   # and the BOUNDED halves of the transaction-budget pairs report the runner's
