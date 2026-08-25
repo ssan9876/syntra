@@ -25,7 +25,7 @@ import {
   type SodRuleFacts,
   type UnevaluableResource,
 } from "./sod.js";
-import type { ResourceKind, Severity } from "./types.js";
+import { resourceKey, type ResourceKind, type Severity } from "./types.js";
 
 export async function upsertBusinessFunction(
   tenantId: string,
@@ -162,13 +162,22 @@ export async function loadSodFacts(
   });
   const rules = await tx.sodRule.findMany();
   const holdings = await tx.holding.findMany({
-    where: { snapshotId: snapshot.id, personId: { not: null }, state: "held" },
+    where: {
+      snapshotId: snapshot.id,
+      personId: { not: null },
+      // BOTH STATES. `state: 'held'` alone made an unknown holding
+      // indistinguishable from one the person does not have, which §8 rule 3
+      // forbids in every aggregation path in this product -- and this is the
+      // path whose output is somebody signing that duties are separated.
+      state: { in: ["held", "unknown"] },
+    },
     select: {
       personId: true,
       systemId: true,
       resourceKind: true,
       resourceId: true,
       resourceName: true,
+      state: true,
       attributions: { select: { detail: true, kind: true } },
     },
   });
@@ -224,6 +233,7 @@ export async function loadSodFacts(
       resourceId: h.resourceId,
       resourceName: h.resourceName,
       contractIds,
+      state: h.state === "unknown" ? "unknown" : "held",
     });
     holdingsByPerson.set(h.personId, list);
   }
@@ -864,12 +874,15 @@ export async function detectDecisionGraph(
       },
     }),
   }));
-  const grantedResourceByRequest = new Map<string, string>();
+  const grantedResourceKeyByRequest = new Map<string, string>();
   for (const grant of grants) {
     if (grant.requestId === null) continue;
-    grantedResourceByRequest.set(
+    // THE FULL KEY. This used to store `grantResource(grant).resourceId` --
+    // the bare id -- which made two resources sharing an id in different
+    // systems the same resource to the laundering scan.
+    grantedResourceKeyByRequest.set(
       grant.requestId,
-      grantResource(grant).resourceId,
+      resourceKey({ systemKind: "targetSystem", ...grantResource(grant) }),
     );
   }
 
@@ -887,14 +900,14 @@ export async function detectDecisionGraph(
         ruleId: rule.ruleId,
         ruleName: rule.name,
         severity: rule.severity,
-        sideAResourceIds: rule.functionA.resources.map(
-          (resource) => resource.resourceId,
+        sideAResourceKeys: rule.functionA.resources.map((resource) =>
+          resourceKey({ systemKind: "targetSystem", ...resource }),
         ),
-        sideBResourceIds: rule.functionB.resources.map(
-          (resource) => resource.resourceId,
+        sideBResourceKeys: rule.functionB.resources.map((resource) =>
+          resourceKey({ systemKind: "targetSystem", ...resource }),
         ),
       })),
-    grantedResourceByRequest,
+    grantedResourceKeyByRequest,
     minReciprocalDecisions: settings.minReciprocalDecisions,
     reciprocityWindowDays: settings.reciprocityWindowDays,
     now,

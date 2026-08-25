@@ -343,6 +343,22 @@ fixing one half of a read-then-create: the failure mode is unchanged, one table
 along. Fixed in remediation 2, task 8, by upserting on the key the read already
 used.
 
+**G29 — `buildDecisionGraph`'s cycle detection is the dominant cost, not the
+laundering scan.** G11 said the laundering scan was O(decisions² × rules), and
+it was; remediation 2, task 9 indexed it by pair. But measuring the fix turned
+up a larger number beside it. On 4,000 edges over 400 people,
+`packages/core/src/govern/graph.ts`'s `buildDecisionGraph` takes **24,730 ms
+with zero SoD rules** and 25,547 ms with twenty — so the laundering scan is
+0.8 s of it and cycle detection is the other 24.7 s. It is synchronous, it runs
+inside `runSnapshotJob`, and 400 people is small: §17 calls a 50,000-person
+population ordinary.
+
+Not fixed. It is a different function from the one task 9 was scoped to, the
+fix is a real algorithm change rather than an indexing change, and shipping it
+untested inside a task about resource keys would be the wrong trade. The
+laundering perf test in `graph.test.ts` measures rules-against-no-rules
+precisely so it keeps testing task 9's fix and not this.
+
 The general lesson is worth carrying into plans 3 and 4: **grep for
 `findUnique` followed by `create` on the same natural key** rather than
 treating each report as its own finding.

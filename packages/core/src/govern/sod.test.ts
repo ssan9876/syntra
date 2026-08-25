@@ -239,3 +239,109 @@ describe('sodImpact — the rule editor’s and Provision’s preview', () => {
     expect(impact.unevaluableSubjects).toBe(1);
   });
 });
+
+/**
+ * TWO FUNCTIONS THAT NAME THE SAME RESOURCE.
+ *
+ * The rule is "these two duties must not be held by one person". If one
+ * resource is in both functions, then a person holding ONLY that resource
+ * satisfies both sides and is reported in violation of a rule they cannot
+ * possibly breach -- and worse, a rule with real overlap fires against every
+ * holder of the shared resource, which on a `critical` rule is the whole
+ * department.
+ *
+ * Refused rather than silently narrowed: a rule whose two functions overlap
+ * cannot say the duties are separated, and quietly excluding the shared
+ * resource would leave a rule that means something different from what its
+ * author wrote.
+ */
+describe('a rule whose two functions share a resource', () => {
+  const shared = { systemId: 'ad', resourceKind: 'targetEntitlement' as const, resourceId: 'e1' };
+  const rule: SodRuleFacts = {
+    ruleId: 'r1',
+    name: 'Raise and approve',
+    functionA: { functionId: 'fa', name: 'Raise', resources: [shared] },
+    functionB: { functionId: 'fb', name: 'Approve', resources: [shared] },
+    severity: 'critical',
+    enabled: true,
+  };
+
+  it('is UNEVALUABLE rather than a violation for somebody holding it once', () => {
+    const outcome = evaluateSodRule(
+      rule,
+      [{ ...shared, resourceName: 'Payments', contractIds: [] }],
+      [],
+    );
+    expect(outcome.kind).toBe('unevaluable');
+    if (outcome.kind !== 'unevaluable') return;
+    expect(outcome.reasons.join(' ')).toContain('e1');
+    expect(outcome.reasons.join(' ')).toMatch(/both/i);
+  });
+
+  it('says nothing at all about somebody who holds neither side', () => {
+    // The same rule §14's unevaluable branch already follows: a person with no
+    // exposure must not put a row on the board, or one misconfigured rule is
+    // 40,000 rows saying nothing.
+    expect(evaluateSodRule(rule, [], []).kind).toBe('clear');
+  });
+});
+
+/**
+ * §8 rule 3: "No aggregation path exists that collapses `unknown` into
+ * `not_held`." `loadSodFacts` read `state: 'held'` only, so a person whose
+ * payments entitlement sits behind an unreadable region evaluated as CLEAR on
+ * a critical rule -- the false-assurance defect this module exists to avoid, in
+ * the one place where the output is somebody signing that duties are separated.
+ */
+describe('a holding whose state is unknown', () => {
+  const raise = { systemId: 'ad', resourceKind: 'targetEntitlement' as const, resourceId: 'e1' };
+  const approve = { systemId: 'ad', resourceKind: 'targetEntitlement' as const, resourceId: 'e2' };
+  const rule: SodRuleFacts = {
+    ruleId: 'r1',
+    name: 'Raise and approve',
+    functionA: { functionId: 'fa', name: 'Raise', resources: [raise] },
+    functionB: { functionId: 'fb', name: 'Approve', resources: [approve] },
+    severity: 'critical',
+    enabled: true,
+  };
+
+  it('is UNEVALUABLE, never clear, when one side is unknown', () => {
+    const outcome = evaluateSodRule(
+      rule,
+      [
+        { ...raise, resourceName: 'Raise payment', contractIds: [], state: 'held' },
+        { ...approve, resourceName: 'Approve payment', contractIds: [], state: 'unknown' },
+      ],
+      [],
+    );
+    expect(outcome.kind).toBe('unevaluable');
+    if (outcome.kind !== 'unevaluable') return;
+    expect(outcome.reasons.join(' ')).toContain('Approve');
+  });
+
+  it('still reports a violation when BOTH sides are known held', () => {
+    const outcome = evaluateSodRule(
+      rule,
+      [
+        { ...raise, resourceName: 'Raise payment', contractIds: [], state: 'held' },
+        { ...approve, resourceName: 'Approve payment', contractIds: [], state: 'held' },
+      ],
+      [],
+    );
+    expect(outcome.kind).toBe('violation');
+  });
+
+  it('treats an absent state as held, for the callers that never set one', () => {
+    // Provision's `sodImpact` builds `wouldGrant` holdings by hand and has no
+    // state to give: what a rule WOULD grant is held by construction.
+    const outcome = evaluateSodRule(
+      rule,
+      [
+        { ...raise, resourceName: 'Raise payment', contractIds: [] },
+        { ...approve, resourceName: 'Approve payment', contractIds: [] },
+      ],
+      [],
+    );
+    expect(outcome.kind).toBe('violation');
+  });
+});
