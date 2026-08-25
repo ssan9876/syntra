@@ -35,6 +35,18 @@ export const RESET_TOKEN_LIFETIME_MS = 30 * 60 * 1000;
  */
 export const RESET_REQUEST_FLOOR_MS = 250;
 
+/**
+ * How long an admin-minted setup link lives.
+ *
+ * Deliberately not `RESET_TOKEN_LIFETIME_MS`. The two flows have genuinely
+ * different shapes: a reset is requested by somebody sitting at the form and
+ * used within minutes, while a setup link is routed to a joiner through a
+ * manager, a ticket or a first-day handover. Thirty minutes turns onboarding
+ * into a support call; a day bounds a leaked link without making the common
+ * case fail.
+ */
+export const SETUP_TOKEN_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
 const hashToken = (token: string) =>
   createHash('sha256').update(token).digest('hex');
 
@@ -193,6 +205,94 @@ async function attemptPasswordReset(
     }),
     { tenantId, userId: user.id, purpose: 'password-reset' },
   );
+}
+
+export type IssueSetupOutcome =
+  | { ok: true; token: string; expiresAt: Date }
+  | { ok: false; reason: 'unknown_user' | 'not_local' };
+
+export interface IssuePasswordSetupInput {
+  userId: string;
+  /** The administrator, who is the actor on the audit event. */
+  actorUserId: string;
+  sourceIp: string | null;
+  now?: Date | undefined;
+  lifetimeMs?: number | undefined;
+}
+
+/**
+ * Mints a password-setup link for a named user.
+ *
+ * The counterpart to `requestPasswordReset` for the case that function cannot
+ * serve: somebody who has no password yet and no mailbox Syntra can reach.
+ * `authenticate()` verifies against a local Argon2id hash and nothing else, so
+ * a user with no `PasswordCredential` cannot sign in — and the two routes to
+ * one both presuppose something a joiner lacks. Self-service change wants the
+ * password they do not have; the reset form wants an inbox that may not exist
+ * on their first day.
+ *
+ * Every property that makes `requestPasswordReset` an oracle-avoider is
+ * deliberately absent here — no constant-time floor, no uniform void return,
+ * no telling-by-mail. The caller holds `directory.write` and can already list
+ * every user in the tenant, so there is no existence fact left to protect, and
+ * hiding the outcome would only stop an administrator distinguishing a typo
+ * from a federated account.
+ *
+ * Takes a transaction rather than a tenantId, unlike its neighbour above: that
+ * one opens its own so an SMTP round trip cannot happen inside one. This sends
+ * no mail and does two indexed writes.
+ *
+ * The raw token is returned once and never stored, logged or audited. What
+ * lands in the audit payload is the token row's id, which is enough to tie a
+ * later abuse back to the administrator who minted it and useless for
+ * redeeming anything.
+ */
+export async function issuePasswordSetup(
+  tx: TenantClient,
+  input: IssuePasswordSetupInput,
+): Promise<IssueSetupOutcome> {
+  const now = input.now ?? new Date();
+  const user = await tx.user.findUnique({ where: { id: input.userId } });
+  if (!user) return { ok: false, reason: 'unknown_user' };
+  if (user.passwordSource !== 'local') return { ok: false, reason: 'not_local' };
+
+  // One live token per user is enforced by the partial unique index
+  // `password_reset_token_one_live`, so the previous one is consumed rather
+  // than left valid beside the new one. Skipping this does not merely leave a
+  // stale link usable -- it violates the index, and the create below throws.
+  await tx.passwordResetToken.updateMany({
+    where: { userId: user.id, consumedAt: null },
+    data: { consumedAt: now },
+  });
+
+  const token = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(
+    now.getTime() + (input.lifetimeMs ?? SETUP_TOKEN_LIFETIME_MS),
+  );
+  const row = await tx.passwordResetToken.create({
+    data: {
+      tenantId: await currentTenant(tx),
+      userId: user.id,
+      tokenHash: hashToken(token),
+      expiresAt,
+    },
+  });
+
+  await recordEvent(tx, {
+    actorUserId: input.actorUserId,
+    action: 'auth.password_setup_issued',
+    targetType: 'User',
+    targetId: user.id,
+    outcome: 'success',
+    sourceIp: input.sourceIp,
+    payload: {
+      login: user.login,
+      tokenId: row.id,
+      expiresAt: expiresAt.toISOString(),
+    },
+  });
+
+  return { ok: true, token, expiresAt };
 }
 
 type TokenRow = { id: string; userId: string };

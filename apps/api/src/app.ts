@@ -216,6 +216,7 @@ export async function buildApp(
   await app.register(registerAdminUserRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,
+    publicUrl: config.publicUrl,
   });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminOrgUnitRoutes, { prefix: '/api/admin' });

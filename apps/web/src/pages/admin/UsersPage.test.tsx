@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { UsersPage } from './UsersPage.js';
@@ -266,5 +266,49 @@ describe('UsersPage — deactivating a directory-managed account', () => {
       await screen.findByText(/disabled in Corporate LDAP immediately/i),
     ).toBeInTheDocument();
     expect(screen.getByText(/leaver steps configured on the target/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The link an administrator hands to somebody who has no password yet.
+ *
+ * Rendered to copy rather than to click: an administrator who follows the link
+ * to check it has spent the token, and the joiner gets a dead page.
+ */
+describe('password setup link', () => {
+  it('shows a link to copy, and says it supersedes the last one', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/password-setup')) {
+        return Promise.resolve(
+          json({
+            url: 'https://acme.test/reset-password?token=abc123',
+            expiresAt: '2026-08-25T12:00:00.000Z',
+          }),
+        );
+      }
+      if (url.includes('/sources')) return Promise.resolve(json({ sources: [] }));
+      return Promise.resolve(json({ users }));
+    });
+    renderPage();
+
+    const row = (await screen.findByText('J Doe')).closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: 'Password link' }));
+
+    expect(
+      await screen.findByDisplayValue('https://acme.test/reset-password?token=abc123'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/stops the previous link working/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /reset-password/ })).toBeNull();
+  });
+
+  it('offers nothing for a user whose password lives upstream', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json({ users: [{ ...users[0], passwordSource: 'upstream' }] }),
+    );
+    renderPage();
+
+    await screen.findByText('J Doe');
+    expect(screen.queryByRole('button', { name: 'Password link' })).toBeNull();
   });
 });
