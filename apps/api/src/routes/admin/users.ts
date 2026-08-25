@@ -13,6 +13,7 @@ import {
   createUser,
   deactivateDirectoryUser,
   reactivateDirectoryUser,
+  issuePasswordSetup,
   listUsers,
   localMasterKeyProvider,
   recordEvent,
@@ -20,6 +21,7 @@ import {
   removeTotp,
   revokeOrphanedRecoveryCodes,
   type DeactivateOutcome,
+  type IssueSetupOutcome,
   type UserStatus,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -33,6 +35,11 @@ const listQuery = z.object({
 export interface AdminUserRouteOptions {
   /** Unseals a directory source's bind credential for a write-back. */
   masterKey: Buffer;
+  /**
+   * Composes the setup link, so both password flows land on the one route the
+   * reset mail already points at.
+   */
+  publicUrl: string;
 }
 
 /**
@@ -221,6 +228,76 @@ export async function registerAdminUserRoutes(
         id: updated.id,
         passwordSource: updated.passwordSource,
         passwordSourceHint: updated.passwordSourceHint,
+      };
+    },
+  );
+
+  /**
+   * Mints a password-setup link for a user who has no password.
+   *
+   * The gap this fills: self-service change needs the password they do not
+   * have, and the reset flow needs a mailbox a joiner may not have yet, so
+   * before this there was no way to give anybody a first password.
+   *
+   * The link is returned rather than mailed, because mailing does not serve
+   * the case it exists for. It is a bearer credential and is bounded by two
+   * things: a 24-hour expiry, and the audit event `issuePasswordSetup` writes
+   * naming the administrator who minted it.
+   */
+  app.post(
+    '/users/:id/password-setup',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      let issued: IssueSetupOutcome;
+      try {
+        issued = await request.db((tx) =>
+          issuePasswordSetup(tx, {
+            userId: id,
+            actorUserId: request.session.userId,
+            sourceIp: request.ip,
+          }),
+        );
+      } catch (cause) {
+        // Two issuances for the same user at once: one wins the partial unique
+        // index `password_reset_token_one_live` and the other violates it.
+        //
+        // The reset path swallows this and sends nothing, because surfacing it
+        // there builds an account-existence oracle out of an error page. That
+        // argument buys nothing against a caller who already holds
+        // `directory.write`, and swallowing it here would answer 200 with a
+        // link that was invalidated before it reached the caller. A 409 says
+        // "that raced, do it again", which is true and actionable.
+        if ((cause as { code?: string }).code === 'P2002') {
+          throw new ProblemError(
+            409,
+            'conflict',
+            'Setup link already being created',
+            'Another setup link was being created for this user at the same time. Try again.',
+          );
+        }
+        throw cause;
+      }
+
+      if (!issued.ok) {
+        if (issued.reason === 'unknown_user') {
+          throw new ProblemError(404, 'not-found', 'User not found');
+        }
+        const user = await request.db((tx) =>
+          tx.user.findUnique({ where: { id }, select: { passwordSourceHint: true } }),
+        );
+        throw new ProblemError(
+          409,
+          'password-source-not-local',
+          'Password not held here',
+          `This user's password is held by ${user?.passwordSourceHint ?? 'an external identity provider'}, so Syntra cannot set it.`,
+        );
+      }
+
+      return {
+        url: `${options.publicUrl.replace(/\/$/, '')}/reset-password?token=${issued.token}`,
+        expiresAt: issued.expiresAt.toISOString(),
       };
     },
   );

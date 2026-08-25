@@ -474,3 +474,76 @@ describe('PATCH /api/admin/users/:id', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+/**
+ * The link an administrator hands to a joiner who has no password.
+ *
+ * The route deliberately answers definitely -- 404 for an unknown user, 409
+ * for a federated one -- where the anonymous reset endpoint answers uniformly.
+ * A caller holding directory.write can already list every user, so there is no
+ * account-existence oracle left to protect here.
+ */
+describe('password setup link', () => {
+  it('returns a link an admin can hand over', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const joiner = await withTenant(ctx.tenantId, (tx) =>
+      createUser(tx, { login: 'joiner', email: 'joiner@acme.test', displayName: 'Joiner' }),
+    );
+
+    const res = await post(`/api/admin/users/${joiner.id}/password-setup`, cookie, {});
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.url).toMatch(/\/reset-password\?token=[A-Za-z0-9_-]+$/);
+    expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('refuses a caller without directory.write', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+    const joiner = await withTenant(ctx.tenantId, (tx) =>
+      createUser(tx, { login: 'joiner', email: 'joiner@acme.test', displayName: 'Joiner' }),
+    );
+
+    const res = await post(`/api/admin/users/${joiner.id}/password-setup`, cookie, {});
+
+    expect(res.statusCode).toBe(403);
+    const count = await withTenant(ctx.tenantId, (tx) => tx.passwordResetToken.count());
+    expect(count).toBe(0);
+  });
+
+  it('404s an unknown user', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const res = await post(
+      '/api/admin/users/00000000-0000-0000-0000-000000000000/password-setup',
+      cookie,
+      {},
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('409s a user whose password lives upstream, and names where', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const federated = await withTenant(ctx.tenantId, async (tx) => {
+      const u = await createUser(tx, {
+        login: 'fed',
+        email: 'fed@acme.test',
+        displayName: 'Fed',
+      });
+      return tx.user.update({
+        where: { id: u.id },
+        data: { passwordSource: 'upstream', passwordSourceHint: 'Entra ID' },
+      });
+    });
+
+    const res = await post(`/api/admin/users/${federated.id}/password-setup`, cookie, {});
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toContain('Entra ID');
+  });
+});
