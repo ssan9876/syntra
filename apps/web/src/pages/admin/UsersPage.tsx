@@ -86,9 +86,14 @@ export function UsersPage() {
 
   return (
     <>
+      {/* Not a duplicate of People, and the description is what says so.
+          The two pages read as two lists of the same thing for as long as
+          this one sat in the onboarding path, which it never belonged in:
+          where a directory source owns the accounts, a joiner's login arrives
+          here by sync rather than by anybody typing it. */}
       <PageHeader
         title="Users"
-        description="Accounts that can sign in. Employment details live under People."
+        description="Accounts that sign into Syntra. Most arrive automatically from a directory sync — create one here only for an administrator, or somebody with no directory presence. To onboard a new joiner, start under People."
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
