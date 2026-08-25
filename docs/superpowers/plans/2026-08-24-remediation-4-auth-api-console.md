@@ -2889,7 +2889,7 @@ Spec §7.4, **H2**, part four. The API from Task 7 is unreachable from the produ
 - Consumes: `useApiResource` from `./hooks.js`; `api`, `ApiError` from `../../session/api.js`; `Alert`, `Button`, `Check`, `Empty`, `Field`, `Panel`, `SkeletonRows`, `Status` from `@syntra/ui`; `PageHeader`.
 - Produces: `export function RolesPage()`; route `/admin/roles`; nav item `{ to: '/admin/roles', label: 'Roles', permission: 'rbac.manage' }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `apps/web/src/pages/admin/RolesPage.test.tsx`:
 
@@ -3027,12 +3027,12 @@ describe('the roles screen', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/RolesPage.test.tsx; cd ../..`
 Expected: FAIL — `Cannot find module './RolesPage.js'`.
 
-- [ ] **Step 3: Write the page**
+- [x] **Step 3: Write the page**
 
 Create `apps/web/src/pages/admin/RolesPage.tsx`:
 
@@ -3235,7 +3235,7 @@ export function RolesPage() {
 
 `Status` takes no `className` today — check `packages/ui/src/Status.tsx` before using it that way, and wrap the badge in a `<span className="ml-2">` instead if it does not.
 
-- [ ] **Step 4: Add the route and the nav item**
+- [x] **Step 4: Add the route and the nav item**
 
 In `apps/web/src/pages/admin/AdminApp.tsx`, add the import and, beside `settings` (line 108):
 
@@ -3250,12 +3250,12 @@ In `apps/web/src/pages/admin/AdminNav.tsx`, in the System group (lines 80–88),
       { to: '/admin/roles', label: 'Roles', permission: 'rbac.manage' },
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/RolesPage.test.tsx; cd ../..`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 6: Typecheck, build and commit**
+- [x] **Step 6: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
@@ -3301,7 +3301,7 @@ Spec §7.5, **N2** — an authorization bug wearing a validation bug's clothes. 
 - Consumes: `decideRequestBody` from `@syntra/contracts` (already exported, never imported by this file).
 - Produces: `export const revokeGrantBody` in `packages/contracts/src/automate.ts`; `POST /automate/requests/:id/decide` and `POST /automate/grants/:id/revoke` answer 400 with `errors[]` for a body that does not parse.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/api/src/routes/admin/automate.test.ts`, reusing that file's existing fixtures for a pending request and an admin cookie:
 
@@ -3380,12 +3380,12 @@ describe('the grant revoke route parses its body', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts -t 'parses its body'`
 Expected: FAIL. The first case gets 200 and the request comes back `approved` — the capitalised value took the approval branch. The missing-field case is a 500.
 
-- [ ] **Step 3: Add the revoke contract**
+- [x] **Step 3: Add the revoke contract**
 
 In `packages/contracts/src/automate.ts`, after `decideRequestBody`'s type export (line 145):
 
@@ -3408,7 +3408,7 @@ export const revokeGrantBody = z
 export type RevokeGrantBody = z.input<typeof revokeGrantBody>;
 ```
 
-- [ ] **Step 4: Parse both bodies**
+- [x] **Step 4: Parse both bodies**
 
 In `apps/api/src/routes/admin/automate.ts`, add `decideRequestBody` and `revokeGrantBody` to the `@syntra/contracts` import block (lines 3–13). Replace line 240:
 
@@ -3445,12 +3445,12 @@ and the call below it:
       );
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
