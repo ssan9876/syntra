@@ -260,6 +260,50 @@ pg_url_field() {
   esac
 }
 
+# The API download URL for the asset named $2, out of a GitHub releases-API
+# response body given as $1 -- the same lookup `asset_url()` below does over
+# the network, split out so the parsing itself can be tested against a canned
+# response with no network or token involved.
+#
+# Cutting v1.0.0-v1.0.3 was the first time the network-calling version ever
+# ran against the real API, and it failed every time: the old implementation
+# split on `,` and assumed an asset's own "url" key sat on the line
+# immediately before its "name" key. GitHub's real response (pretty-printed,
+# one field per line by default) puts "id" and "node_id" between them, and
+# `grep -A0 -B0` inserts a `--` group separator between non-adjacent matches
+# -- which then became "the line before name" instead of the actual url, so
+# the lookup silently returned nothing. It only ever worked against a
+# hand-built rehearsal fixture whose JSON happened to keep the two keys
+# adjacent by accident.
+#
+# This makes no assumption about which OTHER keys sit between an asset's own
+# "url" and "name", or about how the response is laid out on lines: `grep -o`
+# first turns every `"key": value` pair into one output line regardless of
+# the input's original formatting (works identically for GitHub's real
+# multi-line response and a compact single-line one), then a small state
+# machine remembers the most recent line that looked like an ASSET's own url
+# (ending `/assets/<digits>`, which a nested "uploader" url never does) and
+# prints it the moment the matching "name" line is reached.
+parse_asset_url() {
+  local body="$1" name="$2"
+  printf '%s' "$body" \
+    | grep -oE '"[a-zA-Z_]+"[[:space:]]*:[[:space:]]*("([^"\\]|\\.)*"|[0-9]+)' \
+    | awk -v name="\"name\": \"$name\"" -v namec="\"name\":\"$name\"" '
+        /^"url"[[:space:]]*:/ {
+          if ($0 ~ /\/assets\/[0-9]+"/) { u = $0 }
+        }
+        $0 == name || $0 == namec {
+          if (u != "") {
+            v = u
+            sub(/^"url"[[:space:]]*:[[:space:]]*"/, "", v)
+            sub(/"$/, "", v)
+            print v
+            exit
+          }
+        }
+      '
+}
+
 # --- everything below does I/O ----------------------------------------------
 
 log()   { echo "[syntra-update] $*" >&2; }
@@ -328,13 +372,13 @@ latest_version() {
 
 # The API's asset URL, not browser_download_url: a private repository serves
 # assets only through the API, and the browser URL 404s with a valid token.
+#
+# The actual parsing is `parse_asset_url()` above, in the pure-helpers
+# section -- separated so the test harness can exercise it against a canned
+# response with no network or token involved.
 asset_url() {
   local version="$1" name="$2"
-  api "$RELEASE_API/repos/$REPO/releases/tags/v$version" \
-    | tr ',' '\n' \
-    | grep -A0 -B0 "\"url\": \"[^\"]*assets/[0-9]*\"\|\"name\": \"$name\"" \
-    | grep -B1 "\"name\": \"$name\"" | grep '"url"' \
-    | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+  parse_asset_url "$(api "$RELEASE_API/repos/$REPO/releases/tags/v$version")" "$name"
 }
 
 download_asset() {

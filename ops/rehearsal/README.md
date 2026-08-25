@@ -246,6 +246,49 @@ table a rolled-back migration created is actually dropped, and the data it
 mutated is actually restored). The two mutation checks in Steps 12 and 13
 are the evidence that the dump guard and the readiness gate are load-bearing
 — that removing either one breaks a test that is supposed to catch exactly
-that removal. Two further findings, outside the original U1-U10 list, came
+that removal. Three further findings, outside the original U1-U10 list, came
 from the rehearsal's own execution rather than from code review: the stub
-server's asset-shape mismatch, and the `--rollback` orphan bug, both above.
+server's asset-shape mismatch, the `--rollback` orphan bug, both above, and
+one more — below — that the rehearsal itself did NOT catch, and only
+surfaced during the actual live cutover afterward.
+
+## A gap this rehearsal did not close: `asset_url()` never actually worked
+
+The stub server bug above (the composite `<version>/<index>` asset id) was
+real, and fixing it did make Step 8 succeed against the stub. But the fix
+also, incidentally, made the stub's JSON keep each asset's `url` and `name`
+keys on adjacent lines — which is not how GitHub's real API response is
+shaped. Adopting the real, published `v1.0.3` release onto the live install
+afterward failed immediately: `release v1.0.3 has no asset named
+syntra-1.0.3.tar.gz`, even though the asset was right there. `asset_url()`
+split the response on `,` and read `grep -B1 "name"` to mean "the url is the
+line right before it" — but GitHub's real response puts `id` and `node_id`
+in between, and `grep -A0 -B0` inserts a `--` group separator between
+non-adjacent matches, which then became "the line before name" instead of
+the actual url. It had never worked against the real API at all, and nothing
+in the rehearsal — which is meant to be exactly the gate for this — caught
+it, because the stub's accidental adjacency papered over the same bug the
+whole rehearsal exists to find.
+
+Fixed by pulling the parsing logic out into `parse_asset_url()` (in
+`ops/syntra-update`'s pure-helpers section, so the test harness can exercise
+it directly) and rewriting it to make no assumption about which other keys
+sit between an asset's own `url` and `name`, or about the response's line
+layout: every `"key": value` pair is normalised to its own output line
+first, then a small state machine tracks the most recent line that looked
+like an ASSET's own url (ending `/assets/<digits>`, which a nested
+`uploader` url never does) and reports it the moment the matching `name`
+line is reached. New tests in `ops/syntra-update.test.sh` include a captured
+fixture shaped exactly like GitHub's real response — including the `id`,
+`node_id` and nested `uploader.url` that the old parser tripped on — plus
+one that runs the OLD implementation against that same fixture and asserts
+it returns nothing, so this is provably a regression test and not merely a
+test that happens to pass either way.
+
+The honest lesson: a rehearsal is only as good as how faithfully its stub
+reproduces the real thing's shape, not just its endpoints. `release-server.py`
+now matches GitHub's real field order and asset-id format for the reasons
+above, but nothing yet forces it to keep matching GitHub's real *response
+layout* (extra fields, line breaks) as GitHub's API evolves. That is a real,
+open gap in this rehearsal's own fidelity, left here rather than glossed
+over.

@@ -208,6 +208,99 @@ ok "a recorded dev is trusted like any other recorded version" \
 
 rm -rf "$PR_ROOT"
 
+# --- parse_asset_url ---------------------------------------------------------
+#
+# Cutting v1.0.0-v1.0.3 was the first time asset_url() (the network-calling
+# wrapper around this) ever ran against the real API, and it failed every
+# time -- the old implementation split the response on `,` and assumed an
+# asset's own "url" key sat on the line immediately before its "name" key.
+# GitHub's real response, pretty-printed with one field per line, puts "id"
+# and "node_id" in between, and `grep -A0 -B0` inserts a `--` group separator
+# between non-adjacent matches -- which then became "the line before name"
+# instead of the actual url. This is a real capture of that shape (trimmed to
+# the fields that matter), not a guess at it.
+
+GITHUB_SHAPED_RESPONSE='{
+  "tag_name": "v1.0.3",
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/ssan9876/syntra/releases/assets/529772609",
+      "id": 529772609,
+      "node_id": "RA_kwDOT6fZdc4fk7BB",
+      "name": "syntra-1.0.3.tar.gz",
+      "label": "",
+      "uploader": {
+        "login": "github-actions[bot]",
+        "id": 41898282,
+        "url": "https://api.github.com/users/github-actions%5Bbot%5D"
+      },
+      "content_type": "application/x-gtar",
+      "browser_download_url": "https://github.com/ssan9876/syntra/releases/download/v1.0.3/syntra-1.0.3.tar.gz"
+    },
+    {
+      "url": "https://api.github.com/repos/ssan9876/syntra/releases/assets/529772610",
+      "id": 529772610,
+      "node_id": "RA_kwDOT6fZdc4fk7BC",
+      "name": "syntra-1.0.3.tar.gz.sha256",
+      "label": "",
+      "uploader": {
+        "login": "github-actions[bot]",
+        "id": 41898282,
+        "url": "https://api.github.com/users/github-actions%5Bbot%5D"
+      }
+    }
+  ]
+}'
+
+ok "finds the tarball's url in a real-GitHub-shaped, multi-line response" \
+  "$(parse_asset_url "$GITHUB_SHAPED_RESPONSE" "syntra-1.0.3.tar.gz")" \
+  "https://api.github.com/repos/ssan9876/syntra/releases/assets/529772609"
+
+ok "finds the checksum file's url, not the tarball's, in the same response" \
+  "$(parse_asset_url "$GITHUB_SHAPED_RESPONSE" "syntra-1.0.3.tar.gz.sha256")" \
+  "https://api.github.com/repos/ssan9876/syntra/releases/assets/529772610"
+
+# THE BUG ITSELF: the old grep -A0 -B0 / -B1 pipeline, run against exactly
+# this fixture, returns nothing -- proving this is a real regression test,
+# not a test that would have passed against the broken implementation too.
+OLD_BROKEN_ASSET_URL() {
+  local name="$2"
+  printf '%s' "$1" | tr ',' '\n' \
+    | grep -A0 -B0 "\"url\": \"[^\"]*assets/[0-9]*\"\|\"name\": \"$name\"" \
+    | grep -B1 "\"name\": \"$name\"" | grep '"url"' \
+    | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+ok "the OLD implementation is confirmed broken against this exact fixture" \
+  "$(OLD_BROKEN_ASSET_URL "$GITHUB_SHAPED_RESPONSE" "syntra-1.0.3.tar.gz" || echo EMPTY)" \
+  "EMPTY"
+
+# The uploader sub-object has its own "url" key, and it must never be
+# mistaken for the asset's own url just because it appears somewhere in the
+# same object -- it never ends in `/assets/<digits>`, which is what
+# distinguishes the two.
+ok "a nested uploader url is never returned in place of the asset's own" \
+  "$(parse_asset_url "$GITHUB_SHAPED_RESPONSE" "syntra-1.0.3.tar.gz" \
+     | grep -c '/users/')" \
+  "0"
+
+ok "an asset name that does not exist in the response resolves to nothing" \
+  "$(parse_asset_url "$GITHUB_SHAPED_RESPONSE" "syntra-1.0.3.tar.gz.does-not-exist")" \
+  ""
+
+# The shape make-release.sh's stub server actually emits: everything on one
+# line, no whitespace after colons. The real bug was about DISTANCE between
+# keys, not formatting, so this is a second, differently-shaped fixture
+# proving the fix is not accidentally tied to one JSON layout.
+COMPACT_RESPONSE='{"tag_name":"v1.0.0","assets":[{"url":"http://127.0.0.1:8899/assets/0","name":"syntra-1.0.0.tar.gz"},{"url":"http://127.0.0.1:8899/assets/1","name":"syntra-1.0.0.tar.gz.sha256"}]}'
+
+ok "also works against a compact, single-line response" \
+  "$(parse_asset_url "$COMPACT_RESPONSE" "syntra-1.0.0.tar.gz")" \
+  "http://127.0.0.1:8899/assets/0"
+
+ok "picks the right one of two compact-JSON assets by name" \
+  "$(parse_asset_url "$COMPACT_RESPONSE" "syntra-1.0.0.tar.gz.sha256")" \
+  "http://127.0.0.1:8899/assets/1"
+
 # --- status_line ------------------------------------------------------------
 
 ok "the status line is three tab-separated fields" \
