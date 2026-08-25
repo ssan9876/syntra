@@ -688,3 +688,65 @@ describe('the slice-2 admin surface — campaigns, batches and SoD', () => {
     expect(subject).toBeTruthy();
   });
 });
+
+describe('the integrity buttons', () => {
+  it('“Verify now” does not condemn a legitimately signed checkpoint', async () => {
+    // The route called `verifyIncremental(tenantId)` with NO options, so
+    // `signer` defaulted to null while the scheduler passed a real one built
+    // from GOVERN_CHECKPOINT_KEY. `checkpointTrust` then returned `unknown_key`
+    // for a checkpoint this deployment had signed itself.
+    //
+    // What followed: the result was forced to `broken`, a `critical`
+    // `audit_chain_broken` finding was raised and mailed, a full genesis walk
+    // ran inside the HTTP request -- and the recovery branch wrote a new head
+    // checkpoint UNSIGNED, so that night's scheduled run refused to seed on it
+    // and walked from genesis again. Pressing the button made the integrity
+    // story permanently worse until somebody pressed it again.
+    await seedAdmin('gov-integrity', [PERMISSIONS.GOVERN_MANAGE, PERMISSIONS.GOVERN_READ]);
+    const cookie = await cookieFor('gov-integrity');
+
+    const first = await post('/api/admin/govern/integrity/verify', cookie);
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ result: 'valid' });
+
+    const checkpoint = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditCheckpoint.findFirstOrThrow({ orderBy: { sequence: 'desc' } }),
+    );
+    // The test app configures GOVERN_CHECKPOINT_KEY, so the checkpoint the
+    // route wrote carries a key id -- which is the state the second call used
+    // to condemn.
+    expect(checkpoint.keyId).not.toBeNull();
+
+    const second = await post('/api/admin/govern/integrity/verify', cookie);
+    expect(second.json()).toMatchObject({ result: 'valid', signatureState: 'signed_and_verified' });
+
+    const critical = await withTenant(ctx.tenantId, (tx) =>
+      tx.governFinding.count({ where: { kind: 'audit_chain_broken' } }),
+    );
+    expect(critical).toBe(0);
+  });
+
+  it('exposes full verification as its own explicitly invoked route', async () => {
+    // §17: "Full verification from genesis remains available as a separate,
+    // explicitly invoked, paged job." `verifyFull` was exported, tested, and
+    // reachable from nothing -- so the one thing an investigation actually
+    // wants was not in the product.
+    await seedAdmin('gov-full', [PERMISSIONS.GOVERN_MANAGE, PERMISSIONS.GOVERN_READ]);
+    const cookie = await cookieFor('gov-full');
+
+    const res = await post('/api/admin/govern/integrity/verify-full', cookie);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ result: 'valid', fromSequence: 1 });
+
+    const check = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditChainCheck.findFirstOrThrow({ where: { mode: 'full' } }),
+    );
+    expect(check.result).toBe('valid');
+  });
+
+  it('keeps full verification behind govern.manage', async () => {
+    await seedAdmin('gov-full-reader', [PERMISSIONS.GOVERN_READ]);
+    const cookie = await cookieFor('gov-full-reader');
+    expect((await post('/api/admin/govern/integrity/verify-full', cookie)).statusCode).toBe(403);
+  });
+});

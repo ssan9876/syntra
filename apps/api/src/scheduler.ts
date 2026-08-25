@@ -9,7 +9,6 @@ import {
   createScheduler,
   fileAnchorSink,
   governSnapshotSchedule,
-  localFileCheckpointSigner,
   localMasterKeyProvider,
   mailAnchorSink,
   registerKeyRotationJob,
@@ -23,6 +22,7 @@ import {
   type Scheduler,
   type Transport,
 } from '@syntra/core';
+import { configuredCheckpointSigner } from './govern-signer.js';
 
 /**
  * Reconciles the scheduler against every tenant: one signing-key rotation
@@ -252,17 +252,9 @@ export async function startSyncScheduler(
     registerGovernJobs(scheduler, {
       publicUrl: config.publicUrl,
       transport,
-      // `== null`, not `=== null`: this whole function's contract is that it
-      // never rejects, and an absent key must degrade to "this deployment signs
-      // nothing" rather than throw during boot. `runAnchorJob` reads its sink
-      // the same way.
-      signer:
-        config.governCheckpointKey == null
-          ? null
-          : localFileCheckpointSigner(
-              config.governCheckpointKeyId,
-              config.governCheckpointKey,
-            ),
+      // Built by `configuredCheckpointSigner`, which the admin route uses too.
+      // The two used to construct it separately and one of them forgot.
+      signer: configuredCheckpointSigner(config),
       anchorSink:
         config.governAnchorDir != null
           ? fileAnchorSink(config.governAnchorDir)

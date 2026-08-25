@@ -120,6 +120,13 @@ export async function buildTestApp(
     MASTER_KEY: Buffer.alloc(32, 7).toString('base64'),
     SMTP_URL: 'smtp://localhost:1025',
     OUTBOUND_ALLOW_PRIVATE: 'true',
+    // THE CHECKPOINT KEY, without which the signed path is untestable -- and
+    // its absence is what hid the defect where `POST /govern/integrity/verify`
+    // built no signer while the scheduler did. With no key, every checkpoint is
+    // unsigned, `checkpointTrust` answers `unsigned` rather than `unknown_key`,
+    // and the route and the job agree by accident. A constant, not random: a
+    // signature the suite cannot reproduce across runs is not a fixture.
+    GOVERN_CHECKPOINT_KEY: Buffer.alloc(32, 11).toString('base64'),
     ...options.env,
   });
 

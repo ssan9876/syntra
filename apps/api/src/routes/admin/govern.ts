@@ -59,6 +59,7 @@ import {
   buildSnapshot,
   confirmProposal,
   createEvidencePack,
+  type CheckpointSigner,
   fetchEvidencePack,
   denyProposal,
   exportReportCsv,
@@ -74,6 +75,7 @@ import {
   setResourceClassification,
   syncJobPayload,
   updateGovernSettings,
+  verifyFull,
   verifyIncremental,
   whatChanged,
   whatDoesPersonHold,
@@ -247,7 +249,16 @@ const scopeOf = (request: FastifyRequest): GovernScope =>
 
 export async function registerAdminGovernRoutes(
   app: FastifyInstance,
-  options: { scheduler?: () => Scheduler | null; publicUrl?: string } = {},
+  options: {
+    scheduler?: () => Scheduler | null;
+    publicUrl?: string;
+    /**
+     * The deployment's checkpoint signer, the SAME one the scheduler uses.
+     * Without it `verifyIncremental` is handed `null` here and condemns a
+     * checkpoint this deployment signed itself.
+     */
+    checkpointSigner?: () => CheckpointSigner | null;
+  } = {},
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
@@ -622,7 +633,33 @@ export async function registerAdminGovernRoutes(
   app.post(
     '/govern/integrity/verify',
     { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
-    async (request) => verifyIncremental(request.tenantId),
+    async (request) =>
+      // THE SIGNER, which this route did not pass. `verifyIncremental` defaults
+      // it to null, `checkpointTrust` then answers `unknown_key` for a
+      // legitimately signed checkpoint, the result is forced to `broken`, a
+      // `critical` finding is raised and mailed, a genesis walk runs inside
+      // this request -- and the recovery branch writes the new head checkpoint
+      // UNSIGNED, so the scheduled run that night refuses to seed on it and
+      // walks from genesis again. Pressing "Verify now" made the integrity
+      // story permanently worse.
+      verifyIncremental(request.tenantId, { signer: options.checkpointSigner?.() ?? null }),
+  );
+
+  app.post(
+    '/govern/integrity/verify-full',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) =>
+      // §17: "Full verification from genesis remains available as a separate,
+      // explicitly invoked, paged job -- for an investigation, and on a slow
+      // schedule." It was exported, tested and reachable from nothing, so the
+      // one thing an investigation actually wants was not in the product.
+      //
+      // NO SIGNER PARAMETER, and that is not an omission: a full walk starts at
+      // genesis and seeds on `GENESIS_HASH`, so there is no checkpoint to
+      // trust or refuse. It writes an `AuditChainCheck` with `mode: 'full'` and
+      // deliberately writes no checkpoint -- `verifyIncremental` remains the
+      // only writer of those.
+      verifyFull(request.tenantId),
   );
 
   // ---- settings and classification ----------------------------------------

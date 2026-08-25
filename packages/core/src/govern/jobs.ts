@@ -318,8 +318,30 @@ export async function applyGovernSchedules(
   tenantId: string,
   snapshotSchedule: string | null,
 ): Promise<void> {
-  const CRON: Record<GovernPurpose, string> = {
-    snapshot: snapshotSchedule ?? '',
+  // THE SNAPSHOT CADENCE GOVERNS THE SNAPSHOT PURPOSE AND NOTHING ELSE.
+  //
+  // It used to be read as "unschedule every purpose", so pausing snapshots -- a
+  // documented operation, and the obvious thing to do while a directory
+  // migration runs -- switched off six unrelated controls with it:
+  //
+  //   - `govern.audit.verify`, so a broken hash chain is never detected. The
+  //     alarm §17 calls `critical` and "never digested" simply stops running.
+  //   - `govern.exception.sweep`, so an approved SoD exception stays `active`
+  //     past its `endsAt` FOREVER and its violation stays `excepted` --
+  //     invisible on the default `open` filter. §15's expiry is enforced by
+  //     this sweep and by nothing else, so the cap on `maxExceptionDays`
+  //     becomes advisory.
+  //   - `govern.campaign.close` and `.remind`, so every open campaign silently
+  //     stops asking and never reaches its due date, and nothing marks anything
+  //     `undecided`.
+  //   - `govern.snapshot.prune` and `govern.audit.anchor`, which are at least
+  //     harmless to skip.
+  //
+  // The six that are not about snapshots run on fixed cadences and are always
+  // scheduled. A tenant that wants no governance at all removes the tenant.
+  const CRON: Record<GovernPurpose, string | null> = {
+    // The ONLY purpose this argument governs.
+    snapshot: snapshotSchedule,
     prune: '30 3 * * *',
     verify: '0 4 * * *',
     anchor: '0 5 * * 0',
@@ -331,7 +353,7 @@ export async function applyGovernSchedules(
   for (const purpose of GOVERN_PURPOSES) {
     const key = governScheduleKey(tenantId, purpose);
     const cron = CRON[purpose];
-    if (snapshotSchedule === null || cron === '') {
+    if (cron === null || cron === '') {
       await scheduler.unschedule(GOVERN_JOB_BY_PURPOSE[purpose], key);
       continue;
     }
