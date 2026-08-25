@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { RecordPanel } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
 
 interface Contract {
@@ -35,7 +36,7 @@ const day = (iso: string | null) =>
 
 export function PersonDetailPage() {
   const { id } = useParams();
-  const { data, error, loading } = useApiResource<PersonDetail>(
+  const { data, error, loading, reload } = useApiResource<PersonDetail>(
     `/api/admin/persons/${id}`,
   );
 
@@ -123,6 +124,99 @@ export function PersonDetailPage() {
               </tbody>
             </table>
           )}
+
+          {/* The endpoint has existed since Identity and nothing called it, so
+              a contract could only ever arrive by CSV import or a directory
+              sync. That is not a cosmetic gap: `desiredState` reads contracts
+              to decide anybody should hold an account at all, so a person
+              created by hand had nothing for the planner to act on and
+              provisioned nothing. */}
+          <div className="border-t border-border-subtle p-4">
+            <RecordPanel
+              title="Add contract"
+              submitLabel="Add contract"
+              path={`/api/admin/persons/${data.id}/contracts`}
+              onCreated={reload}
+              build={(v) => ({
+                // One past the highest. A duplicate sequence is a 409, and
+                // counting the rows instead would reuse a number after a
+                // contract in the middle was removed.
+                sequence:
+                  Math.max(0, ...data.contracts.map((c) => c.sequence)) + 1,
+                // Primary only when nothing else is: the partial unique index
+                // allows exactly one, and a second is refused as a conflict.
+                isPrimary: !data.contracts.some((c) => c.isPrimary),
+                startDate: v.startDate ?? '',
+                ...(v.endDate ? { endDate: v.endDate } : {}),
+                ...(v.jobTitle ? { jobTitle: v.jobTitle } : {}),
+                ...(v.department ? { department: v.department } : {}),
+                ...(v.costCentre ? { costCentre: v.costCentre } : {}),
+                ...(v.employer ? { employer: v.employer } : {}),
+                ...(v.location ? { location: v.location } : {}),
+                ...(v.fte ? { fte: Number(v.fte) } : {}),
+              })}
+              fields={(v, set, errs) => (
+                <>
+                  <Field
+                    label="Job title"
+                    value={v.jobTitle ?? ''}
+                    onChange={(x) => set('jobTitle', x)}
+                    error={errs.jobTitle}
+                    placeholder="Staff Nurse"
+                  />
+                  <Field
+                    label="Department"
+                    value={v.department ?? ''}
+                    onChange={(x) => set('department', x)}
+                    error={errs.department}
+                    hint="Business rules match on this, and the account's container in the directory is built from it."
+                    placeholder="Nursing"
+                  />
+                  <Field
+                    label="Start date"
+                    type="date"
+                    value={v.startDate ?? ''}
+                    onChange={(x) => set('startDate', x)}
+                    error={errs.startDate}
+                  />
+                  <Field
+                    label="End date"
+                    type="date"
+                    value={v.endDate ?? ''}
+                    onChange={(x) => set('endDate', x)}
+                    error={errs.endDate}
+                    hint="Leave empty for an open-ended engagement."
+                  />
+                  <Field
+                    label="Cost centre"
+                    value={v.costCentre ?? ''}
+                    onChange={(x) => set('costCentre', x)}
+                    error={errs.costCentre}
+                  />
+                  <Field
+                    label="Employer"
+                    value={v.employer ?? ''}
+                    onChange={(x) => set('employer', x)}
+                    error={errs.employer}
+                  />
+                  <Field
+                    label="Location"
+                    value={v.location ?? ''}
+                    onChange={(x) => set('location', x)}
+                    error={errs.location}
+                  />
+                  <Field
+                    label="FTE"
+                    value={v.fte ?? ''}
+                    onChange={(x) => set('fte', x)}
+                    error={errs.fte}
+                    hint="Between 0 and 2. Rules can compare on it."
+                    placeholder="1.0"
+                  />
+                </>
+              )}
+            />
+          </div>
         </Panel>
 
         <Panel

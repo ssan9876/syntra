@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PersonDetailPage } from './PersonDetailPage.js';
 
@@ -38,6 +39,30 @@ const json = (body: unknown) =>
     status: 200,
     headers: { 'content-type': 'application/json' },
   }) as never;
+
+const noContent = () => new Response(null, { status: 204 }) as never;
+
+/**
+ * Routes the stubbed fetch by path.
+ *
+ * The blanket `mockResolvedValue` the older tests use answers every request
+ * with the same body, which is fine while a page reads one resource and writes
+ * nothing. These tests assert what was POSTed, so they need to tell the person
+ * read apart from the contract write.
+ */
+function mockRoutes(
+  handlers: Record<string, (init: RequestInit | undefined) => Response>,
+) {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(((
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => {
+    const url = String(input);
+    const handler = handlers[url];
+    if (!handler) return Promise.reject(new Error(`unmocked fetch: ${url}`));
+    return Promise.resolve(handler(init));
+  }) as never);
+}
 
 const renderPage = () =>
   render(
@@ -96,5 +121,61 @@ describe('PersonDetailPage', () => {
     renderPage();
 
     expect(await screen.findByText(/no accounts linked/i)).toBeInTheDocument();
+  });
+
+  it('offers a contract form and posts what was typed', async () => {
+    const user = userEvent.setup();
+    const posted: unknown[] = [];
+    mockRoutes({
+      '/api/admin/persons/p1': () => json({ ...person, contracts: [] }),
+      '/api/admin/users': () => json({ users: [] }),
+      '/api/admin/persons/p1/contracts': (init) => {
+        posted.push(JSON.parse(String(init?.body)));
+        return json({ id: 'c9' });
+      },
+    });
+
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Add contract' }));
+    await user.type(screen.getByLabelText('Job title'), 'Staff Nurse');
+    await user.type(screen.getByLabelText('Department'), 'Nursing');
+    await user.type(screen.getByLabelText('Start date'), '2026-09-01');
+    await user.click(screen.getByRole('button', { name: 'Add contract' }));
+
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({
+      // The person had no contracts, so this is their first and therefore
+      // their primary one.
+      sequence: 1,
+      isPrimary: true,
+      startDate: '2026-09-01',
+      jobTitle: 'Staff Nurse',
+      department: 'Nursing',
+    });
+  });
+
+  it('numbers a second contract past the first and does not claim primary twice', async () => {
+    const user = userEvent.setup();
+    const posted: unknown[] = [];
+    mockRoutes({
+      // `person` already holds sequences 1 and 2, and 1 is primary.
+      '/api/admin/persons/p1': () => json(person),
+      '/api/admin/users': () => json({ users: [] }),
+      '/api/admin/persons/p1/contracts': (init) => {
+        posted.push(JSON.parse(String(init?.body)));
+        return json({ id: 'c9' });
+      },
+    });
+
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Add contract' }));
+    await user.type(screen.getByLabelText('Start date'), '2026-09-01');
+    await user.click(screen.getByRole('button', { name: 'Add contract' }));
+
+    await waitFor(() => expect(posted).toHaveLength(1));
+    // A duplicate sequence and a second primary are both 409s from the API.
+    expect(posted[0]).toMatchObject({ sequence: 3, isPrimary: false });
   });
 });
