@@ -1,5 +1,5 @@
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
@@ -39,6 +39,18 @@ export function PersonDetailPage() {
   const { data, error, loading, reload } = useApiResource<PersonDetail>(
     `/api/admin/persons/${id}`,
   );
+  // Its error state is deliberately ignored, as on the users page: a caller
+  // who may read people but not the directory gets an empty list and a
+  // control that says it has nothing to offer, rather than a page that will
+  // not render at all.
+  const { data: usersData } = useApiResource<{
+    users: { id: string; login: string; personId: string | null; status: string }[];
+  }>('/api/admin/users');
+
+  // An account already carrying a person is not offered. `link-user` would
+  // move it rather than refuse, so listing one is offering to detach somebody
+  // else's login by picking the wrong row.
+  const unlinked = (usersData?.users ?? []).filter((u) => u.personId === null);
 
   if (error) return <Alert tone="danger">{error}</Alert>;
   if (loading || !data) {
@@ -247,6 +259,35 @@ export function PersonDetailPage() {
               ))}
             </ul>
           )}
+
+          {/* The other endpoint nothing called. The empty state above has
+              always advised linking an account and offered no way to do it,
+              so an account created here stayed an orphan for good: no person,
+              therefore no contracts, therefore nothing the planner reads. */}
+          <div className="border-t border-border-subtle p-4">
+            <RecordPanel
+              title="Link an account"
+              submitLabel="Link an account"
+              path={`/api/admin/persons/${data.id}/link-user`}
+              onCreated={reload}
+              disabled={unlinked.length === 0}
+              disabledReason="Every account already belongs to somebody."
+              build={(v) => ({ userId: v.userId ?? '' })}
+              fields={(v, set, errs) => (
+                <Select
+                  label="Account"
+                  value={v.userId ?? ''}
+                  onChange={(x) => set('userId', x)}
+                  error={errs.userId}
+                  hint="Only accounts not already linked to a person are listed."
+                  options={[
+                    { value: '', label: 'Choose an account' },
+                    ...unlinked.map((u) => ({ value: u.id, label: u.login })),
+                  ]}
+                />
+              )}
+            />
+          </div>
         </Panel>
 
         {/* The one question every auditor asks, and it has to be reachable

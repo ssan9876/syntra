@@ -178,4 +178,54 @@ describe('PersonDetailPage', () => {
     // A duplicate sequence and a second primary are both 409s from the API.
     expect(posted[0]).toMatchObject({ sequence: 3, isPrimary: false });
   });
+
+  it('links an existing unlinked account to the person', async () => {
+    const user = userEvent.setup();
+    const posted: unknown[] = [];
+    mockRoutes({
+      '/api/admin/persons/p1': () => json({ ...person, users: [] }),
+      '/api/admin/users': () =>
+        json({
+          users: [
+            { id: 'u1', login: 'mokafor', personId: null, status: 'active' },
+            { id: 'u2', login: 'taken', personId: 'p9', status: 'active' },
+          ],
+        }),
+      '/api/admin/persons/p1/link-user': (init) => {
+        posted.push(JSON.parse(String(init?.body)));
+        return noContent();
+      },
+    });
+
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Link an account' }));
+
+    const picker = screen.getByLabelText('Account');
+    // An account already belonging to somebody else is not offered: linking
+    // it would silently move it off them.
+    expect(within(picker).queryByText('taken')).not.toBeInTheDocument();
+    expect(within(picker).getByText('mokafor')).toBeInTheDocument();
+
+    await user.selectOptions(picker, 'u1');
+    await user.click(screen.getByRole('button', { name: 'Link an account' }));
+
+    await waitFor(() => expect(posted).toEqual([{ userId: 'u1' }]));
+  });
+
+  it('says why it cannot link when every account already belongs to somebody', async () => {
+    mockRoutes({
+      '/api/admin/persons/p1': () => json({ ...person, users: [] }),
+      '/api/admin/users': () =>
+        json({ users: [{ id: 'u2', login: 'taken', personId: 'p9', status: 'active' }] }),
+    });
+
+    renderPage();
+
+    // Disabled with the reason beside it, rather than a control that opens
+    // onto an empty picker.
+    expect(
+      await screen.findByText(/every account already belongs to somebody/i),
+    ).toBeInTheDocument();
+  });
 });
