@@ -237,6 +237,28 @@ export interface CollectOptions {
  * taking twenty minutes describes a world as it stood at one stated moment
  * rather than over a smeared window.
  */
+/**
+ * The subject for a `User` row, whether or not Govern can name the person
+ * behind it.
+ *
+ * All three of the loops below used to be `if (user?.personId == null) continue;`
+ * -- so an account with no person contributed NO holdings at all, only a
+ * `subject_unresolvable` gap. §6 is explicit that an orphan account's holdings
+ * are holdings, held by somebody Syntra cannot name, and the consequence of
+ * dropping them is that a service account holding `tenant.manage` appeared in
+ * no report, no campaign and no SoD evaluation. That is the single most
+ * interesting row an access review can produce, and it was the one row that was
+ * never there.
+ *
+ * `SYNTRA_SYSTEM_ID` rather than the resource's own system: the SUBJECT is a
+ * Syntra account, whatever system the thing it holds lives in.
+ */
+function subjectForUser(user: { id: string; personId: string | null }): SubjectRef {
+  return user.personId === null
+    ? { kind: 'account', systemId: SYNTRA_SYSTEM_ID, accountRef: user.id }
+    : { kind: 'person', personId: user.personId };
+}
+
 export async function collectTenant(
   tenantId: string,
   options: CollectOptions = {},
@@ -328,9 +350,12 @@ export async function collectTenant(
 
   for (const m of memberships) {
     const user = userById.get(m.userId);
-    if (user?.personId == null) continue;
+    // The USER must exist; the PERSON need not. A membership whose user row is
+    // missing is a referential impossibility under the foreign key, and
+    // guessing at it would invent a subject.
+    if (user === undefined) continue;
     holdings.push({
-      subject: { kind: 'person', personId: user.personId },
+      subject: subjectForUser(user),
       systemKind: m.group.sourceId === null ? 'syntraInternal' : 'directorySource',
       systemId: m.group.sourceId ?? SYNTRA_SYSTEM_ID,
       systemName: m.group.sourceId === null ? 'Syntra' : (m.group.source?.name ?? 'directory source'),
@@ -374,7 +399,10 @@ export async function collectTenant(
   for (const [key, paths] of appByUserAndApp) {
     const [userId, applicationId] = key.split('|') as [string, string];
     const user = userById.get(userId);
-    if (user?.personId == null) continue;
+    // The USER must exist; the PERSON need not. A membership whose user row is
+    // missing is a referential impossibility under the foreign key, and
+    // guessing at it would invent a subject.
+    if (user === undefined) continue;
 
     const directAssignments: DirectAssignmentFact[] = paths
       .filter((p) => p.via === 'user')
@@ -399,7 +427,7 @@ export async function collectTenant(
       }));
 
     holdings.push({
-      subject: { kind: 'person', personId: user.personId },
+      subject: subjectForUser(user),
       systemKind: 'syntraInternal',
       systemId: SYNTRA_SYSTEM_ID,
       systemName: 'Syntra',
@@ -439,9 +467,12 @@ export async function collectTenant(
 
   for (const ra of roleAssignments) {
     const user = userById.get(ra.userId);
-    if (user?.personId == null) continue;
+    // The USER must exist; the PERSON need not. A membership whose user row is
+    // missing is a referential impossibility under the foreign key, and
+    // guessing at it would invent a subject.
+    if (user === undefined) continue;
     holdings.push({
-      subject: { kind: 'person', personId: user.personId },
+      subject: subjectForUser(user),
       systemKind: 'syntraInternal',
       systemId: SYNTRA_SYSTEM_ID,
       systemName: 'Syntra',

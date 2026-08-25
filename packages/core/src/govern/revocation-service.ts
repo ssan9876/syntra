@@ -625,10 +625,32 @@ export async function confirmRevocationBatch(
             decision === null
               ? null
               : await tx.person.findUniqueOrThrow({ where: { id: decision.personId } });
+          // THE ITEM'S OWN `accountRef` WHEN IT HAS ONE.
+          //
+          // This was `findFirstOrThrow({ where: { targetSystemId, ...(personId
+          // ? { personId } : {}) } })`. With a person it was safe only because
+          // of `@@unique([tenantId, targetSystemId, personId])` -- a uniqueness
+          // nothing here states, and one that a second-account-per-person
+          // feature would remove with nothing on this path failing. With NO
+          // person -- an item whose subject is an unattributed account, which is
+          // exactly the kind of holding a review exists to surface -- the spread
+          // contributed nothing and the query took the first account in the
+          // target, in no defined order. Somebody else's account, revoked under
+          // a reviewer's name.
+          if (item.accountRef === null && item.personId === null) {
+            // Neither. There is nothing to resolve and nothing safe to guess,
+            // and a revocation order against an arbitrary account is worse than
+            // none.
+            throw new Error(
+              `campaign item ${item.id} names neither a person nor an account, so no target account can be resolved for its revocation`,
+            );
+          }
           const account = await tx.targetAccount.findFirstOrThrow({
             where: {
               targetSystemId: item.systemId,
-              ...(item.personId === null ? {} : { personId: item.personId }),
+              ...(item.accountRef !== null
+                ? { anchor: item.accountRef }
+                : { personId: item.personId! }),
             },
             select: { id: true },
           });
