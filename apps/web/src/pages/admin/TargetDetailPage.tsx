@@ -29,9 +29,12 @@ interface TestResult {
   rights?: ConnectorRight[];
 }
 
+type TargetType = 'activeDirectory' | 'scim2';
+
 interface Target {
   id: string;
   name: string;
+  type: string;
   config: Record<string, unknown>;
   enabled: boolean;
   autoApply: boolean;
@@ -133,14 +136,22 @@ function TestReport({ result }: { result: TestResult }) {
 
 interface Form {
   name: string;
+  type: TargetType;
   url: string;
   tlsMode: TlsMode;
   rejectUnauthorized: boolean;
   bindDn: string;
+  // Shared by both connector types: the Active Directory bind password and
+  // the SCIM bearer token are both, structurally, "the one credential this
+  // target holds" -- `CreateTargetInput.bindPassword` names it that
+  // generically for exactly this reason, so the form does too rather than
+  // inventing a second field that means the same thing.
   bindPassword: string;
   baseDn: string;
   entitlementSearchBase: string;
   archiveContainer: string;
+  // SCIM 2.0 only.
+  baseUrl: string;
   schedule: string;
   enabled: boolean;
   autoApply: boolean;
@@ -162,6 +173,7 @@ interface Form {
 
 const BLANK: Form = {
   name: '',
+  type: 'activeDirectory',
   url: 'ldaps://',
   // No `plain`. `targetConfigSchema` does not offer it, and a target that
   // could be configured to write in the clear is a target that eventually
@@ -173,6 +185,7 @@ const BLANK: Form = {
   baseDn: '',
   entitlementSearchBase: '',
   archiveContainer: '',
+  baseUrl: 'https://',
   schedule: '',
   enabled: true,
   autoApply: false,
@@ -201,6 +214,7 @@ const OWNED_CONFIG_KEYS = [
   'baseDn',
   'entitlementSearchBase',
   'archiveContainer',
+  'baseUrl',
 ];
 
 const THRESHOLDS = [
@@ -270,6 +284,8 @@ function formFrom(target: Target): Form {
   const url = text(config.url, BLANK.url);
   return {
     name: target.name,
+    type: target.type === 'scim2' ? 'scim2' : 'activeDirectory',
+    baseUrl: text(config.baseUrl, BLANK.baseUrl),
     url,
     tlsMode:
       config.tlsMode === 'starttls' || config.tlsMode === 'ldaps'
@@ -381,6 +397,9 @@ export function TargetDetailPage() {
   }
 
   function configFromForm(): Record<string, unknown> {
+    if (form.type === 'scim2') {
+      return { ...extraConfig, baseUrl: form.baseUrl.trim() };
+    }
     return {
       ...extraConfig,
       url: form.url.trim(),
@@ -457,6 +476,7 @@ export function TargetDetailPage() {
         await api<TestResult>('/api/admin/targets/test', {
           method: 'POST',
           body: JSON.stringify({
+            type: form.type,
             config: configFromForm(),
             // Sent only when it was typed. Otherwise the saved target is
             // named and the server reads its own vault entry: the browser is
@@ -492,6 +512,7 @@ export function TargetDetailPage() {
           method: 'POST',
           body: JSON.stringify({
             name: form.name.trim(),
+            type: form.type,
             config: configFromForm(),
             bindPassword: form.bindPassword,
             schedule: form.schedule.trim() === '' ? null : form.schedule.trim(),
@@ -661,81 +682,131 @@ export function TargetDetailPage() {
             {...mark('name')}
             className="sm:col-span-2"
           />
-          <Field
-            label="URL"
-            value={form.url}
-            onChange={(v) => set('url', v)}
-            hint="Writes require LDAPS or StartTLS. A Samba AD domain controller refuses even a bind in the clear."
-            {...mark('url')}
-          />
           <Select
-            label="Transport"
-            value={form.tlsMode}
-            onChange={(v) => set('tlsMode', v as TlsMode)}
-            {...mark('tlsMode')}
-            hint={
-              form.tlsMode === 'ldaps'
-                ? 'TLS from the first byte. Needs an ldaps:// URL.'
-                : 'The connection is upgraded to TLS before the bind, so the password never crosses in the clear.'
-            }
-            options={[
-              { value: 'ldaps', label: 'LDAPS' },
-              { value: 'starttls', label: 'StartTLS' },
-            ]}
-          />
-          <Check
-            className="sm:col-span-2"
-            checked={form.rejectUnauthorized}
-            onChange={(v) => set('rejectUnauthorized', v)}
-            label="Verify the directory server's TLS certificate"
-            hint={
-              form.rejectUnauthorized
-                ? 'Leave this on unless the server presents a self-signed certificate you cannot install.'
-                : 'Off: any certificate is accepted, including one presented by an impostor. The connection is encrypted but not authenticated.'
-            }
-          />
-          <Field
-            label="Bind DN"
-            value={form.bindDn}
-            onChange={(v) => set('bindDn', v)}
-            hint="The account Provision writes as. It needs create, modify, move and membership rights — the test below reports which of them it could confirm."
-            {...mark('bindDn')}
-          />
-          <Field
-            label="Bind password"
-            type="password"
-            autoComplete="new-password"
-            value={form.bindPassword}
-            onChange={(v) => set('bindPassword', v)}
+            label="Type"
+            value={form.type}
+            onChange={(v) => set('type', v as TargetType)}
+            // Changing a target's connector type after accounts exist has no
+            // migration story, so the console does not offer it: fixed at
+            // creation, same as the type column itself once a target holds
+            // any accounts.
+            disabled={!isNew}
+            {...mark('type')}
             hint={
               isNew
-                ? 'Stored in the secrets vault, never on the target record.'
-                : 'Leave blank to keep the stored password. It is never sent to this page.'
+                ? undefined
+                : "A target's type cannot be changed after it is created."
             }
-            {...mark('bindPassword')}
-          />
-          <Field
-            label="Base DN"
-            value={form.baseDn}
-            onChange={(v) => set('baseDn', v)}
-            hint="The subtree accounts are read from and created under."
-            {...mark('baseDn')}
-          />
-          <Field
-            label="Entitlement search base"
-            value={form.entitlementSearchBase}
-            onChange={(v) => set('entitlementSearchBase', v)}
-            hint="Where the grantable groups live. Anything outside it is invisible to Provision."
-            {...mark('entitlementSearchBase')}
-          />
-          <Field
-            label="Archive container"
-            value={form.archiveContainer}
-            onChange={(v) => set('archiveContainer', v)}
-            hint="Where an archived account is moved to. Provision never deletes; archiving moves the object and strips its managed entitlements."
-            {...mark('archiveContainer')}
+            options={[
+              { value: 'activeDirectory', label: 'Active Directory' },
+              { value: 'scim2', label: 'SCIM 2.0' },
+            ]}
             className="sm:col-span-2"
           />
+          {form.type === 'activeDirectory' ? (
+            <>
+              <Field
+                label="URL"
+                value={form.url}
+                onChange={(v) => set('url', v)}
+                hint="Writes require LDAPS or StartTLS. A Samba AD domain controller refuses even a bind in the clear."
+                {...mark('url')}
+              />
+              <Select
+                label="Transport"
+                value={form.tlsMode}
+                onChange={(v) => set('tlsMode', v as TlsMode)}
+                {...mark('tlsMode')}
+                hint={
+                  form.tlsMode === 'ldaps'
+                    ? 'TLS from the first byte. Needs an ldaps:// URL.'
+                    : 'The connection is upgraded to TLS before the bind, so the password never crosses in the clear.'
+                }
+                options={[
+                  { value: 'ldaps', label: 'LDAPS' },
+                  { value: 'starttls', label: 'StartTLS' },
+                ]}
+              />
+              <Check
+                className="sm:col-span-2"
+                checked={form.rejectUnauthorized}
+                onChange={(v) => set('rejectUnauthorized', v)}
+                label="Verify the directory server's TLS certificate"
+                hint={
+                  form.rejectUnauthorized
+                    ? 'Leave this on unless the server presents a self-signed certificate you cannot install.'
+                    : 'Off: any certificate is accepted, including one presented by an impostor. The connection is encrypted but not authenticated.'
+                }
+              />
+              <Field
+                label="Bind DN"
+                value={form.bindDn}
+                onChange={(v) => set('bindDn', v)}
+                hint="The account Provision writes as. It needs create, modify, move and membership rights — the test below reports which of them it could confirm."
+                {...mark('bindDn')}
+              />
+              <Field
+                label="Bind password"
+                type="password"
+                autoComplete="new-password"
+                value={form.bindPassword}
+                onChange={(v) => set('bindPassword', v)}
+                hint={
+                  isNew
+                    ? 'Stored in the secrets vault, never on the target record.'
+                    : 'Leave blank to keep the stored password. It is never sent to this page.'
+                }
+                {...mark('bindPassword')}
+              />
+              <Field
+                label="Base DN"
+                value={form.baseDn}
+                onChange={(v) => set('baseDn', v)}
+                hint="The subtree accounts are read from and created under."
+                {...mark('baseDn')}
+              />
+              <Field
+                label="Entitlement search base"
+                value={form.entitlementSearchBase}
+                onChange={(v) => set('entitlementSearchBase', v)}
+                hint="Where the grantable groups live. Anything outside it is invisible to Provision."
+                {...mark('entitlementSearchBase')}
+              />
+              <Field
+                label="Archive container"
+                value={form.archiveContainer}
+                onChange={(v) => set('archiveContainer', v)}
+                hint="Where an archived account is moved to. Provision never deletes; archiving moves the object and strips its managed entitlements."
+                {...mark('archiveContainer')}
+                className="sm:col-span-2"
+              />
+            </>
+          ) : (
+            <>
+              <Field
+                label="Base URL"
+                value={form.baseUrl}
+                onChange={(v) => set('baseUrl', v)}
+                hint="Scheme and host, e.g. https://api.example.test/scim/v2. The Users and Groups collections are read beneath it."
+                {...mark('baseUrl')}
+                className="sm:col-span-2"
+              />
+              <Field
+                label="Bearer token"
+                type="password"
+                autoComplete="new-password"
+                value={form.bindPassword}
+                onChange={(v) => set('bindPassword', v)}
+                hint={
+                  isNew
+                    ? 'Stored in the secrets vault, never on the target record.'
+                    : 'Leave blank to keep the stored token. It is never sent to this page.'
+                }
+                {...mark('bindPassword')}
+                className="sm:col-span-2"
+              />
+            </>
+          )}
         </Panel>
 
         {/*

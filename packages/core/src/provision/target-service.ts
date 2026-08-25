@@ -1,8 +1,8 @@
 import { withTenant, type TenantClient } from '@syntra/db';
 import {
-  adTargetConfigSchema,
-  adTargetConnector,
-  type AdTargetConfig,
+  targetConnectorFor,
+  targetConfigSchemaFor,
+  TARGET_CONNECTOR_TYPES,
   type ConnectionResult,
 } from '@syntra/connectors';
 import { z } from 'zod';
@@ -100,24 +100,18 @@ export class ProvisionOwnershipError extends Error {
 }
 
 /**
- * The only `type` this service can honestly store.
- *
- * `TargetSystem.type` is a column of type text so that a second connector
- * family needs no migration, and that is still true. But everything below
- * parses the configuration with `adTargetConfigSchema` and tests it with
- * `adTargetConnector`, so a row saying `okta` with an Active Directory
- * configuration on it describes a target nothing in this package can read.
- * The check moves when a second connector arrives; until then the column and
- * the code agree.
+ * Every `type` this service can honestly store — read from the connector
+ * registry (`@syntra/connectors`) rather than restated here, so a third
+ * connector is one entry in `registry.ts` and needs no change in this file.
  */
-const TARGET_TYPES = ['activeDirectory'] as const;
+const TARGET_TYPES = TARGET_CONNECTOR_TYPES;
 
 const ENFORCEMENT_MODES = ['additive', 'authoritative'] as const;
 export type EnforcementModeInput = (typeof ENFORCEMENT_MODES)[number];
 
 export interface CreateTargetInput {
   name: string;
-  type?: string;
+  type: string;
   config: unknown;
   bindPassword: string;
   pairedDirectorySourceId?: string | null;
@@ -141,7 +135,7 @@ export interface CreateTargetInput {
  */
 const createScalarsSchema = z.object({
   name: z.string().trim().min(1).max(200),
-  type: z.enum(TARGET_TYPES).default('activeDirectory'),
+  type: z.enum(TARGET_TYPES),
   bindPassword: z.string().min(1),
   pairedDirectorySourceId: z.string().uuid().nullable().optional(),
   /**
@@ -345,9 +339,10 @@ export async function createTarget(
   scheduler?: Scheduler,
 ): Promise<{ id: string }> {
   // Parsed outside the transaction. A schema failure is a validation error,
-  // not a rolled-back write.
-  const config = adTargetConfigSchema.parse(input.config);
+  // not a rolled-back write. Scalars first: the config schema to parse
+  // against depends on `scalars.type`.
   const scalars = createScalarsSchema.parse(input);
+  const config = targetConfigSchemaFor(scalars.type).parse(input.config) as Record<string, unknown>;
 
   const created = await withTenant(tenantId, async (tx) => {
     const bound = await currentTenant(tx);
@@ -357,7 +352,12 @@ export async function createTarget(
         tenantId: bound,
         name: scalars.name,
         type: scalars.type,
-        config,
+        // `as never`: `config` is `Record<string, unknown>` now that it is
+        // resolved from whichever connector's schema `scalars.type` names,
+        // and TypeScript never gives an implicit index signature to that, so
+        // it is not structurally provable as `Prisma.InputJsonValue` (Global
+        // Constraint 21). The repository's convention for exactly this shape.
+        config: config as never,
         // Replaced immediately below, once the id exists.
         secretName: 'pending',
         pairedDirectorySourceId: scalars.pairedDirectorySourceId ?? null,
@@ -382,8 +382,13 @@ export async function createTarget(
       sourceIp: null,
       payload: {
         name: scalars.name,
-        url: config.url,
-        tlsMode: config.tlsMode,
+        type: scalars.type,
+        // The transport fields are Active-Directory-specific; every other
+        // connector's own config shape is different, so they are included
+        // only when they mean something.
+        ...(scalars.type === 'activeDirectory'
+          ? { url: config.url as string, tlsMode: config.tlsMode as string }
+          : {}),
         enforcementMode: scalars.enforcementMode ?? 'additive',
       },
     });
@@ -422,8 +427,20 @@ export async function updateTarget(
   input: UpdateTargetInput,
   scheduler?: Scheduler,
 ): Promise<void> {
-  const config =
-    input.config === undefined ? undefined : adTargetConfigSchema.parse(input.config);
+  let config: Record<string, unknown> | undefined;
+  if (input.config !== undefined) {
+    // A read OUTSIDE the transaction, only to learn which schema to parse
+    // `input.config` against before the transaction opens. The transactional
+    // read at `withTenant`'s `before` below is still what the write is gated
+    // on; a target deleted between these two reads fails there, as it always
+    // did.
+    const existing = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUnique({ where: { id: targetId }, select: { type: true } }),
+    );
+    if (!existing) throw new TargetNotFoundError(targetId);
+    const effectiveType = input.type ?? existing.type;
+    config = targetConfigSchemaFor(effectiveType).parse(input.config) as Record<string, unknown>;
+  }
   // Every scalar is optional on an update, so the create schema is reused
   // partially rather than restated. `.partial()` keeps the same bounds.
   const scalars = createScalarsSchema.partial().strict().parse({
@@ -470,7 +487,8 @@ export async function updateTarget(
       data: {
         ...(scalars.name === undefined ? {} : { name: scalars.name }),
         ...(scalars.type === undefined ? {} : { type: scalars.type }),
-        ...(config === undefined ? {} : { config }),
+        // `as never`: same reason as `createTarget`'s cast above.
+        ...(config === undefined ? {} : { config: config as never }),
         ...(scalars.schedule === undefined ? {} : { schedule: scalars.schedule }),
         ...(scalars.autoApply === undefined ? {} : { autoApply: scalars.autoApply }),
         ...(scalars.enabled === undefined ? {} : { enabled: scalars.enabled }),
@@ -630,13 +648,13 @@ export async function targetWithCredential(
   tx: TenantClient,
   provider: MasterKeyProvider,
   targetId: string,
-): Promise<(AdTargetConfig & { bindPassword: string }) | null> {
+): Promise<(Record<string, unknown> & { bindPassword: string }) | null> {
   const target = await tx.targetSystem.findUnique({ where: { id: targetId } });
   if (!target) return null;
   const bindPassword = await getSecret(tx, provider, target.secretName);
   if (bindPassword === null) return null;
   return {
-    ...adTargetConfigSchema.parse(target.config),
+    ...(targetConfigSchemaFor(target.type).parse(target.config) as Record<string, unknown>),
     bindPassword,
   };
 }
@@ -678,9 +696,10 @@ const testScalarsSchema = z.object({
 export async function testTargetConfiguration(
   tenantId: string,
   provider: MasterKeyProvider,
-  input: { config: unknown; bindPassword?: string; borrowFromTargetId?: string },
+  input: { type: string; config: unknown; bindPassword?: string; borrowFromTargetId?: string },
 ): Promise<ConnectionResult> {
-  const config = adTargetConfigSchema.parse(input.config);
+  const type = z.enum(TARGET_TYPES).parse(input.type);
+  const config = targetConfigSchemaFor(type).parse(input.config) as Record<string, unknown>;
   const scalars = testScalarsSchema.parse(input);
 
   let bindPassword = scalars.bindPassword;
@@ -694,18 +713,29 @@ export async function testTargetConfiguration(
         where: { id: borrowFromTargetId },
       });
       if (!target) return null;
+      if (target.type !== type) return 'mismatch' as const;
+      // The Active-Directory-specific transport comparison — url, tlsMode,
+      // rejectUnauthorized — only makes sense for that connector's own config
+      // shape; a type match is asserted above first, so this cast is sound.
       // Parsed, not cast, and for the reason this comparison exists: the
       // saved side must be resolved the same way the requested side is, or
       // `rejectUnauthorized` absent from an older row compares unequal to the
       // `true` the schema fills in, and every borrow is refused for a
       // difference that is not one.
-      const savedConfig = adTargetConfigSchema.parse(target.config);
-      if (
-        savedConfig.url.trim() !== config.url.trim() ||
-        savedConfig.tlsMode !== config.tlsMode ||
-        savedConfig.rejectUnauthorized !== config.rejectUnauthorized
-      ) {
-        return 'mismatch' as const;
+      if (type === 'activeDirectory') {
+        const savedConfig = targetConfigSchemaFor(target.type).parse(target.config) as {
+          url: string;
+          tlsMode: string;
+          rejectUnauthorized: boolean;
+        };
+        const requested = config as { url: string; tlsMode: string; rejectUnauthorized: boolean };
+        if (
+          savedConfig.url.trim() !== requested.url.trim() ||
+          savedConfig.tlsMode !== requested.tlsMode ||
+          savedConfig.rejectUnauthorized !== requested.rejectUnauthorized
+        ) {
+          return 'mismatch' as const;
+        }
       }
       return getSecret(tx, provider, target.secretName);
     });
@@ -713,7 +743,7 @@ export async function testTargetConfiguration(
       return {
         ok: false,
         message:
-          'a saved credential can only be borrowed for the transport it was saved against: the URL, TLS mode and certificate setting must all match',
+          'a saved credential can only be borrowed for a target of the same type and, for Active Directory, the same transport',
       };
     }
     if (saved === null) return { ok: false, message: 'no saved credential' };
@@ -721,7 +751,7 @@ export async function testTargetConfiguration(
   }
 
   // Outside any transaction: this is a network call.
-  return adTargetConnector.test({ ...config, bindPassword });
+  return targetConnectorFor(type).test({ ...config, bindPassword } as never);
 }
 
 /**
@@ -791,8 +821,15 @@ export const initialPasswordPolicySchema = z
   })
   .strict();
 
-/** RFC 4512 `descr`: a letter, then letters, digits and hyphens. */
-const LDAP_ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9-]*$/;
+/**
+ * RFC 4512 `descr` (a letter, then letters, digits and hyphens) — Active
+ * Directory's attribute names — OR a dotted path of the same shape (SCIM's
+ * `name.givenName`, `name.familyName`). Active Directory never produces a
+ * dotted name, so widening this to allow one changes nothing for that
+ * connector; it is what lets a `scim2` target's attribute profile name a
+ * sub-attribute of SCIM's core User schema at all.
+ */
+const LDAP_ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9-]*(\.[A-Za-z][A-Za-z0-9-]*)*$/;
 
 const attributeTemplatesSchema = z
   .record(

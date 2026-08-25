@@ -287,6 +287,70 @@ describe('BusinessRulesPage', () => {
     expect(await screen.findByText('Finance staff')).toBeVisible();
   });
 
+  it('shows a compound condition in full, not the opaque placeholder', async () => {
+    mockFetch({
+      rules: [
+        {
+          ...RULE,
+          condition: {
+            all: [
+              { field: 'contract.department', op: 'equals', value: 'Finance' },
+              { field: 'contract.fte', op: 'greaterThan', value: 0.5 },
+            ],
+          },
+        },
+      ],
+    });
+    renderPage();
+
+    await screen.findByText('Finance staff');
+    // The description sits in a `<p>` alongside " — grants an account, N
+    // entitlements", all as sibling text within the same element, so it is
+    // never the WHOLE text of any one node and a `getByText` exact or
+    // regex match against a single element is the wrong tool here.
+    expect(document.body.textContent).toContain(
+      '(contract.department is Finance) AND (contract.fte is greater than 0.5)',
+    );
+    expect(document.body.textContent).not.toContain('a compound condition');
+  });
+
+  it('builds a 2-level AND rule entirely through the editor and saves the correct JSON', async () => {
+    const fetchMock = mockFetch({});
+    renderPage();
+
+    await screen.findByText('Finance');
+    await userEvent.type(screen.getByLabelText('Name'), 'Finance and part-time');
+    await userEvent.click(screen.getByRole('button', { name: 'Group with AND' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Add condition' }));
+
+    const values = screen.getAllByLabelText('Value');
+    await userEvent.type(values[0]!, 'Finance');
+    await userEvent.type(values[1]!, 'Sales');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+
+    // Not `bodyOfLastPost`: a successful save calls `reload()`, which issues
+    // its own GET to this same `/rules` suffix immediately afterwards, so the
+    // last call ending in `/rules` is that GET, not the PUT this test means to
+    // inspect. Filtered on method instead.
+    const put = await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input).endsWith('/rules') &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      );
+      if (!call) throw new Error('no PUT to /rules yet');
+      return call;
+    });
+    const body = JSON.parse(String((put[1] as RequestInit).body));
+    expect(body.condition).toEqual({
+      all: [
+        { field: 'contract.department', op: 'equals', value: 'Finance' },
+        { field: 'contract.department', op: 'equals', value: 'Sales' },
+      ],
+    });
+  });
+
   it('loads a stored rule back into the editor, entitlements and all', async () => {
     mockFetch({
       rules: [

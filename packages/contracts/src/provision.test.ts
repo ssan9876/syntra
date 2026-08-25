@@ -227,15 +227,21 @@ describe('the target a caller may create', () => {
     // unnoticed.
     const long = 'x'.repeat(1025);
     expect(
-      createTargetRequestSchema.safeParse({ name: 'Acme AD', config, bindPassword: long })
-        .success,
+      createTargetRequestSchema.safeParse({
+        name: 'Acme AD',
+        type: 'activeDirectory',
+        config,
+        bindPassword: long,
+      }).success,
     ).toBe(false);
     expect(
-      testTargetRequestSchema.safeParse({ config, bindPassword: long }).success,
+      testTargetRequestSchema.safeParse({ type: 'activeDirectory', config, bindPassword: long })
+        .success,
     ).toBe(false);
     expect(
       createTargetRequestSchema.safeParse({
         name: 'Acme AD',
+        type: 'activeDirectory',
         config,
         bindPassword: 'x'.repeat(1024),
       }).success,

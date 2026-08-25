@@ -154,6 +154,9 @@ importers:
 
   packages/connectors:
     dependencies:
+      ipaddr.js:
+        specifier: ^2.2.0
+        version: 2.5.0
       ldapts:
         specifier: ^9.0.0
         version: 9.0.0

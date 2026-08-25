@@ -53,6 +53,7 @@ beforeEach(async () => {
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
   tenantId = t.id;
   const created = await createTarget(tenantId, provider, null, {
+  type: 'activeDirectory',
     name: 'Acme AD',
     config,
     bindPassword: 'secret',

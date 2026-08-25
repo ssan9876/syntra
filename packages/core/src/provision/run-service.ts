@@ -1,6 +1,6 @@
 import { withTenant } from '@syntra/db';
 import {
-  adTargetConnector,
+  targetConnectorFor,
   first,
   isEnabled,
   type DiscoveredEntitlement,
@@ -410,8 +410,6 @@ export async function previewProvisionRun(
   options: PreviewProvisionRunOptions = {},
 ): Promise<ProvisionRunSummary> {
   const now = options.now ?? new Date();
-  const connector = (options.connector ??
-    adTargetConnector) as unknown as TargetConnector<unknown>;
   // Called inside `adoptStaleRunsAndStart`, before a new run is created and
   // outside any transaction. An action left `in_flight` by a dead process is
   // in an UNKNOWN state — not a failed one — and it has to be asked about
@@ -453,6 +451,9 @@ export async function previewProvisionRun(
       });
       return { target, config, profile, remit, grantedEntitlements, entitlementRows };
     });
+
+    const connector = (options.connector ??
+      targetConnectorFor(prepared.target.type)) as unknown as TargetConnector<unknown>;
 
     // Phase 4. The slow, network-bound part, holding no database connection.
     const config = prepared.config;
@@ -862,7 +863,10 @@ export async function previewProvisionRun(
           containerTemplate: prepared.profile.containerTemplate,
           fallbackContainer: prepared.profile.fallbackContainer,
           attributeTemplates: prepared.profile.attributeTemplates as Record<string, string>,
-          baseDn: config.baseDn,
+          // `baseDn` is an Active-Directory concept, available to a template as
+          // `%baseDn%`; other connector types have no equivalent, so this
+          // renders empty rather than assuming an AD-shaped config.
+          baseDn: typeof config.baseDn === 'string' ? config.baseDn : '',
         },
         entitlementStatus,
         existingCorrelationKey: knownByPerson.get(person.id)?.correlationKey ?? null,

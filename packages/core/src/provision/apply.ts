@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto';
 import { withTenant, type TenantClient } from '@syntra/db';
 import {
-  adTargetConnector,
+  targetConnectorFor,
   isRetryable,
   provenanceActionId,
   SYNTRA_ONLY_ACTION_TYPES,
@@ -456,8 +456,6 @@ export async function applyProvisionRun(
   skipped: number;
 }> {
   const sleep = options.sleep ?? defaultSleep;
-  const connector = (options.connector ??
-    adTargetConnector) as unknown as TargetConnector<unknown>;
 
   const confirmed = isConfirmed(options);
   // One value, used for every event this apply writes. Naming a user who did
@@ -525,6 +523,9 @@ export async function applyProvisionRun(
     });
     return { run, target, config, profile, remit, grantedEntitlements };
   });
+
+  const connector = (options.connector ??
+    targetConnectorFor(prepared.target.type)) as unknown as TargetConnector<unknown>;
 
   const actions = await withTenant(tenantId, (tx) =>
     tx.provisionAction.findMany({
@@ -1429,15 +1430,26 @@ async function finish(
  * else", which was not true and would have been read as a guarantee by the
  * next person to add a non-idempotent operation.
  */
+/**
+ * The attribute each connector's `read()` reports the correlation key under.
+ *
+ * Active Directory correlates on `sAMAccountName`; SCIM's core schema
+ * reserves `userName` for exactly this purpose (RFC 7643 §4.1.1) and
+ * `scimTargetConnector.read` reports it under that key. Not part of
+ * `TargetConnector` because it names an attribute key in `SourceRecord`
+ * rather than a network operation — the same reason `provenanceAttribute`
+ * below is read off the config rather than off the connector.
+ */
+function correlationAttributeFor(targetType: string): string {
+  return targetType === 'activeDirectory' ? 'sAMAccountName' : 'userName';
+}
+
 export async function resolveInFlightActions(
   tenantId: string,
   provider: MasterKeyProvider,
   targetSystemId: string,
   options: { connector?: TargetConnector<never> } = {},
 ): Promise<number> {
-  const connector = (options.connector ??
-    adTargetConnector) as unknown as TargetConnector<unknown>;
-
   const prepared = await withTenant(tenantId, async (tx) => {
     const actions = await tx.provisionAction.findMany({
       where: { status: 'in_flight', run: { targetSystemId } },
@@ -1446,13 +1458,17 @@ export async function resolveInFlightActions(
     // The credential is decrypted only when there is something to resolve. A
     // target with nothing in flight is the ordinary case and must not pay for
     // this at all.
-    if (actions.length === 0) return { config: null, actions };
+    if (actions.length === 0) return { config: null, actions, targetType: null };
+    const target = await tx.targetSystem.findUniqueOrThrow({ where: { id: targetSystemId } });
     const config = await targetWithCredential(tx, provider, targetSystemId);
     if (!config) throw new Error('target configuration or credential missing');
-    return { config, actions };
+    return { config, actions, targetType: target.type };
   });
 
   if (prepared.actions.length === 0) return 0;
+
+  const connector = (options.connector ??
+    targetConnectorFor(prepared.targetType!)) as unknown as TargetConnector<unknown>;
 
   /**
    * The attribute this target actually keeps the provenance marker in.
@@ -1472,6 +1488,7 @@ export async function resolveInFlightActions(
   // flight reads the entire directory forty times, and every one of those
   // reads returns the same answer.
   const objects: { anchor: string; correlationKey: string; provenance: string[] }[] = [];
+  const correlationAttribute = correlationAttributeFor(prepared.targetType!);
   for await (const record of connector.read(prepared.config as never)) {
     objects.push({
       anchor: record.anchor,
@@ -1479,7 +1496,7 @@ export async function resolveInFlightActions(
       // and PostgreSQL does not, so an exact comparison reads a write that
       // landed as one that did not — and the next run then creates a second
       // object and lands in `conflict`. Fifth case defect on this programme.
-      correlationKey: (valuesOf(record, 'sAMAccountName')[0] ?? '').toLowerCase(),
+      correlationKey: (valuesOf(record, correlationAttribute)[0] ?? '').toLowerCase(),
       provenance: valuesOf(record, provenanceAttribute),
     });
   }

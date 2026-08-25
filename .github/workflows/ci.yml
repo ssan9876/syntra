@@ -93,6 +93,18 @@ jobs:
       # and leaves nothing able to reach the database.
       - run: corepack enable
 
+      - name: Get the pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
       - name: Start PostgreSQL, OpenLDAP, Samba and MailDev
         run: docker compose -f infra/docker-compose.yml up -d
 
@@ -187,6 +199,18 @@ jobs:
 
       - run: corepack enable
 
+      - name: Get the pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
       - name: Start PostgreSQL, OpenLDAP, Samba and MailDev
         run: docker compose -f infra/docker-compose.yml up -d
 
@@ -200,6 +224,13 @@ jobs:
           } >> .env
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright's Chromium download
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('**/pnpm-lock.yaml') }}
+
       - run: pnpm exec playwright install --with-deps chromium
 
       - name: Wait for PostgreSQL

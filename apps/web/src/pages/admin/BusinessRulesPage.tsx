@@ -14,6 +14,7 @@ import {
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { ConditionGroupEditor } from './ConditionGroupEditor.js';
 
 interface Entitlement {
   id: string;
@@ -71,7 +72,7 @@ const deletionOf = (rule: StoredRule) => ({
 });
 
 /** The closed field set from `condition.ts`. Anything else is refused. */
-const FIELDS = [
+export const FIELDS = [
   'contract.department',
   'contract.jobTitle',
   'contract.costCentre',
@@ -90,7 +91,7 @@ const FIELDS = [
  * an empty value is Ruling P20's defect: a blank `contains` matches every
  * person in the tenant, including those with nothing recorded in that field.
  */
-const OPERATORS = [
+export const OPERATORS = [
   { value: 'equals', label: 'is', kind: 'text' },
   { value: 'notEquals', label: 'is not', kind: 'text' },
   { value: 'in', label: 'is one of', kind: 'list' },
@@ -103,16 +104,38 @@ const OPERATORS = [
   { value: 'lessThan', label: 'is less than', kind: 'number' },
 ] as const;
 
-type Operator = (typeof OPERATORS)[number]['value'];
-const kindOf = (op: Operator) =>
+export type Operator = (typeof OPERATORS)[number]['value'];
+export const kindOf = (op: Operator) =>
   OPERATORS.find((o) => o.value === op)?.kind ?? 'text';
+
+export interface LeafDraft {
+  kind: 'leaf';
+  field: (typeof FIELDS)[number];
+  op: Operator;
+  value: string;
+}
+export interface GroupDraft {
+  kind: 'group';
+  combinator: 'all' | 'any';
+  children: ConditionDraft[];
+}
+export interface NotDraft {
+  kind: 'not';
+  child: ConditionDraft;
+}
+export type ConditionDraft = LeafDraft | GroupDraft | NotDraft;
+
+const BLANK_LEAF: LeafDraft = {
+  kind: 'leaf',
+  field: 'contract.department',
+  op: 'equals',
+  value: '',
+};
 
 interface Draft {
   id?: string;
   name: string;
-  field: (typeof FIELDS)[number];
-  op: Operator;
-  value: string;
+  condition: ConditionDraft;
   grantsAccount: boolean;
   enabled: boolean;
   entitlementIds: string[];
@@ -120,84 +143,130 @@ interface Draft {
 
 const BLANK: Draft = {
   name: '',
-  field: 'contract.department',
-  op: 'equals',
-  value: '',
+  condition: BLANK_LEAF,
   grantsAccount: true,
   enabled: true,
   entitlementIds: [],
 };
 
-/** A stored condition, back into the one-leaf form this editor writes. */
-function draftFrom(rule: StoredRule): Draft {
-  const leaf = (rule.condition ?? {}) as {
+/**
+ * A stored condition (any shape `conditionSchema` in `condition.ts` accepts),
+ * into the tree this editor writes. Recognises nothing outside
+ * `all`/`any`/`not`/leaf and falls back to a blank leaf rather than throwing —
+ * a rule column written by an older version of this page, or by hand, must
+ * still open.
+ */
+export function draftConditionFrom(raw: unknown): ConditionDraft {
+  const node = (raw ?? {}) as {
+    all?: unknown[];
+    any?: unknown[];
+    not?: unknown;
     field?: string;
     op?: string;
     value?: unknown;
   };
-  const field = (FIELDS as readonly string[]).includes(leaf.field ?? '')
-    ? (leaf.field as Draft['field'])
+  if (Array.isArray(node.all)) {
+    return { kind: 'group', combinator: 'all', children: node.all.map(draftConditionFrom) };
+  }
+  if (Array.isArray(node.any)) {
+    return { kind: 'group', combinator: 'any', children: node.any.map(draftConditionFrom) };
+  }
+  if (node.not !== undefined) {
+    return { kind: 'not', child: draftConditionFrom(node.not) };
+  }
+  const field = (FIELDS as readonly string[]).includes(node.field ?? '')
+    ? (node.field as LeafDraft['field'])
     : 'contract.department';
-  const op = OPERATORS.some((o) => o.value === leaf.op)
-    ? (leaf.op as Operator)
-    : 'equals';
+  const op = OPERATORS.some((o) => o.value === node.op) ? (node.op as Operator) : 'equals';
+  return {
+    kind: 'leaf',
+    field,
+    op,
+    value: Array.isArray(node.value)
+      ? node.value.join(', ')
+      : node.value === undefined || node.value === null
+        ? ''
+        : String(node.value),
+  };
+}
+
+/** A stored condition, back into the draft tree this editor writes. */
+function draftFrom(rule: StoredRule): Draft {
   return {
     id: rule.id,
     name: rule.name,
-    field,
-    op,
-    value: Array.isArray(leaf.value)
-      ? leaf.value.join(', ')
-      : leaf.value === undefined || leaf.value === null
-        ? ''
-        : String(leaf.value),
+    condition: draftConditionFrom(rule.condition),
     grantsAccount: rule.grantsAccount,
     enabled: rule.enabled,
     entitlementIds: rule.entitlements.map((e) => e.entitlementId),
   };
 }
 
-function conditionOf(draft: Draft): unknown {
-  const kind = kindOf(draft.op);
-  if (kind === 'none') return { field: draft.field, op: draft.op };
+/** The tree back into the JSON shape `conditionSchema` accepts. */
+export function conditionOf(node: ConditionDraft): unknown {
+  if (node.kind === 'group') {
+    return { [node.combinator]: node.children.map(conditionOf) };
+  }
+  if (node.kind === 'not') {
+    return { not: conditionOf(node.child) };
+  }
+  const kind = kindOf(node.op);
+  if (kind === 'none') return { field: node.field, op: node.op };
   if (kind === 'list') {
     return {
-      field: draft.field,
-      op: draft.op,
-      value: draft.value
+      field: node.field,
+      op: node.op,
+      value: node.value
         .split(',')
         .map((part) => part.trim())
         .filter((part) => part !== ''),
     };
   }
-  if (kind === 'number') {
-    return { field: draft.field, op: draft.op, value: Number(draft.value) };
-  }
-  return { field: draft.field, op: draft.op, value: draft.value };
+  if (kind === 'number') return { field: node.field, op: node.op, value: Number(node.value) };
+  return { field: node.field, op: node.op, value: node.value };
 }
 
 function bodyOf(draft: Draft) {
   return {
     ...(draft.id === undefined ? {} : { id: draft.id }),
     name: draft.name.trim(),
-    condition: conditionOf(draft),
+    condition: conditionOf(draft.condition),
     grantsAccount: draft.grantsAccount,
     enabled: draft.enabled,
     entitlementIds: draft.entitlementIds,
   };
 }
 
-const describe = (rule: StoredRule) => {
-  const leaf = (rule.condition ?? {}) as {
+/**
+ * A human-readable rendering of any stored condition, replacing the old
+ * `'a compound condition'` placeholder. Matches `evaluate()`'s own reading in
+ * `condition.ts`: an empty `all` is `always` (true of everybody), an empty
+ * `any` is `never`.
+ */
+export function describeCondition(raw: unknown): string {
+  const node = (raw ?? {}) as {
+    all?: unknown[];
+    any?: unknown[];
+    not?: unknown;
     field?: string;
     op?: string;
     value?: unknown;
   };
-  if (leaf.field === undefined) return 'a compound condition';
-  const label = OPERATORS.find((o) => o.value === leaf.op)?.label ?? leaf.op;
-  const value = Array.isArray(leaf.value) ? leaf.value.join(', ') : leaf.value;
-  return `${leaf.field} ${label}${value === undefined ? '' : ` ${String(value)}`}`;
-};
+  if (Array.isArray(node.all)) {
+    if (node.all.length === 0) return 'always';
+    return node.all.map(describeCondition).map((s) => `(${s})`).join(' AND ');
+  }
+  if (Array.isArray(node.any)) {
+    if (node.any.length === 0) return 'never';
+    return node.any.map(describeCondition).map((s) => `(${s})`).join(' OR ');
+  }
+  if (node.not !== undefined) return `NOT (${describeCondition(node.not)})`;
+  const label = OPERATORS.find((o) => o.value === node.op)?.label ?? node.op;
+  const value = Array.isArray(node.value) ? node.value.join(', ') : node.value;
+  return `${node.field} ${label}${value === undefined ? '' : ` ${String(value)}`}`;
+}
+
+const describe = (rule: StoredRule) => describeCondition(rule.condition);
 
 export function BusinessRulesPage() {
   const { id } = useParams<{ id: string }>();
@@ -388,8 +457,6 @@ export function BusinessRulesPage() {
     }
   }
 
-  const kind = kindOf(draft.op);
-
   return (
     <>
       <PageHeader
@@ -555,41 +622,11 @@ export function BusinessRulesPage() {
               {...mark('name')}
             />
 
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Select
-                label="Field"
-                value={draft.field}
-                onChange={(v) => set('field', v as Draft['field'])}
-                options={FIELDS.map((field) => ({ value: field, label: field }))}
-                {...mark('field')}
-              />
-              <Select
-                label="Test"
-                value={draft.op}
-                onChange={(v) => set('op', v as Operator)}
-                options={OPERATORS.map((o) => ({
-                  value: o.value,
-                  label: o.label,
-                }))}
-                {...mark('op')}
-              />
-              {kind !== 'none' && (
-                <Field
-                  label="Value"
-                  value={draft.value}
-                  onChange={(v) => set('value', v)}
-                  inputMode={kind === 'number' ? 'decimal' : undefined}
-                  // Ruling P20, said on the screen rather than discovered from
-                  // a 400: a blank pattern is the universal pattern.
-                  hint={
-                    kind === 'list'
-                      ? 'Separated by commas. A blank list matches nobody and is refused.'
-                      : 'A blank value is refused: it would match every person in the tenant.'
-                  }
-                  {...mark('value')}
-                />
-              )}
-            </div>
+            <ConditionGroupEditor
+              node={draft.condition}
+              onChange={(next) => set('condition', next)}
+              depth={0}
+            />
 
             <Check
               checked={draft.grantsAccount}

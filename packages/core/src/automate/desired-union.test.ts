@@ -66,6 +66,7 @@ beforeEach(async () => {
 
   targetId = (
     await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
       name: 'Acme AD',
       config,
       bindPassword: 'secret',
