@@ -3497,7 +3497,7 @@ The enumeration is widened at the same time, because otherwise the next POST rea
 - Consumes: `requirePermission(PERMISSIONS.GOVERN_MANAGE)`, `scopeOf(request)`, `personIdsInScope(tx, scope)` — all already in the module.
 - Produces: `GOVERN_READ_ROUTES` gains `{ path: 'POST /govern/sod/violations/:id/except', scoped: true }`. No new exports.
 
-- [ ] **Step 1: Widen the structural test so it can see a POST**
+- [x] **Step 1: Widen the structural test so it can see a POST**
 
 In `apps/api/src/routes/admin/govern.test.ts`, replace the `EVERY read route in the module is enumerated` case (lines 292–305):
 
@@ -3531,12 +3531,12 @@ In `apps/api/src/routes/admin/govern.test.ts`, replace the `EVERY read route in 
   });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/govern.test.ts -t 'enumerated'`
 Expected: FAIL, naming `POST /govern/campaigns/preview-scope`, `POST /govern/campaigns/preview-reviewers`, `POST /govern/sod/rules/preview` and `POST /govern/sod/violations/:id/except` as routes admitted by `govern.read` that are not in the list.
 
-- [ ] **Step 3: Raise the three previews to `govern.manage`**
+- [x] **Step 3: Raise the three previews to `govern.manage`**
 
 In `apps/api/src/routes/admin/govern.ts`, change the guard on all three, and say why once, above the first of them (line 693):
 
@@ -3568,7 +3568,7 @@ In `apps/api/src/routes/admin/govern.ts`, change the guard on all three, and say
 
 Apply the same guard change to `/govern/campaigns/preview-reviewers` (line 702) and `/govern/sod/rules/preview` (line 897), leaving their existing bodies and comments intact.
 
-- [ ] **Step 4: Scope the exception request, and list it**
+- [x] **Step 4: Scope the exception request, and list it**
 
 In the `/govern/sod/violations/:id/except` handler (line 928), after the violation is read and before `requestSodException` is called:
 
@@ -3599,13 +3599,13 @@ In `GOVERN_READ_ROUTES`, at the end of the slice-2 block (after `GET /govern/sod
   },
 ```
 
-- [ ] **Step 5: Run the whole govern route suite**
+- [x] **Step 5: Run the whole govern route suite**
 
 Run: `npx vitest run apps/api/src/routes/admin/govern.test.ts`
 
 Expected: PASS. The `exempt list is short and named` case is unchanged — the four routes above are either no longer admitted by `govern.read` or are listed as `scoped: true`, so nothing joins the exempt list.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
