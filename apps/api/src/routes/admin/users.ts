@@ -12,6 +12,7 @@ import {
   PERMISSIONS,
   createUser,
   deactivateDirectoryUser,
+  deleteDirectoryUser,
   reactivateDirectoryUser,
   issuePasswordSetup,
   listUsers,
@@ -175,6 +176,67 @@ export async function registerAdminUserRoutes(
       });
       raiseIfRefused(outcome);
       return request.db((tx) => tx.user.findUniqueOrThrow({ where: { id } }));
+    },
+  );
+
+  /**
+   * Deletion, where everything else in this directory deactivates.
+   *
+   * Offered because a directory that can never forget anything becomes its own
+   * problem, and gated three ways because it is the one operation here that
+   * doing the opposite does not undo: a permission of its own, a per-source
+   * flag of its own, and a confirmation in the console that makes the reader
+   * type the login.
+   *
+   * The Person and the audit trail survive it. See `deleteDirectoryUser`.
+   */
+  app.delete(
+    '/users/:id',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_DELETE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+
+      const outcome = await deleteDirectoryUser(request.tenantId, provider, {
+        userId: id,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
+      });
+
+      if (!outcome.ok) {
+        switch (outcome.reason) {
+          case 'not_found':
+            throw new ProblemError(404, 'not-found', 'User not found');
+          case 'delete_not_enabled':
+            // 409, not 403: the caller HAS the permission and the
+            // configuration does not allow the write. The detail says why
+            // deleting the Syntra row alone would be worse than refusing.
+            throw new ProblemError(
+              409,
+              'delete-not-enabled',
+              'This account cannot be deleted',
+              `${outcome.sourceName} is not configured to let Syntra delete objects in it, and removing only the Syntra record would leave the next sync run free to create the account again`,
+            );
+          case 'no_credential':
+            throw new ProblemError(
+              409,
+              'no-credential',
+              'This account cannot be deleted',
+              `the bind credential for ${outcome.sourceName} could not be unsealed`,
+            );
+          case 'directory_failed':
+            // 502: Syntra worked, the directory refused. Nothing was changed
+            // on either side, which the message says so nobody goes looking
+            // for a half-finished delete.
+            throw new ProblemError(
+              502,
+              'directory-failed',
+              'The directory refused the delete',
+              `${outcome.message}; nothing was changed in Syntra either`,
+            );
+        }
+      }
+
+      return reply.status(204).send();
     },
   );
 

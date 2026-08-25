@@ -547,3 +547,99 @@ describe('password setup link', () => {
     expect(res.json().detail).toContain('Entra ID');
   });
 });
+
+describe('deleting a user', () => {
+  const del = (url: string, cookie: string) =>
+    ctx.app.inject({ method: 'DELETE', url, headers: { host: ctx.host, cookie } });
+
+  /** A locally managed account with a person behind it. */
+  async function seedLocalUser() {
+    return withTenant(ctx.tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId: ctx.tenantId, givenName: 'Maya', familyName: 'Okafor' },
+      });
+      const user = await createUser(tx, {
+        login: 'mokafor',
+        email: 'maya@acme.test',
+        displayName: 'Maya Okafor',
+      });
+      await tx.user.update({ where: { id: user.id }, data: { personId: person.id } });
+      return { userId: user.id, personId: person.id };
+    });
+  }
+
+  it('deletes the account and keeps the person', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_WRITE, PERMISSIONS.DIRECTORY_DELETE]);
+    const cookie = await authCookie('admin');
+    const { userId, personId } = await seedLocalUser();
+
+    const res = await del(`/api/admin/users/${userId}`, cookie);
+
+    expect(res.statusCode).toBe(204);
+    await withTenant(ctx.tenantId, async (tx) => {
+      expect(await tx.user.findUnique({ where: { id: userId } })).toBeNull();
+      expect(await tx.person.findUnique({ where: { id: personId } })).not.toBeNull();
+    });
+  });
+
+  it('refuses a caller who may write the directory but not delete from it', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const { userId } = await seedLocalUser();
+
+    const res = await del(`/api/admin/users/${userId}`, cookie);
+
+    // 403, and the account is still there. The separation is the point: this
+    // caller can rename the account all day and cannot destroy it.
+    expect(res.statusCode).toBe(403);
+    await withTenant(ctx.tenantId, (tx) =>
+      expect(tx.user.findUnique({ where: { id: userId } })).resolves.not.toBeNull(),
+    );
+  });
+
+  it('answers 404 for a user that is not there', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_WRITE, PERMISSIONS.DIRECTORY_DELETE]);
+    const cookie = await authCookie('admin');
+
+    const res = await del(
+      '/api/admin/users/00000000-0000-4000-8000-000000000000',
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('explains a source that has not been allowed deletion, rather than 500ing', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_WRITE, PERMISSIONS.DIRECTORY_DELETE]);
+    const cookie = await authCookie('admin');
+    const { userId } = await seedLocalUser();
+    const sourceId = await withTenant(ctx.tenantId, async (tx) => {
+      const source = await tx.directorySource.create({
+        data: {
+          tenantId: ctx.tenantId,
+          name: 'Head office AD',
+          type: 'ldap',
+          config: {},
+          secretName: 'unused',
+        },
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: { sourceId: source.id, sourceAnchor: 'anchor-1' },
+      });
+      return source.id;
+    });
+    expect(sourceId).toBeTruthy();
+
+    const res = await del(`/api/admin/users/${userId}`, cookie);
+
+    // 409, not 403: the caller holds the permission, the CONFIGURATION does
+    // not allow the write. And the detail says why deleting only the Syntra
+    // row would be worse than refusing.
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toContain('Head office AD');
+    await withTenant(ctx.tenantId, (tx) =>
+      expect(tx.user.findUnique({ where: { id: userId } })).resolves.not.toBeNull(),
+    );
+  });
+});
