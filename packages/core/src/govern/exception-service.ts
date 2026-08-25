@@ -1,20 +1,20 @@
-import { withTenant, type TenantClient } from '@syntra/db';
-import { recordEvent } from '../audit/audit-service.js';
+import { withTenant, type TenantClient } from "@syntra/db";
+import { recordEvent } from "../audit/audit-service.js";
 import {
   resolveStageApprovers,
   type ResolutionSubject,
   type StageSnapshot,
-} from '../automate/approvers.js';
+} from "../automate/approvers.js";
 import {
   displayNames,
   enqueueOutbox,
   recipientsForPersons,
   usersWithPermission,
-} from '../automate/notify.js';
-import { PERMISSIONS } from '../rbac/permissions.js';
-import { createRemediationItem } from './finding-service.js';
-import { governSettings } from './settings-service.js';
-import { raiseSeverity, type Severity } from './types.js';
+} from "../automate/notify.js";
+import { PERMISSIONS } from "../rbac/permissions.js";
+import { createRemediationItem } from "./finding-service.js";
+import { governSettings } from "./settings-service.js";
+import { raiseSeverity, type Severity } from "./types.js";
 
 /**
  * Section 15. An exception is a RISK ACCEPTANCE, not a decision on a campaign
@@ -31,15 +31,15 @@ import { raiseSeverity, type Severity } from './types.js';
 export class ExceptionRefusedError extends Error {
   constructor(
     readonly code:
-      | 'no_end_date'
-      | 'too_long'
-      | 'beneficiary_is_approver'
-      | 'blocked_no_approver'
-      | 'missing_justification',
+      | "no_end_date"
+      | "too_long"
+      | "beneficiary_is_approver"
+      | "blocked_no_approver"
+      | "missing_justification",
     message: string,
   ) {
     super(message);
-    this.name = 'ExceptionRefusedError';
+    this.name = "ExceptionRefusedError";
   }
 }
 
@@ -80,28 +80,34 @@ async function resolveAcceptors(
   let personIds: string[];
 
   if (rule.exceptionWorkflowId === null) {
-    const holders = await usersWithPermission(tx, PERMISSIONS.GOVERN_ACCEPT_RISK);
+    const holders = await usersWithPermission(
+      tx,
+      PERMISSIONS.GOVERN_ACCEPT_RISK,
+    );
     personIds = holders
       .map((holder) => holder.personId)
       .filter((id): id is string => id !== null);
   } else {
     const stage = await tx.approvalStage.findFirst({
       where: { workflowId: rule.exceptionWorkflowId },
-      orderBy: { sequence: 'asc' },
+      orderBy: { sequence: "asc" },
     });
     if (stage === null) return [];
     const snapshot: StageSnapshot = {
       sequence: stage.sequence,
       name: stage.name,
-      selector: stage.selector as StageSnapshot['selector'],
-      selectorConfig: stage.selectorConfig as StageSnapshot['selectorConfig'],
-      quorum: stage.quorum as 'any' | 'all',
-      fallbackSelector: stage.fallbackSelector as StageSnapshot['fallbackSelector'],
-      fallbackConfig: stage.fallbackConfig as StageSnapshot['selectorConfig'],
+      selector: stage.selector as StageSnapshot["selector"],
+      selectorConfig: stage.selectorConfig as StageSnapshot["selectorConfig"],
+      quorum: stage.quorum as "any" | "all",
+      fallbackSelector:
+        stage.fallbackSelector as StageSnapshot["fallbackSelector"],
+      fallbackConfig: stage.fallbackConfig as StageSnapshot["selectorConfig"],
       slaHours: stage.slaHours,
-      onTimeout: stage.onTimeout as StageSnapshot['onTimeout'],
-      escalationSelector: stage.escalationSelector as StageSnapshot['escalationSelector'],
-      escalationConfig: stage.escalationConfig as StageSnapshot['selectorConfig'],
+      onTimeout: stage.onTimeout as StageSnapshot["onTimeout"],
+      escalationSelector:
+        stage.escalationSelector as StageSnapshot["escalationSelector"],
+      escalationConfig:
+        stage.escalationConfig as StageSnapshot["selectorConfig"],
       expiryHours: stage.expiryHours,
     };
     const subject: ResolutionSubject = {
@@ -133,16 +139,21 @@ export async function requestSodException(
 ): Promise<{ id: string; status: string }> {
   // Both required, and checked before anything is written. A perpetual,
   // unjustified, uncompensated exception is how an SoD programme dies quietly.
-  if (input.justification.trim() === '' || input.compensatingControl.trim() === '') {
+  if (
+    input.justification.trim() === "" ||
+    input.compensatingControl.trim() === ""
+  ) {
     throw new ExceptionRefusedError(
-      'missing_justification',
-      'an exception needs both a justification and a compensating control, in words a reader who was not in the room can follow',
+      "missing_justification",
+      "an exception needs both a justification and a compensating control, in words a reader who was not in the room can follow",
     );
   }
 
   return withTenant(tenantId, async (tx) => {
     const settings = await governSettings(tx);
-    const rule = await tx.sodRule.findUniqueOrThrow({ where: { id: input.ruleId } });
+    const rule = await tx.sodRule.findUniqueOrThrow({
+      where: { id: input.ruleId },
+    });
 
     // There is no such thing as a permanent exception. The schema requires an
     // end date; this requires it to be a REVIEWABLE distance away.
@@ -151,18 +162,23 @@ export async function requestSodException(
     );
     if (lengthDays > settings.maxExceptionDays) {
       throw new ExceptionRefusedError(
-        'too_long',
+        "too_long",
         `an exception may run for at most ${settings.maxExceptionDays} days; this one asks for ${lengthDays}. Renewal is a new decision, which is the point.`,
       );
     }
     if (input.endsAt <= input.startsAt) {
       throw new ExceptionRefusedError(
-        'no_end_date',
-        'an exception must end after it starts; there is no such thing as a permanent risk acceptance',
+        "no_end_date",
+        "an exception must end after it starts; there is no such thing as a permanent risk acceptance",
       );
     }
 
-    const acceptors = await resolveAcceptors(tx, rule, input.personId, input.startsAt);
+    const acceptors = await resolveAcceptors(
+      tx,
+      rule,
+      input.personId,
+      input.startsAt,
+    );
 
     const exception = await tx.sodException.create({
       data: {
@@ -177,16 +193,16 @@ export async function requestSodException(
         endsAt: input.endsAt,
         // BLOCKED, not silently pending forever, and not approved by the
         // requester. A request nobody can decide is a state somebody has to see.
-        status: acceptors.length === 0 ? 'blocked_no_approver' : 'pending',
+        status: acceptors.length === 0 ? "blocked_no_approver" : "pending",
       },
     });
 
     await recordEvent(tx, {
       actorUserId,
-      action: 'govern.exception.request',
-      targetType: 'SodException',
+      action: "govern.exception.request",
+      targetType: "SodException",
       targetId: exception.id,
-      outcome: 'success',
+      outcome: "success",
       sourceIp: null,
       payload: {
         ruleId: input.ruleId,
@@ -207,7 +223,7 @@ export async function decideSodException(
   tenantId: string,
   actorUserId: string,
   exceptionId: string,
-  decision: 'approve' | 'refuse',
+  decision: "approve" | "refuse",
   comment: string,
 ): Promise<void> {
   await withTenant(tenantId, async (tx) => {
@@ -215,9 +231,9 @@ export async function decideSodException(
       where: { id: exceptionId },
       include: { rule: true },
     });
-    if (exception.status !== 'pending') {
+    if (exception.status !== "pending") {
       throw new ExceptionRefusedError(
-        'blocked_no_approver',
+        "blocked_no_approver",
         `this exception is ${exception.status} and is not open for a decision`,
       );
     }
@@ -231,32 +247,43 @@ export async function decideSodException(
     // who held `govern.accept_risk` when the exception was raised and does not
     // hold it now is not an acceptor, and the beneficiary is subtracted here
     // for the second time rather than once.
-    const acceptors = await resolveAcceptors(tx, exception.rule, exception.personId, new Date());
+    const acceptors = await resolveAcceptors(
+      tx,
+      exception.rule,
+      exception.personId,
+      new Date(),
+    );
     if (actor.personId === null || !acceptors.includes(actor.personId)) {
       throw new ExceptionRefusedError(
-        actor.personId === exception.personId ? 'beneficiary_is_approver' : 'blocked_no_approver',
         actor.personId === exception.personId
-          ? 'the beneficiary of an exception may not accept it on their own behalf'
-          : 'this account is not among the people who may accept this risk',
+          ? "beneficiary_is_approver"
+          : "blocked_no_approver",
+        actor.personId === exception.personId
+          ? "the beneficiary of an exception may not accept it on their own behalf"
+          : "this account is not among the people who may accept this risk",
       );
     }
 
-    if (decision === 'approve') {
+    if (decision === "approve") {
       await tx.sodException.update({
         where: { id: exceptionId },
-        data: { status: 'active', approvedByPersonId: actor.personId },
+        data: { status: "active", approvedByPersonId: actor.personId },
       });
       await tx.sodViolation.update({
         where: { id: exception.violationId },
         // `excepted`, never `resolved`. Somebody accepted it; nobody fixed it,
         // and every report that counts open violations has to be able to tell
         // those apart.
-        data: { status: 'excepted', exceptionId },
+        data: { status: "excepted", exceptionId },
       });
     } else {
       await tx.sodException.update({
         where: { id: exceptionId },
-        data: { status: 'refused', revokedReason: comment, revokedByUserId: actorUserId },
+        data: {
+          status: "refused",
+          revokedReason: comment,
+          revokedByUserId: actorUserId,
+        },
       });
 
       // A REFUSAL REVOKES NOTHING. Auto-revoking here would make an exception
@@ -267,8 +294,8 @@ export async function decideSodException(
       // was refused, and a human is given the job.
       const finding = await tx.governFinding.findFirst({
         where: {
-          kind: 'sod_violation',
-          subjectRefType: 'sod_violation',
+          kind: "sod_violation",
+          subjectRefType: "sod_violation",
           subjectRefId: `${exception.ruleId}:${exception.personId}`,
         },
       });
@@ -285,14 +312,14 @@ export async function decideSodException(
           },
         });
         await createRemediationItem(tx, tenantId, {
-          kind: 'sod_violation_unaccepted',
+          kind: "sod_violation_unaccepted",
           ownerPersonId: exception.personId,
           dueAt: new Date(Date.now() + 30 * 86_400_000),
           findingId: finding.id,
           description:
             `The risk acceptance for "${exception.rule.name}" was refused: ${comment}. ` +
-            'Nothing was removed. The incompatible access has to be separated by a person, ' +
-            'through a campaign decision or a change to what grants it.',
+            "Nothing was removed. The incompatible access has to be separated by a person, " +
+            "through a campaign decision or a change to what grants it.",
           deepLink: `/admin/govern/sod/violations/${exception.violationId}`,
         });
       }
@@ -300,10 +327,10 @@ export async function decideSodException(
 
     await recordEvent(tx, {
       actorUserId,
-      action: 'govern.exception.decide',
-      targetType: 'SodException',
+      action: "govern.exception.decide",
+      targetType: "SodException",
       targetId: exceptionId,
-      outcome: 'success',
+      outcome: "success",
       sourceIp: null,
       payload: {
         decision,
@@ -325,20 +352,26 @@ export async function revokeSodException(
   reason: string,
 ): Promise<void> {
   await withTenant(tenantId, async (tx) => {
-    const exception = await tx.sodException.findUniqueOrThrow({ where: { id: exceptionId } });
-    await lapse(tx, tenantId, exception, new Date(), reason, 'revoked');
+    const exception = await tx.sodException.findUniqueOrThrow({
+      where: { id: exceptionId },
+    });
+    await lapse(tx, tenantId, exception, new Date(), reason, "revoked");
     await tx.sodException.update({
       where: { id: exceptionId },
       data: { revokedByUserId: actorUserId },
     });
     await recordEvent(tx, {
       actorUserId,
-      action: 'govern.exception.revoke',
-      targetType: 'SodException',
+      action: "govern.exception.revoke",
+      targetType: "SodException",
       targetId: exceptionId,
-      outcome: 'success',
+      outcome: "success",
       sourceIp: null,
-      payload: { reason, violationId: exception.violationId, accessRevoked: false },
+      payload: {
+        reason,
+        violationId: exception.violationId,
+        accessRevoked: false,
+      },
     });
   });
 }
@@ -353,87 +386,146 @@ export async function revokeSodException(
  * let quietly expire is a different and worse thing than one nobody has looked
  * at yet, and everybody involved is told.
  */
+/**
+ * EXCEPTIONS PER SWEEP TRANSACTION.
+ *
+ * 100 rather than 200, because `lapse` is heavy per row: it updates the
+ * exception, updates the violation, reads and updates the finding, resolves
+ * recipients, enqueues outbox rows, and calls `recordEvent` -- which takes a
+ * PER-TENANT ADVISORY LOCK for the duration of its transaction. So a loop over
+ * every active exception in one transaction does not merely risk the 5000 ms
+ * ceiling, it serialises every other audited action in the tenant behind
+ * itself while it runs.
+ *
+ * And this sweep runs inside `runSnapshotJob`, AFTER earlier stages have
+ * committed, so an abort here retries the whole job and builds a second
+ * snapshot -- which is how one slow sweep turned into two nights of inventory.
+ */
+export const EXCEPTION_SWEEP_BATCH = 100;
+
 export async function sweepExceptions(
   tenantId: string,
-  options: { now?: Date; publicUrl?: string } = {},
+  options: { now?: Date; publicUrl?: string; batchSize?: number } = {},
 ): Promise<{ warned: number; lapsed: number; lapsedByContract: number }> {
   const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? EXCEPTION_SWEEP_BATCH;
 
-  return withTenant(tenantId, async (tx) => {
-    const settings = await governSettings(tx);
-    const active = await tx.sodException.findMany({
-      where: { status: 'active' },
-      include: { rule: true },
-    });
+  const settings = await withTenant(tenantId, (tx) => governSettings(tx));
 
-    let warned = 0;
-    let lapsed = 0;
-    let lapsedByContract = 0;
+  let warned = 0;
+  let lapsed = 0;
+  let lapsedByContract = 0;
 
-    for (const exception of active) {
-      // The one place an exception ends early without a human, and it is safe
-      // because ending an exception TAKES NOTHING AWAY FROM ANYBODY — it
-      // reopens a finding. Where the stated basis is a pair of concurrent
-      // contracts, the justification stopped being true when one of them ended.
-      const basis = (exception.basisContractIds as string[] | null) ?? [];
-      if (basis.length > 0) {
-        const stillRunning = await tx.contract.count({
-          where: { id: { in: basis }, OR: [{ endDate: null }, { endDate: { gte: now } }] },
-        });
-        if (stillRunning < basis.length) {
+  // A SHORT TRANSACTION RETURNING PLAIN DATA, then per-batch work in its own.
+  // Paged by id, not by status: `lapse` moves rows out of `active`, so a
+  // status-only page would be re-read as "the next page" and a warning-only
+  // page would loop forever.
+  let cursor: string | null = null;
+  for (;;) {
+    const page = await withTenant(tenantId, (tx) =>
+      tx.sodException.findMany({
+        where: {
+          status: "active",
+          ...(cursor === null ? {} : { id: { gt: cursor } }),
+        },
+        include: { rule: true },
+        orderBy: { id: "asc" },
+        take: batchSize,
+      }),
+    );
+    if (page.length === 0) break;
+    cursor = page[page.length - 1]!.id;
+
+    const outcome = await withTenant(tenantId, async (tx) => {
+      let pageWarned = 0;
+      let pageLapsed = 0;
+      let pageByContract = 0;
+
+      for (const exception of page) {
+        // The one place an exception ends early without a human, and it is safe
+        // because ending an exception TAKES NOTHING AWAY FROM ANYBODY — it
+        // reopens a finding. Where the stated basis is a pair of concurrent
+        // contracts, the justification stopped being true when one of them ended.
+        const basis = (exception.basisContractIds as string[] | null) ?? [];
+        if (basis.length > 0) {
+          const stillRunning = await tx.contract.count({
+            where: {
+              id: { in: basis },
+              OR: [{ endDate: null }, { endDate: { gte: now } }],
+            },
+          });
+          if (stillRunning < basis.length) {
+            await lapse(
+              tx,
+              tenantId,
+              exception,
+              now,
+              "a contract its justification rested on has ended",
+            );
+            pageLapsed += 1;
+            pageByContract += 1;
+            continue;
+          }
+        }
+
+        if (exception.endsAt <= now) {
           await lapse(
             tx,
             tenantId,
             exception,
             now,
-            'a contract its justification rested on has ended',
+            "it reached its end date and was not renewed",
           );
-          lapsed += 1;
-          lapsedByContract += 1;
+          pageLapsed += 1;
           continue;
         }
+
+        const daysLeft = Math.ceil(
+          (exception.endsAt.getTime() - now.getTime()) / 86_400_000,
+        );
+        if (!settings.exceptionWarningDays.includes(daysLeft)) continue;
+
+        const parties = await recipientsForPersons(
+          tx,
+          [exception.personId, exception.approvedByPersonId].filter(
+            (x): x is string => typeof x === "string",
+          ),
+        );
+        const names = await displayNames(tx, {
+          personIds: [exception.personId],
+        });
+        await enqueueOutbox(
+          tx,
+          parties.map((recipient) => ({
+            template: "govern-exception-expiring" as const,
+            to: recipient.email,
+            vars: {
+              displayName: recipient.displayName,
+              ruleName: exception.rule.name,
+              beneficiaryName:
+                names.get(`person:${exception.personId}`) ?? "the beneficiary",
+              endsAt: exception.endsAt.toDateString(),
+              // Renewal is a NEW exception with a new decision, pre-filled with
+              // the old justification. Never auto-renewal, which is approval by
+              // inattention wearing a different hat.
+              renewUrl: `${options.publicUrl ?? ""}/admin/govern/sod/exceptions/new?renew=${exception.id}`,
+            },
+            requestId: null,
+            userId: recipient.userId,
+          })),
+        );
+        pageWarned += 1;
       }
 
-      if (exception.endsAt <= now) {
-        await lapse(tx, tenantId, exception, now, 'it reached its end date and was not renewed');
-        lapsed += 1;
-        continue;
-      }
+      return { pageWarned, pageLapsed, pageByContract };
+    });
 
-      const daysLeft = Math.ceil((exception.endsAt.getTime() - now.getTime()) / 86_400_000);
-      if (!settings.exceptionWarningDays.includes(daysLeft)) continue;
+    warned += outcome.pageWarned;
+    lapsed += outcome.pageLapsed;
+    lapsedByContract += outcome.pageByContract;
+  }
 
-      const parties = await recipientsForPersons(
-        tx,
-        [exception.personId, exception.approvedByPersonId].filter(
-          (x): x is string => typeof x === 'string',
-        ),
-      );
-      const names = await displayNames(tx, { personIds: [exception.personId] });
-      await enqueueOutbox(
-        tx,
-        parties.map((recipient) => ({
-          template: 'govern-exception-expiring' as const,
-          to: recipient.email,
-          vars: {
-            displayName: recipient.displayName,
-            ruleName: exception.rule.name,
-            beneficiaryName: names.get(`person:${exception.personId}`) ?? 'the beneficiary',
-            endsAt: exception.endsAt.toDateString(),
-            // Renewal is a NEW exception with a new decision, pre-filled with
-            // the old justification. Never auto-renewal, which is approval by
-            // inattention wearing a different hat.
-            renewUrl: `${options.publicUrl ?? ''}/admin/govern/sod/exceptions/new?renew=${exception.id}`,
-          },
-          requestId: null,
-          userId: recipient.userId,
-        })),
-      );
-      warned += 1;
-    }
-
-    return { warned, lapsed, lapsedByContract };
-  });
+  return { warned, lapsed, lapsedByContract };
 }
 
 /**
@@ -448,10 +540,15 @@ export async function sweepExceptions(
 async function lapse(
   tx: TenantClient,
   tenantId: string,
-  exception: { id: string; ruleId: string; personId: string; violationId: string },
+  exception: {
+    id: string;
+    ruleId: string;
+    personId: string;
+    violationId: string;
+  },
   now: Date,
   reason: string,
-  status: 'lapsed' | 'revoked' = 'lapsed',
+  status: "lapsed" | "revoked" = "lapsed",
 ): Promise<void> {
   await tx.sodException.update({
     where: { id: exception.id },
@@ -461,13 +558,13 @@ async function lapse(
     where: { id: exception.violationId },
     // Its ORIGINAL severity: the exception never changed what the violation is,
     // only whether somebody had accepted it.
-    data: { status: 'open', exceptionId: null },
+    data: { status: "open", exceptionId: null },
   });
 
   const finding = await tx.governFinding.findFirst({
     where: {
-      kind: 'sod_violation',
-      subjectRefType: 'sod_violation',
+      kind: "sod_violation",
+      subjectRefType: "sod_violation",
       subjectRefId: `${exception.ruleId}:${exception.personId}`,
     },
   });
@@ -485,7 +582,10 @@ async function lapse(
     });
   }
 
-  const parties = await recipientsForPersons(tx, [exception.personId, violation.personId]);
+  const parties = await recipientsForPersons(tx, [
+    exception.personId,
+    violation.personId,
+  ]);
   const names = await displayNames(tx, { personIds: [exception.personId] });
   const rule = await tx.sodRule.findUniqueOrThrow({
     where: { id: exception.ruleId },
@@ -494,12 +594,13 @@ async function lapse(
   await enqueueOutbox(
     tx,
     parties.map((recipient) => ({
-      template: 'govern-exception-expiring' as const,
+      template: "govern-exception-expiring" as const,
       to: recipient.email,
       vars: {
         displayName: recipient.displayName,
         ruleName: rule.name,
-        beneficiaryName: names.get(`person:${exception.personId}`) ?? 'the beneficiary',
+        beneficiaryName:
+          names.get(`person:${exception.personId}`) ?? "the beneficiary",
         endsAt: now.toDateString(),
         renewUrl: `/admin/govern/sod/exceptions/new?renew=${exception.id}`,
       },
@@ -510,12 +611,17 @@ async function lapse(
 
   await recordEvent(tx, {
     actorUserId: null,
-    action: 'govern.exception.lapse',
-    targetType: 'SodException',
+    action: "govern.exception.lapse",
+    targetType: "SodException",
     targetId: exception.id,
-    outcome: 'success',
+    outcome: "success",
     sourceIp: null,
     // Stated in the event as well as on the screen: nothing was removed.
-    payload: { reason, violationId: exception.violationId, status, accessRevoked: false },
+    payload: {
+      reason,
+      violationId: exception.violationId,
+      status,
+      accessRevoked: false,
+    },
   });
 }

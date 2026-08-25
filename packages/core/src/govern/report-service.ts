@@ -152,12 +152,30 @@ export async function whoHasAccessToSystem(
       },
       select: { reason: true },
     });
-    const persons = await tx.person.findMany({
-      select: { id: true, givenName: true, familyName: true },
-    });
-    const contracts = await tx.contract.findMany({
-      select: { personId: true, startDate: true, endDate: true },
-    });
+    // SCOPED TO THE SUBJECTS THIS REPORT ACTUALLY NAMES.
+    //
+    // These read every `Person` and every `Contract` in the tenant to resolve
+    // display names and the has-a-contract bucket for the handful of subjects
+    // in one system. At 40,000 people that is two tenant-sized reads inside a
+    // transaction with a 5000 ms budget, on a screen somebody is waiting on --
+    // and it grows with the organization rather than with the answer.
+    const subjectPersonIds = [
+      ...new Set(holdings.map((h) => h.personId).filter((p): p is string => p !== null)),
+    ];
+    const persons =
+      subjectPersonIds.length === 0
+        ? []
+        : await tx.person.findMany({
+            where: { id: { in: subjectPersonIds } },
+            select: { id: true, givenName: true, familyName: true },
+          });
+    const contracts =
+      subjectPersonIds.length === 0
+        ? []
+        : await tx.contract.findMany({
+            where: { personId: { in: subjectPersonIds } },
+            select: { personId: true, startDate: true, endDate: true },
+          });
     const certifications = await tx.holdingCertification.findMany({
       where: { systemId: input.systemId },
     });
@@ -523,6 +541,12 @@ export interface ChangeReport {
     explained: boolean;
     auditEventSequence: number | null;
   }[];
+  /**
+   * TRUE when this period holds more recorded actions than one report returns.
+   * Stated rather than omitted: a pane that silently stops at 5,000 is a pane
+   * that answers "what changed" with a number that is not the answer.
+   */
+  recordedActionsTruncated: boolean;
   recordedActions: {
     sequence: number;
     action: string;
@@ -532,6 +556,24 @@ export interface ChangeReport {
   /** An action with no observed change: usually a write that reported success and did not land. */
   actionsWithNoObservedChange: number;
 }
+
+/**
+ * The most audit events one change report will return.
+ *
+ * §9's change report is TWO PANES -- what was observed, and what Syntra
+ * recorded -- over a period an administrator chooses, and "the last quarter" is
+ * the documented case. There is no bound on how many events a quarter holds,
+ * and the report read them all inside one transaction and then returned them
+ * all in one response: a tenant with a nightly provisioning run produces
+ * hundreds of thousands.
+ *
+ * A cap rather than paging, because the pane is a CONTEXT pane -- the
+ * cross-reference that matters (`actionsWithNoObservedChange`) is computed over
+ * the same read and is the number people act on. Truncation is stated on the
+ * report, in the shape §8 rule 3 requires of every figure this product prints:
+ * never a silent omission.
+ */
+export const AUDIT_ACTIONS_LIMIT = 5_000;
 
 export async function whatChanged(
   tenantId: string,
@@ -547,6 +589,9 @@ export async function whatChanged(
       where: { occurredAt: { gte: from.asOf, lte: to.asOf } },
       orderBy: { sequence: 'asc' },
       select: { sequence: true, action: true, occurredAt: true, actorUserId: true },
+      // One more than the cap, so the report can say whether it was truncated
+      // without a second count query.
+      take: AUDIT_ACTIONS_LIMIT + 1,
     });
     const snapshotsOverPeriod = await tx.accessSnapshot.count({
       where: { status: 'complete', asOf: { gte: from.asOf, lte: to.asOf } },
@@ -573,7 +618,8 @@ export async function whatChanged(
       explained: e.explained,
       auditEventSequence: e.auditEventSequence,
     })),
-    recordedActions: loaded.audit.map((a) => ({
+    recordedActionsTruncated: loaded.audit.length > AUDIT_ACTIONS_LIMIT,
+    recordedActions: loaded.audit.slice(0, AUDIT_ACTIONS_LIMIT).map((a) => ({
       sequence: a.sequence,
       action: a.action,
       occurredAt: a.occurredAt.toISOString(),

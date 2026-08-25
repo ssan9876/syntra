@@ -310,8 +310,36 @@ export async function upsertFindings(
         });
 
         if (existing === null) {
-          await tx.governFinding.create({
-            data: {
+          // UPSERT, not create, on the same natural key the read above used.
+          //
+          // The read-then-create here is the twin of the one in
+          // `detectSodViolations`, and it fails for the same reason: two
+          // detection passes over one tenant -- an administrator pressing
+          // "Build snapshot" while the nightly job runs -- both read null and
+          // both create, and the second raises P2002 on
+          // `(tenantId, kind, subjectRefType, subjectRefId)`. The job throws,
+          // `reconcileFindings` never runs, and the findings written earlier in
+          // the same pass are already committed.
+          //
+          // Found by the overlapping-passes case in `sod-service.test.ts`:
+          // fixing the violation write alone made the two passes get FURTHER
+          // and collide here instead, which is the whole reason a partial fix
+          // to a read-then-create is not a fix.
+          //
+          // `update` carries only `lastSeenAt`, deliberately. The row this
+          // collides with was written microseconds ago by the other pass with
+          // the same detail; the branch below is where a genuinely pre-existing
+          // finding is updated, and it must keep its `accepted` carve-out.
+          await tx.governFinding.upsert({
+            where: {
+              tenantId_kind_subjectRefType_subjectRefId: {
+                tenantId,
+                kind: draft.kind,
+                subjectRefType: draft.subjectRefType,
+                subjectRefId: draft.subjectRefId,
+              },
+            },
+            create: {
               tenantId,
               kind: draft.kind,
               severity: draft.severity,
@@ -322,6 +350,7 @@ export async function upsertFindings(
               firstSeenAt: now,
               lastSeenAt: now,
             },
+            update: { lastSeenAt: now },
           });
           opened += 1;
           continue;
@@ -559,42 +588,73 @@ export async function acceptFinding(
  * different and worse thing than one nobody has looked at yet, so the severity
  * goes up one step and the finding says why.
  */
+/**
+ * FINDINGS PER SWEEP TRANSACTION.
+ *
+ * Every row does an update plus a `recordEvent`, and `recordEvent` takes a
+ * per-tenant advisory lock for the duration of its transaction -- so a loop
+ * over every lapsing acceptance in one transaction serialises every other
+ * audited action in the tenant behind itself. This sweep runs inside
+ * `runSnapshotJob` after earlier stages have committed, so an abort retries the
+ * whole job and builds a second snapshot.
+ */
+export const FINDING_SWEEP_BATCH = 100;
+
 export async function sweepAcceptedFindings(
   tenantId: string,
   now: Date,
+  options: { batchSize?: number } = {},
 ): Promise<{ lapsed: number }> {
-  return withTenant(tenantId, async (tx) => {
-    const lapsing = await tx.governFinding.findMany({
-      where: { status: 'accepted', acceptedUntil: { lt: now } },
-      select: { id: true, severity: true, detail: true },
+  const batchSize = options.batchSize ?? FINDING_SWEEP_BATCH;
+  let lapsed = 0;
+
+  // No cursor needed: every row this page touches leaves `status: 'accepted'`,
+  // so the same query returns the NEXT page. That is only true because the
+  // update is unconditional on the row it read -- if a later change makes a
+  // sweep able to leave a row `accepted`, this becomes an infinite loop and
+  // must become a cursor.
+  for (;;) {
+    const page = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findMany({
+        where: { status: 'accepted', acceptedUntil: { lt: now } },
+        select: { id: true, severity: true, detail: true },
+        orderBy: { id: 'asc' },
+        take: batchSize,
+      }),
+    );
+    if (page.length === 0) break;
+
+    await withTenant(tenantId, async (tx) => {
+      for (const finding of page) {
+        const raised = raiseSeverity(finding.severity as Severity);
+        await tx.governFinding.update({
+          where: { id: finding.id },
+          data: {
+            status: 'open',
+            severity: raised,
+            acceptedUntil: null,
+            detail: {
+              ...(finding.detail as Record<string, unknown>),
+              lapsedAcceptanceAt: now.toISOString(),
+            } as never,
+          },
+        });
+        await recordEvent(tx, {
+          actorUserId: null,
+          action: 'govern.finding.acceptance_lapsed',
+          targetType: 'GovernFinding',
+          targetId: finding.id,
+          outcome: 'success',
+          sourceIp: null,
+          payload: { raisedTo: raised },
+        });
+      }
     });
 
-    for (const finding of lapsing) {
-      await tx.governFinding.update({
-        where: { id: finding.id },
-        data: {
-          status: 'open',
-          severity: raiseSeverity(finding.severity as Severity),
-          acceptedUntil: null,
-          detail: {
-            ...(finding.detail as Record<string, unknown>),
-            lapsedAcceptanceAt: now.toISOString(),
-          } as never,
-        },
-      });
-      await recordEvent(tx, {
-        actorUserId: null,
-        action: 'govern.finding.acceptance_lapsed',
-        targetType: 'GovernFinding',
-        targetId: finding.id,
-        outcome: 'success',
-        sourceIp: null,
-        payload: { raisedTo: raiseSeverity(finding.severity as Severity) },
-      });
-    }
+    lapsed += page.length;
+  }
 
-    return { lapsed: lapsing.length };
-  });
+  return { lapsed };
 }
 
 /**

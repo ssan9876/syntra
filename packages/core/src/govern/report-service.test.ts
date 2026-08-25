@@ -8,8 +8,10 @@ import {
   envelope,
   headerOf,
   snapshotInForceOn,
+  whatChanged,
   whatDoesPersonHold,
   whoHasAccessToSystem,
+  AUDIT_ACTIONS_LIMIT,
 } from './report-service.js';
 import { readableSnapshot } from './readable.js';
 
@@ -382,5 +384,53 @@ describe('Syntra account dormancy — §16', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.caveat).toContain('NOT entitlement usage');
     expect(rows[0]!.dormantDays).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('the change report says what it left out', () => {
+  it('reports recordedActionsTruncated, and does not exceed the cap', async () => {
+    // §8 rule 3's shape, applied to a count rather than to a holding: never a
+    // silent omission. `whatChanged` read a whole period of audit events inside
+    // one transaction and returned all of them -- a tenant with a nightly
+    // provisioning run produces hundreds of thousands over "the last quarter",
+    // which is the documented case. A pane that stops at 5,000 without saying
+    // so answers "what changed" with a number that is not the answer.
+    const later = await withTenant(tenantId, async (tx) => {
+      const snapshot = await tx.accessSnapshot.create({
+        data: {
+          tenantId,
+          kind: 'manual',
+          status: 'complete',
+          asOf: new Date(NOW.getTime() + 86_400_000),
+          personsWithActiveContract: 1,
+        },
+      });
+      // A snapshot with NO source is not readable, and says so in those words:
+      // "nothing in it has been shown to have been read". That refusal is the
+      // point of `readableSnapshot`, so the fixture has to satisfy it rather
+      // than route around it.
+      await tx.snapshotSource.create({
+        data: {
+          tenantId,
+          snapshotId: snapshot.id,
+          sourceKind: 'targetSystem',
+          sourceId: 'sys-1',
+          sourceName: 'Acme AD',
+          lastSuccessfulReadAt: new Date(NOW.getTime() + 86_400_000),
+          completeness: 'complete',
+          staleness: 'fresh',
+          freshnessSlaHours: 24,
+        },
+      });
+      return snapshot;
+    });
+
+    const report = await whatChanged(tenantId, {
+      fromSnapshotId: snapshotId,
+      toSnapshotId: later.id,
+    });
+
+    expect(bodyOf(report).recordedActionsTruncated).toBe(false);
+    expect(bodyOf(report).recordedActions.length).toBeLessThanOrEqual(AUDIT_ACTIONS_LIMIT);
   });
 });

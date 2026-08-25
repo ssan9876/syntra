@@ -6,6 +6,8 @@ import { collectTenant, type CollectedTenant } from './collect.js';
 import { buildSnapshot } from './snapshot-service.js';
 import { createCampaign, rebaseCampaign, startCampaign } from './campaign-service.js';
 import { computeReviewQualitySignals } from './decision-service.js';
+import { sweepExceptions } from './exception-service.js';
+import { sweepAcceptedFindings } from './finding-service.js';
 import {
   closeDueCampaigns,
   mootDepartedSubjects,
@@ -13,6 +15,7 @@ import {
   reassignInvalidReviewers,
   runCampaignReminders,
 } from './reviewer-service.js';
+import { detectDecisionGraph } from './sod-service.js';
 import {
   computeRevocationBatch,
   confirmRevocationBatch,
@@ -327,6 +330,113 @@ describe('the transaction budget — slice 2', () => {
    * constraints. A collision there would fail the seed, not the assertion.
    */
   let seedSeq = 0;
+
+  /**
+   * `n` lapsing exceptions and `n` lapsing accepted findings, in bulk.
+   *
+   * EVERY ROW THROUGH `createMany`. A seed written row by row inside one
+   * `withTenant` would itself exceed the budget this file measures, and a seed
+   * that trips the instrument tells you nothing about the code.
+   *
+   * One rule and one function pair: the exceptions differ by PERSON, which is
+   * what `sweepExceptions` pages over. Every exception is `active` with an
+   * `endsAt` in the past, so the sweep lapses all of them -- the heaviest path,
+   * which updates the exception, updates the violation, reads and updates the
+   * finding, resolves recipients, enqueues outbox rows, and calls `recordEvent`.
+   */
+  async function seedManyExceptionsAndAcceptedFindings(n: number): Promise<void> {
+    seedSeq += 1;
+    const tag = seedSeq;
+    const personIds = Array.from({ length: n }, () => randomUUID());
+    const functionAId = randomUUID();
+    const functionBId = randomUUID();
+    const ruleId = randomUUID();
+    const violationIds = Array.from({ length: n }, () => randomUUID());
+    const past = new Date(NOW.getTime() - 86_400_000);
+
+    await withTenant(tenantId, async (tx) => {
+      await tx.person.createMany({
+        data: personIds.map((id, i) => ({
+          id,
+          tenantId,
+          givenName: `Sweep${tag}-${i}`,
+          familyName: 'Subject',
+        })),
+      });
+      await tx.contract.createMany({
+        data: personIds.map((personId) => ({
+          tenantId,
+          personId,
+          sequence: 1,
+          isPrimary: true,
+          startDate: new Date('2020-01-01'),
+        })),
+      });
+      await tx.businessFunction.createMany({
+        data: [
+          { id: functionAId, tenantId, name: `Raise payments ${tag}`, ownerPersonId: personIds[0]! },
+          { id: functionBId, tenantId, name: `Approve payments ${tag}`, ownerPersonId: personIds[0]! },
+        ],
+      });
+      await tx.sodRule.createMany({
+        data: [
+          {
+            id: ruleId,
+            tenantId,
+            name: `Raise vs approve ${tag}`,
+            functionAId,
+            functionBId,
+            severity: 'high',
+            rationale: 'one person must not both raise and approve a payment',
+          },
+        ],
+      });
+      await tx.sodViolation.createMany({
+        data: violationIds.map((id, i) => ({
+          id,
+          tenantId,
+          ruleId,
+          personId: personIds[i]!,
+          holdingsA: [],
+          holdingsB: [],
+          severity: 'high',
+          status: 'excepted',
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+          lastSnapshotId: snapshotId,
+        })),
+      });
+      await tx.sodException.createMany({
+        data: violationIds.map((violationId, i) => ({
+          tenantId,
+          ruleId,
+          personId: personIds[i]!,
+          violationId,
+          justification: 'the team is two people this quarter',
+          compensatingControl: 'every payment over 10k is reviewed by finance',
+          startsAt: new Date('2026-01-01'),
+          // In the past, so the sweep lapses it.
+          endsAt: past,
+          status: 'active',
+        })),
+      });
+      await tx.governFinding.createMany({
+        data: personIds.map((personId, i) => ({
+          tenantId,
+          kind: 'sod_violation',
+          severity: 'high',
+          subjectRefType: 'person',
+          subjectRefId: `${personId}-${i}`,
+          status: 'accepted',
+          acceptedReason: 'accepted for the quarter',
+          // In the past, so the sweep lapses it.
+          acceptedUntil: past,
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+        })),
+      });
+    });
+  }
 
   /** Seeds the ordinary 2,000-item campaign and binds the three ids. */
   async function seedOrdinaryCampaign(): Promise<void> {
@@ -768,6 +878,52 @@ describe('the transaction budget — slice 2', () => {
 
     const breached = aborted || slowest > BUDGET_MS;
     expect(breached).toBe(true);
+  }, 300_000);
+
+  it('sweeps exceptions and accepted findings within the budget', async () => {
+    // These two run inside `runSnapshotJob`, AFTER earlier stages have
+    // committed, so an abort retries the whole job and builds a SECOND
+    // snapshot. Both wrapped a per-row loop in one transaction, and `lapse`
+    // calls `recordEvent` per row -- which takes a per-tenant advisory lock for
+    // the duration of its transaction, so the loop serialises every other
+    // audited action in the tenant behind it.
+    await seedOrdinaryCampaign();
+    await seedManyExceptionsAndAcceptedFindings(600);
+    const after = new Date(NOW.getTime() + 400 * 86_400_000);
+
+    const sweepTiming = await timedTransactions(() => sweepExceptions(tenantId, { now: after }));
+    expect(sweepTiming.result.lapsed).toBe(600);
+    expect(sweepTiming.slowest).toBeLessThan(BUDGET_MS);
+
+    const findingTiming = await timedTransactions(() => sweepAcceptedFindings(tenantId, after));
+    expect(findingTiming.result.lapsed).toBe(600);
+    expect(findingTiming.slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  it('FAILS when the exception sweep is unbounded — the mutation this case exists for', async () => {
+    await seedOrdinaryCampaign();
+    await seedManyExceptionsAndAcceptedFindings(600);
+
+    let aborted = false;
+    const { slowest } = await timedTransactions(async () => {
+      try {
+        await sweepExceptions(tenantId, {
+          now: new Date(NOW.getTime() + 400 * 86_400_000),
+          batchSize: Number.MAX_SAFE_INTEGER,
+        });
+      } catch {
+        aborted = true;
+      }
+    });
+    expect(aborted || slowest > BUDGET_MS).toBe(true);
+  }, 300_000);
+
+  it('builds the decision graph over the seeded tenant within the budget', async () => {
+    await seedOrdinaryCampaign();
+    const { slowest } = await timedTransactions(() =>
+      detectDecisionGraph(tenantId, snapshotId, { now: NOW }),
+    );
+    expect(slowest).toBeLessThan(BUDGET_MS);
   }, 300_000);
 
   it('FAILS when reviewer resolution is unbounded — the mutation this half exists for', async () => {
