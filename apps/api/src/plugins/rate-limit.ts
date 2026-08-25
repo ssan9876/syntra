@@ -13,8 +13,9 @@ import { ProblemError } from './problem-json.js';
  * else out, and a tenant under attack takes the rest down with it. Tenant
  * first so the key reads the way the buckets nest.
  *
- * `/health` answers before a tenant is known and carries no limit, so the
- * fallback below is never reached by a limited route.
+ * `/health/ready` is unauthenticated and rate-limited, and reaches this
+ * fallback on every request -- the 'unscoped' bucket is shared by everyone
+ * hitting it, which is fine for a single low-value endpoint.
  */
 export function tenantAndIpKey(request: FastifyRequest): string {
   return `${request.tenantId || 'unscoped'}|${request.ip}`;

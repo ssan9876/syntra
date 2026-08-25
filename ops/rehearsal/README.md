@@ -58,6 +58,19 @@ repository.
   migration that cannot apply) or one that deliberately never becomes ready
   (a readiness probe patched to always fail).
 
+### If `make-release.sh` exits non-zero without printing `built ...`
+
+Its three self-check lines (`tar -tzf ... | grep -q ...`) run under
+`set -o pipefail`, inherited verbatim from `.github/workflows/release.yml`'s
+own already-shipped packaging step -- deliberately, so this script rehearses
+the same artefact-shape checks the real release does. `grep -q` can exit as
+soon as it finds its match, before `tar -tzf` has finished writing its full
+listing; when that happens, `tar` gets `SIGPIPE`, and under `pipefail` bash
+reports that non-zero exit as the whole pipeline's status even though `grep`
+itself matched successfully. If this happens, check whether the tarball was
+actually built correctly (`tar -tzf $OUT/$NAME.tar.gz | head`) before
+assuming packaging failed -- it usually did not.
+
 ## The procedure Steps 4-15 would follow (not yet run)
 
 This is a description of what the plan's Task 11 asks for, so a reader can

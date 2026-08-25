@@ -1129,10 +1129,11 @@ Signing in stops working for about a minute. Sessions already open survive.
 ### Doing it by hand
 
 ```bash
-/opt/syntra/bin/syntra-update --check      # what is running, what is available
-/opt/syntra/bin/syntra-update 1.5.0        # update
-/opt/syntra/bin/syntra-update --rollback   # go back deliberately
-cat /opt/syntra/var/update.status          # what it is doing right now
+/opt/syntra/bin/syntra-update --check        # what is running, what is available
+/opt/syntra/bin/syntra-update --adopt 1.5.0  # once, by hand: take a converted `dev` install to its first release
+/opt/syntra/bin/syntra-update 1.5.0          # update
+/opt/syntra/bin/syntra-update --rollback     # go back deliberately
+cat /opt/syntra/var/update.status            # what it is doing right now
 ```
 
 ### Things worth knowing before you need them

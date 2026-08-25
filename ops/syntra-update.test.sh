@@ -143,6 +143,12 @@ ok "falls back to the adopted working tree" \
 ok "refuses when there is nowhere to go" \
   "$(previous_release_of 1.0.0 1.0.0 || echo NONE)" "NONE"
 
+# THE BUG THIS FUNCTION USED TO HAVE: a release newer than $now is not a
+# "previous" release, it is the one that was just judged broken. Returning
+# it sent --rollback FORWARD into a failed release with a much-older dump.
+ok "never answers with a release newer than now" \
+  "$(previous_release_of 1.4.0 1.4.0 1.5.0 || echo NONE)" "NONE"
+
 # --- status_line ------------------------------------------------------------
 
 ok "the status line is three tab-separated fields" \

@@ -288,7 +288,7 @@ export function UpdatesPage() {
                   {!confirming && !launched && (
                     <div className="flex justify-end">
                       <Button
-                        disabled={busy || launched || (progress?.running ?? false)}
+                        disabled={busy || (progress?.running ?? false)}
                         onClick={() => setConfirming(true)}
                       >
                         Update to {latest.version}

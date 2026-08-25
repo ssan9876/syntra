@@ -28,6 +28,13 @@
 
 set -euo pipefail
 
+SRC="${SYNTRA_SRC:-/root/syntra}"
+ROOT="${SYNTRA_ROOT:-/opt/syntra}"
+SERVICE="${SYNTRA_SERVICE:-syntra}"
+UNIT="/etc/systemd/system/$SERVICE.service"
+DRY=0
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
 # The pure helpers out of the updater, which lives beside this file.
 #
 # Sourced rather than copied, and the guard at the bottom of that script means
@@ -37,16 +44,12 @@ set -euo pipefail
 #
 # It must come BEFORE this script's own say/run/die, because syntra-update
 # defines a `die` that writes an update status file -- which is exactly wrong
-# for a conversion that has not started an update.
+# for a conversion that has not started an update. It does NOT need to come
+# before SRC/ROOT/SERVICE/UNIT/DRY above -- sourcing also evaluates
+# syntra-update's OWN top-level config vars (ROOT, SERVICE, ...) into this
+# script's scope, and those are what get assigned here a few lines down.
 SYNTRA_UPDATE_SOURCE_ONLY=1 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/syntra-update"
 unset SYNTRA_UPDATE_SOURCE_ONLY
-
-SRC="${SYNTRA_SRC:-/root/syntra}"
-ROOT="${SYNTRA_ROOT:-/opt/syntra}"
-SERVICE="${SYNTRA_SERVICE:-syntra}"
-UNIT="/etc/systemd/system/$SERVICE.service"
-DRY=0
-[ "${1:-}" = "--dry-run" ] && DRY=1
 
 say()  { echo "==> $*"; }
 run()  { if [ "$DRY" -eq 1 ]; then echo "    would: $*"; else eval "$@"; fi; }
@@ -157,15 +160,20 @@ for _ in $(seq 1 30); do
     echo "The old tree is untouched at $SRC."
     echo "If anything is wrong: restore $UNIT.pre-release-layout, daemon-reload, restart."
     echo
-    # This install is `dev` and the console will say so and refuse to update
-    # it, which is correct -- but it means the Updates page cannot take it to
-    # its first release either. This is the one-time command that can, run by
-    # the person who knows what is in the tree it replaces.
-    echo "This install reports itself as \"$VERSION\". A working tree cannot be updated"
-    echo "from the console -- it would overwrite uncommitted work. To take it to its"
-    echo "first release, once, by hand:"
-    echo
-    echo "    SYNTRA_RELEASE_TOKEN=… $ROOT/bin/syntra-update --adopt <version>"
+    if [ "$VERSION" = dev ]; then
+      # This install is `dev` and the console will say so and refuse to
+      # update it, which is correct -- but it means the Updates page cannot
+      # take it to its first release either. This is the one-time command
+      # that can, run by the person who knows what is in the tree it
+      # replaces. Printed only for a `dev` conversion: an install that
+      # already reports a real version has already had its first release,
+      # and `adoption_allowed` refuses `--adopt` there anyway.
+      echo "This install reports itself as \"$VERSION\". A working tree cannot be updated"
+      echo "from the console -- it would overwrite uncommitted work. To take it to its"
+      echo "first release, once, by hand:"
+      echo
+      echo "    SYNTRA_RELEASE_TOKEN=… $ROOT/bin/syntra-update --adopt <version>"
+    fi
     exit 0
   fi
   sleep 2

@@ -176,8 +176,18 @@ releases_to_prune() {
 # answer and the only one.
 previous_release_of() {
   local now="$1"; shift
-  local candidate
-  candidate=$(release_candidates "$@" | grep -vx "$now" | tail -1)
+  local candidate="" c
+  # `release_candidates` is sorted ascending, so walking it and keeping the
+  # last entry that is OLDER than $now finds the true predecessor. The old
+  # version (`grep -vx "$now" | tail -1`) only excluded an EXACT match,
+  # which let it return a release NEWER than $now -- the exact state left
+  # behind by a failed update, where the broken release stays on disk next
+  # to a working `current`. --rollback then rolled FORWARD into it.
+  for c in $(release_candidates "$@"); do
+    if [ "$c" != "$now" ] && version_newer "$now" "$c"; then
+      candidate="$c"
+    fi
+  done
   if [ -n "$candidate" ]; then
     printf '%s\n' "$candidate"
     return 0
@@ -401,9 +411,30 @@ SQL
   docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$PG_DB" -c 'SELECT 1' >/dev/null 2>&1
 }
 
-swap_to() {
+# The symlink alone -- no restart. Shared by the normal switch and by the
+# rollback paths, which need the swap to happen while the service is
+# STOPPED, not running.
+link_current() {
   ln -sfn "$RELEASES/$1" "$CURRENT"
-  systemctl restart "$SERVICE"
+}
+
+swap_to() {
+  link_current "$1"
+  # Guarded: `systemctl restart` failing here must not abort the script
+  # under `set -e` with nothing written. The very next thing that runs after
+  # this (status "checking"; wait_ready) already exists to detect exactly
+  # this -- a service that did not come up -- and route it into
+  # restore_after_failure. A failed restart just makes wait_ready fail
+  # immediately instead of after the timeout, and the existing machinery
+  # takes it from there.
+  systemctl restart "$SERVICE" || true
+}
+
+# Stops the service before the database changes under it. Best-effort: a
+# unit that is not running, or does not exist for some reason, must not stop
+# a rollback that is the last line of defense this system has.
+stop_service() {
+  systemctl stop "$SERVICE" 2>/dev/null || true
 }
 
 # What this deployment's database actually is, read from the configuration the
@@ -594,9 +625,15 @@ restore_after_failure() {
   log "ROLLING BACK: $why"
   status "rolling-back" "$why"
 
-  swap_to "$back_to"
+  # STOPPED before the schema drop, not restarted after it. restore_database
+  # now drops and recreates every non-system schema; a live app (and
+  # pg-boss, which owns a schema of its own) fighting that DROP is how the
+  # drop hangs on a lock, or the restore races a schema pg-boss just
+  # recreated.
+  stop_service
+  link_current "$back_to"
   if restore_database "$dump"; then
-    systemctl restart "$SERVICE"
+    systemctl restart "$SERVICE" || true
   else
     log "the database could not be restored from $dump — RESTORE IT BY HAND"
     status "failed" "$why; the database could not be restored automatically (dump: $dump)"
@@ -621,9 +658,10 @@ do_rollback() {
   [ -n "$dump" ] || die "no database dump was taken before v$from; roll back by hand"
 
   status "rolling-back" "returning to v$back_to"
-  swap_to "$back_to"
+  stop_service
+  link_current "$back_to"
   restore_database "$dump" || die "the database could not be restored from $dump"
-  systemctl restart "$SERVICE"
+  systemctl restart "$SERVICE" || true
   wait_ready || die "v$back_to did not become ready"
   status "rolled_back" "returned to v$back_to"
 }
@@ -655,11 +693,23 @@ prune() {
 do_check() {
   local from latest
   from=$(current_version)
-  latest=$(latest_version)
+  # Tolerant of everything --check can fail at: no token (this command is
+  # documented to run without one), the forge being unreachable, whatever.
+  # --check promises to "change nothing", and that includes update.status --
+  # api()'s die on a missing token used to write `failed` over a DIFFERENT,
+  # running update's status just because somebody ran --check beside it,
+  # which is exactly the hazard refuse() exists to prevent everywhere else
+  # in this file. Checked here rather than by changing api()/die themselves,
+  # which are correct as they are for a real update already in progress.
+  if [ -z "${SYNTRA_RELEASE_TOKEN:-}" ]; then
+    latest=""
+  else
+    latest=$(latest_version 2>/dev/null) || latest=""
+  fi
   echo "current: $from"
   echo "latest:  ${latest:-unknown}"
   if [ "$from" = "dev" ]; then
-    echo "state:   working tree — update with deploy.sh, not from the console"
+    echo "state:   working tree -- update with deploy.sh, not from the console; or take its first release with: syntra-update --adopt <version>"
   elif [ -n "$latest" ] && version_newer "$latest" "$from"; then
     echo "state:   an update is available"
   else

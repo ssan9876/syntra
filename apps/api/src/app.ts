@@ -136,8 +136,7 @@ export async function buildApp(
   // it without parsing a body: the updater's automatic rollback hangs on this
   // status code. Unauthenticated for the same reason the updater needs it --
   // it holds no session and cannot obtain one while the thing it is checking
-  // is broken -- and it discloses nothing a caller could not learn by trying
-  // to sign in.
+  // is broken.
   app.get(
     '/health/ready',
     {
@@ -146,11 +145,13 @@ export async function buildApp(
       // as fast as anybody cares to ask. `rateLimit` is registered
       // `global: false`, so a route that sets no config has none at all.
       //
-      // Thirty a minute is roughly double what the updater's three-second poll
-      // spends during the ninety seconds it is allowed, and it is keyed per
-      // address, so the updater on loopback and a container orchestrator's
-      // probe do not share a bucket with anybody.
-      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      // Sixty a minute, not thirty: the updater's readiness poll (3s interval,
+      // 90s deadline) issues exactly 30 requests on its own -- not "double"
+      // anything -- and a FAILED update polls this twice, once for the new
+      // release and again for the rollback, which can land inside the same
+      // one-minute window. Keyed per address, so the updater on loopback and
+      // a container orchestrator's probe do not share a bucket with anybody.
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
     },
     async (request, reply) => {
       const report = await readiness({
