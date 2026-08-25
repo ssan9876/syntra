@@ -224,13 +224,25 @@ export async function recordCampaignDecision(
   const now = options.now ?? new Date();
   const facts = await decisionFacts(tenantId, input, now);
 
-  if (facts.campaignStatus !== 'open' && facts.campaignStatus !== 'executing') {
+  // `open`, and ONLY `open`. `executing` was in this gate and is written by
+  // NOTHING in the tree -- and `closeDueCampaigns` closes `open` alone, so a
+  // campaign that somehow reached `executing` would never close and every item
+  // in it would stay decidable forever. A status with a reader and no writer is
+  // a state machine describing something that does not exist.
+  if (facts.campaignStatus !== 'open') {
     throw new CampaignDecisionRefusedError(
       'campaign_not_open',
       `this campaign is ${facts.campaignStatus}`,
     );
   }
-  if (facts.itemStatus !== 'pending' && facts.itemStatus !== 'blocked_no_reviewer') {
+  // `pending`, and ONLY `pending`. §11's item table has no
+  // `blocked_no_reviewer -> certified` transition and `CERTIFYING_TRANSITIONS`
+  // -- the constant the structural test asserts over -- names `pending` as its
+  // only `from`. Admitting `blocked_no_reviewer` here contradicted both, and
+  // was unreachable only because a blocked item has no active reviewer row so
+  // the `not_reviewer` refusal fired first. Two guards, one of them wrong, is
+  // one move away from the wrong one being the only guard.
+  if (facts.itemStatus !== 'pending') {
     throw new CampaignDecisionRefusedError(
       'item_not_pending',
       `this item is already ${facts.itemStatus}`,
@@ -309,13 +321,42 @@ export async function recordCampaignDecision(
   }
 
   return withTenant(tenantId, async (tx) => {
-    // Re-read inside the write transaction: the checks above ran in an earlier
-    // one, and an item that changed in between must not be decided twice.
     const item = await tx.campaignItem.findUniqueOrThrow({ where: { id: input.itemId } });
-    if (item.status !== 'pending' && item.status !== 'blocked_no_reviewer') {
+    const status = input.decision === 'certify' ? 'certified' : 'revoke_decided';
+
+    // THE STATUS MOVES FIRST, UNDER A PREDICATE, AND THE ROW COUNT IS CHECKED.
+    //
+    // This is the lock. The previous form re-read the status here and then
+    // wrote with `update({ where: { id } })` -- no predicate, no row lock, and
+    // no unique index on `CampaignDecision(itemId)` -- so under READ COMMITTED
+    // two reviewers holding one item both read `pending`, both passed, and both
+    // committed. That shape is ordinary rather than exotic: `quorum: 'any'` is
+    // normal for a role or group selector, and escalation ADDS a reviewer
+    // rather than replacing one, so every escalated item has two. The item then
+    // carried a certify AND a revoke -- `HoldingCertification` claiming
+    // "certified" for a holding on its way into a revocation batch -- and
+    // `closeDueCampaigns` broke the tie on `decidedAt`, which is identical
+    // within a second.
+    //
+    // NOT a unique index on the decision instead. `closeDueCampaigns` takes the
+    // LATEST decision per item deliberately -- "an item revoked and then
+    // re-certified on appeal is certified" -- so one-decision-per-item would
+    // forbid the case the close path is written for. Moving the row is the
+    // lock; everything below runs only for the transaction that won it.
+    const moved = await tx.campaignItem.updateMany({
+      where: { id: item.id, status: 'pending' },
+      data: { status },
+    });
+    if (moved.count !== 1) {
+      // The loser re-reads the row it did not get to write, so the message
+      // names what actually happened rather than the status it saw earlier.
+      const current = await tx.campaignItem.findUniqueOrThrow({
+        where: { id: input.itemId },
+        select: { status: true },
+      });
       throw new CampaignDecisionRefusedError(
         'item_not_pending',
-        `this item is already ${item.status}`,
+        `this item is already ${current.status}`,
       );
     }
 
@@ -347,9 +388,6 @@ export async function recordCampaignDecision(
         } as never,
       },
     });
-
-    const status = input.decision === 'certify' ? 'certified' : 'revoke_decided';
-    await tx.campaignItem.update({ where: { id: item.id }, data: { status } });
 
     if (input.decision === 'certify') {
       await projectCertification(tx, item.id, decision.id, input.deciderPersonId);
@@ -456,6 +494,17 @@ export async function bulkCertify(
 
   return withTenant(tenantId, async (tx) => {
     const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: input.campaignId } });
+    // THE SAME GATE THE SINGLE PATH ENFORCES. `bulkCertify` checked
+    // `allowBulkCertify` and the tenant's cap and neither of these, so a closed
+    // campaign's items could still be certified in bulk while the single path
+    // refused them one at a time. A carve-out present on one of two entry
+    // points to the same table is not a carve-out; it is a hole.
+    if (campaign.status !== 'open') {
+      throw new CampaignDecisionRefusedError(
+        'campaign_not_open',
+        `this campaign is ${campaign.status}`,
+      );
+    }
     if (!campaign.allowBulkCertify) {
       throw new CampaignDecisionRefusedError(
         'bulk_not_allowed',
@@ -485,7 +534,29 @@ export async function bulkCertify(
       },
     });
 
+    // ONE query over every subject in the batch, not one per item. A bulk
+    // certify is capped at `bulkCertifyLimit` items and a contract read per
+    // item inside this transaction would be that many round trips against the
+    // 5000 ms ceiling.
+    const subjectIds = [
+      ...new Set(items.map((i) => i.personId).filter((p): p is string => p !== null)),
+    ];
+    const liveContracts =
+      subjectIds.length === 0
+        ? []
+        : await tx.contract.findMany({
+            where: {
+              personId: { in: subjectIds },
+              startDate: { lte: now },
+              OR: [{ endDate: null }, { endDate: { gte: now } }],
+            },
+            select: { personId: true },
+          });
+    const stillEmployed = new Set(liveContracts.map((c) => c.personId));
+    const departed = new Set(subjectIds.filter((id) => !stillEmployed.has(id)));
+
     const refused: { itemId: string; reason: string }[] = [];
+    const certified: string[] = [];
     const eligible: typeof items = [];
 
     for (const item of items) {
@@ -495,6 +566,29 @@ export async function bulkCertify(
       }
       if (item.personId === input.deciderPersonId) {
         refused.push({ itemId: item.id, reason: 'you are the subject of this item' });
+        continue;
+      }
+      // A DEPARTED SUBJECT, refused AND mooted, exactly as the single path does
+      // it. Their items stay `pending` until the nightly `mootDepartedSubjects`
+      // sweep runs, so between the departure and that sweep a manager could
+      // bulk-certify somebody who has left -- which `recordCampaignDecision`
+      // calls false assurance and refuses in words. That was the fifth route on
+      // this programme to a person's access outliving their employment, and the
+      // standing suspicion applies: any code path that special-cases a departed
+      // person is suspect until its failure mode is checked.
+      if (item.personId !== null && departed.has(item.personId)) {
+        await tx.campaignItem.update({
+          where: { id: item.id },
+          data: {
+            status: 'moot',
+            statusReason:
+              "the subject's contracts have all ended. A certification is a signed statement about somebody's access; signing one for a person who left would be false assurance.",
+          },
+        });
+        refused.push({
+          itemId: item.id,
+          reason: 'this person has left; the item is now moot and cannot be certified',
+        });
         continue;
       }
       if (!item.reviewers.some((r) => r.personId === input.deciderPersonId)) {
@@ -534,6 +628,19 @@ export async function bulkCertify(
     );
 
     for (const [index, item] of eligible.entries()) {
+      // The same conditional move as the single path, for the same reason: the
+      // eligibility loop above read these statuses in THIS transaction, but a
+      // reviewer deciding one of them singly in another transaction is exactly
+      // the concurrency this file now refuses to lose.
+      const moved = await tx.campaignItem.updateMany({
+        where: { id: item.id, status: 'pending' },
+        data: { status: 'certified' },
+      });
+      if (moved.count !== 1) {
+        refused.push({ itemId: item.id, reason: 'somebody else decided this item first' });
+        continue;
+      }
+
       const openedAt = openedByItem.get(item.id) ?? now;
       const decision = await tx.campaignDecision.create({
         data: {
@@ -555,8 +662,8 @@ export async function bulkCertify(
           } as never,
         },
       });
-      await tx.campaignItem.update({ where: { id: item.id }, data: { status: 'certified' } });
       await projectCertification(tx, item.id, decision.id, input.deciderPersonId);
+      certified.push(item.id);
     }
 
     // ONE audit event naming the items and the reviewer, not one per item.
@@ -565,7 +672,11 @@ export async function bulkCertify(
     // fifty thousand serialized transactions on one tenant's chain. Nothing is
     // lost: the audit event is the tamper-evident anchor for a set of rows that
     // are themselves complete.
-    if (eligible.length > 0) {
+    //
+    // `certified`, not `eligible`: an item whose conditional move lost the race
+    // above was decided by somebody else, and an audit event naming items this
+    // reviewer did not actually write is a worse record than no event at all.
+    if (certified.length > 0) {
       await recordEvent(tx, {
         actorUserId: input.deciderUserId,
         action: 'govern.decision.bulk_certify',
@@ -575,14 +686,14 @@ export async function bulkCertify(
         sourceIp: null,
         payload: {
           reviewerPersonId: input.deciderPersonId,
-          bulkSize: eligible.length,
-          itemIds: eligible.map((i) => i.id),
+          bulkSize: certified.length,
+          itemIds: certified,
           refusedCount: refused.length,
         },
       });
     }
 
-    return { certified: eligible.length, refused };
+    return { certified: certified.length, refused };
   });
 }
 
