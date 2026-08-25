@@ -124,6 +124,64 @@ export async function tellOwnerAFactorWasAdded(
   });
 }
 
+/**
+ * Tells the account owner a factor was taken off.
+ *
+ * The mirror of `tellOwnerAFactorWasAdded`, and the more important of the two.
+ * Removal needs only a session -- no current password, no step-up -- and it
+ * cascades recovery-code revocation, so an attacker holding a stolen session
+ * can strip every way back in off an account in two requests. Additions were
+ * mailed precisely because a factor enrolled by somebody else survives the
+ * password change that would otherwise fix things; a factor REMOVED by
+ * somebody else is the step that comes first, and until this it produced no
+ * signal the owner could see at all.
+ *
+ * `codesNote` is part of the message rather than a separate mail: "and the
+ * recovery codes you printed have stopped working" is the sentence that turns
+ * this from a notification into something the reader can act on, and sending
+ * it separately means half of them arrive and half do not.
+ *
+ * Delivery goes through `deliverMessage`, which does not throw: the removal has
+ * already committed, and a mail server that is down must not turn it into a 500
+ * for the user who just made it. A failure is logged and recorded as
+ * `notify.delivery_failed`.
+ */
+export async function tellOwnerAFactorWasRemoved(
+  request: FastifyRequest,
+  transport: Transport,
+  userId: string,
+  factor: string,
+  recoveryCodesRevoked = 0,
+): Promise<void> {
+  const { user, tenantName } = await request.db(async (tx) => ({
+    user: await tx.user.findUnique({ where: { id: userId } }),
+    tenantName: (
+      await tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } })
+    ).name,
+  }));
+  if (!user) return;
+
+  const message = renderMessage(tenantName, 'factor-removed', user.email, {
+    displayName: user.displayName,
+    factor,
+    when: new Date().toISOString(),
+    sourceIp: request.ip,
+    codesNote:
+      recoveryCodesRevoked === 0
+        ? ''
+        : ` ${recoveryCodesRevoked} unused recovery code${
+            recoveryCodesRevoked === 1 ? '' : 's'
+          } stopped working with it, because recovery codes are a way back in when a real factor is lost and there is no longer one to lose.`,
+  });
+  await deliverMessage(transport, message, {
+    tenantId: request.tenantId,
+    userId: user.id,
+    purpose: 'factor-removed',
+    log: (error, purpose) =>
+      request.log.error({ err: error, purpose }, 'notification not delivered'),
+  });
+}
+
 export const qrDataUrl = (text: string) =>
   new Encoder({ level: 'M' }).encode(new Byte(text)).toDataURL(4, { margin: 8 });
 
@@ -423,6 +481,17 @@ export async function registerMfaRoutes(
         });
         return dropped;
       });
+
+      // Outside the transaction above, and awaited so a mail failure is logged
+      // and audited rather than becoming an unhandled rejection on a removal
+      // that has already committed.
+      await tellOwnerAFactorWasRemoved(
+        request,
+        options.transport,
+        request.session.userId,
+        'security key',
+        revoked,
+      );
       return reply.status(200).send({ recoveryCodesRevoked: revoked });
     });
 

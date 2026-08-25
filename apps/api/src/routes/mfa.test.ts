@@ -508,3 +508,74 @@ describe('administrative factor removal', () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+/**
+ * A credential row, seeded rather than registered.
+ *
+ * Registering one over HTTP needs a real authenticator to sign the
+ * attestation, which a test does not have; `admin/tenant.test.ts` seeds the
+ * same way for the same reason. Bound through `withTenant` because row-level
+ * security matches nothing outside a bound transaction, so an unbound create
+ * would fail for a reason unrelated to what is under test.
+ */
+async function seedWebAuthnCredential(): Promise<string> {
+  const row = await withTenant(ctx.tenantId, (tx) =>
+    tx.webAuthnCredential.create({
+      data: {
+        tenantId: ctx.tenantId,
+        userId,
+        // The base64url handle the authenticator knows it by. The ROUTE takes
+        // the row's own uuid, which is what this returns -- they are different
+        // identifiers and only one of them parses as a uuid.
+        credentialId: `cred-${userId}`,
+        publicKey: Buffer.from([0]),
+        counter: 0,
+        rpId: ctx.host,
+        label: 'YubiKey',
+      },
+    }),
+  );
+  return row.id;
+}
+
+describe('a factor leaving an account is told to its owner', () => {
+  /**
+   * Additions mail the owner deliberately: it is one of the two controls that
+   * make "a stolen password can enrol a factor" an acceptable trade. Removal
+   * needs only a session -- no current password, no step-up -- and cascades
+   * recovery-code revocation, which is strictly the more damaging half, and it
+   * told nobody at all. An attacker holding a session could quietly strip
+   * every factor off an account and the owner would find out at their next
+   * sign-in, with nothing to say what happened.
+   */
+  it('mails the owner when a security key is removed', async () => {
+    await seedUser();
+    const cookie = await portalCookie();
+    const credentialId = await seedWebAuthnCredential();
+
+    const before = ctx.mail.sent.length;
+    const res = await call('DELETE', `/api/auth/mfa/webauthn/${credentialId}`, { cookie });
+    expect(res.statusCode).toBe(200);
+
+    const sent = ctx.mail.sent.slice(before);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toBe('j@acme.test');
+    expect(sent[0]!.text).toContain('security key');
+  });
+
+  /**
+   * The count is on the wire because the console shows it. A user whose
+   * printed codes have just been revoked has no other way to find that out.
+   */
+  it('answers how many recovery codes went with it', async () => {
+    await seedUser();
+    const cookie = await portalCookie();
+    const credentialId = await seedWebAuthnCredential();
+    const issued = await call('POST', '/api/auth/mfa/recovery-codes', { cookie });
+
+    const res = await call('DELETE', `/api/auth/mfa/webauthn/${credentialId}`, { cookie });
+    expect(res.json()).toEqual({
+      recoveryCodesRevoked: (issued.json() as { codes: string[] }).codes.length,
+    });
+  });
+});
