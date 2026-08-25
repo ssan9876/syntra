@@ -3652,7 +3652,7 @@ Spec §7.5, **N4**. `providerFor` caches one `Provider` per tenant with the issu
 - Consumes: `invalidateProvider(tenantId)` from `@syntra/protocols` — already imported by `protocol-apps.ts`, so the dependency edge exists.
 - Produces: no signature change. `PUT /api/admin/tenant` keeps its body and its response.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/api/src/routes/admin/tenant.test.ts`:
 
@@ -3700,12 +3700,12 @@ describe('changing the tenant’s domain', () => {
 
 Import the module namespace at the top of the file — `import * as protocols from '@syntra/protocols';` — because `vi.spyOn` needs an object to replace the property on, and add `vi` to the `vitest` import if the file does not already have it.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/tenant.test.ts -t 'domain'`
 Expected: FAIL — the first case: `invalidateProvider` was never called.
 
-- [ ] **Step 3: Invalidate after the write commits**
+- [x] **Step 3: Invalidate after the write commits**
 
 In `apps/api/src/routes/admin/tenant.ts`, add `import { invalidateProvider } from '@syntra/protocols';` and restructure the handler so the transaction's result is captured and the cache is dropped **after** it commits (currently the handler is `return request.db(async (tx) => { … })`, lines 43–141):
 
@@ -3740,12 +3740,12 @@ In `apps/api/src/routes/admin/tenant.ts`, add `import { invalidateProvider } fro
 
 The `before` read is the one the handler already makes inside the transaction (line 47); hoist it rather than adding a second, and keep the in-transaction `before` for the lockout check that uses it.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/tenant.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -3788,7 +3788,7 @@ Spec §7.5, **N5**. Four routes reach a path or query parameter with a cast inst
 - Consumes: `idParam` from `@syntra/contracts`.
 - Produces: `export const personParam = z.object({ personId: z.string().uuid() })` in `packages/contracts/src/govern.ts`. No route signature changes; the three routes answer 400 with `errors[]` instead of 500.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `apps/api/src/routes/saml-metadata.test.ts`:
 
@@ -3831,12 +3831,12 @@ it('answers 400 for a subjectPersonId that is not a uuid', async () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run apps/api/src/routes/saml-metadata.test.ts apps/api/src/routes/admin/govern.test.ts apps/api/src/routes/automate-portal.test.ts -t 'not a uuid'`
 Expected: FAIL — all three answer 500.
 
-- [ ] **Step 3: Validate the three parameters**
+- [x] **Step 3: Validate the three parameters**
 
 `apps/api/src/routes/saml-idp.ts`, replacing lines 382–384:
 
@@ -3893,12 +3893,12 @@ and adding `personParam` to the `@syntra/contracts` import block.
 
 and use `subject` in place of `requested` for the remainder of the function. Add `idParam` to the file's `@syntra/contracts` import if it is not already there.
 
-- [ ] **Step 4: Run the three files to verify they pass**
+- [x] **Step 4: Run the three files to verify they pass**
 
 Run: `npx vitest run apps/api/src/routes/saml-metadata.test.ts apps/api/src/routes/admin/govern.test.ts apps/api/src/routes/automate-portal.test.ts`
 Expected: PASS, all three files in full.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -3940,7 +3940,7 @@ Spec §7.5, **N6**. `presentedCredentials` runs `decodeURIComponent` over both h
 - Consumes: nothing new.
 - Produces: `presentedCredentials` returns `ClientCredentials | 'malformed' | null`. `POST /oidc/token` answers 401 `{ error: 'invalid_client' }` for an unreadable Basic header.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/api/src/routes/oidc-token.test.ts`:
 
@@ -3988,12 +3988,12 @@ describe('malformed client credentials', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/oidc-token.test.ts -t 'malformed client credentials'`
 Expected: FAIL — the first case is a 500 from the `URIError`. The second currently returns `null`, which reads as "public client" and produces a different refusal further down.
 
-- [ ] **Step 3: Distinguish "no credentials" from "unreadable credentials"**
+- [x] **Step 3: Distinguish "no credentials" from "unreadable credentials"**
 
 In `apps/api/src/routes/oidc-token.ts`, replace `presentedCredentials` (lines 49–69):
 
@@ -4060,12 +4060,12 @@ In the handler (line 305), before the `credentials !== null` branch:
 
 The rest of the handler is unchanged: `credentials` is now `ClientCredentials | null`, which is what `substitutedRequest` already takes.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/oidc-token.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
