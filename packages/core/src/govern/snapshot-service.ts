@@ -706,13 +706,61 @@ export async function pruneSnapshots(
     if (candidates.length === 0) return { pruned: 0, retainedForReference: 0 };
     const ids = candidates.map((c) => c.id);
 
+    // THE THREE REFERENCE KINDS THE DOCSTRING PROMISES, and the third of them
+    // was missing.
+    //
+    // `Campaign.snapshotId`, `Campaign.rebasedFromSnapshotId` and
+    // `CampaignItem.holdingSnapshotId` are bare uuid columns with NO foreign
+    // key, so nothing stopped the delete at the database either: the campaign
+    // was left pointing at a snapshot that no longer exists, and
+    // `readableSnapshot` then throws `not_found` for its report, its re-base
+    // and its evidence pack. A campaign closed 400 days ago is exactly the one
+    // an auditor asks about, so the window this defect fires in is the window
+    // the evidence matters in.
+    //
+    // A foreign key was considered and rejected in both forms. `RESTRICT` turns
+    // the prune into an exception rather than a retention -- the job dies and
+    // nothing else is pruned either -- and `SET NULL` silently unlinks a
+    // campaign from its own evidence, which is the same data loss wearing a
+    // constraint.
     const referenced = new Set<string>();
+
     for (const pack of await tx.evidencePack.findMany({
       where: { snapshotId: { in: ids } },
       select: { snapshotId: true },
     })) {
       if (pack.snapshotId !== null) referenced.add(pack.snapshotId);
     }
+
+    // EVERY campaign, not only open ones. A closed campaign is the one whose
+    // evidence somebody comes back for; an open one still has reviewers looking
+    // at it. Neither may lose the picture it was generated from.
+    for (const campaign of await tx.campaign.findMany({
+      where: {
+        OR: [{ snapshotId: { in: ids } }, { rebasedFromSnapshotId: { in: ids } }],
+      },
+      select: { snapshotId: true, rebasedFromSnapshotId: true },
+    })) {
+      if (ids.includes(campaign.snapshotId)) referenced.add(campaign.snapshotId);
+      if (campaign.rebasedFromSnapshotId !== null && ids.includes(campaign.rebasedFromSnapshotId)) {
+        referenced.add(campaign.rebasedFromSnapshotId);
+      }
+    }
+
+    // And the item's OWN snapshot, which a re-base moves per item -- so a
+    // campaign whose items sit on three snapshots holds all three.
+    // `holdingSnapshotId` names where the copied attribution set came from, and
+    // that is what "attested against these facts" means. `distinct` rather than
+    // a read of every item: a 50,000-item campaign has at most a handful of
+    // distinct values and this transaction has a 5000 ms budget.
+    for (const item of await tx.campaignItem.findMany({
+      where: { holdingSnapshotId: { in: ids } },
+      select: { holdingSnapshotId: true },
+      distinct: ['holdingSnapshotId'],
+    })) {
+      referenced.add(item.holdingSnapshotId);
+    }
+
     for (const finding of await tx.governFinding.findMany({
       where: { status: { not: 'resolved' }, subjectRefType: 'snapshot', subjectRefId: { in: ids } },
       select: { subjectRefId: true },
