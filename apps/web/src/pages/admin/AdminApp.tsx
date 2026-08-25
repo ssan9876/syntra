@@ -5,6 +5,7 @@ import { UsersPage } from './UsersPage.js';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
 import { PersonsPage } from './PersonsPage.js';
+import { OnboardPersonPage } from './OnboardPersonPage.js';
 import { PersonDetailPage } from './PersonDetailPage.js';
 import { ImportPage } from './ImportPage.js';
 import { AuditPage } from './AuditPage.js';
@@ -55,6 +56,10 @@ export function AdminApp() {
             <Route path="groups" element={<GroupsPage />} />
             <Route path="org-units" element={<OrgUnitsPage />} />
             <Route path="people" element={<PersonsPage />} />
+            {/* Listed before the parametric route for readability, as
+                sources/new is. React Router ranks the static segment above the
+                dynamic one regardless, so "new" is never read as an id. */}
+            <Route path="people/new" element={<OnboardPersonPage />} />
             <Route path="people/:id" element={<PersonDetailPage />} />
             {/* After the person, so the more specific path is reached rather
                 than shadowed by the less specific one. */}

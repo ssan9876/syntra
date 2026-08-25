@@ -1,6 +1,15 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Empty,
+  Field,
+  Panel,
+  SkeletonRows,
+  Status,
+  buttonClasses,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
@@ -26,7 +35,12 @@ export function PersonsPage() {
     <>
       <PageHeader
         title="People"
-        description="Who someone is, and the contracts they hold. Their sign-in accounts are listed under Users."
+        description="Everyone the organization knows, and the contracts they hold. Start here to onboard somebody; their sign-in accounts are listed under Users."
+        actions={
+          <Link to="/admin/people/new" className={buttonClasses('primary')}>
+            Add someone
+          </Link>
+        }
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
@@ -90,59 +104,13 @@ export function PersonsPage() {
         />
       )}
 
-      <RecordPanel
-        title="New person"
-        submitLabel="Add someone"
-        path="/api/admin/persons"
-        onCreated={reload}
-        build={(v) => ({
-          givenName: v.givenName ?? '',
-          familyName: v.familyName ?? '',
-          // Each omitted when blank. The schema validates these as e-mail
-          // addresses and as a bounded string, and '' satisfies neither.
-          ...(v.businessEmail ? { businessEmail: v.businessEmail } : {}),
-          ...(v.externalId ? { externalId: v.externalId } : {}),
-        })}
-        fields={(v, set, errs) => (
-          <>
-            <Field
-              label="Given name"
-              value={v.givenName ?? ''}
-              onChange={(x) => set('givenName', x)}
-              error={errs.givenName}
-              placeholder="Maya"
-            />
-            <Field
-              label="Family name"
-              value={v.familyName ?? ''}
-              onChange={(x) => set('familyName', x)}
-              error={errs.familyName}
-              placeholder="Okafor"
-            />
-            <Field
-              label="Business email"
-              value={v.businessEmail ?? ''}
-              onChange={(x) => set('businessEmail', x)}
-              error={errs.businessEmail}
-              type="email"
-              placeholder="maya.okafor@acme.localhost"
-            />
-            <Field
-              label="External id"
-              value={v.externalId ?? ''}
-              onChange={(x) => set('externalId', x)}
-              error={errs.externalId}
-              hint="The identifier the HR system knows them by. Must be unique."
-              placeholder="E1042"
-            />
-          </>
-        )}
-      />
-
-      {/* A person is not an account. Creating one here records WHO somebody
-          is; linking them to a login, and giving them a contract, are separate
-          acts on their own page — which is the distinction this product is
-          built on and the reason the two lists are not one list. */}
+      {/* The create form has moved to /admin/people/new.
+          A four-field panel here recorded WHO somebody is and stopped, which
+          read as the whole job and was not: the contract that makes them
+          provisionable, and the login that lets them sign in, had no form
+          anywhere. Sending the primary action to a page that asks for all
+          three is what closes that, and it is why this page keeps a list and
+          nothing else. */}
 
       {!error && (
         <Panel>
