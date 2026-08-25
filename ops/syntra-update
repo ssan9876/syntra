@@ -36,6 +36,9 @@ SERVICE="${SYNTRA_SERVICE:-syntra}"
 READY_URL="${SYNTRA_READY_URL:-http://127.0.0.1:3000/health/ready}"
 REPO="${SYNTRA_RELEASE_REPO:-ssan9876/syntra}"
 PG_CONTAINER="${SYNTRA_PG_CONTAINER:-infra-postgres-1}"
+PG_ROLE="${SYNTRA_PG_ROLE:-syntra}"
+PG_DB="${SYNTRA_PG_DB:-syntra}"
+APP_ROLE="${SYNTRA_PG_APP_ROLE:-syntra_app}"
 KEEP=3
 # How long a new release gets to become ready before it is judged broken.
 # Long enough for a cold start with a large migration behind it; short enough
@@ -277,24 +280,79 @@ dump_database() {
   mkdir -p "$BACKUPS"
   # Through the container: there is no pg_dump on the host, and the version
   # inside always matches the server.
-  docker exec "$PG_CONTAINER" pg_dump -U syntra -d syntra -Fc > "$dest" 2>/dev/null \
+  #
+  # As a role that BYPASSES RLS, which is not a detail. Every tenant-scoped
+  # table here is FORCE ROW LEVEL SECURITY, and the application role is
+  # deliberately NOSUPERUSER NOBYPASSRLS -- so a dump taken as the application
+  # role either errors out or, with row security enabled, quietly captures the
+  # rows visible to a session that has set no tenant, which is none of them.
+  docker exec "$PG_CONTAINER" pg_dump -U "$PG_ROLE" -d "$PG_DB" -Fc > "$dest" 2>/dev/null \
     || die "the pre-migration database dump failed; nothing was changed"
   # A dump that exists and is empty is worse than none, because it looks like
   # a backup. pg_dump's custom format starts with the magic "PGDMP".
   [ -s "$dest" ] || die "the pre-migration dump is empty; nothing was changed"
   head -c 5 "$dest" | grep -q PGDMP \
     || die "the pre-migration dump is not a PostgreSQL archive; nothing was changed"
-  log "dumped $(wc -c < "$dest") bytes to $dest"
+  # AND IT CONTAINS ROWS. The two checks above pass on a structurally perfect
+  # archive of nothing, which is exactly what an RLS-filtered dump is. This is
+  # the check that can tell a backup from something shaped like one.
+  local sections
+  sections=$(docker exec -i "$PG_CONTAINER" pg_restore -l < "$dest" 2>/dev/null \
+    | grep -c 'TABLE DATA' || true)
+  [ "${sections:-0}" -gt 0 ] \
+    || die "the pre-migration dump contains no table data, so it is not a backup; nothing was changed"
+  log "dumped $(wc -c < "$dest") bytes, $sections table(s) of data, to $dest"
 }
 
 restore_database() {
   local src="$1"
   [ -s "$src" ] || { log "no dump to restore from"; return 1; }
-  docker exec -i "$PG_CONTAINER" pg_restore -U syntra -d syntra --clean --if-exists \
+
+  # THE SCHEMAS GO FIRST, and this is the whole of the fix.
+  #
+  # `pg_restore --clean --if-exists` drops only what is IN THE ARCHIVE. Every
+  # table, type, index and policy the new release's migration created is
+  # absent from a dump taken BEFORE that migration -- so all of it survives a
+  # rollback, while the restored _prisma_migrations no longer has a row saying
+  # it was ever applied. The next attempt then dies at `migrating` with
+  # `relation "X" already exists` and repeats forever, while the console says
+  # "Nothing was left half-applied."
+  #
+  # Every non-system schema, not just `public`: pg-boss creates and migrates
+  # its own, and a release that moved its queue tables would leave them behind
+  # the same way.
+  #
+  # Afterwards the database holds exactly what the dump holds, which is what
+  # the word restore means.
+  docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_ROLE" -d "$PG_DB" >/dev/null 2>&1 <<SQL
+DO \$\$
+DECLARE s text;
+BEGIN
+  FOR s IN
+    SELECT nspname FROM pg_namespace
+     WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema'
+  LOOP
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', s);
+  END LOOP;
+END \$\$;
+CREATE SCHEMA public;
+-- Mirrors infra/initdb/01-app-role.sql. The application role OWNS the schema
+-- and its tables, which is what makes FORCE ROW LEVEL SECURITY bind the owner
+-- -- so restoring into a schema owned by the dumping superuser would leave a
+-- database whose isolation model is subtly not the one that was tested.
+ALTER SCHEMA public OWNER TO "$APP_ROLE";
+GRANT ALL ON SCHEMA public TO "$APP_ROLE";
+SQL
+  if [ "$?" -ne 0 ]; then
+    log "the schemas could not be dropped before restoring; NOT restoring over a database in an unknown state"
+    return 1
+  fi
+
+  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$PG_DB" --clean --if-exists \
     < "$src" >/dev/null 2>&1
   # pg_restore exits non-zero on benign "does not exist" noise from --clean,
   # so its status is not the test. Whether the schema is usable is.
-  docker exec "$PG_CONTAINER" psql -U syntra -d syntra -c 'SELECT 1' >/dev/null 2>&1
+  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$PG_DB" -c 'SELECT 1' >/dev/null 2>&1
 }
 
 swap_to() {

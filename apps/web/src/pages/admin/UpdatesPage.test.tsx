@@ -177,7 +177,7 @@ describe('UpdatesPage', () => {
     render(<UpdatesPage />);
 
     expect(await screen.findByText(/The update was undone/)).toBeInTheDocument();
-    expect(screen.getByText(/Nothing was left half-applied/)).toBeInTheDocument();
+    expect(screen.getByText(/schema and data both/)).toBeInTheDocument();
   });
 
   /**

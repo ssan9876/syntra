@@ -185,8 +185,11 @@ export function UpdatesPage() {
                 {progress.step === 'rolled_back' && (
                   <Alert tone="warning" title="The update was undone">
                     The new version did not come up, so the previous one was put
-                    back automatically, along with the database as it was before
-                    the update. Nothing was left half-applied.
+                    back automatically, along with the database as it was
+                    immediately before the update — schema and data both.
+                    Anything that happened in the minutes between the backup and
+                    the rollback is not in it: a sign-in, a sync run, a
+                    provisioning action.
                   </Alert>
                 )}
                 {progress.step === 'failed' && (
