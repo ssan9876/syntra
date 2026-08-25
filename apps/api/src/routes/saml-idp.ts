@@ -661,8 +661,28 @@ export async function registerSamlIdpRoutes(
     const session = token ? await request.db((tx) => resolveSession(tx, token)) : null;
 
     // No Syntra session yet, or the service provider demanded a fresh
-    // authentication. Send the user to the login screen; it returns here.
-    if (!session || ctx.parked.forceAuthn) {
+    // authentication this session is not an answer to.
+    //
+    // `forceAuthn` on its own is NOT the condition, and that distinction is
+    // the whole of this fix. Nothing clears the flag -- the parked row is read
+    // back unchanged, and `consumeParkedAuthnRequest` only stamps `consumedAt`
+    // and runs after this point -- so redirecting on the flag alone sent the
+    // user to `/login`, which sent them back to `/saml/continue`, which
+    // redirected again. The browser looped, minting a fresh session each
+    // round, until the row expired at ten minutes with a 410, and no assertion
+    // was ever issued to any service provider that asks for ForceAuthn.
+    //
+    // A session minted AFTER the request was parked is the fresh
+    // authentication the service provider asked for, and it is the only thing
+    // that is. Comparing timestamps rather than marking the row also means two
+    // tabs mid-sign-in cannot satisfy each other's demand: each request is
+    // measured against the session as it stood when that request arrived.
+    const staleForForceAuthn =
+      session !== null &&
+      ctx.parked.forceAuthn &&
+      session.createdAt.getTime() <= ctx.parked.createdAt.getTime();
+
+    if (!session || staleForForceAuthn) {
       const next = encodeURIComponent(`/saml/continue?handle=${ctx.parked.handle}`);
       return reply.redirect(`/login?next=${next}`, 302);
     }

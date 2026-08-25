@@ -10,6 +10,15 @@ export interface ParkedAuthnRequest {
   acsUrl: string;
   relayState: string | null;
   forceAuthn: boolean;
+  /**
+   * When the request was parked.
+   *
+   * Carried out to the caller because it is half of the answer to
+   * `forceAuthn`. The flag says "prove this person again"; the only honest
+   * test of that is a session established AFTER the service provider asked,
+   * and neither side of the comparison was reachable before this.
+   */
+  createdAt: Date;
 }
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
@@ -31,7 +40,7 @@ const DEFAULT_TTL_MS = 10 * 60 * 1000;
  */
 export async function parkAuthnRequest(
   tenantId: string,
-  input: Omit<ParkedAuthnRequest, 'id' | 'handle'> & {
+  input: Omit<ParkedAuthnRequest, 'id' | 'handle' | 'createdAt'> & {
     browserBinding: string;
     ttlMs?: number;
   },
@@ -60,6 +69,7 @@ export async function parkAuthnRequest(
     acsUrl: row.acsUrl,
     relayState: row.relayState,
     forceAuthn: row.forceAuthn,
+    createdAt: row.createdAt,
   };
 }
 
@@ -95,6 +105,7 @@ export async function findParkedAuthnRequest(
       acsUrl: row.acsUrl,
       relayState: row.relayState,
       forceAuthn: row.forceAuthn,
+    createdAt: row.createdAt,
     };
   });
 }
