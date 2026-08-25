@@ -81,6 +81,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260829000000_tenant_additional_domains',
   '20260830000000_org_unit_status',
   '20260831000000_campaign_revocation_vocabulary',
+  '20260903000000_builtin_role_permissions',
   '20260905000000_deployment_manage_backfill',
 ];
 
