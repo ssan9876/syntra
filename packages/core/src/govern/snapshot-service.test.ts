@@ -517,3 +517,107 @@ describe('the audit integrity finding and the nightly detect stage (C-a)', () =>
     expect(after.resolvedBySnapshotId).not.toBe(built.snapshotId);
   });
 });
+
+/**
+ * One person, two `User` rows -- explicitly supported by the sync design,
+ * and the shape that used to end every nightly build.
+ *
+ * `collect` emits a holding per (userId, resource) while the subject key is
+ * the PERSON, so two accounts holding one application collide on
+ * `Holding`'s unique key. `createMany` has no upsert: the snapshot failed
+ * with P2002, and so did every build after it, because the shape does not
+ * go away on its own.
+ */
+describe('a person holding one resource through two accounts', () => {
+  const viaTwoAccounts = (personId: string): Partial<CollectedTenant> => ({
+    personIds: [personId],
+    personsWithActiveContract: 1,
+    holdings: [
+      {
+        subject: { kind: 'person', personId },
+        systemKind: 'syntraInternal',
+        systemId: 'syntra',
+        systemName: 'Syntra',
+        resourceKind: 'application',
+        resourceId: 'app-1',
+        resourceName: 'CRM',
+        state: 'held',
+        observedAt: NOW,
+        observedVia: 'user-a',
+        attribution: {
+          rules: [], requests: [], directAssignments: [],
+          groupInheritance: [{ groupId: 'g1', groupName: 'Ward Nurses', assignmentId: 'a-1' }],
+          orgUnitInheritance: [], directorySources: [], discovered: [], manual: [],
+        },
+      },
+      {
+        subject: { kind: 'person', personId },
+        systemKind: 'syntraInternal',
+        systemId: 'syntra',
+        systemName: 'Syntra',
+        resourceKind: 'application',
+        resourceId: 'app-1',
+        resourceName: 'CRM',
+        state: 'held',
+        observedAt: NOW,
+        observedVia: 'user-b',
+        attribution: {
+          rules: [], requests: [], directAssignments: [],
+          groupInheritance: [{ groupId: 'g2', groupName: 'Bank Staff', assignmentId: 'a-2' }],
+          orgUnitInheritance: [], directorySources: [], discovered: [], manual: [],
+        },
+      },
+    ],
+  });
+
+  const buildFor = async (personId: string) =>
+    buildSnapshot(tenantId, {
+      now: NOW,
+      collect: async () => emptyCollection(viaTwoAccounts(personId)),
+    });
+
+  const aPerson = async () =>
+    withTenant(tenantId, (tx) =>
+      tx.person.create({ data: { tenantId, givenName: 'Maya', familyName: 'Okafor' } }),
+    );
+
+  it('builds instead of failing the snapshot', async () => {
+    const person = await aPerson();
+    const built = await buildFor(person.id);
+
+    const snapshot = await withTenant(tenantId, (tx) =>
+      tx.accessSnapshot.findUniqueOrThrow({ where: { id: built.snapshotId } }),
+    );
+    expect(snapshot.status).toBe('complete');
+    expect(snapshot.error).toBeNull();
+  });
+
+  it('writes ONE holding, not two', async () => {
+    const person = await aPerson();
+    const built = await buildFor(person.id);
+
+    const holdings = await withTenant(tenantId, (tx) =>
+      tx.holding.findMany({ where: { snapshotId: built.snapshotId } }),
+    );
+    expect(holdings).toHaveLength(1);
+  });
+
+  /**
+   * Union rather than discard. Each account is a separate true reason the
+   * person holds this, and dropping one would make the holding look less
+   * attributable than it is -- which is a claim the reviewer acts on.
+   */
+  it('keeps BOTH accounts as attributions of the one holding', async () => {
+    const person = await aPerson();
+    const built = await buildFor(person.id);
+
+    const holding = await withTenant(tenantId, (tx) =>
+      tx.holding.findFirstOrThrow({
+        where: { snapshotId: built.snapshotId },
+        include: { attributions: true },
+      }),
+    );
+    expect(holding.attributions).toHaveLength(2);
+    expect(holding.attributionCount).toBe(2);
+  });
+});

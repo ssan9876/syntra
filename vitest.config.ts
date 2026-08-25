@@ -29,7 +29,18 @@ const shards = database.name === null ? 1 : testWorkerCount();
 
 export default defineConfig({
   test: {
-    include: ['packages/**/src/**/*.test.ts', 'apps/**/src/**/*.test.ts'],
+    // `apps/api`, NOT `apps/**`. The web app has its own config -- jsdom,
+    // `globals: true`, and `src/test-setup.ts` -- and the three `.test.ts`
+    // files under it were being matched HERE instead: run in a node
+    // environment, without that setup, which is not what they were written
+    // against. Its 37 `.test.tsx` files were matched by neither pattern and
+    // ran nowhere at all, which is how a stale assertion in
+    // StatusToggle.test.tsx sat red on main unseen.
+    //
+    // Widening this to `*.test.{ts,tsx}` would not work: this config has no
+    // jsdom environment and no React plugin. Two configs, two commands, and
+    // CI runs both.
+    include: ['packages/**/src/**/*.test.ts', 'apps/api/**/src/**/*.test.ts'],
     testTimeout: 30_000,
     // The same budget as a test body, deliberately. A `beforeEach` here does
     // exactly what a test body does -- `resetDatabase()` TRUNCATEs every table

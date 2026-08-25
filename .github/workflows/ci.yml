@@ -141,6 +141,30 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # THE CONSOLE'S TESTS, which ran in no job at all until this step.
+      #
+      # The root vitest config matches `*.test.ts` only, so every
+      # `apps/web/**/*.test.tsx` file -- 37 of them, 303 tests -- was
+      # invisible to `pnpm test`. Because release.yml reuses this workflow
+      # through `workflow_call`, tagged releases shipped with them unexecuted
+      # too. A stale assertion in StatusToggle.test.tsx sat red on main until
+      # a full local run turned it up.
+      #
+      # A separate step rather than folded into `pnpm test`: these need jsdom
+      # and the React plugin, which is what apps/web/vitest.config.ts is.
+      - name: Test the console
+        run: pnpm --filter @syntra/web test
+
+      # THE PRODUCTION BUNDLE, which nothing built until this step.
+      #
+      # The browser job exercises the Vite DEV server, so a break that only
+      # appears in a production build -- a rollup resolution failure, a
+      # tailwind config error, a dynamic import path -- merged green and first
+      # surfaced in release.yml, or on the lab host halfway through a deploy.
+      # It takes a couple of seconds.
+      - name: Build the console
+        run: pnpm --filter @syntra/web build
+
       - name: Container logs, if the suite failed
         if: failure()
         run: docker compose -f infra/docker-compose.yml logs --tail 100
@@ -193,9 +217,17 @@ jobs:
       # and leaves the last one's fixtures behind, which is enough to fool the
       # seed's idempotence guard into doing nothing — and the browser tests then
       # look at a directory with no people in it.
+      #
+      # `SYNTRA_ALLOW_RESET` names the database deliberately: `db:reset`
+      # refuses anything that is not a scratch `syntra_test_*` database unless
+      # told which one it is emptying. The development and lab databases are
+      # both called `syntra`, so the name cannot tell them apart, and the
+      # NODE_ENV guard this replaced protected neither. CI names its own for
+      # the same reason anybody else has to.
+      # See packages/db/src/reset-guard.ts.
       - name: Seed
         run: |
-          pnpm db:reset
+          SYNTRA_ALLOW_RESET=syntra pnpm db:reset
           pnpm seed
 
       - name: Start the application

@@ -6,6 +6,7 @@ web app and a seeded database up first:
 ```bash
 pnpm db:up
 pnpm db:migrate
+SYNTRA_ALLOW_RESET=syntra pnpm db:reset
 SEED_ADMIN_PASSWORD=... SEED_USER_PASSWORD=... pnpm seed
 AUTH_RATE_LIMIT_MAX=200 pnpm dev    # api on :3000, web on :5173
 pnpm e2e
@@ -13,10 +14,18 @@ pnpm e2e
 
 Several things will bite otherwise:
 
-**Run `pnpm db:reset && pnpm seed` after `pnpm test`.** The integration tests
-truncate every table between cases and leave the last one's fixtures behind —
-usually a tenant named `acme` with an `admin` user in it, which is enough to
-fool the seed into reporting the tenant as already seeded and doing nothing.
+**Run `SYNTRA_ALLOW_RESET=syntra pnpm db:reset && pnpm seed` after `pnpm test`.**
+The integration tests truncate every table between cases and leave the last
+one's fixtures behind — usually a tenant named `acme` with an `admin` user in
+it, which is enough to fool the seed into reporting the tenant as already
+seeded and doing nothing.
+
+`db:reset` refuses to empty anything that is not a scratch `syntra_test_*`
+database unless you name the database you mean, and it prints the tenant, user
+and audit counts it is about to destroy. That is not ceremony for its own sake:
+the development database and the lab database are both called `syntra`, so the
+connection string cannot tell them apart, and the guard this replaced tested
+`NODE_ENV=production` — which the lab sets nowhere.
 
 **Raise `AUTH_RATE_LIMIT_MAX`.** The suite signs in far more often in a minute
 than a person ever would, and the default limit of ten password attempts per
@@ -44,7 +53,7 @@ which is exactly what makes the cleanup possible; signing the user in on the
 administrator's own page would throw that session away and leave nobody able to
 take the rule off again.
 
-**`pnpm db:reset && pnpm seed` is required before every run of the MFA spec,
+**`SYNTRA_ALLOW_RESET=syntra pnpm db:reset && pnpm seed` is required before every run of the MFA spec,
 not merely advisable.** The factors enrolled during the run are not cleaned up
 — this slice ships no console screen for clearing somebody's factor, only the
 `DELETE /api/admin/users/:id/factors/:type` endpoint — so a second run finds
