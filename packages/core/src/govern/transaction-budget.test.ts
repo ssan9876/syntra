@@ -540,10 +540,15 @@ describe('the transaction budget — slice 2', () => {
   it('closes a 2,000-item campaign with no transaction over the budget', async () => {
     await seedOrdinaryCampaign();
     await startCampaign(tenantId, actorUserId, campaignId, { now: NOW });
-    await decideEveryItem('certify');
-    const { slowest } = await timedTransactions(() =>
+    // REVOKE, not certify. The close now computes the revocation batch §13 says
+    // it must, and that is one transaction for the whole batch by design -- so
+    // certifying every item would measure a close that skips the heaviest thing
+    // it does.
+    await decideEveryItem('revoke');
+    const { result, slowest } = await timedTransactions(() =>
       closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) }),
     );
+    expect(result.batches).toBe(1);
     expect(slowest).toBeLessThan(BUDGET_MS);
   }, 300_000);
 

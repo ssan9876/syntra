@@ -22,6 +22,14 @@ import { PERMISSIONS } from '../rbac/permissions.js';
 // from here.
 import { computeReviewQualitySignals } from './decision-service.js';
 import { createRemediationItem, upsertFindings } from './finding-service.js';
+// §13: revoke decisions "accumulate, and at campaign close -- or at an explicit
+// Execute revocations action before it -- they are computed into a
+// RevocationBatch". Nothing computed one, so a campaign closed with its
+// decisions sitting untouched forever.
+//
+// The edge is one-way: `revocation-service.ts` imports nothing from this file,
+// so nothing here closes a cycle.
+import { computeRevocationBatch } from './revocation-service.js';
 import { readableSnapshot } from './readable.js';
 import { governSettings } from './settings-service.js';
 
@@ -778,11 +786,12 @@ export async function runCampaignReminders(
 export async function closeDueCampaigns(
   tenantId: string,
   options: { now?: Date; publicUrl?: string; batchSize?: number } = {},
-): Promise<{ closed: number; undecided: number }> {
+): Promise<{ closed: number; undecided: number; batches: number }> {
   const now = options.now ?? new Date();
   const batchSize = options.batchSize ?? REVIEWER_BATCH;
   let closed = 0;
   let undecidedTotal = 0;
+  let batches = 0;
 
   // A SHORT TRANSACTION RETURNING PLAIN DATA, not a transaction held open
   // across every campaign and every item. §17 contemplates 50,000-item
@@ -837,6 +846,60 @@ export async function closeDueCampaigns(
       undecided += page.length;
       // The page's items are no longer `pending`, so the same query returns the
       // next page without needing a cursor.
+    }
+
+    // ---- the revocation batch, BEFORE the close ---------------------------
+    //
+    // §13: revoke decisions "accumulate, and at campaign close -- or at an
+    // explicit Execute revocations action before it -- they are computed into a
+    // RevocationBatch". Nothing computed one. `computeRevocationBatch`'s only
+    // caller was an admin route the console never invokes, so a campaign closed
+    // with 91 revoke decisions sitting as rows nobody would ever act on: the
+    // report said `revoke_decided` and the target still held everything. That
+    // is the silent-drop failure this platform keeps rediscovering, wearing the
+    // clothes of a completed audit.
+    //
+    // COMPUTING IS NOT APPLYING. §13: "`autoApply` does not exist for a batch."
+    // What this produces is `previewed` or `blocked` -- a proposal on a screen,
+    // with per-row skip, that a named human must confirm. So doing it
+    // unattended takes nothing away from anybody, which is the only reason an
+    // unattended path may touch this at all.
+    //
+    // BEFORE the status flip, not after, and that ordering is the whole safety
+    // property. `closeDueCampaigns` selects `status: 'open'`, so a batch that
+    // failed after the close would be a batch nothing would ever build. Failing
+    // here leaves the campaign open and the next nightly tick retries; the
+    // compute is idempotent by construction, because it supersedes a stale
+    // non-terminal batch at the head of itself.
+    const toRevoke = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.count({ where: { campaignId: campaign.id, status: 'revoke_decided' } }),
+    );
+    if (toRevoke > 0) {
+      // `actorUserId: null` -- a background job has no request and therefore no
+      // actor, and naming one would put a person's id on a computation they did
+      // not ask for. The audit event records the campaign and the verdict, and
+      // the CONFIRMATION is where a named human enters the record.
+      const batch = await computeRevocationBatch(tenantId, null, campaign.id, { now });
+      batches += 1;
+
+      // A batch the guard refused outright is not a screen somebody will
+      // happen upon. §13's four blocking conditions are all "re-base and let
+      // the reviewers look at what changed", which is work with a deadline, so
+      // it goes in the remediation queue with the campaign's owner on it.
+      if (batch.status === 'blocked') {
+        await withTenant(tenantId, (tx) =>
+          createRemediationItem(tx, tenantId, {
+            kind: 'revocation_batch_blocked',
+            ownerPersonId: campaign.ownerPersonId,
+            dueAt: new Date(now.getTime() + 7 * 86_400_000),
+            description:
+              `The revocations decided in "${campaign.name}" cannot be executed: ` +
+              `${batch.blockedReason ?? 'the guard refused the batch'}. ` +
+              'Nothing was removed and nothing will be until this is resolved.',
+            deepLink: `/admin/govern/campaigns/${campaign.id}`,
+          }),
+        );
+      }
     }
 
     // ---- the counts, computed from what they are DEFINED as ----------------
@@ -1028,7 +1091,7 @@ export async function closeDueCampaigns(
     undecidedTotal += undecided;
   }
 
-  return { closed, undecided: undecidedTotal };
+  return { closed, undecided: undecidedTotal, batches };
 }
 
 export interface ReviewerResolutionPreview {

@@ -962,4 +962,99 @@ describe('closing', () => {
     expect(campaign.status).toBe('closed_complete');
     expect(campaign.coveragePercent).toBe(100);
   });
+
+  /**
+   * §13: revoke decisions "accumulate, and at campaign close -- or at an
+   * explicit Execute revocations action before it -- they are computed into a
+   * RevocationBatch".
+   *
+   * Nothing computed one. `computeRevocationBatch`'s only caller was an admin
+   * route the console never invokes, so a campaign closed with its revoke
+   * decisions sitting untouched forever and the reviewers' 91 revocations were
+   * a set of rows nobody would ever act on. The campaign report said
+   * `revoke_decided`; the target still held everything.
+   */
+  it('computes the revocation batch at close', async () => {
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({ where: { id: itemId }, data: { status: 'revoke_decided' } });
+      await tx.campaignDecision.create({
+        data: {
+          tenantId,
+          itemId,
+          personId: person['Jan']!,
+          decision: 'revoke',
+          comment: 'no longer needed',
+          itemOpenedAt: NOW,
+          decidedAt: NOW,
+          sessionDecisionOrdinal: 1,
+          coverageAtDecision: {},
+        },
+      });
+    });
+
+    const result = await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    expect(result.batches).toBe(1);
+
+    const batch = await withTenant(tenantId, (tx) =>
+      tx.revocationBatch.findFirstOrThrow({ where: { campaignId } }),
+    );
+    // NOTHING AUTO-APPLIES. §13: "`autoApply` does not exist for a batch."
+    // The first batch in a tenant always requires confirmation regardless of
+    // size, because every denominator is zero and no percentage can say
+    // anything about it.
+    expect(batch.status).toBe('previewed');
+    expect(batch.requiresConfirmation).toBe(true);
+
+    const dispatches = await withTenant(tenantId, (tx) =>
+      tx.revocationDispatch.findMany({ where: { batchId: batch.id } }),
+    );
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]!.status).toBe('proposed');
+
+    // And the item has NOT moved. A computed batch is a proposal.
+    const item = await withTenant(tenantId, (tx) =>
+      tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
+    );
+    expect(item.status).toBe('revoke_decided');
+  });
+
+  it('computes NO batch for a campaign with nothing to revoke', async () => {
+    // An empty `RevocationBatch` row per closed campaign is a confirmation
+    // screen with nothing on it, on the dashboard, for every campaign that ever
+    // ran clean.
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) =>
+      tx.campaignItem.update({ where: { id: itemId }, data: { status: 'certified' } }),
+    );
+
+    const result = await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    expect(result.batches).toBe(0);
+    expect(await withTenant(tenantId, (tx) => tx.revocationBatch.count())).toBe(0);
+  });
+
+  /**
+   * The batch is computed BEFORE the campaign closes, so a failure leaves the
+   * campaign `open` and the next nightly tick retries. `closeDueCampaigns`
+   * selects `status: 'open'`, so a batch that failed AFTER the close would be a
+   * batch nothing would ever build -- the same silent drop, one step later.
+   */
+  it('leaves the campaign open when the batch cannot be computed', async () => {
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({ where: { id: itemId }, data: { status: 'revoke_decided' } });
+      // The campaign's snapshot is made unreadable, which is what
+      // `computeRevocationBatch` refuses on first.
+      await tx.accessSnapshot.update({ where: { id: snapshotId }, data: { status: 'failed' } });
+    });
+
+    await expect(
+      closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) }),
+    ).rejects.toThrow();
+
+    const campaign = await withTenant(tenantId, (tx) =>
+      tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
+    );
+    expect(campaign.status).toBe('open');
+  });
 });
