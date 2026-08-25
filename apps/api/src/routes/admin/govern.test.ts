@@ -782,3 +782,12 @@ it('refuses an early exception revocation to somebody with no standing', async (
   // id does not exist. What must NOT happen is a 204.
   expect(res.statusCode).not.toBe(204);
 });
+
+it('answers 400 for a person report path that is not a uuid', async () => {
+  await seedAdmin('uuidreader', [PERMISSIONS.GOVERN_READ]);
+  const res = await get(
+    '/api/admin/govern/reports/person/not-a-uuid',
+    await cookieFor('uuidreader'),
+  );
+  expect(res.statusCode).toBe(400);
+});

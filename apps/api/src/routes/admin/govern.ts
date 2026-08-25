@@ -29,6 +29,7 @@ import {
   sodRuleBody,
   sodRulePreviewBody,
   violationQuery,
+  personParam,
   personReportQuery,
   refreshSourceParams,
   resolveRemediationBody,
@@ -375,7 +376,7 @@ export async function registerAdminGovernRoutes(
     '/govern/reports/person/:personId',
     { preHandler: requireGovernRead() },
     async (request) => {
-      const { personId } = request.params as { personId: string };
+      const { personId } = personParam.parse(request.params);
       const query = personReportQuery.parse(request.query);
       const scope = scopeOf(request);
       if (scope.kind !== 'tenant') {

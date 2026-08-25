@@ -457,3 +457,12 @@ describe('the catalog segregation-of-duties warning', () => {
     expect(product.sodWarning).toBeNull();
   });
 });
+
+it('answers 400 for a subjectPersonId that is not a uuid', async () => {
+  const res = await call(
+    'GET',
+    '/api/portal/automate/catalog?subjectPersonId=not-a-uuid',
+    annaCookie,
+  );
+  expect(res.statusCode).toBe(400);
+});

@@ -93,11 +93,17 @@ export async function registerAutomatePortalRoutes(
     requested: string | undefined,
   ): Promise<string> => {
     const self = await personFor(request);
-    if (requested === undefined || requested === self) return self;
+    if (requested === undefined) return self;
+    // PARSED. A malformed id went straight into `contract.findMany({ where: {
+    // personId } })` and came back as a Prisma error on a uuid column -- a 500
+    // where the caller's mistake deserved a 400, on a route any portal user can
+    // reach.
+    const { id: subject } = idParam.parse({ id: requested });
+    if (subject === self) return self;
 
     const allowed = await request.db(async (tx) => {
       const contracts = await tx.contract.findMany({
-        where: { personId: requested },
+        where: { personId: subject },
         select: { managerPersonId: true },
       });
       if (contracts.some((c) => c.managerPersonId === self)) return true;
@@ -111,7 +117,7 @@ export async function registerAutomatePortalRoutes(
         'You can ask for things for yourself and for the people who report to you.',
       );
     }
-    return requested;
+    return subject;
   };
 
   app.get('/automate/catalog', async (request) => {

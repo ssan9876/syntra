@@ -383,8 +383,13 @@ export async function registerSamlIdpRoutes(
    */
   const metadata = async (request: FastifyRequest, reply: FastifyReply) => {
     const { tenant, identity } = await samlContext(request, options);
-    const applicationId = (request.params as { applicationId?: string }).applicationId;
-    if (applicationId !== undefined) {
+    // `idParam.parse`, not a cast. This route is UNAUTHENTICATED, and a
+    // malformed id reached Prisma as a uuid it could not read: a bare 500 and
+    // a stack trace in the log for anybody who can reach the host and type a
+    // URL. The comment above already claimed the parameter was validated.
+    const raw = (request.params as { applicationId?: string }).applicationId;
+    if (raw !== undefined) {
+      const { id: applicationId } = idParam.parse({ id: raw });
       const application = await request.db((tx) => findApplication(tx, applicationId));
       if (!application || application.type !== 'saml') {
         throw new ProblemError(404, 'not-found', 'No such SAML application');
