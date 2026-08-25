@@ -56,9 +56,15 @@ fi
 tar -czf "$OUT/$NAME.tar.gz" -C "$STAGE" "$NAME"
 ( cd "$OUT" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
 
-tar -tzf "$OUT/$NAME.tar.gz" | grep -q "^$NAME/RELEASE.json$"
-tar -tzf "$OUT/$NAME.tar.gz" | grep -q "^$NAME/apps/web/dist/index.html$"
-tar -tzf "$OUT/$NAME.tar.gz" | grep -q "^$NAME/pnpm-lock.yaml$"
+# `grep -c`, not `-q`: `-q` exits on its first match, closing the pipe while
+# `tar -tzf` may still be writing -- under `set -o pipefail` that SIGPIPE is
+# reported as this line's failure even though grep matched and the tarball
+# is fine. `-c` reads to the end to produce a count, so it never closes the
+# pipe early. release.yml had the same pattern and hit this every time the
+# first tag ever pushed was built for real; fixed there too.
+tar -tzf "$OUT/$NAME.tar.gz" | grep -c "^$NAME/RELEASE.json$" >/dev/null
+tar -tzf "$OUT/$NAME.tar.gz" | grep -c "^$NAME/apps/web/dist/index.html$" >/dev/null
+tar -tzf "$OUT/$NAME.tar.gz" | grep -c "^$NAME/pnpm-lock.yaml$" >/dev/null
 
 rm -rf "$STAGE"
 echo "built $OUT/$NAME.tar.gz"

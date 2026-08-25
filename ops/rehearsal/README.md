@@ -70,18 +70,22 @@ fixes in the standup script, not in shipped product code.
   migration that cannot apply) or one that deliberately never becomes ready
   (a readiness probe patched to always fail).
 
-### If `make-release.sh` exits non-zero without printing `built ...`
+### The `grep -q` / `SIGPIPE` bug this rehearsal found in the real release workflow
 
-Its three self-check lines (`tar -tzf ... | grep -q ...`) run under
-`set -o pipefail`, inherited verbatim from `.github/workflows/release.yml`'s
-own already-shipped packaging step -- deliberately, so this script rehearses
-the same artefact-shape checks the real release does. `grep -q` can exit as
-soon as it finds its match, before `tar -tzf` has finished writing its full
-listing; when that happens, `tar` gets `SIGPIPE`, and under `pipefail` bash
-reports that non-zero exit as the whole pipeline's status even though `grep`
-itself matched successfully. If this happens, check whether the tarball was
-actually built correctly (`tar -tzf $OUT/$NAME.tar.gz | head`) before
-assuming packaging failed -- it usually did not.
+Its three self-check lines (`tar -tzf ... | grep -c ... >/dev/null`) run
+under `set -o pipefail`, the same shape `.github/workflows/release.yml`'s own
+packaging step uses -- deliberately, so this script rehearses the same
+artefact-shape checks the real release does. They used to read `| grep -q
+...`: `-q` exits the instant it finds its match, closing the pipe while
+`tar -tzf` may still be writing the rest of its listing; `tar` then dies of
+`SIGPIPE`, and under `pipefail` bash reports that as the whole pipeline's
+failure even though `grep` matched and the tarball was fine. This had sat
+unnoticed in `release.yml` since it was written, because nobody had ever
+pushed a real release tag before cutting `v1.0.0` — it failed the same way
+twice in a row on GitHub's own runner. Fixed in both files by swapping `-q`
+for `-c` (redirecting its count to `/dev/null` and relying only on its exit
+code): `-c` has to read its input to the end to produce an accurate count,
+so it never closes the pipe early.
 
 ## The procedure that was run (Steps 4-15)
 

@@ -167,9 +167,18 @@ jobs:
           # Proof the thing is intact and contains what the updater will look
           # for. A tarball missing its bundle or its metadata is a release that
           # fails on the target instead of here.
-          tar -tzf "$NAME.tar.gz" | grep -q "^$NAME/RELEASE.json$"
-          tar -tzf "$NAME.tar.gz" | grep -q "^$NAME/apps/web/dist/index.html$"
-          tar -tzf "$NAME.tar.gz" | grep -q "^$NAME/pnpm-lock.yaml$"
+          #
+          # `grep -c`, not `-q`: this is under `set -o pipefail`, and `-q`
+          # exits the instant it finds a match, closing the pipe while `tar
+          # -tzf` may still be writing the rest of its listing -- tar then
+          # dies of SIGPIPE and pipefail reports that as this line's failure,
+          # even though grep matched and the tarball is fine. `-c` has to
+          # read its input to the end to produce a count, so it never closes
+          # the pipe early. This is the first tag this workflow was ever run
+          # against, and it hit this every time.
+          tar -tzf "$NAME.tar.gz" | grep -c "^$NAME/RELEASE.json$" >/dev/null
+          tar -tzf "$NAME.tar.gz" | grep -c "^$NAME/apps/web/dist/index.html$" >/dev/null
+          tar -tzf "$NAME.tar.gz" | grep -c "^$NAME/pnpm-lock.yaml$" >/dev/null
           ls -lh "$NAME.tar.gz"
 
       - name: Publish
