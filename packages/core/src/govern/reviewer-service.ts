@@ -36,6 +36,24 @@ import { governSettings } from './settings-service.js';
 export const REVIEWER_BATCH = 200;
 
 /**
+ * ITEM IDS PER ESCALATION TRANSACTION.
+ *
+ * Separate from `REVIEWER_BATCH`, which bounds how many REVIEWERS one reminder
+ * transaction handles. Escalation is bounded by the ITEMS a single reviewer
+ * holds, which is a different number entirely: one reviewer with 4,000 pending
+ * items is one row in the reminder batch and 4,000 units of work here.
+ *
+ * That is the defect this constant exists for. The escalation block used to run
+ * inside the reminder batch transaction, looping over every pending item the
+ * reviewer held with a `findFirst` plus a `create` per (item, approver) --
+ * roughly 40,000 sequential statements for a 20,000-item campaign over 50
+ * reviewers, inside one 5000 ms budget. It aborted, and the abort rolled back
+ * the `lastRemindedAt` writes with it, so the next run rebuilt the identical
+ * batch and failed identically. No reminder and no escalation ever went out.
+ */
+export const ESCALATION_BATCH = 200;
+
+/**
  * Automate's selector machinery, REUSED rather than reimplemented.
  *
  * An approval chain and a review chain disagreeing about who somebody's manager
@@ -579,10 +597,16 @@ export async function mootVanishedHoldings(
  */
 export async function runCampaignReminders(
   tenantId: string,
-  options: { now?: Date; publicUrl?: string; batchSize?: number } = {},
+  options: {
+    now?: Date;
+    publicUrl?: string;
+    batchSize?: number;
+    escalationBatchSize?: number;
+  } = {},
 ): Promise<{ reminded: number; escalated: number }> {
   const now = options.now ?? new Date();
   const batchSize = options.batchSize ?? REVIEWER_BATCH;
+  const escalationBatchSize = options.escalationBatchSize ?? ESCALATION_BATCH;
   let reminded = 0;
   let escalated = 0;
 
@@ -655,12 +679,22 @@ export async function runCampaignReminders(
       byReviewer.set(row.personId, entry);
     }
 
+    // Who actually got a reminder, and over which items. Escalation is phase
+    // two and runs over exactly this set: a reviewer whose reminder was skipped
+    // -- because they are no longer a valid approver -- must not be escalated
+    // past either.
+    const remindedThisRun: { personId: string; itemIds: string[] }[] = [];
+
     const reviewers = [...byReviewer];
     for (let i = 0; i < reviewers.length; i += batchSize) {
       const batch = reviewers.slice(i, i + batchSize);
       const outcome = await withTenant(tenantId, async (tx) => {
         let sent = 0;
-        let raised = 0;
+        // Accumulated INSIDE the transaction and merged by the caller only
+        // after it commits. Pushing straight into `remindedThisRun` from here
+        // would leave phase two escalating for a reminder a rolled-back
+        // transaction never actually sent.
+        const reminded: { personId: string; itemIds: string[] }[] = [];
 
         for (const [personId, entry] of batch) {
           // A reminder in a leaver's mailbox is a campaign asking somebody who
@@ -691,86 +725,103 @@ export async function runCampaignReminders(
             where: { id: { in: entry.reviewerRowIds } },
             data: { lastRemindedAt: now },
           });
+          reminded.push({ personId, itemIds: entry.itemIds });
           sent += 1;
-
-          if (escalating) {
-            // Escalation ADDS a reviewer and never replaces one, and it tells
-            // the original they were escalated past.
-            //
-            // THE SUBJECT IS THE REVIEWER, NOT THE ITEM. §12: escalation goes
-            // to "`Contract.managerPersonId` on THE REVIEWER'S OWN RESOLVED
-            // CONTRACT". Passing the first pending item's subject resolves an
-            // arbitrary person's manager and grants them review authority over
-            // items they have no relationship to — and if that arbitrary
-            // subject's manager is themselves the subject of one of the
-            // escalated items, they now review their own access, which the
-            // self-review invariant is only re-checked for against the ITEM's
-            // own subject.
-            const escalation = await resolveEscalationApprovers(
-              tx,
-              stageFor(campaign),
-              reviewerAsSubject(personId),
-              now,
-            );
-            const added = escalation.approvers.filter((a) => a.personId !== personId);
-            if (added.length === 0) continue;
-
-            for (const itemId of entry.itemIds) {
-              for (const approver of added) {
-                // `findFirst` then `create`, with NO swallowed error.
-                //
-                // An `upsert` on a synthesised `id` like `${itemId}:${personId}`
-                // is not a uuid, so the query errors before `create` is
-                // reached; and a query error inside a Prisma interactive
-                // transaction leaves the Postgres transaction ABORTED, so a
-                // `.catch(() => undefined)` does not rescue the one escalation
-                // — it kills the whole reminder run with "current transaction
-                // is aborted" on the next statement.
-                const existing = await tx.campaignItemReviewer.findFirst({
-                  where: { itemId, personId: approver.personId, unassignedAt: null },
-                  select: { id: true },
-                });
-                if (existing !== null) continue;
-                await tx.campaignItemReviewer.create({
-                  data: {
-                    tenantId,
-                    itemId,
-                    personId: approver.personId,
-                    via: 'escalation',
-                    assignedAt: now,
-                  },
-                });
-              }
-            }
-
-            const names = await displayNames(tx, { personIds: added.map((a) => a.personId) });
-            await enqueueOutbox(
-              tx,
-              recipients.map((recipient) => ({
-                template: 'govern-review-escalated' as const,
-                to: recipient.email,
-                vars: {
-                  displayName: recipient.displayName,
-                  campaignName: campaign.name,
-                  itemCount: String(entry.itemIds.length),
-                  escalatedTo: added
-                    .map((a) => names.get(`person:${a.personId}`) ?? 'their manager')
-                    .join(', '),
-                  reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaign.id}`,
-                },
-                requestId: null,
-                userId: recipient.userId,
-              })),
-            );
-            raised += 1;
-          }
         }
 
-        return { sent, raised };
+        return { sent, reminded };
       });
 
       reminded += outcome.sent;
-      escalated += outcome.raised;
+      remindedThisRun.push(...outcome.reminded);
+    }
+
+    // ---- phase two: escalation, in its own transactions -------------------
+    //
+    // §12: escalation ADDS a reviewer and never replaces one, and it tells the
+    // original they were escalated past. THE SUBJECT IS THE REVIEWER, NOT THE
+    // ITEM -- `Contract.managerPersonId` on the reviewer's own resolved
+    // contract. Passing the first pending item's subject would resolve an
+    // arbitrary person's manager and grant them review authority over items
+    // they have no relationship to, and if that arbitrary subject's manager is
+    // themselves the subject of one of the escalated items they would then
+    // review their own access.
+    //
+    // SEPARATE FROM THE REMINDER, and that is the whole of this task. The
+    // reminder's `lastRemindedAt` is committed by the time this runs, so an
+    // escalation that fails costs one night's escalation rather than every
+    // reminder in the campaign forever.
+    if (escalating) {
+      for (const { personId, itemIds } of remindedThisRun) {
+        const resolved = await withTenant(tenantId, async (tx) => {
+          const escalation = await resolveEscalationApprovers(
+            tx,
+            stageFor(campaign),
+            reviewerAsSubject(personId),
+            now,
+          );
+          return escalation.approvers
+            .filter((a) => a.personId !== personId)
+            .map((a) => a.personId);
+        });
+        if (resolved.length === 0) continue;
+
+        // ONE existence read and ONE createMany per page of items, instead of a
+        // `findFirst` plus a `create` per (item, approver). The unique index is
+        // `(itemId, personId, assignedAt)` and `assignedAt` is `now`, so
+        // `skipDuplicates` alone would not stop a SECOND row for an escalation
+        // made on an earlier run at a different `now` -- which is why the read
+        // is still here, and why it is set-based.
+        for (let i = 0; i < itemIds.length; i += escalationBatchSize) {
+          const page = itemIds.slice(i, i + escalationBatchSize);
+          await withTenant(tenantId, async (tx) => {
+            const existing = await tx.campaignItemReviewer.findMany({
+              where: { itemId: { in: page }, personId: { in: resolved }, unassignedAt: null },
+              select: { itemId: true, personId: true },
+            });
+            const held = new Set(existing.map((row) => `${row.itemId}|${row.personId}`));
+            const missing = page.flatMap((itemId) =>
+              resolved
+                .filter((approverId) => !held.has(`${itemId}|${approverId}`))
+                .map((approverId) => ({
+                  tenantId,
+                  itemId,
+                  personId: approverId,
+                  via: 'escalation',
+                  assignedAt: now,
+                })),
+            );
+            if (missing.length === 0) return;
+            await tx.campaignItemReviewer.createMany({ data: missing, skipDuplicates: true });
+          });
+        }
+
+        // The original is told, once, after the rows are in. Telling them
+        // before would name an escalation that a failed page never made.
+        await withTenant(tenantId, async (tx) => {
+          const recipients = await recipientsForPersons(tx, [personId]);
+          const names = await displayNames(tx, { personIds: resolved });
+          await enqueueOutbox(
+            tx,
+            recipients.map((recipient) => ({
+              template: 'govern-review-escalated' as const,
+              to: recipient.email,
+              vars: {
+                displayName: recipient.displayName,
+                campaignName: campaign.name,
+                itemCount: String(itemIds.length),
+                escalatedTo: resolved
+                  .map((id) => names.get(`person:${id}`) ?? 'their manager')
+                  .join(', '),
+                reviewUrl: `${options.publicUrl ?? ''}/govern/reviews?campaign=${campaign.id}`,
+              },
+              requestId: null,
+              userId: recipient.userId,
+            })),
+          );
+        });
+        escalated += 1;
+      }
     }
   }
 

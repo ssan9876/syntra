@@ -392,12 +392,22 @@ describe('the transaction budget — slice 2', () => {
     await withTenant(tenantId, (tx) =>
       tx.contract.createMany({
         data: [
-          ...reviewerIds.map((personId) => ({
+          ...reviewerIds.map((personId, i) => ({
             tenantId,
             personId,
             sequence: 1,
             isPrimary: true,
             startDate: new Date('2020-01-01'),
+            // THE REVIEWERS HAVE MANAGERS NOW, and that is what this seed was
+            // missing. `resolveEscalationApprovers` reads
+            // `Contract.managerPersonId` on the REVIEWER's own contract, so
+            // reviewers with none resolved to nobody and the escalation loop
+            // never executed -- which is why this file measured the reminder
+            // run as bounded while the escalation inside it was unbounded.
+            // Chained, so every reviewer has one and the fiftieth has the
+            // first: escalating to a person outside the campaign would only
+            // measure a lookup that misses.
+            managerPersonId: reviewerIds[(i + 1) % REVIEWERS]!,
           })),
           // Spread across the 50 reviewers, so the `manager` selector is a real
           // cost rather than one lookup repeated 2,000 times.
@@ -621,6 +631,43 @@ describe('the transaction budget — slice 2', () => {
     );
     expect(reflectTiming.slowest).toBeLessThan(BUDGET_MS);
   }, 300_000);
+
+  it('reminds AND escalates a 2,000-item campaign within the budget', async () => {
+    await seedOrdinaryCampaign();
+    await startCampaign(tenantId, actorUserId, campaignId, { now: NOW });
+    // The last day before `dueAt` is when escalation fires, and it is the only
+    // window in which this code path runs at all.
+    const { result, slowest } = await timedTransactions(() =>
+      runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 3_600_000) }),
+    );
+    expect(result.escalated).toBeGreaterThan(0);
+    expect(slowest).toBeLessThan(BUDGET_MS);
+  }, 300_000);
+
+  /**
+   * THERE IS NO UNBOUNDED MUTATION FOR ESCALATION, and the reason is the same
+   * one the `UNBOUNDED_PER_SUBJECT` note gives for item creation.
+   *
+   * The defect this task fixed was a `findFirst` plus a `create` PER (item,
+   * approver), inside the reviewer batch transaction -- roughly 40,000
+   * sequential statements for a 20,000-item campaign over 50 reviewers, which
+   * aborted and rolled the reminder's `lastRemindedAt` writes back with it, so
+   * the next run rebuilt the identical batch and failed identically forever.
+   *
+   * The replacement is ONE set-based existence read and ONE `createMany` per
+   * page. `escalationBatchSize` therefore bounds how many rows go into a bulk
+   * write, not how many round trips are made -- and writing rows in bulk is
+   * what a database is fast at. Measured here: unbounding it against this same
+   * 2,000-item campaign completes in ~13 s of wall clock with a slowest
+   * transaction WELL under the budget, so a mutation case on that knob asserts
+   * nothing and would sit permanently red-if-inverted for the wrong reason.
+   *
+   * What guards the regression is the bounded case above -- restoring per-item
+   * round trips would blow through the budget at this size -- together with the
+   * three correctness cases in `reviewer-service.test.ts`, which pin the two
+   * phases apart: `lastRemindedAt` is stamped even when escalation adds nobody,
+   * and a second run adds no duplicate row.
+   */
 
   it('FAILS when reviewer resolution is unbounded — the mutation this half exists for', async () => {
     // EXECUTED, not documented. `REVIEWER_BATCH` was exported by the reviewer

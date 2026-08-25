@@ -1058,3 +1058,99 @@ describe('closing', () => {
     expect(campaign.status).toBe('open');
   });
 });
+
+/**
+ * THE FAILURE THAT NEVER RECOVERS.
+ *
+ * Escalation ran INSIDE the reviewer batch transaction, looping over every
+ * pending item the reviewer held -- bounded by campaign size and by nothing
+ * else -- with a `findFirst` plus a `create` per (item, approver). At 20,000
+ * items over 50 reviewers that is roughly 40,000 sequential statements inside
+ * one 5000 ms budget.
+ *
+ * The abort took the `lastRemindedAt` writes with it, so the next run rebuilt
+ * the identical batch from the identical `lastRemindedAt: null` rows and failed
+ * identically. No reminder and no escalation ever went out, for the life of the
+ * campaign, on the last day before the due date.
+ *
+ * The budget suite could not see it: its reviewers carry no `managerPersonId`,
+ * so `resolveEscalationApprovers` returns nobody and the loop never runs.
+ */
+describe('reminders and escalation are two phases', () => {
+  it('stamps lastRemindedAt even when escalation adds nobody', async () => {
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+
+    // The last day before `dueAt`, which is when escalation fires.
+    const escalatingAt = new Date(DUE.getTime() - 3_600_000);
+    const result = await runCampaignReminders(tenantId, { now: escalatingAt });
+    expect(result.reminded).toBe(1);
+
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { itemId } }),
+    );
+    expect(rows.every((r) => r.lastRemindedAt !== null)).toBe(true);
+  });
+
+  it('escalates to the REVIEWER’s own manager, once per item', async () => {
+    // §12: escalation goes to `Contract.managerPersonId` on THE REVIEWER'S OWN
+    // resolved contract. `Jan` is the seeded reviewer; give Jan a manager.
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({
+        where: { personId: person['Jan']! },
+        data: { managerPersonId: person['Ola']! },
+      }),
+    );
+    // BOTH items subject-Anna, so both resolve to the SAME reviewer. The
+    // selector is `manager` and Anna's manager is Jan while Bram's is Ola, so a
+    // Bram item would land on a different reviewer entirely -- and this case is
+    // about one silent reviewer's WHOLE queue being escalated, not about two
+    // reviewers each getting one.
+    const first = await seedItem('Anna');
+    const second = await seedItem('Anna');
+    await withTenant(tenantId, (tx) =>
+      resolveItemReviewers(tx, campaignId, [first, second], NOW),
+    );
+
+    const escalatingAt = new Date(DUE.getTime() - 3_600_000);
+    const result = await runCampaignReminders(tenantId, { now: escalatingAt });
+    expect(result.escalated).toBe(1);
+
+    const escalations = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { via: 'escalation' } }),
+    );
+    // ADDS a reviewer and never replaces one, on every item the silent reviewer
+    // held.
+    expect(escalations.map((e) => e.itemId).sort()).toEqual([first, second].sort());
+    expect(new Set(escalations.map((e) => e.personId))).toEqual(new Set([person['Ola']]));
+
+    // And the original is told they were escalated past.
+    const mail = await withTenant(tenantId, (tx) =>
+      tx.notificationOutbox.findMany({ where: { template: 'govern-review-escalated' } }),
+    );
+    expect(mail.length).toBeGreaterThan(0);
+  });
+
+  it('adds no second row on the run after an escalation', async () => {
+    // The `findFirst`-then-`create` this replaces was the only thing stopping a
+    // duplicate, and it cost one round trip per (item, approver). A second row
+    // would double-count the reviewer in every coverage figure and mail them
+    // twice a day until the campaign closed.
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({
+        where: { personId: person['Jan']! },
+        data: { managerPersonId: person['Ola']! },
+      }),
+    );
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, (tx) => resolveItemReviewers(tx, campaignId, [itemId], NOW));
+
+    await runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 3_600_000) });
+    await runCampaignReminders(tenantId, { now: new Date(DUE.getTime() - 1_800_000) });
+
+    const escalations = await withTenant(tenantId, (tx) =>
+      tx.campaignItemReviewer.findMany({ where: { itemId, via: 'escalation' } }),
+    );
+    expect(escalations).toHaveLength(1);
+  });
+});
