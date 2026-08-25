@@ -80,6 +80,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260828000000_upstream_login_adoption',
   '20260829000000_tenant_additional_domains',
   '20260830000000_org_unit_status',
+  '20260831000000_campaign_revocation_vocabulary',
   '20260905000000_deployment_manage_backfill',
 ];
 
