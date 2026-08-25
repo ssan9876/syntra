@@ -855,13 +855,52 @@ export async function closeDueCampaigns(
     // on it".
     const counts = await withTenant(tenantId, async (tx) => {
       const total = await tx.campaignItem.count({ where: { campaignId: campaign.id } });
-      const moot = await tx.campaignItem.count({
-        where: { campaignId: campaign.id, status: 'moot' },
-      });
-      const requiresChange = await tx.campaignItem.count({
-        where: { campaignId: campaign.id, status: 'revocation_requires_change' },
-      });
 
+      // ---- the OUTCOME counts, from the statuses that define them ----------
+      //
+      // §10 defines "revoked" once and this is the whole of it: the removal was
+      // APPLIED at the system that holds it, confirmed by that system, and
+      // observed by a subsequent read. `revocation_applied` is the status that
+      // means exactly that, and it is the only one that may be counted here.
+      //
+      // The previous form counted "items whose latest decision is revoke",
+      // which swept in `revocation_requires_change` -- the case §13 says is
+      // NEVER counted in a revoked figure and calls "a lie with a signature on
+      // it" -- plus `revocation_failed`, plus every item still in
+      // `revoke_decided` with nothing dispatched at all. At close time NOTHING
+      // has been dispatched yet, so the honest `revoked` figure on a campaign
+      // that has just closed is normally ZERO, and that is the point: the
+      // removals have been decided, not done.
+      //
+      // ONE grouped query, not seven counts. This runs per campaign inside the
+      // close loop and seven round trips per campaign is seven times the work
+      // for the same answer.
+      const byStatus = await tx.campaignItem.groupBy({
+        by: ['status'],
+        where: { campaignId: campaign.id },
+        _count: { _all: true },
+      });
+      const countOf = (status: string): number =>
+        byStatus.find((row) => row.status === status)?._count._all ?? 0;
+
+      const moot = countOf('moot');
+      const requiresChange = countOf('revocation_requires_change');
+      const revoked = countOf('revocation_applied');
+      const revokeDecided = countOf('revoke_decided');
+      // `dispatched` and `confirmed` together: §13 calls `confirmed` "an honest
+      // intermediate state" -- the subsystem said it applied and no snapshot has
+      // observed it gone -- and the one thing both share is that they are NOT
+      // revoked. Reporting them apart would put a distinction on the campaign
+      // report that only the next snapshot can resolve.
+      const dispatched = countOf('revocation_dispatched') + countOf('revocation_confirmed');
+      const failed = countOf('revocation_failed');
+
+      // ---- `decided`, which is a different question -------------------------
+      //
+      // §12: `coveragePercent = (decided + moot) / total` where `decided` is
+      // EVERY ITEM CARRYING A CampaignDecision. Deriving it from statuses
+      // instead omits the outcome statuses, so a campaign that dispatched 91
+      // revocations would report them as uncovered.
       const decidedGroups = await tx.campaignDecision.groupBy({
         by: ['itemId'],
         where: { item: { campaignId: campaign.id } },
@@ -869,8 +908,8 @@ export async function closeDueCampaigns(
       });
       const decided = decidedGroups.length;
 
-      // The LATEST decision per item decides which side of the line it is on.
-      // An item revoked and then re-certified on appeal is certified. Ordered
+      // `certified` stays decision-derived, and stays on the LATEST decision:
+      // an item revoked and then re-certified on appeal is certified. Ordered
       // ascending and overwritten, because `CampaignDecision` is append-only
       // and `sessionDecisionOrdinal` is per session rather than per item.
       const history = await tx.campaignDecision.findMany({
@@ -881,13 +920,21 @@ export async function closeDueCampaigns(
       const decisionByItem = new Map<string, string>();
       for (const row of history) decisionByItem.set(row.itemId, row.decision);
       let certified = 0;
-      let revoked = 0;
       for (const decision of decisionByItem.values()) {
         if (decision === 'certify') certified += 1;
-        if (decision === 'revoke') revoked += 1;
       }
 
-      return { total, moot, requiresChange, decided, certified, revoked };
+      return {
+        total,
+        moot,
+        requiresChange,
+        decided,
+        certified,
+        revoked,
+        revokeDecided,
+        dispatched,
+        failed,
+      };
     });
 
     const coverage =
@@ -902,6 +949,9 @@ export async function closeDueCampaigns(
           status: undecided === 0 ? 'closed_complete' : 'closed_incomplete',
           certifiedItems: counts.certified,
           revokedItems: counts.revoked,
+          revokeDecidedItems: counts.revokeDecided,
+          dispatchedItems: counts.dispatched,
+          failedItems: counts.failed,
           requiresChangeItems: counts.requiresChange,
           mootItems: counts.moot,
           undecidedItems: undecided,
@@ -920,6 +970,9 @@ export async function closeDueCampaigns(
         payload: {
           certified: counts.certified,
           revoked: counts.revoked,
+          revokeDecided: counts.revokeDecided,
+          dispatched: counts.dispatched,
+          failed: counts.failed,
           requiresChange: counts.requiresChange,
           moot: counts.moot,
           undecided,
@@ -951,6 +1004,9 @@ export async function closeDueCampaigns(
               minimum: settings.minimumCoveragePercent,
               certified: counts.certified,
               revoked: counts.revoked,
+              revokeDecided: counts.revokeDecided,
+              dispatched: counts.dispatched,
+              failed: counts.failed,
               requiresChange: counts.requiresChange,
               moot: counts.moot,
               undecided,

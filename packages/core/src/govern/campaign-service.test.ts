@@ -695,3 +695,63 @@ describe('coverageOf', () => {
     expect(coverageOf({ total: 0, decided: 0, moot: 0 }).known).toBe(false);
   });
 });
+
+/**
+ * A value stored, shown on the screen, and consulted by nothing.
+ *
+ * `opensAt` is `REQUIRED` on the row and is the first half of the reminder
+ * cadence -- `runCampaignReminders` computes `elapsed / total` from it -- so a
+ * campaign scheduled to open next month was live the moment somebody pressed
+ * start, and its reminder share was NEGATIVE until the opening date passed.
+ * "Scheduled for next quarter" was a label, not a behaviour.
+ */
+describe('opensAt', () => {
+  it('refuses to start a campaign before it opens', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(
+      tenantId,
+      actorUserId,
+      draft({ opensAt: new Date(NOW.getTime() + 7 * 86_400_000) }),
+    );
+    await expect(
+      startCampaign(tenantId, actorUserId, id, { now: NOW }),
+    ).rejects.toMatchObject({ code: 'not_open_yet' });
+
+    const campaign = await withTenant(tenantId, (tx) =>
+      tx.campaign.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(campaign.status).toBe('draft');
+  });
+
+  it('starts it once the opening date has passed', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(
+      tenantId,
+      actorUserId,
+      draft({ opensAt: new Date(NOW.getTime() - 86_400_000) }),
+    );
+    const started = await startCampaign(tenantId, actorUserId, id, { now: NOW });
+    expect(started.status).toBe('open');
+  });
+});
+
+/**
+ * "A due date that can be moved quietly is not a due date" -- and a due date
+ * that can be moved after the campaign closed is not a due date either. The
+ * function checked only that the new date was later, so a closed campaign's
+ * `dueAt` could be pushed out, its `extensionCount` raised, and its reviewers
+ * re-notified about a queue nobody can decide in. The evidence bundle then
+ * carries a due date the campaign never actually ran to.
+ */
+describe('extendCampaign', () => {
+  it('refuses to extend a campaign that has closed', async () => {
+    await buildSnapshot(tenantId, { now: NOW });
+    const { id } = await createCampaign(tenantId, actorUserId, draft());
+    await withTenant(tenantId, (tx) =>
+      tx.campaign.update({ where: { id }, data: { status: 'closed_incomplete' } }),
+    );
+    await expect(
+      extendCampaign(tenantId, actorUserId, id, new Date(DUE.getTime() + 30 * 86_400_000)),
+    ).rejects.toMatchObject({ code: 'not_open' });
+  });
+});

@@ -2744,17 +2744,33 @@ model Campaign {
 
   allowBulkCertify Boolean @default(true)
 
-  /// draft | generating | open | executing | closed_complete | closed_incomplete | cancelled
+  /// draft | generating | open | closed_complete | closed_incomplete | cancelled
+  ///
+  /// There is no `executing`. It was in this list, was written by nothing, and
+  /// `closeDueCampaigns` closes `open` alone -- so a campaign that reached it
+  /// would never close and every item in it would stay decidable forever.
   status String @default("draft")
 
   totalItems          Int    @default(0)
   certifiedItems      Int    @default(0)
+  /// APPLIED at the system that holds it, confirmed by that system, and
+  /// observed by a subsequent read (§10). NOT "the latest decision was
+  /// revoke": that counts requires_change, failed, and decisions nothing has
+  /// dispatched yet, which is a campaign claiming work it did not do.
   revokedItems        Int    @default(0)
+  /// Decided `revoke` and not yet computed into a batch.
+  revokeDecidedItems  Int    @default(0)
+  /// Sent to the owning subsystem, or reported applied by it and not yet
+  /// observed gone. A dispatch is a request, not an outcome.
+  dispatchedItems     Int    @default(0)
+  /// A permanent failure reported by the owning subsystem. The holding stays
+  /// in the inventory as held, because it is.
+  failedItems         Int    @default(0)
   mootItems           Int    @default(0)
   undecidedItems      Int    @default(0)
   blockedItems        Int    @default(0)
   requiresChangeItems Int    @default(0)
-  /// (decided + moot) / total. Never printed without the four counts beside it.
+  /// (decided + moot) / total. Never printed without the counts beside it.
   coveragePercent     Float?
 
   createdAt DateTime @default(now())

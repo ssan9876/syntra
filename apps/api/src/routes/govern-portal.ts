@@ -74,7 +74,10 @@ export async function registerGovernPortalRoutes(app: FastifyInstance): Promise<
           // Tuesday it was sitting there — and must not keep the work.
           reviewers: { some: { personId, unassignedAt: null } },
           campaign: {
-            status: { in: ['open', 'executing'] },
+            // `open`, and only `open`. `executing` was in this list and is
+            // written by nothing in the tree; `closeDueCampaigns` closes `open`
+            // alone, so a campaign that reached it would never close.
+            status: 'open',
             ...(query.campaignId === undefined ? {} : { id: query.campaignId }),
           },
         },

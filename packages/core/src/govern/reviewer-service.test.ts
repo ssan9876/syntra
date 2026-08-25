@@ -791,27 +791,37 @@ describe('closing', () => {
     expect((finding.detail as { reviewers?: string[] }).reviewers).toContain(person['Jan']);
   });
 
-  it('NEVER counts a revocation_requires_change item as revoked, and counts dispatched ones as decided', async () => {
-    // `'revocation_dispatched'.startsWith('revoke')` is FALSE — "revocation"
-    // begins "revoca" — so a string test matches `revoke_decided` alone and
-    // excludes all four `revocation_*` outcome statuses, while explicitly
-    // INCLUDING `revocation_requires_change`. Two rules broken at once: the
-    // vocabulary rule says `revocation_requires_change` is never counted in a
-    // revoked figure, and §13 calls a rule-attributed holding counted as
-    // revoked "a lie with a signature on it".
-    const dispatched = await seedItem('Anna');
-    const requiresChange = await seedItem('Bram');
+  it('counts REVOKED as applied, and every other outcome on its own line', async () => {
+    // §10 defines the word, and this is the whole of the definition:
+    // "'Revoked' means the removal was APPLIED at the system that holds it,
+    // confirmed by that system, and observed by a subsequent read."
+    //
+    // The old form counted "items whose latest decision is revoke", which swept
+    // in `revocation_requires_change` -- the case §13 says is NEVER counted in a
+    // revoked figure and calls "a lie with a signature on it" -- plus
+    // `revocation_failed`, plus every item still in `revoke_decided` with
+    // nothing dispatched at all. A campaign that removed nothing reported 91
+    // revocations.
+    const applied = await seedItem('Anna');
+    const dispatched = await seedItem('Bram');
+    const requiresChange = await seedItem('Anna');
+    const failed = await seedItem('Bram');
+    const stillDecided = await seedItem('Anna');
+
     await withTenant(tenantId, async (tx) => {
-      for (const [itemId, status, personId] of [
-        [dispatched, 'revocation_dispatched', person['Jan']!],
-        [requiresChange, 'revocation_requires_change', person['Ola']!],
+      for (const [itemId, status] of [
+        [applied, 'revocation_applied'],
+        [dispatched, 'revocation_dispatched'],
+        [requiresChange, 'revocation_requires_change'],
+        [failed, 'revocation_failed'],
+        [stillDecided, 'revoke_decided'],
       ] as const) {
         await tx.campaignItem.update({ where: { id: itemId }, data: { status } });
         await tx.campaignDecision.create({
           data: {
             tenantId,
             itemId,
-            personId,
+            personId: person['Jan']!,
             decision: 'revoke',
             comment: 'no longer needed',
             itemOpenedAt: NOW,
@@ -828,13 +838,53 @@ describe('closing', () => {
       tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
     );
 
-    // Both carry a decision, so both are DECIDED and coverage is 100.
+    // All five carry a decision, so all five are DECIDED and coverage is 100.
     expect(campaign.coveragePercent).toBe(100);
     expect(campaign.status).toBe('closed_complete');
-    // Both decisions were `revoke`, so both count as revoked...
-    expect(campaign.revokedItems).toBe(2);
-    // ...and the one Govern could not execute is ALSO reported on its own line.
+
+    // ONE was actually removed.
+    expect(campaign.revokedItems).toBe(1);
+    // And the other four are each visible, each on their own line, because a
+    // number nobody can decompose is a number an auditor cannot check.
+    expect(campaign.dispatchedItems).toBe(1);
     expect(campaign.requiresChangeItems).toBe(1);
+    expect(campaign.failedItems).toBe(1);
+    expect(campaign.revokeDecidedItems).toBe(1);
+  });
+
+  it('counts a CONFIRMED dispatch as dispatched, not as revoked', async () => {
+    // §13's honest intermediate state: "the owning subsystem reported the
+    // removal applied, and no snapshot has been built since". Two conditions,
+    // not one, "because a write that reported success and did not land is a
+    // case Provision's convergence logic exists for and Govern should not be
+    // more credulous than Provision is".
+    const itemId = await seedItem('Anna');
+    await withTenant(tenantId, async (tx) => {
+      await tx.campaignItem.update({
+        where: { id: itemId },
+        data: { status: 'revocation_confirmed' },
+      });
+      await tx.campaignDecision.create({
+        data: {
+          tenantId,
+          itemId,
+          personId: person['Jan']!,
+          decision: 'revoke',
+          comment: 'no longer needed',
+          itemOpenedAt: NOW,
+          decidedAt: NOW,
+          sessionDecisionOrdinal: 1,
+          coverageAtDecision: {},
+        },
+      });
+    });
+
+    await closeDueCampaigns(tenantId, { now: new Date(DUE.getTime() + 60_000) });
+    const campaign = await withTenant(tenantId, (tx) =>
+      tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
+    );
+    expect(campaign.revokedItems).toBe(0);
+    expect(campaign.dispatchedItems).toBe(1);
   });
 
   it('counts `decided` from CampaignDecision rows, not from statuses', async () => {
@@ -849,7 +899,17 @@ describe('closing', () => {
       tx.campaign.findUniqueOrThrow({ where: { id: campaignId } }),
     );
     expect(campaign.coveragePercent).toBe(0);
-    expect(campaign.revokedItems).toBe(0);
+
+    // And this fixture is exactly where the two measures diverge, deliberately.
+    // `revoked` is a statement about the WORLD -- §10: the removal was applied
+    // at the system that holds it and observed by a subsequent read -- so an
+    // item sitting in `revocation_applied` is revoked whether or not anybody
+    // signed for it. `decided` is a statement about the REVIEW, and it counts
+    // CampaignDecision rows. A holding that vanished with nobody deciding it is
+    // both: removed, and uncertified -- and `coveragePercent` above, which is
+    // 0, is the half that says so. Collapsing the two is what let a campaign
+    // report work it had not done.
+    expect(campaign.revokedItems).toBe(1);
   });
 
   it('writes ReviewQualitySignal rows when the campaign closes', async () => {

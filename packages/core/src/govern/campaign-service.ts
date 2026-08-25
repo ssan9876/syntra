@@ -86,7 +86,13 @@ void _scopeKeysMatch;
 
 export class CampaignRefusedError extends Error {
   constructor(
-    readonly code: 'stale_source' | 'stale_snapshot' | 'empty_scope' | 'not_draft',
+    readonly code:
+      | 'stale_source'
+      | 'stale_snapshot'
+      | 'empty_scope'
+      | 'not_draft'
+      | 'not_open_yet'
+      | 'not_open',
     /** Which clock. A refusal that does not say is a refusal nobody can act on. */
     readonly clock: 'source' | 'snapshot' | null,
     message: string,
@@ -421,6 +427,24 @@ export async function startCampaign(
       );
     }
 
+    // `opensAt` GATES SOMETHING NOW.
+    //
+    // It is REQUIRED on the row, it is shown on the screen, and it is the first
+    // half of the reminder cadence -- `runCampaignReminders` computes
+    // `elapsed / total` from it. Nothing consulted it here, so a campaign
+    // scheduled to open next month went live the moment somebody pressed start,
+    // 200 reviewers were emailed a queue they were not meant to see yet, and
+    // the reminder share was NEGATIVE until the opening date passed, which
+    // suppressed every reminder in the meantime. "Scheduled for next quarter"
+    // was a label rather than a behaviour.
+    if (campaign.opensAt.getTime() > now.getTime()) {
+      throw new CampaignRefusedError(
+        'not_open_yet',
+        null,
+        `this campaign opens on ${campaign.opensAt.toDateString()}; starting it now would email every reviewer a queue that is not due to exist yet`,
+      );
+    }
+
     const snapshot = await readableSnapshot(tx, campaign.snapshotId);
     const scope = campaignScopeSchema.parse(campaign.scope);
     const settings = await governSettings(tx);
@@ -608,6 +632,21 @@ export async function extendCampaign(
 ): Promise<void> {
   await withTenant(tenantId, async (tx) => {
     const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: campaignId } });
+    // "A due date that can be moved quietly is not a due date" -- and one that
+    // can be moved after the campaign closed is not a due date either. This
+    // checked only that the new date was later, so a closed campaign's `dueAt`
+    // could be pushed out, its `extensionCount` raised, and every reviewer with
+    // a still-`pending` item re-notified about a queue that can no longer be
+    // decided in: `recordCampaignDecision` refuses anything but `open`. The
+    // evidence bundle then carries a due date the campaign never ran to, which
+    // is the one fact §11 says the original date exists to preserve.
+    if (campaign.status !== 'open') {
+      throw new CampaignRefusedError(
+        'not_open',
+        null,
+        `this campaign is ${campaign.status}; a due date can only be moved while reviewers can still decide`,
+      );
+    }
     if (newDueAt <= campaign.dueAt) {
       throw new Error(
         'a due date may not move backwards; that would rewrite how long reviewers actually had',

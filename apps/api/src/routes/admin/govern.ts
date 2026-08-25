@@ -664,7 +664,14 @@ export async function registerAdminGovernRoutes(
         counts: {
           total: campaign.totalItems,
           certified: campaign.certifiedItems,
+          // §10's definition, and the four states that are NOT it, each on
+          // their own line. A campaign that closes with 91 revoke decisions, 0
+          // applied and 3 Govern cannot execute has to be able to say all
+          // three numbers; one combined figure is the report §13 forbids.
           revoked: campaign.revokedItems,
+          revokeDecided: campaign.revokeDecidedItems,
+          dispatched: campaign.dispatchedItems,
+          failed: campaign.failedItems,
           requiresChange: campaign.requiresChangeItems,
           moot: campaign.mootItems,
           undecided: campaign.undecidedItems,
