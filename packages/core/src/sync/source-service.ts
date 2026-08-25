@@ -33,6 +33,7 @@ export interface CreateSourceInput {
   writebackEnabled?: boolean | undefined;
   writebackPassword?: boolean | undefined;
   writebackDisable?: boolean | undefined;
+  writebackDelete?: boolean | undefined;
   enabled?: boolean | undefined;
 }
 
@@ -59,6 +60,7 @@ export async function createSource(
       writebackEnabled: input.writebackEnabled ?? false,
       writebackPassword: input.writebackPassword ?? false,
       writebackDisable: input.writebackDisable ?? false,
+      writebackDelete: input.writebackDelete ?? false,
     },
   });
 
@@ -83,6 +85,7 @@ export interface UpdateSourceInput {
   writebackEnabled?: boolean | undefined;
   writebackPassword?: boolean | undefined;
   writebackDisable?: boolean | undefined;
+  writebackDelete?: boolean | undefined;
 }
 
 /**
@@ -137,6 +140,9 @@ export async function updateSource(
         : {}),
       ...(input.writebackDisable !== undefined
         ? { writebackDisable: input.writebackDisable }
+        : {}),
+      ...(input.writebackDelete !== undefined
+        ? { writebackDelete: input.writebackDelete }
         : {}),
     },
   });

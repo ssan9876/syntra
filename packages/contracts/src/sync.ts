@@ -58,16 +58,19 @@ export const createSourceRequest = z.object({
    */
   enabled: z.boolean().optional(),
   /**
-   * Write-back. All three default to false, and a source that omits them
+   * Write-back. All four default to false, and a source that omits them
    * stays read-only: an upgrade must not hand an existing source the ability
-   * to change passwords or disable accounts.
+   * to change passwords, disable accounts or delete objects.
    *
-   * `writebackEnabled` is the master switch; the other two are the individual
-   * writes, separate because they are separate decisions.
+   * `writebackEnabled` is the master switch; the other three are the
+   * individual writes, separate because they are separate decisions.
+   * `writebackDelete` is the only one whose effect cannot be undone by
+   * writing the opposite value back.
    */
   writebackEnabled: z.boolean().optional(),
   writebackPassword: z.boolean().optional(),
   writebackDisable: z.boolean().optional(),
+  writebackDelete: z.boolean().optional(),
 });
 
 /**
@@ -91,6 +94,7 @@ export const updateSourceRequest = z
     writebackEnabled: z.boolean().optional(),
     writebackPassword: z.boolean().optional(),
     writebackDisable: z.boolean().optional(),
+    writebackDelete: z.boolean().optional(),
   })
   .refine((body) => Object.keys(body).length > 0, {
     message: 'nothing to update',

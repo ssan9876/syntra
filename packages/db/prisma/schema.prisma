@@ -325,6 +325,12 @@ model DirectorySource {
   writebackEnabled             Boolean   @default(false)
   writebackPassword            Boolean   @default(false)
   writebackDisable             Boolean   @default(false)
+  /// Whether Syntra may DELETE an object in this source.
+  ///
+  /// Default false for the same reason the others are, and one more: it is
+  /// the only write here that writing the opposite value back does not undo.
+  /// Deactivation is a state; deletion is not.
+  writebackDelete              Boolean   @default(false)
   lastRunAt                    DateTime?
   createdAt                    DateTime  @default(now())
   updatedAt                    DateTime  @updatedAt

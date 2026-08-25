@@ -136,6 +136,28 @@ describe('source administration', () => {
     expect(res.body).not.toContain('adminpassword');
   });
 
+  it('leaves deletion off until it is turned on deliberately', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    expect(created.statusCode).toBe(201);
+    // A source configured before deletion existed must not acquire the
+    // ability to remove objects because the deployment was upgraded.
+    expect(created.json().writebackDelete).toBe(false);
+
+    const patched = await patch(
+      `/api/admin/sources/${created.json().id}`,
+      cookie,
+      { writebackEnabled: true, writebackDelete: true },
+    );
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().writebackDelete).toBe(true);
+  });
+
   it('refuses a duplicate name with a 409, not a bare 500', async () => {
     // The unique index on (tenantId, name) is what actually protects this, and
     // it surfaced as a 500 with nothing an administrator could act on.

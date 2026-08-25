@@ -82,6 +82,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260830000000_org_unit_status',
   '20260831000000_campaign_revocation_vocabulary',
   '20260905000000_deployment_manage_backfill',
+  '20260906000000_writeback_delete',
 ];
 
 /**
