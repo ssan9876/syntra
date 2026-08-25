@@ -1669,7 +1669,7 @@ This task adds the domain operations. Task 7 exposes them, Task 8 repairs the in
   - `export async function deleteRole(tx: TenantClient, roleId: string): Promise<void>`
   - `export async function countHoldersOf(tx: TenantClient, permission: Permission): Promise<number>`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `packages/core/src/rbac/rbac-service.test.ts`:
 
@@ -1800,12 +1800,12 @@ describe('countHoldersOf', () => {
 
 Add `ALL_PERMISSIONS`, `createOrgUnit`, `createUser`, `countHoldersOf`, `deleteRole`, `readRole` and `updateRole` to the file's existing imports.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/rbac/rbac-service.test.ts`
 Expected: FAIL — `updateRole`, `deleteRole`, `readRole` and `countHoldersOf` do not exist.
 
-- [ ] **Step 3: Write the operations**
+- [x] **Step 3: Write the operations**
 
 Append to `packages/core/src/rbac/rbac-service.ts`, and add `PERMISSIONS, isPermission` to the import from `./permissions.js` (line 3):
 
@@ -1983,12 +1983,12 @@ export async function countHoldersOf(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run packages/core/src/rbac/rbac-service.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -2043,7 +2043,7 @@ Spec §7.4, **H2**, part two. The routes, the contract, and the one guard that k
   - `DELETE /api/admin/roles/:id/assignments/:userId` → 204
   - `export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<void>`
 
-- [ ] **Step 1: Write the contract**
+- [x] **Step 1: Write the contract**
 
 Create `packages/contracts/src/rbac.ts`:
 
@@ -2113,7 +2113,7 @@ export const roleAssignmentParams = z.object({
 
 Add `export * from './rbac.js';` to `packages/contracts/src/index.ts`.
 
-- [ ] **Step 2: Write the failing route test**
+- [x] **Step 2: Write the failing route test**
 
 Create `apps/api/src/routes/admin/roles.test.ts`:
 
@@ -2321,12 +2321,12 @@ describe('the role API that did not exist', () => {
 });
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/roles.test.ts`
 Expected: FAIL — every case 404s; the router does not exist.
 
-- [ ] **Step 4: Write the router**
+- [x] **Step 4: Write the router**
 
 Create `apps/api/src/routes/admin/roles.ts`:
 
@@ -2579,7 +2579,7 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
 
 Delete the stray `refuseIfStranded` stub above `guardRbac` before running anything — it is a leftover shape and must not ship. `guardRbac` is the whole guard.
 
-- [ ] **Step 5: Register it**
+- [x] **Step 5: Register it**
 
 In `apps/api/src/app.ts`, add `import { registerAdminRoleRoutes } from './routes/admin/roles.js';` beside the other admin imports, and after the tenant registration (line 215):
 
@@ -2587,12 +2587,12 @@ In `apps/api/src/app.ts`, add `import { registerAdminRoleRoutes } from './routes
   await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/roles.test.ts`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 7: Typecheck and commit**
+- [x] **Step 7: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -2642,7 +2642,7 @@ Spec §7.4 **H2** and §5 **U3**. The API from Task 7 lets an administrator gran
 - Consumes: `ALL_PERMISSIONS` from `@syntra/core`; the migration directory listing.
 - Produces: no exported symbols. Every `Role` with `builtIn = true` gains every permission in the literal list that it does not already hold. Nothing is ever removed.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/db/src/builtin-role-permissions.test.ts`:
 
@@ -2714,12 +2714,12 @@ describe('the built-in role backfill', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/db/src/builtin-role-permissions.test.ts`
 Expected: FAIL — `ENOENT`, the migration does not exist.
 
-- [ ] **Step 3: Generate the permission list from the catalogue**
+- [x] **Step 3: Generate the permission list from the catalogue**
 
 ```bash
 node --import tsx -e "import('@syntra/core').then(m => console.log(m.ALL_PERMISSIONS.map(p => \"    '\" + p + \"'\").join(',\n')))"
@@ -2727,7 +2727,7 @@ node --import tsx -e "import('@syntra/core').then(m => console.log(m.ALL_PERMISS
 
 Paste that output into the `ARRAY[...]` literal below rather than typing the names by hand. The test in Step 1 is what keeps the paste honest.
 
-- [ ] **Step 4: Write the migration**
+- [x] **Step 4: Write the migration**
 
 Create `packages/db/prisma/migrations/20260903000000_builtin_role_permissions/migration.sql`:
 
@@ -2806,11 +2806,11 @@ WHERE r.id = sub.id;
 
 Regenerate the literal from Step 3's output if the catalogue has changed since this plan was written; the test will say so.
 
-- [ ] **Step 5: Register the migration name**
+- [x] **Step 5: Register the migration name**
 
 In `packages/db/src/migration-order.ts`, append `'20260903000000_builtin_role_permissions',` to `KNOWN_MIGRATIONS`. **This is not optional** — remediation 1 Task 5's `grandfathers exactly the migrations that exist` case compares that list against the directory and fails otherwise.
 
-- [ ] **Step 6: Apply it and check the two tests**
+- [x] **Step 6: Apply it and check the two tests**
 
 ```bash
 cd packages/db && npx prisma migrate deploy; cd ../..
@@ -2819,7 +2819,7 @@ npx vitest run packages/db/src/builtin-role-permissions.test.ts packages/db/src/
 
 Expected: the migration applies, and both files PASS.
 
-- [ ] **Step 7: Prove it repairs the case it exists for**
+- [x] **Step 7: Prove it repairs the case it exists for**
 
 ```bash
 SYNTRA_ALLOW_RESET=syntra pnpm db:reset && SEED_ADMIN_PASSWORD=aaaaaaaaaaaa pnpm seed
@@ -2842,7 +2842,7 @@ npx prisma db execute --file prisma/migrations/20260903000000_builtin_role_permi
 
 Expected: the Owner role's `permissions` array contains `deployment.manage` again. Only do this against a development database.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add packages/db/prisma/migrations/20260903000000_builtin_role_permissions/migration.sql \
