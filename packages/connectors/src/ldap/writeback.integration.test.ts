@@ -445,3 +445,71 @@ describe('ldapWriteback.setEnabled', () => {
     expect(result.failure).toBe('not_found');
   });
 });
+
+describe('ldapWriteback.deleteObject', () => {
+  it('removes the object, and a second delete reports it already gone', async () => {
+    const { anchor, dn } = await makeAccount('deleteme');
+
+    const first = await ldapWriteback.deleteObject(config, { anchor });
+    expect(first.ok, first.message).toBe(true);
+    // Named in the message: whoever reads the audit trail needs to see WHICH
+    // object went, not that "a delete succeeded".
+    expect(first.message).toContain(dn);
+
+    await expect(
+      admin.search(dn, { scope: 'base', filter: '(objectClass=*)' }),
+    ).rejects.toThrow();
+
+    // `not_found`, not ok. The caller asked for a specific object to be
+    // removed and it was not this call that removed it; collapsing the two
+    // would hide a delete racing another administrator's.
+    const second = await ldapWriteback.deleteObject(config, { anchor });
+    expect(second.ok).toBe(false);
+    expect(second.failure).toBe('not_found');
+  });
+
+  it('reports an empty anchor as not found rather than searching for it', async () => {
+    const result = await ldapWriteback.deleteObject(config, { anchor: '' });
+    expect(result.ok).toBe(false);
+    expect(result.failure).toBe('not_found');
+  });
+
+  it('reports an anchor that names nothing', async () => {
+    const result = await ldapWriteback.deleteObject(config, {
+      anchor: normaliseAnchor(
+        'objectGUID',
+        Buffer.from([
+          0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b,
+          0x2c, 0x2d, 0x2e, 0x2f, 0x30,
+        ]),
+      ),
+    });
+    expect(result.failure).toBe('not_found');
+  });
+
+  it('refuses to delete a container that still holds something', async () => {
+    // A leaf delete, never a subtree one. The directory refuses an OU with
+    // children, and that refusal is what the org-unit route leans on as its
+    // second line behind its own emptiness check: a recursive delete driven by
+    // hand is the same mass removal the provisioning invariant exists to stop.
+    const branch = `OU=Branch,${testOu}`;
+    await admin.add(branch, { objectClass: ['top', 'organizationalUnit'] });
+    await admin.add(`CN=inside,${branch}`, {
+      objectClass: ['top', 'person', 'organizationalPerson', 'user'],
+      sAMAccountName: 'inside',
+    });
+
+    const { searchEntries } = await admin.search(branch, {
+      scope: 'base',
+      filter: '(objectClass=*)',
+      attributes: ['objectGUID'],
+    });
+    const anchor = normaliseAnchor(
+      'objectGUID',
+      searchEntries[0]!.objectGUID as Buffer,
+    );
+
+    const result = await ldapWriteback.deleteObject(config, { anchor });
+    expect(result.ok).toBe(false);
+  });
+});

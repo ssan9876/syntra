@@ -1,6 +1,7 @@
 import { Attribute, Change, EqualityFilter, type Client } from 'ldapts';
 import type {
   ChangePasswordInput,
+  DeleteObjectInput,
   SetEnabledInput,
   SourceWriteback,
   WritebackFailure,
@@ -306,6 +307,42 @@ export const ldapWriteback: SourceWriteback<Config> = {
         ok: true,
         message: `the account was ${input.enabled ? 'enabled' : 'disabled'} in the directory`,
       };
+    } catch (cause) {
+      return fail(classify(cause));
+    } finally {
+      await client?.unbind().catch(() => undefined);
+    }
+  },
+
+  /**
+   * Deletes the object the anchor names.
+   *
+   * A LEAF delete, never a subtree one. `del` removes a single entry and the
+   * directory refuses it outright for an object that still has children, which
+   * is exactly the behaviour wanted here: an organizational unit with people
+   * in it should be refused rather than emptied, and a recursive delete driven
+   * from a console button is the same mass-removal shape the provisioning
+   * invariant exists to prevent — just triggered by hand instead of computed.
+   *
+   * Not idempotent, deliberately, where `setEnabled` is. Re-disabling an
+   * already-disabled account is the caller's request satisfied; a second
+   * delete is a different situation, because something removed that object
+   * between the two calls and it was not this one. Reporting `not_found`
+   * rather than success is what lets the caller tell "I deleted it" from
+   * "somebody else already had", and those differ when two administrators are
+   * working the same leaver.
+   */
+  async deleteObject(rawConfig, input: DeleteObjectInput): Promise<WritebackResult> {
+    const config = normalise(rawConfig);
+    let client: Client | undefined;
+    try {
+      client = await openBound(config, config.bindDn, config.bindPassword);
+      const located = await locate(client, config, input.anchor);
+      if (!located) return fail('not_found');
+      await client.del(located.dn);
+      // The DN, not "the object": this string reaches the audit trail, and
+      // "an object was deleted" is not something anybody can check later.
+      return { ok: true, message: `${located.dn} was deleted from the directory` };
     } catch (cause) {
       return fail(classify(cause));
     } finally {

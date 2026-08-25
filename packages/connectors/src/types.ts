@@ -227,9 +227,26 @@ export interface SetEnabledInput {
  * have to pretend: a source is configured for reading, and write-back is an
  * explicit opt-in with its own rights and its own failure modes.
  */
+/**
+ * Deleting one directory object, named by its anchor.
+ *
+ * Deliberately NOT a `ProvisionActionType`, and the distinction is worth
+ * stating next to the invariant that forbids one. That invariant is about the
+ * PLANNER: actions computed from state, applied in bulk, where the
+ * characteristic accident is four thousand objects and not one. Nothing here
+ * is computed. A human names a single object and confirms it, which is the
+ * same shape as `changePassword` and belongs on the same path.
+ *
+ * The planner still has no delete and still cannot acquire one.
+ */
+export interface DeleteObjectInput {
+  anchor: string;
+}
+
 export interface SourceWriteback<C> {
   changePassword(config: C, input: ChangePasswordInput): Promise<WritebackResult>;
   setEnabled(config: C, input: SetEnabledInput): Promise<WritebackResult>;
+  deleteObject(config: C, input: DeleteObjectInput): Promise<WritebackResult>;
 }
 
 /**
