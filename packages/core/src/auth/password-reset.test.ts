@@ -18,6 +18,7 @@ import {
 import { generateRecoveryCodes, installRecoveryCodeVerifier } from './mfa/recovery-codes.js';
 import {
   completePasswordReset,
+  issuePasswordSetup,
   preflightPasswordReset,
   requestPasswordReset,
   RESET_REQUEST_FLOOR_MS,
@@ -464,5 +465,136 @@ describe('completePasswordReset with a second factor', () => {
       tx.recoveryCode.count({ where: { userId, usedAt: { not: null } } }),
     );
     expect(spent).toBe(1);
+  });
+});
+
+/**
+ * The joiner case: a person who has an account and a login and no password.
+ *
+ * Self-service change needs the password they do not have, and the reset form
+ * needs a mailbox that may not exist yet, so before this there was no way for
+ * an administrator to give anybody a first password at all.
+ */
+describe('issuePasswordSetup', () => {
+  it('mints a link a user with no password can complete', async () => {
+    const joiner = await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'joiner', email: 'joiner@acme.test', displayName: 'Joiner' }),
+    );
+
+    const issued = await withTenant(tenantId, (tx) =>
+      issuePasswordSetup(tx, {
+        userId: joiner.id,
+        actorUserId: userId,
+        sourceIp: null,
+        now: NOW,
+      }),
+    );
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+
+    const outcome = await completePasswordReset(tenantId, transport, {
+      token: issued.token,
+      newPassword: NEW_PASSWORD,
+      relyingParty: RP,
+      sourceIp: null,
+      now: NOW,
+    });
+    expect(outcome.ok).toBe(true);
+
+    const credential = await withTenant(tenantId, (tx) =>
+      tx.passwordCredential.findUnique({ where: { userId: joiner.id } }),
+    );
+    expect(await verifyPassword(credential!.hash, NEW_PASSWORD)).toBe(true);
+  });
+
+  it('expires 24 hours out, not 30 minutes', async () => {
+    const now = new Date('2026-08-24T12:00:00.000Z');
+    const issued = await withTenant(tenantId, (tx) =>
+      issuePasswordSetup(tx, { userId, actorUserId: userId, sourceIp: null, now }),
+    );
+    if (!issued.ok) throw new Error('expected ok');
+    expect(issued.expiresAt.toISOString()).toBe('2026-08-25T12:00:00.000Z');
+  });
+
+  it('supersedes the previous link, because one live token is all the index allows', async () => {
+    const first = await withTenant(tenantId, (tx) =>
+      issuePasswordSetup(tx, { userId, actorUserId: userId, sourceIp: null, now: NOW }),
+    );
+    const second = await withTenant(tenantId, (tx) =>
+      issuePasswordSetup(tx, { userId, actorUserId: userId, sourceIp: null, now: NOW }),
+    );
+    if (!first.ok || !second.ok) throw new Error('expected ok');
+
+    const dead = await completePasswordReset(tenantId, transport, {
+      token: first.token,
+      newPassword: NEW_PASSWORD,
+      relyingParty: RP,
+      sourceIp: null,
+      now: NOW,
+    });
+    expect(dead).toEqual({ ok: false, reason: 'invalid_token' });
+
+    const live = await completePasswordReset(tenantId, transport, {
+      token: second.token,
+      newPassword: NEW_PASSWORD,
+      relyingParty: RP,
+      sourceIp: null,
+      now: NOW,
+    });
+    expect(live.ok).toBe(true);
+  });
+
+  it('refuses an unknown user without writing a token', async () => {
+    const outcome = await withTenant(tenantId, (tx) =>
+      issuePasswordSetup(tx, {
+        userId: '00000000-0000-0000-0000-000000000000',
+        actorUserId: userId,
+        sourceIp: null,
+      }),
+    );
+    expect(outcome).toEqual({ ok: false, reason: 'unknown_user' });
+    const count = await withTenant(tenantId, (tx) => tx.passwordResetToken.count());
+    expect(count).toBe(0);
+  });
+
+  it('refuses a user whose password lives upstream', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.user.update({
+        where: { id: userId },
+        data: { passwordSource: 'upstream', passwordSourceHint: 'Entra ID' },
+      }),
+    );
+    const outcome = await withTenant(tenantId, (tx) =>
+      issuePasswordSetup(tx, { userId, actorUserId: userId, sourceIp: null }),
+    );
+    expect(outcome).toEqual({ ok: false, reason: 'not_local' });
+    const count = await withTenant(tenantId, (tx) => tx.passwordResetToken.count());
+    expect(count).toBe(0);
+  });
+
+  it('audits the administrator as the actor, not the subject', async () => {
+    const joiner = await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'joiner2', email: 'joiner2@acme.test', displayName: 'Joiner Two' }),
+    );
+    await withTenant(tenantId, (tx) =>
+      issuePasswordSetup(tx, { userId: joiner.id, actorUserId: userId, sourceIp: '10.0.0.9' }),
+    );
+
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirst({ where: { action: 'auth.password_setup_issued' } }),
+    );
+    expect(event?.actorUserId).toBe(userId);
+    expect(event?.targetId).toBe(joiner.id);
+  });
+
+  it('never puts the raw token in the audit payload', async () => {
+    const issued = await withTenant(tenantId, (tx) =>
+      issuePasswordSetup(tx, { userId, actorUserId: userId, sourceIp: null }),
+    );
+    if (!issued.ok) throw new Error('expected ok');
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirst({ where: { action: 'auth.password_setup_issued' } }),
+    );
+    expect(JSON.stringify(event?.payload ?? {})).not.toContain(issued.token);
   });
 });
