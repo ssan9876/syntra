@@ -178,3 +178,28 @@ export async function readiness(deps: ReadinessDeps): Promise<ReadinessReport> {
     probes,
   };
 }
+
+/**
+ * The same verdict, with the causes removed.
+ *
+ * `/health/ready` is unauthenticated on purpose: the updater holds no session
+ * and cannot obtain one while the thing it is checking is broken, and the
+ * automatic rollback hangs on the status code. The comment on that route used
+ * to say it "discloses nothing a caller could not learn by trying to sign in".
+ * That was true of the status code and false of the body -- with Postgres
+ * down, `reason()` put Prisma's own message on the wire, which names the host
+ * and port it could not reach.
+ *
+ * So: the status code and the failing probe's NAME go out, because §6 wants
+ * the failing probe named and "the database" is not a disclosure. The cause
+ * goes to the journal, where the operator restoring a broken update at three
+ * in the morning is already looking.
+ */
+export function redactReport(report: ReadinessReport): ReadinessReport {
+  return {
+    ...report,
+    probes: report.probes.map((probe) =>
+      probe.status === 'fail' ? { ...probe, detail: 'this check did not pass' } : probe,
+    ),
+  };
+}

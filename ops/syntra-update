@@ -14,9 +14,11 @@
 # It also runs from bin/, not from a release, so that swapping `current`
 # underneath it does not pull the script out from under itself.
 #
-#   syntra-update <version>     update to that release
-#   syntra-update --rollback    go back to the release we came from
-#   syntra-update --check       print current and available, change nothing
+#   syntra-update <version>          update to that release
+#   syntra-update --adopt <version>  take a converted working tree to its first
+#                                    release; by hand, once, not from the console
+#   syntra-update --rollback         go back to the release we came from
+#   syntra-update --check            print current and available, change nothing
 #
 # Every step writes to var/update.status, which is what the console reads.
 
@@ -31,9 +33,22 @@ STATUS="$VAR/update.status"
 LOCK="$VAR/update.lock"
 BACKUPS="$SHARED/backups"
 SERVICE="${SYNTRA_SERVICE:-syntra}"
-READY_URL="${SYNTRA_READY_URL:-http://127.0.0.1:3000/health/ready}"
+# Resolved in resolve_environment() from shared/.env, or overridden by the
+# environment the transient unit was launched with. Empty here, deliberately:
+# a default assigned at the top of the file is a default nobody sees until it
+# is wrong, and the one that was here judged every deployment not serving on
+# port 3000 to be broken.
+READY_URL="${SYNTRA_READY_URL:-}"
+PG_CONTAINER="${SYNTRA_PG_CONTAINER:-}"
+PG_ROLE="${SYNTRA_PG_ROLE:-}"
+PG_DB="${SYNTRA_PG_DB:-}"
+APP_ROLE="${SYNTRA_PG_APP_ROLE:-}"
 REPO="${SYNTRA_RELEASE_REPO:-ssan9876/syntra}"
-PG_CONTAINER="${SYNTRA_PG_CONTAINER:-infra-postgres-1}"
+# The forge. Configurable for one reason: the rehearsal has to install
+# releases that must never exist on the real repository -- a migration that
+# fails, and a release whose readiness never goes green -- and a rehearsal that
+# cannot stage its own failures is a rehearsal of the happy path.
+RELEASE_API="${SYNTRA_RELEASE_API:-https://api.github.com}"
 KEEP=3
 # How long a new release gets to become ready before it is judged broken.
 # Long enough for a cold start with a large migration behind it; short enough
@@ -62,20 +77,183 @@ version_valid() {
   esac
 }
 
+# May an update proceed from version $1, given whether --adopt was passed ($2)?
+#
+# `dev` is refused from the console and always will be: an install that is
+# somebody's working tree has uncommitted work in it, and a tarball unpacks
+# over that cleanly and silently. But a converted in-place install IS `dev` --
+# syntra-install writes no RELEASE.json, because inventing a version number for
+# a working tree is how an install comes to have a fictional update history --
+# so a blanket refusal leaves the only deployment that exists with no route to
+# a first release.
+#
+# --adopt is that route, and it is deliberately not reachable from the console:
+# it is a one-time command run by a person who knows what is in the tree they
+# are replacing, exactly like syntra-install. On a real release it is refused,
+# because there it would only skip the is-this-newer check.
+adoption_allowed() {
+  local from="$1" adopt="${2:-}"
+  if [ "$from" = "dev" ]; then
+    [ "$adopt" = "1" ]
+  else
+    [ "$adopt" != "1" ]
+  fi
+}
+
+# What WEB_ROOT should say after the install has been converted, given its
+# current value ($1), the old tree ($2) and the new root ($3).
+#
+# WEB_ROOT is the path `registerWebApp` serves the console from AND the path
+# the readiness `web` probe checks, which is why getting it wrong is so quiet:
+# an absolute path into the old tree keeps serving the OLD bundle forever with
+# the probe passing, because a file is indeed there. A relative one resolves
+# against the process's working directory -- which systemd points at
+# <release>/apps/api -- so after conversion it resolves somewhere that does not
+# exist, readiness fails, and every update rolls itself back.
+#
+# Re-anchored at `current`, not at the release directory: the console must
+# follow the symlink, or a rollback would leave the API serving the bundle of
+# the release it just undid.
+#
+# Prints nothing and returns 1 when there is nothing to do -- unset, already
+# under the new root, or somewhere outside the old tree entirely, which is a
+# choice somebody made and not this script's to overrule.
+rewritten_web_root() {
+  local value="$1" src="$2" root="$3" rest
+  [ -n "$value" ] || return 1
+  src="${src%/}"
+  root="${root%/}"
+  value="${value%/}"
+
+  case "$value" in
+    "$root"/*) return 1 ;;
+    "$src"/*)
+      rest="${value#"$src"/}"
+      printf '%s/current/%s\n' "$root" "$rest"
+      return 0
+      ;;
+    /*) return 1 ;;
+    *)
+      # Relative: the same path, spelled from the release root instead of from
+      # whatever directory the service happened to start in.
+      printf '%s/current/%s\n' "$root" "$value"
+      return 0
+      ;;
+  esac
+}
+
+# The entries in a releases directory that name a release we could actually
+# run, `sort -V` ordered, newest last.
+#
+# `sort -V` orders the literal `dev` and any `<v>.partial` AFTER every real
+# version, so both used to land in the newest-three: a rollback could target a
+# half-unpacked download that had failed its checksum, a partial could evict a
+# real release from the retention limit, and the conversion's copy of the
+# working tree was never pruned at all.
+release_candidates() {
+  printf '%s\n' "$@" | grep -v '^$' | grep -Ex '[0-9]+(\.[0-9]+)*' | sort -V || true
+}
+
 # Which releases to delete, given how many to keep and the list to choose
-# from, newest last. Never the one passed as $2 — deleting the release you are
-# running is a way to make a rollback impossible at the moment it is needed.
+# from. Never the one passed as $2 — deleting the release you are running is a
+# way to make a rollback impossible at the moment it is needed — and never
+# `dev`, which is the recovery point for a bad conversion and is not a release
+# anybody is counting.
 releases_to_prune() {
   local keep="$1" protect="$2"; shift 2
   local sorted
-  sorted=$(printf '%s\n' "$@" | grep -v '^$' | sort -V)
+  sorted=$(release_candidates "$@")
   local total; total=$(printf '%s\n' "$sorted" | grep -c . || true)
   [ "$total" -le "$keep" ] && return 0
   printf '%s\n' "$sorted" | head -n "$(( total - keep ))" | grep -vx "$protect" || true
 }
 
+# Where a rollback goes: the newest release that is not the running one.
+#
+# Falls back to `dev` when there is no numeric candidate, and only then. That
+# is the state immediately after an adoption — one release, plus the working
+# tree it was installed over — and going back to that tree is both the correct
+# answer and the only one.
+previous_release_of() {
+  local now="$1"; shift
+  local candidate="" c
+  # `release_candidates` is sorted ascending, so walking it and keeping the
+  # last entry that is OLDER than $now finds the true predecessor. The old
+  # version (`grep -vx "$now" | tail -1`) only excluded an EXACT match,
+  # which let it return a release NEWER than $now -- the exact state left
+  # behind by a failed update, where the broken release stays on disk next
+  # to a working `current`. --rollback then rolled FORWARD into it.
+  for c in $(release_candidates "$@"); do
+    if [ "$c" != "$now" ] && version_newer "$now" "$c"; then
+      candidate="$c"
+    fi
+  done
+  if [ -n "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if [ "$now" != "dev" ] && printf '%s\n' "$@" | grep -qx dev; then
+    printf 'dev\n'
+    return 0
+  fi
+  return 1
+}
+
 # The step name and detail, as the console will read them.
 status_line() { printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2"; }
+
+# The value of KEY in an env file, WITHOUT sourcing it.
+#
+# `. "$SHARED/.env"` would EXECUTE that file, and it holds MASTER_KEY and
+# RELEASE_TOKEN -- values produced by base64 and by GitHub, not by anybody
+# thinking about shell quoting. Sourcing it to learn a port number is a way to
+# run whatever a stray backtick happens to spell, as root, from a unit nobody
+# is watching.
+#
+# Always exits 0, including for a file that does not exist. An absent key and
+# an empty key are the same answer here, and the CALLER decides what that
+# means -- a missing PORT is a default, a missing DATABASE_URL is fatal.
+env_value() {
+  local key="$1" file="$2"
+  [ -f "$file" ] || return 0
+  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}${key}[[:space:]]*=[[:space:]]*\(.*\)\$/\2/p" "$file" \
+    | tail -1 \
+    | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+# One field out of a PostgreSQL connection URL.
+#
+#   pg_url_field user postgresql://syntra_app:pw@localhost:5432/syntra -> syntra_app
+#   pg_url_field db   postgresql://syntra_app:pw@localhost:5432/syntra -> syntra
+#
+# Refuses rather than defaults. `pg_dump -d syntra` when the URL named
+# something else is a backup of the wrong database, and it looks like a
+# backup right up to the moment it is restored over the right one.
+pg_url_field() {
+  local field="$1" url="$2" rest
+  rest="${url#*://}"
+  case "$field" in
+    user)
+      case "$rest" in
+        *@*) rest="${rest%%@*}"; printf '%s\n' "${rest%%:*}"; return 0 ;;
+        *)   return 1 ;;
+      esac
+      ;;
+    db)
+      case "$rest" in
+        */*)
+          rest="${rest#*/}"
+          rest="${rest%%\?*}"
+          [ -n "$rest" ] || return 1
+          printf '%s\n' "$rest"
+          return 0
+          ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 2 ;;
+  esac
+}
 
 # --- everything below does I/O ----------------------------------------------
 
@@ -88,6 +266,9 @@ die() {
   exit 1
 }
 
+# Refused before anything started, so it does NOT touch update.status.
+refuse() { log "REFUSED: $1"; exit 1; }
+
 current_version() {
   if [ -f "$CURRENT/RELEASE.json" ]; then
     sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CURRENT/RELEASE.json" | head -1
@@ -98,7 +279,8 @@ current_version() {
 
 previous_release() {
   local now; now=$(current_version)
-  ls -1 "$RELEASES" 2>/dev/null | sort -V | grep -vx "$now" | tail -1
+  # shellcheck disable=SC2046
+  previous_release_of "$now" $(ls -1 "$RELEASES" 2>/dev/null) || true
 }
 
 api() {
@@ -108,7 +290,7 @@ api() {
 }
 
 latest_version() {
-  api "https://api.github.com/repos/$REPO/releases/latest" \
+  api "$RELEASE_API/repos/$REPO/releases/latest" \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1
 }
 
@@ -116,7 +298,7 @@ latest_version() {
 # assets only through the API, and the browser URL 404s with a valid token.
 asset_url() {
   local version="$1" name="$2"
-  api "https://api.github.com/repos/$REPO/releases/tags/v$version" \
+  api "$RELEASE_API/repos/$REPO/releases/tags/v$version" \
     | tr ',' '\n' \
     | grep -A0 -B0 "\"url\": \"[^\"]*assets/[0-9]*\"\|\"name\": \"$name\"" \
     | grep -B1 "\"name\": \"$name\"" | grep '"url"' \
@@ -154,40 +336,199 @@ dump_database() {
   mkdir -p "$BACKUPS"
   # Through the container: there is no pg_dump on the host, and the version
   # inside always matches the server.
-  docker exec "$PG_CONTAINER" pg_dump -U syntra -d syntra -Fc > "$dest" 2>/dev/null \
+  #
+  # As a role that BYPASSES RLS, which is not a detail. Every tenant-scoped
+  # table here is FORCE ROW LEVEL SECURITY, and the application role is
+  # deliberately NOSUPERUSER NOBYPASSRLS -- so a dump taken as the application
+  # role either errors out or, with row security enabled, quietly captures the
+  # rows visible to a session that has set no tenant, which is none of them.
+  docker exec "$PG_CONTAINER" pg_dump -U "$PG_ROLE" -d "$PG_DB" -Fc > "$dest" 2>/dev/null \
     || die "the pre-migration database dump failed; nothing was changed"
   # A dump that exists and is empty is worse than none, because it looks like
   # a backup. pg_dump's custom format starts with the magic "PGDMP".
   [ -s "$dest" ] || die "the pre-migration dump is empty; nothing was changed"
   head -c 5 "$dest" | grep -q PGDMP \
     || die "the pre-migration dump is not a PostgreSQL archive; nothing was changed"
-  log "dumped $(wc -c < "$dest") bytes to $dest"
+  # AND IT CONTAINS ROWS. The two checks above pass on a structurally perfect
+  # archive of nothing, which is exactly what an RLS-filtered dump is. This is
+  # the check that can tell a backup from something shaped like one.
+  local sections
+  sections=$(docker exec -i "$PG_CONTAINER" pg_restore -l < "$dest" 2>/dev/null \
+    | grep -c 'TABLE DATA' || true)
+  [ "${sections:-0}" -gt 0 ] \
+    || die "the pre-migration dump contains no table data, so it is not a backup; nothing was changed"
+  log "dumped $(wc -c < "$dest") bytes, $sections table(s) of data, to $dest"
 }
 
 restore_database() {
   local src="$1"
   [ -s "$src" ] || { log "no dump to restore from"; return 1; }
-  docker exec -i "$PG_CONTAINER" pg_restore -U syntra -d syntra --clean --if-exists \
+
+  # THE SCHEMAS GO FIRST, and this is the whole of the fix.
+  #
+  # `pg_restore --clean --if-exists` drops only what is IN THE ARCHIVE. Every
+  # table, type, index and policy the new release's migration created is
+  # absent from a dump taken BEFORE that migration -- so all of it survives a
+  # rollback, while the restored _prisma_migrations no longer has a row saying
+  # it was ever applied. The next attempt then dies at `migrating` with
+  # `relation "X" already exists` and repeats forever, while the console says
+  # "Nothing was left half-applied."
+  #
+  # Every non-system schema, not just `public`: pg-boss creates and migrates
+  # its own, and a release that moved its queue tables would leave them behind
+  # the same way.
+  #
+  # Afterwards the database holds exactly what the dump holds, which is what
+  # the word restore means.
+  docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_ROLE" -d "$PG_DB" >/dev/null 2>&1 <<SQL
+DO \$\$
+DECLARE s text;
+BEGIN
+  FOR s IN
+    SELECT nspname FROM pg_namespace
+     WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema'
+  LOOP
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', s);
+  END LOOP;
+END \$\$;
+CREATE SCHEMA public;
+-- Mirrors infra/initdb/01-app-role.sql. The application role OWNS the schema
+-- and its tables, which is what makes FORCE ROW LEVEL SECURITY bind the owner
+-- -- so restoring into a schema owned by the dumping superuser would leave a
+-- database whose isolation model is subtly not the one that was tested.
+ALTER SCHEMA public OWNER TO "$APP_ROLE";
+GRANT ALL ON SCHEMA public TO "$APP_ROLE";
+SQL
+  if [ "$?" -ne 0 ]; then
+    log "the schemas could not be dropped before restoring; NOT restoring over a database in an unknown state"
+    return 1
+  fi
+
+  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$PG_DB" --clean --if-exists \
     < "$src" >/dev/null 2>&1
   # pg_restore exits non-zero on benign "does not exist" noise from --clean,
   # so its status is not the test. Whether the schema is usable is.
-  docker exec "$PG_CONTAINER" psql -U syntra -d syntra -c 'SELECT 1' >/dev/null 2>&1
+  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$PG_DB" -c 'SELECT 1' >/dev/null 2>&1
+}
+
+# The symlink alone -- no restart. Shared by the normal switch and by the
+# rollback paths, which need the swap to happen while the service is
+# STOPPED, not running.
+link_current() {
+  ln -sfn "$RELEASES/$1" "$CURRENT"
 }
 
 swap_to() {
-  ln -sfn "$RELEASES/$1" "$CURRENT"
-  systemctl restart "$SERVICE"
+  link_current "$1"
+  # Guarded: `systemctl restart` failing here must not abort the script
+  # under `set -e` with nothing written. The very next thing that runs after
+  # this (status "checking"; wait_ready) already exists to detect exactly
+  # this -- a service that did not come up -- and route it into
+  # restore_after_failure. A failed restart just makes wait_ready fail
+  # immediately instead of after the timeout, and the existing machinery
+  # takes it from there.
+  systemctl restart "$SERVICE" || true
+}
+
+# Stops the service before the database changes under it. Best-effort: a
+# unit that is not running, or does not exist for some reason, must not stop
+# a rollback that is the last line of defense this system has.
+stop_service() {
+  systemctl stop "$SERVICE" 2>/dev/null || true
+}
+
+# What this deployment's database actually is, read from the configuration the
+# SERVICE is started with rather than assumed.
+#
+# `resolve_environment` is called from main(), after the lock and never at
+# source time: the test harness sources this file to reach the pure helpers
+# above, and a script that read files on import would make the tests depend on
+# a machine that has been installed.
+DB_URL=""
+SHADOW_URL=""
+
+resolve_environment() {
+  DB_URL="${SYNTRA_DATABASE_URL:-$(env_value DATABASE_URL "$SHARED/.env")}"
+  [ -n "$DB_URL" ] \
+    || die "no DATABASE_URL in $SHARED/.env, so the migration step has nothing to connect to"
+
+  # Named in the datasource block, so the schema does not LOAD without it --
+  # even though `migrate deploy` never connects to it and only `migrate dev`
+  # does. Falling back to the real URL is therefore correct rather than a
+  # compromise: nothing will open it.
+  SHADOW_URL="${SYNTRA_SHADOW_DATABASE_URL:-$(env_value SHADOW_DATABASE_URL "$SHARED/.env")}"
+  [ -n "$SHADOW_URL" ] || SHADOW_URL="$DB_URL"
+
+  # THE PORT THIS DEPLOYMENT ACTUALLY SERVES ON.
+  #
+  # PORT is a validated configuration key, and the fixed 127.0.0.1:3000 that
+  # was here meant a deployment that set it had its healthy new release judged
+  # broken at the verify step and rolled back -- and then the ROLLBACK's own
+  # readiness check failed identically, so a system that was never broken ended
+  # at `failed`. Read here rather than defaulted, because a default is a value
+  # nobody looks at until it is wrong.
+  if [ -z "$READY_URL" ]; then
+    local port; port=$(env_value PORT "$SHARED/.env")
+    READY_URL="http://127.0.0.1:${port:-3000}/health/ready"
+  fi
+
+  # WHICH DATABASE, AND AS WHOM.
+  #
+  # The database name comes from the connection string the service uses, so a
+  # dump and a restore cannot land on a database nobody named.
+  #
+  # The ROLE deliberately does not: the application role is NOSUPERUSER
+  # NOBYPASSRLS by design, and every tenant-scoped table is FORCE ROW LEVEL
+  # SECURITY -- so a pg_dump as that role captures the rows visible to a
+  # session with no tenant set, which is none of them. The dump has to be
+  # taken by a role that bypasses RLS, which is SUPERUSER_DATABASE_URL's role
+  # where one is configured.
+  [ -n "$PG_DB" ]    || PG_DB=$(pg_url_field db "$DB_URL") \
+    || die "DATABASE_URL names no database, so there is nothing to dump or migrate"
+  [ -n "$APP_ROLE" ] || APP_ROLE=$(pg_url_field user "$DB_URL") \
+    || die "DATABASE_URL names no role, so the restored schema would have no owner"
+  if [ -z "$PG_ROLE" ]; then
+    local super; super=$(env_value SUPERUSER_DATABASE_URL "$SHARED/.env")
+    if [ -n "$super" ]; then
+      PG_ROLE=$(pg_url_field user "$super") || PG_ROLE=""
+    fi
+    # Falls back to the database's own name, which is the convention this
+    # deployment's infra follows: the owning role and the database share it.
+    [ -n "$PG_ROLE" ] || PG_ROLE="$PG_DB"
+  fi
+
+  # The container the database runs in. Not derivable from a connection string
+  # -- `localhost:5432` says nothing about which container answers it -- so it
+  # is configuration, with the lab's compose project name as the default.
+  [ -n "$PG_CONTAINER" ] || PG_CONTAINER=$(env_value PG_CONTAINER "$SHARED/.env")
+  [ -n "$PG_CONTAINER" ] || PG_CONTAINER="infra-postgres-1"
+
+  log "database $PG_DB in $PG_CONTAINER as $PG_ROLE; readiness at $READY_URL"
 }
 
 # --- the update -------------------------------------------------------------
 
 do_update() {
   local target="$1"
+  local adopt="${2:-}"
   local from; from=$(current_version)
 
   version_valid "$target" || die "\"$target\" is not a version this will install"
-  [ "$from" != "dev" ] || die "this install is a working tree, not a release; update it with deploy.sh"
-  version_newer "$target" "$from" || die "$target is not newer than the running $from"
+
+  adoption_allowed "$from" "$adopt" \
+    || if [ "$from" = "dev" ]; then
+         die "this install is a working tree, not a release; push to it with deploy.sh, or adopt a release once with: syntra-update --adopt <version>"
+       else
+         die "--adopt is for a working tree taking its first release; this install is already v$from"
+       fi
+
+  # Skipped for an adoption and only for one: `dev` cannot be ordered against
+  # a number -- that is what makes the comparison safe to trust everywhere
+  # else -- so there is nothing here to compare and the operator naming the
+  # version IS the decision.
+  if [ "$from" != "dev" ]; then
+    version_newer "$target" "$from" || die "$target is not newer than the running $from"
+  fi
 
   local dir="$RELEASES/$target"
   local tmp="$dir.partial"
@@ -220,19 +561,46 @@ do_update() {
   ( cd "$dir" && pnpm install --frozen-lockfile --prod=false ) \
     || die "dependencies could not be installed for v$target"
 
+  status "generating" "generating the database client"
+  # U2. `node_modules` is deliberately not in the tarball, and @prisma/client's
+  # postinstall cannot find packages/db/prisma/schema.prisma from the release
+  # root -- so `pnpm install` alone leaves a release whose every query throws
+  # "@prisma/client did not initialize yet". The API starts fine, `/health`
+  # answers 200 throughout, readiness stays 503 for the full 90 seconds, and
+  # the rollback then discards anything written in between.
+  #
+  # Before the dump, deliberately: this is the last step that can fail with
+  # nothing to undo.
+  ( cd "$dir" && env DATABASE_URL="$DB_URL" SHADOW_DATABASE_URL="$SHADOW_URL" \
+      pnpm --filter @syntra/db exec prisma generate ) \
+    || die "the database client could not be generated for v$target"
+
   local dump="$BACKUPS/pre-$target-$(date -u +%Y%m%dT%H%M%SZ).dump"
   status "backing-up" "dumping the database"
   dump_database "$dump"
 
   status "migrating" "applying migrations"
   # In the NEW release: the migrations being applied are its own.
-  ( cd "$dir" && pnpm --filter @syntra/db exec prisma migrate deploy ) \
+  #
+  # DATABASE_URL is passed IN, and that is the whole of U1. The Prisma CLI
+  # reads `.env` from ITS OWN working directory -- `packages/db`, under
+  # `pnpm --filter` -- and `packages/db/.env` is gitignored, so it is not in
+  # the tarball and never will be. The root `.env` symlinked into the release
+  # is not in scope for it. Every console update reached this line and failed
+  # with "Environment variable not found: DATABASE_URL", and every one of them
+  # rolled back.
+  ( cd "$dir" && env DATABASE_URL="$DB_URL" SHADOW_DATABASE_URL="$SHADOW_URL" \
+      pnpm --filter @syntra/db exec prisma migrate deploy ) \
     || { restore_after_failure "$from" "$dump" "migrations failed"; }
 
   status "switching" "restarting on v$target"
   swap_to "$target"
 
-  status "verifying" "waiting for v$target to become ready"
+  # NOT `verifying`, which is the checksum. This is a different question asked
+  # at a different time -- "does the release that is now running actually
+  # work?" -- and reusing the label meant the console told an operator their
+  # download was being checked while their service was down.
+  status "checking" "waiting for v$target to become ready"
   if ! wait_ready; then
     restore_after_failure "$from" "$dump" "v$target did not become ready within ${READY_TIMEOUT}s"
   fi
@@ -257,9 +625,15 @@ restore_after_failure() {
   log "ROLLING BACK: $why"
   status "rolling-back" "$why"
 
-  swap_to "$back_to"
+  # STOPPED before the schema drop, not restarted after it. restore_database
+  # now drops and recreates every non-system schema; a live app (and
+  # pg-boss, which owns a schema of its own) fighting that DROP is how the
+  # drop hangs on a lock, or the restore races a schema pg-boss just
+  # recreated.
+  stop_service
+  link_current "$back_to"
   if restore_database "$dump"; then
-    systemctl restart "$SERVICE"
+    systemctl restart "$SERVICE" || true
   else
     log "the database could not be restored from $dump — RESTORE IT BY HAND"
     status "failed" "$why; the database could not be restored automatically (dump: $dump)"
@@ -284,9 +658,10 @@ do_rollback() {
   [ -n "$dump" ] || die "no database dump was taken before v$from; roll back by hand"
 
   status "rolling-back" "returning to v$back_to"
-  swap_to "$back_to"
+  stop_service
+  link_current "$back_to"
   restore_database "$dump" || die "the database could not be restored from $dump"
-  systemctl restart "$SERVICE"
+  systemctl restart "$SERVICE" || true
   wait_ready || die "v$back_to did not become ready"
   status "rolled_back" "returned to v$back_to"
 }
@@ -300,6 +675,15 @@ prune() {
     log "pruning release $name"
     rm -rf "${RELEASES:?}/$name"
   done
+  # Partial directories are no longer counted as releases, which also means
+  # nothing was ever removing them. An interrupted download leaves one behind,
+  # and the next attempt at the same version starts with `rm -rf "$tmp"` -- but
+  # an attempt at a DIFFERENT version never touches it.
+  for partial in "$RELEASES"/*.partial; do
+    [ -d "$partial" ] || continue
+    log "removing abandoned $(basename "$partial")"
+    rm -rf "$partial"
+  done
   ls -1t "$BACKUPS"/*.dump 2>/dev/null | tail -n +$(( KEEP + 1 )) | while read -r old; do
     log "pruning dump $(basename "$old")"
     rm -f "$old"
@@ -309,11 +693,23 @@ prune() {
 do_check() {
   local from latest
   from=$(current_version)
-  latest=$(latest_version)
+  # Tolerant of everything --check can fail at: no token (this command is
+  # documented to run without one), the forge being unreachable, whatever.
+  # --check promises to "change nothing", and that includes update.status --
+  # api()'s die on a missing token used to write `failed` over a DIFFERENT,
+  # running update's status just because somebody ran --check beside it,
+  # which is exactly the hazard refuse() exists to prevent everywhere else
+  # in this file. Checked here rather than by changing api()/die themselves,
+  # which are correct as they are for a real update already in progress.
+  if [ -z "${SYNTRA_RELEASE_TOKEN:-}" ]; then
+    latest=""
+  else
+    latest=$(latest_version 2>/dev/null) || latest=""
+  fi
   echo "current: $from"
   echo "latest:  ${latest:-unknown}"
   if [ "$from" = "dev" ]; then
-    echo "state:   working tree — update with deploy.sh, not from the console"
+    echo "state:   working tree -- update with deploy.sh, not from the console; or take its first release with: syntra-update --adopt <version>"
   elif [ -n "$latest" ] && version_newer "$latest" "$from"; then
     echo "state:   an update is available"
   else
@@ -322,19 +718,27 @@ do_check() {
 }
 
 main() {
+  local adopt=""
   case "${1:-}" in
     --check)    do_check; return ;;
     --rollback) : ;;
-    '')         die "usage: syntra-update <version> | --rollback | --check" ;;
+    --adopt)
+      adopt=1
+      shift
+      [ -n "${1:-}" ] || refuse "usage: syntra-update --adopt <version>"
+      ;;
+    '')         refuse "usage: syntra-update <version> | --adopt <version> | --rollback | --check" ;;
   esac
 
   mkdir -p "$VAR"
   # One at a time. Two updaters sharing a symlink and a database is a way to
   # end up running neither version.
   exec 9>"$LOCK"
-  flock -n 9 || die "another update is already running"
+  flock -n 9 || refuse "another update is already running"
 
-  if [ "$1" = "--rollback" ]; then do_rollback; else do_update "$1"; fi
+  resolve_environment
+
+  if [ "$1" = "--rollback" ]; then do_rollback; else do_update "$1" "$adopt"; fi
 }
 
 # Sourced by the tests to get at the pure helpers without running anything.

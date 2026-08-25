@@ -65,6 +65,22 @@ ok "an empty version is refused"     "$(yes_no version_valid '')" no
 ok "a command substitution is refused" "$(yes_no version_valid '1.0;rm -rf /')" no
 ok "dev is refused as a target"      "$(yes_no version_valid dev)" no
 
+# --- adoption_allowed -------------------------------------------------------
+#
+# A converted in-place tree is `dev`, and `dev` must never be updatable FROM
+# THE CONSOLE: a tarball unpacks cleanly over a working tree and takes
+# uncommitted work with it without saying so. But `dev` is also the only
+# deployment that exists, so refusing it everywhere leaves no path to a first
+# release at all. The path is a person at a keyboard passing --adopt.
+
+ok "an ordinary release may be updated"    "$(yes_no adoption_allowed 1.4.0 '')" yes
+ok "dev is refused without adoption"       "$(yes_no adoption_allowed dev '')" no
+ok "dev is permitted with adoption"        "$(yes_no adoption_allowed dev 1)" yes
+# --adopt is for the FIRST release only. Passing it on a real install would
+# skip the is-this-newer check, which is the guard against installing a
+# downgrade by typing the wrong number.
+ok "adoption is refused on a real release" "$(yes_no adoption_allowed 1.4.0 1)" no
+
 # --- releases_to_prune ------------------------------------------------------
 
 ok "nothing is pruned below the limit" \
@@ -84,6 +100,55 @@ ok "versions are ordered numerically, not lexically" \
   "$(releases_to_prune 2 1.10.0 1.2.0 1.9.0 1.10.0 | tr '\n' ' ' | sed 's/ $//')" \
   "1.2.0"
 
+# `sort -V` puts the literal `dev` and any `<v>.partial` AFTER real versions,
+# so both used to land in the newest-three and count against the limit -- which
+# means a half-unpacked download could evict a release somebody may need to
+# roll back to, and the conversion's copy of the working tree was never pruned
+# at all.
+
+ok "a partial directory is not a release" \
+  "$(releases_to_prune 2 1.3.0 1.1.0 1.2.0 1.3.0 1.4.0.partial | tr '\n' ' ' | sed 's/ $//')" \
+  "1.1.0"
+
+ok "dev does not count against the limit" \
+  "$(releases_to_prune 2 1.3.0 dev 1.1.0 1.2.0 1.3.0 | tr '\n' ' ' | sed 's/ $//')" \
+  "1.1.0"
+
+# It is the recovery point for a bad conversion. Deleting it is how somebody
+# loses the tree they were told was still sitting there.
+ok "dev is never pruned" \
+  "$(releases_to_prune 1 1.3.0 dev 1.1.0 1.2.0 1.3.0 | tr '\n' ' ' | sed 's/ $//')" \
+  "1.1.0 1.2.0"
+
+# --- previous_release_of ----------------------------------------------------
+#
+# Where a rollback goes. Sorting the raw listing meant it could go to a
+# half-unpacked download that failed its checksum, or to an unversioned copy
+# of somebody's working tree.
+
+ok "the newest older release" \
+  "$(previous_release_of 1.5.0 1.3.0 1.4.0 1.5.0)" "1.4.0"
+
+ok "ordered numerically, not lexically" \
+  "$(previous_release_of 1.10.0 1.2.0 1.9.0 1.10.0)" "1.9.0"
+
+ok "a partial download is never a rollback target" \
+  "$(previous_release_of 1.5.0 1.4.0 1.5.0 1.6.0.partial)" "1.4.0"
+
+# After an adoption there is exactly one release and the tree it replaced.
+# Going back to that tree is the correct and only answer.
+ok "falls back to the adopted working tree" \
+  "$(previous_release_of 1.0.0 dev 1.0.0)" "dev"
+
+ok "refuses when there is nowhere to go" \
+  "$(previous_release_of 1.0.0 1.0.0 || echo NONE)" "NONE"
+
+# THE BUG THIS FUNCTION USED TO HAVE: a release newer than $now is not a
+# "previous" release, it is the one that was just judged broken. Returning
+# it sent --rollback FORWARD into a failed release with a much-older dump.
+ok "never answers with a release newer than now" \
+  "$(previous_release_of 1.4.0 1.4.0 1.5.0 || echo NONE)" "NONE"
+
 # --- status_line ------------------------------------------------------------
 
 ok "the status line is three tab-separated fields" \
@@ -94,6 +159,92 @@ ok "the status line carries the step" \
 
 ok "the status line carries the detail" \
   "$(status_line migrating 'applying migrations' | cut -f3)" "applying migrations"
+
+# --- env_value --------------------------------------------------------------
+#
+# The updater has to learn the deployment's connection string, its port and its
+# container name from the same file the service is started with. It must NOT
+# learn them by sourcing it: that file holds MASTER_KEY and RELEASE_TOKEN, whose
+# values are chosen by base64 and by GitHub rather than by anybody thinking
+# about shell quoting.
+
+ENVFILE="$(mktemp)"
+cat > "$ENVFILE" <<'EOF'
+# A comment, and a commented-out key that must not be found.
+# PORT=9999
+DATABASE_URL=postgresql://syntra_app:syntra_app@localhost:5432/syntra
+PORT=3000
+QUOTED="quoted value"
+SINGLE='single value'
+export EXPORTED=exported
+TRAILING=value   
+EOF
+
+ok "reads a plain value"        "$(env_value DATABASE_URL "$ENVFILE")" \
+  "postgresql://syntra_app:syntra_app@localhost:5432/syntra"
+ok "reads a numeric value"      "$(env_value PORT "$ENVFILE")" "3000"
+ok "strips double quotes"       "$(env_value QUOTED "$ENVFILE")" "quoted value"
+ok "strips single quotes"       "$(env_value SINGLE "$ENVFILE")" "single value"
+ok "reads an exported key"      "$(env_value EXPORTED "$ENVFILE")" "exported"
+ok "strips trailing whitespace" "$(env_value TRAILING "$ENVFILE")" "value"
+ok "ignores a commented key"    "$(env_value PORT "$ENVFILE")" "3000"
+ok "an absent key is empty"     "$(env_value NOPE "$ENVFILE")" ""
+# Not an error: an install may legitimately not have the file yet, and the
+# caller decides what a missing value means. Exiting non-zero here would take
+# the whole updater down under `set -e` for a key nobody required.
+ok "an absent file is empty"    "$(env_value PORT /nonexistent/env)" ""
+rm -f "$ENVFILE"
+
+# --- pg_url_field -----------------------------------------------------------
+#
+# The dump, the restore and the migration all need to know WHICH database, and
+# the answer is in DATABASE_URL rather than in this script.
+
+PGURL="postgresql://syntra_app:s3cr3t@localhost:5432/syntra"
+ok "reads the role"    "$(pg_url_field user "$PGURL")" "syntra_app"
+ok "reads the database" "$(pg_url_field db  "$PGURL")" "syntra"
+ok "drops query parameters" \
+  "$(pg_url_field db 'postgresql://u:p@h:5432/syntra?schema=public&sslmode=require')" "syntra"
+ok "reads a url with no password" "$(pg_url_field user 'postgresql://syntra@h:5432/syntra')" "syntra"
+# Refused rather than guessed. A default database name is how a restore lands
+# somewhere nobody chose.
+ok "refuses a url with no database" "$(pg_url_field db 'postgresql://u:p@h:5432' || echo ERR)" "ERR"
+ok "refuses a url with no role"     "$(pg_url_field user 'postgresql://h:5432/syntra' || echo ERR)" "ERR"
+ok "refuses an unknown field"       "$(pg_url_field port "$PGURL" || echo ERR)" "ERR"
+
+# --- rewritten_web_root -----------------------------------------------------
+#
+# WEB_ROOT is what makes one process serve the console as well as the API, and
+# syntra-install used to copy .env verbatim. An absolute path kept serving the
+# OLD tree's bundle forever -- with the readiness `web` probe passing, because
+# a file was there -- and a relative one resolved against the new working
+# directory and failed readiness, so every update rolled back.
+
+ok "an absolute path under the old tree is re-anchored" \
+  "$(rewritten_web_root /root/syntra/apps/web/dist /root/syntra /opt/syntra)" \
+  "/opt/syntra/current/apps/web/dist"
+
+# A relative WEB_ROOT resolves against the process's working directory, which
+# systemd sets to <root>/apps/api. Made absolute here rather than left to
+# resolve somewhere new.
+ok "a relative path is made absolute against the release" \
+  "$(rewritten_web_root apps/web/dist /root/syntra /opt/syntra)" \
+  "/opt/syntra/current/apps/web/dist"
+
+ok "a trailing slash does not double up" \
+  "$(rewritten_web_root /root/syntra/apps/web/dist/ /root/syntra /opt/syntra)" \
+  "/opt/syntra/current/apps/web/dist"
+
+# Somebody serving a bundle from outside the tree meant it. Re-anchoring that
+# would point the console at a directory that does not exist.
+ok "a path outside the old tree is left alone" \
+  "$(rewritten_web_root /srv/syntra-console /root/syntra /opt/syntra || echo LEAVE)" "LEAVE"
+
+ok "a path already under the new root is left alone" \
+  "$(rewritten_web_root /opt/syntra/current/apps/web/dist /root/syntra /opt/syntra || echo LEAVE)" "LEAVE"
+
+ok "an unset WEB_ROOT is left alone" \
+  "$(rewritten_web_root '' /root/syntra /opt/syntra || echo LEAVE)" "LEAVE"
 
 # --- report -----------------------------------------------------------------
 

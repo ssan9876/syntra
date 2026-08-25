@@ -24,15 +24,20 @@ interface Availability {
   progress: Progress | null;
 }
 
+/** Steps after which the updater is not coming back. */
+const TERMINAL = new Set(['succeeded', 'rolled_back', 'failed']);
+
 /** How the updater's step names read to somebody who did not write them. */
 const STEP_TEXT: Record<string, string> = {
   downloading: 'Downloading the release',
   verifying: 'Checking it is intact',
   unpacking: 'Unpacking',
   installing: 'Installing dependencies',
+  generating: 'Preparing the database client',
   'backing-up': 'Backing up the database',
   migrating: 'Applying database changes',
   switching: 'Restarting on the new version',
+  checking: 'Checking the new version works',
   'rolling-back': 'Putting the previous version back',
   pruning: 'Tidying up',
   succeeded: 'Update complete',
@@ -58,13 +63,42 @@ export function UpdatesPage() {
   const [confirming, setConfirming] = useState(false);
   /** True once the API has stopped answering — i.e. the restart has begun. */
   const [restarting, setRestarting] = useState(false);
+  /**
+   * True from the moment this page launched an update until it has seen the
+   * updater stop. Not derived from `progress`: for the first few seconds there
+   * IS no progress -- the status file is written by a detached unit that has
+   * not started yet -- and a page that trusted the absence of one concluded
+   * nothing was happening and stopped looking.
+   */
+  const [launched, setLaunched] = useState(false);
 
   const load = useCallback(async (quiet = false) => {
     try {
+      // The QUIET path asks the cheap route. `/api/admin/update` re-queries
+      // the forge every time; at one poll every three seconds that is a
+      // GitHub round trip per tick, to re-learn a release list that cannot
+      // have changed during an update. `/update/status` reads the status file
+      // and nothing else.
+      if (quiet) {
+        const { progress } = await api<{ progress: Progress | null }>(
+          '/api/admin/update/status',
+        );
+        setData((previous) => (previous ? { ...previous, progress } : previous));
+        setRestarting(false);
+        if (progress && TERMINAL.has(progress.step)) {
+          setLaunched(false);
+          // One full read, now that it is over: the running version has
+          // changed and the availability with it.
+          void load();
+        }
+        return;
+      }
+
       const next = await api<Availability>('/api/admin/update');
       setData(next);
       setRestarting(false);
-      if (!quiet) setError(null);
+      setError(null);
+      if (next.progress && TERMINAL.has(next.progress.step)) setLaunched(false);
     } catch (cause) {
       // While the service is restarting this WILL fail, and that is the
       // update working. Only a foreground load reports a problem.
@@ -88,12 +122,18 @@ export function UpdatesPage() {
 
   // Poll only while something is happening. A page that polls forever keeps a
   // request every three seconds against a system nobody is updating.
+  //
+  // `launched` is in the condition and it is load-bearing. The updater is a
+  // detached systemd unit: for the first seconds after a 202 there is no
+  // status file at all, and a condition built only on `running` read that
+  // absence as "finished" and stopped -- leaving the page static, with the
+  // button live, while the server restarted underneath it.
   const running = data?.progress?.running ?? false;
   useEffect(() => {
-    if (!running && !restarting) return;
+    if (!running && !restarting && !launched) return;
     const timer = setInterval(() => void load(true), 3000);
     return () => clearInterval(timer);
-  }, [running, restarting, load]);
+  }, [running, restarting, launched, load]);
 
   async function start(version: string) {
     setBusy(true);
@@ -104,8 +144,13 @@ export function UpdatesPage() {
         body: JSON.stringify({ version }),
       });
       setConfirming(false);
+      setLaunched(true);
       setRestarting(true);
-      void load(true);
+      // Deliberately NOT loading here. That request succeeds -- the API is
+      // still up, the restart has not happened yet -- and its success used to
+      // clear `restarting` before the first tick, which with no status file
+      // yet written cleared the interval for good. The first poll is three
+      // seconds away and knows more than this one would.
     } catch (cause) {
       setError(
         cause instanceof ApiError
@@ -184,8 +229,11 @@ export function UpdatesPage() {
                 {progress.step === 'rolled_back' && (
                   <Alert tone="warning" title="The update was undone">
                     The new version did not come up, so the previous one was put
-                    back automatically, along with the database as it was before
-                    the update. Nothing was left half-applied.
+                    back automatically, along with the database as it was
+                    immediately before the update — schema and data both.
+                    Anything that happened in the minutes between the backup and
+                    the rollback is not in it: a sign-in, a sync run, a
+                    provisioning action.
                   </Alert>
                 )}
                 {progress.step === 'failed' && (
@@ -231,7 +279,13 @@ export function UpdatesPage() {
                     </div>
                   )}
 
-                  {!confirming && (
+                  {/* Not merely `disabled`: `disabled` still leaves an
+                      element for `getByRole` to find, so a page that had
+                      launched an update and only disabled this button was
+                      still, technically, "offering" it. While this page has
+                      launched something and has not yet seen it stop, there
+                      is nothing to offer. */}
+                  {!confirming && !launched && (
                     <div className="flex justify-end">
                       <Button
                         disabled={busy || (progress?.running ?? false)}

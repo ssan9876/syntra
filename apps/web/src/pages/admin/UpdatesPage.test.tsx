@@ -177,7 +177,7 @@ describe('UpdatesPage', () => {
     render(<UpdatesPage />);
 
     expect(await screen.findByText(/The update was undone/)).toBeInTheDocument();
-    expect(screen.getByText(/Nothing was left half-applied/)).toBeInTheDocument();
+    expect(screen.getByText(/schema and data both/)).toBeInTheDocument();
   });
 
   /**
@@ -204,5 +204,49 @@ describe('UpdatesPage', () => {
 
     expect(await screen.findByText(/Syntra is restarting/)).toBeInTheDocument();
     expect(screen.queryByText(/could not be read/i)).toBeNull();
+  });
+
+  /**
+   * THE ONE THAT MADE THE PAGE LIE.
+   *
+   * After a 202 the page used to call load() immediately. That request SUCCEEDS
+   * -- the API is still up, the restart has not happened -- so `restarting`
+   * cleared, and with no status file written yet the page decided nothing was
+   * running and cleared its interval for good. It then sat there, static, with
+   * the button enabled, while the update restarted the server; a second click
+   * launched a second updater that lost the lock.
+   *
+   * The fix is that a page which has just LAUNCHED an update keeps polling until
+   * it sees a terminal step, whatever the first poll happens to catch.
+   */
+  it('keeps polling after a 202 even when no status file exists yet', async () => {
+    const fetchSpy = mockApi(availability({ progress: null }));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<UpdatesPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /update to 1\.5\.0/i }));
+    await userEvent.click(screen.getByRole('button', { name: /update now/i }));
+
+    const afterLaunch = fetchSpy.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    // Three ticks at three seconds. The old page made zero: it had already
+    // cleared the interval.
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(afterLaunch);
+    // And it polls the CHEAP route, which does not go to GitHub.
+    const polled = fetchSpy.mock.calls.at(-1)![0];
+    expect(String(polled)).toBe('/api/admin/update/status');
+  });
+
+  it('does not offer the button again while an update it launched is running', async () => {
+    mockApi(availability({ progress: null }));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<UpdatesPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /update to 1\.5\.0/i }));
+    await userEvent.click(screen.getByRole('button', { name: /update now/i }));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(screen.queryByRole('button', { name: /update to 1\.5\.0/i })).toBeNull();
   });
 });

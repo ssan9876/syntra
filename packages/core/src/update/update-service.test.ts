@@ -1,14 +1,26 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as child from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import {
   checkForUpdate,
   fetchLatestRelease,
   isNewer,
+  launchUpdater,
   readProgress,
+  resetUpdateCache,
 } from './update-service.js';
 import * as version from '../health/version.js';
+
+// Node's own ESM namespace for a built-in module is frozen, so `vi.spyOn`
+// cannot redefine `spawn` on the real `node:child_process` -- this replaces
+// it with a plain, mutable object (everything else untouched) purely so the
+// spy below has something it is allowed to patch.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawn: actual.spawn };
+});
 
 /**
  * The comparison the whole feature rests on. Get it wrong and the console
@@ -115,6 +127,7 @@ describe('checkForUpdate', () => {
       repo: 'acme/syntra',
       token: 'tok',
       root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
       fetchImpl: vi.fn() as never,
     });
 
@@ -130,6 +143,7 @@ describe('checkForUpdate', () => {
       repo: 'r',
       token: 'tok',
       root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
       fetchImpl: fetchImpl as never,
     });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -147,12 +161,77 @@ describe('checkForUpdate', () => {
       migrations: [],
     });
     try {
-      const result = await checkForUpdate({ repo: 'r', token: null, root: '/opt/syntra' });
+      const result = await checkForUpdate({
+        repo: 'r',
+        token: null,
+        root: '/opt/syntra',
+        readyUrl: 'http://127.0.0.1:3000/health/ready',
+      });
       expect(result.updatable).toBe(false);
       expect(result.reason).toContain('token');
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+/**
+ * The design says the check caches for an hour; nothing did. So the settings
+ * page, the POST that starts an update, and every tick of the console's
+ * three-second poll each made their own round trip to GitHub -- which is a
+ * rate limit spent on re-learning a release list that cannot change during an
+ * update, and a settings page whose load time is somebody else's uptime.
+ */
+describe('checkForUpdate caching', () => {
+  it('asks the forge once for repeated checks', async () => {
+    resetUpdateCache();
+    vi.spyOn(version, 'buildInfo').mockReturnValue({
+      version: '1.4.0',
+      isRelease: true,
+      commit: null,
+      released: null,
+      migrations: [],
+    });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(release())));
+    const env = {
+      repo: 'acme/syntra',
+      token: 'tok',
+      root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+
+    await checkForUpdate(env);
+    await checkForUpdate(env);
+    await checkForUpdate(env);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  /** A failure must not be remembered: "we could not check" for an hour after
+   *  a blip is worse than checking again. */
+  it('does not cache a failure', async () => {
+    resetUpdateCache();
+    vi.spyOn(version, 'buildInfo').mockReturnValue({
+      version: '1.4.0',
+      isRelease: true,
+      commit: null,
+      released: null,
+      migrations: [],
+    });
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 503 }));
+    const env = {
+      repo: 'acme/syntra',
+      token: 'tok',
+      root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+
+    await checkForUpdate(env);
+    await checkForUpdate(env);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -203,5 +282,67 @@ describe('readProgress', () => {
   it('tolerates a status with no detail', () => {
     const root = withStatus('2026-08-24T19:10:00Z\tsucceeded\t\n');
     expect(readProgress(root)).toMatchObject({ step: 'succeeded', detail: '' });
+  });
+});
+
+/**
+ * The API is the one process that knows for certain what port it bound, and
+ * the updater's automatic rollback hangs entirely on reaching it. Forwarding
+ * only the token, the root and the repository meant a deployment with a
+ * PORT of its own had every healthy release judged broken -- and then the
+ * rollback judged the previous release broken too, for the same reason.
+ */
+describe('launchUpdater', () => {
+  it('passes the readiness URL to the transient unit', () => {
+    const spawn = vi.spyOn(child, 'spawn').mockReturnValue({
+      unref: () => {},
+      on: () => {},
+    } as never);
+
+    launchUpdater(
+      {
+        repo: 'acme/syntra',
+        token: 'tok',
+        root: '/opt/syntra',
+        readyUrl: 'http://127.0.0.1:8443/health/ready',
+      },
+      '1.5.0',
+    );
+
+    const args = spawn.mock.calls[0]![1] as string[];
+    expect(args).toContain('--setenv=SYNTRA_READY_URL=http://127.0.0.1:8443/health/ready');
+  });
+
+  /**
+   * `spawn` reports a missing executable ASYNCHRONOUSLY, on the child's
+   * 'error' event. With no handler that is an unhandled 'error' on an
+   * EventEmitter, which in Node is a thrown exception with nothing to catch it
+   * -- so a host without systemd-run took the API down, having already
+   * answered 202 and written an audit event saying an update had begun.
+   */
+  it('records a failure instead of crashing when systemd-run is missing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'syntra-launch-'));
+    mkdirSync(join(root, 'var'), { recursive: true });
+
+    const handlers: Record<string, (cause: Error) => void> = {};
+    vi.spyOn(child, 'spawn').mockReturnValue({
+      unref: () => {},
+      on: (event: string, handler: (cause: Error) => void) => {
+        handlers[event] = handler;
+      },
+    } as never);
+
+    launchUpdater(
+      { repo: 'a/b', token: 't', root, readyUrl: 'http://127.0.0.1:3000/health/ready' },
+      '1.5.0',
+    );
+
+    expect(handlers.error).toBeDefined();
+    expect(() => handlers.error!(new Error('spawn systemd-run ENOENT'))).not.toThrow();
+
+    const progress = readProgress(root);
+    expect(progress?.step).toBe('failed');
+    expect(progress?.running).toBe(false);
+    expect(progress?.detail).toContain('systemd-run');
   });
 });

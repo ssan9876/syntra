@@ -1129,17 +1129,22 @@ Signing in stops working for about a minute. Sessions already open survive.
 ### Doing it by hand
 
 ```bash
-/opt/syntra/bin/syntra-update --check      # what is running, what is available
-/opt/syntra/bin/syntra-update 1.5.0        # update
-/opt/syntra/bin/syntra-update --rollback   # go back deliberately
-cat /opt/syntra/var/update.status          # what it is doing right now
+/opt/syntra/bin/syntra-update --check        # what is running, what is available
+/opt/syntra/bin/syntra-update --adopt 1.5.0  # once, by hand: take a converted `dev` install to its first release
+/opt/syntra/bin/syntra-update 1.5.0          # update
+/opt/syntra/bin/syntra-update --rollback     # go back deliberately
+cat /opt/syntra/var/update.status            # what it is doing right now
 ```
 
 ### Things worth knowing before you need them
 
 - **`deploy.sh` still works** and is still the right tool for iterating. It
-  writes into `current`, which leaves the tree no longer matching its release —
-  the updater notices and refuses rather than discarding your pushed work.
+  writes into `current`, which leaves the tree no longer matching its release.
+  The updater only checks whether `RELEASE.json` is present — it refuses a
+  working tree that has none, but a `deploy.sh` push made on top of an
+  existing release still has one, so the updater does **not** notice that push
+  and would overwrite it silently. Detecting that would take hashing the
+  release manifest, which is not implemented.
 - **A rollback does not undo what happened during the update.** The dump is
   from just before the migration; a login or a sync run in the minute since is
   not in it.

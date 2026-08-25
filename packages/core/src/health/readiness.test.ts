@@ -7,7 +7,7 @@ import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { putSecret } from '../vault/vault-service.js';
-import { readiness } from './readiness.js';
+import { readiness, redactReport, type Probe, type ReadinessReport } from './readiness.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 23));
 let tenantId: string;
@@ -228,5 +228,56 @@ describe('readiness', () => {
 
     const report = await readiness(deps());
     expect(JSON.stringify(report)).not.toContain('SUPER-SECRET-PEM');
+  });
+});
+
+/**
+ * The answer is unauthenticated, because the updater holds no session and
+ * cannot get one while the thing it is checking is broken. That is the whole
+ * reason the endpoint exists, and it is also why the failure DETAIL cannot go
+ * on the wire: Prisma's message names the host and port it could not reach,
+ * which is not something a sign-in attempt tells anybody.
+ *
+ * The probe NAME stays. Section 6 wants the failing probe named, and "the
+ * database" is not a disclosure -- every deployment has one.
+ */
+describe('redactReport', () => {
+  const report = (probes: Probe[]): ReadinessReport => ({
+    ready: probes.every((p) => p.status !== 'fail'),
+    version: '1.4.0',
+    probes,
+  });
+
+  it('drops the cause of a failure and keeps the name', () => {
+    const redacted = redactReport(
+      report([
+        {
+          name: 'database',
+          status: 'fail',
+          detail: "not reachable: Can't reach database server at `db.internal:5432`",
+        },
+      ]),
+    );
+    expect(redacted.probes[0]!.name).toBe('database');
+    expect(redacted.probes[0]!.status).toBe('fail');
+    expect(redacted.probes[0]!.detail).not.toContain('5432');
+    expect(redacted.probes[0]!.detail).not.toContain('db.internal');
+    expect(redacted.probes[0]!.detail).toBe('this check did not pass');
+  });
+
+  it('leaves passing and skipped probes exactly as they are', () => {
+    const original = report([
+      { name: 'migrations', status: 'pass', detail: '31 applied' },
+      { name: 'vault', status: 'skip', detail: 'no tenants yet' },
+    ]);
+    expect(redactReport(original)).toEqual(original);
+  });
+
+  it('keeps the readiness verdict and the version', () => {
+    const redacted = redactReport(
+      report([{ name: 'web', status: 'fail', detail: 'the console bundle is missing' }]),
+    );
+    expect(redacted.ready).toBe(false);
+    expect(redacted.version).toBe('1.4.0');
   });
 });

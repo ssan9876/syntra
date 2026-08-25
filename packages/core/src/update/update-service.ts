@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { buildInfo } from '../health/version.js';
+import { guardedFetch } from '../net/guarded-fetch.js';
 
 /**
  * What the console needs to offer an update, and how it starts one.
@@ -44,9 +45,11 @@ const IN_FLIGHT = new Set([
   'verifying',
   'unpacking',
   'installing',
+  'generating',
   'backing-up',
   'migrating',
   'switching',
+  'checking',
   'rolling-back',
   'pruning',
 ]);
@@ -81,6 +84,19 @@ interface ReleaseApi {
 }
 
 /**
+ * The forge, reached through the same outbound guard every other
+ * administrator-influenced request uses.
+ *
+ * `RELEASE_REPO` is configuration, so the URL this builds is partly somebody's
+ * input -- and the bare global `fetch` that was here followed redirects and
+ * would connect to whatever address the name resolved to, including this
+ * deployment's own network. `guardedFetch` checks every resolved address, pins
+ * the connection to the one it checked, and refuses redirects. It is not a
+ * second opinion about which addresses may be reached; it is the same one.
+ */
+const forgeFetch: typeof fetch = guardedFetch({ timeoutMs: 10_000 }) as typeof fetch;
+
+/**
  * The newest published release, as the forge reports it.
  *
  * Any failure returns null rather than throwing. A GitHub outage, a revoked
@@ -91,7 +107,10 @@ interface ReleaseApi {
 export async function fetchLatestRelease(
   token: string,
   repo: string,
-  fetchImpl: typeof fetch = fetch,
+  // `GuardedFetch` is deliberately narrower than `typeof fetch` -- it follows
+  // no redirects and streams no bodies. The cast is safe here and only here,
+  // because this call site is one GET whose whole response is JSON.
+  fetchImpl: typeof fetch = forgeFetch,
 ): Promise<AvailableRelease | null> {
   try {
     const response = await fetchImpl(
@@ -133,7 +152,39 @@ export interface UpdateEnvironment {
   token: string | null;
   /** Where the release layout lives. */
   root: string;
+  /**
+   * Where the updater should ask whether the new release works.
+   *
+   * Passed in rather than assumed, because THIS process is the only thing
+   * that knows for certain what port it bound. The updater has a fallback --
+   * it reads PORT out of shared/.env, so a rollback run by hand from a serial
+   * console still works with no API alive to tell it anything -- and this is
+   * the authoritative answer when there is one.
+   */
+  readyUrl: string;
   fetchImpl?: typeof fetch | undefined;
+}
+
+/**
+ * The last successful release lookup, and when it was taken.
+ *
+ * The design said "caches for an hour" and nothing did, so the settings page,
+ * the POST that starts an update and every tick of the console's poll each
+ * spent a round trip re-learning a release list that had not moved. Sixty
+ * seconds rather than an hour: an operator who has just cut a release and
+ * refreshes the page should see it, and an hour of "there is nothing new" is
+ * the kind of stale that gets diagnosed as a broken button.
+ *
+ * Keyed on repository and token together, so a configuration change is not
+ * answered from the previous configuration's cache. Failures are NOT cached --
+ * "we could not check" is a fine answer once and a poor one for a minute.
+ */
+const RELEASE_CACHE_MS = 60_000;
+let releaseCache: { key: string; at: number; value: AvailableRelease } | null = null;
+
+/** Test seam. Never called by the product. */
+export function resetUpdateCache(): void {
+  releaseCache = null;
 }
 
 /**
@@ -171,7 +222,17 @@ export async function checkForUpdate(
     };
   }
 
-  const latest = await fetchLatestRelease(env.token, env.repo, env.fetchImpl);
+  // `\u0000` as the separator, written as an escape rather than a raw byte:
+  // it cannot occur in a repository name or a token, so no pair of values
+  // can collide by concatenating to the same string.
+  const key = `${env.repo}\u0000${env.token}`;
+  let latest: AvailableRelease | null = null;
+  if (releaseCache !== null && releaseCache.key === key && Date.now() - releaseCache.at < RELEASE_CACHE_MS) {
+    latest = releaseCache.value;
+  } else {
+    latest = await fetchLatestRelease(env.token, env.repo, env.fetchImpl);
+    if (latest !== null) releaseCache = { key, at: Date.now(), value: latest };
+  }
   return {
     current: build.version,
     updatable: true,
@@ -234,11 +295,37 @@ export function launchUpdater(
       `--setenv=SYNTRA_RELEASE_TOKEN=${env.token}`,
       `--setenv=SYNTRA_ROOT=${env.root}`,
       `--setenv=SYNTRA_RELEASE_REPO=${env.repo}`,
+      `--setenv=SYNTRA_READY_URL=${env.readyUrl}`,
       `${env.root}/bin/syntra-update`,
       argument,
     ],
     { detached: true, stdio: 'ignore' },
   );
+
+  // `spawn` reports a missing executable asynchronously, on 'error'. Without a
+  // handler that is an unhandled 'error' on an EventEmitter, which Node turns
+  // into a thrown exception with nothing to catch it -- so a host with no
+  // systemd-run took the whole API down, after this route had already answered
+  // 202 and audited that an update was beginning.
+  //
+  // It writes the failure where the console is already looking. The updater
+  // owns that file, but the updater is precisely what did not start, and a
+  // console left watching a spinner for an update that never began is the
+  // worst of the available answers.
+  child.on('error', (cause: Error) => {
+    try {
+      mkdirSync(`${env.root}/var`, { recursive: true });
+      writeFileSync(
+        `${env.root}/var/update.status`,
+        `${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}\tfailed\t` +
+          `the updater could not be started: ${cause.message}\n`,
+      );
+    } catch {
+      // A root that cannot be written to is a deployment that was never
+      // installed. There is nowhere left to report this to; the log line
+      // below is the record.
+    }
+  });
   child.unref();
 
   // Not awaited. `systemd-run` returns as soon as the unit is queued, and

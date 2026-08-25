@@ -84,6 +84,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: The updater's own shell logic
+        # bash -n first: a syntax error in the updater is discovered at 2am
+        # by a system that has already migrated its database, and the fast
+        # syntax check catches it in under a second rather than after Node
+        # and Postgres have spun up for nothing.
+        #
+        # The harness sources the SHIPPED script (SYNTRA_UPDATE_SOURCE_ONLY=1)
+        # rather than a copy, so this is the only automated coverage of the
+        # guards release.yml now depends on being correct: version_valid (a
+        # path-traversal refusal), adoption_allowed (keeps --adopt off real
+        # releases), previous_release_of (where a rollback goes), and the
+        # env/URL parsers the migrate step and the dump/restore need.
+        run: bash -n ops/syntra-update ops/syntra-install && bash ops/syntra-update.test.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
