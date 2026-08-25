@@ -227,6 +227,7 @@ export async function buildApp(
     releaseRepo: config.releaseRepo,
     releaseToken: config.releaseToken,
     releaseRoot: config.releaseRoot,
+    readyUrl: `http://127.0.0.1:${config.port}/health/ready`,
   });
   await app.register(registerAdminSourceRoutes, {
     prefix: '/api/admin',

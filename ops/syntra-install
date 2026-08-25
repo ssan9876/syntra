@@ -143,8 +143,14 @@ if [ "$DRY" -eq 1 ]; then
 fi
 
 say "waiting for it to come back"
+# The port this deployment serves on, not 3000. The installer had the same
+# fixed address the updater did, so converting an install that sets PORT ended
+# in "it did not become ready" on an install that was ready the whole time.
+PORT_VALUE=$(env_value PORT "$ROOT/shared/.env")
+[ -n "$PORT_VALUE" ] || PORT_VALUE=3000
 for _ in $(seq 1 30); do
-  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/health/ready || echo 000)
+  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+    "http://127.0.0.1:$PORT_VALUE/health/ready" || echo 000)
   if [ "$code" = "200" ]; then
     say "ready. Running from $ROOT/current"
     echo

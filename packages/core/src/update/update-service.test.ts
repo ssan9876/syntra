@@ -1,14 +1,25 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as child from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import {
   checkForUpdate,
   fetchLatestRelease,
   isNewer,
+  launchUpdater,
   readProgress,
 } from './update-service.js';
 import * as version from '../health/version.js';
+
+// Node's own ESM namespace for a built-in module is frozen, so `vi.spyOn`
+// cannot redefine `spawn` on the real `node:child_process` -- this replaces
+// it with a plain, mutable object (everything else untouched) purely so the
+// spy below has something it is allowed to patch.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawn: actual.spawn };
+});
 
 /**
  * The comparison the whole feature rests on. Get it wrong and the console
@@ -115,6 +126,7 @@ describe('checkForUpdate', () => {
       repo: 'acme/syntra',
       token: 'tok',
       root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
       fetchImpl: vi.fn() as never,
     });
 
@@ -130,6 +142,7 @@ describe('checkForUpdate', () => {
       repo: 'r',
       token: 'tok',
       root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
       fetchImpl: fetchImpl as never,
     });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -147,7 +160,12 @@ describe('checkForUpdate', () => {
       migrations: [],
     });
     try {
-      const result = await checkForUpdate({ repo: 'r', token: null, root: '/opt/syntra' });
+      const result = await checkForUpdate({
+        repo: 'r',
+        token: null,
+        root: '/opt/syntra',
+        readyUrl: 'http://127.0.0.1:3000/health/ready',
+      });
       expect(result.updatable).toBe(false);
       expect(result.reason).toContain('token');
     } finally {
@@ -203,5 +221,34 @@ describe('readProgress', () => {
   it('tolerates a status with no detail', () => {
     const root = withStatus('2026-08-24T19:10:00Z\tsucceeded\t\n');
     expect(readProgress(root)).toMatchObject({ step: 'succeeded', detail: '' });
+  });
+});
+
+/**
+ * The API is the one process that knows for certain what port it bound, and
+ * the updater's automatic rollback hangs entirely on reaching it. Forwarding
+ * only the token, the root and the repository meant a deployment with a
+ * PORT of its own had every healthy release judged broken -- and then the
+ * rollback judged the previous release broken too, for the same reason.
+ */
+describe('launchUpdater', () => {
+  it('passes the readiness URL to the transient unit', () => {
+    const spawn = vi.spyOn(child, 'spawn').mockReturnValue({
+      unref: () => {},
+      on: () => {},
+    } as never);
+
+    launchUpdater(
+      {
+        repo: 'acme/syntra',
+        token: 'tok',
+        root: '/opt/syntra',
+        readyUrl: 'http://127.0.0.1:8443/health/ready',
+      },
+      '1.5.0',
+    );
+
+    const args = spawn.mock.calls[0]![1] as string[];
+    expect(args).toContain('--setenv=SYNTRA_READY_URL=http://127.0.0.1:8443/health/ready');
   });
 });

@@ -17,6 +17,8 @@ export interface UpdateRouteOptions {
   releaseRepo: string | null;
   releaseToken: string | null;
   releaseRoot: string;
+  /** Built from the port this process actually bound. See launchUpdater. */
+  readyUrl: string;
 }
 
 const startRequest = z.object({
@@ -43,6 +45,7 @@ export async function registerAdminUpdateRoutes(
     repo: options.releaseRepo ?? '',
     token: options.releaseToken,
     root: options.releaseRoot,
+    readyUrl: options.readyUrl,
   });
 
   const configured = (): boolean =>

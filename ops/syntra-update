@@ -33,12 +33,17 @@ STATUS="$VAR/update.status"
 LOCK="$VAR/update.lock"
 BACKUPS="$SHARED/backups"
 SERVICE="${SYNTRA_SERVICE:-syntra}"
-READY_URL="${SYNTRA_READY_URL:-http://127.0.0.1:3000/health/ready}"
+# Resolved in resolve_environment() from shared/.env, or overridden by the
+# environment the transient unit was launched with. Empty here, deliberately:
+# a default assigned at the top of the file is a default nobody sees until it
+# is wrong, and the one that was here judged every deployment not serving on
+# port 3000 to be broken.
+READY_URL="${SYNTRA_READY_URL:-}"
+PG_CONTAINER="${SYNTRA_PG_CONTAINER:-}"
+PG_ROLE="${SYNTRA_PG_ROLE:-}"
+PG_DB="${SYNTRA_PG_DB:-}"
+APP_ROLE="${SYNTRA_PG_APP_ROLE:-}"
 REPO="${SYNTRA_RELEASE_REPO:-ssan9876/syntra}"
-PG_CONTAINER="${SYNTRA_PG_CONTAINER:-infra-postgres-1}"
-PG_ROLE="${SYNTRA_PG_ROLE:-syntra}"
-PG_DB="${SYNTRA_PG_DB:-syntra}"
-APP_ROLE="${SYNTRA_PG_APP_ROLE:-syntra_app}"
 KEEP=3
 # How long a new release gets to become ready before it is judged broken.
 # Long enough for a cold start with a large migration behind it; short enough
@@ -381,6 +386,52 @@ resolve_environment() {
   # compromise: nothing will open it.
   SHADOW_URL="${SYNTRA_SHADOW_DATABASE_URL:-$(env_value SHADOW_DATABASE_URL "$SHARED/.env")}"
   [ -n "$SHADOW_URL" ] || SHADOW_URL="$DB_URL"
+
+  # THE PORT THIS DEPLOYMENT ACTUALLY SERVES ON.
+  #
+  # PORT is a validated configuration key, and the fixed 127.0.0.1:3000 that
+  # was here meant a deployment that set it had its healthy new release judged
+  # broken at the verify step and rolled back -- and then the ROLLBACK's own
+  # readiness check failed identically, so a system that was never broken ended
+  # at `failed`. Read here rather than defaulted, because a default is a value
+  # nobody looks at until it is wrong.
+  if [ -z "$READY_URL" ]; then
+    local port; port=$(env_value PORT "$SHARED/.env")
+    READY_URL="http://127.0.0.1:${port:-3000}/health/ready"
+  fi
+
+  # WHICH DATABASE, AND AS WHOM.
+  #
+  # The database name comes from the connection string the service uses, so a
+  # dump and a restore cannot land on a database nobody named.
+  #
+  # The ROLE deliberately does not: the application role is NOSUPERUSER
+  # NOBYPASSRLS by design, and every tenant-scoped table is FORCE ROW LEVEL
+  # SECURITY -- so a pg_dump as that role captures the rows visible to a
+  # session with no tenant set, which is none of them. The dump has to be
+  # taken by a role that bypasses RLS, which is SUPERUSER_DATABASE_URL's role
+  # where one is configured.
+  [ -n "$PG_DB" ]    || PG_DB=$(pg_url_field db "$DB_URL") \
+    || die "DATABASE_URL names no database, so there is nothing to dump or migrate"
+  [ -n "$APP_ROLE" ] || APP_ROLE=$(pg_url_field user "$DB_URL") \
+    || die "DATABASE_URL names no role, so the restored schema would have no owner"
+  if [ -z "$PG_ROLE" ]; then
+    local super; super=$(env_value SUPERUSER_DATABASE_URL "$SHARED/.env")
+    if [ -n "$super" ]; then
+      PG_ROLE=$(pg_url_field user "$super") || PG_ROLE=""
+    fi
+    # Falls back to the database's own name, which is the convention this
+    # deployment's infra follows: the owning role and the database share it.
+    [ -n "$PG_ROLE" ] || PG_ROLE="$PG_DB"
+  fi
+
+  # The container the database runs in. Not derivable from a connection string
+  # -- `localhost:5432` says nothing about which container answers it -- so it
+  # is configuration, with the lab's compose project name as the default.
+  [ -n "$PG_CONTAINER" ] || PG_CONTAINER=$(env_value PG_CONTAINER "$SHARED/.env")
+  [ -n "$PG_CONTAINER" ] || PG_CONTAINER="infra-postgres-1"
+
+  log "database $PG_DB in $PG_CONTAINER as $PG_ROLE; readiness at $READY_URL"
 }
 
 # --- the update -------------------------------------------------------------

@@ -134,6 +134,16 @@ export interface UpdateEnvironment {
   token: string | null;
   /** Where the release layout lives. */
   root: string;
+  /**
+   * Where the updater should ask whether the new release works.
+   *
+   * Passed in rather than assumed, because THIS process is the only thing
+   * that knows for certain what port it bound. The updater has a fallback --
+   * it reads PORT out of shared/.env, so a rollback run by hand from a serial
+   * console still works with no API alive to tell it anything -- and this is
+   * the authoritative answer when there is one.
+   */
+  readyUrl: string;
   fetchImpl?: typeof fetch | undefined;
 }
 
@@ -235,6 +245,7 @@ export function launchUpdater(
       `--setenv=SYNTRA_RELEASE_TOKEN=${env.token}`,
       `--setenv=SYNTRA_ROOT=${env.root}`,
       `--setenv=SYNTRA_RELEASE_REPO=${env.repo}`,
+      `--setenv=SYNTRA_READY_URL=${env.readyUrl}`,
       `${env.root}/bin/syntra-update`,
       argument,
     ],
