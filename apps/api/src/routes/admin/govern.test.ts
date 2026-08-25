@@ -311,6 +311,11 @@ describe('the org-unit scope on EVERY read path — §21', () => {
         .sort(),
     ).toEqual([
       'GET /govern/campaigns',
+      // The signed bundle. Unscoped because it is an artifact over a campaign
+      // or a snapshot AS A WHOLE -- there is no partial disclosure of a
+      // document whose whole point is a digest over all of it -- and it is
+      // gated on `govern.export` rather than `govern.read` for that reason.
+      'GET /govern/evidence/:id',
       'GET /govern/integrity',
       'GET /govern/orphans',
       'GET /govern/settings',

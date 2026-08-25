@@ -59,6 +59,7 @@ import {
   buildSnapshot,
   confirmProposal,
   createEvidencePack,
+  fetchEvidencePack,
   denyProposal,
   exportReportCsv,
   governReadScope,
@@ -137,6 +138,11 @@ function requireGovernRead(alsoRequire?: Permission) {
  * the scope is then a test failure rather than a disclosure.
  */
 export const GOVERN_READ_ROUTES: readonly { path: string; scoped: boolean; why?: string }[] = [
+  {
+    path: 'GET /govern/evidence/:id',
+    scoped: false,
+    why: 'a bundle is a signed artifact over a campaign or a snapshot as a whole; it cannot be partially disclosed and is gated on govern.export instead',
+  },
   {
     path: 'GET /govern/snapshots',
     scoped: false,
@@ -449,6 +455,23 @@ export async function registerAdminGovernRoutes(
     async (request) => {
       const body = evidencePackBody.parse(request.body ?? {});
       return createEvidencePack(request.tenantId, request.session.userId, body);
+    },
+  );
+
+  app.get(
+    '/govern/evidence/:id',
+    // `govern.export` rather than `govern.read`: this returns the whole signed
+    // document, which is the same act as creating one. "Reading a screen and
+    // walking out with a file are different acts with different consequences,
+    // and only one of them is a copy."
+    { preHandler: requireGovernRead(PERMISSIONS.GOVERN_EXPORT) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { bundle, digestMatches } = await fetchEvidencePack(request.tenantId, id);
+      // Returned, never thrown. A bundle that no longer digests to what was
+      // stored is the most interesting thing this route can say, and a 500
+      // would say it as "something went wrong".
+      return { bundle, digestMatches };
     },
   );
 

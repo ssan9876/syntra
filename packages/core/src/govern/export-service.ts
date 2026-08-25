@@ -106,18 +106,84 @@ export const BUNDLE_LIMITATIONS: readonly string[] = [
   'A certification proves a click, not a judgement. It proves a named, authenticated human recorded a decision against a stated set of facts at a stated time. It does not prove they read anything, that the access was appropriate, or that the facts were true at the target at that instant.',
   'An item marked `undecided` in this bundle was NOT attested. The campaign closed and nobody decided it.',
   'Deletion of the entire log is detectable only by something outside it that remembers the head. That is what anchoring is for, and without anchoring it is not detectable.',
+  'Where this bundle covers no campaign, it contains no items and no decisions, and says so on this line rather than by being empty. A campaign bundle with an empty item list is a defect, not a clean review.',
+  'The notification set is matched by template and by time window, because Syntra does not record which campaign an outbox row belonged to. It may include a notification from another campaign running in the same period, and it is offered as a record of what was sent rather than as a complete set.',
 ];
 
+/**
+ * The document §17 describes, and the thing it used not to be.
+ *
+ * Every one of `items`, `decisions`, `reviewers`, `notifications` and
+ * `dispatches` was hard-coded `[]`, and the digest was computed over that -- so
+ * the bundle VERIFIED, while its own cover made a claim about items it did not
+ * contain. An auditor received a signed, digest-checked artifact with zero
+ * decisions in it and nothing saying so.
+ *
+ * The element shapes are written out rather than left as `unknown[]` because
+ * this document is the product: an auditor reads these field names, and
+ * `unknown` is how a field quietly stops being written.
+ */
 export interface EvidenceBundle {
   header: ReportHeader;
   limitations: string[];
+  /** Null for a report or period bundle, which legitimately covers no campaign. */
+  campaignId: string | null;
   snapshot: unknown;
   coverage: unknown;
-  items: unknown[];
-  decisions: unknown[];
-  reviewers: unknown[];
-  notifications: unknown[];
-  dispatches: unknown[];
+  items: {
+    id: string;
+    subjectKey: string;
+    systemId: string;
+    resourceKind: string;
+    resourceId: string;
+    resourceName: string;
+    status: string;
+    statusReason: string | null;
+    coverageStatus: string;
+    riskFlags: string[];
+    observedAt: string;
+    holdingSnapshotId: string;
+    attributions: unknown;
+  }[];
+  decisions: {
+    id: string;
+    itemId: string;
+    personId: string;
+    decision: string;
+    comment: string | null;
+    decidedAt: string;
+    itemOpenedAt: string;
+    /** §17's engagement signals, offered as signals rather than as proof. */
+    neverOpened: boolean;
+    viaBulk: boolean;
+    bulkSize: number | null;
+    sessionDecisionOrdinal: number;
+    coverageAtDecision: unknown;
+  }[];
+  reviewers: {
+    itemId: string;
+    personId: string;
+    via: string;
+    assignedAt: string;
+    unassignedAt: string | null;
+    unassignedReason: string | null;
+  }[];
+  notifications: { template: string; to: string; createdAt: string; sentAt: string | null }[];
+  /**
+   * Stated on the bundle when the notification set is approximate. See
+   * `buildEvidenceBundle`.
+   */
+  notificationLimitation: string | null;
+  dispatches: {
+    itemId: string | null;
+    route: string;
+    status: string;
+    message: string | null;
+    sequence: number;
+    dispatchedAt: string | null;
+    confirmedAt: string | null;
+    appliedAt: string | null;
+  }[];
   chain: {
     fromSequence: number;
     toSequence: number;
@@ -138,28 +204,92 @@ export function bundleDigest(bundle: Omit<EvidenceBundle, 'digest'>): string {
   return createHash('sha256').update(stableStringify(bundle)).digest('hex');
 }
 
-export async function createEvidencePack(
+/**
+ * Everything the bundle is built from, all of it recorded on the
+ * `EvidencePack` row.
+ *
+ * §17: the digest exists so "a reader can recompute it a year later". It could
+ * not, because the document was built from the chain AS IT STOOD -- so
+ * re-creating a pack produced a different document with a different digest, and
+ * `storageRef` was never written, so there was no other copy either.
+ *
+ * Building from the recorded range instead makes the bundle a pure function of
+ * the row, which is a stronger artifact than filed bytes: it can be recomputed
+ * AND checked against the digest that was stored at the time.
+ */
+export interface EvidenceSpec {
+  snapshotId: string;
+  campaignId: string | null;
+  scope: Record<string, unknown>;
+  chainFromSequence: number;
+  chainSeedHash: string;
+  chainHeadSequence: number;
+  chainHeadHash: string;
+}
+
+export async function buildEvidenceBundle(
   tenantId: string,
-  actorUserId: string,
-  input: {
-    kind: 'campaign' | 'report' | 'period';
-    snapshotId?: string | undefined;
-    campaignId?: string | undefined;
-    scope: Record<string, unknown>;
-  },
-): Promise<{ id: string; digest: string; bundle: EvidenceBundle }> {
+  spec: EvidenceSpec,
+): Promise<Omit<EvidenceBundle, 'digest'>> {
   const loaded = await withTenant(tenantId, async (tx) => {
-    const snapshot = await readableSnapshot(tx, input.snapshotId);
+    const snapshot = await readableSnapshot(tx, spec.snapshotId);
     const sources = await tx.snapshotSource.findMany({ where: { snapshotId: snapshot.id } });
     const gaps = await tx.coverageGap.findMany({ where: { snapshotId: snapshot.id } });
-    const status = await integrityStatus(tx, false);
-    const lastCheckpoint = await tx.auditCheckpoint.findFirst({ orderBy: { sequence: 'desc' } });
-    return { snapshot, sources, gaps, status, lastCheckpoint };
+    return { snapshot, sources, gaps };
   });
 
-  const from = (loaded.lastCheckpoint?.sequence ?? 0) + 1;
-  const seed = loaded.lastCheckpoint?.hash ?? GENESIS_HASH;
-  const segment = await verifySegment(tenantId, from, seed);
+  // BOUNDED AT THE HEAD THE PACK RECORDED, which is what makes the rebuild
+  // reproducible at all. Without `maxSequence` the walk runs to the chain as it
+  // stands TODAY, so every audit event written after the pack -- including the
+  // `govern.evidence.create` event the pack itself writes -- moves
+  // `segment.toSequence` and changes the digest. A year later the document
+  // would differ from the one that was signed, for no reason but the passage of
+  // time.
+  const segment = await verifySegment(tenantId, spec.chainFromSequence, spec.chainSeedHash, {
+    maxSequence: spec.chainHeadSequence,
+  });
+
+  // ---- the campaign's own record ------------------------------------------
+  //
+  // ONE transaction of reads, and every one of them bounded by the campaign
+  // rather than by the tenant. A 50,000-item campaign's bundle is a large
+  // document by construction and that is correct -- it is the record somebody
+  // signs against -- but it must not be assembled by a query per item.
+  const campaignId = spec.campaignId;
+  const campaign =
+    campaignId === null
+      ? null
+      : await withTenant(tenantId, async (tx) => {
+          const row = await tx.campaign.findUniqueOrThrow({ where: { id: campaignId } });
+          const items = await tx.campaignItem.findMany({
+            where: { campaignId },
+            orderBy: { id: 'asc' },
+          });
+          const decisions = await tx.campaignDecision.findMany({
+            where: { item: { campaignId } },
+            orderBy: [{ decidedAt: 'asc' }, { id: 'asc' }],
+          });
+          const reviewers = await tx.campaignItemReviewer.findMany({
+            where: { item: { campaignId } },
+            orderBy: { id: 'asc' },
+          });
+          const dispatches = await tx.revocationDispatch.findMany({
+            where: { batch: { campaignId } },
+            orderBy: [{ batchId: 'asc' }, { sequence: 'asc' }],
+          });
+          // MATCHED BY TEMPLATE AND WINDOW, because `NotificationOutbox` has no
+          // campaign column -- it carries `requestId` for Automate and nothing
+          // for Govern. Approximate, and the bundle says so on its cover rather
+          // than presenting a partial set as a complete one.
+          const notifications = await tx.notificationOutbox.findMany({
+            where: {
+              template: { startsWith: 'govern-review-' },
+              createdAt: { gte: row.createdAt, lte: row.dueAt },
+            },
+            orderBy: { createdAt: 'asc' },
+          });
+          return { items, decisions, reviewers, dispatches, notifications };
+        });
 
   const header: ReportHeader = {
     snapshotId: loaded.snapshot.id,
@@ -181,14 +311,15 @@ export async function createEvidencePack(
     coverageGapCount: loaded.snapshot.coverageGapCount,
     unattributableCount: loaded.snapshot.unattributableCount,
     unattributedAccountCount: loaded.snapshot.unattributedAccountCount,
-    scopeDescription: JSON.stringify(input.scope),
+    scopeDescription: JSON.stringify(spec.scope),
   };
 
-  const withoutDigest: Omit<EvidenceBundle, 'digest'> = {
+  return {
     header,
     // Printed on the COVER of every bundle, not kept in a caveats appendix,
     // because the harm this module causes is somebody over-reading its output.
     limitations: [...BUNDLE_LIMITATIONS],
+    campaignId: spec.campaignId,
     snapshot: {
       id: loaded.snapshot.id,
       asOf: loaded.snapshot.asOf.toISOString(),
@@ -196,20 +327,101 @@ export async function createEvidencePack(
       unattributableCount: loaded.snapshot.unattributableCount,
     },
     coverage: loaded.gaps.map((g) => ({ kind: g.kind, reason: g.reason, systemId: g.systemId })),
-    items: [],
-    decisions: [],
-    reviewers: [],
-    notifications: [],
-    dispatches: [],
+    items: (campaign?.items ?? []).map((i) => ({
+      id: i.id,
+      subjectKey: i.subjectKey,
+      systemId: i.systemId,
+      resourceKind: i.resourceKind,
+      resourceId: i.resourceId,
+      resourceName: i.resourceName,
+      status: i.status,
+      statusReason: i.statusReason,
+      coverageStatus: i.coverageStatus,
+      riskFlags: i.riskFlags,
+      observedAt: i.observedAt.toISOString(),
+      holdingSnapshotId: i.holdingSnapshotId,
+      attributions: i.attributions,
+    })),
+    decisions: (campaign?.decisions ?? []).map((d) => ({
+      id: d.id,
+      itemId: d.itemId,
+      personId: d.personId,
+      decision: d.decision,
+      comment: d.comment,
+      decidedAt: d.decidedAt.toISOString(),
+      itemOpenedAt: d.itemOpenedAt.toISOString(),
+      neverOpened: d.neverOpened,
+      viaBulk: d.viaBulk,
+      bulkSize: d.bulkSize,
+      sessionDecisionOrdinal: d.sessionDecisionOrdinal,
+      coverageAtDecision: d.coverageAtDecision,
+    })),
+    reviewers: (campaign?.reviewers ?? []).map((r) => ({
+      itemId: r.itemId,
+      personId: r.personId,
+      via: r.via,
+      assignedAt: r.assignedAt.toISOString(),
+      unassignedAt: r.unassignedAt?.toISOString() ?? null,
+      unassignedReason: r.unassignedReason,
+    })),
+    notifications: (campaign?.notifications ?? []).map((n) => ({
+      template: n.template,
+      to: n.to,
+      createdAt: n.createdAt.toISOString(),
+      sentAt: n.sentAt?.toISOString() ?? null,
+    })),
+    notificationLimitation:
+      campaign === null
+        ? null
+        : 'matched by template and by the campaign’s own window, because no column records which campaign an outbox row belonged to',
+    dispatches: (campaign?.dispatches ?? []).map((d) => ({
+      itemId: d.itemId,
+      route: d.route,
+      status: d.status,
+      message: d.message,
+      sequence: d.sequence,
+      dispatchedAt: d.dispatchedAt?.toISOString() ?? null,
+      confirmedAt: d.confirmedAt?.toISOString() ?? null,
+      appliedAt: d.appliedAt?.toISOString() ?? null,
+    })),
     chain: {
       fromSequence: segment.fromSequence,
       toSequence: segment.toSequence,
       result: segment.result,
-      headSequence: loaded.status.headSequence,
-      headHash: loaded.status.headHash,
+      headSequence: spec.chainHeadSequence,
+      headHash: spec.chainHeadHash,
     },
   };
+}
 
+export async function createEvidencePack(
+  tenantId: string,
+  actorUserId: string,
+  input: {
+    kind: 'campaign' | 'report' | 'period';
+    snapshotId?: string | undefined;
+    campaignId?: string | undefined;
+    scope: Record<string, unknown>;
+  },
+): Promise<{ id: string; digest: string; bundle: EvidenceBundle }> {
+  const anchor = await withTenant(tenantId, async (tx) => {
+    const snapshot = await readableSnapshot(tx, input.snapshotId);
+    const status = await integrityStatus(tx, false);
+    const lastCheckpoint = await tx.auditCheckpoint.findFirst({ orderBy: { sequence: 'desc' } });
+    return { snapshotId: snapshot.id, status, lastCheckpoint };
+  });
+
+  const spec: EvidenceSpec = {
+    snapshotId: anchor.snapshotId,
+    campaignId: input.campaignId ?? null,
+    scope: input.scope,
+    chainFromSequence: (anchor.lastCheckpoint?.sequence ?? 0) + 1,
+    chainSeedHash: anchor.lastCheckpoint?.hash ?? GENESIS_HASH,
+    chainHeadSequence: anchor.status.headSequence,
+    chainHeadHash: anchor.status.headHash,
+  };
+
+  const withoutDigest = await buildEvidenceBundle(tenantId, spec);
   const digest = bundleDigest(withoutDigest);
   const bundle: EvidenceBundle = { ...withoutDigest, digest };
   const body = JSON.stringify(bundle);
@@ -220,17 +432,26 @@ export async function createEvidencePack(
         tenantId,
         kind: input.kind,
         scope: input.scope as never,
-        snapshotId: loaded.snapshot.id,
-        campaignId: input.campaignId ?? null,
-        chainHeadSequence: loaded.status.headSequence,
-        chainHeadHash: loaded.status.headHash,
-        chainVerificationResult: segment.result,
-        chainFromSequence: segment.fromSequence,
-        chainToSequence: segment.toSequence,
+        snapshotId: spec.snapshotId,
+        campaignId: spec.campaignId,
+        chainHeadSequence: spec.chainHeadSequence,
+        chainHeadHash: spec.chainHeadHash,
+        chainVerificationResult: bundle.chain.result,
+        chainFromSequence: bundle.chain.fromSequence,
+        chainToSequence: bundle.chain.toSequence,
         digest,
         byteLength: Buffer.byteLength(body, 'utf8'),
         createdByUserId: actorUserId,
       },
+    });
+    // `storageRef` STOPS BEING A LIE. The column's own comment says it is
+    // "where the bytes live", and it was never written -- so a bundle could not
+    // be fetched again, and re-creating one produced a different document
+    // because the chain head had moved. It names the route that rebuilds this
+    // pack from its own recorded range.
+    await tx.evidencePack.update({
+      where: { id: pack.id },
+      data: { storageRef: `/api/admin/govern/evidence/${pack.id}` },
     });
     await recordEvent(tx, {
       actorUserId,
@@ -239,10 +460,66 @@ export async function createEvidencePack(
       targetId: pack.id,
       outcome: 'success',
       sourceIp: null,
-      payload: { kind: input.kind, digest, chainResult: segment.result, scope: input.scope },
+      payload: {
+        kind: input.kind,
+        digest,
+        chainResult: bundle.chain.result,
+        scope: input.scope,
+        itemCount: bundle.items.length,
+        decisionCount: bundle.decisions.length,
+      },
     });
     return pack.id;
   });
 
   return { id, digest, bundle };
+}
+
+/**
+ * Rebuilds a pack from its own recorded range and says whether the result still
+ * digests to what was stored.
+ *
+ * `digestMatches: false` is not an error to swallow. It means the document a
+ * pack describes is no longer the document that was signed -- which is either a
+ * pruned snapshot, an edited campaign, or the thing §17 says hash chaining
+ * exists to detect -- and the caller has to be able to say so on the screen.
+ */
+export async function fetchEvidencePack(
+  tenantId: string,
+  packId: string,
+): Promise<{ bundle: EvidenceBundle; digestMatches: boolean }> {
+  const pack = await withTenant(tenantId, (tx) =>
+    tx.evidencePack.findUniqueOrThrow({ where: { id: packId } }),
+  );
+  if (pack.snapshotId === null) {
+    throw new Error('this evidence pack names no snapshot, so it cannot be rebuilt');
+  }
+
+  const withoutDigest = await buildEvidenceBundle(tenantId, {
+    snapshotId: pack.snapshotId,
+    campaignId: pack.campaignId,
+    scope: pack.scope as Record<string, unknown>,
+    chainFromSequence: pack.chainFromSequence,
+    // The seed is the checkpoint hash the original walk started from. It is not
+    // stored, and it does not need to be: `chainFromSequence` is 1 exactly when
+    // the walk began at genesis, and otherwise the checkpoint at
+    // `chainFromSequence - 1` is the one it seeded on.
+    chainSeedHash: await seedHashFor(tenantId, pack.chainFromSequence),
+    chainHeadSequence: pack.chainHeadSequence,
+    chainHeadHash: pack.chainHeadHash,
+  });
+
+  const bundle: EvidenceBundle = { ...withoutDigest, digest: bundleDigest(withoutDigest) };
+  return { bundle, digestMatches: bundle.digest === pack.digest };
+}
+
+async function seedHashFor(tenantId: string, fromSequence: number): Promise<string> {
+  if (fromSequence <= 1) return GENESIS_HASH;
+  const checkpoint = await withTenant(tenantId, (tx) =>
+    tx.auditCheckpoint.findFirst({
+      where: { sequence: fromSequence - 1 },
+      orderBy: { verifiedAt: 'desc' },
+    }),
+  );
+  return checkpoint?.hash ?? GENESIS_HASH;
 }
