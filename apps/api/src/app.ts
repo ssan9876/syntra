@@ -9,6 +9,7 @@ import {
   localMasterKeyProvider,
   onSigningKeysChanged,
   readiness,
+  redactReport,
   smtpTransport,
   type Config,
   type Scheduler,
@@ -137,14 +138,41 @@ export async function buildApp(
   // it holds no session and cannot obtain one while the thing it is checking
   // is broken -- and it discloses nothing a caller could not learn by trying
   // to sign in.
-  app.get('/health/ready', async (_request, reply) => {
-    const report = await readiness({
-      provider: localMasterKeyProvider(config.masterKey),
-      webRoot: config.webRoot ?? undefined,
-      version: buildInfo().version,
-    });
-    return reply.status(report.ready ? 200 : 503).send(report);
-  });
+  app.get(
+    '/health/ready',
+    {
+      // A RATE LIMIT, because this one is not free: several queries, two
+      // withTenant transactions and an AES unseal per request, unauthenticated,
+      // as fast as anybody cares to ask. `rateLimit` is registered
+      // `global: false`, so a route that sets no config has none at all.
+      //
+      // Thirty a minute is roughly double what the updater's three-second poll
+      // spends during the ninety seconds it is allowed, and it is keyed per
+      // address, so the updater on loopback and a container orchestrator's
+      // probe do not share a bucket with anybody.
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    },
+    async (request, reply) => {
+      const report = await readiness({
+        provider: localMasterKeyProvider(config.masterKey),
+        webRoot: config.webRoot ?? undefined,
+        version: buildInfo().version,
+      });
+
+      // The CAUSE goes to the journal and the NAME goes on the wire. This
+      // answer is unauthenticated, and Prisma's message names the host and
+      // port it could not reach -- which is not something a sign-in attempt
+      // tells anybody, whatever the old comment here claimed.
+      if (!report.ready) {
+        request.log.warn(
+          { probes: report.probes.filter((probe) => probe.status === 'fail') },
+          'readiness check failed',
+        );
+      }
+
+      return reply.status(report.ready ? 200 : 503).send(redactReport(report));
+    },
+  );
 
   await app.register(registerAuthRoutes, {
     prefix: '/api/auth',
