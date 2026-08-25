@@ -65,6 +65,22 @@ ok "an empty version is refused"     "$(yes_no version_valid '')" no
 ok "a command substitution is refused" "$(yes_no version_valid '1.0;rm -rf /')" no
 ok "dev is refused as a target"      "$(yes_no version_valid dev)" no
 
+# --- adoption_allowed -------------------------------------------------------
+#
+# A converted in-place tree is `dev`, and `dev` must never be updatable FROM
+# THE CONSOLE: a tarball unpacks cleanly over a working tree and takes
+# uncommitted work with it without saying so. But `dev` is also the only
+# deployment that exists, so refusing it everywhere leaves no path to a first
+# release at all. The path is a person at a keyboard passing --adopt.
+
+ok "an ordinary release may be updated"    "$(yes_no adoption_allowed 1.4.0 '')" yes
+ok "dev is refused without adoption"       "$(yes_no adoption_allowed dev '')" no
+ok "dev is permitted with adoption"        "$(yes_no adoption_allowed dev 1)" yes
+# --adopt is for the FIRST release only. Passing it on a real install would
+# skip the is-this-newer check, which is the guard against installing a
+# downgrade by typing the wrong number.
+ok "adoption is refused on a real release" "$(yes_no adoption_allowed 1.4.0 1)" no
+
 # --- releases_to_prune ------------------------------------------------------
 
 ok "nothing is pruned below the limit" \

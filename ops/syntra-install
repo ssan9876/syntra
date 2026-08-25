@@ -120,6 +120,16 @@ for _ in $(seq 1 30); do
     echo
     echo "The old tree is untouched at $SRC."
     echo "If anything is wrong: restore $UNIT.pre-release-layout, daemon-reload, restart."
+    echo
+    # This install is `dev` and the console will say so and refuse to update
+    # it, which is correct -- but it means the Updates page cannot take it to
+    # its first release either. This is the one-time command that can, run by
+    # the person who knows what is in the tree it replaces.
+    echo "This install reports itself as \"$VERSION\". A working tree cannot be updated"
+    echo "from the console -- it would overwrite uncommitted work. To take it to its"
+    echo "first release, once, by hand:"
+    echo
+    echo "    SYNTRA_RELEASE_TOKEN=… $ROOT/bin/syntra-update --adopt <version>"
     exit 0
   fi
   sleep 2
