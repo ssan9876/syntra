@@ -1,6 +1,6 @@
 # Remediation 2 — Governance
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make the governance module tell the truth. Two reviewers can no longer both decide one item; retention can no longer delete the evidence a campaign was signed against; the word "revoked" means what §10 says it means; the two transaction-ceiling failures that never recover are batched; the evidence bundle contains evidence; a CSV cell cannot execute; pausing snapshots no longer switches off the integrity alarm; and the capabilities the design requires and the code cannot reach are wired up.
 
@@ -40,7 +40,7 @@ All three live in `decision-service.ts` and all three are the same shape: a stat
 - Consumes: `withTenant` from `@syntra/db`; `recordEvent` from `../audit/audit-service.js`; `isValidApprover` from `../automate/approvers.js`; `governSettings` from `./settings-service.js`; the file's own `CampaignDecisionRefusedError`, `isBulkCertifiable`, `projectCertification`.
 - Produces: no signature change. `recordCampaignDecision(tenantId, input, options) => Promise<{ status: string }>` and `bulkCertify(tenantId, input, options) => Promise<{ certified: number; refused: { itemId: string; reason: string }[] }>` keep their shapes. `CERTIFYING_TRANSITIONS` still holds exactly one row, `{ from: 'pending', to: 'certified', causedBy: 'CampaignDecision' }`, and both entry points now honour it.
 
-- [ ] **Step 1: Write the failing test for the race**
+- [x] **Step 1: Write the failing test for the race**
 
 Add to the end of `packages/core/src/govern/decision-service.test.ts`:
 
@@ -232,13 +232,13 @@ import {
 } from './decision-service.js';
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/decision-service.test.ts -t 'at once'`
 
 Expected: FAIL. Both promises fulfil and two `CampaignDecision` rows exist.
 
-- [ ] **Step 3: Drop `executing` from the campaign-status gate**
+- [x] **Step 3: Drop `executing` from the campaign-status gate**
 
 `Campaign.status = 'executing'` is written by nothing in the tree — two readers, no writer — and `closeDueCampaigns` closes `open` alone, so anything that *did* set it would never close. This is half of G13; Task 3 removes the other reader and the schema comment.
 
@@ -258,7 +258,7 @@ In `packages/core/src/govern/decision-service.ts`, replace lines 227–231:
   }
 ```
 
-- [ ] **Step 4: Narrow the item-status gate to `pending`**
+- [x] **Step 4: Narrow the item-status gate to `pending`**
 
 Replace lines 233–237:
 
@@ -278,7 +278,7 @@ Replace lines 233–237:
   }
 ```
 
-- [ ] **Step 5: Make the status move be the lock**
+- [x] **Step 5: Make the status move be the lock**
 
 In the write transaction, replace everything from `const item = await tx.campaignItem.findUniqueOrThrow({ where: { id: input.itemId } });` (line 313) down to and including `await tx.campaignItem.update({ where: { id: item.id }, data: { status } });` (line 352) with:
 
@@ -354,7 +354,7 @@ In the write transaction, replace everything from `const item = await tx.campaig
 
 The `if (input.decision === 'certify') { await projectCertification(...) }` block and the `recordEvent` call after it are unchanged. Delete the now-duplicated `const status = ...` line that used to sit immediately before the old `campaignItem.update`.
 
-- [ ] **Step 6: Give `bulkCertify` the campaign gate it skipped**
+- [x] **Step 6: Give `bulkCertify` the campaign gate it skipped**
 
 Immediately after `const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: input.campaignId } });` (line 458), insert:
 
@@ -372,7 +372,7 @@ Immediately after `const campaign = await tx.campaign.findUniqueOrThrow({ where:
     }
 ```
 
-- [ ] **Step 7: Give `bulkCertify` the departure gate, from one grouped read**
+- [x] **Step 7: Give `bulkCertify` the departure gate, from one grouped read**
 
 Immediately before `const refused: { itemId: string; reason: string }[] = [];` (line 489), insert:
 
@@ -427,7 +427,7 @@ Then, inside the per-item loop, immediately after the `if (item.personId === inp
       }
 ```
 
-- [ ] **Step 8: Make the bulk write conditional too, and audit what was actually written**
+- [x] **Step 8: Make the bulk write conditional too, and audit what was actually written**
 
 Declare `const certified: string[] = [];` beside `const refused` and `const eligible`. Replace the whole `for (const [index, item] of eligible.entries()) { ... }` loop (line 536) with:
 
@@ -474,19 +474,19 @@ Declare `const certified: string[] = [];` beside `const refused` and `const elig
 
 Then change the audit block's guard to `if (certified.length > 0) {`, its `bulkSize` to `certified.length`, its `itemIds` to `certified`, and the function's return to `return { certified: certified.length, refused };`. An audit event naming items somebody else decided is a worse record than no event at all.
 
-- [ ] **Step 9: Run the test to verify it passes**
+- [x] **Step 9: Run the test to verify it passes**
 
 Run: `npx vitest run packages/core/src/govern/decision-service.test.ts`
 
 Expected: PASS, every test in the file including the two pre-existing structural ones.
 
-- [ ] **Step 10: Run the neighbours that read these statuses**
+- [x] **Step 10: Run the neighbours that read these statuses**
 
 Run: `npx vitest run packages/core/src/govern/reviewer-service.test.ts packages/core/src/govern/revocation-service.test.ts apps/api/src/routes/govern-portal.test.ts`
 
 Expected: PASS. The portal's campaign filter still names `executing`; that is inert because nothing writes it, and Task 3 removes it.
 
-- [ ] **Step 11: Typecheck and commit**
+- [x] **Step 11: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -545,7 +545,7 @@ The consequence is the one this module exists to prevent. A campaign closed 400 
 - Consumes: `withTenant` from `@syntra/db`.
 - Produces: `pruneSnapshots(tenantId, options?: { now?: Date; retentionDays?: number }) => Promise<{ pruned: number; retainedForReference: number }>` — unchanged signature. `retainedForReference` now counts campaign-held snapshots as well as pack- and finding-held ones.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add inside the existing `describe('pruneSnapshots', ...)` block in `packages/core/src/govern/snapshot-service.test.ts`:
 
@@ -696,13 +696,13 @@ Add inside the existing `describe('pruneSnapshots', ...)` block in `packages/cor
   });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/snapshot-service.test.ts -t 'pruneSnapshots'`
 
 Expected: FAIL — `{ pruned: 1, retainedForReference: 0 }` for the first case; the snapshot is gone and the campaign points at nothing.
 
-- [ ] **Step 3: Read the campaign references too**
+- [x] **Step 3: Read the campaign references too**
 
 In `packages/core/src/govern/snapshot-service.ts`, replace the block that builds `referenced` — from `const referenced = new Set<string>();` to the closing brace of the last `for` loop over `resolvedBySnapshotId` — with:
 
@@ -776,19 +776,19 @@ In `packages/core/src/govern/snapshot-service.ts`, replace the block that builds
     }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run packages/core/src/govern/snapshot-service.test.ts`
 
 Expected: PASS, including the pre-existing "prunes past the retention window and NEVER prunes one an evidence pack points at".
 
-- [ ] **Step 5: Run the prune job's own test**
+- [x] **Step 5: Run the prune job's own test**
 
 Run: `npx vitest run packages/core/src/govern/jobs.test.ts`
 
 Expected: PASS. `runPruneJob` is the only caller and its assertions are over counts.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -849,7 +849,7 @@ Spec §6.1 — **G3** (the `revoked` figure counts items that were not revoked) 
   - `extendCampaign` gains a `CampaignRefusedError` code `'not_open'`.
   - `CampaignRefusedError`'s code union becomes `'stale_source' | 'stale_snapshot' | 'empty_scope' | 'not_draft' | 'not_open_yet' | 'not_open'`.
 
-- [ ] **Step 1: Write the failing tests for the vocabulary**
+- [x] **Step 1: Write the failing tests for the vocabulary**
 
 In `packages/core/src/govern/reviewer-service.test.ts`, **replace** the existing `it('NEVER counts a revocation_requires_change item as revoked, and counts dispatched ones as decided', ...)` (line 794) with:
 
@@ -951,7 +951,7 @@ In `packages/core/src/govern/reviewer-service.test.ts`, **replace** the existing
   });
 ```
 
-- [ ] **Step 2: Write the failing tests for the dead gates**
+- [x] **Step 2: Write the failing tests for the dead gates**
 
 Add to the end of `packages/core/src/govern/campaign-service.test.ts`:
 
@@ -1019,7 +1019,7 @@ describe('extendCampaign', () => {
 
 `draft(over)` (line 121), `NOW`, `DUE`, `actorUserId`, `buildSnapshot`, `createCampaign`, `startCampaign` and `extendCampaign` are all already in the file. Use them — do not introduce a second seeding path.
 
-- [ ] **Step 3: Run both to verify they fail**
+- [x] **Step 3: Run both to verify they fail**
 
 ```bash
 npx vitest run packages/core/src/govern/reviewer-service.test.ts -t 'REVOKED as applied'
@@ -1028,7 +1028,7 @@ npx vitest run packages/core/src/govern/campaign-service.test.ts -t 'opensAt'
 
 Expected: FAIL — `revokedItems` is 5 and `dispatchedItems` does not exist on the model; `startCampaign` returns `{ status: 'open' }` for a campaign that has not opened.
 
-- [ ] **Step 4: Add the three columns**
+- [x] **Step 4: Add the three columns**
 
 Create `packages/db/prisma/migrations/20260831000000_campaign_revocation_vocabulary/migration.sql`:
 
@@ -1093,7 +1093,7 @@ In `packages/db/prisma/schema.prisma`, in `model Campaign`, replace the status c
   coveragePercent     Float?
 ```
 
-- [ ] **Step 5: Apply the migration and regenerate the client**
+- [x] **Step 5: Apply the migration and regenerate the client**
 
 ```bash
 pnpm db:migrate
@@ -1102,7 +1102,7 @@ pnpm db:generate
 
 Expected: `1 migration found` applied, then `Generated Prisma Client`. If `db:migrate` reports drift, stop — the schema edit and the SQL must say the same thing.
 
-- [ ] **Step 6: Count the outcomes from the statuses that define them**
+- [x] **Step 6: Count the outcomes from the statuses that define them**
 
 In `packages/core/src/govern/reviewer-service.ts`, replace the whole `const counts = await withTenant(tenantId, async (tx) => { ... });` block (lines 856–890) with:
 
@@ -1213,7 +1213,7 @@ and the same four in both the `recordEvent` payload and the `campaign_low_covera
           requiresChange: counts.requiresChange,
 ```
 
-- [ ] **Step 7: Make `opensAt` gate something**
+- [x] **Step 7: Make `opensAt` gate something**
 
 In `packages/core/src/govern/campaign-service.ts`, widen the error union at line 88:
 
@@ -1259,7 +1259,7 @@ and in `startCampaign`, immediately after the `if (campaign.status !== 'draft')`
     }
 ```
 
-- [ ] **Step 8: Make `extendCampaign` refuse a campaign that is not running**
+- [x] **Step 8: Make `extendCampaign` refuse a campaign that is not running**
 
 In `extendCampaign`, immediately after `const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: campaignId } });`, insert:
 
@@ -1281,7 +1281,7 @@ In `extendCampaign`, immediately after `const campaign = await tx.campaign.findU
     }
 ```
 
-- [ ] **Step 9: Remove the last reader of `executing`**
+- [x] **Step 9: Remove the last reader of `executing`**
 
 In `apps/api/src/routes/govern-portal.ts:77`, replace the campaign filter:
 
@@ -1295,7 +1295,7 @@ In `apps/api/src/routes/govern-portal.ts:77`, replace the campaign filter:
           },
 ```
 
-- [ ] **Step 10: Put the new counts on the campaign screen's contract**
+- [x] **Step 10: Put the new counts on the campaign screen's contract**
 
 In `apps/api/src/routes/admin/govern.ts`, in the `GET /govern/campaigns/:id` handler, extend the `counts` object:
 
@@ -1318,7 +1318,7 @@ In `apps/api/src/routes/admin/govern.ts`, in the `GET /govern/campaigns/:id` han
         },
 ```
 
-- [ ] **Step 11: Run the tests to verify they pass**
+- [x] **Step 11: Run the tests to verify they pass**
 
 ```bash
 npx vitest run packages/core/src/govern/reviewer-service.test.ts
@@ -1328,7 +1328,7 @@ npx vitest run apps/api/src/routes/govern-portal.test.ts apps/api/src/routes/adm
 
 Expected: PASS. If a campaign-service case fails on `not_open_yet`, its fixture set `opensAt` in the future — the existing suite mostly uses `opensAt: NOW`; fix the fixture rather than weakening the gate.
 
-- [ ] **Step 12: Typecheck and commit**
+- [x] **Step 12: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -1392,7 +1392,7 @@ Spec §6.1 — **G15**. §13: "`revoke_decided` items do not dispatch as they ar
 - Produces: `closeDueCampaigns(tenantId, options?) => Promise<{ closed: number; undecided: number; batches: number }>` — **the return type gains `batches`**, the number of campaigns for which a batch was computed. `jobs.ts`'s `GOVERN_CLOSE_JOB` handler discards the value and needs no change; `reviewer-service.test.ts` asserts on it.
 - **New import edge:** `reviewer-service.ts → revocation-service.ts`. `revocation-service.ts` imports nothing from `reviewer-service.ts`, so no cycle is closed; `boundaries.test.ts` constrains `snapshot-service.ts` and `readable.ts` only and is unaffected.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add inside the existing `describe('closing', ...)` block in `packages/core/src/govern/reviewer-service.test.ts`:
 
@@ -1493,13 +1493,13 @@ Add inside the existing `describe('closing', ...)` block in `packages/core/src/g
   });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/reviewer-service.test.ts -t 'revocation batch at close'`
 
 Expected: FAIL — `result.batches` is `undefined` and `RevocationBatch` is empty.
 
-- [ ] **Step 3: Import the computation**
+- [x] **Step 3: Import the computation**
 
 In `packages/core/src/govern/reviewer-service.ts`, add to the imports, after the `finding-service.js` import:
 
@@ -1514,7 +1514,7 @@ In `packages/core/src/govern/reviewer-service.ts`, add to the imports, after the
 import { computeRevocationBatch } from './revocation-service.js';
 ```
 
-- [ ] **Step 4: Compute the batch before the close**
+- [x] **Step 4: Compute the batch before the close**
 
 In `closeDueCampaigns`, add the counter beside `let closed = 0;`:
 
@@ -1580,7 +1580,7 @@ Then, in the per-campaign loop, **between** the end of the undecided-sweep `for 
     }
 ```
 
-- [ ] **Step 5: Return the count**
+- [x] **Step 5: Return the count**
 
 Change the final `return { closed, undecided: undecidedTotal };` to:
 
@@ -1590,13 +1590,13 @@ Change the final `return { closed, undecided: undecidedTotal };` to:
 
 and the declared return type on the function signature to `Promise<{ closed: number; undecided: number; batches: number }>`.
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `npx vitest run packages/core/src/govern/reviewer-service.test.ts`
 
 Expected: PASS. Pre-existing cases that assert `toMatchObject({ closed: 1, undecided: 1 })` still pass — `toMatchObject` ignores the new key.
 
-- [ ] **Step 7: Extend the budget case to cover the close's new work**
+- [x] **Step 7: Extend the budget case to cover the close's new work**
 
 In `packages/core/src/govern/transaction-budget.test.ts`, replace the body of `it('closes a 2,000-item campaign with no transaction over the budget', ...)` so it closes a campaign whose items were all **revoked** rather than certified — which is the shape that now computes a 2,000-row batch inside the close:
 
@@ -1617,13 +1617,13 @@ In `packages/core/src/govern/transaction-budget.test.ts`, replace the body of `i
   }, 300_000);
 ```
 
-- [ ] **Step 8: Run the budget file**
+- [x] **Step 8: Run the budget file**
 
 Run: `GOVERN_BUDGET_MS=4500 npx vitest run packages/core/src/govern/transaction-budget.test.ts -t 'closes a 2,000-item campaign'`
 
 Expected: PASS. The budget is calibrated against hardware, not code — 4500 is what CI uses; run it once at the default 2500 as well and record the measurement in the commit message if it is close.
 
-- [ ] **Step 9: Typecheck and commit**
+- [x] **Step 9: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -1681,7 +1681,7 @@ The budget suite misses it because its seeded reviewers carry no `managerPersonI
   - `export const ESCALATION_BATCH = 200;` — item ids per escalation transaction, exported so the budget test can unbound it.
   - `runCampaignReminders(tenantId, options?: { now?: Date; publicUrl?: string; batchSize?: number; escalationBatchSize?: number }) => Promise<{ reminded: number; escalated: number }>` — one new option, same return shape.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `packages/core/src/govern/reviewer-service.test.ts`, inside the reminders `describe` (or at the end of the file if there is none):
 
@@ -1780,13 +1780,13 @@ describe('reminders and escalation are two phases', () => {
 
 Add `runCampaignReminders` and `resolveItemReviewers` to the file's imports if they are not already there — both are.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/reviewer-service.test.ts -t 'two phases'`
 
 Expected: the second case FAILS or passes only by accident — with `escalationBatchSize` not yet existing and the work inside the reminder transaction, the third case is the one that shows the shape most clearly. The definitive failure is Step 8's budget case; run it before implementing if the unit cases pass.
 
-- [ ] **Step 3: Add the batch constant**
+- [x] **Step 3: Add the batch constant**
 
 In `packages/core/src/govern/reviewer-service.ts`, beside `export const REVIEWER_BATCH = 200;`:
 
@@ -1810,7 +1810,7 @@ In `packages/core/src/govern/reviewer-service.ts`, beside `export const REVIEWER
 export const ESCALATION_BATCH = 200;
 ```
 
-- [ ] **Step 4: Take escalation out of the reminder transaction**
+- [x] **Step 4: Take escalation out of the reminder transaction**
 
 In `runCampaignReminders`, read the option beside `batchSize`:
 
@@ -1841,7 +1841,7 @@ and inside the per-reviewer loop, immediately after `sent += 1;`, push onto a lo
 
 with `const reminded: { personId: string; itemIds: string[] }[] = [];` declared at the top of the transaction callback and returned as `{ sent, reminded }`; the outer loop then does `remindedThisRun.push(...outcome.reminded);`. Pushing into the outer array directly from inside a transaction that may roll back would leave phase two escalating for a reminder nobody received.
 
-- [ ] **Step 5: Add the escalation phase**
+- [x] **Step 5: Add the escalation phase**
 
 Immediately after the reviewer-batch `for` loop closes, still inside the per-campaign loop, insert:
 
@@ -1935,13 +1935,13 @@ Immediately after the reviewer-batch `for` loop closes, still inside the per-cam
     }
 ```
 
-- [ ] **Step 6: Run the unit tests to verify they pass**
+- [x] **Step 6: Run the unit tests to verify they pass**
 
 Run: `npx vitest run packages/core/src/govern/reviewer-service.test.ts`
 
 Expected: PASS, all cases including the pre-existing reminder-cadence ones.
 
-- [ ] **Step 7: Give the budget seed reviewers a manager**
+- [x] **Step 7: Give the budget seed reviewers a manager**
 
 In `packages/core/src/govern/transaction-budget.test.ts`, in `seedLargeCampaign`, add a manager to the reviewers' own contracts:
 
@@ -1965,7 +1965,7 @@ In `packages/core/src/govern/transaction-budget.test.ts`, in `seedLargeCampaign`
           })),
 ```
 
-- [ ] **Step 8: Add the budget case, both halves**
+- [x] **Step 8: Add the budget case, both halves**
 
 Add to the slice-2 `describe` in `packages/core/src/govern/transaction-budget.test.ts`:
 
@@ -2010,13 +2010,13 @@ Add to the slice-2 `describe` in `packages/core/src/govern/transaction-budget.te
   }, 300_000);
 ```
 
-- [ ] **Step 9: Run the budget cases**
+- [x] **Step 9: Run the budget cases**
 
 Run: `GOVERN_BUDGET_MS=4500 npx vitest run packages/core/src/govern/transaction-budget.test.ts -t 'escalat'`
 
 Expected: PASS both — the bounded case under the budget, the unbounded one breaching it.
 
-- [ ] **Step 10: Typecheck and commit**
+- [x] **Step 10: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -2078,7 +2078,7 @@ And what it does complete is wrong. There is no status filter and no campaign-st
   - `export const REBASE_BATCH = 200;`
   - `rebaseCampaign(tenantId, actorUserId, campaignId, newSnapshotId, options?: { batchSize?: number }) => Promise<{ reopened: number; kept: number; untouched: number }>` — **the return type gains `untouched`**, the count of items whose status put them outside a re-base. `POST /govern/campaigns/:id/rebase` returns it unchanged and needs no edit.
 
-- [ ] **Step 1: Write the failing status tests**
+- [x] **Step 1: Write the failing status tests**
 
 Add to `packages/core/src/govern/campaign-service.test.ts`, in the re-base `describe`:
 
@@ -2239,7 +2239,7 @@ const emptyCollectionAt = (asOf: Date): CollectedTenant => ({
 
 with `import type { CollectedTenant } from './collect.js';` added to the file's imports.
 
-- [ ] **Step 2: Update the two existing assertions for the new key**
+- [x] **Step 2: Update the two existing assertions for the new key**
 
 At lines 582 and 672, change `expect(result).toEqual({ reopened: 0, kept: 1 });` to:
 
@@ -2247,13 +2247,13 @@ At lines 582 and 672, change `expect(result).toEqual({ reopened: 0, kept: 1 });`
     expect(result).toEqual({ reopened: 0, kept: 1, untouched: 0 });
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `npx vitest run packages/core/src/govern/campaign-service.test.ts -t 'rebase'`
 
 Expected: FAIL — the terminal item is back to `pending`, the dispatched one is `moot`, the certification survives, and the closed campaign re-bases happily.
 
-- [ ] **Step 4: Add the batch constant**
+- [x] **Step 4: Add the batch constant**
 
 In `packages/core/src/govern/campaign-service.ts`, beside `export const ITEM_BATCH = 500;`:
 
@@ -2276,7 +2276,7 @@ In `packages/core/src/govern/campaign-service.ts`, beside `export const ITEM_BAT
 export const REBASE_BATCH = 200;
 ```
 
-- [ ] **Step 5: Rewrite `rebaseCampaign`**
+- [x] **Step 5: Rewrite `rebaseCampaign`**
 
 Replace the whole function body (from `export async function rebaseCampaign(` to its closing brace) with:
 
@@ -2501,13 +2501,13 @@ import {
 } from './types.js';
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `npx vitest run packages/core/src/govern/campaign-service.test.ts`
 
 Expected: PASS, including the two pre-existing re-base cases with their updated `toEqual`.
 
-- [ ] **Step 7: Add the budget case, both halves**
+- [x] **Step 7: Add the budget case, both halves**
 
 Add to the slice-2 `describe` in `packages/core/src/govern/transaction-budget.test.ts`:
 
@@ -2552,13 +2552,13 @@ Add to the slice-2 `describe` in `packages/core/src/govern/transaction-budget.te
 
 Add `rebaseCampaign` to the file's import from `./campaign-service.js`.
 
-- [ ] **Step 8: Run the budget cases**
+- [x] **Step 8: Run the budget cases**
 
 Run: `GOVERN_BUDGET_MS=4500 npx vitest run packages/core/src/govern/transaction-budget.test.ts -t 're-base'`
 
 Expected: PASS both.
 
-- [ ] **Step 9: Typecheck and commit**
+- [x] **Step 9: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -2622,7 +2622,7 @@ Spec §6.1 — **G12** (the gain/audit cross-reference updates per row inside on
 - Consumes: `withTenant` from `@syntra/db`; the file-local `chunk` helper in `snapshot-service.ts`; `SodViolation`'s `@@unique([tenantId, ruleId, personId])`, addressed in Prisma as `tenantId_ruleId_personId`.
 - Produces: no signature change to `buildSnapshot` or `detectSodViolations`. New export `export const GAIN_LINK_BATCH = 200;` from `snapshot-service.ts`, so the budget test can unbound it.
 
-- [ ] **Step 1: Write the failing test for the cross-reference**
+- [x] **Step 1: Write the failing test for the cross-reference**
 
 Add to `packages/core/src/govern/snapshot-service.test.ts`:
 
@@ -2770,13 +2770,13 @@ describe('the gain / audit cross-reference', () => {
 
 Add `GAIN_LINK_BATCH` to the file's import from `./snapshot-service.js`.
 
-- [ ] **Step 2: Run it to verify the batching case fails**
+- [x] **Step 2: Run it to verify the batching case fails**
 
 Run: `npx vitest run packages/core/src/govern/snapshot-service.test.ts -t 'cross-reference'`
 
 Expected: FAIL on the third case with `Cannot find module` / `GAIN_LINK_BATCH is not defined`. The first two may pass — they are the behaviour this task must not change, and they are here so the rewrite is measured against them.
 
-- [ ] **Step 3: Add the batch constant**
+- [x] **Step 3: Add the batch constant**
 
 In `packages/core/src/govern/snapshot-service.ts`, beside `export const EVENT_WRITE_BATCH = 500;`:
 
@@ -2798,7 +2798,7 @@ In `packages/core/src/govern/snapshot-service.ts`, beside `export const EVENT_WR
 export const GAIN_LINK_BATCH = 200;
 ```
 
-- [ ] **Step 4: Split the cross-reference into a read and a paged write**
+- [x] **Step 4: Split the cross-reference into a read and a paged write**
 
 Replace the whole `await withTenant(tenantId, async (tx) => { const gains = ... });` block (lines 409–455) with:
 
@@ -2887,13 +2887,13 @@ Replace the whole `await withTenant(tenantId, async (tx) => { const gains = ... 
       }
 ```
 
-- [ ] **Step 5: Run the snapshot tests**
+- [x] **Step 5: Run the snapshot tests**
 
 Run: `npx vitest run packages/core/src/govern/snapshot-service.test.ts packages/core/src/govern/diff.test.ts`
 
 Expected: PASS, all three new cases and every pre-existing one.
 
-- [ ] **Step 6: Write the failing test for the read-then-create**
+- [x] **Step 6: Write the failing test for the read-then-create**
 
 Add to `packages/core/src/govern/sod-service.test.ts`:
 
@@ -2928,13 +2928,13 @@ describe('two overlapping detection passes', () => {
 
 `seedViolatingSnapshot()` is whatever the file already uses to produce one person on both sides of one rule — read the existing `describe('detectSodViolations')` block and reuse its fixture verbatim rather than writing a second one.
 
-- [ ] **Step 7: Run it to verify it fails**
+- [x] **Step 7: Run it to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/sod-service.test.ts -t 'overlapping detection'`
 
 Expected: FAIL with Prisma `P2002` on `SodViolation_tenantId_ruleId_personId_key`.
 
-- [ ] **Step 8: Use the natural key that already exists**
+- [x] **Step 8: Use the natural key that already exists**
 
 In `packages/core/src/govern/sod-service.ts`, replace the `await withTenant(tenantId, async (tx) => { const existing = ... })` block (lines 267–290) with:
 
@@ -2990,19 +2990,19 @@ In `packages/core/src/govern/sod-service.ts`, replace the `await withTenant(tena
       });
 ```
 
-- [ ] **Step 9: Run the SoD tests**
+- [x] **Step 9: Run the SoD tests**
 
 Run: `npx vitest run packages/core/src/govern/sod-service.test.ts`
 
 Expected: PASS, including the pre-existing "a violation that persists across snapshots is updated, never duplicated" and the exception-holds case.
 
-- [ ] **Step 10: Run the job that composes both**
+- [x] **Step 10: Run the job that composes both**
 
 Run: `npx vitest run packages/core/src/govern/jobs.test.ts`
 
 Expected: PASS. `runSnapshotJob` calls `buildSnapshot` and then `detectSodViolations`, which is the sequence both defects lived in.
 
-- [ ] **Step 11: Typecheck and commit**
+- [x] **Step 11: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -3071,7 +3071,7 @@ None is covered by the budget suite.
   - `sweepAcceptedFindings(tenantId, now, options?: { batchSize?: number })` — **third parameter added**, optional; `jobs.ts`'s call site passes two arguments and needs no change.
   - `ChangeReport` gains `recordedActionsTruncated: boolean` and `AUDIT_ACTIONS_LIMIT`; `apps/web` types the change report locally, so the console compiles unchanged.
 
-- [ ] **Step 1: Write the failing budget cases**
+- [x] **Step 1: Write the failing budget cases**
 
 Add to the slice-2 `describe` in `packages/core/src/govern/transaction-budget.test.ts`:
 
@@ -3128,13 +3128,13 @@ Add to the slice-2 `describe` in `packages/core/src/govern/transaction-budget.te
 
 Write `seedManyExceptionsAndAcceptedFindings(n)` beside `seedLargeCampaign`, using `createMany` for every row — a seed written row by row inside one `withTenant` would itself exceed the budget this file measures, and a seed that trips the instrument tells you nothing about the code. It needs, per index: a `BusinessFunction` pair and a `SodRule` (one rule is enough — the exceptions differ by person), a `SodViolation` per subject person, a `SodException` with `status: 'active'` and an `endsAt` in the past, and a `GovernFinding` with `status: 'accepted'` and an `acceptedUntil` in the past. Read the models in `packages/db/prisma/schema.prisma` for the required columns before writing it.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `GOVERN_BUDGET_MS=4500 npx vitest run packages/core/src/govern/transaction-budget.test.ts -t 'sweep'`
 
 Expected: FAIL — `batchSize` is not an option yet, and the bounded case aborts at Prisma's ceiling because there is no batching at all.
 
-- [ ] **Step 3: Page `sweepExceptions`**
+- [x] **Step 3: Page `sweepExceptions`**
 
 In `packages/core/src/govern/exception-service.ts`, add above `sweepExceptions`:
 
@@ -3268,7 +3268,7 @@ and widen the options type to `{ now?: Date; publicUrl?: string; batchSize?: num
 
 `shouldWarn` is Task 13's function — **if Task 13 has not landed, keep the existing line here verbatim** (`const daysLeft = Math.ceil(...); if (!settings.exceptionWarningDays.includes(daysLeft)) continue;`) and let Task 13 replace it. Do not implement it twice.
 
-- [ ] **Step 4: Page `sweepAcceptedFindings`**
+- [x] **Step 4: Page `sweepAcceptedFindings`**
 
 In `packages/core/src/govern/finding-service.ts`, add above the function:
 
@@ -3347,7 +3347,7 @@ export async function sweepAcceptedFindings(
 }
 ```
 
-- [ ] **Step 5: Split `detectDecisionGraph`'s one transaction**
+- [x] **Step 5: Split `detectDecisionGraph`'s one transaction**
 
 In `packages/core/src/govern/sod-service.ts`, replace `const input = await withTenant(tenantId, async (tx): Promise<GraphInput> => { ... });` with a sequence of short transactions that each return plain data. Keep every query and every comment exactly as it is; only the transaction boundaries move:
 
@@ -3414,7 +3414,7 @@ In `packages/core/src/govern/sod-service.ts`, replace `const input = await withT
 
 Move nothing else. The mapping code, the three qualification comments and the `sodPairs` construction are correct and stay word for word; only the `withTenant` they sit inside changes. `const edges: DecisionEdge[] = []` replaces the `const edges: DecisionEdge[] = decisions.map(...)` initialiser — push the mapped rows instead, so the three later `edges.push` loops still read the same.
 
-- [ ] **Step 6: Scope the report reads**
+- [x] **Step 6: Scope the report reads**
 
 In `packages/core/src/govern/report-service.ts`, in `whoHasAccessToSystem`, replace the two unbounded reads (lines 157–163):
 
@@ -3445,7 +3445,7 @@ In `packages/core/src/govern/report-service.ts`, in `whoHasAccessToSystem`, repl
           });
 ```
 
-- [ ] **Step 7: Cap the change report's audit pane, and say so on it**
+- [x] **Step 7: Cap the change report's audit pane, and say so on it**
 
 In `report-service.ts`, add beside the other report constants:
 
@@ -3505,7 +3505,7 @@ and add `recordedActionsTruncated: boolean;` to the `ChangeReport` interface, im
   recordedActionsTruncated: boolean;
 ```
 
-- [ ] **Step 8: Assert the cap is stated**
+- [x] **Step 8: Assert the cap is stated**
 
 Add to `packages/core/src/govern/report-service.test.ts`:
 
@@ -3522,7 +3522,7 @@ it('says so when the change report’s audit pane is truncated', async () => {
 
 using the file's existing `first` / `second` snapshot fixtures and adding `AUDIT_ACTIONS_LIMIT` to its import.
 
-- [ ] **Step 9: Run every touched suite**
+- [x] **Step 9: Run every touched suite**
 
 ```bash
 npx vitest run packages/core/src/govern/exception-service.test.ts \
@@ -3533,13 +3533,13 @@ npx vitest run packages/core/src/govern/exception-service.test.ts \
 
 Expected: PASS.
 
-- [ ] **Step 10: Run the budget cases**
+- [x] **Step 10: Run the budget cases**
 
 Run: `GOVERN_BUDGET_MS=4500 npx vitest run packages/core/src/govern/transaction-budget.test.ts`
 
 Expected: PASS, every case including the pre-existing ones.
 
-- [ ] **Step 11: Typecheck and commit**
+- [x] **Step 11: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -3611,7 +3611,7 @@ All four are in the pure pair — `sod.ts` and `graph.ts` — plus the one loade
   - `GraphInput.grantedResourceByRequest` is **renamed** to `grantedResourceKeyByRequest`, `ReadonlyMap<string, string>` of `requestId → resourceKey`.
   - `evaluateSodRule` may now return `{ kind: 'unevaluable', reasons }` for a shared resource or an unknown-state holding. `evaluateSodRules` is unchanged.
 
-- [ ] **Step 1: Write the failing tests over plain values**
+- [x] **Step 1: Write the failing tests over plain values**
 
 Add to `packages/core/src/govern/sod.test.ts`:
 
@@ -3867,7 +3867,7 @@ it('scans 4,000 edges against 20 rules in well under a second', () => {
 });
 ```
 
-- [ ] **Step 2: Run both to verify they fail**
+- [x] **Step 2: Run both to verify they fail**
 
 ```bash
 npx vitest run packages/core/src/govern/sod.test.ts -t 'share a resource'
@@ -3876,7 +3876,7 @@ npx vitest run packages/core/src/govern/graph.test.ts -t 'share an id'
 
 Expected: FAIL — a violation instead of `unevaluable`; a laundering row instead of none; and a type error on `sideAResourceKeys`, which is the rename landing.
 
-- [ ] **Step 3: Carry state and refuse an overlapping rule**
+- [x] **Step 3: Carry state and refuse an overlapping rule**
 
 In `packages/core/src/govern/sod.ts`, add to `PersonHolding`:
 
@@ -3949,7 +3949,7 @@ Then, immediately after `const holdingsB = holdings.filter(...)`:
 
 The existing `if (reasons.length > 0) { ... }` block below already does the right thing with them, including the "no exposure means no row" carve-out.
 
-- [ ] **Step 4: Read the unknown holdings, and carry their state**
+- [x] **Step 4: Read the unknown holdings, and carry their state**
 
 In `packages/core/src/govern/sod-service.ts`, in `loadSodFacts`, change the holdings read:
 
@@ -3989,7 +3989,7 @@ and in the `holdingsByPerson` construction, add the field:
     });
 ```
 
-- [ ] **Step 5: Index the laundering scan by pair, on the full resource key**
+- [x] **Step 5: Index the laundering scan by pair, on the full resource key**
 
 In `packages/core/src/govern/graph.ts`, rename the two `GraphInput` fields:
 
@@ -4078,7 +4078,7 @@ and replace the laundering block:
   }
 ```
 
-- [ ] **Step 6: Build the keys where both shapes are in hand**
+- [x] **Step 6: Build the keys where both shapes are in hand**
 
 In `packages/core/src/govern/sod-service.ts`, in `detectDecisionGraph`, replace the `grantedResourceByRequest` construction and the `sodPairs` mapping:
 
@@ -4117,7 +4117,7 @@ In `packages/core/src/govern/sod-service.ts`, in `detectDecisionGraph`, replace 
 
 Add `resourceKey` to the file's import from `./types.js`.
 
-- [ ] **Step 7: Run the pure suites, then the service**
+- [x] **Step 7: Run the pure suites, then the service**
 
 ```bash
 npx vitest run packages/core/src/govern/sod.test.ts packages/core/src/govern/graph.test.ts
@@ -4126,13 +4126,13 @@ npx vitest run packages/core/src/govern/sod-service.test.ts
 
 Expected: PASS. If a `sod-service` case now reports `unevaluable` where it expected `clear`, check whether its fixture seeds a holding with `state: 'unknown'` — that is the fix working, and the assertion is what changes.
 
-- [ ] **Step 8: Run the Provision callers of the shared types**
+- [x] **Step 8: Run the Provision callers of the shared types**
 
 Run: `npx vitest run packages/core/src/provision/explain.test.ts packages/core/src/provision/run-service.test.ts`
 
 Expected: PASS. `state` is optional precisely so these compile and behave unchanged.
 
-- [ ] **Step 9: Typecheck and commit**
+- [x] **Step 9: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -4199,7 +4199,7 @@ Spec §6.2 — **G18** (the bundle is structurally empty) and **G27** part five 
   - `export async function fetchEvidencePack(tenantId: string, packId: string): Promise<{ bundle: EvidenceBundle; digestMatches: boolean }>`.
   - `createEvidencePack` keeps its signature and now writes `storageRef`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `packages/core/src/govern/export-service.test.ts`, in the `describe('the evidence bundle')` block:
 
@@ -4298,13 +4298,13 @@ Add to `packages/core/src/govern/export-service.test.ts`, in the `describe('the 
 
 Write `seedDecidedCampaign()` beside the file's existing `beforeEach`: a campaign, two `CampaignItem` rows (one `certified`, one `undecided`), one `CampaignItemReviewer`, one `CampaignDecision` on the certified item, and one `RevocationBatch` with one `RevocationDispatch`. Read the models in `packages/db/prisma/schema.prisma` for required columns before writing it, and add `fetchEvidencePack` to the file's import.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/export-service.test.ts -t 'items, decisions'`
 
 Expected: FAIL — `bundle.items` is `[]` and `fetchEvidencePack` does not exist.
 
-- [ ] **Step 3: Give the bundle real element shapes**
+- [x] **Step 3: Give the bundle real element shapes**
 
 In `packages/core/src/govern/export-service.ts`, replace the `EvidenceBundle` interface:
 
@@ -4394,7 +4394,7 @@ export interface EvidenceBundle {
 }
 ```
 
-- [ ] **Step 4: Add the two cover statements the empty bundle needed and never had**
+- [x] **Step 4: Add the two cover statements the empty bundle needed and never had**
 
 Append to `BUNDLE_LIMITATIONS`:
 
@@ -4403,7 +4403,7 @@ Append to `BUNDLE_LIMITATIONS`:
   'The notification set is matched by template and by time window, because Syntra does not record which campaign an outbox row belonged to. It may include a notification from another campaign running in the same period, and it is offered as a record of what was sent rather than as a complete set.',
 ```
 
-- [ ] **Step 5: Split the build out of the create, and read what the pack names**
+- [x] **Step 5: Split the build out of the create, and read what the pack names**
 
 Replace `createEvidencePack` with the pair below. The spec type is what makes the digest reproducible: everything the document depends on is recorded on the row, so a rebuild a year later reads the same inputs.
 
@@ -4719,7 +4719,7 @@ async function seedHashFor(tenantId: string, fromSequence: number): Promise<stri
 }
 ```
 
-- [ ] **Step 6: Add the route that `storageRef` names**
+- [x] **Step 6: Add the route that `storageRef` names**
 
 In `apps/api/src/routes/admin/govern.ts`, beside the existing evidence route:
 
@@ -4752,7 +4752,7 @@ Add `fetchEvidencePack` to the `@syntra/core` import list, and add the route to 
   },
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 ```bash
 npx vitest run packages/core/src/govern/export-service.test.ts
@@ -4761,7 +4761,7 @@ npx vitest run apps/api/src/routes/admin/govern.test.ts
 
 Expected: PASS, including the pre-existing "carries its limitations on its cover, in words" and the digest-stability case.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -4824,7 +4824,7 @@ Spec §6.2 — **G19** (CSV export has no formula-injection guard) and **G25** (
   - `export function csvCell(value: string): string` — the single-cell escape, exported so the test can be a table of values rather than a search through a rendered document.
   - `toCsv(header, rows)` and `exportReportCsv(tenantId, actorUserId, envelope, scope)` keep their signatures.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `packages/core/src/govern/export-service.test.ts`:
 
@@ -4902,13 +4902,13 @@ it('audits a REFUSED export as well as a successful one', async () => {
 
 Add `csvCell` to the file's import.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/export-service.test.ts -t 'csvCell'`
 
 Expected: FAIL — `csvCell` does not exist; and the refusal case finds no audit event.
 
-- [ ] **Step 3: Write the cell escape**
+- [x] **Step 3: Write the cell escape**
 
 In `packages/core/src/govern/export-service.ts`, above `toCsv`:
 
@@ -4958,7 +4958,7 @@ export function csvCell(value: string): string {
 
 and replace the local `const escape = ...` in `toCsv` with `const escape = csvCell;` — or use `csvCell` directly at both call sites and delete the local. Keep one name in the function body so the two rendering paths cannot diverge.
 
-- [ ] **Step 4: Audit the refusal**
+- [x] **Step 4: Audit the refusal**
 
 In `exportReportCsv`, replace the `if (header.live) { throw ... }` block:
 
@@ -4998,19 +4998,19 @@ In `exportReportCsv`, replace the `if (header.live) { throw ... }` block:
   }
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npx vitest run packages/core/src/govern/export-service.test.ts`
 
 Expected: PASS. The pre-existing "escapes a value containing a comma or a quote" case asserts `'"Novak, Anna ""A"""'` and still holds — the escape is unchanged for values that do not begin with an introducer.
 
-- [ ] **Step 6: Run the route that calls it**
+- [x] **Step 6: Run the route that calls it**
 
 Run: `npx vitest run apps/api/src/routes/admin/govern.test.ts`
 
 Expected: PASS. `POST /govern/exports/csv` is the only caller.
 
-- [ ] **Step 7: Typecheck and commit**
+- [x] **Step 7: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -5075,7 +5075,7 @@ Spec §6.2 — **G20** (clearing the snapshot cadence unschedules six unrelated 
   - `registerAdminGovernRoutes(app, options)` — options gains `checkpointSigner?: () => CheckpointSigner | null`.
   - `POST /api/admin/govern/integrity/verify-full` — `govern.manage`, no body, returns a `SegmentResult`.
 
-- [ ] **Step 1: Write the failing schedule test**
+- [x] **Step 1: Write the failing schedule test**
 
 In `packages/core/src/govern/jobs.test.ts`, **replace** `it('UNSCHEDULES every purpose when the cadence is cleared', ...)` with:
 
@@ -5111,13 +5111,13 @@ In `packages/core/src/govern/jobs.test.ts`, **replace** `it('UNSCHEDULES every p
   });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/jobs.test.ts -t 'ONLY the snapshot purpose'`
 
 Expected: FAIL — seven unschedules, nothing scheduled.
 
-- [ ] **Step 3: Make the switch switch off one thing**
+- [x] **Step 3: Make the switch switch off one thing**
 
 In `packages/core/src/govern/jobs.ts`, replace the docstring and body of `applyGovernSchedules`:
 
@@ -5179,13 +5179,13 @@ export async function applyGovernSchedules(
 }
 ```
 
-- [ ] **Step 4: Run the schedule tests**
+- [x] **Step 4: Run the schedule tests**
 
 Run: `npx vitest run packages/core/src/govern/jobs.test.ts`
 
 Expected: PASS, including the pre-existing "registers a handler for EVERY purpose it schedules".
 
-- [ ] **Step 5: Write the failing "Verify now" test**
+- [x] **Step 5: Write the failing "Verify now" test**
 
 Add to `apps/api/src/routes/admin/govern.test.ts`:
 
@@ -5254,13 +5254,13 @@ Add to `apps/api/src/routes/admin/govern.test.ts`:
 
 If the test app does not configure `GOVERN_CHECKPOINT_KEY`, set it in `apps/api/src/test-support.ts` alongside the other test config — a 32-byte base64 constant — and say in a comment that the signed path is otherwise untestable and was the state that hid this defect.
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/govern.test.ts -t 'Verify now'`
 
 Expected: FAIL — the second call returns `result: 'broken'` with `signatureState: 'unknown_key'`, and one `audit_chain_broken` finding exists.
 
-- [ ] **Step 7: Build the signer in one place**
+- [x] **Step 7: Build the signer in one place**
 
 Create `apps/api/src/govern-signer.ts`:
 
@@ -5301,7 +5301,7 @@ In `apps/api/src/scheduler.ts`, replace the inline `signer:` expression in the `
       signer: configuredCheckpointSigner(config),
 ```
 
-- [ ] **Step 8: Give the routes the signer, and add the full-verify route**
+- [x] **Step 8: Give the routes the signer, and add the full-verify route**
 
 In `apps/api/src/routes/admin/govern.ts`, widen the options:
 
@@ -5359,7 +5359,7 @@ and replace the verify route, adding the full one beside it:
 
 Add `verifyFull` and `type CheckpointSigner` to the `@syntra/core` import list.
 
-- [ ] **Step 9: Wire it from `app.ts`**
+- [x] **Step 9: Wire it from `app.ts`**
 
 In `apps/api/src/app.ts`, in the `registerAdminGovernRoutes` registration:
 
@@ -5378,19 +5378,19 @@ In `apps/api/src/app.ts`, in the `registerAdminGovernRoutes` registration:
 
 with `import { configuredCheckpointSigner } from './govern-signer.js';` added.
 
-- [ ] **Step 10: Run the route tests**
+- [x] **Step 10: Run the route tests**
 
 Run: `npx vitest run apps/api/src/routes/admin/govern.test.ts`
 
 Expected: PASS, all three new cases and every pre-existing one.
 
-- [ ] **Step 11: Run the integrity unit tests**
+- [x] **Step 11: Run the integrity unit tests**
 
 Run: `npx vitest run packages/core/src/govern/audit-integrity.test.ts`
 
 Expected: PASS. Nothing in `audit-integrity.ts` changed; this confirms the route change did not need one.
 
-- [ ] **Step 12: Typecheck and commit**
+- [x] **Step 12: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -5462,7 +5462,7 @@ Spec §6.2 — **G24** (a refused risk acceptance routes the remediation to the 
   - `revokeExceptionBody = z.object({ reason: z.string().min(1) })` in `@syntra/contracts`.
   - `POST /api/admin/govern/sod/exceptions/:id/revoke` — `govern.read` at the gate, authority decided in the service.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `packages/core/src/govern/exception-service.test.ts`:
 
@@ -5583,13 +5583,13 @@ describe('shouldWarn', () => {
 
 Write `seedPendingException()` and `seedActiveException()` beside the file's existing fixtures — the file already seeds a rule, a violation and an acceptor for its other cases; extend that helper to return the rule owner's and beneficiary's person and user ids rather than writing a third seeding path.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run packages/core/src/govern/exception-service.test.ts -t 'shouldWarn'`
 
 Expected: FAIL — `shouldWarn` does not exist, the remediation owner is the beneficiary, and the revoke has no authority check.
 
-- [ ] **Step 3: Route the refusal to the rule owner**
+- [x] **Step 3: Route the refusal to the rule owner**
 
 In `packages/core/src/govern/exception-service.ts`, widen the error union:
 
@@ -5656,7 +5656,7 @@ with `actorName` resolved just above the branch:
         : (actorNames.get(`person:${actor.personId}`) ?? 'an approver');
 ```
 
-- [ ] **Step 4: Give the early revocation its authority check**
+- [x] **Step 4: Give the early revocation its authority check**
 
 Replace `revokeSodException`:
 
@@ -5746,7 +5746,7 @@ export async function revokeSodException(
 }
 ```
 
-- [ ] **Step 5: Make the warning a bucket, not an edge**
+- [x] **Step 5: Make the warning a bucket, not an edge**
 
 Add to `packages/core/src/govern/exception-service.ts`, above `sweepExceptions`:
 
@@ -5811,7 +5811,7 @@ and replace the warning branch inside the sweep's per-exception loop:
 
 The rest of the warning branch — `recipientsForPersons`, `displayNames`, `enqueueOutbox`, `pageWarned += 1` — is unchanged.
 
-- [ ] **Step 6: Add the contract and the route**
+- [x] **Step 6: Add the contract and the route**
 
 In `packages/contracts/src/govern.ts`, beside `decideExceptionBody`:
 
@@ -5862,7 +5862,7 @@ In `apps/api/src/routes/admin/govern.ts`, after the decide route:
 
 Add `revokeExceptionBody` to the `@syntra/contracts` import list and `revokeSodException` to the `@syntra/core` one.
 
-- [ ] **Step 7: Add the route test**
+- [x] **Step 7: Add the route test**
 
 Add to `apps/api/src/routes/admin/govern.test.ts`:
 
@@ -5885,7 +5885,7 @@ Add to `apps/api/src/routes/admin/govern.test.ts`:
   });
 ```
 
-- [ ] **Step 8: Run every touched suite**
+- [x] **Step 8: Run every touched suite**
 
 ```bash
 npx vitest run packages/core/src/govern/exception-service.test.ts
@@ -5894,7 +5894,7 @@ npx vitest run apps/api/src/routes/admin/govern.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 9: Typecheck and commit**
+- [x] **Step 9: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -5966,7 +5966,7 @@ Spec §6.1 — **G8** (`CampaignScope.riskFlags` is accepted, stored and never a
   - `campaignScopeInput` in `@syntra/contracts` loses `riskFlags`. It is not `.strict()`, so an old caller sending it gets it stripped rather than a 400 — which is the same behaviour it had when the field existed and was ignored.
   - `holdingsInScope` — unchanged signature; the query gains `state: 'held'`.
 
-- [ ] **Step 1: Confirm nothing consumes it before removing it**
+- [x] **Step 1: Confirm nothing consumes it before removing it**
 
 ```bash
 grep -rn "riskFlags" --include=*.ts --include=*.tsx packages apps | grep -v /dist/ | grep -v "\.test\."
@@ -5980,7 +5980,7 @@ grep -rn "riskFlags" --include=*.test.ts --include=*.test.tsx packages apps | gr
 
 Expected: every hit is over `CampaignItem.riskFlags`. No test constructs a scope with the field.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Add to `packages/core/src/govern/campaign-service.test.ts`:
 
@@ -6066,13 +6066,13 @@ it('no longer accepts a riskFlags scope at all', () => {
 });
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/campaign-service.test.ts -t 'unknown'`
 
 Expected: FAIL — the campaign starts over unknown holdings, the preview counts them, and the parsed scope still carries `riskFlags`.
 
-- [ ] **Step 4: Delete the field from the type and the schema**
+- [x] **Step 4: Delete the field from the type and the schema**
 
 In `packages/core/src/govern/campaign-service.ts`, remove `riskFlags?: string[] | undefined;` from `CampaignScope` (line 30) and `riskFlags: z.array(z.string().min(1)).min(1).optional(),` from `leafScopeSchema` (line 43), and add above the interface:
 
@@ -6097,7 +6097,7 @@ In `packages/core/src/govern/campaign-service.ts`, remove `riskFlags?: string[] 
  */
 ```
 
-- [ ] **Step 5: Delete it from the contract**
+- [x] **Step 5: Delete it from the contract**
 
 In `packages/contracts/src/govern.ts`, remove `riskFlags: z.array(z.string().min(1)).min(1).optional(),` from `campaignScopeInput` and leave in its place:
 
@@ -6110,7 +6110,7 @@ In `packages/contracts/src/govern.ts`, remove `riskFlags: z.array(z.string().min
   // happened to it before.
 ```
 
-- [ ] **Step 6: Filter the holdings read on state**
+- [x] **Step 6: Filter the holdings read on state**
 
 In `packages/core/src/govern/campaign-service.ts`, in `holdingsInScope`:
 
@@ -6138,13 +6138,13 @@ In `packages/core/src/govern/campaign-service.ts`, in `holdingsInScope`:
   });
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `npx vitest run packages/core/src/govern/campaign-service.test.ts`
 
 Expected: PASS. The three `MutuallyAssignable` guards in `campaign-service.ts` are what prove the type and the schema were edited together — if only one side was changed, `tsc` fails rather than a test.
 
-- [ ] **Step 8: Run the contract and route suites**
+- [x] **Step 8: Run the contract and route suites**
 
 ```bash
 npx vitest run packages/contracts
@@ -6153,7 +6153,7 @@ npx vitest run apps/api/src/routes/admin/govern.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 9: Typecheck and commit**
+- [x] **Step 9: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0 — and this is the gate that matters here, because `_scopeKeysMatch` is exact over `keyof` in both directions.
@@ -6215,7 +6215,7 @@ Spec §6.1 — **G10** ("Last certified" is always blank), **G14** (orphan-accou
 - Consumes: `parseSubjectKey(key: string) => SubjectRef | null` and `SYNTRA_SYSTEM_ID` from `packages/core/src/govern/types.js`; `CollectedHolding` from `./collect.js`.
 - Produces: no signature changes anywhere. Three behaviour changes: the portal's certification map keys on the bare ref; `collect` emits `{ kind: 'account', systemId: SYNTRA_SYSTEM_ID, accountRef: user.id }` holdings for unlinked users; `createRevocationOrder`'s caller resolves the account by `accountRef` when the item has no person.
 
-- [ ] **Step 1: Write the failing test for "last certified"**
+- [x] **Step 1: Write the failing test for "last certified"**
 
 Add to `apps/api/src/routes/govern-portal.test.ts`:
 
@@ -6254,13 +6254,13 @@ it('shows when an item’s holding was last certified, and by whom', async () =>
 
 Reuse the file's existing `mkItem` fixture rather than writing a second one; `seedReviewableItem` above is whatever wrapper the file already has around it.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/govern-portal.test.ts -t 'last certified'`
 
 Expected: FAIL — both fields are `null`.
 
-- [ ] **Step 3: Key the portal on the ref the writer writes**
+- [x] **Step 3: Key the portal on the ref the writer writes**
 
 In `apps/api/src/routes/govern-portal.ts`, replace the certification read inside the `Promise.all` and the map that consumes it:
 
@@ -6321,7 +6321,7 @@ and at the call site inside `rows.map`:
 
 Add `parseSubjectKey` to the file's `@syntra/core` import if it is not already there — it is, at line 6 of the import list.
 
-- [ ] **Step 4: Write the failing test for orphan holdings**
+- [x] **Step 4: Write the failing test for orphan holdings**
 
 Add to `packages/core/src/govern/collect.test.ts`:
 
@@ -6375,13 +6375,13 @@ describe('an account with no person behind it', () => {
 
 `seedUnlinkedUserHoldingEverything()` creates a `User` with `personId: null`, one `GroupMembership`, one `AppAssignment` reachable through `resolveApplicationPaths`, and one `RoleAssignment`. Reuse the file's existing seeding helpers for each.
 
-- [ ] **Step 5: Run it to verify it fails**
+- [x] **Step 5: Run it to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/collect.test.ts -t 'no person behind it'`
 
 Expected: FAIL — `mine` is empty.
 
-- [ ] **Step 6: Emit the account subject at all three sites**
+- [x] **Step 6: Emit the account subject at all three sites**
 
 In `packages/core/src/govern/collect.ts`, add above the memberships loop:
 
@@ -6425,7 +6425,7 @@ and change each `subject: { kind: 'person', personId: user.personId },` to `subj
 
 Inside the application loop, `user.personId` is also read for nothing else; inside the role loop it is not read at all. Check each site compiles without a non-null assertion — if one needs `user.personId!`, that site is doing something else with the person and must be read before it is changed.
 
-- [ ] **Step 7: Write the failing test for the account lookup**
+- [x] **Step 7: Write the failing test for the account lookup**
 
 Add to `packages/core/src/govern/revocation-service.test.ts`:
 
@@ -6461,13 +6461,13 @@ it('resolves the revocation order’s account from the item’s own accountRef',
 
 `seedTwoAccountsInOneTarget()` builds one target with two `TargetAccount` rows, and a campaign item whose `personId` is null and whose `accountRef` is the second account's `anchor` — the value `collect` writes for a target account subject. Read `collect.ts`'s target-account section to confirm what `accountRef` holds before writing the fixture.
 
-- [ ] **Step 8: Run it to verify it fails**
+- [x] **Step 8: Run it to verify it fails**
 
 Run: `npx vitest run packages/core/src/govern/revocation-service.test.ts -t 'accountRef'`
 
 Expected: FAIL — the order names the other account.
 
-- [ ] **Step 9: Resolve the account by the ref the item carries**
+- [x] **Step 9: Resolve the account by the ref the item carries**
 
 In `packages/core/src/govern/revocation-service.ts`, replace the account lookup in the `revocation_order` branch:
 
@@ -6505,7 +6505,7 @@ In `packages/core/src/govern/revocation-service.ts`, replace the account lookup 
                   })();
 ```
 
-- [ ] **Step 10: Run all three suites**
+- [x] **Step 10: Run all three suites**
 
 ```bash
 npx vitest run apps/api/src/routes/govern-portal.test.ts
@@ -6515,7 +6515,7 @@ npx vitest run packages/core/src/govern/revocation-service.test.ts
 
 Expected: PASS. `snapshot-service.test.ts` is in the list because `collect` now emits more holdings and the snapshot's counts are asserted there.
 
-- [ ] **Step 11: Typecheck and commit**
+- [x] **Step 11: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -6561,25 +6561,25 @@ MSG
 
 ## Done when
 
-- [ ] Two reviewers decide one item concurrently and exactly one succeeds, with one `CampaignDecision` row and a `HoldingCertification` that agrees with the item's status.
-- [ ] `bulkCertify` refuses a closed campaign and moots a departed subject's item, as the single path does.
-- [ ] `pruneSnapshots` retains a snapshot a campaign, a re-based campaign, or a campaign item points at.
-- [ ] A campaign closes with `revokedItems` counting only `revocation_applied`, and `revokeDecidedItems`, `dispatchedItems`, `failedItems` and `requiresChangeItems` each reported separately on the row, the audit event and the API.
-- [ ] `Campaign.status = 'executing'` has no reader left; `startCampaign` refuses before `opensAt`; `extendCampaign` refuses a closed campaign.
-- [ ] `closeDueCampaigns` computes a `previewed` revocation batch when a campaign has revoke decisions, computes none when it does not, and leaves the campaign `open` if the computation fails.
-- [ ] `runCampaignReminders` stamps `lastRemindedAt` in a transaction that no longer contains escalation, and escalates in `ESCALATION_BATCH` pages that add no duplicate row on a second run.
-- [ ] `rebaseCampaign` is paged, leaves `undecided`, `moot` and every `revocation_*` item untouched, drops the certification projection only for items it re-opens from `certified`, and refuses a campaign that is not `open`.
-- [ ] The transaction-budget file covers reminders-with-escalation, the re-base, the exception sweep, the accepted-findings sweep and the decision graph, with a bounded case and an unbounded mutation for each of the first three.
-- [ ] The gain cross-reference links every gain in a population larger than one batch; two overlapping SoD detection passes converge on one violation row.
-- [ ] An SoD rule whose functions share a resource is `unevaluable`; an `unknown` holding on either side is `unevaluable`; laundering matches on the full resource key; 4,000 edges against 20 rules scan in under a second.
-- [ ] A campaign evidence bundle contains its items, decisions, reviewers, dispatches and notifications; a report bundle says on its cover that it covers no campaign; `storageRef` names a route that rebuilds the bundle to the same digest.
-- [ ] A CSV cell beginning `=`, `+`, `-`, `@`, tab or CR is neutralised; an ordinary value is untouched; a refused export writes an audit event with `outcome: 'failure'`.
-- [ ] Clearing the snapshot cadence unschedules the snapshot purpose and nothing else.
-- [ ] `POST /govern/integrity/verify` returns `signed_and_verified` on a second call and raises no finding; `POST /govern/integrity/verify-full` exists, is gated on `govern.manage`, and writes an `AuditChainCheck` with `mode: 'full'`.
-- [ ] A refused risk acceptance files its remediation against the rule owner; `POST /govern/sod/exceptions/:id/revoke` exists and refuses the beneficiary; `shouldWarn` fires the day after a missed sweep.
-- [ ] `CampaignScope.riskFlags` is gone from the type, the schema and the contract; no campaign item is generated over an `unknown` holding.
-- [ ] The reviewer's screen shows when a holding was last certified; an unlinked account's group, application and role holdings are collected; a revocation order resolves its account from the item's `accountRef`.
-- [ ] `npx tsc -b` exits 0, `pnpm --filter @syntra/web build` succeeds, and `packages/core/src/auth/password-reset.test.ts` is still uncommitted and untouched.
+- [x] Two reviewers decide one item concurrently and exactly one succeeds, with one `CampaignDecision` row and a `HoldingCertification` that agrees with the item's status.
+- [x] `bulkCertify` refuses a closed campaign and moots a departed subject's item, as the single path does.
+- [x] `pruneSnapshots` retains a snapshot a campaign, a re-based campaign, or a campaign item points at.
+- [x] A campaign closes with `revokedItems` counting only `revocation_applied`, and `revokeDecidedItems`, `dispatchedItems`, `failedItems` and `requiresChangeItems` each reported separately on the row, the audit event and the API.
+- [x] `Campaign.status = 'executing'` has no reader left; `startCampaign` refuses before `opensAt`; `extendCampaign` refuses a closed campaign.
+- [x] `closeDueCampaigns` computes a `previewed` revocation batch when a campaign has revoke decisions, computes none when it does not, and leaves the campaign `open` if the computation fails.
+- [x] `runCampaignReminders` stamps `lastRemindedAt` in a transaction that no longer contains escalation, and escalates in `ESCALATION_BATCH` pages that add no duplicate row on a second run.
+- [x] `rebaseCampaign` is paged, leaves `undecided`, `moot` and every `revocation_*` item untouched, drops the certification projection only for items it re-opens from `certified`, and refuses a campaign that is not `open`.
+- [x] The transaction-budget file covers reminders-with-escalation, the re-base, the exception sweep, the accepted-findings sweep and the decision graph, with a bounded case and an unbounded mutation for each of the first three.
+- [x] The gain cross-reference links every gain in a population larger than one batch; two overlapping SoD detection passes converge on one violation row.
+- [x] An SoD rule whose functions share a resource is `unevaluable`; an `unknown` holding on either side is `unevaluable`; laundering matches on the full resource key; 4,000 edges against 20 rules scan in under a second.
+- [x] A campaign evidence bundle contains its items, decisions, reviewers, dispatches and notifications; a report bundle says on its cover that it covers no campaign; `storageRef` names a route that rebuilds the bundle to the same digest.
+- [x] A CSV cell beginning `=`, `+`, `-`, `@`, tab or CR is neutralised; an ordinary value is untouched; a refused export writes an audit event with `outcome: 'failure'`.
+- [x] Clearing the snapshot cadence unschedules the snapshot purpose and nothing else.
+- [x] `POST /govern/integrity/verify` returns `signed_and_verified` on a second call and raises no finding; `POST /govern/integrity/verify-full` exists, is gated on `govern.manage`, and writes an `AuditChainCheck` with `mode: 'full'`.
+- [x] A refused risk acceptance files its remediation against the rule owner; `POST /govern/sod/exceptions/:id/revoke` exists and refuses the beneficiary; `shouldWarn` fires the day after a missed sweep.
+- [x] `CampaignScope.riskFlags` is gone from the type, the schema and the contract; no campaign item is generated over an `unknown` holding.
+- [x] The reviewer's screen shows when a holding was last certified; an unlinked account's group, application and role holdings are collected; a revocation order resolves its account from the item's `accountRef`.
+- [x] `npx tsc -b` exits 0, `pnpm --filter @syntra/web build` succeeds, and `packages/core/src/auth/password-reset.test.ts` is still uncommitted and untouched.
 
 ## Deliberately not in this plan
 
