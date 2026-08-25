@@ -113,6 +113,7 @@ beforeEach(async () => {
 const create = async (cookie: string) => {
   const response = await post('/api/admin/targets', cookie, {
     name: 'Acme AD',
+    type: 'activeDirectory',
     config,
     bindPassword: 'super-secret-bind',
   });
@@ -381,6 +382,7 @@ describe('rules', () => {
     const otherTargetId = (
       await post('/api/admin/targets', cookie, {
         name: 'Other AD',
+        type: 'activeDirectory',
         config,
         bindPassword: 'super-secret-bind',
       })
@@ -608,6 +610,7 @@ describe('POST /api/admin/targets/:id/runs/:runId/apply', () => {
     const otherTargetId = (
       await post('/api/admin/targets', cookie, {
         name: 'Other AD',
+        type: 'activeDirectory',
         config,
         bindPassword: 'super-secret-bind',
       })
