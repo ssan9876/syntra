@@ -23,6 +23,7 @@ import { registerEnrolRoutes } from './routes/enrol.js';
 import { registerPasswordResetRoutes } from './routes/password-reset.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerAdminRoleRoutes } from './routes/admin/roles.js';
 import { registerAdminTenantRoutes } from './routes/admin/tenant.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
@@ -246,6 +247,7 @@ export async function buildApp(
   // Every route below requires an administrative session; the guard is
   // applied inside each plugin so a new admin route cannot forget it.
   await app.register(registerAdminTenantRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminUserRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,

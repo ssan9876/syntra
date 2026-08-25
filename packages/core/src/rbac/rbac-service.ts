@@ -246,9 +246,14 @@ export async function updateRole(
   tx: TenantClient,
   roleId: string,
   input: {
-    name?: string;
-    description?: string | null;
-    permissions?: readonly string[];
+    // `| undefined` explicitly, because the tree runs with
+    // `exactOptionalPropertyTypes` and a zod-parsed PATCH body types its
+    // absent fields that way. The body below already branches on
+    // `=== undefined`, so widening the type describes what the function does
+    // rather than forcing every caller to strip its own optionals.
+    name?: string | undefined;
+    description?: string | null | undefined;
+    permissions?: readonly string[] | undefined;
   },
 ): Promise<void> {
   const role = await tx.role.findUniqueOrThrow({ where: { id: roleId } });
