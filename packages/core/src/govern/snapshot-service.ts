@@ -217,11 +217,62 @@ export async function buildSnapshot(
     );
 
     // ---- attribute + classify (pure) ---------------------------------------
-    const prepared: PreparedHolding[] = collected.holdings.map((h) => {
+    //
+    // ONE ROW PER (subject, resource), and that is load-bearing rather than
+    // tidy. `collect` emits a holding per (userId, resource) while the
+    // subject key here is the PERSON, and a person may hold several `User`
+    // rows -- so two accounts in one group, or under one org unit carrying an
+    // application assignment, or holding one role, produce two entries that
+    // collide on `Holding`'s unique key.
+    //
+    // `createMany` has no upsert. Before this, that collision failed the
+    // snapshot with P2002 and failed EVERY nightly build afterwards, because
+    // the shape does not resolve itself: snapshots stopped, sources went
+    // stale, and past `maxSnapshotAgeDays` every campaign start and every
+    // revocation batch was refused. Governance halted and did not restart.
+    //
+    // Deliberately NOT `skipDuplicates` on the write instead. That would
+    // silently drop the second row's attribution -- the holding would read as
+    // less attributable than it is, which is a claim a reviewer acts on --
+    // and it would hide a genuinely new duplicate shape rather than
+    // surfacing it.
+    const preparedByKey = new Map<string, PreparedHolding>();
+    const prepared: PreparedHolding[] = [];
+
+    for (const h of collected.holdings) {
       const key = subjectKey(h.subject);
-      const attributions = attributionsFor(h.attribution, collected.asOf);
       const compositeKey = `${key}|${h.systemId}|${h.resourceKind}|${h.resourceId}`;
-      return {
+      const attributions = attributionsFor(h.attribution, collected.asOf);
+      // Every syntraRole holding is privileged with NO configuration: a
+      // Syntra role carries permissions from the closed catalogue and there
+      // is no version of that which is not.
+      const privileged =
+        h.resourceKind === 'syntraRole' ||
+        privilegedByKey.has(`${h.systemId}|${h.resourceKind}|${h.resourceId}`);
+
+      const existing = preparedByKey.get(compositeKey);
+      if (existing !== undefined) {
+        // Union, because each account is a separate true reason the person
+        // holds this and section 7 wants all of them.
+        existing.attributions.push(...attributions);
+        existing.unattributable = isUnattributable(
+          existing.attributions.map((a) => a.kind),
+        );
+        // `held` beats `unknown`: one readable account is enough to know the
+        // person holds it, and the other account's blindness does not unmake
+        // that.
+        if (h.state === 'held') existing.state = 'held';
+        // Privilege is a property of the RESOURCE, so in practice the two
+        // agree; taking the disjunction means a future per-account
+        // difference cannot quietly downgrade it.
+        existing.privileged = existing.privileged || privileged;
+        if (h.observedAt.getTime() > existing.observedAt.getTime()) {
+          existing.observedAt = h.observedAt;
+        }
+        continue;
+      }
+
+      const row: PreparedHolding = {
         subjectKey: key,
         personId: h.subject.kind === 'person' ? h.subject.personId : null,
         accountRef: h.subject.kind === 'account' ? h.subject.accountRef : null,
@@ -231,19 +282,16 @@ export async function buildSnapshot(
         resourceId: h.resourceId,
         resourceName: h.resourceName,
         state: h.state,
-        // Every syntraRole holding is privileged with NO configuration: a
-        // Syntra role carries permissions from the closed catalogue and there
-        // is no version of that which is not.
-        privileged:
-          h.resourceKind === 'syntraRole' ||
-          privilegedByKey.has(`${h.systemId}|${h.resourceKind}|${h.resourceId}`),
+        privileged,
         observedAt: h.observedAt,
         observedVia: h.observedVia,
         firstSeenAt: firstSeenByKey.get(compositeKey) ?? collected.asOf,
         unattributable: isUnattributable(attributions.map((a) => a.kind)),
         attributions,
       };
-    });
+      preparedByKey.set(compositeKey, row);
+      prepared.push(row);
+    }
 
     const allGaps = [
       ...collected.gaps.map((g) => ({
