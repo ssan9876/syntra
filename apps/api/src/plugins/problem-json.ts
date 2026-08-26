@@ -70,6 +70,40 @@ export function registerProblemJson(
       });
     }
 
+    /**
+     * A transaction that ran out of budget is the database being saturated,
+     * not a fault in this server.
+     *
+     * `P2028` is Prisma's interactive-transaction timeout. Every request to a
+     * tenant-scoped route opens one before the handler runs — tenant
+     * resolution, then the permission check — so under contention a request
+     * dies there, carrying an error that is neither a ProblemError nor a
+     * ZodError, and lands in the bare 500 below. That is how a contended
+     * database came to look identical to an application crash in the logs, and
+     * how a malformed-uuid request that should answer 400 answered 500: it
+     * never reached the handler that would have parsed the id.
+     *
+     * 503 says the thing a client, a proxy or a dashboard can act on: try
+     * again. 500 says "this server has a bug", and conflating the two costs
+     * the 500 its meaning.
+     *
+     * Keyed on P2028 ALONE, deliberately. Widening this to
+     * PrismaClientKnownRequestError would relabel a unique-constraint
+     * violation — a real bug in the caller — as "the service is busy", which
+     * is a worse lie than the one being fixed.
+     */
+    if ((error as { code?: string }).code === 'P2028') {
+      request.log.error({ err: error }, 'database transaction timed out');
+      return reply.status(503).type('application/problem+json').send({
+        type: `${BASE}unavailable`,
+        title: 'Service Unavailable',
+        status: 503,
+        // No timings and no query text: the message carries both, and neither
+        // is the client's business.
+        detail: 'the database did not answer within the transaction budget',
+      });
+    }
+
     // Fastify's own errors (rate limit, malformed body) carry a usable status.
     const fastifyError = error as { statusCode?: number; message?: string };
     const status = fastifyError.statusCode ?? 500;
