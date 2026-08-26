@@ -81,6 +81,15 @@ function conditions(rule: Rule): string[] {
 export function PoliciesPage() {
   const { data: policy, error, loading, reload } = useApiResource<Policy>('/api/admin/policy');
   const [formError, setFormError] = useState<string | null>(null);
+  /**
+   * Refusals from the LIST controls, rendered at page level.
+   *
+   * Deliberately not `formError`: that one lives inside the "add a rule"
+   * panel, which is collapsed unless somebody is adding a rule -- so a refused
+   * Remove would have set a message nobody could see, which is the same
+   * silence this task exists to end, one layer in.
+   */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -177,16 +186,37 @@ export function PoliciesPage() {
     const target = index + delta;
     if (target < 0 || target >= ids.length) return;
     [ids[index], ids[target]] = [ids[target]!, ids[index]!];
-    await api('/api/admin/policy/rules/order', {
-      method: 'PUT',
-      body: JSON.stringify({ ruleIds: ids }),
-    });
-    reload();
+    setActionError(null);
+    try {
+      await api('/api/admin/policy/rules/order', {
+        method: 'PUT',
+        body: JSON.stringify({ ruleIds: ids }),
+      });
+      reload();
+    } catch (cause) {
+      // Rule ORDER decides which rule wins, so a reorder that silently did not
+      // happen leaves the administrator believing a different rule is in force
+      // than the one that is.
+      setActionError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That rule could not be moved.',
+      );
+    }
   }
 
   async function remove(id: string) {
-    await api(`/api/admin/policy/rules/${id}`, { method: 'DELETE' });
-    reload();
+    setActionError(null);
+    try {
+      await api(`/api/admin/policy/rules/${id}`, { method: 'DELETE' });
+      reload();
+    } catch (cause) {
+      setActionError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That rule could not be removed.',
+      );
+    }
   }
 
   return (
@@ -202,6 +232,7 @@ export function PoliciesPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+      {actionError && <Alert tone="danger">{actionError}</Alert>}
 
       {adding && (
         <Panel title="New rule">

@@ -185,4 +185,33 @@ describe('PoliciesPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/not an address or CIDR/i);
   });
+  /**
+   * `remove()` had no catch, so a refusal was an unhandled rejection and the
+   * button read as broken. `move()` was the same shape and worse in
+   * consequence: rule ORDER decides which rule wins, so a reorder that
+   * silently did not happen leaves the administrator believing a different
+   * rule is in force than the one that is.
+   */
+  it('reports a refused removal instead of appearing to do nothing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init?: RequestInit) =>
+        init?.method === 'DELETE'
+          ? json(
+              {
+                type: 'https://syntra.dev/problems/forbidden',
+                title: 'Forbidden',
+                status: 403,
+                detail: 'Requires policy.manage',
+              },
+              403,
+            )
+          : json(policy),
+      ),
+    );
+    renderPage();
+
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Remove' }))[0]!);
+    expect(await screen.findByText('Requires policy.manage')).toBeInTheDocument();
+  });
 });
