@@ -901,11 +901,32 @@ describe('the transaction budget — slice 2', () => {
   }, 300_000);
 
   it('FAILS when the exception sweep is unbounded — the mutation this case exists for', async () => {
+    // 1,800 rather than the 600 the BOUNDED case above uses, and the
+    // assertion demands an ABORT rather than accepting a measurement.
+    //
+    // At 600 this asserted `aborted || slowest > BUDGET_MS`, which made it a
+    // speedometer: the unbounded sweep had to land in the 500 ms window
+    // between GOVERN_BUDGET_MS (4,500 on CI) and Prisma's 5,000 ms
+    // interactive-transaction ceiling. It did, until the hosted runner got
+    // faster -- `verify / tests` fell from 26 minutes to 15 -- and 600 rows
+    // started finishing in 4,326 and 4,874 ms. Under the budget, over nothing,
+    // and the test went red on code that had passed the day before. Re-running
+    // the PREVIOUS tag's job today reproduced it exactly, which is what proved
+    // the runner rather than the change.
+    //
+    // The failure mode being caught is not "slightly slow". It is a sweep that
+    // never returns, and this file's own comment says so: the defect ABORTS at
+    // the ceiling. Asserting that abort is machine-independent in both
+    // directions -- a slower machine reaches 5,000 ms sooner, a faster one
+    // still cannot do 1,800 audited rows inside it -- where the timing
+    // comparison was fragile in one and silently toothless in the other. At
+    // 600 on this runner the mutation would have PASSED with the defect
+    // present, which is the worst thing a mutation test can do.
     await seedOrdinaryCampaign();
-    await seedManyExceptionsAndAcceptedFindings(600);
+    await seedManyExceptionsAndAcceptedFindings(1800);
 
     let aborted = false;
-    const { slowest } = await timedTransactions(async () => {
+    await timedTransactions(async () => {
       try {
         await sweepExceptions(tenantId, {
           now: new Date(NOW.getTime() + 400 * 86_400_000),
@@ -915,7 +936,7 @@ describe('the transaction budget — slice 2', () => {
         aborted = true;
       }
     });
-    expect(aborted || slowest > BUDGET_MS).toBe(true);
+    expect(aborted).toBe(true);
   }, 300_000);
 
   it('builds the decision graph over the seeded tenant within the budget', async () => {
