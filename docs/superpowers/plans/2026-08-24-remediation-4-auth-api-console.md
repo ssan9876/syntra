@@ -8496,7 +8496,7 @@ And two documented one-per invariants have no backing constraint: one `active` `
 - Consumes: nothing.
 - Produces: index `GroupMembership_userId_idx`; partial unique indexes `signing_key_one_active` and `target_account_anchor_unique`. No code changes.
 
-- [ ] **Step 1: Check the existing data can satisfy the two constraints**
+- [x] **Step 1: Check the existing data can satisfy the two constraints**
 
 ```bash
 cd packages/db && npx prisma db execute --stdin <<'SQL'
@@ -8510,7 +8510,7 @@ cd ../..
 
 Expected: no rows from either. If there are rows, the invariant is already broken and this task's first job is finding out how — the constraint is the fix, but a migration that fails on deploy is not.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `packages/db/src/schema-invariants.test.ts`:
 
@@ -8564,12 +8564,12 @@ describe('the index every portal render needs', () => {
 });
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `npx vitest run packages/db/src/schema-invariants.test.ts`
 Expected: FAIL — all three indexes are missing.
 
-- [ ] **Step 4: Write the migration**
+- [x] **Step 4: Write the migration**
 
 Create `packages/db/prisma/migrations/20260904000000_membership_index_and_one_per_uniques/migration.sql`:
 
@@ -8618,11 +8618,11 @@ CREATE UNIQUE INDEX target_account_anchor_unique
 
 In `packages/db/prisma/schema.prisma`, add `@@index([userId])` to `GroupMembership` (after line 130). The two partial uniques stay SQL-only — Prisma cannot express a partial unique index, which is why `role_assignment_unscoped_unique` is SQL-only too.
 
-- [ ] **Step 5: Register the migration name**
+- [x] **Step 5: Register the migration name**
 
 Append `'20260904000000_membership_index_and_one_per_uniques',` to `KNOWN_MIGRATIONS` in `packages/db/src/migration-order.ts`.
 
-- [ ] **Step 6: Apply and verify**
+- [x] **Step 6: Apply and verify**
 
 ```bash
 cd packages/db && npx prisma migrate deploy && npx prisma generate; cd ../..
@@ -8631,13 +8631,13 @@ npx vitest run packages/db/src/schema-invariants.test.ts packages/db/src/migrati
 
 Expected: PASS.
 
-- [ ] **Step 7: Check the two constraints did not break rotation or provisioning**
+- [x] **Step 7: Check the two constraints did not break rotation or provisioning**
 
 Run: `npx vitest run packages/core/src/keys/signing-key-service.test.ts packages/core/src/provision/apply.test.ts`
 
 Expected: PASS. `rotateKey` demotes the previous key to `outgoing` *before* inserting the new one, which is the ordering its own comment says this index makes load-bearing — this is where that claim is finally true.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
