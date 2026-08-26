@@ -130,4 +130,24 @@ describe('the product editor loads what it edits', () => {
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.method).toBe('POST');
   });
+
+  it('sends the duration mode the contract actually accepts', async () => {
+    const sent = mockApi();
+    renderEditor('/admin/automate/products/p1');
+    await screen.findByDisplayValue('AP approve');
+
+    await userEvent.selectOptions(
+      screen.getByLabelText('Duration mode'),
+      'requesterChoice',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    // `durationMode` is z.enum(['permanent','fixed','requesterChoice']). The
+    // option offered here was `requested`, which the schema refuses -- so
+    // choosing "Chosen by the requester" made every subsequent save of that
+    // product 400, and the Select carried no `error` prop, so the reader got
+    // "That could not be saved." and no indication of which control was wrong.
+    expect(sent[0]!.body).toMatchObject({ durationMode: 'requesterChoice' });
+  });
 });

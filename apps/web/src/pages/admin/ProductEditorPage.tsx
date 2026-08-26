@@ -277,7 +277,12 @@ export function ProductEditorPage() {
               options={[
                 { value: 'permanent', label: 'Permanent' },
                 { value: 'fixed', label: 'Fixed' },
-                { value: 'requested', label: 'Chosen by the requester' },
+                // `requesterChoice`, the value `durationMode` in
+                // `@syntra/contracts` actually names. It read `requested`,
+                // which the enum refuses -- so choosing this option made every
+                // later save of that product 400, and the reader saw only the
+                // form's generic banner.
+                { value: 'requesterChoice', label: 'Chosen by the requester' },
               ]}
             />
             <Field
