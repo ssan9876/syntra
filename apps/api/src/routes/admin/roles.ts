@@ -180,8 +180,21 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
       const { id } = idParam.parse(request.params);
       const body = roleAssignmentBody.parse(request.body);
       await request.db(async (tx) => {
-        await tx.role.findUniqueOrThrow({ where: { id } });
-        await tx.user.findUniqueOrThrow({ where: { id: body.userId } });
+        // `findUnique` and an explicit refusal, not `findUniqueOrThrow`.
+        // `problem-json` deliberately does not relabel a Prisma error, so the
+        // throwing form answered 500 for a well-formed id that names nothing —
+        // a stale row, a copied uuid — on the one route whose job is checking
+        // exactly these two ids. Which of them was wrong is the whole content
+        // of the answer, so they are refused separately.
+        const role = await tx.role.findUnique({ where: { id }, select: { id: true } });
+        if (!role) throw new ProblemError(404, 'not-found', 'Role not found');
+
+        const user = await tx.user.findUnique({
+          where: { id: body.userId },
+          select: { id: true },
+        });
+        if (!user) throw new ProblemError(404, 'not-found', 'User not found');
+
         await assignRole(tx, body.userId, id, body.scopeOrgUnitId ?? undefined);
         await recordEvent(tx, {
           actorUserId: request.session.userId,

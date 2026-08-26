@@ -222,4 +222,84 @@ describe('the role API that did not exist', () => {
     const cookie = await authCookie('reader');
     expect((await send('GET', '/api/admin/roles', cookie)).statusCode).toBe(403);
   });
+
+  it('names who holds each role, not merely how many', async () => {
+    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const cookie = await authCookie('owner');
+
+    const res = await send('GET', '/api/admin/roles', cookie);
+    const role = (res.json() as { roles: { id: string; holders: unknown[] }[] }).roles.find(
+      (r) => r.id === roleId,
+    )!;
+
+    // A count is not enough to revoke from: the screen showed "1 holder" and
+    // had no way to say WHICH, so the only path to taking a role off somebody
+    // was a database client. The login travels because RoleAssignment carries
+    // a bare userId with no relation to User.
+    expect(role.holders).toEqual([
+      expect.objectContaining({ login: 'owner', scopeOrgUnitId: null }),
+    ]);
+  });
+
+  it('assigns and revokes, and the holder list follows', async () => {
+    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const cookie = await authCookie('owner');
+    const { user } = await seedAdmin('newcomer', [PERMISSIONS.DIRECTORY_READ]);
+
+    const assigned = await send('POST', `/api/admin/roles/${roleId}/assignments`, cookie, {
+      userId: user.id,
+    });
+    expect(assigned.statusCode).toBe(204);
+
+    const after = await send('GET', '/api/admin/roles', cookie);
+    const role = (
+      after.json() as { roles: { id: string; holders: { login: string }[] }[] }
+    ).roles.find((r) => r.id === roleId)!;
+    expect(role.holders.map((h) => h.login).sort()).toEqual(['newcomer', 'owner']);
+
+    const revoked = await send(
+      'DELETE',
+      `/api/admin/roles/${roleId}/assignments/${user.id}`,
+      cookie,
+    );
+    expect(revoked.statusCode).toBe(204);
+
+    const final = await send('GET', '/api/admin/roles', cookie);
+    const finalRole = (
+      final.json() as { roles: { id: string; holders: { login: string }[] }[] }
+    ).roles.find((r) => r.id === roleId)!;
+    expect(finalRole.holders.map((h) => h.login)).toEqual(['owner']);
+  });
+
+  it('answers 404 for an assignment to a user that is not there', async () => {
+    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const cookie = await authCookie('owner');
+
+    const res = await send('POST', `/api/admin/roles/${roleId}/assignments`, cookie, {
+      userId: '00000000-0000-4000-8000-000000000000',
+    });
+
+    // `findUniqueOrThrow` is there to validate the id, and problem-json
+    // deliberately does not relabel a Prisma error -- so a well-formed but
+    // unknown id (a stale row, a copied uuid) answered 500 with a stack trace
+    // in the log, on a route whose whole job is validating two ids.
+    expect(res.statusCode).toBe(404);
+    expect(res.json().title).toMatch(/user/i);
+  });
+
+  it('answers 404 for an assignment against a role that is not there', async () => {
+    await seedAdmin('owner', ALL_PERMISSIONS);
+    const cookie = await authCookie('owner');
+    const { user } = await seedAdmin('other', [PERMISSIONS.DIRECTORY_READ]);
+
+    const res = await send(
+      'POST',
+      '/api/admin/roles/00000000-0000-4000-8000-000000000000/assignments',
+      cookie,
+      { userId: user.id },
+    );
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().title).toMatch(/role/i);
+  });
 });
