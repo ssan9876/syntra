@@ -7923,7 +7923,7 @@ Spec §7.3, **S6**. `/sources/test` audits every attempt, including refusals; th
 - Consumes: `recordEvent`, already imported by the module.
 - Produces: no signature change. The route writes a `source.test` event with the same payload shape its unsaved sibling uses.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/api/src/routes/admin/sources.test.ts`:
 
@@ -7940,12 +7940,12 @@ it('audits a test against a saved source, as the unsaved one already did', async
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/sources.test.ts -t 'audits a test against a saved source'`
 Expected: FAIL — no events.
 
-- [ ] **Step 3: Audit it**
+- [x] **Step 3: Audit it**
 
 In `apps/api/src/routes/admin/sources.ts`, replace the handler body (lines 549–559):
 
@@ -7991,12 +7991,12 @@ In `apps/api/src/routes/admin/sources.ts`, replace the handler body (lines 549�
       return result;
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/sources.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -8691,7 +8691,7 @@ Spec §7.4, **H6**. Five dead exports were named: `hasPassword`, `listSecretName
 - Consumes: nothing.
 - Produces: four fewer exports. `evaluateIpRanges` and `evaluateTimeWindow` — the three-valued functions the deleted ones wrapped, and the ones the policy engine actually calls — are untouched.
 
-- [ ] **Step 1: Confirm they are still dead**
+- [x] **Step 1: Confirm they are still dead**
 
 ```bash
 for name in hasPassword listSecretNames matchesIpRanges matchesTimeWindow; do
@@ -8708,7 +8708,7 @@ grep -rn "isPermission" --include=*.ts packages/*/src apps/*/src | grep -v "\.te
 
 Expected: the declaration in `permissions.ts` **and** the call in `rbac-service.ts`'s `assertPermissionNames`. If the second is missing, Task 6 has not landed and this task is out of order.
 
-- [ ] **Step 2: Delete the four, and their tests**
+- [x] **Step 2: Delete the four, and their tests**
 
 Remove `hasPassword` from `packages/core/src/auth/password.ts` and `listSecretNames` from `packages/core/src/vault/vault-service.ts` (and its case from `vault-service.test.ts` — the `putSecret`/`getSecret` cases around it stay).
 
@@ -8727,12 +8727,12 @@ In `packages/core/src/policy/ip-match.ts`, delete `matchesIpRanges` (lines 85–
 
 Do the same in `packages/core/src/policy/time-window.ts` for `matchesTimeWindow`, and rewrite the two test files to assert on `evaluateIpRanges` / `evaluateTimeWindow` directly, keeping every case — the coverage is worth keeping, the wrappers are not.
 
-- [ ] **Step 3: Run the affected suites**
+- [x] **Step 3: Run the affected suites**
 
 Run: `npx vitest run packages/core/src/policy/ip-match.test.ts packages/core/src/policy/time-window.test.ts packages/core/src/vault/vault-service.test.ts packages/core/src/auth/password.test.ts`
 Expected: PASS.
 
-- [ ] **Step 4: Typecheck and commit**
+- [x] **Step 4: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0. `@syntra/core`'s index uses `export *`, so nothing else needs editing.
