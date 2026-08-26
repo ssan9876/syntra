@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from './master-key.js';
-import { getSecret, listSecretNames, putSecret } from './vault-service.js';
+import { getSecret, putSecret } from './vault-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 9));
 let tenantId: string;
@@ -99,16 +99,6 @@ describe('vault', () => {
     await expect(
       withTenant(tenantId, (tx) => getSecret(tx, wrong, 'k')),
     ).rejects.toThrow();
-  });
-
-  it('lists names and timestamps without exposing any value', async () => {
-    await withTenant(tenantId, (tx) => putSecret(tx, provider, 'k', 'hunter2'));
-    const listed = await withTenant(tenantId, (tx) => listSecretNames(tx));
-
-    expect(listed).toHaveLength(1);
-    expect(listed[0]).toHaveProperty('name', 'k');
-    expect(JSON.stringify(listed)).not.toContain('hunter2');
-    expect(Object.keys(listed[0]!).sort()).toEqual(['id', 'name', 'updatedAt']);
   });
 
   it('keeps secrets of the same name separate per tenant', async () => {

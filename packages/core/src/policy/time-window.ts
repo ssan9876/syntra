@@ -102,5 +102,8 @@ export function evaluateTimeWindow(window: TimeWindow, now: Date): ConditionResu
   return 'match';
 }
 
-export const matchesTimeWindow = (window: TimeWindow, now: Date): boolean =>
-  evaluateTimeWindow(window, now) === 'match';
+
+// There is deliberately no boolean `matchesTimeWindow` wrapper any more, for
+// the same reason `ip-match.ts` gives: `evaluateTimeWindow` answers three
+// things, and a rule this cannot evaluate is not the same as a rule that does
+// not match. Nothing outside its own test ever called it.
