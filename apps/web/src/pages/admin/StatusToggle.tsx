@@ -5,13 +5,20 @@ import { ApiError, api } from '../../session/api.js';
 /**
  * Deactivate and reactivate, for the four things that carry a status.
  *
- * DELETE IS NOT AN OPTION ANYWHERE IN THIS PRODUCT, and this control is why.
- * Deleting a group revokes access from everybody in it and takes the record of
- * who had what with it; deleting a user destroys the trail of what they held;
- * deleting an org unit does both and orphans any administrative role scoped to
- * it. A deactivated row is still listed, still shows its members, and grants
- * nothing — and it can come back. The specs say it in as many words:
- * "Deactivation never deletes."
+ * THE DEFAULT EVERYWHERE, and this control is why. Deleting a group revokes
+ * access from everybody in it and takes the record of who had what with it;
+ * deleting a user destroys the trail of what they held; deleting an org unit
+ * does both and orphans any administrative role scoped to it. A deactivated
+ * row is still listed, still shows its members, and grants nothing — and it
+ * can come back.
+ *
+ * `DeleteButton` is the deliberate exception, added for the case this does not
+ * cover: an account or container that should stop EXISTING rather than stop
+ * granting, and which a directory otherwise hands back on every sync run for
+ * ever. It is gated on a permission of its own, a per-source flag of its own,
+ * and typing the row's name — three doors, because unlike this control it
+ * cannot be undone by pressing the other button. Deactivation remains the
+ * default and the one offered first.
  *
  * The reason is REQUIRED, and mandatory in the schema rather than merely asked
  * for here. A deactivation with no reason is a row that says access was taken

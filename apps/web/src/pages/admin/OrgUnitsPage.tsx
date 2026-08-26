@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
+import { DeleteButton } from './DeleteButton.js';
 import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -186,6 +188,8 @@ function Row({
   onChanged(): void;
   className: string;
 }) {
+  const can = useCan();
+
   return (
     <div
       className={`flex flex-wrap items-center gap-x-3 rounded-control px-2 py-1.5 transition-colors hover:bg-surface ${className}`}
@@ -218,6 +222,19 @@ function Row({
             label="org unit"
             reasonPrompt="Why is this unit being deactivated? The users in it stay where they are, and it will grant nothing — neither its applications nor a role scoped to it."
             onChanged={onChanged}
+          />
+        )}
+        {/* Offered second, and refused by the server unless the unit is
+            empty. Deactivating keeps the users where they are; this cannot,
+            which is why "move them first" is the server's answer rather than
+            a silent reparent. */}
+        {can('directory.delete') && (
+          <DeleteButton
+            path={`/api/admin/org-units/${unit.id}`}
+            label="org unit"
+            confirmWord={unit.name}
+            warning="The unit is removed from the directory and from Syntra. It has to be empty first — a deactivated user still counts as being in it. This cannot be undone."
+            onDeleted={onChanged}
           />
         )}
       </span>

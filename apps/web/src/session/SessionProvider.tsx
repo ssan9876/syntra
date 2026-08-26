@@ -148,3 +148,18 @@ export function useSession(): SessionContextValue {
   if (!value) throw new Error('useSession must be used inside a SessionProvider');
   return value;
 }
+
+/**
+ * `can`, for a component that only wants to decide whether to OFFER something.
+ *
+ * Tolerates there being no provider, where `useSession` throws — and answers
+ * false when there is none. That direction is the safe one and it is the whole
+ * reason this exists separately: a component wired up wrongly hides a control
+ * rather than showing one it should not, and the server refuses the request
+ * either way. `useSession` keeps throwing, because a component that wants to
+ * sign somebody in outside a provider is broken and should say so loudly.
+ */
+export function useCan(): (permission: string) => boolean {
+  const value = useContext(SessionContext);
+  return value?.can ?? (() => false);
+}

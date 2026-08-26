@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
+import { DeleteButton } from './DeleteButton.js';
 import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -40,6 +42,7 @@ interface SourceRow {
 }
 
 export function UsersPage() {
+  const can = useCan();
   const { data, error, loading, reload } = useApiResource<{ users: UserRow[] }>(
     '/api/admin/users',
   );
@@ -411,6 +414,22 @@ export function UsersPage() {
                         <span className="text-sm text-muted">
                           {sourceNames.get(user.sourceId) ?? 'A directory source'}{' '}
                           owns this account, and write-back is off
+                        </span>
+                      )}
+                      {/* Offered second, and only to a caller holding the
+                          separate permission. Deactivation is the answer for
+                          a leaver; this is for an account that should stop
+                          existing, and the server refuses it anyway for a
+                          source not configured to allow it. */}
+                      {can('directory.delete') && (
+                        <span className="mt-2 block">
+                          <DeleteButton
+                            path={`/api/admin/users/${user.id}`}
+                            label="user"
+                            confirmWord={user.login}
+                            warning="The account is removed from the directory and from Syntra, and every session with it. The person and the audit trail are kept. This cannot be undone."
+                            onDeleted={reload}
+                          />
                         </span>
                       )}
                     </td>
