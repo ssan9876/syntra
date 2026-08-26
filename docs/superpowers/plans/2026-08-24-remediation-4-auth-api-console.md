@@ -7007,7 +7007,7 @@ Spec §7.3, **S1**. `loadExisting` sets every existing user's `correlationValue`
   - `loadExisting(tx: TenantClient, rules: MappingRule[]): Promise<ExistingSnapshot>` — one new parameter
   - a module-private `correlationFieldFor(rules: MappingRule[], objectType: ObjectType): string`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `packages/core/src/sync/run-service.test.ts`:
 
@@ -7095,12 +7095,12 @@ describe('correlation on a configured key', () => {
 
 `seedSource` and `previewRunWith` are the file's existing helpers for a source with mappings and a fake connector; read the top of the file and reuse them rather than adding new ones.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/sync/run-service.test.ts -t 'correlation on a configured key'`
 Expected: FAIL — the first case proposes `create_user` for a person who already exists.
 
-- [ ] **Step 3: Read the configured field**
+- [x] **Step 3: Read the configured field**
 
 In `packages/core/src/sync/run-service.ts`, replace `loadExisting`'s signature and its three `correlationValue` lines (lines 451, 489, 497, 505):
 
@@ -7200,12 +7200,12 @@ At the call site (line 130), pass the rules the run already loaded:
 
 Import `ObjectType` from `@syntra/connectors` if the file does not already have it.
 
-- [ ] **Step 4: Run the test and the neighbouring suites**
+- [x] **Step 4: Run the test and the neighbouring suites**
 
 Run: `npx vitest run packages/core/src/sync/run-service.test.ts packages/core/src/sync/correlate.test.ts packages/core/src/sync/mapping.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7253,7 +7253,7 @@ Spec §7.3, **S2**. `ldapConnector.test()` runs unpaged searches with no client 
 - Consumes: `runSearch(client, search, options, handler)` — already takes an options object.
 - Produces: `export const TEST_SAMPLE_LIMIT = 20` from `packages/connectors/src/ldap/connector.ts`. `ConnectionResult.sampleCounts` is unchanged in shape and now capped at that value.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `packages/connectors/src/ldap/connector.test.ts`, using the file's existing fake `Client`:
 
@@ -7301,12 +7301,12 @@ describe('test() against a directory with a server-side size limit', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/connectors/src/ldap/connector.test.ts -t 'server-side size limit'`
 Expected: FAIL — no `sizeLimit` on the search options and the message says nothing about a sample.
 
-- [ ] **Step 3: Cap the searches**
+- [x] **Step 3: Cap the searches**
 
 In `packages/connectors/src/ldap/connector.ts`, above `ldapConnector` (line 224):
 
@@ -7353,12 +7353,12 @@ and inside `test()`:
 
 In `packages/connectors/src/ad/connector.ts`, add `sizeLimit: TEST_SAMPLE_LIMIT` to both searches in `test()` (lines 813 and 818) — the comment beside `sampleCounts` there already explains that they are a sample and that the server caps them; the limit is what stops the server refusing instead.
 
-- [ ] **Step 4: Run the connector suites**
+- [x] **Step 4: Run the connector suites**
 
 Run: `npx vitest run packages/connectors/src/ldap/connector.test.ts packages/connectors/src/ad/connector.unit.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7404,7 +7404,7 @@ Spec §7.3, **S3**. Neither the route nor `queueRun` checks `enabled`, and `runS
 - Consumes: `DirectorySource.enabled`.
 - Produces: `export class SourceDisabledError extends Error { readonly sourceId: string }` from `packages/core/src/sync/jobs.ts`. `POST /sources/:id/run` answers 409 `source-disabled`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `packages/core/src/sync/jobs.test.ts`:
 
@@ -7450,12 +7450,12 @@ it('answers 409 when a run is asked for on a disabled source', async () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run packages/core/src/sync/jobs.test.ts apps/api/src/routes/admin/sources.test.ts -t 'disabled'`
 Expected: FAIL — a `queued` run is written and the route answers 202.
 
-- [ ] **Step 3: Refuse where the row is written**
+- [x] **Step 3: Refuse where the row is written**
 
 In `packages/core/src/sync/jobs.ts`, above `queueRun` (line 44):
 
@@ -7509,12 +7509,12 @@ In `apps/api/src/routes/admin/sources.ts`, wrap the `queueRun` call:
 
 adding `SourceDisabledError` to the `@syntra/core` import.
 
-- [ ] **Step 4: Run both files to verify they pass**
+- [x] **Step 4: Run both files to verify they pass**
 
 Run: `npx vitest run packages/core/src/sync/jobs.test.ts apps/api/src/routes/admin/sources.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
