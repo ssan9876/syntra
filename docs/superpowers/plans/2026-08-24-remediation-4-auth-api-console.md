@@ -4417,7 +4417,7 @@ Spec §7.6, **W1**. `ProductEditorPage` renders in edit mode but nothing fetches
 - Consumes: `idParam`, `PERMISSIONS.AUTOMATE_READ`, `productBody` (unchanged).
 - Produces: `GET /api/admin/automate/products/:id` → the `Product` row with `grants`, or 404. `ProductEditorPage` reads it when `id` is present and sends every field the schema declares.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Append to `apps/api/src/routes/admin/automate.test.ts`:
 
@@ -4449,12 +4449,12 @@ describe('reading one product', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts -t 'reading one product'`
 Expected: FAIL — 404 on a product that exists, because the route does not.
 
-- [ ] **Step 3: Add the route**
+- [x] **Step 3: Add the route**
 
 In `apps/api/src/routes/admin/automate.ts`, after the products list (line 85):
 
@@ -4482,12 +4482,12 @@ In `apps/api/src/routes/admin/automate.ts`, after the products list (line 85):
   );
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Write the failing web test**
+- [x] **Step 5: Write the failing web test**
 
 Create `apps/web/src/pages/admin/ProductEditorPage.test.tsx`:
 
@@ -4628,12 +4628,12 @@ describe('the product editor loads what it edits', () => {
 });
 ```
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/ProductEditorPage.test.tsx; cd ../..`
 Expected: FAIL — the first case finds no field with that value; the second sends the editor's defaults.
 
-- [ ] **Step 7: Rewrite the editor**
+- [x] **Step 7: Rewrite the editor**
 
 Replace the state and the fetch in `apps/web/src/pages/admin/ProductEditorPage.tsx` (lines 14–101). The essentials: read the product when there is an id, seed every field from it once it arrives, and send the whole object back.
 
@@ -4793,12 +4793,12 @@ and the body of `save()`:
 
 Add `Field`s and a `Select` for description, category, request instructions, duration mode, the two duration caps and status, and render `{error && <Alert tone="danger">{error}</Alert>}` above the panels. Import `useEffect` and `Select`.
 
-- [ ] **Step 8: Run the web test to verify it passes**
+- [x] **Step 8: Run the web test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/ProductEditorPage.test.tsx; cd ../..`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 9: Typecheck, build and commit**
+- [x] **Step 9: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
@@ -4844,7 +4844,7 @@ Spec §7.6, **W2** and **W7**. `MyReviewsPage` lists items across every open cam
 - Consumes: `POST /api/portal/govern/reviews/bulk-certify` with `{ campaignId, itemIds }`; `POST /api/portal/govern/reviews/:id/decide`.
 - Produces: no new endpoints. The page issues one bulk request per distinct campaign in the selection and reports every refusal from every one of them.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/web/src/pages/govern/MyReviewsPage.test.tsx`, adding a second campaign to its fixtures:
 
@@ -4940,12 +4940,12 @@ describe('a double-click', () => {
 
 Extend the file's existing fetch mock into `mockReviews(rows, opts)` — returning `{ bulk: [], decisions: [] }` and honouring `bulkResult` and a `slowDecide` that resolves on a deferred promise — rather than adding a second mocking style beside the one already there.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/govern/MyReviewsPage.test.tsx; cd ../..`
 Expected: FAIL — one bulk request carrying `c-1` and both ids; no button in the third case; two decisions in the fourth.
 
-- [ ] **Step 3: Group the selection by campaign**
+- [x] **Step 3: Group the selection by campaign**
 
 In `apps/web/src/pages/govern/MyReviewsPage.tsx`, replace the bulk button (lines 123–159):
 
@@ -5030,7 +5030,7 @@ and add above the render:
 
 Add `const [bulkBusy, setBulkBusy] = useState(false);` beside the other state.
 
-- [ ] **Step 4: Guard the per-item decisions**
+- [x] **Step 4: Guard the per-item decisions**
 
 Replace `decide` (lines 58–84) so it tracks the item in flight, and the two buttons (lines 228–233):
 
@@ -5095,12 +5095,12 @@ Replace `decide` (lines 58–84) so it tracks the item in flight, and the two bu
                       </Button>
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/govern/MyReviewsPage.test.tsx; cd ../..`
 Expected: PASS, the whole file.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -5147,7 +5147,7 @@ Spec §7.6, **W3**. `use-api-resource.ts`'s `GENERIC` map covers 403 and 404, an
   - `GENERIC[401]` in `use-api-resource.ts`
   - No component changes anywhere else: the router's existing `RequireSession` already navigates to `/login` when `session` becomes null.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/web/src/session/api.test.ts`:
 
@@ -5209,12 +5209,12 @@ describe('a 401 that means the session died', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/session/api.test.ts; cd ../..`
 Expected: FAIL — `onSessionExpired` is not exported.
 
-- [ ] **Step 3: Add the hook**
+- [x] **Step 3: Add the hook**
 
 In `apps/web/src/session/api.ts`, above `api`:
 
@@ -5270,7 +5270,7 @@ and inside `api`, in the `!response.ok` branch, before the throw:
     }
 ```
 
-- [ ] **Step 4: Register it, and give the hook a sentence**
+- [x] **Step 4: Register it, and give the hook a sentence**
 
 In `apps/web/src/session/SessionProvider.tsx`, add to the boot effect (line 70):
 
@@ -5297,17 +5297,17 @@ const GENERIC: Record<number, string> = {
 };
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/session/api.test.ts; cd ../..`
 Expected: PASS, 3 new tests plus the file's existing ones.
 
-- [ ] **Step 6: Run the console suite, because this touches every fetch**
+- [x] **Step 6: Run the console suite, because this touches every fetch**
 
 Run: `cd apps/web && npx vitest run; cd ../..`
 Expected: PASS, everything. This is the one task in the plan where running the whole web suite is right — it is 301 tests and about a minute, and the change is under every page.
 
-- [ ] **Step 7: Typecheck and commit**
+- [x] **Step 7: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
