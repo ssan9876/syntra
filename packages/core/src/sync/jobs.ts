@@ -41,6 +41,20 @@ export function syncJobPayload(
  * job sits in pg-boss for as long as the queue is busy, and a screen that
  * showed `running` for that window would be lying about the directory.
  */
+/**
+ * A run asked for on a source that is switched off.
+ *
+ * Refused HERE rather than in the route, because this is what writes the row:
+ * a check in the route leaves the hole open for the next caller, and a run
+ * that reaches the database is a run somebody has to reap.
+ */
+export class SourceDisabledError extends Error {
+  constructor(readonly sourceId: string) {
+    super('this source is disabled, so a run would never be picked up');
+    this.name = 'SourceDisabledError';
+  }
+}
+
 export async function queueRun(
   scheduler: Scheduler,
   tenantId: string,
@@ -49,6 +63,14 @@ export async function queueRun(
   const run = await withTenant(tenantId, async (tx) => {
     const source = await tx.directorySource.findUnique({ where: { id: sourceId } });
     if (!source) throw new Error(`no such source: ${sourceId}`);
+    if (!source.enabled) {
+      // `runSyncJob` early-returns for a disabled source WITHOUT touching the
+      // run row, and nothing reaps `queued`. So the row sat there for ever,
+      // the console followed it, and the page spun with no error recorded --
+      // for a source somebody had deliberately switched off. Throwing rolls
+      // back the row, so nothing is left behind at all.
+      throw new SourceDisabledError(sourceId);
+    }
     const boundTenant = await currentTenant(tx);
     return tx.syncRun.create({
       data: { tenantId: boundTenant, sourceId, status: 'queued' },

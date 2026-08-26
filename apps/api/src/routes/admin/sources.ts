@@ -28,6 +28,7 @@ import {
   mappingsFor,
   ownedObjectCounts,
   queueRun,
+  SourceDisabledError,
   recordEvent,
   removeSourceSchedule,
   setMappings,
@@ -582,8 +583,20 @@ export async function registerAdminSourceRoutes(
       // connection open for the length of it, which is the shape that outlasts
       // a proxy timeout — the browser is told it failed while the run carries
       // on, and the operator's next move is to press the button again.
-      const run = await queueRun(scheduler, request.tenantId, id);
-      return reply.status(202).send(run);
+      try {
+        const run = await queueRun(scheduler, request.tenantId, id);
+        return reply.status(202).send(run);
+      } catch (cause) {
+        if (cause instanceof SourceDisabledError) {
+          throw new ProblemError(
+            409,
+            'source-disabled',
+            'This source is switched off',
+            'A run would never be picked up. Enable the source first.',
+          );
+        }
+        throw cause;
+      }
     },
   );
 }
