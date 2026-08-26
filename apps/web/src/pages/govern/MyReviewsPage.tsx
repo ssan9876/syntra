@@ -44,6 +44,11 @@ export function MyReviewsPage() {
   const [groupBy, setGroupBy] = useState<'subject' | 'resource'>('subject');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [actionError, setActionError] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // WHICH ITEM IS IN FLIGHT, not a single boolean. The queue is a page of
+  // rows and disabling all of them while one is being decided would make a
+  // twenty-item review a twenty-round-trip queue.
+  const [deciding, setDeciding] = useState<string | null>(null);
 
   const items = data?.items ?? [];
   // Grouped by subject AND by resource at the reviewer's choice; the decisions
@@ -56,6 +61,10 @@ export function MyReviewsPage() {
   }
 
   const decide = (item: ReviewItem, decision: 'certify' | 'revoke') => {
+    // A revoke is a removal, and a double-click sent two: two decisions in the
+    // audit trail for one item, and under `quorum: 'any'` a second decision
+    // the state machine then has to reconcile against the first.
+    if (deciding !== null) return;
     const needsComment = decision === 'revoke' || item.riskFlags.includes('unattributable');
     const comment = needsComment
       ? window.prompt(
@@ -66,6 +75,7 @@ export function MyReviewsPage() {
       : null;
     if (needsComment && (comment === null || comment.trim() === '')) return;
 
+    setDeciding(item.id);
     void api(`/api/portal/govern/reviews/${item.id}/decide`, {
       method: 'POST',
       body: JSON.stringify({ decision, comment }),
@@ -80,7 +90,69 @@ export function MyReviewsPage() {
             ? (cause.problem.detail ?? cause.problem.title)
             : 'Could not record that decision.',
         ),
+      )
+      .finally(() => setDeciding(null));
+  };
+
+  /**
+   * ONE REQUEST PER CAMPAIGN, because the queue spans campaigns and the
+   * endpoint does not.
+   *
+   * The list shows every open campaign's items together -- which is right; a
+   * reviewer has one queue, not one per campaign -- and any bulk-enabled item
+   * gets a checkbox. The request carried `items[0].campaign.id`, and
+   * `bulkCertify` filters on it, so ids belonging to any other campaign were
+   * neither certified nor listed in `refused`. They vanished: the selection
+   * cleared, the page reloaded, and nothing anywhere said that half of what
+   * was ticked had not happened. A reviewer who believed they had certified
+   * twelve items had certified five.
+   *
+   * Grouping here rather than reorganising the page by campaign, because the
+   * page is right and the endpoint's scope is a server-side detail the
+   * reviewer should not have to work around.
+   */
+  const certifySelected = async () => {
+    const byCampaign = new Map<string, string[]>();
+    for (const item of items) {
+      if (!selected.has(item.id)) continue;
+      byCampaign.set(item.campaign.id, [
+        ...(byCampaign.get(item.campaign.id) ?? []),
+        item.id,
+      ]);
+    }
+
+    setBulkBusy(true);
+    setActionError(null);
+    try {
+      const results = await Promise.all(
+        [...byCampaign].map(([campaignId, itemIds]) =>
+          api<{ certified: number; refused: { reason: string }[] }>(
+            '/api/portal/govern/reviews/bulk-certify',
+            { method: 'POST', body: JSON.stringify({ campaignId, itemIds }) },
+          ),
+        ),
       );
+      // EVERY refusal from EVERY request. Reporting one campaign's and
+      // dropping the rest would be the same silence in a smaller shape.
+      const refused = results.flatMap((r) => r.refused);
+      setActionError(
+        refused.length === 0
+          ? null
+          : `${refused.length} item(s) were not certified: ${refused
+              .map((r) => r.reason)
+              .join('; ')}`,
+      );
+      setSelected(new Set());
+      reload();
+    } catch (cause) {
+      setActionError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'Could not certify those items.',
+      );
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
   return (
@@ -120,39 +192,13 @@ export function MyReviewsPage() {
             >
               Group by resource
             </Button>
-            {items[0]!.campaign.allowBulkCertify && (
+            {items.some((item) => item.campaign.allowBulkCertify) && (
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={selected.size === 0}
-                onClick={() => {
-                  void api('/api/portal/govern/reviews/bulk-certify', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      campaignId: items[0]!.campaign.id,
-                      itemIds: [...selected],
-                    }),
-                  })
-                    .then((result) => {
-                      const refused = (result as { refused: { reason: string }[] }).refused;
-                      setActionError(
-                        refused.length === 0
-                          ? null
-                          : `${refused.length} item(s) were not certified: ${refused
-                              .map((r) => r.reason)
-                              .join('; ')}`,
-                      );
-                      setSelected(new Set());
-                      reload();
-                    })
-                    .catch((cause: unknown) =>
-                      setActionError(
-                        cause instanceof ApiError
-                          ? (cause.problem.detail ?? cause.problem.title)
-                          : 'Could not certify those items.',
-                      ),
-                    );
-                }}
+                disabled={selected.size === 0 || bulkBusy}
+                loading={bulkBusy}
+                onClick={() => void certifySelected()}
               >
                 Certify selected ({selected.size})
               </Button>
@@ -225,10 +271,21 @@ export function MyReviewsPage() {
                           include in bulk
                         </label>
                       )}
-                      <Button size="sm" onClick={() => decide(item, 'certify')}>
+                      <Button
+                        size="sm"
+                        disabled={deciding !== null}
+                        loading={deciding === item.id}
+                        onClick={() => decide(item, 'certify')}
+                      >
                         Keep
                       </Button>
-                      <Button size="sm" variant="danger" onClick={() => decide(item, 'revoke')}>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        disabled={deciding !== null}
+                        loading={deciding === item.id}
+                        onClick={() => decide(item, 'revoke')}
+                      >
                         Remove
                       </Button>
                     </div>
