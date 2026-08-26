@@ -131,8 +131,25 @@ describe('what the backfill does to rows', () => {
 
     // U3 itself: the permission the Updates page is gated on.
     expect(builtIn.permissions).toContain('deployment.manage');
-    // Everything the catalogue has, and nothing lost.
-    expect([...builtIn.permissions].sort()).toEqual([...ALL_PERMISSIONS].sort());
+    // Everything THE MIGRATION names, and nothing lost -- not everything the
+    // catalogue currently has.
+    //
+    // This asserted equality with ALL_PERMISSIONS, which contradicted the
+    // reasoning at the top of this file: the literal list is a snapshot of the
+    // catalogue when the migration was written, the subset test above is
+    // deliberately a subset "because the catalogue is meant to grow without a
+    // migration behind it", and equality here demanded the opposite. It only
+    // held while nothing had been added since.
+    //
+    // `directory.delete` was the first, and it went red on a merge -- neither
+    // side wrong alone, and neither able to see it: one branch added a
+    // permission, the other added a test that froze the catalogue.
+    for (const permission of backfilled()) {
+      expect(builtIn.permissions).toContain(permission);
+    }
+    // Nothing the role already held was dropped, which is the other half of
+    // "restores" and the half equality was really covering.
+    expect(builtIn.permissions).toContain('directory.read');
     expect(builtIn.permissions).toContain('directory.write');
 
     expect(custom.permissions).toEqual(['directory.read']);
