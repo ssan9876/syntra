@@ -5824,7 +5824,7 @@ This is the priority: with it the module works end to end, and without it nothin
 
 Note that Task 11 raised the two preview routes to `govern.manage`, which is the same permission this screen's Save needs — so a reader who can see the previews can act on them.
 
-- [ ] **Step 1: Write the failing test for the creation screen**
+- [x] **Step 1: Write the failing test for the creation screen**
 
 Create `apps/web/src/pages/admin/GovernCampaignNewPage.test.tsx`:
 
@@ -5998,12 +5998,12 @@ describe('creating a campaign', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernCampaignNewPage.test.tsx; cd ../..`
 Expected: FAIL — `Cannot find module './GovernCampaignNewPage.js'`.
 
-- [ ] **Step 3: Write the screen**
+- [x] **Step 3: Write the screen**
 
 Create `apps/web/src/pages/admin/GovernCampaignNewPage.tsx`. The shape:
 
@@ -6182,7 +6182,7 @@ export function GovernCampaignNewPage() {
 
 Write the JSX out in full: a `Field` per text input, a `Check` per resource kind labelled with the kind's name (the test queries by it), a `Select` for each selector and for the snapshot, `Field type="date"` for `Opens` and `Due`, and the two preview results rendered as `Alert`s carrying the numbers and the samples. The blocked sample must render each entry's `reason`.
 
-- [ ] **Step 4: Add the route and the way in**
+- [x] **Step 4: Add the route and the way in**
 
 In `apps/web/src/pages/admin/AdminApp.tsx`, before the parametric campaign route (line 99):
 
@@ -6210,7 +6210,7 @@ In `apps/web/src/pages/admin/GovernCampaignsPage.tsx`, give the header an action
 
 and, in the empty state, replace the prose with the same link — the empty state told the reader to create a campaign and offered no way to.
 
-- [ ] **Step 5: Start and re-base on the detail screen**
+- [x] **Step 5: Start and re-base on the detail screen**
 
 In `apps/web/src/pages/admin/GovernCampaignDetailPage.tsx`, add to the Actions panel (line 121), before the extend button:
 
@@ -6280,7 +6280,7 @@ In `apps/web/src/pages/admin/GovernCampaignDetailPage.tsx`, add to the Actions p
 
 with `const [rebaseTo, setRebaseTo] = useState('');`, `const [started, setStarted] = useState<string | null>(null);`, the snapshot list read through `useApiResource`, and `{started && <Alert tone="info">{started}</Alert>}` beside the existing alerts.
 
-- [ ] **Step 6: Test the detail screen's two new controls**
+- [x] **Step 6: Test the detail screen's two new controls**
 
 Create `apps/web/src/pages/admin/GovernCampaignDetailPage.test.tsx` in the house style, asserting:
 - a `draft` campaign shows **Start it**, a `closed_complete` one does not;
@@ -6288,12 +6288,12 @@ Create `apps/web/src/pages/admin/GovernCampaignDetailPage.test.tsx` in the house
 - a 409 from start renders the server's `detail` (`CampaignRefusedError` carries a real sentence — a stale snapshot, an empty scope);
 - **Re-base** is disabled until a snapshot is chosen and then POSTs `{ snapshotId }`.
 
-- [ ] **Step 7: Run both web tests**
+- [x] **Step 7: Run both web tests**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernCampaignNewPage.test.tsx src/pages/admin/GovernCampaignDetailPage.test.tsx; cd ../..`
 Expected: PASS.
 
-- [ ] **Step 8: Typecheck, build and commit**
+- [x] **Step 8: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
