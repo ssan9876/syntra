@@ -43,6 +43,13 @@ export function ProductEditorPage() {
   const { id } = useParams<{ id: string }>();
   const isNew = id === undefined || id === 'new';
 
+  // The workflow list, so `workflowId` is CHOSEN rather than typed. It is
+  // required and it is a uuid; before the list route existed there was no way
+  // to learn one from the console at all.
+  const { data: workflowList } = useApiResource<{ workflows: { id: string; name: string }[] }>(
+    '/api/admin/automate/workflows',
+  );
+
   /**
    * THE PRODUCT, not the list.
    *
@@ -240,10 +247,19 @@ export function ProductEditorPage() {
             value={resourceId}
             onChange={setResourceId}
           />
-          <Field
-            label="Approval workflow id"
+          <Select
+            label="Approval workflow"
             value={workflowId}
             onChange={setWorkflowId}
+            error={errors.workflowId}
+            hint="Who has to agree before this is granted. A workflow with no stages grants immediately."
+            options={[
+              { value: '', label: 'Choose one…' },
+              ...(workflowList?.workflows ?? []).map((w) => ({
+                value: w.id,
+                label: w.name,
+              })),
+            ]}
           />
         </div>
       </Panel>
