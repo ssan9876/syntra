@@ -5,6 +5,7 @@ import {
   PERMISSIONS,
   TargetNotFoundError,
   previewAccountProfile,
+  previewContainerForFacts,
   upsertAccountProfile,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -15,6 +16,28 @@ const previewRequest = z
   .object({
     profile: accountProfileRequestSchema,
     personId: z.string().uuid(),
+  })
+  .strict();
+
+/**
+ * Facts as typed into a form, rather than a person who exists.
+ *
+ * Every field optional but the two names, because this is answered WHILE
+ * somebody is filling the form in: half-typed is the normal state, and a
+ * preview that demanded a complete contract would only appear at the moment it
+ * had stopped being useful.
+ */
+const containerPreviewRequest = z
+  .object({
+    givenName: z.string().max(128).default(''),
+    familyName: z.string().max(128).default(''),
+    department: z.string().max(256).optional(),
+    jobTitle: z.string().max(256).optional(),
+    costCentre: z.string().max(128).optional(),
+    employer: z.string().max(256).optional(),
+    location: z.string().max(256).optional(),
+    businessEmail: z.string().max(320).optional(),
+    personalEmail: z.string().max(320).optional(),
   })
   .strict();
 
@@ -78,6 +101,44 @@ export async function registerAdminProfileRoutes(app: FastifyInstance): Promise<
       );
       if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
       return previewAccountProfile(request.tenantId, id, body.profile, body.personId);
+    },
+  );
+
+  /**
+   * Where an account WOULD be created, from facts typed into a form.
+   *
+   * Distinct from the preview above, which takes a `personId` and is for
+   * checking a profile against somebody who exists. The onboarding form has no
+   * person yet — that is the point of it — and the question it needs answered
+   * is "which container will this department put them in", while the
+   * department is still free to correct.
+   *
+   * `provision.read`, not `provision.manage`. Asking where an account would go
+   * is a read; changing a container template is not. The onboarding page
+   * already needs `provision.read` to list targets at all, so the hint costs
+   * the caller no permission they did not already need.
+   */
+  app.post(
+    '/targets/:id/profile/preview-container',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const facts = containerPreviewRequest.parse(request.body ?? {});
+
+      const preview = await previewContainerForFacts(request.tenantId, id, facts);
+      // One 404 for both "no such target" and "no profile on it". They are the
+      // same answer to the caller — there is no container to name — and the
+      // form shows nothing either way rather than raising configuration
+      // somebody did not come here to do.
+      if (!preview) {
+        throw new ProblemError(
+          404,
+          'not-found',
+          'No container to preview',
+          'this target has no account profile, so there is no template to render',
+        );
+      }
+      return preview;
     },
   );
 }

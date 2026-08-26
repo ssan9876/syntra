@@ -491,6 +491,77 @@ describe('the account profile', () => {
     });
   });
 
+  it('previews the container from typed facts, before any person exists', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    await put(`/api/admin/targets/${targetId}/profile`, cookie, profile);
+
+    // No personId anywhere: that is the point. The onboarding form asks where
+    // somebody WILL land while it is still free to correct, which is
+    // necessarily before they have been written.
+    const response = await post(
+      `/api/admin/targets/${targetId}/profile/preview-container`,
+      cookie,
+      { givenName: 'Anna', familyName: 'Novak', department: 'Finance' },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      container: 'OU=Finance,OU=Users,DC=acme,DC=test',
+      fallbackUsed: false,
+      missing: [],
+    });
+  });
+
+  it('names the fallback and the missing placeholder when a field is blank', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    await put(`/api/admin/targets/${targetId}/profile`, cookie, profile);
+
+    const response = await post(
+      `/api/admin/targets/${targetId}/profile/preview-container`,
+      cookie,
+      { givenName: 'Anna', familyName: 'Novak', department: '' },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      fallbackUsed: true,
+      missing: ['contract.department'],
+    });
+  });
+
+  it('answers 404 rather than an empty preview when no profile is configured', async () => {
+    const cookie = await manager();
+    await create(cookie);
+
+    const response = await post(
+      `/api/admin/targets/${targetId}/profile/preview-container`,
+      cookie,
+      { givenName: 'Anna', familyName: 'Novak' },
+    );
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('is readable by a caller who may read provisioning but not change it', async () => {
+    const manage = await manager();
+    await create(manage);
+    await put(`/api/admin/targets/${targetId}/profile`, manage, profile);
+
+    // provision.read, not provision.manage: asking where an account WOULD go
+    // is a read. The onboarding page already needs provision.read to list
+    // targets at all, so the hint asks for nothing new.
+    const cookie = await adminCookie([PERMISSIONS.PROVISION_READ]);
+    const response = await post(
+      `/api/admin/targets/${targetId}/profile/preview-container`,
+      cookie,
+      { givenName: 'Anna', familyName: 'Novak', department: 'Finance' },
+    );
+
+    expect(response.statusCode).toBe(200);
+  });
+
   it('refuses a profile that would write an attribute the guard cannot count', async () => {
     // `update_account` carries the complete managed set and is deliberately
     // absent from GUARDED_ACTION_TYPES, so a profile templating

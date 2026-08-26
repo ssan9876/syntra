@@ -209,6 +209,11 @@ export type {
   ProfilePreview,
   RuleImpact as ProvisionRuleImpact,
 } from './provision/explain.js';
+export { previewContainerForFacts } from './provision/preview-container.js';
+export type {
+  ContainerPreview,
+  ContainerPreviewFacts,
+} from './provision/preview-container.js';
 
 // Automate — the request catalog, its approval chains, and the grants they
 // produce. Every name below was grepped workspace-wide before being exported
