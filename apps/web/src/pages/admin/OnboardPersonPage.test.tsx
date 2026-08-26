@@ -258,6 +258,90 @@ describe('OnboardPersonPage', () => {
     expect(await screen.findByText('person page')).toBeInTheDocument();
   });
 
+  it('shows which container the typed department would put them in', async () => {
+    const user = userEvent.setup();
+    const asked: unknown[] = [];
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () =>
+        json({ targets: [{ id: 't1', name: 'Acme AD', enabled: true }] }),
+      '/api/admin/targets/t1/profile/preview-container': (init) => {
+        asked.push(JSON.parse(String(init?.body)));
+        return json({
+          container: 'OU=Nursing,OU=Users,DC=acme,DC=test',
+          fallbackUsed: false,
+          missing: [],
+        });
+      },
+    });
+
+    renderPage();
+    await user.type(screen.getByLabelText('Given name'), 'Maya');
+    await user.type(screen.getByLabelText('Family name'), 'Okafor');
+    await user.type(screen.getByLabelText('Department'), 'Nursing');
+
+    // The DN, in full, before anything is written. This is the only place a
+    // typo'd department is visible while it is still free to correct.
+    // The waitFor timeout goes on findByText, not on expect. The hint is
+    // debounced by 400ms, which is uncomfortably close to the 1s default.
+    expect(
+      await screen.findByText(/OU=Nursing,OU=Users,DC=acme,DC=test/, undefined, {
+        timeout: 3000,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Acme AD/)).toBeInTheDocument();
+    expect(asked.at(-1)).toMatchObject({ department: 'Nursing' });
+  });
+
+  it('says when the fallback would be used, and why', async () => {
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () =>
+        json({ targets: [{ id: 't1', name: 'Acme AD', enabled: true }] }),
+      '/api/admin/targets/t1/profile/preview-container': () =>
+        json({
+          container: 'OU=Unsorted,DC=acme,DC=test',
+          fallbackUsed: true,
+          missing: ['contract.department'],
+        }),
+    });
+
+    renderPage();
+    await user.type(screen.getByLabelText('Given name'), 'Maya');
+    await user.type(screen.getByLabelText('Family name'), 'Okafor');
+
+    expect(
+      await screen.findByText(/OU=Unsorted,DC=acme,DC=test/, undefined, {
+        timeout: 3000,
+      }),
+    ).toBeInTheDocument();
+    // Naming the placeholder is the point: "it will go to Unsorted" without
+    // saying why leaves the reader guessing which field to fill in.
+    expect(screen.getByText(/contract\.department/)).toBeInTheDocument();
+  });
+
+  it('says nothing at all when the target has no account profile', async () => {
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () =>
+        json({ targets: [{ id: 't1', name: 'Acme AD', enabled: true }] }),
+      '/api/admin/targets/t1/profile/preview-container': () =>
+        problem(404, 'this target has no account profile'),
+    });
+
+    renderPage();
+    await user.type(screen.getByLabelText('Department'), 'Nursing');
+
+    // A form asking for a joiner is not the place to raise configuration
+    // somebody did not come here to do.
+    await waitFor(() =>
+      expect(screen.queryByText(/will be created at/i)).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Acme AD/)).not.toBeInTheDocument();
+  });
+
   it('reports a refused person without claiming anything was created', async () => {
     const user = userEvent.setup();
     mockRoutes({

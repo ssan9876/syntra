@@ -4,6 +4,7 @@ import { Alert, Button, Check, Field, Panel, Select } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { provisionForPerson } from './provision-on-create.js';
+import { useContainerHints } from './use-container-hint.js';
 import { PageHeader } from './PageHeader.js';
 
 /**
@@ -53,6 +54,20 @@ export function OnboardPersonPage() {
   const { data: targetsData } = useApiResource<{
     targets: { id: string; name: string; enabled: boolean }[];
   }>('/api/admin/targets');
+
+  // Where this would actually land, per enabled target. See
+  // `useContainerHints`: this deployment applies provisioning without a
+  // confirmation step, so this is the only point at which a mistyped
+  // department is visible while correcting it is still free.
+  const hints = useContainerHints(targetsData?.targets ?? [], {
+    givenName: v.givenName ?? '',
+    familyName: v.familyName ?? '',
+    department: v.department ?? '',
+    jobTitle: v.jobTitle ?? '',
+    costCentre: v.costCentre ?? '',
+    employer: v.employer ?? '',
+    location: v.location ?? '',
+  });
 
   const set = (key: string, value: string) =>
     setV((current) => ({ ...current, [key]: value }));
@@ -308,6 +323,37 @@ export function OnboardPersonPage() {
               placeholder="1.0"
             />
           </div>
+
+          {hints.length > 0 && (
+            // Rendered as the distinguished name in full, monospaced, rather
+            // than as a summary of it. The whole value of this is that
+            // somebody reads the actual string and notices the wrong word in
+            // it; a paraphrase would defeat the purpose.
+            <div className="border-t border-border-subtle p-4">
+              <p className="mb-2 font-medium text-ink">
+                Where the account will be created
+              </p>
+              <ul className="space-y-2">
+                {hints.map((hint) => (
+                  <li key={hint.targetId} className="text-sm">
+                    <span className="text-muted">{hint.targetName}</span>
+                    <code className="mt-0.5 block break-all font-mono text-ink">
+                      {hint.container}
+                    </code>
+                    {hint.fallbackUsed && (
+                      // Names the placeholder, not just the outcome. "It will
+                      // go to Unsorted" leaves the reader guessing which field
+                      // to fill in, which is the only question they have.
+                      <span className="mt-0.5 block text-muted">
+                        the fallback container, because{' '}
+                        {hint.missing.join(', ')} resolves to nothing
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Panel>
 
         <Panel title="Syntra sign-in">
