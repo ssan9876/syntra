@@ -7552,7 +7552,7 @@ Spec §7.3, **S4**. `classify()` defaults unmatched errors to `policy`, and DNS 
 - Consumes: nothing.
 - Produces: `export function classifyWritebackError(cause: unknown): WritebackFailure` — the existing private `classify`, exported so it can be tested without a directory.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/connectors/src/ldap/writeback.test.ts`:
 
@@ -7615,12 +7615,12 @@ describe('classifying a write-back failure', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/connectors/src/ldap/writeback.test.ts`
 Expected: FAIL — `classifyWritebackError` is not exported, and once it is, the first three cases answer `policy`.
 
-- [ ] **Step 3: Widen the list and turn the default round**
+- [x] **Step 3: Widen the list and turn the default round**
 
 In `packages/connectors/src/ldap/writeback.ts`, rename `classify` to `classifyWritebackError`, export it, update its two call sites, and rewrite the tail:
 
@@ -7686,12 +7686,12 @@ export function classifyWritebackError(cause: unknown): WritebackFailure {
 }
 ```
 
-- [ ] **Step 4: Run the test and the callers**
+- [x] **Step 4: Run the test and the callers**
 
 Run: `npx vitest run packages/connectors/src/ldap/writeback.test.ts packages/core/src/auth/password-change.test.ts packages/core/src/directory/directory-writeback.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7735,7 +7735,7 @@ Spec §7.3, **S5**. A database that accepts TCP and stops answering hangs `/heal
 - Consumes: nothing.
 - Produces: `export const PROBE_TIMEOUT_MS = 5_000`; a module-private `withTimeout<T>(name, ms, work): Promise<Probe>`. `readiness(deps)` keeps its signature and gains `probeTimeoutMs?: number` on `ReadinessDeps` for the test.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `packages/core/src/health/readiness.test.ts`:
 
@@ -7793,12 +7793,12 @@ describe('a probe that never answers', () => {
 
 `prisma` is a Proxy that materialises methods on access — remediation 1 Task 1 documents that `vi.spyOn` restores to `undefined` here. Use the same hand-swap-with-`finally` shape that file already adopted rather than relying on `mockRestore` if the fix landed differently.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/core/src/health/readiness.test.ts -t 'never answers'`
 Expected: FAIL — the test times out, because `readiness` never resolves. That *is* the defect.
 
-- [ ] **Step 3: Give every probe a deadline**
+- [x] **Step 3: Give every probe a deadline**
 
 In `packages/core/src/health/readiness.ts`, add to `ReadinessDeps` (line 46):
 
@@ -7877,12 +7877,12 @@ export async function readiness(deps: ReadinessDeps): Promise<ReadinessReport> {
 
 `probeWeb` is a synchronous `existsSync` and needs no deadline.
 
-- [ ] **Step 4: Run the file to verify it passes**
+- [x] **Step 4: Run the file to verify it passes**
 
 Run: `npx vitest run packages/core/src/health/readiness.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
