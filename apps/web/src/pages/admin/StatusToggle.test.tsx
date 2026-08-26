@@ -42,14 +42,22 @@ const orgUnit = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function mockApi(rows: { groups?: unknown[]; users?: unknown[]; orgUnits?: unknown[] }) {
+function mockApi(rows: {
+  groups?: unknown[];
+  users?: unknown[];
+  orgUnits?: unknown[];
+  members?: unknown[];
+}) {
   const posts: { url: string; body: unknown }[] = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     const url = String(input);
-    if (init?.method === 'POST') {
+    if (init?.method === 'POST' || init?.method === 'DELETE') {
       posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
       return Promise.resolve(json({}));
     }
+    // BEFORE the `/groups` branch: a members URL contains `/groups` too, and
+    // answering it with the group list would look like an empty membership.
+    if (url.includes('/members')) return Promise.resolve(json({ users: rows.members ?? [] }));
     if (url.includes('/groups')) return Promise.resolve(json({ groups: rows.groups ?? [] }));
     if (url.includes('/users')) return Promise.resolve(json({ users: rows.users ?? [] }));
     if (url.includes('/org-units')) return Promise.resolve(json({ orgUnits: rows.orgUnits ?? [] }));
@@ -260,5 +268,49 @@ describe('org units, the last part of the directory to get this', () => {
     await screen.findByText('Care');
     expect(screen.queryByRole('button', { name: 'Deactivate' })).toBeNull();
     expect(screen.getByText('managed by a directory source')).toBeInTheDocument();
+  });
+});
+
+describe('group membership', () => {
+  /**
+   * `GET`, `POST` and `DELETE /groups/:id/members` all existed and the groups
+   * page showed no members at all -- so the one thing a group is for could
+   * only be done through the API.
+   */
+  it('lists members and adds one', async () => {
+    const posts = mockApi({ groups: [group()], users: [user()], members: [] });
+    render(
+      <MemoryRouter>
+        <GroupsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('Ward Nurses');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Members' }));
+    expect(await screen.findByText(/Nobody is in this group yet/)).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText('Add a member'), 'u1');
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]!.url).toContain('/api/admin/groups/g1/members/u1');
+  });
+
+  it('removes one', async () => {
+    const posts = mockApi({ groups: [group()], users: [user()], members: [user()] });
+    render(
+      <MemoryRouter>
+        <GroupsPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText('Ward Nurses');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Members' }));
+    // 'mokafor' is both the member row and an option in the add picker.
+    await screen.findAllByText('mokafor');
+    await userEvent.click(screen.getByRole('button', { name: 'Remove from group' }));
+
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]!.url).toContain('/api/admin/groups/g1/members/u1');
   });
 });

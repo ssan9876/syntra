@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { ApiError, api } from '../../session/api.js';
 import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
@@ -22,6 +23,41 @@ export function GroupsPage() {
   // per row: that puts a block-level trigger inside a flex row and, opened, a
   // two-column form inside it.
   const [editing, setEditing] = useState<GroupRow | null>(null);
+  /**
+   * MEMBERSHIP, which the page did not show at all.
+   *
+   * `GET`, `POST` and `DELETE /groups/:id/members` all existed and nothing
+   * reached them, so the one thing a group is for -- who is in it -- could
+   * only be seen or changed through the API. One panel for the page, opened by
+   * a row, for the reason the editor above gives.
+   */
+  const [members, setMembers] = useState<GroupRow | null>(null);
+  const [addUserId, setAddUserId] = useState('');
+  const [memberProblem, setMemberProblem] = useState<string | null>(null);
+
+  const { data: memberList, reload: reloadMembers } = useApiResource<{
+    users: { id: string; login: string }[];
+  }>(members === null ? null : `/api/admin/groups/${members.id}/members`);
+
+  const { data: userList } = useApiResource<{ users: { id: string; login: string }[] }>(
+    members === null ? null : '/api/admin/users',
+  );
+
+  const changeMembership = async (userId: string, method: 'POST' | 'DELETE') => {
+    if (members === null) return;
+    setMemberProblem(null);
+    try {
+      await api(`/api/admin/groups/${members.id}/members/${userId}`, { method });
+      setAddUserId('');
+      reloadMembers();
+    } catch (cause) {
+      setMemberProblem(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That membership could not be changed.',
+      );
+    }
+  };
 
   return (
     <>
@@ -31,6 +67,65 @@ export function GroupsPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+
+      {members && (
+        <div className="mb-6">
+          <Panel
+            title={`Members of ${members.name}`}
+            description="Access is granted to the group; everybody in it holds whatever the group holds."
+          >
+            <div className="space-y-4 p-4">
+              {memberProblem && <Alert tone="warning">{memberProblem}</Alert>}
+
+              {(memberList?.users ?? []).length === 0 ? (
+                <p className="text-muted">Nobody is in this group yet.</p>
+              ) : (
+                <ul className="divide-y divide-border-subtle">
+                  {(memberList?.users ?? []).map((member) => (
+                    <li key={member.id} className="flex items-center gap-3 py-2">
+                      <span className="font-medium text-ink">{member.login}</span>
+                      <span className="ml-auto">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => void changeMembership(member.id, 'DELETE')}
+                        >
+                          Remove from group
+                        </Button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <Select
+                label="Add a member"
+                value={addUserId}
+                onChange={setAddUserId}
+                options={[
+                  { value: '', label: 'Choose an account…' },
+                  ...(userList?.users ?? []).map((candidate) => ({
+                    value: candidate.id,
+                    label: candidate.login,
+                  })),
+                ]}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="primary"
+                  disabled={addUserId === ''}
+                  onClick={() => void changeMembership(addUserId, 'POST')}
+                >
+                  Add
+                </Button>
+                <Button variant="secondary" onClick={() => setMembers(null)}>
+                  Done
+                </Button>
+              </div>
+            </div>
+          </Panel>
+        </div>
+      )}
 
       {editing && (
         <RecordPanel
@@ -149,6 +244,16 @@ export function GroupsPage() {
                         Edit
                       </Button>
                     )}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        setMembers(group);
+                        setMemberProblem(null);
+                      }}
+                    >
+                      Members
+                    </Button>
                     <StatusToggle
                       active={group.status === 'active'}
                       basePath={`/api/admin/groups/${group.id}`}

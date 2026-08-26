@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { ApiError, api } from '../../session/api.js';
 import { PageHeader } from './PageHeader.js';
 
 interface Contract {
@@ -35,9 +37,47 @@ const day = (iso: string | null) =>
 
 export function PersonDetailPage() {
   const { id } = useParams();
-  const { data, error, loading } = useApiResource<PersonDetail>(
+  const { data, error, loading, reload } = useApiResource<PersonDetail>(
     `/api/admin/persons/${id}`,
   );
+
+  /**
+   * The accounts that could be linked: the ones belonging to NOBODY.
+   *
+   * `POST /persons/:id/link-user` existed and nothing called it, while the
+   * empty state below told the reader to link an account and offered no
+   * control that would. An account already attached to another person is not
+   * a candidate -- offering it would invite a request the server refuses.
+   */
+  const { data: userList } = useApiResource<{
+    users: { id: string; login: string; personId: string | null }[];
+  }>('/api/admin/users');
+  const candidates = (userList?.users ?? []).filter((user) => user.personId === null);
+
+  const [linkTo, setLinkTo] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const link = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await api(`/api/admin/persons/${id}/link-user`, {
+        method: 'POST',
+        body: JSON.stringify({ userId: linkTo }),
+      });
+      setLinkTo('');
+      reload();
+    } catch (cause) {
+      setProblem(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That account could not be linked.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (error) return <Alert tone="danger">{error}</Alert>;
   if (loading || !data) {
@@ -153,6 +193,28 @@ export function PersonDetailPage() {
               ))}
             </ul>
           )}
+
+          <div className="space-y-3 border-t border-border-subtle p-4">
+            {problem && <Alert tone="warning">{problem}</Alert>}
+            <Select
+              label="Account to link"
+              value={linkTo}
+              onChange={setLinkTo}
+              hint="Only accounts that belong to nobody yet."
+              options={[
+                { value: '', label: 'Choose an account…' },
+                ...candidates.map((user) => ({ value: user.id, label: user.login })),
+              ]}
+            />
+            <Button
+              variant="primary"
+              loading={busy}
+              disabled={linkTo === ''}
+              onClick={() => void link()}
+            >
+              Link
+            </Button>
+          </div>
         </Panel>
 
         {/* The one question every auditor asks, and it has to be reachable

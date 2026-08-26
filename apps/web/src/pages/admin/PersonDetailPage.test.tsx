@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PersonDetailPage } from './PersonDetailPage.js';
 
@@ -96,5 +97,62 @@ describe('PersonDetailPage', () => {
     renderPage();
 
     expect(await screen.findByText(/no accounts linked/i)).toBeInTheDocument();
+  });
+});
+
+describe('linking an account to a person', () => {
+  /**
+   * `POST /persons/:id/link-user` existed and nothing called it, while the
+   * empty state on this very panel said "This person exists in the directory
+   * but cannot sign in. Link an account to give them access." -- with no
+   * control that would.
+   */
+  const mockPerson = (over: { users?: unknown[]; candidates?: unknown[] } = {}) => {
+    const sent: { url: string; body: unknown }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      if (init?.method === 'POST') {
+        sent.push({ url, body: JSON.parse(String(init.body)) });
+        return Promise.resolve(json({}));
+      }
+      if (url.includes('/api/admin/users')) {
+        return Promise.resolve(json({ users: over.candidates ?? [] }));
+      }
+      return Promise.resolve(json({ ...person, users: over.users ?? person.users }));
+    });
+    return sent;
+  };
+
+  it('offers unlinked users and posts the link', async () => {
+    const sent = mockPerson({
+      users: [],
+      // `personId: null` is what makes an account a CANDIDATE: an account
+      // already attached to somebody else is not one to offer here.
+      candidates: [
+        { id: 'u9', login: 'mokafor', displayName: 'Maya Okafor', personId: null },
+        { id: 'u8', login: 'taken', displayName: 'Someone Else', personId: 'p2' },
+      ],
+    });
+    renderPage();
+    await screen.findByText('No accounts linked');
+
+    await userEvent.selectOptions(screen.getByLabelText('Account to link'), 'u9');
+    await userEvent.click(screen.getByRole('button', { name: 'Link' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.url).toContain('/api/admin/persons/p1/link-user');
+    expect(sent[0]!.body).toEqual({ userId: 'u9' });
+  });
+
+  it('does not offer an account that already belongs to somebody', async () => {
+    mockPerson({
+      users: [],
+      candidates: [{ id: 'u8', login: 'taken', displayName: 'Someone Else', personId: 'p2' }],
+    });
+    renderPage();
+    await screen.findByText('No accounts linked');
+
+    const picker = screen.getByLabelText('Account to link');
+    expect(picker).not.toHaveTextContent('taken');
   });
 });
