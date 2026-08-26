@@ -4109,7 +4109,7 @@ Spec §9, **B1**. `createSourceRequest` and `updateSourceRequest` strip unknown 
 - Consumes: nothing.
 - Produces: no new symbols. `createSourceRequest`, `updateSourceRequest`, `tenantSettingsRequest` and `patchUserRequest` refuse unknown keys.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/contracts/src/strictness.test.ts`:
 
@@ -4186,12 +4186,12 @@ describe('the schemas that carry a security-relevant flag are strict', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/contracts/src/strictness.test.ts`
 Expected: FAIL — the first four cases parse successfully, because the unknown key is stripped.
 
-- [ ] **Step 3: Make them strict**
+- [x] **Step 3: Make them strict**
 
 In `packages/contracts/src/sync.ts`, add `.strict()` to `createSourceRequest` (close the `z.object({…})` at line 71 with `}).strict();`) and to `updateSourceRequest` before its `.refine` (line 94), and put the reason where the write-back block already explains itself (line 60):
 
@@ -4231,7 +4231,7 @@ In `packages/contracts/src/reset.ts`, close `patchUserRequest` with `}).strict()
  */
 ```
 
-- [ ] **Step 4: Run the test and the two suites that parse these**
+- [x] **Step 4: Run the test and the two suites that parse these**
 
 ```bash
 npx vitest run packages/contracts/src/strictness.test.ts packages/contracts/src/sync.test.ts
@@ -4240,7 +4240,7 @@ npx vitest run apps/api/src/routes/admin/sources.test.ts apps/api/src/routes/adm
 
 Expected: PASS. A route test that was sending an extra key will now fail — fix the test's payload rather than relaxing the schema; a caller sending a key the API does not accept is exactly what this is for.
 
-- [ ] **Step 5: Verify the console still saves**
+- [x] **Step 5: Verify the console still saves**
 
 ```bash
 cd apps/web && npx vitest run src/pages/admin/SourceDetailPage.test.tsx src/pages/admin/TenantSettingsPage.test.tsx; cd ../..
@@ -4248,7 +4248,7 @@ cd apps/web && npx vitest run src/pages/admin/SourceDetailPage.test.tsx src/page
 
 Expected: PASS. These build the request bodies the strict schemas now police.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -4296,7 +4296,7 @@ They are deliberately **not** parsed at runtime in the browser. A zod parse in t
 - Consumes: `MfaStatusResponse`, `ApplicationTile`, `RuleImpactResponse` — the `z.infer` types the three schemas already export.
 - Produces: no new symbols. Three handlers gain a return-type annotation; three components import a type instead of declaring one.
 
-- [ ] **Step 1: Pin the API side**
+- [x] **Step 1: Pin the API side**
 
 In `apps/api/src/routes/mfa.ts`, add `type MfaStatusResponse` to the `@syntra/contracts` import and annotate the handler (line 244):
 
@@ -4339,7 +4339,7 @@ In `apps/api/src/routes/admin/policies.ts`, annotate the impact handler (line 99
 
 adding `type RuleImpactResponse` to the `@syntra/contracts` import. `previewRuleImpact` returns core's `RuleImpact`, whose four fields are exactly the schema's; if `tsc` disagrees, the contract and the core type have already drifted and that disagreement is the finding.
 
-- [ ] **Step 2: Pin the web side**
+- [x] **Step 2: Pin the web side**
 
 In `apps/web/src/pages/Security.tsx`, delete the local `interface MfaStatus` (lines 8–16) and replace it with:
 
@@ -4356,12 +4356,12 @@ and use `MfaStatusResponse` at the two use sites (`useState<MfaStatusResponse | 
 
 Do the same in `apps/web/src/pages/Portal.tsx` with `ApplicationTile`, and in `apps/web/src/pages/admin/PoliciesPage.tsx` with `RuleImpactResponse` in place of the local `interface RuleImpact` (lines 30–35).
 
-- [ ] **Step 3: Typecheck — this is the test**
+- [x] **Step 3: Typecheck — this is the test**
 
 Run: `npx tsc -b`
 Expected: exit 0. A failure here means the hand-built response and the contract already disagree; fix the response, not the contract, unless the contract is the one that is wrong about what the product does.
 
-- [ ] **Step 4: Run the suites that touch the three shapes**
+- [x] **Step 4: Run the suites that touch the three shapes**
 
 ```bash
 npx vitest run apps/api/src/routes/mfa.test.ts apps/api/src/routes/portal.test.ts
@@ -4370,7 +4370,7 @@ cd apps/web && npx vitest run src/pages/Security.test.tsx src/pages/admin/Polici
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/routes/mfa.ts apps/api/src/routes/portal.ts \
