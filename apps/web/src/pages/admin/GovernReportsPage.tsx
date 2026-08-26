@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -23,13 +23,6 @@ interface ReportHeader {
   scopeDescription: string;
 }
 
-interface LiveReportHeader {
-  live: true;
-  computedAt: string;
-  exportable: false;
-  caveat: string;
-}
-
 interface Tri {
   known: boolean;
   value?: number;
@@ -51,7 +44,10 @@ interface SystemAccessRow {
 }
 
 interface SystemReport {
-  header: ReportHeader | LiveReportHeader;
+  // ONE header type. `LiveReportHeader` was declared here and produced by
+  // nothing anywhere in the tree -- a shape the screen branched on and the
+  // server could never send.
+  header: ReportHeader;
   body: { rows: SystemAccessRow[]; holderCount: Tri; withheldForScope?: number };
 }
 
@@ -77,14 +73,14 @@ const renderCount = (count: Tri) =>
 
 export function GovernReportsPage() {
   const [systemId, setSystemId] = useState('');
+  const [snapshotId, setSnapshotId] = useState('');
   const [submitted, setSubmitted] = useState<string | null>(null);
-  const [mode, setMode] = useState<'snapshot' | 'live'>('snapshot');
 
-  const { data, error, loading } = useApiResource<SystemReport>(
-    submitted === null
-      ? null
-      : `/api/admin/govern/reports/system?systemId=${encodeURIComponent(submitted)}`,
-  );
+  const { data: snapshotList } = useApiResource<{
+    snapshots: { id: string; asOf: string; status: string }[];
+  }>('/api/admin/govern/snapshots?limit=25');
+
+  const { data, error, loading } = useApiResource<SystemReport>(submitted);
 
   const header = data?.header;
 
@@ -97,34 +93,33 @@ export function GovernReportsPage() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <div className="mb-4 flex items-center gap-3">
-        <Button
-          size="sm"
-          variant={mode === 'snapshot' ? 'primary' : 'secondary'}
-          onClick={() => setMode('snapshot')}
-        >
-          Point in time
-        </Button>
-        <Button
-          size="sm"
-          variant={mode === 'live' ? 'primary' : 'secondary'}
-          onClick={() => setMode('live')}
-        >
-          Live
-        </Button>
-        {mode === 'live' && (
-          <span className="text-muted">
-            A live report has no as-of time, so it cannot be exported as evidence.
-          </span>
-        )}
-      </div>
-
       <Panel title="Who has access to this system">
         <form
           className="flex items-end gap-3 p-4"
           onSubmit={(event) => {
             event.preventDefault();
-            setSubmitted(systemId.trim() === '' ? null : systemId.trim());
+            const system = systemId.trim();
+            if (system === '') {
+              setSubmitted(null);
+              return;
+            }
+            // WHICH POINT IN TIME, offered rather than assumed.
+            //
+            // This screen used to carry a "Live" toggle that was wired to
+            // nothing: mode state was kept, a caveat was rendered, and the URL
+            // was always the snapshot one -- so an administrator read a
+            // snapshot believing it was live. Nothing in the tree produces a
+            // `LiveReportHeader`, and a genuinely live report would mean
+            // reading every connected system inside an HTTP request.
+            //
+            // `snapshotId` is the capability that does exist and that the
+            // screen never offered. Omitted means the latest, which is what
+            // `readableSnapshot` already defaults to; naming one is how an
+            // auditor reads the picture a decision was made against.
+            setSubmitted(
+              `/api/admin/govern/reports/system?systemId=${encodeURIComponent(system)}` +
+                (snapshotId === '' ? '' : `&snapshotId=${encodeURIComponent(snapshotId)}`),
+            );
           }}
         >
           <Field
@@ -134,13 +129,26 @@ export function GovernReportsPage() {
             placeholder="the target system's id"
             hint="The id of the target system to report on."
           />
+          <Select
+            label="Point in time"
+            value={snapshotId}
+            onChange={setSnapshotId}
+            hint="The snapshot this report is assembled from. The latest, unless you name another."
+            options={[
+              { value: '', label: 'Latest complete snapshot' },
+              ...(snapshotList?.snapshots ?? []).map((s) => ({
+                value: s.id,
+                label: `${new Date(s.asOf).toLocaleString()} — ${s.status}`,
+              })),
+            ]}
+          />
           <Button type="submit">Run the report</Button>
         </form>
       </Panel>
 
       {loading && <SkeletonRows rows={6} cols={4} />}
 
-      {header && !header.live && (
+      {header && (
         <Panel title="What this report is built from">
           <dl className="grid grid-cols-2 gap-2 p-4">
             <dt className="text-muted">Assembled</dt>
