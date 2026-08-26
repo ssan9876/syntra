@@ -231,3 +231,90 @@ export async function provisionTestDatabase(
 
   return { created };
 }
+
+/** Held for the lifetime of one vitest invocation. Released on teardown. */
+export interface RunLock {
+  release(): Promise<void>;
+}
+
+/**
+ * A PostgreSQL advisory key derived from the scratch database's name.
+ *
+ * 60 bits of the digest, so the value is comfortably inside a signed bigint and
+ * cannot come out negative. Two checkouts hash to different keys and never
+ * contend; the same checkout always produces the same key, which is the whole
+ * point.
+ */
+function advisoryKey(name: string): string {
+  return BigInt(`0x${createHash('sha256').update(name).digest('hex').slice(0, 15)}`).toString();
+}
+
+/**
+ * Refuses a second vitest run against the same checkout's scratch databases.
+ *
+ * `provisionTestDatabase` says above that the brief for this repository is not
+ * to run two suites at once. Nothing enforced it, and the failure when somebody
+ * does is both severe and unrecognisable: the database name is
+ * `syntra_test_<checkout digest>_w<VITEST_POOL_ID>`, and `VITEST_POOL_ID`
+ * restarts at 1 for every invocation — so a targeted run started while a full
+ * suite is going lands on the SAME databases, and `resetDatabase`'s
+ * `TRUNCATE ... CASCADE` empties tables the other run is mid-test on.
+ *
+ * What that looks like is dozens of unrelated tests timing out five seconds
+ * into a transaction, nowhere near whatever is being changed, with the real
+ * cause visible only as lock waits in `pg_stat_activity`. This module's own
+ * header says that shape has cost the project a day twice; this is the third.
+ *
+ * ADVISORY rather than a row, and session-scoped: a killed run drops its
+ * connection and PostgreSQL drops the lock with it. A table row would outlive
+ * the kill and lock the checkout out until somebody deleted it by hand — trading
+ * a confusing failure for a stuck one.
+ *
+ * Answers `null`, and guards nothing, when the operator chose the database. An
+ * exported `DATABASE_URL` is CI or a deliberate choice, and how many runs may
+ * share it is not this function's decision.
+ */
+export async function acquireRunLock(
+  config: TestDatabaseConfig,
+): Promise<RunLock | null> {
+  if (config.name === null) return null;
+  if (!config.superuserUrl) return null;
+
+  const { Client } = await import('pg');
+  const client = new Client({
+    connectionString: withDatabase(config.superuserUrl, 'postgres'),
+  });
+  await client.connect();
+
+  // `try`, never the blocking form. Waiting would turn "you started two runs"
+  // into "the second one hangs forever", which is a worse version of the
+  // problem this exists to remove.
+  const { rows } = await client.query<{ locked: boolean }>(
+    'SELECT pg_try_advisory_lock($1) AS locked',
+    [advisoryKey(config.name)],
+  );
+
+  if (!rows[0]?.locked) {
+    await client.end();
+    throw new Error(
+      `${config.name} is already in use by another vitest run in this checkout.\n` +
+        'Concurrent runs share scratch databases and truncate each other mid-test, ' +
+        'which surfaces as unrelated tests timing out.\n' +
+        'Wait for the other run to finish, or run from a separate git worktree.',
+    );
+  }
+
+  return {
+    async release() {
+      // Ending the connection releases the lock on its own; unlocking first
+      // makes that explicit rather than incidental.
+      try {
+        await client.query('SELECT pg_advisory_unlock($1)', [
+          advisoryKey(config.name!),
+        ]);
+      } finally {
+        await client.end();
+      }
+    },
+  };
+}

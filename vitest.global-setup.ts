@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import {
+  acquireRunLock,
   provisionTestDatabase,
   repoRoot,
   testDatabaseConfig,
@@ -32,9 +33,19 @@ function prismaCli(): string {
   return resolve(dirname(manifest), 'build/index.js');
 }
 
-export default async function setup(): Promise<void> {
+export default async function setup(): Promise<() => Promise<void>> {
   // Nothing to provision when the operator chose the database.
-  if (testDatabaseConfig().name === null) return;
+  if (testDatabaseConfig().name === null) return async () => {};
+
+  // BEFORE anything is provisioned or migrated. A second run in this checkout
+  // would use the same scratch databases -- `VITEST_POOL_ID` restarts at 1 per
+  // invocation -- and `resetDatabase`'s TRUNCATE would empty tables the first
+  // run is mid-test on. Failing here, with a sentence naming the database,
+  // replaces a day of unrelated five-second timeouts.
+  //
+  // Throwing out of global setup aborts the run before a worker is forked,
+  // which is the whole point: nothing has touched a database yet.
+  const lock = await acquireRunLock(testDatabaseConfig(1));
 
   // ONE database per worker, and the count comes from the same function
   // `vitest.config.ts` pins `minForks`/`maxForks` to. If these two ever
@@ -62,4 +73,12 @@ export default async function setup(): Promise<void> {
       stdio: ['ignore', 'ignore', 'inherit'],
     });
   }
+
+  // Vitest calls this after the last worker exits. The lock would go anyway
+  // when the process ends and the connection drops -- that is why it is
+  // advisory -- but releasing it deliberately keeps a watch-mode session from
+  // holding the checkout for as long as it is open.
+  return async () => {
+    await lock?.release();
+  };
 }
