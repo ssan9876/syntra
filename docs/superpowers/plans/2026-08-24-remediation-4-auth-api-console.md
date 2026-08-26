@@ -6348,7 +6348,7 @@ Spec §7.6, **W6**, second surface. There is **no workflow list route at all** �
 - Consumes: `workflowBody` (unchanged), `PERMISSIONS.AUTOMATE_READ`.
 - Produces: `GET /api/admin/automate/workflows` → `{ workflows: Array<ApprovalWorkflow & { stages: ApprovalStage[]; productCount: number }> }`.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Append to `apps/api/src/routes/admin/automate.test.ts`:
 
@@ -6378,12 +6378,12 @@ describe('listing workflows', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts -t 'listing workflows'`
 Expected: FAIL — 404.
 
-- [ ] **Step 3: Add the route**
+- [x] **Step 3: Add the route**
 
 In `apps/api/src/routes/admin/automate.ts`, before the workflow create (line 139):
 
@@ -6424,18 +6424,18 @@ In `apps/api/src/routes/admin/automate.ts`, before the workflow create (line 139
   );
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Make the console screen a list**
+- [x] **Step 5: Make the console screen a list**
 
 Rewrite `apps/web/src/pages/admin/WorkflowEditorPage.tsx` so it reads `/api/admin/automate/workflows` and renders, for each workflow: its name, whether it is enabled, its `productCount`, and its stages in sequence with each stage's selector, quorum, fallback, SLA and timeout behaviour. Keep the existing resolution preview, but with the workflow chosen from a `Select` built from the list rather than typed as a uuid, and add a "New workflow" panel that POSTs a `{ name, description, enabled, stages: [] }` body — the contract permits an empty stage list and `workflowBody`'s own comment says an empty one grants immediately, which is the mechanism and worth saying on the screen.
 
 Keep the existing `DROP_REASON` map and the preview rendering exactly as they are; the preview was the one part of this page that worked.
 
-- [ ] **Step 6: Let the product editor pick one**
+- [x] **Step 6: Let the product editor pick one**
 
 In `apps/web/src/pages/admin/ProductEditorPage.tsx`, replace the `Approval workflow id` `Field` with:
 
@@ -6458,7 +6458,7 @@ In `apps/web/src/pages/admin/ProductEditorPage.tsx`, replace the `Approval workf
 
 with `const { data: workflowList } = useApiResource<{ workflows: { id: string; name: string }[] }>('/api/admin/automate/workflows');`. The editor's test from Task 17 already mocks that endpoint.
 
-- [ ] **Step 7: Test the workflow screen**
+- [x] **Step 7: Test the workflow screen**
 
 Create `apps/web/src/pages/admin/WorkflowEditorPage.test.tsx` in the house style, asserting:
 - every workflow in the response is listed with its name and stage names;
@@ -6466,7 +6466,7 @@ Create `apps/web/src/pages/admin/WorkflowEditorPage.test.tsx` in the house style
 - creating a workflow POSTs `{ name, description, enabled, stages: [] }`;
 - the resolution preview posts the id chosen from the picker, not a typed one.
 
-- [ ] **Step 8: Run the web tests, typecheck and commit**
+- [x] **Step 8: Run the web tests, typecheck and commit**
 
 ```bash
 cd apps/web && npx vitest run src/pages/admin/WorkflowEditorPage.test.tsx src/pages/admin/ProductEditorPage.test.tsx; cd ../..
