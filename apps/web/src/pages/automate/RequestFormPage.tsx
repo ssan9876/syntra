@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Field, Panel, SkeletonRows } from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { ApiError, api } from '../../session/api.js';
@@ -49,6 +49,16 @@ interface ProductForm {
 export function RequestFormPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  /**
+   * The grant this request extends, if it is an extension.
+   *
+   * `submitRequestBody.replacesGrantId` has always existed, `request-service`
+   * validates it against a live grant of the caller's, and `fulfil.ts` ends
+   * that grant when the new one lands. Nothing ever sent it, so every
+   * "extension" was a second grant beside the first.
+   */
+  const replacesGrantId = params.get('replaces');
   const { data, error, loading } = useApiResource<ProductForm>(
     id === undefined ? null : `/api/portal/automate/catalog/${id}/form`,
   );
@@ -73,6 +83,7 @@ export function RequestFormPage() {
             justification: justification.trim() === '' ? null : justification,
             formValues: values,
             requestedDurationDays: days.trim() === '' ? null : Number(days),
+            replacesGrantId,
           }),
         },
       );
@@ -188,6 +199,12 @@ export function RequestFormPage() {
                 <SodWarningNote warning={data.sodWarning} />
               )}
 
+              {replacesGrantId !== null && (
+                <Alert tone="info">
+                  This replaces the access you already hold. The current grant ends when this
+                  one is approved, so there is no gap and no second copy running beside it.
+                </Alert>
+              )}
               {/*
                 Deliberately NOT disabled by the warning above. §14 warns at
                 request time and refuses at eligibility, with a reason the
