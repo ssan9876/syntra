@@ -5,14 +5,13 @@ import { useSession } from '../session/SessionProvider.js';
 import { ApiError, api } from '../session/api.js';
 import { useApiResource } from '../session/use-api-resource.js';
 import { routeFor, storeChallenge } from '../mfa/challenge-store.js';
+// The CONTRACT, not a local restatement. The API builds this response by hand
+// and this file described it independently, so the two could drift with
+// nothing anywhere to notice -- which is the whole reason the schema exists.
+// Type-only: a runtime parse in the browser would strip a field the server had
+// legitimately started sending.
+import type { ApplicationTile } from '@syntra/contracts';
 
-interface Tile {
-  id: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  iconUrl: string | null;
-}
 
 type LaunchResponse =
   | { status: 'launch'; url: string }
@@ -49,7 +48,7 @@ function Monogram({ name }: { name: string }) {
 export function Portal() {
   const { session } = useSession();
   const firstName = session?.displayName.split(' ')[0] ?? 'there';
-  const { data, error, loading } = useApiResource<{ applications: Tile[] }>(
+  const { data, error, loading } = useApiResource<{ applications: ApplicationTile[] }>(
     '/api/portal/applications',
   );
 
@@ -72,7 +71,7 @@ export function Portal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  async function launch(tile: Tile) {
+  async function launch(tile: ApplicationTile) {
     setBusy(tile.id);
     setLaunchError(null);
     try {

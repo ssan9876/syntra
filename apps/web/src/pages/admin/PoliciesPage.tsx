@@ -3,6 +3,12 @@ import { Alert, Button, Empty, Field, Panel, SkeletonRows, Status } from '@syntr
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+// The CONTRACT, not a local restatement. The API builds this response by hand
+// and this file described it independently, so the two could drift with
+// nothing anywhere to notice -- which is the whole reason the schema exists.
+// Type-only: a runtime parse in the browser would strip a field the server had
+// legitimately started sending.
+import type { RuleImpactResponse } from '@syntra/contracts';
 
 interface Rule {
   id: string;
@@ -27,12 +33,6 @@ interface Policy {
   rules: Rule[];
 }
 
-interface RuleImpact {
-  totalActiveUsers: number;
-  matchedUsers: number;
-  usersNeedingEnrolment: number;
-  unevaluatedConditions: string[];
-}
 
 const OUTCOME_LABEL: Record<Rule['outcome'], string> = {
   allow: 'Allow',
@@ -90,7 +90,7 @@ export function PoliciesPage() {
   const [ipRanges, setIpRanges] = useState('');
   const [contractField, setContractField] = useState('');
   const [contractValues, setContractValues] = useState('');
-  const [impact, setImpact] = useState<RuleImpact | null>(null);
+  const [impact, setImpact] = useState<RuleImpactResponse | null>(null);
 
   const list = (value: string) =>
     value
@@ -122,7 +122,7 @@ export function PoliciesPage() {
     setFormError(null);
     try {
       setImpact(
-        await api<RuleImpact>('/api/admin/policy/rules/impact', {
+        await api<RuleImpactResponse>('/api/admin/policy/rules/impact', {
           method: 'POST',
           body: JSON.stringify(draft()),
         }),

@@ -6,6 +6,7 @@ import {
   webauthnChallengeRequest,
   webauthnCredentialRemoveParams,
   webauthnRegisterRequest,
+  type MfaStatusResponse,
 } from '@syntra/contracts';
 import {
   authorize,
@@ -300,7 +301,17 @@ export async function registerMfaRoutes(
   await app.register(async (secured) => {
     secured.addHook('preHandler', requireSession('portal'));
 
-    secured.get('/', async (request) => {
+    // ANNOTATED, not parsed. The schema is the written record of what this
+    // endpoint promises -- including `available` and `unavailableReason`,
+    // whose absence its own comment says would turn "security keys are
+    // unavailable, and here is why" back into an enabled button that fails
+    // when pressed -- and until now nothing referred to it, so the response
+    // and the contract could drift in either direction with nothing to say so.
+    //
+    // A return type rather than a `.parse()` at the boundary: parsing would
+    // strip a field an endpoint had legitimately started sending, which is the
+    // same silent loss one layer down. This makes a drift a `tsc -b` failure.
+    secured.get('/', async (request): Promise<MfaStatusResponse> => {
       const { userId } = request.session;
       const totp = await request.db((tx) => hasTotp(tx, userId));
       const credentials = await request.db((tx) =>

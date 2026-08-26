@@ -3,17 +3,14 @@ import { Alert, Button, Field, Panel, Status } from '@syntra/ui';
 import { AppShell } from '../components/AppShell.js';
 import { ApiError, api } from '../session/api.js';
 import { startWebAuthnRegistration } from '../mfa/webauthn.js';
+// The CONTRACT, not a local restatement. The API builds this response by hand
+// and this file described it independently, so the two could drift with
+// nothing anywhere to notice -- which is the whole reason the schema exists.
+// Type-only: a runtime parse in the browser would strip a field the server had
+// legitimately started sending.
+import type { MfaStatusResponse } from '@syntra/contracts';
 import { PasswordPanel } from './security/PasswordPanel.js';
 
-interface MfaStatus {
-  totp: { enrolled: boolean };
-  webauthn: {
-    available: boolean;
-    unavailableReason: string | null;
-    credentials: { id: string; label: string; createdAt: string; lastUsedAt: string | null }[];
-  };
-  recoveryCodes: { remaining: number };
-}
 
 interface Enrolment {
   secret: string;
@@ -22,7 +19,7 @@ interface Enrolment {
 }
 
 export function Security() {
-  const [status, setStatus] = useState<MfaStatus | null>(null);
+  const [status, setStatus] = useState<MfaStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [enrolment, setEnrolment] = useState<Enrolment | null>(null);
   const [code, setCode] = useState('');
@@ -34,7 +31,7 @@ export function Security() {
 
   const load = useCallback(async () => {
     try {
-      setStatus(await api<MfaStatus>('/api/auth/mfa'));
+      setStatus(await api<MfaStatusResponse>('/api/auth/mfa'));
     } catch {
       setError('Your security settings could not be loaded.');
     }
