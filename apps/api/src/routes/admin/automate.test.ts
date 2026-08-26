@@ -619,3 +619,31 @@ describe('the grant revoke route parses its body', () => {
     expect(res.statusCode).toBe(204);
   });
 });
+
+describe('reading one product', () => {
+  /**
+   * WITHOUT THIS ROUTE the editor cannot load what it edits, and its PUT
+   * requires the whole object -- so saving a renamed product replaced its
+   * description, category, grants, form schema and duration mode with the
+   * editor's defaults.
+   */
+  it('answers the product and its grants', async () => {
+    const created = await call('POST', '/api/admin/automate/products', productPayload());
+    expect(created.statusCode).toBe(201);
+    const productId = created.json().id as string;
+
+    const res = await call('GET', `/api/admin/automate/products/${productId}`);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { id: string; grants: unknown[] };
+    expect(body.id).toBe(productId);
+    expect(body.grants.length).toBeGreaterThan(0);
+  });
+
+  it('404s an id that names nothing', async () => {
+    const res = await call(
+      'GET',
+      '/api/admin/automate/products/00000000-0000-4000-8000-000000000000',
+    );
+    expect(res.statusCode).toBe(404);
+  });
+});

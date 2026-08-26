@@ -86,6 +86,28 @@ export async function registerAdminAutomateRoutes(
     async (request) => ({ products: await request.db((tx) => listAllProducts(tx)) }),
   );
 
+  /**
+   * One product, with its grants.
+   *
+   * The editor could not load what it edited: the page fetched the LIST and
+   * never read it, every field started empty, and `PUT` requires the whole
+   * object -- so renaming a product replaced its description, category,
+   * grants, form schema and duration mode with the editor's defaults. A
+   * catalog entry could be destroyed by fixing a typo in it.
+   */
+  app.get(
+    '/automate/products/:id',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const product = await request.db((tx) =>
+        tx.product.findUnique({ where: { id }, include: { grants: true } }),
+      );
+      if (product === null) throw new ProblemError(404, 'not-found', 'Not found');
+      return product;
+    },
+  );
+
   app.post(
     '/automate/products/audience-preview',
     { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
