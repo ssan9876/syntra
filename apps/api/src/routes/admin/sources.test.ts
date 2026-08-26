@@ -1247,6 +1247,26 @@ describe('deleting a source', () => {
   });
 });
 
+describe('testing a connection to a saved source', () => {
+  it('audits it, as the unsaved one already did', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Audited test',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    const sourceId = created.json().id as string;
+
+    await post(`/api/admin/sources/${sourceId}/test`, cookie, {});
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'source.test' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.targetId).toBe(sourceId);
+  });
+});
+
 describe('a manual run is a job, not a request', () => {
 
   it('answers 409 when a run is asked for on a disabled source', async () => {

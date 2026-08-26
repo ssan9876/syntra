@@ -556,7 +556,37 @@ export async function registerAdminSourceRoutes(
 
       // A failed connection is a result, not a server error: the operator
       // needs the message, not a 500.
-      return ldapConnector.test(config);
+      const result = await ldapConnector.test(config);
+
+      // AUDITED, like `/sources/test` beside it. This route opens a connection
+      // to a configured directory with the stored bind credential, and the
+      // outcome is exactly the thing somebody looks for when a source starts
+      // failing -- a run of refusals here is how a rotated bind password is
+      // noticed. Its sibling recorded every attempt including the refused
+      // ones; this one recorded nothing at all.
+      await request.db((tx) =>
+        recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'source.test',
+          targetType: 'DirectorySource',
+          targetId: id,
+          outcome: result.ok ? 'success' : 'failure',
+          sourceIp: request.ip,
+          // The same fields the unsaved variant records, minus the ones it
+          // only has because the caller typed them. The bind DN is left out as
+          // the rest of this file leaves it out, and the password appears
+          // nowhere near here.
+          payload: {
+            url: config.url,
+            tlsMode: config.tlsMode,
+            rejectUnauthorized: config.rejectUnauthorized,
+            usedStoredCredential: true,
+            message: result.message,
+          },
+        }),
+      );
+
+      return result;
     },
   );
 
