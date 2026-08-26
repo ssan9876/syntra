@@ -96,18 +96,18 @@ const DEFAULT_AUTHN_CONTEXT =
  */
 const SAML_BINDING_COOKIE = 'syntra_saml_bind';
 
-const SAML_BINDING_COOKIE_OPTIONS = {
+const samlBindingCookieOptions = (secure: boolean) => ({
   httpOnly: true,
   sameSite: 'lax' as const,
   path: '/saml',
-  // Follows NODE_ENV for the same reason the session cookie does: a
-  // development server runs on plain HTTP and a Secure cookie would never come
-  // back, which reads as "single sign-on is broken".
-  secure: process.env.NODE_ENV === 'production',
+  // From PUBLIC_URL's scheme, for the reason `sessionCookieOptions` gives:
+  // NODE_ENV is set nowhere in the lab deployment, so this cookie went out
+  // without `Secure` on the one instance that is actually behind TLS.
+  secure,
   // Comfortably longer than a parked request's ten minutes, so the row is what
   // expires the flow and not the cookie, and re-issued on every park.
   maxAge: 30 * 60,
-};
+});
 
 /**
  * The binding digest to park a request under, setting the cookie if this
@@ -124,7 +124,11 @@ function bindBrowser(request: FastifyRequest, reply: FastifyReply): string {
     return browserBindingDigest(existing);
   }
   const { nonce, digest } = newBrowserBinding();
-  reply.setCookie(SAML_BINDING_COOKIE, nonce, SAML_BINDING_COOKIE_OPTIONS);
+  reply.setCookie(
+    SAML_BINDING_COOKIE,
+    nonce,
+    samlBindingCookieOptions(request.server.cookieSecure),
+  );
   return digest;
 }
 
@@ -379,8 +383,13 @@ export async function registerSamlIdpRoutes(
    */
   const metadata = async (request: FastifyRequest, reply: FastifyReply) => {
     const { tenant, identity } = await samlContext(request, options);
-    const applicationId = (request.params as { applicationId?: string }).applicationId;
-    if (applicationId !== undefined) {
+    // `idParam.parse`, not a cast. This route is UNAUTHENTICATED, and a
+    // malformed id reached Prisma as a uuid it could not read: a bare 500 and
+    // a stack trace in the log for anybody who can reach the host and type a
+    // URL. The comment above already claimed the parameter was validated.
+    const raw = (request.params as { applicationId?: string }).applicationId;
+    if (raw !== undefined) {
+      const { id: applicationId } = idParam.parse({ id: raw });
       const application = await request.db((tx) => findApplication(tx, applicationId));
       if (!application || application.type !== 'saml') {
         throw new ProblemError(404, 'not-found', 'No such SAML application');
@@ -661,8 +670,28 @@ export async function registerSamlIdpRoutes(
     const session = token ? await request.db((tx) => resolveSession(tx, token)) : null;
 
     // No Syntra session yet, or the service provider demanded a fresh
-    // authentication. Send the user to the login screen; it returns here.
-    if (!session || ctx.parked.forceAuthn) {
+    // authentication this session is not an answer to.
+    //
+    // `forceAuthn` on its own is NOT the condition, and that distinction is
+    // the whole of this fix. Nothing clears the flag -- the parked row is read
+    // back unchanged, and `consumeParkedAuthnRequest` only stamps `consumedAt`
+    // and runs after this point -- so redirecting on the flag alone sent the
+    // user to `/login`, which sent them back to `/saml/continue`, which
+    // redirected again. The browser looped, minting a fresh session each
+    // round, until the row expired at ten minutes with a 410, and no assertion
+    // was ever issued to any service provider that asks for ForceAuthn.
+    //
+    // A session minted AFTER the request was parked is the fresh
+    // authentication the service provider asked for, and it is the only thing
+    // that is. Comparing timestamps rather than marking the row also means two
+    // tabs mid-sign-in cannot satisfy each other's demand: each request is
+    // measured against the session as it stood when that request arrived.
+    const staleForForceAuthn =
+      session !== null &&
+      ctx.parked.forceAuthn &&
+      session.createdAt.getTime() <= ctx.parked.createdAt.getTime();
+
+    if (!session || staleForForceAuthn) {
       const next = encodeURIComponent(`/saml/continue?handle=${ctx.parked.handle}`);
       return reply.redirect(`/login?next=${next}`, 302);
     }

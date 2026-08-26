@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { SessionResponse } from '@syntra/contracts';
-import { api } from './api.js';
+import { api, onSessionExpired } from './api.js';
 
 export type FactorKind = 'totp' | 'webauthn';
 
@@ -82,6 +82,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    // The session dying mid-request clears it here; `RequireSession` in
+    // routes.tsx does the navigating, because that is where "an
+    // unauthenticated browser goes to /login, carrying where it was headed"
+    // is already decided.
+    return onSessionExpired(() => setSession(null));
   }, []);
 
   const login = useCallback(

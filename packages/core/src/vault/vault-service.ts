@@ -87,13 +87,6 @@ export async function getSecret(
   }
 }
 
-/** Safe to expose: names and timestamps only, never ciphertext or keys. */
-export async function listSecretNames(tx: TenantClient) {
-  return tx.secret.findMany({
-    select: { id: true, name: true, updatedAt: true },
-    orderBy: { name: 'asc' },
-  });
-}
 
 export async function deleteSecret(
   tx: TenantClient,

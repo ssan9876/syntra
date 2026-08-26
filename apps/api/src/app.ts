@@ -23,6 +23,7 @@ import { registerEnrolRoutes } from './routes/enrol.js';
 import { registerPasswordResetRoutes } from './routes/password-reset.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerAdminRoleRoutes } from './routes/admin/roles.js';
 import { registerAdminTenantRoutes } from './routes/admin/tenant.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
@@ -99,6 +100,9 @@ export async function buildApp(
     // collapses the second into one global bucket.
     trustProxy: config.trustProxy,
   });
+
+  // Read once, from configuration, and available wherever a cookie is written.
+  app.decorate('cookieSecure', config.cookieSecure);
 
   await app.register(cookie, { secret: config.sessionSecret });
   // Off by default; applied per route, since a blanket limit would throttle
@@ -243,10 +247,12 @@ export async function buildApp(
   // Every route below requires an administrative session; the guard is
   // applied inside each plugin so a new admin route cannot forget it.
   await app.register(registerAdminTenantRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminUserRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,
     publicUrl: config.publicUrl,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
   // `masterKey`, because deleting a source-owned unit unseals that source's

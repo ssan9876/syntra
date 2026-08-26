@@ -222,6 +222,23 @@ function describeError(cause: unknown): string {
   return cause.message;
 }
 
+/**
+ * How many entries a connection test asks for.
+ *
+ * `test()` used to run unpaged searches with no client `sizeLimit`, and ldapts
+ * throws `SizeLimitExceededError` on result code 4 unless one was set. AD's
+ * default MaxPageSize is 1000 and OpenLDAP's is 500, so a perfectly good
+ * configuration reported "connection failed" and audited `connection-failed`
+ * against a directory that had answered correctly. `discoverSchema` escaped it
+ * only because it passes `sizeLimit: 20`.
+ *
+ * Capped rather than paged. A connection test asks "can I bind, and is
+ * anything there" -- not "how many" -- and paging a real directory to produce
+ * a census would make the test take minutes on exactly the deployments where
+ * it matters most. The count it returns is a SAMPLE and the message says so.
+ */
+export const TEST_SAMPLE_LIMIT = 20;
+
 export const ldapConnector: Connector<Config> = {
   async test(rawConfig): Promise<ConnectionResult> {
     const config = normalise(rawConfig);
@@ -234,14 +251,17 @@ export const ldapConnector: Connector<Config> = {
         counts[search.objectType] = await runSearch(
           client,
           search,
-          { attributes: ['dn'] },
+          { sizeLimit: TEST_SAMPLE_LIMIT, attributes: ['dn'] },
           (searchEntries) => searchEntries.length,
         );
       }
 
+      const capped = Object.values(counts).some((n) => n >= TEST_SAMPLE_LIMIT);
       return {
         ok: true,
-        message: `Connected to ${config.url}`,
+        message: capped
+          ? `Connected to ${config.url}; read at least ${TEST_SAMPLE_LIMIT} of each kind (a sample, not a count)`
+          : `Connected to ${config.url}`,
         sampleCounts: counts,
       };
     } catch (cause) {

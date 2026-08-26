@@ -4,6 +4,7 @@ import {
   policyRuleRequest,
   reorderRulesRequest,
   ruleParams,
+  type RuleImpactResponse,
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
@@ -96,7 +97,10 @@ export async function registerAdminPolicyRoutes(
       preHandler: requirePermission(PERMISSIONS.POLICY_MANAGE),
       config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
     },
-    async (request) => {
+    // Annotated against the contract, which nothing referred to before: the
+    // handler returned core's `RuleImpact` and the console described the shape
+    // again locally, so the schema pinned nothing.
+    async (request): Promise<RuleImpactResponse> => {
       const body = policyRuleRequest.parse(request.body);
       return request.db((tx) =>
         domainError(() => previewRuleImpact(tx, body as RuleInput)),

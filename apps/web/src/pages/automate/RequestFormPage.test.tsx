@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { SessionProvider } from '../../session/SessionProvider.js';
 import { RequestFormPage } from './RequestFormPage.js';
@@ -12,6 +13,19 @@ const json = (body: unknown) =>
 
 function mockForm(form: Record<string, unknown>) {
   vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(json(form)));
+}
+
+/** `mockForm`, plus the POST bodies, so a submit can be asserted on. */
+function mockFormWithSubmit(form: Record<string, unknown>) {
+  const sent: { url: string; body: Record<string, unknown> }[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+    if (init?.method === 'POST') {
+      sent.push({ url: String(input), body: JSON.parse(String(init.body)) });
+      return Promise.resolve(json({ requestId: 'r-1' }));
+    }
+    return Promise.resolve(json(form));
+  });
+  return sent;
 }
 
 const base = {
@@ -77,5 +91,55 @@ describe('RequestFormPage', () => {
     renderPage();
     await screen.findByRole('button', { name: /send the request/i });
     expect(screen.queryByText(/segregation of duties/i)).toBeNull();
+  });
+});
+
+describe('an extension', () => {
+  const renderExtending = () =>
+    render(
+      <MemoryRouter initialEntries={['/catalog/p3?replaces=g-77']}>
+        <SessionProvider>
+          <Routes>
+            <Route path="/catalog/:id" element={<RequestFormPage />} />
+          </Routes>
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+  /**
+   * `Extend` linked to the plain request form and sent no `replacesGrantId`,
+   * so an "extension" was a second parallel grant: two live rows for the same
+   * resource, two expiry dates, and `fulfil.ts`'s replacement path -- which
+   * exists and ends the old grant when the new one lands -- never ran.
+   */
+  it('carries the grant it replaces through to the request', async () => {
+    const sent = mockFormWithSubmit({ ...base });
+    renderExtending();
+    await screen.findByText('AP approve');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Send the request' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toMatchObject({ productId: 'p3', replacesGrantId: 'g-77' });
+  });
+
+  /**
+   * And it SAYS so. A form that silently ends an existing grant when this one
+   * is approved is a form that surprises somebody.
+   */
+  it('says that the current access will be replaced', async () => {
+    mockFormWithSubmit({ ...base });
+    renderExtending();
+    expect(
+      await screen.findByText(/replaces the access you already hold/i),
+    ).toBeInTheDocument();
+  });
+
+  it('sends null when nothing is being replaced', async () => {
+    const sent = mockFormWithSubmit({ ...base });
+    renderPage();
+    await screen.findByText('AP approve');
+    await userEvent.click(screen.getByRole('button', { name: 'Send the request' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toMatchObject({ replacesGrantId: null });
   });
 });

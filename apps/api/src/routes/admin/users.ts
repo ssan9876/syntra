@@ -19,6 +19,7 @@ import {
   localMasterKeyProvider,
   recordEvent,
   removeRecoveryCodes,
+  type Scheduler,
   removeTotp,
   revokeOrphanedRecoveryCodes,
   type DeactivateOutcome,
@@ -41,6 +42,13 @@ export interface AdminUserRouteOptions {
    * reset mail already points at.
    */
   publicUrl: string;
+  /**
+   * Late-bound on purpose. The scheduler talks to pg-boss and is started
+   * after the app is built -- and it is allowed to fail to start without
+   * keeping the API down -- so these routes ask for it when they need it
+   * rather than being handed one at registration.
+   */
+  scheduler?: () => Scheduler | null;
 }
 
 /**
@@ -154,6 +162,7 @@ export async function registerAdminUserRoutes(
         reason,
         actorUserId: request.session.userId,
         sourceIp: request.ip,
+        scheduler: options.scheduler?.() ?? null,
       });
       raiseIfRefused(outcome);
       return request.db((tx) => tx.user.findUniqueOrThrow({ where: { id } }));
@@ -173,6 +182,7 @@ export async function registerAdminUserRoutes(
         reason: 'reactivated by an administrator',
         actorUserId: request.session.userId,
         sourceIp: request.ip,
+        scheduler: options.scheduler?.() ?? null,
       });
       raiseIfRefused(outcome);
       return request.db((tx) => tx.user.findUniqueOrThrow({ where: { id } }));

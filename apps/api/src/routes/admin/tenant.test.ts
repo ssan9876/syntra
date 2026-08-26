@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+// The NAMESPACE, so `vi.spyOn` has an object to replace the property on. The
+// route imports the binding by name; vitest rewrites that to namespace access,
+// so the spy sees the call the route actually makes.
+import * as protocols from '@syntra/protocols';
 import { prisma, withTenant } from '@syntra/db';
 import {
   ALL_PERMISSIONS,
@@ -208,8 +212,25 @@ describe('PUT /api/admin/tenant', () => {
     //
     // The domain used to be frozen alongside it, which meant an operator
     // deploying at their own hostname had no way to say so short of SQL.
-    const res = await put(cookie, {
+    // REFUSED OUTRIGHT now, where it used to be silently stripped. The schema
+    // is `.strict()`, so a key it does not declare is a 400 rather than a 200
+    // that quietly did less than the caller asked -- which is the same
+    // invariant, enforced where the caller can see it.
+    const refused = await put(cookie, {
       slug: 'somebody-else',
+      primaryDomain: 'syntra.example.com',
+      name: 'Acme Care',
+    });
+    expect(refused.statusCode).toBe(400);
+
+    const untouched = await prisma.tenant.findUniqueOrThrow({
+      where: { id: ctx.tenantId },
+    });
+    expect(untouched.slug).toBe('acme');
+    // And nothing else moved either: a refused body writes none of its fields.
+    expect(untouched.name).toBe('Acme');
+
+    const res = await put(cookie, {
       primaryDomain: 'syntra.example.com',
       name: 'Acme Care',
     });
@@ -294,5 +315,43 @@ describe('PUT /api/admin/tenant', () => {
   it('refuses a write without tenant.manage', async () => {
     await seedAdmin([PERMISSIONS.DIRECTORY_WRITE]);
     expect((await put(await adminCookie(), { adminMfaRequired: true })).statusCode).toBe(403);
+  });
+});
+
+describe('changing the tenant domain', () => {
+  /**
+   * `providerFor` fixes the issuer at construction -- oidc-provider asserts a
+   * single web URI and never re-reads it -- and caches one Provider per
+   * tenant. `invalidateProvider` is called on client changes and on key
+   * rotation, and was NOT called here, which is the one route that changes
+   * `primaryDomain`. Every token kept the old `iss` until a restart or an
+   * unrelated rotation, and a relying party validates `iss` against the issuer
+   * it discovered, so the tokens simply stopped being accepted.
+   */
+  it('drops the cached OIDC provider so the issuer is rebuilt', async () => {
+    const spy = vi.spyOn(protocols, 'invalidateProvider');
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+
+    const res = await put(cookie, { primaryDomain: 'id.acme.example' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(spy).toHaveBeenCalledWith(ctx.tenantId);
+    spy.mockRestore();
+  });
+
+  /**
+   * And NOT on a change that cannot move the issuer. Rebuilding the provider
+   * discards every cached client and re-reads the key set, which is real work
+   * on a route an administrator might save from twice in a row.
+   */
+  it('leaves the cache alone when no hostname changed', async () => {
+    const spy = vi.spyOn(protocols, 'invalidateProvider');
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+
+    const res = await put(cookie, { adminMfaRequired: true });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

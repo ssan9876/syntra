@@ -59,7 +59,7 @@ function encodeUnicodePwd(password: string): Buffer {
  * reaches a caller: this returns a classification, and the sentence a user
  * eventually reads is written here, in English, from that classification.
  */
-function classify(cause: unknown): WritebackFailure {
+export function classifyWritebackError(cause: unknown): WritebackFailure {
   const name = cause instanceof Error ? cause.name : '';
   const message = cause instanceof Error ? cause.message : String(cause);
   const text = `${name} ${message}`.toLowerCase();
@@ -76,17 +76,47 @@ function classify(cause: unknown): WritebackFailure {
     return 'unauthorized';
   }
   if (text.includes('nosuchobject')) return 'not_found';
+
+  // NAMED, because they used to fall through. DNS resolution and TLS
+  // verification fail before the directory has read anything, and the list
+  // below is what those failures actually look like on Node.
   if (
     text.includes('busy') ||
     text.includes('unavailable') ||
     text.includes('timeout') ||
     text.includes('econnreset') ||
     text.includes('econnrefused') ||
-    text.includes('etimedout')
+    text.includes('econnaborted') ||
+    text.includes('etimedout') ||
+    text.includes('enotfound') ||
+    text.includes('eai_again') ||
+    text.includes('ehostunreach') ||
+    text.includes('enetunreach') ||
+    text.includes('epipe') ||
+    text.includes('socket hang up') ||
+    text.includes('certificate') ||
+    text.includes('self-signed') ||
+    text.includes('self signed') ||
+    text.includes('cert_') ||
+    text.includes('depth_zero')
   ) {
     return 'transient';
   }
-  return 'policy';
+
+  // THE DEFAULT IS `transient`, NOT `policy`, and that is the fix.
+  //
+  // `policy` is a positive claim: the directory examined this password and
+  // rejected it on its merits. Nothing unmatched here is evidence of that --
+  // DNS and TLS failures matched nothing on the old list, so a user iterating
+  // on ever-stronger passwords against an outage was told each one had been
+  // refused, and the audit trail recorded `directory_policy` for a directory
+  // that was never reached.
+  //
+  // `password-change.ts` maps this to `directory_unavailable`, whose message
+  // invites a retry -- which is the right advice for a fault nobody has
+  // classified. Being wrong in that direction costs a retry; being wrong in
+  // the other costs somebody their afternoon and buries the real cause.
+  return 'transient';
 }
 
 const MESSAGE: Record<WritebackFailure, string> = {
@@ -215,7 +245,7 @@ export const ldapWriteback: SourceWriteback<Config> = {
       service = await openBound(config, config.bindDn, config.bindPassword);
       located = await locate(service, config, input.anchor);
     } catch (cause) {
-      return fail(classify(cause));
+      return fail(classifyWritebackError(cause));
     } finally {
       await service?.unbind().catch(() => undefined);
     }
@@ -227,7 +257,7 @@ export const ldapWriteback: SourceWriteback<Config> = {
       asUser = await openBound(config, located.dn, input.currentPassword);
     } catch (cause) {
       // A refused bind here means one thing, and it is the common one.
-      const failure = classify(cause);
+      const failure = classifyWritebackError(cause);
       return fail(failure === 'policy' ? 'wrong_password' : failure);
     }
 
@@ -238,7 +268,7 @@ export const ldapWriteback: SourceWriteback<Config> = {
       ]);
       return { ok: true, message: 'the password was changed in the directory' };
     } catch (cause) {
-      return fail(classify(cause));
+      return fail(classifyWritebackError(cause));
     } finally {
       await asUser.unbind().catch(() => undefined);
     }
@@ -308,7 +338,7 @@ export const ldapWriteback: SourceWriteback<Config> = {
         message: `the account was ${input.enabled ? 'enabled' : 'disabled'} in the directory`,
       };
     } catch (cause) {
-      return fail(classify(cause));
+      return fail(classifyWritebackError(cause));
     } finally {
       await client?.unbind().catch(() => undefined);
     }
@@ -344,7 +374,7 @@ export const ldapWriteback: SourceWriteback<Config> = {
       // "an object was deleted" is not something anybody can check later.
       return { ok: true, message: `${located.dn} was deleted from the directory` };
     } catch (cause) {
-      return fail(classify(cause));
+      return fail(classifyWritebackError(cause));
     } finally {
       await client?.unbind().catch(() => undefined);
     }

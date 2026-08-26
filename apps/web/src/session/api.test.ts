@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api } from './api.js';
+import { ApiError, api, onSessionExpired } from './api.js';
 
 const ok = (body: unknown = { ok: true }) =>
   new Response(JSON.stringify(body), {
@@ -89,5 +89,62 @@ describe('api', () => {
     );
 
     await expect(api('/api/admin/groups/x/members/y')).resolves.toBeUndefined();
+  });
+});
+
+describe('a 401 that means the session died', () => {
+  const unauthorized = () =>
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', { status: 401, headers: { 'content-type': 'application/json' } }),
+    );
+
+  /**
+   * Nothing handled a 401 mid-session. `GENERIC` mapped 403 and 404 and
+   * nothing cleared the session or navigated anywhere, so an expired admin
+   * session -- the deliberately short one, fifteen minutes idle -- turned
+   * every panel into "Something went wrong" with no route back but typing a
+   * URL.
+   */
+  it('notifies when an admin route answers 401', async () => {
+    const expired = vi.fn();
+    const off = onSessionExpired(expired);
+    unauthorized();
+
+    await expect(api('/api/admin/users')).rejects.toBeInstanceOf(ApiError);
+    expect(expired).toHaveBeenCalledOnce();
+    off();
+  });
+
+  /**
+   * AND NOT for the credential-presenting endpoints. `/api/auth/elevate`
+   * answers 401 for a wrong password while the caller holds a perfectly good
+   * portal session; treating that as expiry would sign somebody out for
+   * mistyping.
+   */
+  it('does not notify for an auth endpoint refusing a credential', async () => {
+    const expired = vi.fn();
+    const off = onSessionExpired(expired);
+    unauthorized();
+
+    await expect(
+      api('/api/auth/elevate', { method: 'POST', body: '{}' }),
+    ).rejects.toBeInstanceOf(ApiError);
+    await expect(
+      api('/api/auth/login', { method: 'POST', body: '{}' }),
+    ).rejects.toBeInstanceOf(ApiError);
+    await expect(api('/api/auth/session')).rejects.toBeInstanceOf(ApiError);
+    expect(expired).not.toHaveBeenCalled();
+    off();
+  });
+
+  it('does not notify for a 403, which is about permissions and not the session', async () => {
+    const expired = vi.fn();
+    const off = onSessionExpired(expired);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', { status: 403, headers: { 'content-type': 'application/json' } }),
+    );
+    await expect(api('/api/admin/users')).rejects.toBeInstanceOf(ApiError);
+    expect(expired).not.toHaveBeenCalled();
+    off();
   });
 });

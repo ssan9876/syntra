@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { Wordmark } from '../components/Wordmark.js';
 import { ApiError, api } from '../session/api.js';
-import { assertWebAuthn } from '../mfa/webauthn.js';
+import { assertWebAuthnForReset } from '../mfa/webauthn.js';
 
 interface Preflight {
   valid: boolean;
@@ -54,7 +54,7 @@ export function ResetPassword() {
       const factor = !preflight.requiresFactor
         ? undefined
         : factorMode === 'webauthn'
-          ? { type: 'webauthn' as const, assertion: await assertWebAuthn(token) }
+          ? { type: 'webauthn' as const, assertion: await assertWebAuthnForReset(token) }
           : { type: factorMode, code: factorCode };
 
       await api('/api/auth/password-reset/complete', {

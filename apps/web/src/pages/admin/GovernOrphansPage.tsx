@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -19,6 +19,31 @@ export function GovernOrphansPage() {
     '/api/admin/govern/orphans',
   );
   const [actionError, setActionError] = useState<string | null>(null);
+  // The denial reason, asked for IN THE PAGE. `window.prompt` returns null for
+  // ever once a browser has been told to block dialogs, so a control built on
+  // it stops working with no sign that it has -- the same reason StatusToggle
+  // moved its own reason inline.
+  const [denying, setDenying] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
+
+  const deny = async (proposalId: string) => {
+    try {
+      await api(`/api/admin/govern/orphans/${proposalId}/deny`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      });
+      setActionError(null);
+      setDenying(null);
+      setReason('');
+      reload();
+    } catch (cause) {
+      setActionError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'Could not record that denial.',
+      );
+    }
+  };
 
   const proposals = data?.proposals ?? [];
 
@@ -52,59 +77,58 @@ export function GovernOrphansPage() {
                 <p className="text-muted">
                   {Math.round(p.confidence * 100)}% — {p.because}
                 </p>
-                <div className="mt-2 flex gap-2">
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      // A wrong link is somebody's access, not a labelling mistake.
-                      if (
-                        !window.confirm(
-                          `Link ${p.accountRef} to ${p.proposedName}? Provision's next run will evaluate that person's desired state against this account.`,
-                        )
-                      ) {
-                        return;
-                      }
-                      void api(`/api/admin/govern/orphans/${p.id}/confirm`, { method: 'POST' })
-                        .then(() => {
-                          setActionError(null);
-                          reload();
-                        })
-                        .catch((cause: unknown) =>
-                          setActionError(
-                            cause instanceof ApiError
-                              ? (cause.problem.detail ?? cause.problem.title)
-                              : 'Could not confirm that owner.',
-                          ),
-                        );
-                    }}
-                  >
-                    Confirm
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => {
-                      const reason = window.prompt('Why is this not the owner?');
-                      if (reason === null || reason.trim() === '') return;
-                      void api(`/api/admin/govern/orphans/${p.id}/deny`, {
-                        method: 'POST',
-                        body: JSON.stringify({ reason }),
-                      })
-                        .then(() => {
-                          setActionError(null);
-                          reload();
-                        })
-                        .catch((cause: unknown) =>
-                          setActionError(
-                            cause instanceof ApiError
-                              ? (cause.problem.detail ?? cause.problem.title)
-                              : 'Could not record that denial.',
-                          ),
-                        );
-                    }}
-                  >
-                    Not them
-                  </Button>
+                {/* NO CONFIRM CONTROL, deliberately.
+                    It called a route whose injected `link` function throws 501
+                    unconditionally, behind a confirmation that promised
+                    "Provision's next run will evaluate that person's desired
+                    state against this account" -- a consequence that cannot
+                    happen. Confirming an owner means Provision ADOPTING an
+                    existing directory object into a TargetAccount: an anchor,
+                    a correlation key, a provenance marker and apply.ts's
+                    reconciliation rules. That is a Provision slice, and doing
+                    it here would put an access-bearing write inside Govern,
+                    which boundaries.test.ts structurally forbids. */}
+                <p className="mt-2 text-muted">
+                  This guess cannot be confirmed from here yet — linking an account to a
+                  person is a write Provision owns, and Govern deliberately makes none.
+                  Denying a wrong guess is recorded either way, so the next snapshot stops
+                  proposing it.
+                </p>
+                <div className="mt-2 flex flex-wrap items-end gap-2">
+                  {denying === p.id ? (
+                    <>
+                      <Field label="Reason" value={reason} onChange={setReason} />
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={reason.trim() === ''}
+                        onClick={() => void deny(p.id)}
+                      >
+                        Record it
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setDenying(null);
+                          setReason('');
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        setDenying(p.id);
+                        setReason('');
+                      }}
+                    >
+                      Not them
+                    </Button>
+                  )}
                 </div>
               </li>
             ))}

@@ -6,9 +6,11 @@ import {
   resetRequestRequest,
 } from '@syntra/contracts';
 import {
+  beginWebAuthnAuthentication,
   completePasswordReset,
   preflightPasswordReset,
   requestPasswordReset,
+  userForResetToken,
   type Transport,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
@@ -61,6 +63,54 @@ export async function registerPasswordResetRoutes(
       result.valid
         ? result
         : { valid: false, requiresFactor: false, acceptableFactors: [] },
+    );
+  });
+
+  /**
+   * A WebAuthn challenge for somebody holding a reset link.
+   *
+   * WITHOUT THIS ROUTE a passkey-only user cannot complete a password reset at
+   * all. `completePasswordReset` verifies the assertion against a stored
+   * challenge, and the only endpoint that minted one required a live
+   * `AuthAttempt` -- which exists after a password has been accepted, not
+   * after a link has been opened. The reset flow holds a `PasswordResetToken`,
+   * so the lookup always missed, the answer was 401, and somebody whose only
+   * factor is a passkey and whose recovery codes were spent had no way back
+   * that did not go through an administrator.
+   *
+   * Deliberately a second endpoint rather than a second credential accepted by
+   * the first. The two are authenticated by different things, and an endpoint
+   * that takes either is how a reset token comes to satisfy a rule written
+   * about a sign-in.
+   *
+   * The refusal is the one `/complete` gives for a dead token, in the same
+   * words: this endpoint must not become an oracle for whether a link is still
+   * good, whether the account exists, or what it has enrolled. It carries the
+   * same rate limit as every other credential-presenting route here.
+   */
+  app.post('/webauthn/challenge', { ...LIMIT }, async (request) => {
+    const body = resetPreflightRequest.parse(request.body);
+    const userId = await userForResetToken(request.tenantId, body.token);
+    if (userId === null) {
+      throw new ProblemError(
+        400,
+        'invalid-reset-token',
+        'That reset link is no longer usable',
+        'Request a new one.',
+      );
+    }
+
+    const tenant = await request.db((tx) =>
+      tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+    );
+    // From the tenant, exactly as `/complete` derives it. The assertion this
+    // challenge produces is verified against the tenant's own origin, and a
+    // challenge minted against a header would be one whose audience an
+    // attacker chooses.
+    return beginWebAuthnAuthentication(
+      request.tenantId,
+      userId,
+      tenantRelyingParty(tenant, options.publicUrl),
     );
   });
 

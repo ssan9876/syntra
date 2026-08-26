@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { idParam, isLaunchableUrl } from '@syntra/contracts';
+import { idParam, isLaunchableUrl, type ApplicationTile } from '@syntra/contracts';
 import {
   authorize,
   findApplication,
@@ -31,17 +31,18 @@ export async function registerPortalRoutes(
     const rows = await request.db((tx) =>
       resolveApplicationsForUser(tx, request.session.userId),
     );
-    // Deliberately not the launch URL. A tile is a name and an icon; getting
-    // to the application goes through /launch, which goes through authorize().
-    return {
-      applications: rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        slug: row.slug,
-        description: row.description,
-        iconUrl: row.iconUrl,
-      })),
-    };
+    // `ApplicationTile`, the contract, rather than an anonymous literal. A
+    // tile is a name and an icon; the schema says so and now the handler is
+    // checked against it. Deliberately not the launch URL -- getting to the
+    // application goes through /launch, which goes through authorize().
+    const applications: ApplicationTile[] = rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      description: row.description,
+      iconUrl: row.iconUrl,
+    }));
+    return { applications };
   });
 
   app.post(

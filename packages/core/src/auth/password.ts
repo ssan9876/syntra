@@ -54,12 +54,3 @@ export async function setPasswordHash(
   });
 }
 
-export async function hasPassword(
-  tx: TenantClient,
-  userId: string,
-): Promise<boolean> {
-  const credential = await tx.passwordCredential.findUnique({
-    where: { userId },
-  });
-  return credential !== null;
-}

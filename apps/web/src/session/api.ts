@@ -26,6 +26,43 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The paths where a 401 means "that credential was wrong", not "your session
+ * is gone".
+ *
+ * Every credential-presenting endpoint lives under `/api/auth/`: login,
+ * elevate, the MFA verify and challenge pair, enrolment, and the reset flow.
+ * `/api/auth/elevate` answers 401 for a mistyped password while the caller
+ * holds a perfectly good portal session, and `/api/auth/session` answers 401
+ * on every cold load before anybody has signed in. Treating either as expiry
+ * would sign people out for typing badly, or bounce a first-time visitor off a
+ * page they had never reached.
+ *
+ * Everything else -- `/api/admin/*`, `/api/portal/*` -- is behind
+ * `requireSession`, where a 401 has exactly one meaning.
+ */
+const CREDENTIAL_PATHS = '/api/auth/';
+
+let expiredHandler: (() => void) | null = null;
+
+/**
+ * Registers what happens when a live session stops being one.
+ *
+ * A registry rather than a direct import of the session store, because `api()`
+ * is not a React module and must not become one. `SessionProvider` registers a
+ * handler that clears the session; the router's `RequireSession` then does the
+ * navigating, which keeps "where does an unauthenticated browser go" in the
+ * one place that already answers it.
+ *
+ * Returns an unsubscribe, so a test can put it back.
+ */
+export function onSessionExpired(handler: () => void): () => void {
+  expiredHandler = handler;
+  return () => {
+    if (expiredHandler === handler) expiredHandler = null;
+  };
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   // Only declare a JSON body when there is one. Sending
   // `content-type: application/json` with an empty body is rejected outright
@@ -52,6 +89,14 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       problem = { ...problem, ...(await response.json()) };
     } catch {
       // A non-JSON error body is still an error; the fallback stands.
+    }
+    // A 401 from anything but a credential-presenting endpoint means the
+    // session is gone. Nothing handled this: `GENERIC` mapped 403 and 404, and
+    // an expired admin session -- the deliberately short one, fifteen minutes
+    // idle -- turned every panel in the console into "Something went wrong"
+    // with no route back but typing a URL.
+    if (response.status === 401 && !path.startsWith(CREDENTIAL_PATHS)) {
+      expiredHandler?.();
     }
     throw new ApiError(problem);
   }

@@ -33,6 +33,10 @@ export interface Resource<T> {
  */
 /** What a refusal says when the server did not say anything more specific. */
 const GENERIC: Record<number, string> = {
+  // Rendered for the instant between the 401 arriving and the router moving
+  // the browser to /login. "Something went wrong" was what an expired session
+  // used to say, on every panel at once.
+  401: 'Your session has ended. Sign in again to continue.',
   403: 'You do not have permission to view this.',
   404: 'That record no longer exists.',
 };

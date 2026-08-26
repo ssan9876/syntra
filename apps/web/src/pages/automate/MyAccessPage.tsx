@@ -97,7 +97,14 @@ export function MyAccessPage() {
                       {LIVE.includes(grant.status) &&
                         grant.endsAt !== null &&
                         grant.productId && (
-                          <Link to={`/catalog/${grant.productId}`}>
+                          // `?replaces=` is what makes this an EXTENSION rather
+                          // than a second parallel grant. Without it the form
+                          // submitted an ordinary request, `replacesGrantId`
+                          // stayed null, and an approval left two live rows for
+                          // the same resource with two expiry dates --
+                          // `fulfil.ts`'s replacement path, which ends the old
+                          // grant when the new one lands, was never reached.
+                          <Link to={`/catalog/${grant.productId}?replaces=${grant.id}`}>
                             <Button size="sm">Extend</Button>
                           </Link>
                         )}

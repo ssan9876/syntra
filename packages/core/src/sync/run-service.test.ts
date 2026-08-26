@@ -715,3 +715,141 @@ describe('applyChange membership failure paths', () => {
     expect(events[0]!.outcome).toBe('failure');
   });
 });
+
+describe('correlation on a configured key', () => {
+  /**
+   * The connector, replaced entirely: these cases are about which COLUMN the
+   * two sides of the correlation compare, so the directory behind them is
+   * fabricated rather than read.
+   */
+  const reading = (records: { anchor: string; dn: string; attributes: Record<string, string[]> }[]) =>
+    vi.spyOn(ldapConnector, 'read').mockImplementation(async function* () {
+      for (const record of records) {
+        yield { ...record, objectType: 'user' as const };
+      }
+    });
+
+  /** Correlate this source on `email` rather than the default `login`. */
+  const correlateOnEmail = () =>
+    withTenant(tenantId, (tx) =>
+      setMappings(tx, sourceId, [
+        {
+          objectType: 'user',
+          sourceAttribute: 'mail',
+          targetField: 'email',
+          transform: 'lowercase',
+          isCorrelation: true,
+        },
+        {
+          objectType: 'user',
+          sourceAttribute: 'uid',
+          targetField: 'login',
+          transform: 'lowercase',
+          isCorrelation: false,
+        },
+      ]),
+    );
+
+  /**
+   * `mappingRule.isCorrelation` is a per-source choice and `setMappings`
+   * accepts it on `email` and `displayName` as readily as on `login`.
+   * `loadExisting` ignored it and keyed every existing user on `u.login`, so
+   * the two sides of the correlation compared different columns.
+   *
+   * The consequence is not a wrong message. The intended `conflict` never
+   * fires, and the run proposes CREATING a second account for a person who
+   * already has one.
+   */
+  it('matches an existing user on email when email is the correlation key', async () => {
+    await correlateOnEmail();
+    await withTenant(tenantId, (tx) =>
+      createUser(tx, {
+        login: 'mokafor',
+        email: 'maya@acme.test',
+        displayName: 'Maya Okafor',
+      }),
+    );
+    // A different login, the SAME email: one person, and the source calls them
+    // something else.
+    reading([
+      {
+        anchor: 'a1',
+        dn: 'cn=a1',
+        attributes: { mail: ['maya@acme.test'], uid: ['m.okafor'] },
+      },
+    ]);
+
+    const run = await previewRun(tenantId, provider, sourceId);
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: run.id } }),
+    );
+
+    // STATUS, not changeType. `diffObjects` records a conflict AS
+    // `create_user` with `status: 'conflict'` -- the plan's assertion on
+    // changeType alone cannot tell a correlated conflict from an uncorrelated
+    // create, which is precisely the difference under test.
+    //
+    // A conflict means the run found the existing person and is refusing to
+    // adopt them silently. A proposed create means it did not find them, and
+    // applying the run would leave two accounts for one person -- the shape
+    // that used to fail every nightly governance snapshot.
+    expect(changes.some((c) => c.status === 'conflict')).toBe(true);
+    expect(
+      changes.filter((c) => c.changeType === 'create_user' && c.status === 'proposed'),
+    ).toEqual([]);
+  });
+
+  /**
+   * And the other direction, which is the quieter failure: with email as the
+   * correlation key, a source record whose email happens to equal somebody's
+   * LOGIN must not match that person.
+   */
+  it('does not match a login when login is not the correlation key', async () => {
+    await correlateOnEmail();
+    await withTenant(tenantId, (tx) =>
+      createUser(tx, {
+        login: 'maya@acme.test',
+        email: 'someone.else@acme.test',
+        displayName: 'Someone Else',
+      }),
+    );
+    reading([
+      { anchor: 'a2', dn: 'cn=a2', attributes: { mail: ['maya@acme.test'], uid: ['maya'] } },
+    ]);
+
+    const run = await previewRun(tenantId, provider, sourceId);
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: run.id } }),
+    );
+    expect(
+      changes.some((c) => c.changeType === 'create_user' && c.status === 'proposed'),
+    ).toBe(true);
+  });
+
+  /** Nothing changes for the default mapping, which correlates on login. */
+  it('still correlates on login when that is the configured key', async () => {
+    await withTenant(tenantId, (tx) =>
+      createUser(tx, {
+        login: 'mokafor',
+        email: 'maya@acme.test',
+        displayName: 'Maya Okafor',
+      }),
+    );
+    reading([
+      {
+        anchor: 'a3',
+        dn: 'cn=a3',
+        attributes: { uid: ['mokafor'], mail: ['maya@acme.test'], cn: ['Maya Okafor'] },
+      },
+    ]);
+
+    const run = await previewRun(tenantId, provider, sourceId);
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: run.id } }),
+    );
+    expect(changes.some((c) => c.status === 'conflict')).toBe(true);
+    expect(
+      changes.filter((c) => c.changeType === 'create_user' && c.status === 'proposed'),
+    ).toEqual([]);
+  });
+});

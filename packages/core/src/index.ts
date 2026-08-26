@@ -1,4 +1,5 @@
 export * from './config.js';
+export * from './cookie-security.js';
 export * from './net/outbound.js';
 export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';

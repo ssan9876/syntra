@@ -47,7 +47,7 @@ The fix is not to clear the flag. `forceAuthn` means "re-authenticate for *this*
   - `interface ResolvedSession` gains `createdAt: Date`
   - No route signature changes. `GET /saml/sso`, `POST /saml/sso` and `GET /saml/continue` keep their shapes.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `apps/api/src/routes/saml-force-authn.test.ts`:
 
@@ -207,13 +207,13 @@ describe('ForceAuthn', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/saml-force-authn.test.ts`
 
 Expected: FAIL. The second case gets a 302 to `/login?next=…` instead of a 200 carrying a form — the fresh session does not satisfy the flag, because nothing compares the two times. Cases one, three and four pass already.
 
-- [ ] **Step 3: Carry `createdAt` out of the parked row**
+- [x] **Step 3: Carry `createdAt` out of the parked row**
 
 In `packages/core/src/access/saml-request-service.ts`, add the field to the interface (currently lines 5–13):
 
@@ -240,7 +240,7 @@ export interface ParkedAuthnRequest {
 
 Then add `createdAt: row.createdAt,` to the object returned by `parkAuthnRequest` (after `forceAuthn: row.forceAuthn,`, line 62) and to the one returned by `findParkedAuthnRequest` (after `forceAuthn: row.forceAuthn,`, line 97). The column already exists — `SamlAuthnRequest.createdAt DateTime @default(now())`, `schema.prisma:1027` — so there is no migration here.
 
-- [ ] **Step 4: Carry `createdAt` out of the session**
+- [x] **Step 4: Carry `createdAt` out of the session**
 
 In `packages/core/src/auth/session-service.ts`, add to `ResolvedSession` after `satisfiedFactor` (line 43):
 
@@ -273,7 +273,7 @@ const toResolved = (row: SessionRow): ResolvedSession => ({
 
 Both readers (`resolveSession`, `readSession`) select whole rows, so the column arrives with no query change. `Session.createdAt` already exists at `schema.prisma:293`.
 
-- [ ] **Step 5: Make the refusal ask the real question**
+- [x] **Step 5: Make the refusal ask the real question**
 
 In `apps/api/src/routes/saml-idp.ts`, replace the block at lines 664–670:
 
@@ -306,18 +306,18 @@ In `apps/api/src/routes/saml-idp.ts`, replace the block at lines 664–670:
     }
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/saml-force-authn.test.ts`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 7: Run the suites that read these two types**
+- [x] **Step 7: Run the suites that read these two types**
 
 Run: `npx vitest run apps/api/src/routes/saml-sso-post.test.ts apps/api/src/routes/saml-sso-redirect.test.ts apps/api/src/routes/auth.test.ts`
 
 Expected: PASS. These are the callers of `ParkedAuthnRequest` and `ResolvedSession`; a widened interface with a construction site left behind would show here.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -372,7 +372,7 @@ It fails closed, so this is a lockout rather than a hole. The fix is a second ch
   - `POST /api/auth/password-reset/webauthn/challenge` — body `{ token: string }`, answers `PublicKeyCredentialRequestOptionsJSON`, or 400 `invalid-reset-token`
   - `export async function assertWebAuthnForReset(token: string): Promise<Record<string, unknown>>`
 
-- [ ] **Step 1: Write the failing core test**
+- [x] **Step 1: Write the failing core test**
 
 Create `packages/core/src/auth/password-reset-webauthn.test.ts`:
 
@@ -471,12 +471,12 @@ describe('userForResetToken', () => {
 
 Before running it, open `packages/core/src/auth/password-change.test.ts` and copy its tenant fixture verbatim in place of the `freshTenant()` placeholder — the directory has one convention for that and this file must use it rather than inventing a second.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/auth/password-reset-webauthn.test.ts`
 Expected: FAIL — `userForResetToken` is not exported from `./password-reset.js`.
 
-- [ ] **Step 3: Add the lookup**
+- [x] **Step 3: Add the lookup**
 
 In `packages/core/src/auth/password-reset.ts`, immediately after `preflightPasswordReset` ends (line 363):
 
@@ -510,12 +510,12 @@ export async function userForResetToken(
 }
 ```
 
-- [ ] **Step 4: Run the core test to verify it passes**
+- [x] **Step 4: Run the core test to verify it passes**
 
 Run: `npx vitest run packages/core/src/auth/password-reset-webauthn.test.ts`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 5: Write the failing route test**
+- [x] **Step 5: Write the failing route test**
 
 Read the top of `apps/api/src/routes/password-reset.test.ts` and reuse its existing helper for obtaining a live reset token (it already requests one and reads it out of `ctx.mail`). Append:
 
@@ -564,12 +564,12 @@ describe('POST /api/auth/password-reset/webauthn/challenge', () => {
 
 The RP id assertion requires the tenant's `primaryDomain` to be the test host; if the file does not already set it in its `beforeEach`, add `await prisma.tenant.update({ where: { id: ctx.tenantId }, data: { primaryDomain: TEST_HOST } });` there, as `saml-force-authn.test.ts` does.
 
-- [ ] **Step 6: Run the route test to verify it fails**
+- [x] **Step 6: Run the route test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/password-reset.test.ts`
 Expected: FAIL — both new cases get 404, because the route does not exist.
 
-- [ ] **Step 7: Add the route**
+- [x] **Step 7: Add the route**
 
 In `apps/api/src/routes/password-reset.ts`, add `beginWebAuthnAuthentication` and `userForResetToken` to the `@syntra/core` import block (lines 8–13), then insert after the `/preflight` handler (line 65):
 
@@ -623,12 +623,12 @@ In `apps/api/src/routes/password-reset.ts`, add `beginWebAuthnAuthentication` an
   });
 ```
 
-- [ ] **Step 8: Run the route test to verify it passes**
+- [x] **Step 8: Run the route test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/password-reset.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 9: Point the browser at the right endpoint**
+- [x] **Step 9: Point the browser at the right endpoint**
 
 Append to `apps/web/src/mfa/webauthn.ts`:
 
@@ -661,7 +661,7 @@ In `apps/web/src/pages/ResetPassword.tsx`, change line 6 to `import { assertWebA
           ? { type: 'webauthn' as const, assertion: await assertWebAuthnForReset(token) }
 ```
 
-- [ ] **Step 10: Verify the web suite and the typecheck**
+- [x] **Step 10: Verify the web suite and the typecheck**
 
 ```bash
 cd apps/web && npx vitest run src/pages/ResetPassword.test.tsx; cd ../..
@@ -670,7 +670,7 @@ npx tsc -b
 
 Expected: PASS, and `tsc -b` exits 0.
 
-- [ ] **Step 11: Commit — and check what is staged first**
+- [x] **Step 11: Commit — and check what is staged first**
 
 ```bash
 git add packages/core/src/auth/password-reset.ts \
@@ -722,7 +722,7 @@ Spec §7.4, **H3**. `POST /mfa/totp/begin` refuses with "Remove the existing one
 - Consumes: `removeTotp`, `revokeOrphanedRecoveryCodes`, `recordEvent`, `hasTotp` from `@syntra/core`; `requireSession('portal')` (already applied to the `secured` sub-register).
 - Produces: `DELETE /api/auth/mfa/totp` — 200 `{ recoveryCodesRevoked: number }`, or 409 `no-totp` when none is enrolled. Mirrors `DELETE /api/auth/mfa/webauthn/:credentialId` exactly.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Append to `apps/api/src/routes/mfa.test.ts`:
 
@@ -790,12 +790,12 @@ describe('removing an authenticator app', () => {
 
 `enrolTotp(cookie)` is the file's existing helper that begins and confirms an enrolment with `OTPAuth` — reuse it; the file already imports `otpauth` and `confirmTotpEnrolment` for exactly this.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/mfa.test.ts -t 'removing an authenticator app'`
 Expected: FAIL — 404 on `DELETE /api/auth/mfa/totp`.
 
-- [ ] **Step 3: Add the route**
+- [x] **Step 3: Add the route**
 
 In `apps/api/src/routes/mfa.ts`, add `removeTotp` to the `@syntra/core` import block, and insert after the `secured.delete('/webauthn/:credentialId', …)` handler ends (line 427):
 
@@ -859,12 +859,12 @@ In `apps/api/src/routes/mfa.ts`, add `removeTotp` to the `@syntra/core` import b
 
 `tellOwnerAFactorWasRemoved` is added in Task 5. **Do Task 5 before this step**, or add the function first and land both together — the two are the same screen and the same route file, and splitting the mail out would ship a removal nobody is told about.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/mfa.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Give the screen the control**
+- [x] **Step 5: Give the screen the control**
 
 In `apps/web/src/pages/Security.tsx`, add beside `removeKey`:
 
@@ -937,7 +937,7 @@ Replace the authenticator panel's `actions` (lines 140–148) with:
           }
 ```
 
-- [ ] **Step 6: Write the web test**
+- [x] **Step 6: Write the web test**
 
 Create `apps/web/src/pages/Security.test.tsx`:
 
@@ -1039,12 +1039,12 @@ describe('the authenticator app can be removed without an administrator', () => 
 });
 ```
 
-- [ ] **Step 7: Run the web test**
+- [x] **Step 7: Run the web test**
 
 Run: `cd apps/web && npx vitest run src/pages/Security.test.tsx; cd ../..`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -1097,7 +1097,7 @@ Spec §7.4, **H4**. The session cookie's `secure` flag and the federation bindin
   - `export function sessionCookieOptions(secure: boolean)` replaces the `SESSION_COOKIE_OPTIONS` constant
   - `samlBindingCookieOptions(secure: boolean)` replaces `SAML_BINDING_COOKIE_OPTIONS` (module-private)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/core/src/cookie-security.test.ts`:
 
@@ -1140,12 +1140,12 @@ describe('cookiesAreSecure', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/cookie-security.test.ts`
 Expected: FAIL — `Cannot find module './cookie-security.js'`.
 
-- [ ] **Step 3: Write the helper**
+- [x] **Step 3: Write the helper**
 
 Create `packages/core/src/cookie-security.ts`:
 
@@ -1181,12 +1181,12 @@ export function cookiesAreSecure(publicUrl: string): boolean {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run packages/core/src/cookie-security.test.ts`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 5: Put it on the config**
+- [x] **Step 5: Put it on the config**
 
 In `packages/core/src/config.ts`, add the import `import { cookiesAreSecure } from './cookie-security.js';`, add to the `Config` interface after `publicUrl` (line 167):
 
@@ -1210,7 +1210,7 @@ and to the returned object after `publicUrl: v.PUBLIC_URL,` (line 220):
 
 Add `export * from './cookie-security.js';` to `packages/core/src/index.ts` beside the other top-level exports.
 
-- [ ] **Step 6: Decorate the app and rewrite the three cookie definitions**
+- [x] **Step 6: Decorate the app and rewrite the three cookie definitions**
 
 In `apps/api/src/routes/session-reply.ts`, replace lines 11–25:
 
@@ -1293,13 +1293,13 @@ const samlBindingCookieOptions = (secure: boolean) => ({
 
 In `apps/api/src/routes/federation.ts`, delete the module-level constant at lines 146–148 and call `federationBindingCookieOptions(request.server.cookieSecure)` at each `setCookie` site. `federationBindingCookieOptions` already takes the flag as a parameter, so its body and its comment stay exactly as they are.
 
-- [ ] **Step 7: Verify nothing that reads these cookies broke**
+- [x] **Step 7: Verify nothing that reads these cookies broke**
 
 Run: `npx vitest run apps/api/src/routes/auth.test.ts apps/api/src/routes/federation-saml.test.ts apps/api/src/routes/saml-sso-post.test.ts`
 
 Expected: PASS. `buildTestApp` configures `PUBLIC_URL: http://acme.syntra.test`, so `cookieSecure` is false throughout the suite — identical to the behaviour NODE_ENV gave, which is what makes this a safe swap.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -1352,7 +1352,7 @@ Three findings, one screen, one route file. Landing them apart would ship a remo
   - `export async function tellOwnerAFactorWasRemoved(request: FastifyRequest, transport: Transport, userId: string, factor: string): Promise<void>`
   - `DELETE /api/auth/mfa/webauthn/:credentialId` keeps its 200 `{ recoveryCodesRevoked }` shape and now also sends mail.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Append to `apps/api/src/routes/mfa.test.ts`:
 
@@ -1402,12 +1402,12 @@ describe('a factor leaving an account is told to its owner', () => {
 
 `enrolWebAuthn(cookie)` is the file's existing helper for registering a credential; reuse it.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/mfa.test.ts -t 'told to its owner'`
 Expected: FAIL — the first case sees zero messages sent. The second passes already.
 
-- [ ] **Step 3: Add the template**
+- [x] **Step 3: Add the template**
 
 In `packages/core/src/notify/templates/index.ts`, after the `factor-added` entry (line 26):
 
@@ -1419,7 +1419,7 @@ In `packages/core/src/notify/templates/index.ts`, after the `factor-added` entry
   },
 ```
 
-- [ ] **Step 4: Add the sender and call it**
+- [x] **Step 4: Add the sender and call it**
 
 In `apps/api/src/routes/mfa.ts`, after `tellOwnerAFactorWasAdded` ends (line 125):
 
@@ -1499,12 +1499,12 @@ In the `secured.delete('/webauthn/:credentialId', …)` handler, replace the fin
       return reply.status(200).send({ recoveryCodesRevoked: revoked });
 ```
 
-- [ ] **Step 5: Run the route test to verify it passes**
+- [x] **Step 5: Run the route test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/mfa.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 6: Make the console show the answer and report the refusal**
+- [x] **Step 6: Make the console show the answer and report the refusal**
 
 In `apps/web/src/pages/Security.tsx`, replace `removeKey` (lines 97–100):
 
@@ -1548,7 +1548,7 @@ In `apps/web/src/pages/Security.tsx`, replace `removeKey` (lines 97–100):
   }
 ```
 
-- [ ] **Step 7: Extend the web test**
+- [x] **Step 7: Extend the web test**
 
 Append to `apps/web/src/pages/Security.test.tsx`:
 
@@ -1610,7 +1610,7 @@ describe('removing a security key says what it cost', () => {
 
 The `[1]` index is deliberate: the authenticator panel from Task 3 renders the first `Remove` and the key list renders the second. If the ordering changes, scope the query to the panel with `within()` rather than adjusting the index.
 
-- [ ] **Step 8: Run the web test and typecheck**
+- [x] **Step 8: Run the web test and typecheck**
 
 ```bash
 cd apps/web && npx vitest run src/pages/Security.test.tsx; cd ../..
@@ -1619,7 +1619,7 @@ npx tsc -b
 
 Expected: PASS, 5 tests; `tsc -b` exits 0.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add packages/core/src/notify/templates/index.ts \
@@ -1669,7 +1669,7 @@ This task adds the domain operations. Task 7 exposes them, Task 8 repairs the in
   - `export async function deleteRole(tx: TenantClient, roleId: string): Promise<void>`
   - `export async function countHoldersOf(tx: TenantClient, permission: Permission): Promise<number>`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `packages/core/src/rbac/rbac-service.test.ts`:
 
@@ -1800,12 +1800,12 @@ describe('countHoldersOf', () => {
 
 Add `ALL_PERMISSIONS`, `createOrgUnit`, `createUser`, `countHoldersOf`, `deleteRole`, `readRole` and `updateRole` to the file's existing imports.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/rbac/rbac-service.test.ts`
 Expected: FAIL — `updateRole`, `deleteRole`, `readRole` and `countHoldersOf` do not exist.
 
-- [ ] **Step 3: Write the operations**
+- [x] **Step 3: Write the operations**
 
 Append to `packages/core/src/rbac/rbac-service.ts`, and add `PERMISSIONS, isPermission` to the import from `./permissions.js` (line 3):
 
@@ -1983,12 +1983,12 @@ export async function countHoldersOf(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run packages/core/src/rbac/rbac-service.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -2043,7 +2043,7 @@ Spec §7.4, **H2**, part two. The routes, the contract, and the one guard that k
   - `DELETE /api/admin/roles/:id/assignments/:userId` → 204
   - `export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<void>`
 
-- [ ] **Step 1: Write the contract**
+- [x] **Step 1: Write the contract**
 
 Create `packages/contracts/src/rbac.ts`:
 
@@ -2113,7 +2113,7 @@ export const roleAssignmentParams = z.object({
 
 Add `export * from './rbac.js';` to `packages/contracts/src/index.ts`.
 
-- [ ] **Step 2: Write the failing route test**
+- [x] **Step 2: Write the failing route test**
 
 Create `apps/api/src/routes/admin/roles.test.ts`:
 
@@ -2321,12 +2321,12 @@ describe('the role API that did not exist', () => {
 });
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/roles.test.ts`
 Expected: FAIL — every case 404s; the router does not exist.
 
-- [ ] **Step 4: Write the router**
+- [x] **Step 4: Write the router**
 
 Create `apps/api/src/routes/admin/roles.ts`:
 
@@ -2579,7 +2579,7 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
 
 Delete the stray `refuseIfStranded` stub above `guardRbac` before running anything — it is a leftover shape and must not ship. `guardRbac` is the whole guard.
 
-- [ ] **Step 5: Register it**
+- [x] **Step 5: Register it**
 
 In `apps/api/src/app.ts`, add `import { registerAdminRoleRoutes } from './routes/admin/roles.js';` beside the other admin imports, and after the tenant registration (line 215):
 
@@ -2587,12 +2587,12 @@ In `apps/api/src/app.ts`, add `import { registerAdminRoleRoutes } from './routes
   await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/roles.test.ts`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 7: Typecheck and commit**
+- [x] **Step 7: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -2642,7 +2642,7 @@ Spec §7.4 **H2** and §5 **U3**. The API from Task 7 lets an administrator gran
 - Consumes: `ALL_PERMISSIONS` from `@syntra/core`; the migration directory listing.
 - Produces: no exported symbols. Every `Role` with `builtIn = true` gains every permission in the literal list that it does not already hold. Nothing is ever removed.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/db/src/builtin-role-permissions.test.ts`:
 
@@ -2714,12 +2714,12 @@ describe('the built-in role backfill', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/db/src/builtin-role-permissions.test.ts`
 Expected: FAIL — `ENOENT`, the migration does not exist.
 
-- [ ] **Step 3: Generate the permission list from the catalogue**
+- [x] **Step 3: Generate the permission list from the catalogue**
 
 ```bash
 node --import tsx -e "import('@syntra/core').then(m => console.log(m.ALL_PERMISSIONS.map(p => \"    '\" + p + \"'\").join(',\n')))"
@@ -2727,7 +2727,7 @@ node --import tsx -e "import('@syntra/core').then(m => console.log(m.ALL_PERMISS
 
 Paste that output into the `ARRAY[...]` literal below rather than typing the names by hand. The test in Step 1 is what keeps the paste honest.
 
-- [ ] **Step 4: Write the migration**
+- [x] **Step 4: Write the migration**
 
 Create `packages/db/prisma/migrations/20260903000000_builtin_role_permissions/migration.sql`:
 
@@ -2806,11 +2806,11 @@ WHERE r.id = sub.id;
 
 Regenerate the literal from Step 3's output if the catalogue has changed since this plan was written; the test will say so.
 
-- [ ] **Step 5: Register the migration name**
+- [x] **Step 5: Register the migration name**
 
 In `packages/db/src/migration-order.ts`, append `'20260903000000_builtin_role_permissions',` to `KNOWN_MIGRATIONS`. **This is not optional** — remediation 1 Task 5's `grandfathers exactly the migrations that exist` case compares that list against the directory and fails otherwise.
 
-- [ ] **Step 6: Apply it and check the two tests**
+- [x] **Step 6: Apply it and check the two tests**
 
 ```bash
 cd packages/db && npx prisma migrate deploy; cd ../..
@@ -2819,7 +2819,7 @@ npx vitest run packages/db/src/builtin-role-permissions.test.ts packages/db/src/
 
 Expected: the migration applies, and both files PASS.
 
-- [ ] **Step 7: Prove it repairs the case it exists for**
+- [x] **Step 7: Prove it repairs the case it exists for**
 
 ```bash
 SYNTRA_ALLOW_RESET=syntra pnpm db:reset && SEED_ADMIN_PASSWORD=aaaaaaaaaaaa pnpm seed
@@ -2842,7 +2842,7 @@ npx prisma db execute --file prisma/migrations/20260903000000_builtin_role_permi
 
 Expected: the Owner role's `permissions` array contains `deployment.manage` again. Only do this against a development database.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add packages/db/prisma/migrations/20260903000000_builtin_role_permissions/migration.sql \
@@ -2889,7 +2889,7 @@ Spec §7.4, **H2**, part four. The API from Task 7 is unreachable from the produ
 - Consumes: `useApiResource` from `./hooks.js`; `api`, `ApiError` from `../../session/api.js`; `Alert`, `Button`, `Check`, `Empty`, `Field`, `Panel`, `SkeletonRows`, `Status` from `@syntra/ui`; `PageHeader`.
 - Produces: `export function RolesPage()`; route `/admin/roles`; nav item `{ to: '/admin/roles', label: 'Roles', permission: 'rbac.manage' }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `apps/web/src/pages/admin/RolesPage.test.tsx`:
 
@@ -3027,12 +3027,12 @@ describe('the roles screen', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/RolesPage.test.tsx; cd ../..`
 Expected: FAIL — `Cannot find module './RolesPage.js'`.
 
-- [ ] **Step 3: Write the page**
+- [x] **Step 3: Write the page**
 
 Create `apps/web/src/pages/admin/RolesPage.tsx`:
 
@@ -3235,7 +3235,7 @@ export function RolesPage() {
 
 `Status` takes no `className` today — check `packages/ui/src/Status.tsx` before using it that way, and wrap the badge in a `<span className="ml-2">` instead if it does not.
 
-- [ ] **Step 4: Add the route and the nav item**
+- [x] **Step 4: Add the route and the nav item**
 
 In `apps/web/src/pages/admin/AdminApp.tsx`, add the import and, beside `settings` (line 108):
 
@@ -3250,12 +3250,12 @@ In `apps/web/src/pages/admin/AdminNav.tsx`, in the System group (lines 80–88),
       { to: '/admin/roles', label: 'Roles', permission: 'rbac.manage' },
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/RolesPage.test.tsx; cd ../..`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 6: Typecheck, build and commit**
+- [x] **Step 6: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
@@ -3301,7 +3301,7 @@ Spec §7.5, **N2** — an authorization bug wearing a validation bug's clothes. 
 - Consumes: `decideRequestBody` from `@syntra/contracts` (already exported, never imported by this file).
 - Produces: `export const revokeGrantBody` in `packages/contracts/src/automate.ts`; `POST /automate/requests/:id/decide` and `POST /automate/grants/:id/revoke` answer 400 with `errors[]` for a body that does not parse.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/api/src/routes/admin/automate.test.ts`, reusing that file's existing fixtures for a pending request and an admin cookie:
 
@@ -3380,12 +3380,12 @@ describe('the grant revoke route parses its body', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts -t 'parses its body'`
 Expected: FAIL. The first case gets 200 and the request comes back `approved` — the capitalised value took the approval branch. The missing-field case is a 500.
 
-- [ ] **Step 3: Add the revoke contract**
+- [x] **Step 3: Add the revoke contract**
 
 In `packages/contracts/src/automate.ts`, after `decideRequestBody`'s type export (line 145):
 
@@ -3408,7 +3408,7 @@ export const revokeGrantBody = z
 export type RevokeGrantBody = z.input<typeof revokeGrantBody>;
 ```
 
-- [ ] **Step 4: Parse both bodies**
+- [x] **Step 4: Parse both bodies**
 
 In `apps/api/src/routes/admin/automate.ts`, add `decideRequestBody` and `revokeGrantBody` to the `@syntra/contracts` import block (lines 3–13). Replace line 240:
 
@@ -3445,12 +3445,12 @@ and the call below it:
       );
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -3497,7 +3497,7 @@ The enumeration is widened at the same time, because otherwise the next POST rea
 - Consumes: `requirePermission(PERMISSIONS.GOVERN_MANAGE)`, `scopeOf(request)`, `personIdsInScope(tx, scope)` — all already in the module.
 - Produces: `GOVERN_READ_ROUTES` gains `{ path: 'POST /govern/sod/violations/:id/except', scoped: true }`. No new exports.
 
-- [ ] **Step 1: Widen the structural test so it can see a POST**
+- [x] **Step 1: Widen the structural test so it can see a POST**
 
 In `apps/api/src/routes/admin/govern.test.ts`, replace the `EVERY read route in the module is enumerated` case (lines 292–305):
 
@@ -3531,12 +3531,12 @@ In `apps/api/src/routes/admin/govern.test.ts`, replace the `EVERY read route in 
   });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/govern.test.ts -t 'enumerated'`
 Expected: FAIL, naming `POST /govern/campaigns/preview-scope`, `POST /govern/campaigns/preview-reviewers`, `POST /govern/sod/rules/preview` and `POST /govern/sod/violations/:id/except` as routes admitted by `govern.read` that are not in the list.
 
-- [ ] **Step 3: Raise the three previews to `govern.manage`**
+- [x] **Step 3: Raise the three previews to `govern.manage`**
 
 In `apps/api/src/routes/admin/govern.ts`, change the guard on all three, and say why once, above the first of them (line 693):
 
@@ -3568,7 +3568,7 @@ In `apps/api/src/routes/admin/govern.ts`, change the guard on all three, and say
 
 Apply the same guard change to `/govern/campaigns/preview-reviewers` (line 702) and `/govern/sod/rules/preview` (line 897), leaving their existing bodies and comments intact.
 
-- [ ] **Step 4: Scope the exception request, and list it**
+- [x] **Step 4: Scope the exception request, and list it**
 
 In the `/govern/sod/violations/:id/except` handler (line 928), after the violation is read and before `requestSodException` is called:
 
@@ -3599,13 +3599,13 @@ In `GOVERN_READ_ROUTES`, at the end of the slice-2 block (after `GET /govern/sod
   },
 ```
 
-- [ ] **Step 5: Run the whole govern route suite**
+- [x] **Step 5: Run the whole govern route suite**
 
 Run: `npx vitest run apps/api/src/routes/admin/govern.test.ts`
 
 Expected: PASS. The `exempt list is short and named` case is unchanged — the four routes above are either no longer admitted by `govern.read` or are listed as `scoped: true`, so nothing joins the exempt list.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -3652,7 +3652,7 @@ Spec §7.5, **N4**. `providerFor` caches one `Provider` per tenant with the issu
 - Consumes: `invalidateProvider(tenantId)` from `@syntra/protocols` — already imported by `protocol-apps.ts`, so the dependency edge exists.
 - Produces: no signature change. `PUT /api/admin/tenant` keeps its body and its response.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/api/src/routes/admin/tenant.test.ts`:
 
@@ -3700,12 +3700,12 @@ describe('changing the tenant’s domain', () => {
 
 Import the module namespace at the top of the file — `import * as protocols from '@syntra/protocols';` — because `vi.spyOn` needs an object to replace the property on, and add `vi` to the `vitest` import if the file does not already have it.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/tenant.test.ts -t 'domain'`
 Expected: FAIL — the first case: `invalidateProvider` was never called.
 
-- [ ] **Step 3: Invalidate after the write commits**
+- [x] **Step 3: Invalidate after the write commits**
 
 In `apps/api/src/routes/admin/tenant.ts`, add `import { invalidateProvider } from '@syntra/protocols';` and restructure the handler so the transaction's result is captured and the cache is dropped **after** it commits (currently the handler is `return request.db(async (tx) => { … })`, lines 43–141):
 
@@ -3740,12 +3740,12 @@ In `apps/api/src/routes/admin/tenant.ts`, add `import { invalidateProvider } fro
 
 The `before` read is the one the handler already makes inside the transaction (line 47); hoist it rather than adding a second, and keep the in-transaction `before` for the lockout check that uses it.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/tenant.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -3788,7 +3788,7 @@ Spec §7.5, **N5**. Four routes reach a path or query parameter with a cast inst
 - Consumes: `idParam` from `@syntra/contracts`.
 - Produces: `export const personParam = z.object({ personId: z.string().uuid() })` in `packages/contracts/src/govern.ts`. No route signature changes; the three routes answer 400 with `errors[]` instead of 500.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `apps/api/src/routes/saml-metadata.test.ts`:
 
@@ -3831,12 +3831,12 @@ it('answers 400 for a subjectPersonId that is not a uuid', async () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run apps/api/src/routes/saml-metadata.test.ts apps/api/src/routes/admin/govern.test.ts apps/api/src/routes/automate-portal.test.ts -t 'not a uuid'`
 Expected: FAIL — all three answer 500.
 
-- [ ] **Step 3: Validate the three parameters**
+- [x] **Step 3: Validate the three parameters**
 
 `apps/api/src/routes/saml-idp.ts`, replacing lines 382–384:
 
@@ -3893,12 +3893,12 @@ and adding `personParam` to the `@syntra/contracts` import block.
 
 and use `subject` in place of `requested` for the remainder of the function. Add `idParam` to the file's `@syntra/contracts` import if it is not already there.
 
-- [ ] **Step 4: Run the three files to verify they pass**
+- [x] **Step 4: Run the three files to verify they pass**
 
 Run: `npx vitest run apps/api/src/routes/saml-metadata.test.ts apps/api/src/routes/admin/govern.test.ts apps/api/src/routes/automate-portal.test.ts`
 Expected: PASS, all three files in full.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -3940,7 +3940,7 @@ Spec §7.5, **N6**. `presentedCredentials` runs `decodeURIComponent` over both h
 - Consumes: nothing new.
 - Produces: `presentedCredentials` returns `ClientCredentials | 'malformed' | null`. `POST /oidc/token` answers 401 `{ error: 'invalid_client' }` for an unreadable Basic header.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/api/src/routes/oidc-token.test.ts`:
 
@@ -3988,12 +3988,12 @@ describe('malformed client credentials', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/oidc-token.test.ts -t 'malformed client credentials'`
 Expected: FAIL — the first case is a 500 from the `URIError`. The second currently returns `null`, which reads as "public client" and produces a different refusal further down.
 
-- [ ] **Step 3: Distinguish "no credentials" from "unreadable credentials"**
+- [x] **Step 3: Distinguish "no credentials" from "unreadable credentials"**
 
 In `apps/api/src/routes/oidc-token.ts`, replace `presentedCredentials` (lines 49–69):
 
@@ -4060,12 +4060,12 @@ In the handler (line 305), before the `credentials !== null` branch:
 
 The rest of the handler is unchanged: `credentials` is now `ClientCredentials | null`, which is what `substitutedRequest` already takes.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/oidc-token.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -4109,7 +4109,7 @@ Spec §9, **B1**. `createSourceRequest` and `updateSourceRequest` strip unknown 
 - Consumes: nothing.
 - Produces: no new symbols. `createSourceRequest`, `updateSourceRequest`, `tenantSettingsRequest` and `patchUserRequest` refuse unknown keys.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/contracts/src/strictness.test.ts`:
 
@@ -4186,12 +4186,12 @@ describe('the schemas that carry a security-relevant flag are strict', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/contracts/src/strictness.test.ts`
 Expected: FAIL — the first four cases parse successfully, because the unknown key is stripped.
 
-- [ ] **Step 3: Make them strict**
+- [x] **Step 3: Make them strict**
 
 In `packages/contracts/src/sync.ts`, add `.strict()` to `createSourceRequest` (close the `z.object({…})` at line 71 with `}).strict();`) and to `updateSourceRequest` before its `.refine` (line 94), and put the reason where the write-back block already explains itself (line 60):
 
@@ -4231,7 +4231,7 @@ In `packages/contracts/src/reset.ts`, close `patchUserRequest` with `}).strict()
  */
 ```
 
-- [ ] **Step 4: Run the test and the two suites that parse these**
+- [x] **Step 4: Run the test and the two suites that parse these**
 
 ```bash
 npx vitest run packages/contracts/src/strictness.test.ts packages/contracts/src/sync.test.ts
@@ -4240,7 +4240,7 @@ npx vitest run apps/api/src/routes/admin/sources.test.ts apps/api/src/routes/adm
 
 Expected: PASS. A route test that was sending an extra key will now fail — fix the test's payload rather than relaxing the schema; a caller sending a key the API does not accept is exactly what this is for.
 
-- [ ] **Step 5: Verify the console still saves**
+- [x] **Step 5: Verify the console still saves**
 
 ```bash
 cd apps/web && npx vitest run src/pages/admin/SourceDetailPage.test.tsx src/pages/admin/TenantSettingsPage.test.tsx; cd ../..
@@ -4248,7 +4248,7 @@ cd apps/web && npx vitest run src/pages/admin/SourceDetailPage.test.tsx src/page
 
 Expected: PASS. These build the request bodies the strict schemas now police.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -4296,7 +4296,7 @@ They are deliberately **not** parsed at runtime in the browser. A zod parse in t
 - Consumes: `MfaStatusResponse`, `ApplicationTile`, `RuleImpactResponse` — the `z.infer` types the three schemas already export.
 - Produces: no new symbols. Three handlers gain a return-type annotation; three components import a type instead of declaring one.
 
-- [ ] **Step 1: Pin the API side**
+- [x] **Step 1: Pin the API side**
 
 In `apps/api/src/routes/mfa.ts`, add `type MfaStatusResponse` to the `@syntra/contracts` import and annotate the handler (line 244):
 
@@ -4339,7 +4339,7 @@ In `apps/api/src/routes/admin/policies.ts`, annotate the impact handler (line 99
 
 adding `type RuleImpactResponse` to the `@syntra/contracts` import. `previewRuleImpact` returns core's `RuleImpact`, whose four fields are exactly the schema's; if `tsc` disagrees, the contract and the core type have already drifted and that disagreement is the finding.
 
-- [ ] **Step 2: Pin the web side**
+- [x] **Step 2: Pin the web side**
 
 In `apps/web/src/pages/Security.tsx`, delete the local `interface MfaStatus` (lines 8–16) and replace it with:
 
@@ -4356,12 +4356,12 @@ and use `MfaStatusResponse` at the two use sites (`useState<MfaStatusResponse | 
 
 Do the same in `apps/web/src/pages/Portal.tsx` with `ApplicationTile`, and in `apps/web/src/pages/admin/PoliciesPage.tsx` with `RuleImpactResponse` in place of the local `interface RuleImpact` (lines 30–35).
 
-- [ ] **Step 3: Typecheck — this is the test**
+- [x] **Step 3: Typecheck — this is the test**
 
 Run: `npx tsc -b`
 Expected: exit 0. A failure here means the hand-built response and the contract already disagree; fix the response, not the contract, unless the contract is the one that is wrong about what the product does.
 
-- [ ] **Step 4: Run the suites that touch the three shapes**
+- [x] **Step 4: Run the suites that touch the three shapes**
 
 ```bash
 npx vitest run apps/api/src/routes/mfa.test.ts apps/api/src/routes/portal.test.ts
@@ -4370,7 +4370,7 @@ cd apps/web && npx vitest run src/pages/Security.test.tsx src/pages/admin/Polici
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/routes/mfa.ts apps/api/src/routes/portal.ts \
@@ -4417,7 +4417,7 @@ Spec §7.6, **W1**. `ProductEditorPage` renders in edit mode but nothing fetches
 - Consumes: `idParam`, `PERMISSIONS.AUTOMATE_READ`, `productBody` (unchanged).
 - Produces: `GET /api/admin/automate/products/:id` → the `Product` row with `grants`, or 404. `ProductEditorPage` reads it when `id` is present and sends every field the schema declares.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Append to `apps/api/src/routes/admin/automate.test.ts`:
 
@@ -4449,12 +4449,12 @@ describe('reading one product', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts -t 'reading one product'`
 Expected: FAIL — 404 on a product that exists, because the route does not.
 
-- [ ] **Step 3: Add the route**
+- [x] **Step 3: Add the route**
 
 In `apps/api/src/routes/admin/automate.ts`, after the products list (line 85):
 
@@ -4482,12 +4482,12 @@ In `apps/api/src/routes/admin/automate.ts`, after the products list (line 85):
   );
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Write the failing web test**
+- [x] **Step 5: Write the failing web test**
 
 Create `apps/web/src/pages/admin/ProductEditorPage.test.tsx`:
 
@@ -4628,12 +4628,12 @@ describe('the product editor loads what it edits', () => {
 });
 ```
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/ProductEditorPage.test.tsx; cd ../..`
 Expected: FAIL — the first case finds no field with that value; the second sends the editor's defaults.
 
-- [ ] **Step 7: Rewrite the editor**
+- [x] **Step 7: Rewrite the editor**
 
 Replace the state and the fetch in `apps/web/src/pages/admin/ProductEditorPage.tsx` (lines 14–101). The essentials: read the product when there is an id, seed every field from it once it arrives, and send the whole object back.
 
@@ -4793,12 +4793,12 @@ and the body of `save()`:
 
 Add `Field`s and a `Select` for description, category, request instructions, duration mode, the two duration caps and status, and render `{error && <Alert tone="danger">{error}</Alert>}` above the panels. Import `useEffect` and `Select`.
 
-- [ ] **Step 8: Run the web test to verify it passes**
+- [x] **Step 8: Run the web test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/ProductEditorPage.test.tsx; cd ../..`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 9: Typecheck, build and commit**
+- [x] **Step 9: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
@@ -4844,7 +4844,7 @@ Spec §7.6, **W2** and **W7**. `MyReviewsPage` lists items across every open cam
 - Consumes: `POST /api/portal/govern/reviews/bulk-certify` with `{ campaignId, itemIds }`; `POST /api/portal/govern/reviews/:id/decide`.
 - Produces: no new endpoints. The page issues one bulk request per distinct campaign in the selection and reports every refusal from every one of them.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/web/src/pages/govern/MyReviewsPage.test.tsx`, adding a second campaign to its fixtures:
 
@@ -4940,12 +4940,12 @@ describe('a double-click', () => {
 
 Extend the file's existing fetch mock into `mockReviews(rows, opts)` — returning `{ bulk: [], decisions: [] }` and honouring `bulkResult` and a `slowDecide` that resolves on a deferred promise — rather than adding a second mocking style beside the one already there.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/govern/MyReviewsPage.test.tsx; cd ../..`
 Expected: FAIL — one bulk request carrying `c-1` and both ids; no button in the third case; two decisions in the fourth.
 
-- [ ] **Step 3: Group the selection by campaign**
+- [x] **Step 3: Group the selection by campaign**
 
 In `apps/web/src/pages/govern/MyReviewsPage.tsx`, replace the bulk button (lines 123–159):
 
@@ -5030,7 +5030,7 @@ and add above the render:
 
 Add `const [bulkBusy, setBulkBusy] = useState(false);` beside the other state.
 
-- [ ] **Step 4: Guard the per-item decisions**
+- [x] **Step 4: Guard the per-item decisions**
 
 Replace `decide` (lines 58–84) so it tracks the item in flight, and the two buttons (lines 228–233):
 
@@ -5095,12 +5095,12 @@ Replace `decide` (lines 58–84) so it tracks the item in flight, and the two bu
                       </Button>
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/govern/MyReviewsPage.test.tsx; cd ../..`
 Expected: PASS, the whole file.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -5147,7 +5147,7 @@ Spec §7.6, **W3**. `use-api-resource.ts`'s `GENERIC` map covers 403 and 404, an
   - `GENERIC[401]` in `use-api-resource.ts`
   - No component changes anywhere else: the router's existing `RequireSession` already navigates to `/login` when `session` becomes null.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/web/src/session/api.test.ts`:
 
@@ -5209,12 +5209,12 @@ describe('a 401 that means the session died', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/session/api.test.ts; cd ../..`
 Expected: FAIL — `onSessionExpired` is not exported.
 
-- [ ] **Step 3: Add the hook**
+- [x] **Step 3: Add the hook**
 
 In `apps/web/src/session/api.ts`, above `api`:
 
@@ -5270,7 +5270,7 @@ and inside `api`, in the `!response.ok` branch, before the throw:
     }
 ```
 
-- [ ] **Step 4: Register it, and give the hook a sentence**
+- [x] **Step 4: Register it, and give the hook a sentence**
 
 In `apps/web/src/session/SessionProvider.tsx`, add to the boot effect (line 70):
 
@@ -5297,17 +5297,17 @@ const GENERIC: Record<number, string> = {
 };
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/session/api.test.ts; cd ../..`
 Expected: PASS, 3 new tests plus the file's existing ones.
 
-- [ ] **Step 6: Run the console suite, because this touches every fetch**
+- [x] **Step 6: Run the console suite, because this touches every fetch**
 
 Run: `cd apps/web && npx vitest run; cd ../..`
 Expected: PASS, everything. This is the one task in the plan where running the whole web suite is right — it is 301 tests and about a minute, and the change is under every page.
 
-- [ ] **Step 7: Typecheck and commit**
+- [x] **Step 7: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -5350,7 +5350,7 @@ Spec §7.6, **W4**. Mode state is kept and a caveat is rendered, but the URL is 
 - Consumes: `GET /api/admin/govern/snapshots?limit=…` → `{ snapshots: { id, asOf, status }[] }`; `GET /api/admin/govern/reports/system?systemId=…&snapshotId=…`.
 - Produces: no new endpoints. The page sends `snapshotId` when one is chosen and omits it for the latest.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `apps/web/src/pages/admin/GovernReportsPage.test.tsx`:
 
@@ -5457,12 +5457,12 @@ describe('the reports screen', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernReportsPage.test.tsx; cd ../..`
 Expected: FAIL — the Live button is present and no snapshot picker exists.
 
-- [ ] **Step 3: Replace the toggle with a snapshot picker**
+- [x] **Step 3: Replace the toggle with a snapshot picker**
 
 In `apps/web/src/pages/admin/GovernReportsPage.tsx`, delete the `mode` state (line 81) and the toggle block (lines 100–120), delete the now-unused `LiveReportHeader` interface (lines 26–31) and narrow `SystemReport['header']` to `ReportHeader`, and add:
 
@@ -5526,12 +5526,12 @@ and, beside the system field:
 
 Import `Select` from `@syntra/ui`.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernReportsPage.test.tsx; cd ../..`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 5: Typecheck, build and commit**
+- [x] **Step 5: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
@@ -5575,7 +5575,7 @@ Spec §7.6, **W5**, the two sites outside `Security.tsx` (which Task 5 covered).
 - Consumes: `ApiError`, `api`.
 - Produces: no signature changes. Both pages render the server's `detail` in an `Alert` on failure.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `apps/web/src/pages/admin/ApplicationDetailPage.test.tsx`:
 
@@ -5666,12 +5666,12 @@ describe('assignment controls', () => {
 
 Append to `apps/web/src/pages/admin/PoliciesPage.test.tsx` a case of the same shape for `Remove` on a rule, asserting the server's `detail` appears.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/ApplicationDetailPage.test.tsx src/pages/admin/PoliciesPage.test.tsx; cd ../..`
 Expected: FAIL — nothing renders, and the console shows an unhandled rejection.
 
-- [ ] **Step 3: Catch, and say what the server said**
+- [x] **Step 3: Catch, and say what the server said**
 
 In `apps/web/src/pages/admin/ApplicationDetailPage.tsx`, add `const [problem, setProblem] = useState<string | null>(null);` and replace the two handlers (lines 70–86):
 
@@ -5766,12 +5766,12 @@ In `apps/web/src/pages/admin/PoliciesPage.tsx`, wrap `move()` and `remove()` (li
   }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/ApplicationDetailPage.test.tsx src/pages/admin/PoliciesPage.test.tsx; cd ../..`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -5824,7 +5824,7 @@ This is the priority: with it the module works end to end, and without it nothin
 
 Note that Task 11 raised the two preview routes to `govern.manage`, which is the same permission this screen's Save needs — so a reader who can see the previews can act on them.
 
-- [ ] **Step 1: Write the failing test for the creation screen**
+- [x] **Step 1: Write the failing test for the creation screen**
 
 Create `apps/web/src/pages/admin/GovernCampaignNewPage.test.tsx`:
 
@@ -5998,12 +5998,12 @@ describe('creating a campaign', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernCampaignNewPage.test.tsx; cd ../..`
 Expected: FAIL — `Cannot find module './GovernCampaignNewPage.js'`.
 
-- [ ] **Step 3: Write the screen**
+- [x] **Step 3: Write the screen**
 
 Create `apps/web/src/pages/admin/GovernCampaignNewPage.tsx`. The shape:
 
@@ -6182,7 +6182,7 @@ export function GovernCampaignNewPage() {
 
 Write the JSX out in full: a `Field` per text input, a `Check` per resource kind labelled with the kind's name (the test queries by it), a `Select` for each selector and for the snapshot, `Field type="date"` for `Opens` and `Due`, and the two preview results rendered as `Alert`s carrying the numbers and the samples. The blocked sample must render each entry's `reason`.
 
-- [ ] **Step 4: Add the route and the way in**
+- [x] **Step 4: Add the route and the way in**
 
 In `apps/web/src/pages/admin/AdminApp.tsx`, before the parametric campaign route (line 99):
 
@@ -6210,7 +6210,7 @@ In `apps/web/src/pages/admin/GovernCampaignsPage.tsx`, give the header an action
 
 and, in the empty state, replace the prose with the same link — the empty state told the reader to create a campaign and offered no way to.
 
-- [ ] **Step 5: Start and re-base on the detail screen**
+- [x] **Step 5: Start and re-base on the detail screen**
 
 In `apps/web/src/pages/admin/GovernCampaignDetailPage.tsx`, add to the Actions panel (line 121), before the extend button:
 
@@ -6280,7 +6280,7 @@ In `apps/web/src/pages/admin/GovernCampaignDetailPage.tsx`, add to the Actions p
 
 with `const [rebaseTo, setRebaseTo] = useState('');`, `const [started, setStarted] = useState<string | null>(null);`, the snapshot list read through `useApiResource`, and `{started && <Alert tone="info">{started}</Alert>}` beside the existing alerts.
 
-- [ ] **Step 6: Test the detail screen's two new controls**
+- [x] **Step 6: Test the detail screen's two new controls**
 
 Create `apps/web/src/pages/admin/GovernCampaignDetailPage.test.tsx` in the house style, asserting:
 - a `draft` campaign shows **Start it**, a `closed_complete` one does not;
@@ -6288,12 +6288,12 @@ Create `apps/web/src/pages/admin/GovernCampaignDetailPage.test.tsx` in the house
 - a 409 from start renders the server's `detail` (`CampaignRefusedError` carries a real sentence — a stale snapshot, an empty scope);
 - **Re-base** is disabled until a snapshot is chosen and then POSTs `{ snapshotId }`.
 
-- [ ] **Step 7: Run both web tests**
+- [x] **Step 7: Run both web tests**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernCampaignNewPage.test.tsx src/pages/admin/GovernCampaignDetailPage.test.tsx; cd ../..`
 Expected: PASS.
 
-- [ ] **Step 8: Typecheck, build and commit**
+- [x] **Step 8: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
@@ -6348,7 +6348,7 @@ Spec §7.6, **W6**, second surface. There is **no workflow list route at all** �
 - Consumes: `workflowBody` (unchanged), `PERMISSIONS.AUTOMATE_READ`.
 - Produces: `GET /api/admin/automate/workflows` → `{ workflows: Array<ApprovalWorkflow & { stages: ApprovalStage[]; productCount: number }> }`.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Append to `apps/api/src/routes/admin/automate.test.ts`:
 
@@ -6378,12 +6378,12 @@ describe('listing workflows', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts -t 'listing workflows'`
 Expected: FAIL — 404.
 
-- [ ] **Step 3: Add the route**
+- [x] **Step 3: Add the route**
 
 In `apps/api/src/routes/admin/automate.ts`, before the workflow create (line 139):
 
@@ -6424,18 +6424,18 @@ In `apps/api/src/routes/admin/automate.ts`, before the workflow create (line 139
   );
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/automate.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Make the console screen a list**
+- [x] **Step 5: Make the console screen a list**
 
 Rewrite `apps/web/src/pages/admin/WorkflowEditorPage.tsx` so it reads `/api/admin/automate/workflows` and renders, for each workflow: its name, whether it is enabled, its `productCount`, and its stages in sequence with each stage's selector, quorum, fallback, SLA and timeout behaviour. Keep the existing resolution preview, but with the workflow chosen from a `Select` built from the list rather than typed as a uuid, and add a "New workflow" panel that POSTs a `{ name, description, enabled, stages: [] }` body — the contract permits an empty stage list and `workflowBody`'s own comment says an empty one grants immediately, which is the mechanism and worth saying on the screen.
 
 Keep the existing `DROP_REASON` map and the preview rendering exactly as they are; the preview was the one part of this page that worked.
 
-- [ ] **Step 6: Let the product editor pick one**
+- [x] **Step 6: Let the product editor pick one**
 
 In `apps/web/src/pages/admin/ProductEditorPage.tsx`, replace the `Approval workflow id` `Field` with:
 
@@ -6458,7 +6458,7 @@ In `apps/web/src/pages/admin/ProductEditorPage.tsx`, replace the `Approval workf
 
 with `const { data: workflowList } = useApiResource<{ workflows: { id: string; name: string }[] }>('/api/admin/automate/workflows');`. The editor's test from Task 17 already mocks that endpoint.
 
-- [ ] **Step 7: Test the workflow screen**
+- [x] **Step 7: Test the workflow screen**
 
 Create `apps/web/src/pages/admin/WorkflowEditorPage.test.tsx` in the house style, asserting:
 - every workflow in the response is listed with its name and stage names;
@@ -6466,7 +6466,7 @@ Create `apps/web/src/pages/admin/WorkflowEditorPage.test.tsx` in the house style
 - creating a workflow POSTs `{ name, description, enabled, stages: [] }`;
 - the resolution preview posts the id chosen from the picker, not a typed one.
 
-- [ ] **Step 8: Run the web tests, typecheck and commit**
+- [x] **Step 8: Run the web tests, typecheck and commit**
 
 ```bash
 cd apps/web && npx vitest run src/pages/admin/WorkflowEditorPage.test.tsx src/pages/admin/ProductEditorPage.test.tsx; cd ../..
@@ -6517,7 +6517,7 @@ Spec §7.6, **W6**, three more server features with no way to invoke them. `POST
   - `DELETE /api/admin/users/:id/factors/:type` → 200 `{ recoveryCodesRevoked }`
 - Produces: no new endpoints.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `apps/web/src/pages/admin/PersonDetailPage.test.tsx`:
 
@@ -6612,12 +6612,12 @@ describe('taking a factor off a user', () => {
 });
 ```
 
-- [ ] **Step 2: Run all three to verify they fail**
+- [x] **Step 2: Run all three to verify they fail**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/PersonDetailPage.test.tsx src/pages/admin/StatusToggle.test.tsx src/pages/admin/UsersPage.test.tsx; cd ../..`
 Expected: FAIL — none of the three controls exist.
 
-- [ ] **Step 3: Build the three controls**
+- [x] **Step 3: Build the three controls**
 
 `PersonDetailPage`: read `/api/admin/users`, filter to accounts whose `personId` is null (add `personId` to the users list response if it is not already there — check `apps/api/src/routes/admin/users.ts`'s list handler first), offer them in a `Select` labelled `Account to link`, and POST on **Link**. Render the refusal.
 
@@ -6634,12 +6634,12 @@ Expected: FAIL — none of the three controls exist.
                     one the attacker removed. */}
 ```
 
-- [ ] **Step 4: Run the three tests to verify they pass**
+- [x] **Step 4: Run the three tests to verify they pass**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/PersonDetailPage.test.tsx src/pages/admin/StatusToggle.test.tsx src/pages/admin/UsersPage.test.tsx; cd ../..`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck, build and commit**
+- [x] **Step 5: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
@@ -6686,7 +6686,7 @@ Spec §7.6, **W6**, last surface. `MyAccessPage`'s **Extend** links to the plain
 - Consumes: `submitRequestBody.replacesGrantId` (already declared, `z.string().uuid().nullable().default(null)`), which `request-service.ts:310-320` validates against a live grant and `fulfil.ts:252` acts on.
 - Produces: no new endpoints. `/catalog/:id?replaces=<grantId>` carries the grant being extended.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/web/src/pages/automate/RequestFormPage.test.tsx`:
 
@@ -6747,12 +6747,12 @@ describe('an extension', () => {
 
 Extend the file's `mockForm` into `mockFormWithSubmit`, recording POST bodies, rather than adding a second mocking style.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/automate/RequestFormPage.test.tsx; cd ../..`
 Expected: FAIL — no `replacesGrantId` on the body and no such sentence on the page.
 
-- [ ] **Step 3: Carry the grant through**
+- [x] **Step 3: Carry the grant through**
 
 In `apps/web/src/pages/automate/MyAccessPage.tsx`, replace the extend link (lines 97–103):
 
@@ -6808,12 +6808,12 @@ and above the submit button:
 
 Import `useSearchParams` from `react-router-dom`.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/automate/RequestFormPage.test.tsx; cd ../..`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -6855,7 +6855,7 @@ Spec §7.6, **W8**. `GovernOrphansPage`'s **Confirm** asks the reader to agree t
 - Consumes: `POST /api/admin/govern/orphans/:id/deny` (unchanged).
 - Produces: `POST /api/admin/govern/orphans/:id/confirm` is removed. `confirmProposal` stays exported in core, tested and unreferenced by any route — deliberately, because it is the half of the pair a Provision slice will call.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `apps/web/src/pages/admin/GovernOrphansPage.test.tsx` in the house style:
 
@@ -6900,12 +6900,12 @@ describe('an orphan proposal', () => {
 
 The denial currently uses `window.prompt`, which `StatusToggle.test.tsx` documents as a control that silently stops working once a browser has been told to block dialogs. Move it into the page, exactly as `StatusToggle` did, which is what the third case asserts.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernOrphansPage.test.tsx; cd ../..`
 Expected: FAIL — Confirm is present, the sentence is not, and the reason is asked for by `window.prompt`.
 
-- [ ] **Step 3: Remove the control and the route**
+- [x] **Step 3: Remove the control and the route**
 
 In `apps/web/src/pages/admin/GovernOrphansPage.tsx`, delete the Confirm `Button` (lines 56–82), move the denial's reason into the page as an inline form, and add under the proposal:
 
@@ -6946,7 +6946,7 @@ In `apps/api/src/routes/admin/govern.ts`, delete the `/govern/orphans/:id/confir
   // does not stay is a route that cannot do what its own name says.
 ```
 
-- [ ] **Step 4: Run the web test and the govern route suite**
+- [x] **Step 4: Run the web test and the govern route suite**
 
 ```bash
 cd apps/web && npx vitest run src/pages/admin/GovernOrphansPage.test.tsx; cd ../..
@@ -6955,7 +6955,7 @@ npx vitest run apps/api/src/routes/admin/govern.test.ts
 
 Expected: PASS both. If a route test asserted the 501, delete it — it was asserting the defect.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7007,7 +7007,7 @@ Spec §7.3, **S1**. `loadExisting` sets every existing user's `correlationValue`
   - `loadExisting(tx: TenantClient, rules: MappingRule[]): Promise<ExistingSnapshot>` — one new parameter
   - a module-private `correlationFieldFor(rules: MappingRule[], objectType: ObjectType): string`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `packages/core/src/sync/run-service.test.ts`:
 
@@ -7095,12 +7095,12 @@ describe('correlation on a configured key', () => {
 
 `seedSource` and `previewRunWith` are the file's existing helpers for a source with mappings and a fake connector; read the top of the file and reuse them rather than adding new ones.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run packages/core/src/sync/run-service.test.ts -t 'correlation on a configured key'`
 Expected: FAIL — the first case proposes `create_user` for a person who already exists.
 
-- [ ] **Step 3: Read the configured field**
+- [x] **Step 3: Read the configured field**
 
 In `packages/core/src/sync/run-service.ts`, replace `loadExisting`'s signature and its three `correlationValue` lines (lines 451, 489, 497, 505):
 
@@ -7200,12 +7200,12 @@ At the call site (line 130), pass the rules the run already loaded:
 
 Import `ObjectType` from `@syntra/connectors` if the file does not already have it.
 
-- [ ] **Step 4: Run the test and the neighbouring suites**
+- [x] **Step 4: Run the test and the neighbouring suites**
 
 Run: `npx vitest run packages/core/src/sync/run-service.test.ts packages/core/src/sync/correlate.test.ts packages/core/src/sync/mapping.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7253,7 +7253,7 @@ Spec §7.3, **S2**. `ldapConnector.test()` runs unpaged searches with no client 
 - Consumes: `runSearch(client, search, options, handler)` — already takes an options object.
 - Produces: `export const TEST_SAMPLE_LIMIT = 20` from `packages/connectors/src/ldap/connector.ts`. `ConnectionResult.sampleCounts` is unchanged in shape and now capped at that value.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `packages/connectors/src/ldap/connector.test.ts`, using the file's existing fake `Client`:
 
@@ -7301,12 +7301,12 @@ describe('test() against a directory with a server-side size limit', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/connectors/src/ldap/connector.test.ts -t 'server-side size limit'`
 Expected: FAIL — no `sizeLimit` on the search options and the message says nothing about a sample.
 
-- [ ] **Step 3: Cap the searches**
+- [x] **Step 3: Cap the searches**
 
 In `packages/connectors/src/ldap/connector.ts`, above `ldapConnector` (line 224):
 
@@ -7353,12 +7353,12 @@ and inside `test()`:
 
 In `packages/connectors/src/ad/connector.ts`, add `sizeLimit: TEST_SAMPLE_LIMIT` to both searches in `test()` (lines 813 and 818) — the comment beside `sampleCounts` there already explains that they are a sample and that the server caps them; the limit is what stops the server refusing instead.
 
-- [ ] **Step 4: Run the connector suites**
+- [x] **Step 4: Run the connector suites**
 
 Run: `npx vitest run packages/connectors/src/ldap/connector.test.ts packages/connectors/src/ad/connector.unit.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7404,7 +7404,7 @@ Spec §7.3, **S3**. Neither the route nor `queueRun` checks `enabled`, and `runS
 - Consumes: `DirectorySource.enabled`.
 - Produces: `export class SourceDisabledError extends Error { readonly sourceId: string }` from `packages/core/src/sync/jobs.ts`. `POST /sources/:id/run` answers 409 `source-disabled`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `packages/core/src/sync/jobs.test.ts`:
 
@@ -7450,12 +7450,12 @@ it('answers 409 when a run is asked for on a disabled source', async () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run packages/core/src/sync/jobs.test.ts apps/api/src/routes/admin/sources.test.ts -t 'disabled'`
 Expected: FAIL — a `queued` run is written and the route answers 202.
 
-- [ ] **Step 3: Refuse where the row is written**
+- [x] **Step 3: Refuse where the row is written**
 
 In `packages/core/src/sync/jobs.ts`, above `queueRun` (line 44):
 
@@ -7509,12 +7509,12 @@ In `apps/api/src/routes/admin/sources.ts`, wrap the `queueRun` call:
 
 adding `SourceDisabledError` to the `@syntra/core` import.
 
-- [ ] **Step 4: Run both files to verify they pass**
+- [x] **Step 4: Run both files to verify they pass**
 
 Run: `npx vitest run packages/core/src/sync/jobs.test.ts apps/api/src/routes/admin/sources.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7552,7 +7552,7 @@ Spec §7.3, **S4**. `classify()` defaults unmatched errors to `policy`, and DNS 
 - Consumes: nothing.
 - Produces: `export function classifyWritebackError(cause: unknown): WritebackFailure` — the existing private `classify`, exported so it can be tested without a directory.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/connectors/src/ldap/writeback.test.ts`:
 
@@ -7615,12 +7615,12 @@ describe('classifying a write-back failure', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/connectors/src/ldap/writeback.test.ts`
 Expected: FAIL — `classifyWritebackError` is not exported, and once it is, the first three cases answer `policy`.
 
-- [ ] **Step 3: Widen the list and turn the default round**
+- [x] **Step 3: Widen the list and turn the default round**
 
 In `packages/connectors/src/ldap/writeback.ts`, rename `classify` to `classifyWritebackError`, export it, update its two call sites, and rewrite the tail:
 
@@ -7686,12 +7686,12 @@ export function classifyWritebackError(cause: unknown): WritebackFailure {
 }
 ```
 
-- [ ] **Step 4: Run the test and the callers**
+- [x] **Step 4: Run the test and the callers**
 
 Run: `npx vitest run packages/connectors/src/ldap/writeback.test.ts packages/core/src/auth/password-change.test.ts packages/core/src/directory/directory-writeback.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7735,7 +7735,7 @@ Spec §7.3, **S5**. A database that accepts TCP and stops answering hangs `/heal
 - Consumes: nothing.
 - Produces: `export const PROBE_TIMEOUT_MS = 5_000`; a module-private `withTimeout<T>(name, ms, work): Promise<Probe>`. `readiness(deps)` keeps its signature and gains `probeTimeoutMs?: number` on `ReadinessDeps` for the test.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `packages/core/src/health/readiness.test.ts`:
 
@@ -7793,12 +7793,12 @@ describe('a probe that never answers', () => {
 
 `prisma` is a Proxy that materialises methods on access — remediation 1 Task 1 documents that `vi.spyOn` restores to `undefined` here. Use the same hand-swap-with-`finally` shape that file already adopted rather than relying on `mockRestore` if the fix landed differently.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/core/src/health/readiness.test.ts -t 'never answers'`
 Expected: FAIL — the test times out, because `readiness` never resolves. That *is* the defect.
 
-- [ ] **Step 3: Give every probe a deadline**
+- [x] **Step 3: Give every probe a deadline**
 
 In `packages/core/src/health/readiness.ts`, add to `ReadinessDeps` (line 46):
 
@@ -7877,12 +7877,12 @@ export async function readiness(deps: ReadinessDeps): Promise<ReadinessReport> {
 
 `probeWeb` is a synchronous `existsSync` and needs no deadline.
 
-- [ ] **Step 4: Run the file to verify it passes**
+- [x] **Step 4: Run the file to verify it passes**
 
 Run: `npx vitest run packages/core/src/health/readiness.test.ts`
 Expected: PASS, the whole file.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -7923,7 +7923,7 @@ Spec §7.3, **S6**. `/sources/test` audits every attempt, including refusals; th
 - Consumes: `recordEvent`, already imported by the module.
 - Produces: no signature change. The route writes a `source.test` event with the same payload shape its unsaved sibling uses.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/api/src/routes/admin/sources.test.ts`:
 
@@ -7940,12 +7940,12 @@ it('audits a test against a saved source, as the unsaved one already did', async
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run apps/api/src/routes/admin/sources.test.ts -t 'audits a test against a saved source'`
 Expected: FAIL — no events.
 
-- [ ] **Step 3: Audit it**
+- [x] **Step 3: Audit it**
 
 In `apps/api/src/routes/admin/sources.ts`, replace the handler body (lines 549–559):
 
@@ -7991,12 +7991,12 @@ In `apps/api/src/routes/admin/sources.ts`, replace the handler body (lines 549�
       return result;
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `npx vitest run apps/api/src/routes/admin/sources.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -8039,7 +8039,7 @@ The write-back design §7.2 step 6 says a Provision run is enqueued after an adm
   - `AdminUserRouteOptions` gains `scheduler?: () => Scheduler | null`
   - a new audit action, `auth.password_writeback_desync`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `packages/core/src/directory/directory-writeback.test.ts`:
 
@@ -8161,12 +8161,12 @@ describe('a password that landed in the directory and not locally', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run packages/core/src/directory/directory-writeback.test.ts packages/core/src/auth/password-change.test.ts -t 'ladder\|desync'`
 Expected: FAIL — `scheduler` is not a field of `DeactivateInput`, and no desync event is written.
 
-- [ ] **Step 3: Enqueue the ladder**
+- [x] **Step 3: Enqueue the ladder**
 
 In `packages/core/src/directory/directory-writeback.ts`, add `scheduler?: Scheduler | null | undefined;` to `DeactivateInput` and `runsEnqueued: number` to the success arm of `DeactivateOutcome`, and after the ladder transaction (line 177):
 
@@ -8220,7 +8220,7 @@ The locally-managed early return (line 105) returns `runsEnqueued: 0` too.
 
 In `apps/api/src/routes/admin/users.ts`, add `scheduler?: () => Scheduler | null;` to `AdminUserRouteOptions` with the comment the source routes already use, and pass `scheduler: options.scheduler?.() ?? null` to both `deactivateDirectoryUser` and `reactivateDirectoryUser`. In `apps/api/src/app.ts`, add `...(options.scheduler ? { scheduler: options.scheduler } : {})` to the `registerAdminUserRoutes` registration (line 216), matching how the source routes are registered.
 
-- [ ] **Step 4: Mark the desync**
+- [x] **Step 4: Mark the desync**
 
 In `packages/core/src/auth/password-change.ts`, replace the success return of the write-back branch (line 222):
 
@@ -8264,12 +8264,12 @@ In `packages/core/src/auth/password-change.ts`, replace the success return of th
     }
 ```
 
-- [ ] **Step 5: Run both files to verify they pass**
+- [x] **Step 5: Run both files to verify they pass**
 
 Run: `npx vitest run packages/core/src/directory/directory-writeback.test.ts packages/core/src/auth/password-change.test.ts apps/api/src/routes/admin/users.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -8320,7 +8320,7 @@ Spec §9, **B2**. `findFirst({ where: { login: 'admin' } })` after a slug upsert
 - Consumes: nothing.
 - Produces: `export function seedMarkerFound(markers: { adminUser: boolean; builtInRole: boolean }): boolean` in a new `packages/db/src/seed-guard.ts`, so the decision is testable without running a seed.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/db/src/seed-guard.test.ts`:
 
@@ -8360,12 +8360,12 @@ describe('seedMarkerFound', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/db/src/seed-guard.test.ts`
 Expected: FAIL — `Cannot find module './seed-guard.js'`.
 
-- [ ] **Step 3: Write the guard and use it**
+- [x] **Step 3: Write the guard and use it**
 
 Create `packages/db/src/seed-guard.ts`:
 
@@ -8436,7 +8436,7 @@ await withTenant(tenant.id, async (tx) => {
 
 adding `import { seedMarkerFound } from './seed-guard.js';`.
 
-- [ ] **Step 4: Run the guard test, then prove the seed still seeds**
+- [x] **Step 4: Run the guard test, then prove the seed still seeds**
 
 ```bash
 npx vitest run packages/db/src/seed-guard.test.ts
@@ -8446,7 +8446,7 @@ SEED_ADMIN_PASSWORD=aaaaaaaaaaaa pnpm seed
 
 Expected: PASS; the first seed creates everything; the second prints "already seeded" and does nothing. Only against a development database.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -8496,7 +8496,7 @@ And two documented one-per invariants have no backing constraint: one `active` `
 - Consumes: nothing.
 - Produces: index `GroupMembership_userId_idx`; partial unique indexes `signing_key_one_active` and `target_account_anchor_unique`. No code changes.
 
-- [ ] **Step 1: Check the existing data can satisfy the two constraints**
+- [x] **Step 1: Check the existing data can satisfy the two constraints**
 
 ```bash
 cd packages/db && npx prisma db execute --stdin <<'SQL'
@@ -8510,7 +8510,7 @@ cd ../..
 
 Expected: no rows from either. If there are rows, the invariant is already broken and this task's first job is finding out how — the constraint is the fix, but a migration that fails on deploy is not.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `packages/db/src/schema-invariants.test.ts`:
 
@@ -8564,12 +8564,12 @@ describe('the index every portal render needs', () => {
 });
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `npx vitest run packages/db/src/schema-invariants.test.ts`
 Expected: FAIL — all three indexes are missing.
 
-- [ ] **Step 4: Write the migration**
+- [x] **Step 4: Write the migration**
 
 Create `packages/db/prisma/migrations/20260904000000_membership_index_and_one_per_uniques/migration.sql`:
 
@@ -8618,11 +8618,11 @@ CREATE UNIQUE INDEX target_account_anchor_unique
 
 In `packages/db/prisma/schema.prisma`, add `@@index([userId])` to `GroupMembership` (after line 130). The two partial uniques stay SQL-only — Prisma cannot express a partial unique index, which is why `role_assignment_unscoped_unique` is SQL-only too.
 
-- [ ] **Step 5: Register the migration name**
+- [x] **Step 5: Register the migration name**
 
 Append `'20260904000000_membership_index_and_one_per_uniques',` to `KNOWN_MIGRATIONS` in `packages/db/src/migration-order.ts`.
 
-- [ ] **Step 6: Apply and verify**
+- [x] **Step 6: Apply and verify**
 
 ```bash
 cd packages/db && npx prisma migrate deploy && npx prisma generate; cd ../..
@@ -8631,13 +8631,13 @@ npx vitest run packages/db/src/schema-invariants.test.ts packages/db/src/migrati
 
 Expected: PASS.
 
-- [ ] **Step 7: Check the two constraints did not break rotation or provisioning**
+- [x] **Step 7: Check the two constraints did not break rotation or provisioning**
 
 Run: `npx vitest run packages/core/src/keys/signing-key-service.test.ts packages/core/src/provision/apply.test.ts`
 
 Expected: PASS. `rotateKey` demotes the previous key to `outgoing` *before* inserting the new one, which is the ordering its own comment says this index makes load-bearing — this is where that claim is finally true.
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -8691,7 +8691,7 @@ Spec §7.4, **H6**. Five dead exports were named: `hasPassword`, `listSecretName
 - Consumes: nothing.
 - Produces: four fewer exports. `evaluateIpRanges` and `evaluateTimeWindow` — the three-valued functions the deleted ones wrapped, and the ones the policy engine actually calls — are untouched.
 
-- [ ] **Step 1: Confirm they are still dead**
+- [x] **Step 1: Confirm they are still dead**
 
 ```bash
 for name in hasPassword listSecretNames matchesIpRanges matchesTimeWindow; do
@@ -8708,7 +8708,7 @@ grep -rn "isPermission" --include=*.ts packages/*/src apps/*/src | grep -v "\.te
 
 Expected: the declaration in `permissions.ts` **and** the call in `rbac-service.ts`'s `assertPermissionNames`. If the second is missing, Task 6 has not landed and this task is out of order.
 
-- [ ] **Step 2: Delete the four, and their tests**
+- [x] **Step 2: Delete the four, and their tests**
 
 Remove `hasPassword` from `packages/core/src/auth/password.ts` and `listSecretNames` from `packages/core/src/vault/vault-service.ts` (and its case from `vault-service.test.ts` — the `putSecret`/`getSecret` cases around it stay).
 
@@ -8727,12 +8727,12 @@ In `packages/core/src/policy/ip-match.ts`, delete `matchesIpRanges` (lines 85–
 
 Do the same in `packages/core/src/policy/time-window.ts` for `matchesTimeWindow`, and rewrite the two test files to assert on `evaluateIpRanges` / `evaluateTimeWindow` directly, keeping every case — the coverage is worth keeping, the wrappers are not.
 
-- [ ] **Step 3: Run the affected suites**
+- [x] **Step 3: Run the affected suites**
 
 Run: `npx vitest run packages/core/src/policy/ip-match.test.ts packages/core/src/policy/time-window.test.ts packages/core/src/vault/vault-service.test.ts packages/core/src/auth/password.test.ts`
 Expected: PASS.
 
-- [ ] **Step 4: Typecheck and commit**
+- [x] **Step 4: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0. `@syntra/core`'s index uses `export *`, so nothing else needs editing.

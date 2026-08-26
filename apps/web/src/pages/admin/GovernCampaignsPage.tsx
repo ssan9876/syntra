@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -64,13 +64,31 @@ export function GovernCampaignsPage() {
       <PageHeader
         title="Access reviews"
         description="A campaign is a scope, a set of reviewers and a due date, frozen against one snapshot. Nothing in it removes anything until somebody confirms a revocation batch."
+        actions={
+          <Link to="/admin/govern/campaigns/new">
+            <Button variant="primary" size="sm">
+              New campaign
+            </Button>
+          </Link>
+        }
       />
 
       {error !== null && <Alert tone="danger">{error}</Alert>}
       {loading && <SkeletonRows rows={5} cols={4} />}
 
       {!loading && campaigns.length === 0 && (
-        <Empty title="No campaigns yet">
+        <Empty
+          title="No campaigns yet"
+          action={
+            // The empty state TOLD the reader to scope a review and offered no
+            // way to. Every endpoint behind this link already existed.
+            <Link to="/admin/govern/campaigns/new">
+              <Button variant="primary" size="sm">
+                New campaign
+              </Button>
+            </Link>
+          }
+        >
           A campaign is built against a snapshot. Take one first, then scope the review to the
           systems and people it should cover.
         </Empty>

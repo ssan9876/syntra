@@ -3,14 +3,19 @@ import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser } from '../directory/user-service.js';
 import { createOrgUnit } from '../directory/org-unit-service.js';
-import { PERMISSIONS } from './permissions.js';
+import { ALL_PERMISSIONS, PERMISSIONS } from './permissions.js';
 import {
   assignRole,
+  countHoldersOf,
   createRole,
+  deleteRole,
   hasPermission,
   isAdministrator,
+  listRoles,
   permissionsForUser,
+  readRole,
   revokeRole,
+  updateRole,
 } from './rbac-service.js';
 
 let tenantId: string;
@@ -233,5 +238,128 @@ describe('assignRole', () => {
       tx.roleAssignment.count({ where: { userId } }),
     );
     expect(count).toBe(2);
+  });
+});
+
+describe('editing a role', () => {
+  /**
+   * The whole reason this exists. `Role.permissions` is a stored snapshot
+   * written once by the seed, and the catalogue grew in six later commits with
+   * no migration behind them -- so an upgraded deployment's Owner got 403 on
+   * every new module and the only remedy was hand-written SQL.
+   */
+  it('replaces the permission set', async () => {
+    const roleId = await withTenant(tenantId, async (tx) => {
+      const role = await createRole(tx, 'Auditor', [PERMISSIONS.AUDIT_READ]);
+      await updateRole(tx, role.id, {
+        permissions: [PERMISSIONS.AUDIT_READ, PERMISSIONS.GOVERN_READ],
+      });
+      return role.id;
+    });
+
+    const after = await withTenant(tenantId, (tx) => readRole(tx, roleId));
+    expect([...after.permissions].sort()).toEqual(
+      [PERMISSIONS.AUDIT_READ, PERMISSIONS.GOVERN_READ].sort(),
+    );
+  });
+
+  /**
+   * The catalogue is closed and it is closed HERE, in the domain, not in a
+   * zod enum at the edge. A second declaration of the same list is a second
+   * thing to keep in step, and this one already exists and is already the
+   * authority `hasPermission` compares against.
+   */
+  it('refuses a permission that is not in the catalogue', async () => {
+    await expect(
+      withTenant(tenantId, async (tx) => {
+        const role = await createRole(tx, 'Odd', [PERMISSIONS.AUDIT_READ]);
+        await updateRole(tx, role.id, { permissions: ['directory.reed'] });
+      }),
+    ).rejects.toThrow(/directory\.reed/);
+  });
+
+  it('renames without touching the permissions', async () => {
+    const roleId = await withTenant(tenantId, async (tx) => {
+      const role = await createRole(tx, 'Auditor', [PERMISSIONS.AUDIT_READ]);
+      await updateRole(tx, role.id, { name: 'Internal audit' });
+      return role.id;
+    });
+    const after = await withTenant(tenantId, (tx) => readRole(tx, roleId));
+    expect(after.name).toBe('Internal audit');
+    expect(after.permissions).toEqual([PERMISSIONS.AUDIT_READ]);
+  });
+});
+
+describe('deleting a role', () => {
+  it('deletes one nobody holds', async () => {
+    const roleId = await withTenant(tenantId, async (tx) => {
+      const role = await createRole(tx, 'Temporary', [PERMISSIONS.AUDIT_READ]);
+      await deleteRole(tx, role.id);
+      return role.id;
+    });
+    const rows = await withTenant(tenantId, (tx) => listRoles(tx));
+    expect(rows.map((r) => r.id)).not.toContain(roleId);
+  });
+
+  /**
+   * A built-in role is the one the seed wrote and the one the migration
+   * backfills. Deleting it is not an edit an administrator can undo, and the
+   * assignment rows cascade with it.
+   */
+  it('refuses a built-in role', async () => {
+    await expect(
+      withTenant(tenantId, async (tx) => {
+        const role = await createRole(tx, 'Owner', ALL_PERMISSIONS, { builtIn: true });
+        await deleteRole(tx, role.id);
+      }),
+    ).rejects.toThrow(/built-in/);
+  });
+
+  it('refuses one that is still assigned, and names the count', async () => {
+    await expect(
+      withTenant(tenantId, async (tx) => {
+        const user = await createUser(tx, {
+          login: 'a', email: 'a@acme.test', displayName: 'A',
+        });
+        const role = await createRole(tx, 'Held', [PERMISSIONS.AUDIT_READ]);
+        await assignRole(tx, user.id, role.id);
+        await deleteRole(tx, role.id);
+      }),
+    ).rejects.toThrow(/1 /);
+  });
+});
+
+describe('countHoldersOf', () => {
+  /**
+   * The denominator behind the lockout guard the API applies. Unscoped
+   * assignments ONLY: `hasPermission` deliberately refuses a scoped grant
+   * asked tenant-wide, so a department-scoped `rbac.manage` cannot administer
+   * roles and must not count towards "somebody can still do this".
+   */
+  it('counts people holding it tenant-wide, once each', async () => {
+    const count = await withTenant(tenantId, async (tx) => {
+      const user = await createUser(tx, {
+        login: 'b', email: 'b@acme.test', displayName: 'B',
+      });
+      const one = await createRole(tx, 'One', [PERMISSIONS.RBAC_MANAGE]);
+      const two = await createRole(tx, 'Two', [PERMISSIONS.RBAC_MANAGE]);
+      await assignRole(tx, user.id, one.id);
+      await assignRole(tx, user.id, two.id);
+      return countHoldersOf(tx, PERMISSIONS.RBAC_MANAGE);
+    });
+    expect(count).toBe(1);
+  });
+
+  it('does not count a scoped assignment', async () => {
+    const count = await withTenant(tenantId, async (tx) => {
+      const unit = await createOrgUnit(tx, 'Care');
+      const user = await createUser(tx, {
+        login: 'c', email: 'c@acme.test', displayName: 'C',
+      });
+      const role = await createRole(tx, 'Scoped', [PERMISSIONS.RBAC_MANAGE]);
+      await assignRole(tx, user.id, role.id, unit.id);
+      return countHoldersOf(tx, PERMISSIONS.RBAC_MANAGE);
+    });
+    expect(count).toBe(0);
   });
 });

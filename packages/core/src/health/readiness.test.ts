@@ -281,3 +281,53 @@ describe('redactReport', () => {
     expect(redacted.version).toBe('1.4.0');
   });
 });
+
+describe('a probe that never answers', () => {
+  /**
+   * The updater's automatic rollback hangs on this endpoint. A database that
+   * accepts TCP and then stops answering -- a failed-over primary, a saturated
+   * pool, a paused container -- leaves every query pending for ever, so the
+   * readiness gate never resolves and the rollback that was waiting on it
+   * never happens. A gate that cannot answer "no" is not a gate.
+   *
+   * The hand-swap, not `vi.spyOn`: `prisma` is a Proxy that materialises its
+   * methods on access, and a spy restored through it leaves `$queryRawUnsafe`
+   * undefined for every later test in the file -- documented above, at the
+   * existing `fails when the database is not reachable` case.
+   */
+  it('fails the probe rather than hanging the gate', async () => {
+    type RawQuery = typeof prisma.$queryRawUnsafe;
+    const target = prisma as unknown as { $queryRawUnsafe: RawQuery };
+    const original = prisma.$queryRawUnsafe.bind(prisma) as RawQuery;
+    target.$queryRawUnsafe = (() => new Promise(() => {})) as unknown as RawQuery;
+
+    try {
+      const report = await readiness(deps({ probeTimeoutMs: 25 }));
+      expect(probe(report, 'database').status).toBe('fail');
+      expect(probe(report, 'database').detail).toMatch(/did not answer/i);
+      expect(report.ready).toBe(false);
+    } finally {
+      target.$queryRawUnsafe = original;
+    }
+  });
+
+  /** And the other probes still run: the report says everything at once. */
+  it('still reports every other probe', async () => {
+    type RawQuery = typeof prisma.$queryRawUnsafe;
+    const target = prisma as unknown as { $queryRawUnsafe: RawQuery };
+    const original = prisma.$queryRawUnsafe.bind(prisma) as RawQuery;
+    target.$queryRawUnsafe = (() => new Promise(() => {})) as unknown as RawQuery;
+
+    try {
+      const report = await readiness(deps({ probeTimeoutMs: 25 }));
+      expect(report.probes.map((p) => p.name)).toEqual([
+        'database',
+        'migrations',
+        'vault',
+        'web',
+      ]);
+    } finally {
+      target.$queryRawUnsafe = original;
+    }
+  });
+});

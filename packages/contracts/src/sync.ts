@@ -1,5 +1,5 @@
-import { CronExpressionParser } from 'cron-parser';
-import { z } from 'zod';
+import { CronExpressionParser } from "cron-parser";
+import { z } from "zod";
 
 /**
  * A cron expression the job scheduler will actually accept.
@@ -31,47 +31,61 @@ export const cronExpression = z
   .max(128)
   .superRefine((value, ctx) => {
     try {
-      CronExpressionParser.parse(value, { tz: 'UTC', strict: false });
+      CronExpressionParser.parse(value, { tz: "UTC", strict: false });
     } catch (cause) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `not a cron expression the scheduler can use: ${
-          cause instanceof Error ? cause.message : 'unparseable'
+          cause instanceof Error ? cause.message : "unparseable"
         }`,
       });
     }
   });
 
-export const createSourceRequest = z.object({
-  name: z.string().min(1).max(256),
-  config: z.record(z.unknown()),
-  bindPassword: z.string().min(1).max(1024),
-  schedule: cronExpression.optional(),
-  autoApply: z.boolean().optional(),
-  deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
-  /**
-   * Absent means enabled, which is what a source created before this field
-   * existed got. Sending `false` creates a source that is configured but does
-   * not run — the only way to give a source a cron expression and its
-   * attribute mappings without the schedule firing in between, since a create
-   * is scheduled the moment it commits.
-   */
-  enabled: z.boolean().optional(),
-  /**
-   * Write-back. All four default to false, and a source that omits them
-   * stays read-only: an upgrade must not hand an existing source the ability
-   * to change passwords, disable accounts or delete objects.
-   *
-   * `writebackEnabled` is the master switch; the other three are the
-   * individual writes, separate because they are separate decisions.
-   * `writebackDelete` is the only one whose effect cannot be undone by
-   * writing the opposite value back.
-   */
-  writebackEnabled: z.boolean().optional(),
-  writebackPassword: z.boolean().optional(),
-  writebackDisable: z.boolean().optional(),
-  writebackDelete: z.boolean().optional(),
-});
+/**
+ * `.strict()`, for the reason `provision.ts` gives about target config and one
+ * this schema has of its own.
+ *
+ * Four of these fields turn password write-back, account disabling and
+ * object deletion on and off. Without strictness zod strips a key it does not
+ * know, so a PATCH carrying `writebackPasword` beside a valid field commits
+ * the valid one, answers success, and leaves write-back exactly as it was --
+ * an administrator narrowing a source's behaviour after an incident gets a
+ * save that reports success and changed nothing, which is the failure mode
+ * this product spends most of its comments avoiding.
+ */
+export const createSourceRequest = z
+  .object({
+    name: z.string().min(1).max(256),
+    config: z.record(z.unknown()),
+    bindPassword: z.string().min(1).max(1024),
+    schedule: cronExpression.optional(),
+    autoApply: z.boolean().optional(),
+    deactivationThresholdPercent: z.number().int().min(0).max(100).optional(),
+    /**
+     * Absent means enabled, which is what a source created before this field
+     * existed got. Sending `false` creates a source that is configured but does
+     * not run — the only way to give a source a cron expression and its
+     * attribute mappings without the schedule firing in between, since a create
+     * is scheduled the moment it commits.
+     */
+    enabled: z.boolean().optional(),
+    /**
+     * Write-back. All four default to false, and a source that omits them
+     * stays read-only: an upgrade must not hand an existing source the ability
+     * to change passwords, disable accounts or delete objects.
+     *
+     * `writebackEnabled` is the master switch; the other three are the
+     * individual writes, separate because they are separate decisions.
+     * `writebackDelete` is the only one whose effect cannot be undone by
+     * writing the opposite value back.
+     */
+    writebackEnabled: z.boolean().optional(),
+    writebackPassword: z.boolean().optional(),
+    writebackDisable: z.boolean().optional(),
+    writebackDelete: z.boolean().optional(),
+  })
+  .strict();
 
 /**
  * Every field optional, and only what was sent is written: changing a
@@ -96,8 +110,9 @@ export const updateSourceRequest = z
     writebackDisable: z.boolean().optional(),
     writebackDelete: z.boolean().optional(),
   })
+  .strict()
   .refine((body) => Object.keys(body).length > 0, {
-    message: 'nothing to update',
+    message: "nothing to update",
   });
 
 /**
@@ -108,9 +123,9 @@ export const updateSourceRequest = z
  */
 export const deleteSourceQuery = z.object({
   confirm: z
-    .enum(['true', 'false'])
+    .enum(["true", "false"])
     .optional()
-    .transform((value) => value === 'true'),
+    .transform((value) => value === "true"),
   /**
    * The counts the caller was shown when they confirmed.
    *
@@ -130,10 +145,10 @@ export const deleteSourceQuery = z.object({
 });
 
 export const mappingRule = z.object({
-  objectType: z.enum(['user', 'group', 'orgUnit']),
+  objectType: z.enum(["user", "group", "orgUnit"]),
   sourceAttribute: z.string().min(1).max(128),
   targetField: z.string().min(1).max(128),
-  transform: z.enum(['none', 'trim', 'lowercase']),
+  transform: z.enum(["none", "trim", "lowercase"]),
   isCorrelation: z.boolean(),
 });
 
@@ -196,6 +211,6 @@ export const testConnectionRequest = z
     (body) => body.bindPassword !== undefined || body.sourceId !== undefined,
     {
       message:
-        'send a bind password, or the id of a saved source whose stored password should be used',
+        "send a bind password, or the id of a saved source whose stored password should be used",
     },
   );

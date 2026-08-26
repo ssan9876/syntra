@@ -82,5 +82,12 @@ export function evaluateIpRanges(
   return usable.length === ranges.length ? 'no-match' : 'unevaluable';
 }
 
-export const matchesIpRanges = (sourceIp: string | null, ranges: string[]): boolean =>
-  evaluateIpRanges(sourceIp, ranges) === 'match';
+
+// There is deliberately no boolean `matchesIpRanges` wrapper any more.
+//
+// `evaluateIpRanges` answers THREE things -- 'match', 'no-match' and
+// 'unevaluable' -- and the third is the point: a rule whose range list could
+// not be read covers addresses this cannot see, and "no" would be an
+// overstatement. A boolean wrapper collapses the third into the second, which
+// is the wrong direction for a policy condition, and nothing outside its own
+// test ever called it.

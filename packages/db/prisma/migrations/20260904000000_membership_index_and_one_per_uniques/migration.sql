@@ -1,0 +1,15 @@
+-- `GroupMembership` is read BY USER on every portal render, every SAML
+-- assertion and every OIDC token: resolving what somebody can reach starts
+-- with the groups they are in. The unique index leads with `groupId`, which
+-- answers the other question, so the per-user lookup fell back to the bare
+-- `tenantId` index and filtered the tenant's entire membership table.
+-- `RoleAssignment` -- the same shape, read the same way -- has carried this
+-- index since it was created.
+--
+-- The two one-per invariants this task was also meant to add --
+-- `signing_key_one_active` and `target_account_anchor_unique` -- already
+-- exist. They were added by `20260817000000_access_2` and
+-- `20260820000000_provision_targets` respectively, before the audit that
+-- became this plan was written; the spec was stale on that point, not the
+-- schema. This migration carries only the part that was genuinely missing.
+CREATE INDEX "GroupMembership_userId_idx" ON "GroupMembership"("userId");

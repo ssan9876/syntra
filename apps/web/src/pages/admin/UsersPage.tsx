@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
 import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
+import { ApiError, api } from '../../session/api.js';
 import { RecordPanel } from './RecordPanel.js';
 import { DeleteButton } from './DeleteButton.js';
 import { StatusToggle } from './StatusToggle.js';
@@ -58,6 +59,45 @@ export function UsersPage() {
     expiresAt: string;
   } | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  /**
+   * FACTOR REMOVAL, which no screen reached.
+   *
+   * `DELETE /users/:id/factors/:type` is the way back in for somebody who lost
+   * their phone, and the way an administrator revokes a factor an attacker
+   * enrolled. It existed and wrote its own audit event naming the
+   * administrator -- a factor that disappears with nothing to show who removed
+   * it is indistinguishable from one the attacker removed -- and the answer to
+   * "I lost my authenticator" was still a database client.
+   */
+  const [factorsFor, setFactorsFor] = useState<UserRow | null>(null);
+  const [factorNotice, setFactorNotice] = useState<string | null>(null);
+
+  const removeFactor = async (userId: string, type: string) => {
+    setFactorNotice(null);
+    setLinkError(null);
+    try {
+      const result = await api<{ recoveryCodesRevoked: number }>(
+        `/api/admin/users/${userId}/factors/${type}`,
+        { method: 'DELETE' },
+      );
+      // The count is SAID. Taking the last real factor away takes the printed
+      // recovery codes with it, and nothing else tells the account's owner
+      // that the page in their drawer has stopped working.
+      setFactorNotice(
+        result.recoveryCodesRevoked > 0
+          ? `Removed, and ${result.recoveryCodesRevoked} unused recovery code${
+              result.recoveryCodesRevoked === 1 ? '' : 's'
+            } stopped working with it.`
+          : 'Removed.',
+      );
+    } catch (cause) {
+      setLinkError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That factor could not be removed.',
+      );
+    }
+  };
   // For the org-unit picker on the create form. Same tolerance as the sources
   // read below: a caller without `directory.read` on units gets an empty list
   // and a form that still works, rather than a page that will not render.
@@ -102,6 +142,45 @@ export function UsersPage() {
       {error && <Alert tone="danger">{error}</Alert>}
 
       {linkError && <Alert tone="danger">{linkError}</Alert>}
+
+      {factorsFor && (
+        <div className="mb-6">
+          <Panel
+            title={`Second factors for ${factorsFor.login}`}
+            description="Removing a factor is recorded against your account. The owner is not asked first, so tell them."
+          >
+            <div className="space-y-3 p-4">
+              {factorNotice && <Alert tone="warning">{factorNotice}</Alert>}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void removeFactor(factorsFor.id, 'totp')}
+                >
+                  Remove authenticator app
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void removeFactor(factorsFor.id, 'webauthn')}
+                >
+                  Remove security keys
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void removeFactor(factorsFor.id, 'recovery_code')}
+                >
+                  Remove recovery codes
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setFactorsFor(null)}>
+                  Done
+                </Button>
+              </div>
+            </div>
+          </Panel>
+        </div>
+      )}
 
       {setupLink && (
         <Panel>
@@ -341,6 +420,18 @@ export function UsersPage() {
                           </Button>
                         </span>
                       )}
+                      <span className="mr-2 inline-block align-middle">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setFactorsFor(user);
+                            setFactorNotice(null);
+                          }}
+                        >
+                          Factors
+                        </Button>
+                      </span>
                       {/*
                         Offered for a synced account as well as a local one:
                         a directory-owned user still authenticates against

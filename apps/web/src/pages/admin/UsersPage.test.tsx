@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { UsersPage } from './UsersPage.js';
@@ -310,5 +310,57 @@ describe('password setup link', () => {
 
     await screen.findByText('J Doe');
     expect(screen.queryByRole('button', { name: 'Password link' })).toBeNull();
+  });
+});
+
+describe('taking a factor off a user', () => {
+  /**
+   * The way back in for somebody who lost their phone, and the way an
+   * administrator revokes a factor an attacker enrolled. The route existed and
+   * wrote its own audit event naming the administrator; no screen reached it,
+   * so the answer to "I lost my authenticator" was a database client.
+   */
+  const mockFactors = (rows: Record<string, unknown>[], response: Response) => {
+    const sent: { url: string; method: string }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      if (init?.method === 'DELETE') {
+        sent.push({ url, method: 'DELETE' });
+        return Promise.resolve(response);
+      }
+      if (url.includes('/sources')) return Promise.resolve(json({ sources: [] }));
+      return Promise.resolve(json({ users: rows }));
+    });
+    return sent;
+  };
+
+  it('removes the authenticator app and says what it cost', async () => {
+    const sent = mockFactors([users[0]!], json({ recoveryCodesRevoked: 3 }));
+    renderPage();
+    await screen.findByText('jdoe');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Factors' }));
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Remove authenticator app' }),
+    );
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.url).toContain('/api/admin/users/u1/factors/totp');
+    expect(sent[0]!.method).toBe('DELETE');
+    expect(
+      await screen.findByText(/3 unused recovery codes stopped working/),
+    ).toBeInTheDocument();
+  });
+
+  it('removes security keys too', async () => {
+    const sent = mockFactors([users[0]!], json({ recoveryCodesRevoked: 0 }));
+    renderPage();
+    await screen.findByText('jdoe');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Factors' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove security keys' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.url).toContain('/factors/webauthn');
   });
 });

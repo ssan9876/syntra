@@ -154,4 +154,20 @@ describe('GET /saml/metadata', () => {
     expect(again).toHaveLength(1);
     expect(again[0]!.kid).toBe(after[0]!.kid);
   });
+
+  /**
+   * UNAUTHENTICATED, so a 500 here is a stack trace in the log for anybody who
+   * can reach the host and type a URL. The comment above this handler already
+   * claimed the parameter was "validated so a mistyped id is a 404 rather than a
+   * document naming an application that does not exist" -- it was cast, and
+   * Prisma raised on the malformed uuid before the 404 branch was reached.
+   */
+  it('answers 400 for a metadata path that is not a uuid', async () => {
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/saml/metadata/not-a-uuid',
+      headers: { host: TEST_HOST },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });

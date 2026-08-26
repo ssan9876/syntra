@@ -24,6 +24,11 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nA {{factor}} was added to your account on {{when}}, from {{sourceIp}}.\n\nIf that was you, nothing further is needed. If it was not, contact your administrator immediately and change your password — a second factor added by someone else survives a password change, so the factor has to be removed too.',
     html: '<p>Hello {{displayName}},</p><p>A <strong>{{factor}}</strong> was added to your account on {{when}}, from {{sourceIp}}.</p><p>If that was you, nothing further is needed. If it was not, contact your administrator immediately and change your password — a second factor added by someone else survives a password change, so the factor has to be removed too.</p>',
   },
+  'factor-removed': {
+    subject: 'A second factor was removed from your {{tenantName}} account',
+    text: 'Hello {{displayName}},\n\nA {{factor}} was removed from your account on {{when}}, from {{sourceIp}}.{{codesNote}}\n\nIf that was you, nothing further is needed. If it was not, change your password and contact your administrator immediately \u2014 removing a factor is what an attacker holding your session does before they do anything else, and it is the step nobody notices.',
+    html: '<p>Hello {{displayName}},</p><p>A <strong>{{factor}}</strong> was removed from your account on {{when}}, from {{sourceIp}}.{{codesNote}}</p><p>If that was you, nothing further is needed. If it was not, change your password and contact your administrator immediately \u2014 removing a factor is what an attacker holding your session does before they do anything else, and it is the step nobody notices.</p>',
+  },
   'password-reset': {
     subject: 'Reset your {{tenantName}} password',
     text: 'Hello {{displayName}},\n\nOpen this link to choose a new password. It works once and expires in 30 minutes.\n\n{{resetUrl}}\n\nIf you did not ask for this, nothing has changed and you can ignore this message.',

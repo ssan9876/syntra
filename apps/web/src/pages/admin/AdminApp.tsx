@@ -17,6 +17,7 @@ import { SyncRunDetailPage } from './SyncRunDetailPage.js';
 import { ApplicationsPage } from './ApplicationsPage.js';
 import { ApplicationDetailPage } from './ApplicationDetailPage.js';
 import { PoliciesPage } from './PoliciesPage.js';
+import { RolesPage } from './RolesPage.js';
 import { TenantSettingsPage } from './TenantSettingsPage.js';
 import { TargetsPage } from './TargetsPage.js';
 import { TargetDetailPage } from './TargetDetailPage.js';
@@ -39,6 +40,7 @@ import { GovernFindingsPage } from './GovernFindingsPage.js';
 import { GovernOrphansPage } from './GovernOrphansPage.js';
 import { GovernIntegrityPage } from './GovernIntegrityPage.js';
 import { GovernCampaignsPage } from './GovernCampaignsPage.js';
+import { GovernCampaignNewPage } from './GovernCampaignNewPage.js';
 import { GovernCampaignDetailPage } from './GovernCampaignDetailPage.js';
 import { GovernBatchPage } from './GovernBatchPage.js';
 import { GovernSodPage } from './GovernSodPage.js';
@@ -101,6 +103,9 @@ export function AdminApp() {
             <Route path="govern/snapshots/:id" element={<GovernSnapshotDetailPage />} />
             <Route path="govern/reports" element={<GovernReportsPage />} />
             <Route path="govern/campaigns" element={<GovernCampaignsPage />} />
+            {/* Before the parametric route, so "new" is a page rather than an
+                id that will 404 on its way to the detail screen. */}
+            <Route path="govern/campaigns/new" element={<GovernCampaignNewPage />} />
             <Route path="govern/campaigns/:id" element={<GovernCampaignDetailPage />} />
             <Route path="govern/batches/:id" element={<GovernBatchPage />} />
             <Route path="govern/sod" element={<GovernSodPage />} />
@@ -110,6 +115,7 @@ export function AdminApp() {
             <Route path="applications/:id" element={<ApplicationDetailPage />} />
             <Route path="policy" element={<PoliciesPage />} />
             <Route path="audit" element={<AuditPage />} />
+            <Route path="roles" element={<RolesPage />} />
             <Route path="settings" element={<TenantSettingsPage />} />
             <Route path="updates" element={<UpdatesPage />} />
             <Route path="*" element={<Navigate to="/admin/users" replace />} />

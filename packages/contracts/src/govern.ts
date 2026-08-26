@@ -19,6 +19,13 @@ export const personReportQuery = z.object({
   snapshotId: z.string().uuid().optional(),
 });
 
+/**
+ * The person report's path parameter. `idParam` names its field `id`, and this
+ * route's is `personId`, which is why the route reached for a cast and got a
+ * 500 on every mistyped url.
+ */
+export const personParam = z.object({ personId: z.string().uuid() });
+
 export const changeReportQuery = z.object({
   fromSnapshotId: z.string().uuid(),
   toSnapshotId: z.string().uuid(),

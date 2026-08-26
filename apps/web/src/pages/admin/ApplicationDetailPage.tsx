@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Alert, Button, Empty, Panel, SkeletonRows } from '@syntra/ui';
-import { api } from '../../session/api.js';
+import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -51,6 +51,7 @@ export function ApplicationDetailPage() {
   const orgUnits = orgUnitsData?.orgUnits ?? [];
   const assignments = assignmentsData?.assignments ?? null;
 
+  const [problem, setProblem] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Record<SubjectType, string>>({
     user: '',
     group: '',
@@ -67,22 +68,48 @@ export function ApplicationDetailPage() {
     return orgUnits.find((row) => row.id === assignment.orgUnitId)?.name ?? 'Unknown org unit';
   };
 
+  /**
+   * The refusal, rendered.
+   *
+   * Both of these had no catch at all. A 403 -- which is the ORDINARY case
+   * here, because `access.read` is enough to open this page and not enough to
+   * change it -- was an unhandled rejection, and the button appeared to do
+   * nothing at all. The reader had no way to learn that the thing they were
+   * clicking was not theirs to click.
+   */
+  const report = (cause: unknown) =>
+    setProblem(
+      cause instanceof ApiError
+        ? (cause.problem.detail ?? cause.problem.title)
+        : 'That could not be saved.',
+    );
+
   async function assign(type: SubjectType) {
     const subjectId = chosen[type];
     if (!subjectId) return;
-    await api(`/api/admin/applications/${id}/assignments`, {
-      method: 'POST',
-      body: JSON.stringify({ type, id: subjectId }),
-    });
-    setChosen((current) => ({ ...current, [type]: '' }));
-    reload();
+    setProblem(null);
+    try {
+      await api(`/api/admin/applications/${id}/assignments`, {
+        method: 'POST',
+        body: JSON.stringify({ type, id: subjectId }),
+      });
+      setChosen((current) => ({ ...current, [type]: '' }));
+      reload();
+    } catch (cause) {
+      report(cause);
+    }
   }
 
   async function unassign(assignmentId: string) {
-    await api(`/api/admin/applications/${id}/assignments/${assignmentId}`, {
-      method: 'DELETE',
-    });
-    reload();
+    setProblem(null);
+    try {
+      await api(`/api/admin/applications/${id}/assignments/${assignmentId}`, {
+        method: 'DELETE',
+      });
+      reload();
+    } catch (cause) {
+      report(cause);
+    }
   }
 
   const picker = (type: SubjectType, options: Named[]) => (
@@ -116,6 +143,7 @@ export function ApplicationDetailPage() {
       <PageHeader title="Assignments" description="Who can reach this application, and how." />
 
       {error && <Alert tone="danger">{error}</Alert>}
+      {problem && <Alert tone="warning">{problem}</Alert>}
 
       {loading && !error && (
         <Panel>

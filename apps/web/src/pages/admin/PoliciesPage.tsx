@@ -3,6 +3,12 @@ import { Alert, Button, Empty, Field, Panel, SkeletonRows, Status } from '@syntr
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+// The CONTRACT, not a local restatement. The API builds this response by hand
+// and this file described it independently, so the two could drift with
+// nothing anywhere to notice -- which is the whole reason the schema exists.
+// Type-only: a runtime parse in the browser would strip a field the server had
+// legitimately started sending.
+import type { RuleImpactResponse } from '@syntra/contracts';
 
 interface Rule {
   id: string;
@@ -27,12 +33,6 @@ interface Policy {
   rules: Rule[];
 }
 
-interface RuleImpact {
-  totalActiveUsers: number;
-  matchedUsers: number;
-  usersNeedingEnrolment: number;
-  unevaluatedConditions: string[];
-}
 
 const OUTCOME_LABEL: Record<Rule['outcome'], string> = {
   allow: 'Allow',
@@ -81,6 +81,15 @@ function conditions(rule: Rule): string[] {
 export function PoliciesPage() {
   const { data: policy, error, loading, reload } = useApiResource<Policy>('/api/admin/policy');
   const [formError, setFormError] = useState<string | null>(null);
+  /**
+   * Refusals from the LIST controls, rendered at page level.
+   *
+   * Deliberately not `formError`: that one lives inside the "add a rule"
+   * panel, which is collapsed unless somebody is adding a rule -- so a refused
+   * Remove would have set a message nobody could see, which is the same
+   * silence this task exists to end, one layer in.
+   */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -90,7 +99,7 @@ export function PoliciesPage() {
   const [ipRanges, setIpRanges] = useState('');
   const [contractField, setContractField] = useState('');
   const [contractValues, setContractValues] = useState('');
-  const [impact, setImpact] = useState<RuleImpact | null>(null);
+  const [impact, setImpact] = useState<RuleImpactResponse | null>(null);
 
   const list = (value: string) =>
     value
@@ -122,7 +131,7 @@ export function PoliciesPage() {
     setFormError(null);
     try {
       setImpact(
-        await api<RuleImpact>('/api/admin/policy/rules/impact', {
+        await api<RuleImpactResponse>('/api/admin/policy/rules/impact', {
           method: 'POST',
           body: JSON.stringify(draft()),
         }),
@@ -177,16 +186,37 @@ export function PoliciesPage() {
     const target = index + delta;
     if (target < 0 || target >= ids.length) return;
     [ids[index], ids[target]] = [ids[target]!, ids[index]!];
-    await api('/api/admin/policy/rules/order', {
-      method: 'PUT',
-      body: JSON.stringify({ ruleIds: ids }),
-    });
-    reload();
+    setActionError(null);
+    try {
+      await api('/api/admin/policy/rules/order', {
+        method: 'PUT',
+        body: JSON.stringify({ ruleIds: ids }),
+      });
+      reload();
+    } catch (cause) {
+      // Rule ORDER decides which rule wins, so a reorder that silently did not
+      // happen leaves the administrator believing a different rule is in force
+      // than the one that is.
+      setActionError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That rule could not be moved.',
+      );
+    }
   }
 
   async function remove(id: string) {
-    await api(`/api/admin/policy/rules/${id}`, { method: 'DELETE' });
-    reload();
+    setActionError(null);
+    try {
+      await api(`/api/admin/policy/rules/${id}`, { method: 'DELETE' });
+      reload();
+    } catch (cause) {
+      setActionError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That rule could not be removed.',
+      );
+    }
   }
 
   return (
@@ -202,6 +232,7 @@ export function PoliciesPage() {
       />
 
       {error && <Alert tone="danger">{error}</Alert>}
+      {actionError && <Alert tone="danger">{actionError}</Alert>}
 
       {adding && (
         <Panel title="New rule">

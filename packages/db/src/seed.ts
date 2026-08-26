@@ -9,6 +9,7 @@
  */
 import { prisma } from './client.js';
 import { withTenant } from './with-tenant.js';
+import { seedMarkerFound } from './seed-guard.js';
 import {
   ALL_PERMISSIONS,
   addRule,
@@ -56,12 +57,26 @@ const tenant = await prisma.tenant.upsert({
     slug: 'acme',
     primaryDomain: 'acme.localhost',
   },
-  update: {},
+  // NOT `{}`. A leftover `acme` tenant -- which the integration suite creates
+  // and leaves behind constantly -- was kept exactly as it was, including a
+  // `primaryDomain` of null or of whatever a test set. `resolveTenantId`
+  // matches the Host header against that column, so the seed could report
+  // success against a tenant the browser can never reach.
+  update: {
+    name: 'Acme Care',
+    primaryDomain: 'acme.localhost',
+  },
 });
 
 await withTenant(tenant.id, async (tx) => {
-  const existing = await tx.user.findFirst({ where: { login: 'admin' } });
-  if (existing) {
+  const seeded = seedMarkerFound({
+    adminUser: (await tx.user.findFirst({ where: { login: 'admin' } })) !== null,
+    // The marker only the seed writes. Every fixture in the repository calls
+    // `createRole(tx, name, permissions)` with no options, so `builtIn` is
+    // false on all of them.
+    builtInRole: (await tx.role.findFirst({ where: { builtIn: true } })) !== null,
+  });
+  if (seeded) {
     console.log(`Tenant ${tenant.slug} is already seeded. Nothing to do.`);
     return;
   }

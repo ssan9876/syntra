@@ -1,3 +1,4 @@
+import { invalidateProvider } from '@syntra/protocols';
 import type { FastifyInstance } from 'fastify';
 import { tenantSettingsRequest } from '@syntra/contracts';
 import {
@@ -43,7 +44,12 @@ export async function registerAdminTenantRoutes(
     async (request) => {
       const body = tenantSettingsRequest.parse(request.body);
 
-      return request.db(async (tx) => {
+      // Read once outside the transaction as well, to compare hostnames after
+      // it commits. The in-transaction read below stays: the lockout check
+      // needs a value the write is serialised against, not one from before it.
+      const hostnamesBefore = await request.db((tx) => readTenant(tx));
+
+      const saved = await request.db(async (tx) => {
         const before = await readTenant(tx);
         const after = { ...before, ...body };
 
@@ -137,6 +143,28 @@ export async function registerAdminTenantRoutes(
         });
         return saved;
       });
+
+      // AFTER the commit, and only when a hostname actually moved.
+      //
+      // `providerFor` caches one Provider per tenant with the issuer fixed at
+      // construction -- oidc-provider asserts a single web URI and never
+      // re-reads it. `invalidateProvider` was wired to client changes and to
+      // key rotation and not to this route, which is the only one that changes
+      // `primaryDomain`, so every token carried the old `iss` until a restart
+      // or an unrelated rotation. A relying party validates `iss` against the
+      // issuer it discovered, so those tokens were simply rejected, with
+      // nothing anywhere saying why.
+      //
+      // Guarded on the hostnames rather than called unconditionally: rebuilding
+      // the provider discards every cached client and re-reads the key set,
+      // and this route is saved from for reasons that have nothing to do with
+      // the issuer.
+      const hostnamesMoved =
+        saved.primaryDomain !== hostnamesBefore.primaryDomain ||
+        saved.additionalDomains.join(',') !== hostnamesBefore.additionalDomains.join(',');
+      if (hostnamesMoved) invalidateProvider(request.tenantId);
+
+      return saved;
     },
   );
 }

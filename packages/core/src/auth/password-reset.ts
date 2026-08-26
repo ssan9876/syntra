@@ -362,6 +362,34 @@ export async function preflightPasswordReset(
   });
 }
 
+/**
+ * The user a live reset token belongs to, or null.
+ *
+ * Exists for exactly one caller: the reset-scoped WebAuthn challenge endpoint.
+ * A passkey-only user could not complete a reset at all, because
+ * `completePasswordReset` verifies the assertion against a stored challenge and
+ * the only endpoint that minted one demanded a live `AuthAttempt` -- which
+ * exists after a password has been accepted, not after a link has been opened.
+ * `findAttempt` always missed, the route answered 401, and somebody whose only
+ * factor is a passkey and whose recovery codes were spent had no way back into
+ * their account that did not go through an administrator.
+ *
+ * Liveness is `liveToken`'s definition and not a second one: unknown, consumed
+ * and expired all answer null, so a challenge cannot outlive the link that
+ * authorised it. The caller learns a user id and nothing else -- not whether
+ * the login exists, not whether it is federated, not what it has enrolled.
+ */
+export async function userForResetToken(
+  tenantId: string,
+  token: string,
+  now: Date = new Date(),
+): Promise<string | null> {
+  return withTenant(tenantId, async (tx) => {
+    const row = await liveToken(tx, token, now);
+    return row?.userId ?? null;
+  });
+}
+
 export interface CompleteResetInput {
   token: string;
   newPassword: string;

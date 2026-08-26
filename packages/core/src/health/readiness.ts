@@ -43,6 +43,8 @@ export interface ReadinessDeps {
   /** Where the built console is served from, when one is configured. */
   webRoot?: string | undefined;
   version: string;
+  /** Overridden by the tests only; nothing in the application passes it. */
+  probeTimeoutMs?: number | undefined;
 }
 
 const pass = (name: string, detail: string): Probe => ({ name, status: 'pass', detail });
@@ -57,6 +59,50 @@ const skip = (name: string, detail: string): Probe => ({ name, status: 'skip', d
 function reason(cause: unknown): string {
   if (!(cause instanceof Error)) return 'unknown error';
   return cause.message.split('\n')[0]!.slice(0, 200);
+}
+
+/**
+ * How long any one probe may take before it is a failure.
+ *
+ * `/health/ready` is what the updater's automatic rollback decision waits on,
+ * and none of these probes had a deadline. A database that accepts TCP and
+ * then stops answering -- a failed-over primary, a saturated pool, a paused
+ * container -- leaves the query pending for ever: the gate never resolves, the
+ * rollback that was waiting on it never happens, and an operator watching a
+ * broken update sees a request that simply hangs.
+ *
+ * Five seconds because every probe here is one indexed round trip and an AES
+ * unseal. Anything slower than that is already an answer.
+ */
+export const PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * Runs a probe with a deadline, and turns overrunning it into a `fail`.
+ *
+ * A failure rather than a `skip`, deliberately. "I could not find out" and
+ * "there is nothing to check" are different answers, and only the first should
+ * roll an update back.
+ */
+async function withTimeout(
+  name: string,
+  ms: number,
+  work: () => Promise<Probe>,
+): Promise<Probe> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<Probe>((resolve) => {
+    timer = setTimeout(
+      () => resolve(fail(name, `did not answer within ${ms} ms`)),
+      ms,
+    );
+    // Never keeps the process alive on its own. A readiness check must not be
+    // the reason a shutdown waits.
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([work(), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -165,10 +211,11 @@ function probeWeb(webRoot: string | undefined): Probe {
  * rather than one restart at a time.
  */
 export async function readiness(deps: ReadinessDeps): Promise<ReadinessReport> {
+  const ms = deps.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
   const probes = [
-    await probeDatabase(),
-    await probeMigrations(),
-    await probeVault(deps.provider),
+    await withTimeout('database', ms, probeDatabase),
+    await withTimeout('migrations', ms, probeMigrations),
+    await withTimeout('vault', ms, () => probeVault(deps.provider)),
     probeWeb(deps.webRoot),
   ];
 

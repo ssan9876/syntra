@@ -3,10 +3,12 @@ import { idParam } from '@syntra/contracts';
 import {
   approvalDelegationBody,
   audiencePreviewBody,
+  decideRequestBody,
   productBody,
   resolutionPreviewBody,
   resourceDelegationBody,
   resourceOwnerBody,
+  revokeGrantBody,
   settingsBody,
   sweepApplyBody,
   workflowBody,
@@ -84,6 +86,28 @@ export async function registerAdminAutomateRoutes(
     async (request) => ({ products: await request.db((tx) => listAllProducts(tx)) }),
   );
 
+  /**
+   * One product, with its grants.
+   *
+   * The editor could not load what it edited: the page fetched the LIST and
+   * never read it, every field started empty, and `PUT` requires the whole
+   * object -- so renaming a product replaced its description, category,
+   * grants, form schema and duration mode with the editor's defaults. A
+   * catalog entry could be destroyed by fixing a typo in it.
+   */
+  app.get(
+    '/automate/products/:id',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const product = await request.db((tx) =>
+        tx.product.findUnique({ where: { id }, include: { grants: true } }),
+      );
+      if (product === null) throw new ProblemError(404, 'not-found', 'Not found');
+      return product;
+    },
+  );
+
   app.post(
     '/automate/products/audience-preview',
     { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
@@ -133,6 +157,41 @@ export async function registerAdminAutomateRoutes(
         asProblem(cause);
       }
       return reply.status(204).send();
+    },
+  );
+
+  /**
+   * Every approval workflow, with its stages and how many products use it.
+   *
+   * There was no list route of any kind, so `Product.workflowId` -- which is
+   * REQUIRED and a uuid -- could not be discovered from the console at all:
+   * the product editor asked an administrator to type an id the product gave
+   * them no way to learn, and the workflow screen asked for the same id before
+   * it would preview anything.
+   *
+   * `productCount` because a workflow bound to eleven products is not one
+   * somebody should edit without knowing that, and `ApprovalWorkflow.products`
+   * is a relation this can count without a second query.
+   */
+  app.get(
+    '/automate/workflows',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
+    async (request) => {
+      const rows = await request.db((tx) =>
+        tx.approvalWorkflow.findMany({
+          orderBy: { name: 'asc' },
+          include: {
+            stages: { orderBy: { sequence: 'asc' } },
+            products: { select: { id: true } },
+          },
+        }),
+      );
+      return {
+        workflows: rows.map(({ products, ...workflow }) => ({
+          ...workflow,
+          productCount: products.length,
+        })),
+      };
     },
   );
 
@@ -237,7 +296,16 @@ export async function registerAdminAutomateRoutes(
     { preHandler: requirePermission(PERMISSIONS.AUTOMATE_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      const body = (request.body ?? {}) as { decision: 'approve' | 'reject'; comment: string };
+      // PARSED, not cast, and that distinction was an authorization bug rather
+      // than a tidiness one. `recordDecision` branches on `=== 'reject'`, so a
+      // capitalised "Reject" took the approval path: it skipped the
+      // comment-required guard on the schema, fulfilled the grants, and put
+      // the literal string where a decision belongs -- in the decision row and
+      // the audit payload, where it reads as a rejection to anybody looking
+      // later. A missing field reached Prisma as `undefined` and became a 500.
+      //
+      // `decideRequestBody` existed and was exported and had no importer.
+      const body = decideRequestBody.parse(request.body);
       const person = await request.db((tx) =>
         tx.user.findUnique({
           where: { id: request.session.userId },
@@ -262,8 +330,11 @@ export async function registerAdminAutomateRoutes(
             deciderPersonId: person.personId,
             deciderUserId: request.session.userId,
             decision: body.decision,
-            comment: body.comment ?? null,
-            shortenedToDays: null,
+            // The schema defaults both. `shortenedToDays` was hard-coded to
+            // null here while the contract has always carried it, so an
+            // approver shortening a grant was silently granting the full term.
+            comment: body.comment,
+            shortenedToDays: body.shortenedToDays,
             sourceIp: request.ip,
           },
           { asAdministrator: true, scheduler: scheduler(), publicUrl: options.publicUrl },
@@ -410,12 +481,12 @@ export async function registerAdminAutomateRoutes(
     { preHandler: requirePermission(PERMISSIONS.AUTOMATE_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      const body = (request.body ?? {}) as { reason?: string };
+      const body = revokeGrantBody.parse(request.body ?? {});
       await revokeGrant(
         request.tenantId,
         request.session.userId,
         id,
-        body.reason ?? 'withdrawn by an administrator',
+        body.reason,
         { scheduler: scheduler(), publicUrl: options.publicUrl },
       );
       return reply.status(204).send();

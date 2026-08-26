@@ -29,6 +29,7 @@ import {
   sodRuleBody,
   sodRulePreviewBody,
   violationQuery,
+  personParam,
   personReportQuery,
   refreshSourceParams,
   resolveRemediationBody,
@@ -59,7 +60,6 @@ import {
   upsertBusinessFunction,
   upsertSodRule,
   buildSnapshot,
-  confirmProposal,
   createEvidencePack,
   type CheckpointSigner,
   fetchEvidencePack,
@@ -204,6 +204,10 @@ export const GOVERN_READ_ROUTES: readonly { path: string; scoped: boolean; why?:
   },
   { path: 'GET /govern/sod/violations', scoped: true },
   { path: 'GET /govern/sod/graph', scoped: true },
+  // A POST, and on this list because `requireGovernRead` is what admits a
+  // scoped holder to it -- not the method. It reads a violation by id to
+  // resolve the rule and the person, so it is a read path and §21 applies.
+  { path: 'POST /govern/sod/violations/:id/except', scoped: true },
 ];
 
 /**
@@ -371,7 +375,7 @@ export async function registerAdminGovernRoutes(
     '/govern/reports/person/:personId',
     { preHandler: requireGovernRead() },
     async (request) => {
-      const { personId } = request.params as { personId: string };
+      const { personId } = personParam.parse(request.params);
       const query = personReportQuery.parse(request.query);
       const scope = scopeOf(request);
       if (scope.kind !== 'tenant') {
@@ -593,25 +597,18 @@ export async function registerAdminGovernRoutes(
     })),
   );
 
-  app.post(
-    '/govern/orphans/:id/confirm',
-    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
-    async (request, reply) => {
-      const { id } = idParam.parse(request.params);
-      // The linking function is injected rather than imported by the service,
-      // so `boundaries.test.ts`'s no-access-bearing-write assertion stays true
-      // of the Govern module. Provision owns the write.
-      await confirmProposal(request.tenantId, request.session.userId, id, async () => {
-        throw new ProblemError(
-          501,
-          'linking-not-wired',
-          'Account linking is not wired yet',
-          "Provision's account-linking entry point is supplied here once the two modules are joined.",
-        );
-      });
-      return reply.status(204).send();
-    },
-  );
+  // There is deliberately NO `POST /govern/orphans/:id/confirm`.
+  //
+  // It existed and threw 501 on every call: `confirmProposal` takes the
+  // linking function as a parameter -- so that `boundaries.test.ts`'s
+  // no-access-bearing-write assertion stays true of the Govern module -- and
+  // the function supplied here threw unconditionally. The console rendered a
+  // Confirm button in front of it promising that Provision's next run would
+  // act on the link.
+  //
+  // `confirmProposal` stays in core, exported and tested: it is the half of
+  // the pair a Provision slice will call once account adoption exists. What
+  // does not stay is a route that cannot do what its own name says.
 
   app.post(
     '/govern/orphans/:id/deny',
@@ -759,9 +756,24 @@ export async function registerAdminGovernRoutes(
     });
   });
 
+  // ---- previews ----------------------------------------------------------
+  //
+  // `govern.manage`, NOT `requireGovernRead()`. These three answer tenant-wide
+  // questions -- how many holdings a scope covers, how many people a reviewer
+  // selector resolves for, how many persons a rule would put in violation --
+  // and they were admitted by `govern.read`, which is scopeable. A department
+  // lead therefore got the whole tenant's counts and a sample of subject keys
+  // from outside their scope, three routes below GETs that filter carefully.
+  //
+  // Raised rather than filtered, deliberately. All three exist to configure
+  // something whose SAVE already requires `govern.manage`, and
+  // `requirePermission` asks unscoped, so a scoped holder cannot save what
+  // they previewed anyway. A preview filtered to one department would report
+  // different numbers from the campaign the administrator then creates, which
+  // is a worse answer than not offering the preview.
   app.post(
     '/govern/campaigns/preview-scope',
-    { preHandler: requireGovernRead() },
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
     async (request) => {
       const body = previewScopeBody.parse(request.body);
       return previewCampaignScope(request.tenantId, body.scope, body.snapshotId);
@@ -770,7 +782,7 @@ export async function registerAdminGovernRoutes(
 
   app.post(
     '/govern/campaigns/preview-reviewers',
-    { preHandler: requireGovernRead() },
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
     async (request) => {
       // "Stage: manager; 1,102 items resolve, 61 fall to the fallback, 17
       // resolve to nobody — here they are." The screen that catches an
@@ -965,7 +977,7 @@ export async function registerAdminGovernRoutes(
 
   app.post(
     '/govern/sod/rules/preview',
-    { preHandler: requireGovernRead() },
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
     // BEFORE it is saved. A rule that would fire against 400 people is a
     // configuration error, and the person with the console open is who should
     // see it, at that moment — not the 400 people, six hours later.
@@ -1011,6 +1023,22 @@ export async function registerAdminGovernRoutes(
           select: { ruleId: true, personId: true },
         }),
       );
+      const scope = scopeOf(request);
+      if (scope.kind !== 'tenant') {
+        // §21 on every read path, and this route reads: it resolves the rule
+        // and the person off a violation the caller named by id. Without this,
+        // a department lead could raise -- and disclose the existence of -- an
+        // exception against somebody in another department's violation.
+        //
+        // 404, not 403, for the reason the person report gives: a 403 confirms
+        // the violation exists, and the existence of a violation about
+        // somebody in another department is itself information.
+        const admitted = await request.db((tx) => personIdsInScope(tx, scope));
+        if (admitted !== 'all' && !admitted.has(violation.personId)) {
+          throw new ProblemError(404, 'not-found', 'Not found');
+        }
+      }
+
       try {
         const created = await requestSodException(request.tenantId, request.session.userId, {
           ruleId: violation.ruleId,

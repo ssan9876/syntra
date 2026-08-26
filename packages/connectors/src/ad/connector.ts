@@ -37,6 +37,7 @@ import {
   type AdTargetConfig,
   type ResolvedAdTargetConfig,
 } from './config.js';
+import { TEST_SAMPLE_LIMIT } from '../ldap/connector.js';
 import {
   UAC_NORMAL_DISABLED,
   UAC_NORMAL_ENABLED,
@@ -810,15 +811,22 @@ export const adTargetConnector: TargetConnector<Config> = {
     let client: Client | undefined;
     try {
       client = await connect(config);
+      // `sizeLimit`: without it an unpaged search throws SizeLimitExceededError
+      // the moment AD's default MaxPageSize (1000) is reached, so a perfectly
+      // good bind against a real directory reported "connection failed". The
+      // counts below are already a SAMPLE, not a census -- this is what makes
+      // that true rather than aspirational.
       const accounts = await client.search(config.baseDn, {
         scope: 'sub',
         filter: config.accountFilter,
         attributes: ['dn'],
+        sizeLimit: TEST_SAMPLE_LIMIT,
       });
       const groups = await client.search(config.entitlementSearchBase, {
         scope: 'sub',
         filter: config.groupFilter,
         attributes: ['dn'],
+        sizeLimit: TEST_SAMPLE_LIMIT,
       });
 
       // Spec section 18: the bind should hold only the rights it needs, and

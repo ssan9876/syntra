@@ -127,7 +127,7 @@ export async function previewRun(
     // field values alongside it, so this is three `findMany`s and not the six
     // it was when the field maps were loaded per object type.
     const snapshot = await withTenant(tenantId, async (tx) => ({
-      existing: await loadExisting(tx),
+      existing: await loadExisting(tx, prepared.rules),
       memberships: await currentMemberships(tx, sourceId),
     }));
 
@@ -444,11 +444,45 @@ function computeDiff(input: DiffInput) {
 }
 
 /**
+ * The field a source correlates an object type on, as configured.
+ *
+ * `mapRecord` lets the LAST rule marked `isCorrelation` win, and this reads
+ * the same way so the two sides of the comparison cannot disagree about which
+ * mapping is the correlation one.
+ *
+ * The fallback is what the seeded defaults use, so a source whose mappings say
+ * nothing about an object type behaves exactly as it did.
+ */
+function correlationFieldFor(
+  rules: MappingRule[],
+  objectType: ObjectType,
+  fallback: string,
+): string {
+  const configured = rules
+    .filter((rule) => rule.objectType === objectType && rule.isCorrelation)
+    .at(-1);
+  return configured?.targetField ?? fallback;
+}
+
+/**
  * Every row a run could correlate against, with its current field values, in
  * three queries. The field values ride along with the rows because the diff
  * needs both, and loading them separately meant reading each table twice.
+ *
+ * `rules` is here because CORRELATION IS CONFIGURED. This function used to set
+ * every user's `correlationValue` to `u.login` unconditionally, while the
+ * object side used whichever mapping is marked `isCorrelation` -- and
+ * `setMappings` accepts that on `email` and `displayName` as readily as on
+ * `login`. The two sides of the correlation compared different columns, so a
+ * source correlating on email never produced the `conflict` it was supposed
+ * to and proposed CREATING a second account for a person who already had one;
+ * and a source email that happened to equal somebody's login reported a
+ * conflict against a row it had nothing to do with.
  */
-async function loadExisting(tx: TenantClient): Promise<ExistingSnapshot> {
+async function loadExisting(
+  tx: TenantClient,
+  rules: MappingRule[],
+): Promise<ExistingSnapshot> {
   const users = await tx.user.findMany();
   const groups = await tx.group.findMany();
   const units = await tx.orgUnit.findMany();
@@ -478,6 +512,10 @@ async function loadExisting(tx: TenantClient): Promise<ExistingSnapshot> {
     fields.set(o.id, { name: o.name, parentAnchor: placement(o.parentId) });
   }
 
+  const userField = correlationFieldFor(rules, 'user', 'login');
+  const groupField = correlationFieldFor(rules, 'group', 'name');
+  const unitField = correlationFieldFor(rules, 'orgUnit', 'name');
+
   return {
     fields,
     objects: [
@@ -486,7 +524,11 @@ async function loadExisting(tx: TenantClient): Promise<ExistingSnapshot> {
         objectType: 'user' as const,
         sourceId: u.sourceId,
         sourceAnchor: u.sourceAnchor,
-        correlationValue: u.login,
+        // A rule may name a field this row does not store -- `parentAnchor`,
+        // say -- and an empty string would collide with every other such row.
+        // Falling back to the login keeps the old behaviour for a mapping
+        // nothing here can honour, rather than inventing a match.
+        correlationValue: fields.get(u.id)?.[userField] ?? u.login,
         status: u.status,
       })),
       ...groups.map((g) => ({
@@ -494,7 +536,7 @@ async function loadExisting(tx: TenantClient): Promise<ExistingSnapshot> {
         objectType: 'group' as const,
         sourceId: g.sourceId,
         sourceAnchor: g.sourceAnchor,
-        correlationValue: g.name,
+        correlationValue: fields.get(g.id)?.[groupField] ?? g.name,
         status: g.status,
       })),
       ...units.map((o) => ({
@@ -502,7 +544,7 @@ async function loadExisting(tx: TenantClient): Promise<ExistingSnapshot> {
         objectType: 'orgUnit' as const,
         sourceId: o.sourceId,
         sourceAnchor: o.sourceAnchor,
-        correlationValue: o.name,
+        correlationValue: fields.get(o.id)?.[unitField] ?? o.name,
         status: 'active',
       })),
     ],

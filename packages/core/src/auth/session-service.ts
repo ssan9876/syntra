@@ -41,6 +41,18 @@ export interface ResolvedSession {
    * the user has just answered, and the application is unreachable forever.
    */
   satisfiedFactor: string | null;
+  /**
+   * When this session was minted.
+   *
+   * Read by the SAML identity provider to answer `ForceAuthn`: a service
+   * provider demanding a fresh authentication is answered by a session NEWER
+   * than the request, and by nothing else. Comparing against the request's own
+   * `createdAt` is what makes "sign in again" a thing the user can actually
+   * do -- before it, the flag was checked, never satisfied, and the browser
+   * bounced between the login screen and `/saml/continue` until the parked row
+   * expired.
+   */
+  createdAt: Date;
 }
 
 /**
@@ -99,6 +111,7 @@ interface SessionRow {
   userId: string;
   scope: string;
   satisfiedFactor: string | null;
+  createdAt: Date;
   lastSeenAt: Date;
   absoluteExpiresAt: Date;
   revokedAt: Date | null;
@@ -142,6 +155,7 @@ const toResolved = (row: SessionRow): ResolvedSession => ({
   userId: row.userId,
   scope: row.scope as SessionScope,
   satisfiedFactor: row.satisfiedFactor,
+  createdAt: row.createdAt,
 });
 
 /**

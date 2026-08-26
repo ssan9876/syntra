@@ -5,7 +5,8 @@ import { localMasterKeyProvider } from '../vault/master-key.js';
 import { DEFAULT_MAPPINGS } from './defaults.js';
 import { createSource, setMappings } from './source-service.js';
 import { applyRun } from './run-service.js';
-import { runSyncJob, SYNC_JOB, syncJobPayload } from './jobs.js';
+import { queueRun, runSyncJob, SourceDisabledError, SYNC_JOB, syncJobPayload } from './jobs.js';
+import type { Scheduler } from '../jobs/scheduler.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 11));
 let tenantId: string;
@@ -154,5 +155,56 @@ describe('runSyncJob', () => {
 
     await runSyncJob(provider, syncJobPayload(tenantId, sourceId));
     expect(await withTenant(tenantId, (tx) => tx.syncRun.count())).toBe(0);
+  });
+});
+
+describe('queueing a run for a disabled source', () => {
+  /**
+   * A minimal `Scheduler`, local to this file: `queueRun` only ever calls
+   * `enqueue`, and a fake covering the other four methods it never touches
+   * would be dead weight kept in step with an interface for no reason.
+   */
+  const fakeScheduler = (): Scheduler & { enqueued: { name: string; data: unknown }[] } => {
+    const enqueued: { name: string; data: unknown }[] = [];
+    return {
+      enqueued,
+      async start() {},
+      async stop() {},
+      register() {},
+      async enqueue(name: string, data: unknown) {
+        enqueued.push({ name, data });
+        return 'job-1';
+      },
+      async schedule() {},
+      async unschedule() {},
+    } as unknown as Scheduler & { enqueued: { name: string; data: unknown }[] };
+  };
+
+  /**
+   * Neither the route nor queueRun checked `enabled`, and runSyncJob
+   * early-returns without touching the run row. Nothing reaps `queued`, so the
+   * row sat there for ever, the console followed it, and the page spun with no
+   * error anywhere -- for a source somebody had deliberately switched off.
+   */
+  it('refuses rather than writing a run nothing will ever pick up', async () => {
+    const scheduler = fakeScheduler();
+    await withTenant(tenantId, (tx) =>
+      tx.directorySource.update({ where: { id: sourceId }, data: { enabled: false } }),
+    );
+
+    await expect(queueRun(scheduler, tenantId, sourceId)).rejects.toBeInstanceOf(
+      SourceDisabledError,
+    );
+
+    const runs = await withTenant(tenantId, (tx) => tx.syncRun.findMany());
+    expect(runs).toHaveLength(0);
+    expect(scheduler.enqueued).toHaveLength(0);
+  });
+
+  it('still queues one for an enabled source', async () => {
+    const scheduler = fakeScheduler();
+    const run = await queueRun(scheduler, tenantId, sourceId);
+    expect(run.status).toBe('queued');
+    expect(scheduler.enqueued).toHaveLength(1);
   });
 });

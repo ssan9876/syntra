@@ -117,8 +117,8 @@ const FEDERATION_BINDING_COOKIE = 'syntra_federation_bind';
  * cookie outright unless it is also `Secure`, so on a development server over
  * plain HTTP the pair would mean no cookie at all — and then no federation
  * login of either protocol would complete, which reads as "single sign-on is
- * broken" rather than as a cookie policy. The same `NODE_ENV` reasoning the
- * session cookie uses for `secure` alone.
+ * broken" rather than as a cookie policy. The same PUBLIC_URL-scheme reasoning
+ * the session cookie uses for `secure` alone.
  *
  * `None` is not a weakening. It is what lets the cookie arrive on the one
  * request that genuinely is cross-site and genuinely has to carry it; the
@@ -143,10 +143,6 @@ export function federationBindingCookieOptions(secure: boolean) {
   };
 }
 
-const FEDERATION_BINDING_COOKIE_OPTIONS = federationBindingCookieOptions(
-  process.env.NODE_ENV === 'production',
-);
-
 /**
  * The binding digest to open a request under, setting the cookie if this
  * browser has none yet.
@@ -162,7 +158,11 @@ function bindBrowser(request: FastifyRequest, reply: FastifyReply): string {
     return browserBindingDigest(existing);
   }
   const { nonce, digest } = newBrowserBinding();
-  reply.setCookie(FEDERATION_BINDING_COOKIE, nonce, FEDERATION_BINDING_COOKIE_OPTIONS);
+  reply.setCookie(
+    FEDERATION_BINDING_COOKIE,
+    nonce,
+    federationBindingCookieOptions(request.server.cookieSecure),
+  );
   return digest;
 }
 
