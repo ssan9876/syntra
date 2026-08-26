@@ -647,3 +647,25 @@ describe('reading one product', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('listing workflows', () => {
+  /**
+   * There was no list route at all, so a product's required `workflowId` could
+   * not be discovered from the product: the editor asked an administrator to
+   * type a uuid the console gave them no way to learn.
+   */
+  it('answers every workflow with its stages', async () => {
+    const res = await call('GET', '/api/admin/automate/workflows');
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { workflows: { stages: unknown[]; productCount: number }[] };
+    expect(body.workflows.length).toBeGreaterThan(0);
+    expect(Array.isArray(body.workflows[0]!.stages)).toBe(true);
+    // The count is what makes "can I delete this" answerable from the list.
+    expect(body.workflows[0]!.productCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it('needs automate.read', async () => {
+    const res = await call('GET', '/api/admin/automate/workflows', undefined, readOnlyCookie);
+    expect(res.statusCode).toBe(200);
+  });
+});

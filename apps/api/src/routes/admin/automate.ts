@@ -160,6 +160,41 @@ export async function registerAdminAutomateRoutes(
     },
   );
 
+  /**
+   * Every approval workflow, with its stages and how many products use it.
+   *
+   * There was no list route of any kind, so `Product.workflowId` -- which is
+   * REQUIRED and a uuid -- could not be discovered from the console at all:
+   * the product editor asked an administrator to type an id the product gave
+   * them no way to learn, and the workflow screen asked for the same id before
+   * it would preview anything.
+   *
+   * `productCount` because a workflow bound to eleven products is not one
+   * somebody should edit without knowing that, and `ApprovalWorkflow.products`
+   * is a relation this can count without a second query.
+   */
+  app.get(
+    '/automate/workflows',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
+    async (request) => {
+      const rows = await request.db((tx) =>
+        tx.approvalWorkflow.findMany({
+          orderBy: { name: 'asc' },
+          include: {
+            stages: { orderBy: { sequence: 'asc' } },
+            products: { select: { id: true } },
+          },
+        }),
+      );
+      return {
+        workflows: rows.map(({ products, ...workflow }) => ({
+          ...workflow,
+          productCount: products.length,
+        })),
+      };
+    },
+  );
+
   app.post(
     '/automate/workflows',
     { preHandler: requirePermission(PERMISSIONS.AUTOMATE_MANAGE) },
