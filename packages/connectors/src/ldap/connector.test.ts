@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'ldapts';
-import { ldapConnector, rangedMembershipFailure } from './connector.js';
+import { TEST_SAMPLE_LIMIT, ldapConnector, rangedMembershipFailure } from './connector.js';
 import { RANGE_STEP } from './range.js';
 import type { LdapConfig } from './config.js';
 
@@ -564,5 +564,58 @@ describe('ldapConnector.read: the anchor is an attribute too', () => {
     expect(record.attributes.objectGUID).toEqual([record.anchor]);
     expect(record.anchor).toBe('76543210-ba98-fedc-0123-456789abcdef');
     await stream.return?.(undefined);
+  });
+});
+
+describe('test() against a directory with a server-side size limit', () => {
+  /**
+   * ldapts throws `SizeLimitExceededError` on result code 4 UNLESS the client
+   * asked for a limit of its own. AD's default MaxPageSize is 1000 and
+   * OpenLDAP's is 500, so an unpaged search with no `sizeLimit` fails on every
+   * directory big enough to be worth connecting to -- and a perfectly good
+   * configuration reported "connection failed" and audited connection-failed.
+   *
+   * The seeded directory here is far too small to hit a real server-side
+   * limit, so the search is spied on rather than the server reconfigured: the
+   * assertion is that the CLIENT asks for a limit, which is the half of the
+   * exchange under this file's control and the half that was missing.
+   */
+  it('sends a sizeLimit, so the server does not refuse the search', async () => {
+    const realSearch = Client.prototype.search;
+    const asked: unknown[] = [];
+    vi.spyOn(Client.prototype, 'search').mockImplementation(function (
+      this: Client,
+      ...args: Parameters<Client['search']>
+    ) {
+      asked.push(args[1]);
+      return realSearch.apply(this, args);
+    });
+
+    const result = await ldapConnector.test(config);
+
+    expect(result.ok).toBe(true);
+    expect(asked.length).toBeGreaterThan(0);
+    for (const options of asked) {
+      expect(options).toMatchObject({ sizeLimit: TEST_SAMPLE_LIMIT });
+    }
+  });
+
+  /**
+   * And the answer says it is a sample once the cap is actually reached.
+   * `sampleCounts` was already named that -- and the AD connector's comment
+   * already said so about its own unpaged counts -- but the LDAP side read as
+   * a census, which is what made "how many users does this source have" the
+   * wrong question to ask a connection test.
+   */
+  it('reports a capped count rather than a census', async () => {
+    vi.spyOn(Client.prototype, 'search').mockResolvedValue({
+      searchEntries: Array.from({ length: TEST_SAMPLE_LIMIT }, (_, i) => ({ dn: `cn=u${i}` })),
+      searchReferences: [],
+    } as never);
+
+    const result = await ldapConnector.test(config);
+
+    expect(result.sampleCounts?.user).toBe(TEST_SAMPLE_LIMIT);
+    expect(result.message).toMatch(/sample|at least/i);
   });
 });
