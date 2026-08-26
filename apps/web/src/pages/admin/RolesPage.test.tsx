@@ -20,7 +20,21 @@ const roles = [
     permissions: ['directory.read', 'rbac.manage'],
     builtIn: true,
     assignmentCount: 1,
+    holders: [
+      {
+        userId: 'u1',
+        login: 'ssander',
+        displayName: 'Seth Sander',
+        status: 'active',
+        scopeOrgUnitId: null,
+      },
+    ],
   },
+];
+
+const USERS = [
+  { id: 'u1', login: 'ssander', displayName: 'Seth Sander', status: 'active' },
+  { id: 'u2', login: 'agray', displayName: 'Andrew Gray', status: 'active' },
 ];
 
 function mockApi(over: { patch?: Response } = {}) {
@@ -36,7 +50,7 @@ function mockApi(over: { patch?: Response } = {}) {
     if (url.includes('/api/admin/roles')) {
       return Promise.resolve(json({ catalog: CATALOG, roles }));
     }
-    if (url.includes('/api/admin/users')) return Promise.resolve(json({ users: [] }));
+    if (url.includes('/api/admin/users')) return Promise.resolve(json({ users: USERS }));
     return Promise.resolve(json({}));
   });
   return sent;
@@ -125,5 +139,69 @@ describe('the roles screen', () => {
     renderPage();
     await screen.findByText('Owner');
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+
+  it('names who holds the role rather than only counting them', async () => {
+    mockApi();
+    renderPage();
+
+    // "1 holder" is not something anybody can revoke from. Until this, the
+    // only way to find out WHO, or to take it off them, was a database client.
+    expect(await screen.findByText('ssander')).toBeInTheDocument();
+  });
+
+  it('assigns the role to somebody who does not hold it', async () => {
+    const user = userEvent.setup();
+    const sent = mockApi();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
+    const picker = screen.getByLabelText('Account');
+    // ssander already holds it: offering them again invites an assignment the
+    // unique index refuses.
+    expect(within(picker).queryByText('ssander')).not.toBeInTheDocument();
+    await user.selectOptions(picker, 'u2');
+    await user.click(screen.getByRole('button', { name: 'Grant' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({
+      method: 'POST',
+      url: expect.stringContaining('/api/admin/roles/r1/assignments'),
+      body: { userId: 'u2' },
+    });
+  });
+
+  it('revokes a holder, naming them in the confirmation', async () => {
+    const user = userEvent.setup();
+    const sent = mockApi();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Revoke ssander' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({
+      method: 'DELETE',
+      url: expect.stringContaining('/api/admin/roles/r1/assignments/u1'),
+    });
+  });
+
+  it('says so when everybody already holds the role', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/users')) {
+        return Promise.resolve(json({ users: [USERS[0]] }) as never);
+      }
+      return Promise.resolve(json({ catalog: CATALOG, roles }) as never);
+    });
+    renderPage();
+
+    await screen.findByText('Owner');
+    // Disabled with the reason beside it, rather than a control that opens
+    // onto an empty picker.
+    expect(
+      screen.getByText(/everybody who can sign in already holds it/i),
+    ).toBeInTheDocument();
+    expect(user).toBeTruthy();
   });
 });

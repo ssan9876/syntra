@@ -1,8 +1,26 @@
 import { useState } from 'react';
-import { Alert, Button, Check, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Check,
+  Empty,
+  Field,
+  Panel,
+  Select,
+  SkeletonRows,
+  Status,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+
+interface Holder {
+  userId: string;
+  login: string;
+  displayName: string;
+  status: string;
+  scopeOrgUnitId: string | null;
+}
 
 interface RoleRow {
   id: string;
@@ -11,6 +29,7 @@ interface RoleRow {
   permissions: string[];
   builtIn: boolean;
   assignmentCount: number;
+  holders: Holder[];
 }
 
 /**
@@ -39,6 +58,21 @@ export function RolesPage() {
   const [name, setName] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Which role's grant picker is open, and who is selected in it. */
+  const [granting, setGranting] = useState<string | null>(null);
+  const [grantee, setGrantee] = useState('');
+
+  /**
+   * The accounts a role can be granted to.
+   *
+   * Its error state is deliberately ignored. `rbac.manage` and
+   * `directory.read` are separate permissions and a caller may hold the first
+   * without the second; they get an empty picker saying so, rather than a page
+   * that will not render. The server refuses the assignment either way.
+   */
+  const { data: usersData } = useApiResource<{
+    users: { id: string; login: string; displayName: string; status: string }[];
+  }>('/api/admin/users');
 
   const open = (role: RoleRow) => {
     setEditing(role);
@@ -80,6 +114,58 @@ export function RolesPage() {
       );
     } finally {
       setBusy(false);
+    }
+  };
+
+  /** Accounts not already holding this role. */
+  const grantable = (role: RoleRow) => {
+    const held = new Set(role.holders.map((h) => h.userId));
+    return (usersData?.users ?? []).filter((u) => !held.has(u.id));
+  };
+
+  const grant = async (role: RoleRow) => {
+    if (!grantee) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await api(`/api/admin/roles/${role.id}/assignments`, {
+        method: 'POST',
+        // No scope. `RoleAssignment` carries `scopeOrgUnitId` and the API
+        // accepts one, but a scoped grant is a different question from "who
+        // administers this tenant" and needs a unit picker with its own
+        // explanation of what scoping does. Unscoped is what this screen
+        // means, and it is what the anti-lockout guard counts.
+        body: JSON.stringify({ userId: grantee }),
+      });
+      setGranting(null);
+      setGrantee('');
+      reload();
+    } catch (cause) {
+      setProblem(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That role could not be granted.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (role: RoleRow, holder: Holder) => {
+    setProblem(null);
+    try {
+      await api(`/api/admin/roles/${role.id}/assignments/${holder.userId}`, {
+        method: 'DELETE',
+      });
+      reload();
+    } catch (cause) {
+      // The refusal worth reading is the anti-lockout one: taking the last
+      // holder of rbac.manage off leaves nobody able to put it back.
+      setProblem(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : `${holder.login} could not be revoked.`,
+      );
     }
   };
 
@@ -157,7 +243,8 @@ export function RolesPage() {
         {!loading && data && data.roles.length > 0 && (
           <ul className="divide-y divide-border-subtle">
             {data.roles.map((role) => (
-              <li key={role.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+              <li key={role.id} className="px-4 py-3">
+                <div className="flex flex-wrap items-center gap-3">
                 <span>
                   <span className="font-medium text-ink">{role.name}</span>
                   {/* `Status` takes only `tone` and `children`, so the spacing
@@ -188,6 +275,96 @@ export function RolesPage() {
                     </Button>
                   )}
                 </span>
+                </div>
+
+                {/* WHO holds it, not just how many. The count above was the
+                    whole of what this screen said, and a count is not
+                    something anybody can revoke from -- so taking a role off
+                    somebody still meant a database client, which is the gap
+                    the role API existed to close. */}
+                <div className="mt-2 pl-1">
+                  {role.holders.length === 0 ? (
+                    <p className="text-sm text-muted">Nobody holds this role.</p>
+                  ) : (
+                    <ul className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                      {role.holders.map((holder) => (
+                        <li
+                          key={holder.userId}
+                          className="flex items-center gap-2 text-sm"
+                        >
+                          <span className="text-ink">{holder.login}</span>
+                          {holder.status !== 'active' && (
+                            // Shown rather than filtered away: a deactivated
+                            // account still holds the role, and still counts
+                            // toward the anti-lockout guard.
+                            <Status tone="inactive">cannot sign in</Status>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-label={`Revoke ${holder.login}`}
+                            onClick={() => revoke(role, holder)}
+                          >
+                            Revoke
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {granting === role.id ? (
+                    <div className="mt-2 flex flex-wrap items-end gap-2">
+                      <Select
+                        label="Account"
+                        value={grantee}
+                        onChange={setGrantee}
+                        options={[
+                          { value: '', label: 'Choose an account' },
+                          ...grantable(role).map((u) => ({
+                            value: u.id,
+                            label: u.login,
+                          })),
+                        ]}
+                      />
+                      <Button
+                        size="sm"
+                        disabled={grantee === '' || busy}
+                        loading={busy}
+                        onClick={() => void grant(role)}
+                      >
+                        Grant
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() => {
+                          setGranting(null);
+                          setGrantee('');
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : grantable(role).length === 0 ? (
+                    <p className="mt-2 text-sm text-muted">
+                      Everybody who can sign in already holds it.
+                    </p>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="mt-2"
+                      onClick={() => {
+                        setGranting(role.id);
+                        setGrantee('');
+                        setProblem(null);
+                      }}
+                    >
+                      Grant to someone
+                    </Button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

@@ -220,11 +220,55 @@ export async function readRole(tx: TenantClient, roleId: string) {
 export async function listRolesWithAssignmentCounts(tx: TenantClient) {
   const roles = await tx.role.findMany({
     orderBy: { name: 'asc' },
-    include: { assignments: { select: { userId: true } } },
+    include: { assignments: { select: { userId: true, scopeOrgUnitId: true } } },
   });
+
+  /**
+   * The holders BY NAME, not merely counted.
+   *
+   * A count is not something anybody can revoke from: the screen said "1
+   * holder" and offered no way to say which, so taking a role off somebody
+   * still meant a database client — the exact gap the role API was written to
+   * close, reproduced one level up.
+   *
+   * Logins by a second read rather than an `include`, because
+   * `RoleAssignment.userId` is a bare column with no relation to `User`; the
+   * same reason and the same shape as the person lookup in the provision run
+   * detail route. One statement for every role on the page, joined in memory.
+   */
+  const userIds = [
+    ...new Set(roles.flatMap((role) => role.assignments.map((a) => a.userId))),
+  ];
+  const users =
+    userIds.length === 0
+      ? []
+      : await tx.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, login: true, displayName: true, status: true },
+        });
+  const byId = new Map(users.map((user) => [user.id, user]));
+
   return roles.map(({ assignments, ...role }) => ({
     ...role,
     assignmentCount: new Set(assignments.map((a) => a.userId)).size,
+    holders: assignments
+      .map((assignment) => {
+        const user = byId.get(assignment.userId);
+        return user
+          ? {
+              userId: user.id,
+              login: user.login,
+              displayName: user.displayName,
+              // Carried so the screen can say a holder cannot sign in. A
+              // deactivated account still holds the role, which is exactly
+              // what makes it worth showing rather than filtering away.
+              status: user.status,
+              scopeOrgUnitId: assignment.scopeOrgUnitId,
+            }
+          : null;
+      })
+      .filter((holder): holder is NonNullable<typeof holder> => holder !== null)
+      .sort((a, b) => a.login.localeCompare(b.login)),
   }));
 }
 
