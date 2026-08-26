@@ -60,7 +60,6 @@ import {
   upsertBusinessFunction,
   upsertSodRule,
   buildSnapshot,
-  confirmProposal,
   createEvidencePack,
   type CheckpointSigner,
   fetchEvidencePack,
@@ -598,25 +597,18 @@ export async function registerAdminGovernRoutes(
     })),
   );
 
-  app.post(
-    '/govern/orphans/:id/confirm',
-    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
-    async (request, reply) => {
-      const { id } = idParam.parse(request.params);
-      // The linking function is injected rather than imported by the service,
-      // so `boundaries.test.ts`'s no-access-bearing-write assertion stays true
-      // of the Govern module. Provision owns the write.
-      await confirmProposal(request.tenantId, request.session.userId, id, async () => {
-        throw new ProblemError(
-          501,
-          'linking-not-wired',
-          'Account linking is not wired yet',
-          "Provision's account-linking entry point is supplied here once the two modules are joined.",
-        );
-      });
-      return reply.status(204).send();
-    },
-  );
+  // There is deliberately NO `POST /govern/orphans/:id/confirm`.
+  //
+  // It existed and threw 501 on every call: `confirmProposal` takes the
+  // linking function as a parameter -- so that `boundaries.test.ts`'s
+  // no-access-bearing-write assertion stays true of the Govern module -- and
+  // the function supplied here threw unconditionally. The console rendered a
+  // Confirm button in front of it promising that Provision's next run would
+  // act on the link.
+  //
+  // `confirmProposal` stays in core, exported and tested: it is the half of
+  // the pair a Provision slice will call once account adoption exists. What
+  // does not stay is a route that cannot do what its own name says.
 
   app.post(
     '/govern/orphans/:id/deny',
