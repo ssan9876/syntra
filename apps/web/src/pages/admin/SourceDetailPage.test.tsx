@@ -75,6 +75,7 @@ const savedSource = (overrides: Record<string, unknown> = {}) => ({
   writebackEnabled: false,
   writebackPassword: false,
   writebackDisable: false,
+  writebackDelete: false,
   enabled: true,
   deactivationThresholdPercent: 10,
   lastRunAt: null,
@@ -432,6 +433,63 @@ describe('editing a source', () => {
       calls.find((c) => c.init.method === 'PATCH')!,
     );
     expect(bodyOf(patch).schedule).toBeNull();
+  });
+});
+
+describe('allowing this directory to be deleted from', () => {
+  const DELETE_LABEL = /Deleting a user or org unit removes it/i;
+
+  it('cannot be ticked while the master switch is off', async () => {
+    mockFetch();
+    renderEdit();
+
+    await screen.findByDisplayValue('Corporate LDAP');
+    // The sub-flag means nothing on its own: the server checks
+    // writebackEnabled AND writebackDelete, so offering it alone would be
+    // offering a setting that does nothing.
+    expect(screen.getByLabelText(DELETE_LABEL)).toBeDisabled();
+  });
+
+  it('sends it once the master switch is on', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch();
+    renderEdit();
+
+    await screen.findByDisplayValue('Corporate LDAP');
+    await user.click(
+      screen.getByLabelText(/Allow Syntra to write to this directory/i),
+    );
+    await user.click(screen.getByLabelText(DELETE_LABEL));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    const patch = calls.find((c) => c.init.method === 'PATCH')!;
+    expect(bodyOf(patch)).toMatchObject({
+      writebackEnabled: true,
+      writebackDelete: true,
+    });
+  });
+
+  it('is sent false when the master switch is turned back off', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch({
+      source: savedSource({ writebackEnabled: true, writebackDelete: true }),
+    });
+    renderEdit();
+
+    await screen.findByDisplayValue('Corporate LDAP');
+    await user.click(
+      screen.getByLabelText(/Allow Syntra to write to this directory/i),
+    );
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    // Turning the master off must not leave the sub-flag true in the row.
+    // Deletion is the one write nothing undoes, so a stale true here is the
+    // setting somebody thought they had switched off.
+    const patch = calls.find((c) => c.init.method === 'PATCH')!;
+    expect(bodyOf(patch)).toMatchObject({
+      writebackEnabled: false,
+      writebackDelete: false,
+    });
   });
 });
 

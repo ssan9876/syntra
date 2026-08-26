@@ -37,6 +37,7 @@ interface SourceDetail {
   writebackEnabled: boolean;
   writebackPassword: boolean;
   writebackDisable: boolean;
+  writebackDelete: boolean;
   enabled: boolean;
   deactivationThresholdPercent: number;
   lastRunAt: string | null;
@@ -70,6 +71,7 @@ interface Form {
   writebackEnabled: boolean;
   writebackPassword: boolean;
   writebackDisable: boolean;
+  writebackDelete: boolean;
   deactivationThresholdPercent: string;
 }
 
@@ -95,6 +97,7 @@ const BLANK: Form = {
   writebackEnabled: false,
   writebackPassword: false,
   writebackDisable: false,
+  writebackDelete: false,
   deactivationThresholdPercent: '10',
 };
 
@@ -176,6 +179,7 @@ function formFrom(source: SourceDetail): Form {
     writebackEnabled: source.writebackEnabled,
     writebackPassword: source.writebackPassword,
     writebackDisable: source.writebackDisable,
+    writebackDelete: source.writebackDelete,
     deactivationThresholdPercent: String(source.deactivationThresholdPercent),
   };
 }
@@ -377,6 +381,7 @@ export function SourceDetailPage() {
             // trusts the wrong half of.
             writebackPassword: form.writebackEnabled && form.writebackPassword,
             writebackDisable: form.writebackEnabled && form.writebackDisable,
+            writebackDelete: form.writebackEnabled && form.writebackDelete,
             enabled: form.enabled,
             deactivationThresholdPercent: threshold,
           }),
@@ -426,6 +431,7 @@ export function SourceDetailPage() {
           // the wrong half of.
           writebackPassword: form.writebackEnabled && form.writebackPassword,
           writebackDisable: form.writebackEnabled && form.writebackDisable,
+          writebackDelete: form.writebackEnabled && form.writebackDelete,
           enabled: form.enabled,
           deactivationThresholdPercent: threshold,
         }),
@@ -761,6 +767,19 @@ export function SourceDetailPage() {
               // starts applying, including the minimum age, and it will refuse
               // things Syntra's own policy would have accepted.
               hint="Off, changing a password in the portal changes it only in Syntra, and the user keeps a different password for this directory. On, the directory verifies the current password and applies its own rules for the new one — complexity, history and minimum age."
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.writebackEnabled && form.writebackDelete}
+              disabled={!form.writebackEnabled}
+              onChange={(v) => set('writebackDelete', v)}
+              label="Deleting a user or org unit removes it from this directory"
+              // The one on this panel that writing the opposite value back
+              // does not undo. Everything else here is a state: a disabled
+              // account is enabled again, a changed password is changed again.
+              // This is not, so the hint leads with that rather than with what
+              // the feature does.
+              hint="The only write here that cannot be reversed by doing it again — a deleted object is gone, and re-running the sync does not bring it back. Off, deleting from the console is refused for any account owned by this directory. On, the bind account also needs permission to delete the objects in scope. Deactivating remains the default everywhere; this is for an account or container that should stop existing."
             />
           </div>
         </Panel>
