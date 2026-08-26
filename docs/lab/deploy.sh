@@ -47,6 +47,43 @@ fi
 echo "commit : $(git rev-parse --short HEAD) $(git log -1 --format=%s)"
 echo "host   : $HOST:$REMOTE"
 
+# --- refuse a host that has moved to the release layout ---------------------
+#
+# This script pushes a working tree into $REMOTE and restarts the service. That
+# is only a deploy while the service RUNS from $REMOTE, and on a host installed
+# by `ops/syntra-install` it does not: systemd runs
+# /opt/syntra/current/apps/api, where `current` is a symlink into
+# releases/<version> that `syntra-update` swaps.
+#
+# Without this check the script does every step successfully against a
+# directory nothing reads, restarts the service, watches the OLD version come
+# back healthy, prints "healthy" and exits 0. It reported a clean deploy of
+# thirty-two files, none of which were running, and only a 404 on a route that
+# should have existed gave it away. A deploy tool that cannot fail is worse
+# than no deploy tool, because it is believed.
+if ssh "$HOST" 'test -L /opt/syntra/current' 2>/dev/null; then
+  installed=$(ssh "$HOST" 'readlink -f /opt/syntra/current' 2>/dev/null || echo unknown)
+  cat >&2 <<EOF
+$HOST runs the release layout, not a pushed working tree.
+
+  systemd runs : /opt/syntra/current/apps/api
+  current      : $installed
+  this script  : $REMOTE   <- nothing runs from here
+
+Files copied to $REMOTE would not be executed, and the restart below would
+bring the SAME version back up healthy. Refusing rather than reporting a
+deploy that did not happen.
+
+To ship a commit to this host, cut a release and adopt it:
+
+  git tag vX.Y.Z && git push origin vX.Y.Z     # the workflow builds it
+  ssh $HOST /opt/syntra/bin/syntra-update X.Y.Z
+
+or use Updates in the console, which runs the same script.
+EOF
+  exit 1
+fi
+
 # --- what differs -----------------------------------------------------------
 
 # Line endings are normalised out of the comparison. A Windows checkout stores
