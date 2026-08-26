@@ -8320,7 +8320,7 @@ Spec §9, **B2**. `findFirst({ where: { login: 'admin' } })` after a slug upsert
 - Consumes: nothing.
 - Produces: `export function seedMarkerFound(markers: { adminUser: boolean; builtInRole: boolean }): boolean` in a new `packages/db/src/seed-guard.ts`, so the decision is testable without running a seed.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `packages/db/src/seed-guard.test.ts`:
 
@@ -8360,12 +8360,12 @@ describe('seedMarkerFound', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run packages/db/src/seed-guard.test.ts`
 Expected: FAIL — `Cannot find module './seed-guard.js'`.
 
-- [ ] **Step 3: Write the guard and use it**
+- [x] **Step 3: Write the guard and use it**
 
 Create `packages/db/src/seed-guard.ts`:
 
@@ -8436,7 +8436,7 @@ await withTenant(tenant.id, async (tx) => {
 
 adding `import { seedMarkerFound } from './seed-guard.js';`.
 
-- [ ] **Step 4: Run the guard test, then prove the seed still seeds**
+- [x] **Step 4: Run the guard test, then prove the seed still seeds**
 
 ```bash
 npx vitest run packages/db/src/seed-guard.test.ts
@@ -8446,7 +8446,7 @@ SEED_ADMIN_PASSWORD=aaaaaaaaaaaa pnpm seed
 
 Expected: PASS; the first seed creates everything; the second prints "already seeded" and does nothing. Only against a development database.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
