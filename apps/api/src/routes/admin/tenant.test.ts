@@ -212,8 +212,25 @@ describe('PUT /api/admin/tenant', () => {
     //
     // The domain used to be frozen alongside it, which meant an operator
     // deploying at their own hostname had no way to say so short of SQL.
-    const res = await put(cookie, {
+    // REFUSED OUTRIGHT now, where it used to be silently stripped. The schema
+    // is `.strict()`, so a key it does not declare is a 400 rather than a 200
+    // that quietly did less than the caller asked -- which is the same
+    // invariant, enforced where the caller can see it.
+    const refused = await put(cookie, {
       slug: 'somebody-else',
+      primaryDomain: 'syntra.example.com',
+      name: 'Acme Care',
+    });
+    expect(refused.statusCode).toBe(400);
+
+    const untouched = await prisma.tenant.findUniqueOrThrow({
+      where: { id: ctx.tenantId },
+    });
+    expect(untouched.slug).toBe('acme');
+    // And nothing else moved either: a refused body writes none of its fields.
+    expect(untouched.name).toBe('Acme');
+
+    const res = await put(cookie, {
       primaryDomain: 'syntra.example.com',
       name: 'Acme Care',
     });
