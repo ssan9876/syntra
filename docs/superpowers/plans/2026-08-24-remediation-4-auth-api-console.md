@@ -6686,7 +6686,7 @@ Spec §7.6, **W6**, last surface. `MyAccessPage`'s **Extend** links to the plain
 - Consumes: `submitRequestBody.replacesGrantId` (already declared, `z.string().uuid().nullable().default(null)`), which `request-service.ts:310-320` validates against a live grant and `fulfil.ts:252` acts on.
 - Produces: no new endpoints. `/catalog/:id?replaces=<grantId>` carries the grant being extended.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/web/src/pages/automate/RequestFormPage.test.tsx`:
 
@@ -6747,12 +6747,12 @@ describe('an extension', () => {
 
 Extend the file's `mockForm` into `mockFormWithSubmit`, recording POST bodies, rather than adding a second mocking style.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/automate/RequestFormPage.test.tsx; cd ../..`
 Expected: FAIL — no `replacesGrantId` on the body and no such sentence on the page.
 
-- [ ] **Step 3: Carry the grant through**
+- [x] **Step 3: Carry the grant through**
 
 In `apps/web/src/pages/automate/MyAccessPage.tsx`, replace the extend link (lines 97–103):
 
@@ -6808,12 +6808,12 @@ and above the submit button:
 
 Import `useSearchParams` from `react-router-dom`.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/automate/RequestFormPage.test.tsx; cd ../..`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
@@ -6855,7 +6855,7 @@ Spec §7.6, **W8**. `GovernOrphansPage`'s **Confirm** asks the reader to agree t
 - Consumes: `POST /api/admin/govern/orphans/:id/deny` (unchanged).
 - Produces: `POST /api/admin/govern/orphans/:id/confirm` is removed. `confirmProposal` stays exported in core, tested and unreferenced by any route — deliberately, because it is the half of the pair a Provision slice will call.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `apps/web/src/pages/admin/GovernOrphansPage.test.tsx` in the house style:
 
@@ -6900,12 +6900,12 @@ describe('an orphan proposal', () => {
 
 The denial currently uses `window.prompt`, which `StatusToggle.test.tsx` documents as a control that silently stops working once a browser has been told to block dialogs. Move it into the page, exactly as `StatusToggle` did, which is what the third case asserts.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernOrphansPage.test.tsx; cd ../..`
 Expected: FAIL — Confirm is present, the sentence is not, and the reason is asked for by `window.prompt`.
 
-- [ ] **Step 3: Remove the control and the route**
+- [x] **Step 3: Remove the control and the route**
 
 In `apps/web/src/pages/admin/GovernOrphansPage.tsx`, delete the Confirm `Button` (lines 56–82), move the denial's reason into the page as an inline form, and add under the proposal:
 
@@ -6946,7 +6946,7 @@ In `apps/api/src/routes/admin/govern.ts`, delete the `/govern/orphans/:id/confir
   // does not stay is a route that cannot do what its own name says.
 ```
 
-- [ ] **Step 4: Run the web test and the govern route suite**
+- [x] **Step 4: Run the web test and the govern route suite**
 
 ```bash
 cd apps/web && npx vitest run src/pages/admin/GovernOrphansPage.test.tsx; cd ../..
@@ -6955,7 +6955,7 @@ npx vitest run apps/api/src/routes/admin/govern.test.ts
 
 Expected: PASS both. If a route test asserted the 501, delete it — it was asserting the defect.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
