@@ -5350,7 +5350,7 @@ Spec §7.6, **W4**. Mode state is kept and a caveat is rendered, but the URL is 
 - Consumes: `GET /api/admin/govern/snapshots?limit=…` → `{ snapshots: { id, asOf, status }[] }`; `GET /api/admin/govern/reports/system?systemId=…&snapshotId=…`.
 - Produces: no new endpoints. The page sends `snapshotId` when one is chosen and omits it for the latest.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `apps/web/src/pages/admin/GovernReportsPage.test.tsx`:
 
@@ -5457,12 +5457,12 @@ describe('the reports screen', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernReportsPage.test.tsx; cd ../..`
 Expected: FAIL — the Live button is present and no snapshot picker exists.
 
-- [ ] **Step 3: Replace the toggle with a snapshot picker**
+- [x] **Step 3: Replace the toggle with a snapshot picker**
 
 In `apps/web/src/pages/admin/GovernReportsPage.tsx`, delete the `mode` state (line 81) and the toggle block (lines 100–120), delete the now-unused `LiveReportHeader` interface (lines 26–31) and narrow `SystemReport['header']` to `ReportHeader`, and add:
 
@@ -5526,12 +5526,12 @@ and, beside the system field:
 
 Import `Select` from `@syntra/ui`.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/GovernReportsPage.test.tsx; cd ../..`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 5: Typecheck, build and commit**
+- [x] **Step 5: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
@@ -5575,7 +5575,7 @@ Spec §7.6, **W5**, the two sites outside `Security.tsx` (which Task 5 covered).
 - Consumes: `ApiError`, `api`.
 - Produces: no signature changes. Both pages render the server's `detail` in an `Alert` on failure.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `apps/web/src/pages/admin/ApplicationDetailPage.test.tsx`:
 
@@ -5666,12 +5666,12 @@ describe('assignment controls', () => {
 
 Append to `apps/web/src/pages/admin/PoliciesPage.test.tsx` a case of the same shape for `Remove` on a rule, asserting the server's `detail` appears.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/ApplicationDetailPage.test.tsx src/pages/admin/PoliciesPage.test.tsx; cd ../..`
 Expected: FAIL — nothing renders, and the console shows an unhandled rejection.
 
-- [ ] **Step 3: Catch, and say what the server said**
+- [x] **Step 3: Catch, and say what the server said**
 
 In `apps/web/src/pages/admin/ApplicationDetailPage.tsx`, add `const [problem, setProblem] = useState<string | null>(null);` and replace the two handlers (lines 70–86):
 
@@ -5766,12 +5766,12 @@ In `apps/web/src/pages/admin/PoliciesPage.tsx`, wrap `move()` and `remove()` (li
   }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/ApplicationDetailPage.test.tsx src/pages/admin/PoliciesPage.test.tsx; cd ../..`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
