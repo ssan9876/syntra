@@ -128,6 +128,7 @@ model GroupMembership {
 
   @@unique([groupId, userId])
   @@index([tenantId])
+  @@index([userId])
 }
 
 /// Typed key/value storage so a tenant can carry attributes Syntra does not
