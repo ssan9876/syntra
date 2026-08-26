@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -46,6 +46,12 @@ export function GovernCampaignDetailPage() {
   );
   const [actionError, setActionError] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
+  const [rebaseTo, setRebaseTo] = useState('');
+  const [started, setStarted] = useState<string | null>(null);
+
+  const { data: snapshotList } = useApiResource<{
+    snapshots: { id: string; asOf: string; status: string }[];
+  }>('/api/admin/govern/snapshots?limit=25');
 
   const act = (path: string, body: unknown, onDone: (result: unknown) => void) =>
     void api(path, { method: 'POST', body: JSON.stringify(body) })
@@ -71,6 +77,7 @@ export function GovernCampaignDetailPage() {
 
       {error !== null && <Alert tone="danger">{error}</Alert>}
       {actionError !== null && <Alert tone="danger">{actionError}</Alert>}
+      {started !== null && <Alert tone="info">{started}</Alert>}
       {loading && <SkeletonRows rows={6} cols={4} />}
 
       {data !== null && (
@@ -118,7 +125,74 @@ export function GovernCampaignDetailPage() {
           </Panel>
 
           <Panel title="Actions">
-            <div className="flex flex-wrap gap-2 p-4">
+            <div className="flex flex-wrap items-end gap-2 p-4">
+              {/* A campaign is created as a DRAFT and generates nothing until
+                  it is started: `startCampaign` is what writes the items,
+                  resolves the reviewers and sends the mail. Until this button
+                  existed, every campaign the API could create sat as a draft
+                  forever. */}
+              {data.campaign.status === 'draft' && (
+                <Button
+                  variant="primary"
+                  onClick={() =>
+                    act(
+                      `/api/admin/govern/campaigns/${data.campaign.id}/start`,
+                      {},
+                      (result) => {
+                        const outcome = result as {
+                          itemCount: number;
+                          blockedCount: number;
+                        };
+                        setStarted(
+                          `${outcome.itemCount} item(s) generated` +
+                            (outcome.blockedCount === 0
+                              ? '.'
+                              : `, and ${outcome.blockedCount} resolved to nobody — they cannot be decided until somebody is named.`),
+                        );
+                      },
+                    )
+                  }
+                >
+                  Start it
+                </Button>
+              )}
+
+              {/* Section 8 rule 2: a campaign whose snapshot has aged past
+                  `maxSnapshotAgeDays` must be re-based before its revocations
+                  can execute, and the guard refuses outright otherwise. The
+                  endpoint existed; nothing could call it, so a campaign that
+                  aged out was permanently unexecutable. */}
+              <Select
+                label="Re-base onto"
+                value={rebaseTo}
+                onChange={setRebaseTo}
+                options={[
+                  { value: '', label: 'Choose a snapshot…' },
+                  ...(snapshotList?.snapshots ?? []).map((snapshot) => ({
+                    value: snapshot.id,
+                    label: new Date(snapshot.asOf).toLocaleString(),
+                  })),
+                ]}
+              />
+              <Button
+                variant="secondary"
+                disabled={rebaseTo === ''}
+                onClick={() =>
+                  act(
+                    `/api/admin/govern/campaigns/${data.campaign.id}/rebase`,
+                    { snapshotId: rebaseTo },
+                    (result) => {
+                      const outcome = result as { reopened: number; kept: number };
+                      setStarted(
+                        `${outcome.reopened} item(s) re-opened, ${outcome.kept} kept.`,
+                      );
+                    },
+                  )
+                }
+              >
+                Re-base
+              </Button>
+
               <Button
                 variant="secondary"
                 onClick={() => {

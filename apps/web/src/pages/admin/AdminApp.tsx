@@ -39,6 +39,7 @@ import { GovernFindingsPage } from './GovernFindingsPage.js';
 import { GovernOrphansPage } from './GovernOrphansPage.js';
 import { GovernIntegrityPage } from './GovernIntegrityPage.js';
 import { GovernCampaignsPage } from './GovernCampaignsPage.js';
+import { GovernCampaignNewPage } from './GovernCampaignNewPage.js';
 import { GovernCampaignDetailPage } from './GovernCampaignDetailPage.js';
 import { GovernBatchPage } from './GovernBatchPage.js';
 import { GovernSodPage } from './GovernSodPage.js';
@@ -97,6 +98,9 @@ export function AdminApp() {
             <Route path="govern/snapshots/:id" element={<GovernSnapshotDetailPage />} />
             <Route path="govern/reports" element={<GovernReportsPage />} />
             <Route path="govern/campaigns" element={<GovernCampaignsPage />} />
+            {/* Before the parametric route, so "new" is a page rather than an
+                id that will 404 on its way to the detail screen. */}
+            <Route path="govern/campaigns/new" element={<GovernCampaignNewPage />} />
             <Route path="govern/campaigns/:id" element={<GovernCampaignDetailPage />} />
             <Route path="govern/batches/:id" element={<GovernBatchPage />} />
             <Route path="govern/sod" element={<GovernSodPage />} />
