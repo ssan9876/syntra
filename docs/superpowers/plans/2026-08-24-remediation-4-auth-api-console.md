@@ -6517,7 +6517,7 @@ Spec §7.6, **W6**, three more server features with no way to invoke them. `POST
   - `DELETE /api/admin/users/:id/factors/:type` → 200 `{ recoveryCodesRevoked }`
 - Produces: no new endpoints.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `apps/web/src/pages/admin/PersonDetailPage.test.tsx`:
 
@@ -6612,12 +6612,12 @@ describe('taking a factor off a user', () => {
 });
 ```
 
-- [ ] **Step 2: Run all three to verify they fail**
+- [x] **Step 2: Run all three to verify they fail**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/PersonDetailPage.test.tsx src/pages/admin/StatusToggle.test.tsx src/pages/admin/UsersPage.test.tsx; cd ../..`
 Expected: FAIL — none of the three controls exist.
 
-- [ ] **Step 3: Build the three controls**
+- [x] **Step 3: Build the three controls**
 
 `PersonDetailPage`: read `/api/admin/users`, filter to accounts whose `personId` is null (add `personId` to the users list response if it is not already there — check `apps/api/src/routes/admin/users.ts`'s list handler first), offer them in a `Select` labelled `Account to link`, and POST on **Link**. Render the refusal.
 
@@ -6634,12 +6634,12 @@ Expected: FAIL — none of the three controls exist.
                     one the attacker removed. */}
 ```
 
-- [ ] **Step 4: Run the three tests to verify they pass**
+- [x] **Step 4: Run the three tests to verify they pass**
 
 Run: `cd apps/web && npx vitest run src/pages/admin/PersonDetailPage.test.tsx src/pages/admin/StatusToggle.test.tsx src/pages/admin/UsersPage.test.tsx; cd ../..`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck, build and commit**
+- [x] **Step 5: Typecheck, build and commit**
 
 ```bash
 npx tsc -b
