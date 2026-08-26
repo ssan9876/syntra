@@ -219,7 +219,41 @@ export async function changeOwnPassword(
 
     // The directory has the new password. Syntra's hash follows so the portal
     // keeps working with the same string the workstation now wants.
-    return { ok: true, otherSessionsRevoked: await commit() };
+    //
+    // If THAT fails, the two have diverged -- with the directory holding the
+    // password the user just chose, which is the recoverable direction and the
+    // reason for this ordering. What was missing is any way to find the state
+    // afterwards: it propagated as a plain error with no marker, and section 9
+    // names `auth.password_writeback_desync` precisely so somebody can query
+    // for the accounts it happened to and reconcile them.
+    //
+    // Recorded and RE-THROWN. Swallowing it would report a successful change
+    // to a user whose Syntra password is now the old one, which is the
+    // failure this event exists to make visible rather than one to hide.
+    try {
+      return { ok: true, otherSessionsRevoked: await commit() };
+    } catch (cause) {
+      await withTenant(tenantId, (tx) =>
+        recordEvent(tx, {
+          actorUserId: context.user.id,
+          action: 'auth.password_writeback_desync',
+          targetType: 'User',
+          targetId: context.user.id,
+          outcome: 'failure',
+          sourceIp: input.sourceIp,
+          payload: {
+            // Neither password appears, and neither does the hash. What is
+            // recorded is which account, which source, and which side holds
+            // the value the user expects.
+            sourceId: context.sourceId,
+            directoryAccepted: true,
+            localApplied: false,
+            reason: cause instanceof Error ? cause.message : 'unknown',
+          },
+        }),
+      );
+      throw cause;
+    }
   }
 
   const correct = await verifyPassword(

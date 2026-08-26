@@ -252,6 +252,7 @@ export async function buildApp(
     prefix: '/api/admin',
     masterKey: config.masterKey,
     publicUrl: config.publicUrl,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminOrgUnitRoutes, { prefix: '/api/admin' });

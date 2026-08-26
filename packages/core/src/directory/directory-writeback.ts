@@ -5,6 +5,8 @@ import { recordEvent } from '../audit/audit-service.js';
 import { sourceWithPassword } from '../sync/source-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { deactivateUser, reactivateUser } from './user-service.js';
+import { PROVISION_JOB, provisionJobPayload } from '../provision/jobs.js';
+import type { Scheduler } from '../jobs/scheduler.js';
 
 /**
  * Deactivating a user whose account is owned by a directory source, and
@@ -25,7 +27,7 @@ import { deactivateUser, reactivateUser } from './user-service.js';
  */
 
 export type DeactivateOutcome =
-  | { ok: true; viaDirectory: boolean; ladderStarted: boolean }
+  | { ok: true; viaDirectory: boolean; ladderStarted: boolean; runsEnqueued: number }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'writeback_not_enabled'; sourceName: string }
   | { ok: false; reason: 'no_credential'; sourceName: string }
@@ -36,6 +38,7 @@ export interface DeactivateInput {
   reason: string;
   actorUserId: string;
   sourceIp?: string | undefined;
+  scheduler?: Scheduler | null | undefined;
 }
 
 interface Resolved {
@@ -102,7 +105,7 @@ async function writeThrough(
       else await deactivateUser(tx, input.userId, input.reason);
       await audit(tx, input, enabled, { viaDirectory: false });
     });
-    return { ok: true, viaDirectory: false, ladderStarted: false };
+    return { ok: true, viaDirectory: false, ladderStarted: false, runsEnqueued: 0 };
   }
 
   // Refused rather than quietly done locally. A local-only status change on a
@@ -180,7 +183,39 @@ async function writeThrough(
     audit(tx, input, enabled, { viaDirectory: true, ladderStarted }),
   );
 
-  return { ok: true, viaDirectory: true, ladderStarted };
+  /**
+   * Write-back design section 7.2 step 6: the Provision run that carries this
+   * departure onto the ladder.
+   *
+   * Nothing enqueued one, so the entitlement revocation, the archive into the
+   * deactivated OU and the reap on the domain controller all waited for the
+   * next SCHEDULED run -- on a change whose whole point is that it happens
+   * now, and whose console copy says the leaver steps "follow from today".
+   *
+   * One run per target holding this person an account, not one per person:
+   * `provisionJobPayload` is scoped to a target system, because that is the
+   * unit Provision reconciles, and a person can hold accounts on several.
+   *
+   * Skipped entirely when `ladderStarted` is false or no scheduler was
+   * passed -- a reactivation does not start the ladder, and a caller that
+   * gave no scheduler gets the same behaviour as before this existed.
+   */
+  let runsEnqueued = 0;
+  if (ladderStarted && input.scheduler) {
+    const targets = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findMany({
+        where: { personId: resolved.user.personId! },
+        select: { targetSystemId: true },
+        distinct: ['targetSystemId'],
+      }),
+    );
+    for (const { targetSystemId } of targets) {
+      await input.scheduler.enqueue(PROVISION_JOB, provisionJobPayload(tenantId, targetSystemId));
+      runsEnqueued += 1;
+    }
+  }
+
+  return { ok: true, viaDirectory: true, ladderStarted, runsEnqueued };
 }
 
 async function audit(

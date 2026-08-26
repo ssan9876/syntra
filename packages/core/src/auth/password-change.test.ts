@@ -6,6 +6,7 @@ import { createUser } from '../directory/user-service.js';
 import { createSource } from '../sync/source-service.js';
 import { createSession, resolveSession } from './session-service.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
+import * as passwordModule from './password.js';
 import { changeOwnPassword } from './password-change.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 
@@ -284,6 +285,42 @@ describe('changeOwnPassword writing through to a directory', () => {
   });
 
   afterEach(() => changePassword.mockReset());
+
+  /**
+   * The divergence this ordering deliberately allows, made findable.
+   *
+   * The directory is written FIRST, so a commit failure after it accepted
+   * leaves the two disagreeing -- with the DIRECTORY holding the password the
+   * user just chose, which is the recoverable direction and the one that
+   * makes their workstation login work at eight the next morning. What was
+   * missing is any way to find that state: it propagated as a plain error
+   * with no marker, and section 9 asks for `auth.password_writeback_desync`
+   * precisely so somebody can query for the accounts it happened to.
+   */
+  it('records auth.password_writeback_desync and re-throws when the local commit fails', async () => {
+    const { sessionId } = await signIn();
+    const boom = vi
+      .spyOn(passwordModule, 'setPasswordHash')
+      .mockRejectedValue(new Error('connection terminated'));
+
+    try {
+      await expect(change(sessionId)).rejects.toThrow(/connection terminated/);
+
+      const events = await withTenant(tenantId, (tx) =>
+        tx.auditEvent.findMany({ where: { action: 'auth.password_writeback_desync' } }),
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]!.targetId).toBe(userId);
+      expect(events[0]!.outcome).toBe('failure');
+
+      // Never the passwords, never the hash.
+      const payload = JSON.stringify(events[0]!.payload);
+      expect(payload).not.toContain(PASSWORD);
+      expect(payload).not.toContain(NEW_PASSWORD);
+    } finally {
+      boom.mockRestore();
+    }
+  });
 
   it('sends the change to the directory and then stores the hash', async () => {
     const { sessionId } = await signIn();
