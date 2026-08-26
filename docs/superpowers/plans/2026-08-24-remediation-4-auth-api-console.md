@@ -8039,7 +8039,7 @@ The write-back design §7.2 step 6 says a Provision run is enqueued after an adm
   - `AdminUserRouteOptions` gains `scheduler?: () => Scheduler | null`
   - a new audit action, `auth.password_writeback_desync`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `packages/core/src/directory/directory-writeback.test.ts`:
 
@@ -8161,12 +8161,12 @@ describe('a password that landed in the directory and not locally', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `npx vitest run packages/core/src/directory/directory-writeback.test.ts packages/core/src/auth/password-change.test.ts -t 'ladder\|desync'`
 Expected: FAIL — `scheduler` is not a field of `DeactivateInput`, and no desync event is written.
 
-- [ ] **Step 3: Enqueue the ladder**
+- [x] **Step 3: Enqueue the ladder**
 
 In `packages/core/src/directory/directory-writeback.ts`, add `scheduler?: Scheduler | null | undefined;` to `DeactivateInput` and `runsEnqueued: number` to the success arm of `DeactivateOutcome`, and after the ladder transaction (line 177):
 
@@ -8220,7 +8220,7 @@ The locally-managed early return (line 105) returns `runsEnqueued: 0` too.
 
 In `apps/api/src/routes/admin/users.ts`, add `scheduler?: () => Scheduler | null;` to `AdminUserRouteOptions` with the comment the source routes already use, and pass `scheduler: options.scheduler?.() ?? null` to both `deactivateDirectoryUser` and `reactivateDirectoryUser`. In `apps/api/src/app.ts`, add `...(options.scheduler ? { scheduler: options.scheduler } : {})` to the `registerAdminUserRoutes` registration (line 216), matching how the source routes are registered.
 
-- [ ] **Step 4: Mark the desync**
+- [x] **Step 4: Mark the desync**
 
 In `packages/core/src/auth/password-change.ts`, replace the success return of the write-back branch (line 222):
 
@@ -8264,12 +8264,12 @@ In `packages/core/src/auth/password-change.ts`, replace the success return of th
     }
 ```
 
-- [ ] **Step 5: Run both files to verify they pass**
+- [x] **Step 5: Run both files to verify they pass**
 
 Run: `npx vitest run packages/core/src/directory/directory-writeback.test.ts packages/core/src/auth/password-change.test.ts apps/api/src/routes/admin/users.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npx tsc -b`
 Expected: exit 0.
