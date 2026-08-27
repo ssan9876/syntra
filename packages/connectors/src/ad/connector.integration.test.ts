@@ -1488,3 +1488,78 @@ describe('adTargetConnector — read', () => {
     }
   });
 });
+
+describe('createContainer against a real domain controller', () => {
+  const op = (dn: string) => ({ op: 'create_container' as const, actionId: 'a-1', dn });
+
+  it('creates a container and returns an anchor that resolves', async () => {
+    const dn = `OU=Sales,${testOu}`;
+
+    const result = await adTargetConnector.write(config, op(dn));
+
+    expect(result.ok).toBe(true);
+    expect(result.anchor).toBeTruthy();
+
+    // Read, never inferred: the container has to be visible to the same call
+    // the run uses to decide whether a container exists, or the create
+    // succeeds and the next run still reports container_missing.
+    const seen: string[] = [];
+    for await (const container of adTargetConnector.listContainers(config)) {
+      seen.push(container.dn.toLowerCase());
+    }
+    expect(seen).toContain(dn.toLowerCase());
+
+    // The anchor is the target's own identifier for THIS object, not a
+    // fabricated one.
+    const { searchEntries } = await admin.search(dn, {
+      scope: 'base',
+      filter: '(objectClass=*)',
+      attributes: ['objectGUID'],
+    });
+    const raw = (searchEntries[0] as unknown as Record<string, unknown>).objectGUID;
+    const expected = normaliseAnchor(
+      'objectGUID',
+      Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw)),
+    );
+    expect(result.anchor).toBe(expected);
+  });
+
+  it('reports conflict for a container that already exists', async () => {
+    // Adoption, not an error. Two administrators materialising one unit, and
+    // a re-materialise after somebody made the OU by hand, both land here and
+    // the caller treats it as success.
+    const dn = `OU=Duplicated,${testOu}`;
+    const first = await adTargetConnector.write(config, op(dn));
+    expect(first.ok).toBe(true);
+
+    const second = await adTargetConnector.write(config, op(dn));
+
+    expect(second.ok).toBe(false);
+    expect(second.failure).toBe('conflict');
+  });
+
+  it('reports not_found for a missing parent and does not invent it', async () => {
+    // Creating intermediate parents is exactly the implicit creation Ruling
+    // P9 forbids, and is how one typo in a DN becomes three containers
+    // nobody asked for. One level, or nothing.
+    const dn = `OU=Child,OU=NoSuchParent,${testOu}`;
+
+    const result = await adTargetConnector.write(config, op(dn));
+
+    expect(result.ok).toBe(false);
+    expect(result.failure).toBe('not_found');
+
+    const seen: string[] = [];
+    for await (const container of adTargetConnector.listContainers(config)) {
+      seen.push(container.dn.toLowerCase());
+    }
+    expect(seen.some((d) => d.includes('nosuchparent'))).toBe(false);
+  });
+
+  it('refuses a DN with no name rather than sending it', async () => {
+    const result = await adTargetConnector.write(config, op(testOu.slice(testOu.indexOf(',') + 1)));
+    // A bare `DC=...` has an RDN, so this one reaches the server and is
+    // refused there; either way it must not come back ok.
+    expect(result.ok).toBe(false);
+  });
+});

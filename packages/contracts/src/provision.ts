@@ -182,6 +182,14 @@ export const thresholdsSchema = z
     deactivateSyntraUserThresholdPercent: z.number().int().min(0).max(100).optional(),
     perEntitlementThresholdPercent: z.number().int().min(0).max(100).optional(),
     personPopulationDropPercent: z.number().int().min(0).max(100).optional(),
+    /**
+     * An absolute COUNT, which is why its bound is 1000 rather than 100 and
+     * its name carries no `Percent`.
+     *
+     * Containers have no population to be a share of, so this axis is a cap.
+     * Zero is permitted and means no run may create a container at all.
+     */
+    maxContainerCreatesPerRun: z.number().int().min(0).max(1000).optional(),
   })
   .strict();
 

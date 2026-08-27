@@ -264,6 +264,18 @@ export const scimTargetConnector: TargetConnector<Config> = {
           }
           return { ok: true, message: 'archived' };
         }
+        case 'create_container':
+          // SCIM has no container concept at all -- there is no resource type
+          // to create and no DN to create it at. Refused explicitly rather
+          // than left to the exhaustiveness throw, so the message says why
+          // instead of reading like an unimplemented case somebody forgot.
+          return {
+            ok: false,
+            message:
+              'this target has no containers: SCIM addresses resources by id, ' +
+              'so there is nothing for an org unit to be materialised at',
+            failure: 'rejected',
+          };
         case 'grant_entitlement':
           return await patchGroupMembers(config, op.entitlementId, 'add', op.anchor);
         case 'revoke_entitlement':

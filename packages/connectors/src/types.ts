@@ -54,6 +54,17 @@ export interface SchemaDescriptor {
  * does not.
  */
 export type ProvisionActionType =
+  /**
+   * The one action that names an OBJECT rather than a person: it carries a
+   * `dn` and a null `personId`.
+   *
+   * Emitted only for a container an administrator explicitly materialised --
+   * Ruling P9 (revised). Provision still never creates a container to satisfy
+   * a rendered template, and cannot: the emission path reads an
+   * `OrgUnitContainer` row, and the template rungs of the placement ladder
+   * hold none.
+   */
+  | 'create_container'
   | 'create_account'
   | 'update_account'
   | 'enable_account'
@@ -65,8 +76,12 @@ export type ProvisionActionType =
   | 'deactivate_syntra_user'
   | 'reactivate_syntra_user';
 
-/** The eight that reach a connector, in the order enforcement applies them. */
+/** The nine that reach a connector, in the order enforcement applies them. */
 export const CONNECTOR_ACTION_TYPES = [
+  // First, and not alphabetically: a container has to exist before an account
+  // can be created in it or moved into it. An account applied ahead of its
+  // container fails, and would fail again on every subsequent run.
+  'create_container',
   'create_account',
   'update_account',
   'enable_account',
@@ -122,6 +137,17 @@ export const SYNTRA_ONLY_ACTION_TYPES = [
  * a remit.
  */
 export type WriteOperation =
+  | {
+      op: 'create_container';
+      actionId: string;
+      /**
+       * The container to create, in full. The connector creates THIS and
+       * nothing above it: a missing parent is `not_found`, never an
+       * invitation to build the tree, which is the implicit creation Ruling
+       * P9 forbids.
+       */
+      dn: string;
+    }
   | {
       op: 'create_account';
       actionId: string;

@@ -57,6 +57,7 @@ describe('first', () => {
  */
 describe('the action-type union', () => {
   const EXPECTED: ProvisionActionType[] = [
+    'create_container',
     'create_account',
     'update_account',
     'enable_account',
@@ -69,7 +70,7 @@ describe('the action-type union', () => {
     'reactivate_syntra_user',
   ];
 
-  it('contains exactly the ten action types the spec names', () => {
+  it('contains exactly the eleven action types the spec names', () => {
     expect([...CONNECTOR_ACTION_TYPES, ...SYNTRA_ONLY_ACTION_TYPES].sort()).toEqual(
       [...EXPECTED].sort(),
     );
@@ -100,6 +101,7 @@ describe('the action-type union', () => {
     // connector action with no operation could never be applied; an operation
     // with no action type could never be proposed.
     const ops: WriteOperation['op'][] = [
+      'create_container',
       'create_account',
       'update_account',
       'enable_account',

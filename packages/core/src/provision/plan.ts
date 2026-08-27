@@ -20,6 +20,9 @@ import type {
  * the only step that moves the object.
  */
 export const ACTION_ORDER = [
+  // Before everything, and not alphabetically: an account cannot be created
+  // in a container that does not exist yet, nor moved into one.
+  'create_container',
   'create_account',
   'update_account',
   'rename_account',

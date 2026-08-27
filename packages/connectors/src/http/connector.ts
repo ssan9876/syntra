@@ -277,6 +277,20 @@ export const httpTargetConnector: TargetConnector<Config> = {
     const entitlement = config.document.entitlement;
 
     switch (op.op) {
+      case 'create_container':
+        // A document-driven HTTP target describes account and entitlement
+        // operations only. There is no container document to POST, and
+        // inventing one from the account document would write an account
+        // shape to an endpoint that expects none.
+        return {
+          ok: false,
+          message:
+            'this target has no containers: its document describes account and ' +
+            'entitlement operations only, so there is nothing for an org unit ' +
+            'to be materialised at',
+          failure: 'rejected',
+        };
+
       case 'create_account':
         return runWrite(
           config,

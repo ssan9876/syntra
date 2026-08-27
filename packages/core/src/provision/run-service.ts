@@ -1013,6 +1013,7 @@ export async function previewProvisionRun(
         deactivateSyntraUserThresholdPercent:
           prepared.target.deactivateSyntraUserThresholdPercent,
         perEntitlementThresholdPercent: prepared.target.perEntitlementThresholdPercent,
+        maxContainerCreatesPerRun: prepared.target.maxContainerCreatesPerRun,
         personPopulationDropPercent: prepared.target.personPopulationDropPercent,
       },
       accountsAtTarget: objects.length,
