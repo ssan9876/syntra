@@ -71,6 +71,7 @@ const plan = (over: Partial<Parameters<typeof planActions>[0]> = {}) =>
   planActions({
     desired: [desired()],
     actual: new Map([['person-1', actual()]]),
+    containersToCreate: new Map(),
     contractsByPerson: new Map([['person-1', [contract()]]]),
     departureOverrideByPerson: new Map(),
     syntraUserByPerson: new Map(),
@@ -339,6 +340,7 @@ describe('planActions — the leaver and the grace ladder', () => {
      */
     const actions = planActions({
       departureOverrideByPerson: new Map(),
+      containersToCreate: new Map(),
       desired: [
         desired({
           account: {
@@ -2196,5 +2198,39 @@ describe('an administrative deactivation on the ladder', () => {
       ladder: { ...ladder, archiveAfterDays: 30 },
     });
     expect(actions.map((a) => a.actionType)).not.toContain('archive_account');
+  });
+});
+
+describe('planActions — create_container', () => {
+  it('proposes one action per container reconciliation asked for', () => {
+    const actions = plan({
+      containersToCreate: new Map([['ouc-1', 'OU=Sales,OU=Users,DC=acme,DC=test']]),
+    });
+    const create = actions.find((a) => a.actionType === 'create_container');
+    expect(create).toBeDefined();
+    // Names an OBJECT, not a person. Every consumer has to tolerate the null.
+    expect(create?.personId).toBeNull();
+    expect(create?.accountId).toBeNull();
+    expect(create?.after).toEqual({
+      dn: 'OU=Sales,OU=Users,DC=acme,DC=test',
+      orgUnitContainerId: 'ouc-1',
+    });
+  });
+
+  it('orders every container ahead of every account action', () => {
+    // Not cosmetic: an account created before its container fails, and would
+    // fail again on every subsequent run.
+    const actions = plan({
+      containersToCreate: new Map([['ouc-1', 'OU=Sales,OU=Users,DC=acme,DC=test']]),
+      actual: new Map(),
+    });
+    const firstContainer = actions.findIndex((a) => a.actionType === 'create_container');
+    const firstAccount = actions.findIndex((a) => a.actionType !== 'create_container');
+    expect(firstContainer).toBe(0);
+    expect(firstAccount === -1 || firstContainer < firstAccount).toBe(true);
+  });
+
+  it('proposes nothing when reconciliation asked for nothing', () => {
+    expect(plan().some((a) => a.actionType === 'create_container')).toBe(false);
   });
 });

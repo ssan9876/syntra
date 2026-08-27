@@ -55,6 +55,15 @@ const daysBetween = (from: Date, to: Date) =>
 export interface PlanInput {
   desired: DesiredState[];
   actual: Map<string, ActualState>;
+  /**
+   * Containers reconciliation found missing and backed by a materialisation,
+   * keyed by `OrgUnitContainer.id` (Ruling P9, revised).
+   *
+   * Already deduplicated by row, so a department of forty people arrives as
+   * one entry. Reconcile decides WHETHER a container may be created; this
+   * turns that decision into an action and does not second-guess it.
+   */
+  containersToCreate: ReadonlyMap<string, string>;
   contractsByPerson: ReadonlyMap<string, ContractFacts[]>;
   /**
    * Administrative departures, keyed on `personId`.
@@ -162,6 +171,30 @@ function sameAttributes(
 export function planActions(input: PlanInput): PlannedAction[] {
   const actions: PlannedAction[] = [];
   const { ladder, now } = input;
+
+  /**
+   * Containers first, and the final sort puts them first again.
+   *
+   * The one action type that names an OBJECT rather than a person: `personId`
+   * is null, which every consumer has to tolerate. `after` carries the row id
+   * so `apply.ts` can record the anchor against it, and the DN so the plan
+   * reads as something a person can check.
+   */
+  for (const [orgUnitContainerId, dn] of input.containersToCreate) {
+    actions.push({
+      actionType: 'create_container',
+      personId: null,
+      accountId: null,
+      entitlementId: null,
+      before: null,
+      after: { dn, orgUnitContainerId },
+      attributedRuleIds: [],
+      attributedGrantIds: [],
+      requiresConfirmation: false,
+      message: `create the container ${dn}`,
+      revocationOrderId: null,
+    });
+  }
 
   for (const state of input.desired) {
     // How much of this person's plan an unprocessable verdict poisons, decided

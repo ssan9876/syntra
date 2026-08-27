@@ -27,6 +27,20 @@ export interface ReconcileInput {
   existingContainers: ReadonlySet<string>;
   /** personId to the container the profile computed for them, in its own case. */
   desiredContainers: ReadonlyMap<string, string>;
+  /**
+   * Every `OrgUnitContainer` row for this target, keyed by LOWERCASED dn.
+   *
+   * This map is the whole of Ruling P9 (revised). A container the target does
+   * not hold, present here in state 'desired', is one an administrator
+   * explicitly materialised, and is created. A container absent from both is
+   * one a template invented, and is not -- the person stays
+   * `container_missing` at scope `all`, exactly as before.
+   *
+   * Keyed by DN rather than by org unit because that is the question asked
+   * here: the loop holds a container and needs to know whether anybody asked
+   * for it, not which unit it belongs to.
+   */
+  desiredContainerRows: ReadonlyMap<string, { id: string; state: string }>;
   enforcementMode: EnforcementMode;
 }
 
@@ -34,6 +48,18 @@ export interface ReconcileOutput {
   actual: Map<string, ActualState>;
   findings: DraftDriftFinding[];
   extraUnprocessable: Map<string, { kind: UnprocessableKind; message: string }>;
+  /**
+   * Containers to create, keyed by `OrgUnitContainer.id`, valued with the DN
+   * in the case the administrator wrote.
+   *
+   * Deduplicated by row, so a department of forty people is one create rather
+   * than forty -- which also matters for the per-run cap, since forty would
+   * blow it on its own.
+   *
+   * `planActions` turns these into `create_container`. Reconcile reports what
+   * is missing; it does not build actions, and this keeps that boundary.
+   */
+  containersToCreate: Map<string, string>;
 }
 
 /**
@@ -178,6 +204,9 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
     string,
     { kind: UnprocessableKind; message: string }
   >();
+  const containersToCreate = new Map<string, string>();
+  /** Confirmed rows already reported vanished, so two people share one finding. */
+  const vanishedReported = new Set<string>();
 
   const knownByPerson = new Map(input.known.map((a) => [a.personId, a]));
   const objectByAnchor = new Map(input.objects.map((o) => [o.anchor, o]));
@@ -278,13 +307,48 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
         container.trim() !== '' &&
         !existingContainers.has(container.trim().toLowerCase())
       ) {
-        // Silently creating organizational units in somebody else's domain is
-        // not a thing this product does.
-        extraUnprocessable.set(state.personId, {
-          kind: 'container_missing',
-          message: `the container ${container} does not exist in the target; Provision does not create it`,
-        });
-        continue;
+        const row = input.desiredContainerRows.get(container.trim().toLowerCase());
+
+        if (row !== undefined && row.state === 'desired') {
+          // Ruling P9 (revised). An administrator explicitly materialised this
+          // unit against this target, so the container is created and the
+          // person stays in the run rather than dropping out of it.
+          //
+          // This is the ONLY branch that can ask for a container, and it can
+          // only be reached through a row. A template that rendered this same
+          // DN carries no row and falls to the else below -- which is what
+          // makes the narrowing structural rather than a matter of remembering
+          // to check.
+          if (!containersToCreate.has(row.id)) {
+            containersToCreate.set(row.id, container);
+          }
+        } else {
+          if (row !== undefined && !vanishedReported.has(row.id)) {
+            // The row says the target confirmed this container and the target
+            // no longer returns it. Somebody removed it.
+            //
+            // A finding, NEVER a re-create: re-creating it on the next
+            // five-minute tick is Syntra silently fighting a domain
+            // administrator, indefinitely and invisibly. Whether the container
+            // should come back is not a question a scheduler can answer.
+            vanishedReported.add(row.id);
+            record('container_vanished', null, null, {
+              dn: container,
+              state: row.state,
+              orgUnitContainerId: row.id,
+              reason:
+                'Syntra records this container as confirmed at the target and the target no longer returns it',
+            });
+          }
+          // Unchanged in every other respect, including the scope: without a
+          // container there is nowhere to put the account, so the whole person
+          // is unprocessable.
+          extraUnprocessable.set(state.personId, {
+            kind: 'container_missing',
+            message: `the container ${container} does not exist in the target; Provision does not create it`,
+          });
+          continue;
+        }
       }
     }
 
@@ -463,5 +527,5 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
     );
   }
 
-  return { actual, findings, extraUnprocessable };
+  return { actual, findings, extraUnprocessable, containersToCreate };
 }

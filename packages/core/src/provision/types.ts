@@ -171,7 +171,18 @@ export type DriftKind =
   | 'missing_grant'
   | 'orphan_account'
   | 'account_missing_at_target'
-  | 'unexpected_status';
+  | 'unexpected_status'
+  /**
+   * An `OrgUnitContainer` in state 'live' or 'adopted' whose DN the target no
+   * longer returns. Somebody removed the container in the directory.
+   *
+   * Reported and never acted on: re-creating it every five-minute tick would
+   * be Syntra silently overruling a domain administrator, and whether it
+   * should come back is not a question a scheduler can answer. Resolved by
+   * hand -- re-materialise, which adopts if the container is there again, or
+   * unmaterialise.
+   */
+  | 'container_vanished';
 
 export type AccountStatus =
   | 'pending'
