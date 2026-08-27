@@ -157,6 +157,9 @@ model OrgUnit {
   status       String           @default("active")
   statusReason String?
 
+  persons    Person[]           @relation("PersonOrgUnit")
+  containers OrgUnitContainer[]
+
   @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
 }
@@ -261,6 +264,19 @@ model Person {
   targetAccounts      TargetAccount[]
   provisionExceptions ProvisionException[]
   placements          AccountPlacement[]
+
+  /// The unit this person belongs to, which places their account in the
+  /// container that unit is materialised at on each target.
+  ///
+  /// Separate from `User.orgUnitId`, which stays as it is and keeps feeding
+  /// access resolution. Placement is a property of a PERSON: in a
+  /// Syntra-front-door deployment a provisioned person routinely has no User
+  /// at all -- `passwordSource` is 'local' or 'upstream' and neither is
+  /// satisfied by an account Provision just wrote -- so hanging placement off
+  /// User would mean the feature silently did not apply to most of the
+  /// population it exists for.
+  orgUnitId String?  @db.Uuid
+  orgUnit   OrgUnit? @relation("PersonOrgUnit", fields: [orgUnitId], references: [id])
 
   @@unique([tenantId, externalId])
   @@index([tenantId])
@@ -704,6 +720,58 @@ model AccountPlacement {
   updatedAt      DateTime     @updatedAt
 
   @@unique([personId, targetSystemId])
+  @@index([tenantId])
+  @@index([targetSystemId])
+}
+
+/// The container one OrgUnit corresponds to on one target.
+///
+/// An OrgUnit is tenant-wide and target-agnostic; a container is a
+/// distinguished name under one particular target's base. This row is the
+/// join, and it is what lets a run compare what Syntra INTENDS against what
+/// the target HOLDS. Without it the intent lives only in the shape of the
+/// tree, and a container renamed or removed behind Syntra's back is
+/// undetectable.
+///
+/// Deliberately not a `dn` column on OrgUnit: a unit materialised against two
+/// targets has two DNs, and the ingested units already carry a `sourceAnchor`
+/// from a directory SOURCE, which is a different fact from an anchor at a
+/// TARGET -- in this deployment even a different bind identity against the
+/// same domain controller.
+model OrgUnitContainer {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  orgUnitId      String       @db.Uuid
+  orgUnit        OrgUnit      @relation(fields: [orgUnitId], references: [id], onDelete: Cascade)
+  targetSystemId String       @db.Uuid
+  targetSystem   TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  /// The DN Syntra intends. Validated once, on write, by
+  /// `validateContainerDn` -- never re-rendered per run and never passed
+  /// through `renderContainer`, because it is a literal an operator chose
+  /// rather than a template with HR data in it (Ruling P22 moves to the write
+  /// path for this rung).
+  dn             String
+  /// The target's own identifier for the object, once the target has
+  /// confirmed it. Null while `state` is 'desired'.
+  anchor         String?
+  /// 'desired' | 'live' | 'adopted'
+  ///
+  /// 'desired' -- Syntra intends this container and the target has not
+  ///   confirmed it. THE ONLY STATE FROM WHICH `create_container` MAY BE
+  ///   EMITTED (Ruling P9, revised).
+  /// 'live'    -- Provision created it and holds its anchor.
+  /// 'adopted' -- it already existed at the target and Syntra bound to it.
+  ///
+  /// 'live' and 'adopted' behave identically at run time. They are
+  /// distinguished because "we made this" and "this was already here" are
+  /// different answers to the question somebody asks when a container turns up
+  /// in a domain nobody expected it in.
+  state          String       @default("desired")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([tenantId, orgUnitId, targetSystemId])
+  @@unique([tenantId, targetSystemId, dn])
   @@index([tenantId])
   @@index([targetSystemId])
 }
@@ -1420,6 +1488,18 @@ model TargetSystem {
   /// 40,000-holding tenant and total for the 90 people it happens to.
   perEntitlementThresholdPercent       Int @default(50)
   personPopulationDropPercent          Int @default(20)
+  /// An ABSOLUTE count, not a share, and deliberately so.
+  ///
+  /// Every other guard axis is a percentage of an affected population.
+  /// Containers have no population to be a percentage of: ten new containers
+  /// against four people is not 250% of anything, because the denominator does
+  /// not exist. Do not "fix" this into a percentage -- the number it would
+  /// produce has no meaning.
+  ///
+  /// The accident it prevents is real and is not a share either: a bulk
+  /// OrgUnit import, or a script materialising a whole tree, putting a hundred
+  /// containers into a domain in one tick.
+  maxContainerCreatesPerRun            Int @default(5)
 
   maxAttempts   Int     @default(3)
   concurrency   Int     @default(4)
@@ -1446,6 +1526,7 @@ model TargetSystem {
   accounts     TargetAccount[]
   runs         ProvisionRun[]
   placements   AccountPlacement[]
+  containers   OrgUnitContainer[]
 
   @@unique([tenantId, name])
   @@index([tenantId])

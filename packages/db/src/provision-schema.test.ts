@@ -152,6 +152,123 @@ describe('provision schema', () => {
     expect(updated.archiveAfterDays).toBe(90);
   });
 
+  it('isolates OrgUnitContainer rows between tenants', async () => {
+    const unit = await withTenant(tenantId, (tx) =>
+      tx.orgUnit.create({ data: { tenantId, name: 'Sales' } }),
+    );
+    const created = await withTenant(tenantId, (tx) =>
+      tx.orgUnitContainer.create({
+        data: {
+          tenantId,
+          orgUnitId: unit.id,
+          targetSystemId: targetId,
+          dn: 'OU=Sales,OU=Users,DC=acme,DC=test',
+        },
+      }),
+    );
+    expect(created.state).toBe('desired');
+    expect(created.anchor).toBeNull();
+
+    // Written without a tenant filter on purpose: the point is that the
+    // database refuses it, not that the application remembered to ask.
+    const other = await prisma.tenant.create({ data: { name: 'Two', slug: 'two' } });
+    const leaked = await withTenant(other.id, (tx) => tx.orgUnitContainer.findMany());
+    expect(leaked).toEqual([]);
+  });
+
+  it('allows one materialisation per unit per target and refuses a second', async () => {
+    const unit = await withTenant(tenantId, (tx) =>
+      tx.orgUnit.create({ data: { tenantId, name: 'Sales' } }),
+    );
+    const row = {
+      tenantId,
+      orgUnitId: unit.id,
+      targetSystemId: targetId,
+      dn: 'OU=Sales,OU=Users,DC=acme,DC=test',
+    };
+    await withTenant(tenantId, (tx) => tx.orgUnitContainer.create({ data: row }));
+    await expect(
+      withTenant(tenantId, (tx) =>
+        tx.orgUnitContainer.create({
+          data: { ...row, dn: 'OU=Sales2,OU=Users,DC=acme,DC=test' },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('refuses two units claiming one container on the same target', async () => {
+    // Two units on one DN would converge two departments' accounts into a
+    // single container with no error raised anywhere, and the drift check
+    // would then read one row's intent as the other's reality.
+    const [sales, support] = await withTenant(tenantId, async (tx) => [
+      await tx.orgUnit.create({ data: { tenantId, name: 'Sales' } }),
+      await tx.orgUnit.create({ data: { tenantId, name: 'Support' } }),
+    ]);
+    const dn = 'OU=Shared,OU=Users,DC=acme,DC=test';
+    await withTenant(tenantId, (tx) =>
+      tx.orgUnitContainer.create({
+        data: { tenantId, orgUnitId: sales!.id, targetSystemId: targetId, dn },
+      }),
+    );
+    await expect(
+      withTenant(tenantId, (tx) =>
+        tx.orgUnitContainer.create({
+          data: { tenantId, orgUnitId: support!.id, targetSystemId: targetId, dn },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a blank container DN and an unknown state', async () => {
+    const unit = await withTenant(tenantId, (tx) =>
+      tx.orgUnit.create({ data: { tenantId, name: 'Sales' } }),
+    );
+    await expect(
+      withTenant(tenantId, (tx) =>
+        tx.orgUnitContainer.create({
+          data: { tenantId, orgUnitId: unit.id, targetSystemId: targetId, dn: '   ' },
+        }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      withTenant(tenantId, (tx) =>
+        tx.orgUnitContainer.create({
+          data: {
+            tenantId,
+            orgUnitId: unit.id,
+            targetSystemId: targetId,
+            dn: 'OU=Sales,OU=Users,DC=acme,DC=test',
+            state: 'probably',
+          },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('defaults a target to five container creates per run', async () => {
+    // An absolute count, not a share. Asserted here so that a future change
+    // turning it into a percentage has to come through this test.
+    const target = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(target.maxContainerCreatesPerRun).toBe(5);
+  });
+
+  it('keeps a person when their org unit is deleted', async () => {
+    // SET NULL, not CASCADE. Deleting a unit must never delete people.
+    const unit = await withTenant(tenantId, (tx) =>
+      tx.orgUnit.create({ data: { tenantId, name: 'Sales' } }),
+    );
+    await withTenant(tenantId, (tx) =>
+      tx.person.update({ where: { id: personId }, data: { orgUnitId: unit.id } }),
+    );
+    await withTenant(tenantId, (tx) => tx.orgUnit.delete({ where: { id: unit.id } }));
+    const person = await withTenant(tenantId, (tx) =>
+      tx.person.findUniqueOrThrow({ where: { id: personId } }),
+    );
+    expect(person.orgUnitId).toBeNull();
+  });
+
   it('isolates targets between tenants', async () => {
     const other = await prisma.tenant.create({ data: { name: 'Other', slug: 'other' } });
     const seen = await withTenant(other.id, (tx) => tx.targetSystem.findMany());
