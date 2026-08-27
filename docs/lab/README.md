@@ -1169,3 +1169,33 @@ cat /opt/syntra/var/update.status            # what it is doing right now
 8. Source → test → run → apply.
 9. Target → profile → rule → run → confirm → apply.
 10. Register the service provider; hand over the metadata URL.
+
+## Org-unit-driven placement: the first run
+
+The `ssander.local (AD)` target runs with `autoApply: true` and
+`archiveAccountThresholdPercent: 2`. Container MOVES share the archive axis
+(`guard.ts`, the `update_account` population), and the tenant holds four
+people, so ONE account move is 25% and the first run will SKIP rather than
+apply.
+
+That is the guard working, not a fault — but it presents as a mysterious
+no-op, so do it in this order:
+
+1. **Materialise `Users` first.** `OU=Users,OU=Syntra,DC=ssander,DC=local`
+   already exists in AD, so it adopts and no container is created. This proves
+   the placement half without exercising `create_container` at all.
+2. **Assign one person and PREVIEW.** Confirm the plan proposes the move you
+   expect, and read the guard's reason.
+3. **Raise `archiveAccountThresholdPercent` deliberately**, with the reason
+   recorded, then apply.
+
+Do not lower a safety threshold mid-incident because a run skipped
+unexpectedly. Raise it in advance, knowing which axis it is and why.
+
+Two other things worth knowing before the first run:
+
+- The target's `containerTemplate` is `%baseDn%`, so everybody currently lands
+  in `OU=Users,OU=Syntra`. A person with no org unit keeps that behaviour
+  exactly — the feature is adoptable one person at a time.
+- `maxContainerCreatesPerRun` defaults to **5**. It is an absolute count, not
+  a percentage: containers have no population to be a share of.
