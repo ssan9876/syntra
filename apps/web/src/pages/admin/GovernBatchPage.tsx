@@ -105,6 +105,21 @@ export function GovernBatchPage() {
 
       {data !== null && (
         <div className="mt-6 space-y-6">
+          {/* The one sentence on this screen that is not describable by what
+              is under it. A revocation batch is the last moment before access
+              is actually taken away, and until it is dispatched NOTHING has
+              happened — which is invisible, because the page looks identical
+              either side of the button.
+
+              It was a Panel `description`, so it read as a caption on a table
+              and was deleted with the rest of the prose. Restored as state:
+              shown while it is TRUE, and gone the moment it stops being. */}
+          {!finished && dispatchable.length > 0 && (
+            <Alert tone="warning" title="Nothing here has happened yet">
+              This is the last point at which a mistake costs nothing.
+            </Alert>
+          )}
+
           <Panel title={`${dispatchable.length} removals Govern can dispatch`}>
             <Table>
               <thead>
@@ -162,6 +177,14 @@ export function GovernBatchPage() {
             <Panel
               title={`${requiresChange.length} that require a change somewhere else`}
             >
+              {/* Not a caption: it corrects the expectation the page itself
+                  sets. Everything else here is a removal; these are the rows
+                  this batch will NOT remove, and a reader who skims would
+                  otherwise leave believing they had been dealt with. */}
+              <Alert tone="info">
+                These are not removed by this batch. Each gets a remediation
+                item with an owner when the batch is confirmed.
+              </Alert>
               <ul className="divide-y divide-border-subtle">
                 {requiresChange.map((d) => (
                   <li key={d.id} className="p-4">

@@ -40,7 +40,10 @@ test('an administrator signs in, elevates, and reaches the directory', async ({
   await signIn(page, 'admin', ADMIN!);
   await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
 
-  await page.goto('/admin/users');
+  // `?tab=accounts`: Users is one destination holding people and the
+  // accounts they sign in with, and it opens on People because that is where
+  // a joiner ticket starts. This test is about the sign-in account.
+  await page.goto('/admin/users?tab=accounts');
   // Reaching the console requires re-entering the password: elevation is a
   // fresh authentication, not a mode the portal session can switch into.
   await expect(
@@ -69,6 +72,7 @@ test('a non-administrator is refused the console', async ({ page }) => {
   await signIn(page, 'jdoe', USER!);
   await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
 
+  // Any console path will do — this test is about being refused one.
   await page.goto('/admin/users');
   await page.getByLabel('Password').fill(USER!);
   await page.getByRole('button', { name: 'Continue' }).click();
@@ -93,7 +97,7 @@ test('signing out revokes the session', async ({ page }) => {
 
 test('a person with concurrent contracts shows both', async ({ page }) => {
   await signInAndLand(page, 'admin', ADMIN!);
-  await elevateTo(page, '/admin/people', ADMIN!);
+  await elevateTo(page, '/admin/users?tab=people', ADMIN!);
 
   await page.getByRole('link', { name: 'Jo Doe' }).click();
   await expect(page.getByRole('heading', { name: 'Contracts' })).toBeVisible();
@@ -108,7 +112,7 @@ test('a person with concurrent contracts shows both', async ({ page }) => {
 
 test('a partial CSV import names every rejected line', async ({ page }) => {
   await signInAndLand(page, 'admin', ADMIN!);
-  await elevateTo(page, '/admin/import', ADMIN!);
+  await elevateTo(page, '/admin/users?tab=import', ADMIN!);
 
   const stamp = Date.now();
   await page.locator('#csv').fill(
@@ -129,8 +133,14 @@ test('a partial CSV import names every rejected line', async ({ page }) => {
 
 test('the audit log reports whether its chain still holds', async ({ page }) => {
   await signInAndLand(page, 'admin', ADMIN!);
-  await elevateTo(page, '/admin/audit', ADMIN!);
+  await elevateTo(page, '/admin/activity?tab=all', ADMIN!);
 
-  await expect(page.getByRole('heading', { name: 'Audit log' })).toBeVisible();
+  // "Activity" holds two views of the same events: Attention is the log
+  // filtered to failures, All events is the log.
+  await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /All events/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
   await expect(page.getByRole('table')).toContainText('auth.login');
 });

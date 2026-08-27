@@ -244,9 +244,13 @@ test('the revocation batch carries the decision, and is the last cheap moment', 
   // The decision reached the batch, whichever route it took: a dispatchable
   // removal, or its own panel because something else has to change first.
   await expect(page.getByText(GROUP_NAME).first()).toBeVisible();
+  // The reversibility statement is now an alert rather than a panel caption,
+  // and it is shown only while it is true — it disappears once the batch is
+  // dispatched, which is the whole point of saying it.
   await expect(
-    page.getByText('Nothing here has happened yet. This is the last point at which a mistake costs nothing.'),
+    page.getByRole('alert').filter({ hasText: 'Nothing here has happened yet' }),
   ).toBeVisible();
+  await expect(page.getByText('This is the last point at which a mistake costs nothing.')).toBeVisible();
 });
 
 test('the segregation-of-duties screen refuses to be written over two groups', async ({ page }) => {

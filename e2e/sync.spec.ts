@@ -334,7 +334,9 @@ test('a directory source is created, tested, mapped, run, partly applied and ski
 
   // The nurse landed; the clerk was skipped and did not; the group was left
   // out of this apply and did not.
-  await page.goto('/admin/users');
+  // `?tab=accounts`: Users opens on People, and the subject here is the
+  // sign-in account a sync run created.
+  await page.goto('/admin/users?tab=accounts');
   await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible();
   const users = page.getByRole('table');
   await expect(users).toContainText(NURSE_UID);
@@ -399,7 +401,7 @@ test('deleting a source states what it will deactivate before it will do it', as
   await expect(page).toHaveURL(/\/admin\/sources$/);
   await expect(page.getByText(SOURCE_NAME)).toHaveCount(0);
 
-  await page.goto('/admin/users');
+  await page.goto('/admin/users?tab=accounts');
   const nurse = page.getByRole('row').filter({ hasText: NURSE_UID });
   await expect(nurse).toContainText('Inactive');
   await expect(nurse).toContainText(SOURCE_NAME);

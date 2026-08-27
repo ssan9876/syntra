@@ -404,7 +404,10 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   await expect(page.getByRole('button', { name: /^Apply/ })).toHaveCount(0);
 
   // And the question everybody asks.
-  await page.goto('/admin/people');
+  // People is a tab of Users now. Named explicitly rather than relying on the
+  // /admin/people redirect, so a failure here is a failure of THIS test's
+  // subject rather than of the redirect, which has its own coverage.
+  await page.goto('/admin/users?tab=people');
   await page.getByRole('link', { name: PERSON_NAME }).click();
   await page
     .getByRole('link', { name: 'Why does this person hold what they hold?' })

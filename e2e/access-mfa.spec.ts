@@ -309,8 +309,17 @@ test.describe.serial('access, second factors and the console', () => {
       await page.getByLabel('Recovery code').fill(codes[1]!);
       await page.getByRole('button', { name: 'Verify' }).click();
 
-      await expect(page.getByRole('heading', { name: 'Audit log' })).toBeVisible();
-      await expect(page).toHaveURL(/\/admin\/audit/);
+      // Deliberately still the OLD path above. `/admin/audit` is now a
+      // redirect into the Activity screen's "All events" tab, so this covers
+      // the whole journey a bookmarked link actually takes: guard bounces to
+      // /elevate, elevation re-authenticates, the returnTo survives, and the
+      // redirect then resolves to the tab the link meant.
+      await expect(page.getByRole('heading', { name: 'Activity' })).toBeVisible();
+      await expect(page).toHaveURL(/\/admin\/activity/);
+      await expect(page.getByRole('tab', { name: /All events/ })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
     });
 
     await signOut(page);
