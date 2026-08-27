@@ -15,10 +15,22 @@ export function Elevate() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Where the guard bounced them from, if anywhere.
-  const intended =
-    (location.state as { from?: { pathname?: string } } | null)?.from
-      ?.pathname ?? '/admin/users';
+  // Where the guard bounced them from, IN FULL.
+  //
+  // This read `from.pathname` alone and dropped the query string, which was
+  // invisible for as long as no console URL carried meaningful query state.
+  // Then the console's navigation collapsed into tabbed destinations whose
+  // selected tab lives in `?tab=`, and every deep link through this guard
+  // began landing on the wrong tab of the right page — the worst shape of bug
+  // to be on the receiving end of, because it looks like it worked. Somebody
+  // follows a link to the orphan accounts screen, is asked for their
+  // password, and arrives at findings.
+  const from = location.state as
+    | { from?: { pathname?: string; search?: string; hash?: string } }
+    | null;
+  const intended = from?.from?.pathname
+    ? `${from.from.pathname}${from.from.search ?? ''}${from.from.hash ?? ''}`
+    : '/admin/users';
 
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);

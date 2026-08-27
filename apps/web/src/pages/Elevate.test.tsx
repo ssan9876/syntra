@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { SessionProvider, useSession } from '../session/SessionProvider.js';
 import { Elevate } from './Elevate.js';
 import { takeChallenge } from '../mfa/challenge-store.js';
@@ -189,5 +189,76 @@ describe('Elevate', () => {
         expect.objectContaining({ method: 'POST', credentials: 'include' }),
       );
     });
+  });
+});
+
+/**
+ * The destination the guard bounced them from, in full.
+ *
+ * `intended` read `from.pathname` and nothing else, so the query string was
+ * dropped on the way through elevation. That was invisible for as long as no
+ * console URL carried meaningful query state — and then the console's
+ * navigation collapsed into tabbed destinations whose selected tab lives in
+ * `?tab=`, and every deep link through the guard started landing on the wrong
+ * tab of the right page.
+ *
+ * It is the worst shape of bug for a reader to diagnose: they followed a link
+ * to the orphan-accounts screen, were asked for their password, and arrived
+ * somewhere that looks like it worked.
+ */
+describe('where elevation returns to', () => {
+  // Reports the router's own location. `window.location` does not move under
+  // MemoryRouter, so asserting against it would pass whatever the code did —
+  // which is exactly the trap the first version of this test fell into.
+  function Where() {
+    const location = useLocation();
+    return <span data-testid="where">{location.pathname + location.search}</span>;
+  }
+
+  const renderFrom = (from: { pathname: string; search?: string; hash?: string }) =>
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/elevate', state: { from } }]}>
+        <SessionProvider>
+          <Where />
+          <Routes>
+            <Route path="/elevate" element={<Elevate />} />
+            <Route path="/admin/users" element={<h1>Users</h1>} />
+            <Route path="/admin/govern" element={<h1>Governance</h1>} />
+          </Routes>
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+  it('keeps the tab the link asked for', async () => {
+    arrange(json(ADMIN));
+    renderFrom({ pathname: '/admin/govern', search: '?tab=orphans' });
+    await submit();
+
+    expect(await screen.findByRole('heading', { name: 'Governance' })).toBeVisible();
+    // The assertion that matters: the right TAB, not merely the right page.
+    expect(screen.getByTestId('where')).toHaveTextContent('/admin/govern?tab=orphans');
+  });
+
+  it('still works for a destination with no query at all', async () => {
+    arrange(json(ADMIN));
+    renderFrom({ pathname: '/admin/users' });
+    await submit();
+    expect(await screen.findByRole('heading', { name: 'Users' })).toBeVisible();
+  });
+
+  it('falls back to the console when the guard recorded nothing', async () => {
+    arrange(json(ADMIN));
+    render(
+      <MemoryRouter initialEntries={['/elevate']}>
+        <SessionProvider>
+          <Routes>
+            <Route path="/elevate" element={<Elevate />} />
+            <Route path="/admin/users" element={<h1>Users</h1>} />
+          </Routes>
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+    await submit();
+    expect(await screen.findByRole('heading', { name: 'Users' })).toBeVisible();
   });
 });

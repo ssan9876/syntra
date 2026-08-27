@@ -111,10 +111,16 @@ export function GovernBatchPage() {
               happened — which is invisible, because the page looks identical
               either side of the button.
 
+              Gated on `!finished` ALONE. It first also required a dispatchable
+              row, which was wrong twice over: it was a PageHeader description,
+              so it spoke for the whole screen, and a batch whose every
+              decision requires a change somewhere else still has not
+              happened yet.
+
               It was a Panel `description`, so it read as a caption on a table
               and was deleted with the rest of the prose. Restored as state:
               shown while it is TRUE, and gone the moment it stops being. */}
-          {!finished && dispatchable.length > 0 && (
+          {!finished && (
             <Alert tone="warning" title="Nothing here has happened yet">
               This is the last point at which a mistake costs nothing.
             </Alert>

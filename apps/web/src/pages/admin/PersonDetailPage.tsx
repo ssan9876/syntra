@@ -11,7 +11,7 @@ import {
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
-import { PageHeader } from './PageHeader.js';
+import { PageFacts, PageHeader } from './PageHeader.js';
 
 interface Contract {
   id: string;
@@ -74,6 +74,19 @@ export function PersonDetailPage() {
     <>
       <PageHeader
         title={`${data.givenName} ${data.familyName}`}
+      />
+
+      {/* The key an HR import matches this person on. It was in the header as
+          a sentence — "Source reference E1001" — which is a label and a value
+          written as prose. As a pair it is also selectable on its own, which
+          is what somebody comparing it against a feed actually wants. */}
+      <PageFacts
+        facts={[
+          {
+            label: 'Source reference',
+            value: data.externalId ?? <span className="text-muted">None recorded</span>,
+          },
+        ]}
       />
 
       <div className="space-y-6">

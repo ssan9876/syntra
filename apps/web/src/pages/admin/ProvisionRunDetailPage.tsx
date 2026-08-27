@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Check, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
-import { PageHeader } from './PageHeader.js';
+import { PageFacts, PageHeader } from './PageHeader.js';
 
 interface Person {
   id: string;
@@ -333,6 +333,16 @@ export function ProvisionRunDetailPage() {
     <>
       <PageHeader
         title="Run detail"
+      />
+
+      {/* Both were in the header's sentence, and both are figures. A run's
+          start and the size of the population it looked at are the two things
+          somebody checks before reading a single proposed change. */}
+      <PageFacts
+        facts={[
+          { label: 'Started', value: new Date(run.startedAt).toLocaleString() },
+          { label: 'Persons evaluated', value: run.personsEvaluated },
+        ]}
       />
 
       <div className="space-y-6">

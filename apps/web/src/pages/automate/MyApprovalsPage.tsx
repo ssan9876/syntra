@@ -90,6 +90,24 @@ export function MyApprovalsPage() {
                 title={approval.request.product?.name ?? 'Requested access'}
               >
                 <div className="space-y-3 p-4">
+                  {/* Who it is for and how long it has waited. This was the
+                      panel's `description`, which read as a caption; both are
+                      facts an approver decides on, and the waiting time is the
+                      one that decides which of five to open first. */}
+                  <dl className="flex flex-wrap gap-x-8 gap-y-1">
+                    <div>
+                      <dt className="text-sm font-medium text-muted">For</dt>
+                      <dd className="font-medium text-ink">
+                        {approval.request.subjectPersonId}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-sm font-medium text-muted">Waiting since</dt>
+                      <dd className="font-medium text-ink tabular-nums">
+                        {when(approval.openedAt)}
+                      </dd>
+                    </div>
+                  </dl>
                   <p className="text-ink">{approval.request.justification}</p>
                   <p className="text-sm text-muted">
                     Grants:{' '}

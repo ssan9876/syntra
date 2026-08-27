@@ -460,6 +460,23 @@ export function PersonAccessPage() {
               })()}
             >
               {/*
+                The account's own name at the target. It rode in on the
+                panel's `description`, which made an identifier look like a
+                sentence about the panel — the third place in this console
+                where that prop was carrying data rather than prose, and the
+                reason it was removed rather than merely emptied.
+
+                Monospaced and selectable, like every other identifier here:
+                somebody reading this screen is usually about to paste it
+                into a directory tool.
+              */}
+              <div className="border-b border-border-subtle px-4 py-2.5">
+                <span className="text-sm font-medium text-muted">Account</span>{' '}
+                <code className="font-mono text-sm text-ink">
+                  {account.correlationKey}
+                </code>
+              </div>
+              {/*
                 Where the account SITS, above what it holds. They are different
                 questions and the placement is the one somebody arriving from
                 a reorg came here for.
