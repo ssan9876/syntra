@@ -2107,3 +2107,125 @@ describe('resolveInFlightActions', () => {
     expect(action.status).toBe('proposed');
   });
 });
+
+describe('applyProvisionRun: create_container', () => {
+  const SALES = `OU=Sales,${USERS}`;
+
+  /** Materialises a unit at `SALES` and puts Anna in it. */
+  const assignToSales = (state: 'desired' | 'adopted' = 'desired') =>
+    withTenant(tenantId, async (tx) => {
+      const unit = await tx.orgUnit.create({ data: { tenantId, name: 'Sales' } });
+      const row = await tx.orgUnitContainer.create({
+        data: {
+          tenantId,
+          orgUnitId: unit.id,
+          targetSystemId: targetId,
+          dn: SALES,
+          state,
+        },
+      });
+      await tx.person.updateMany({ data: { orgUnitId: unit.id } });
+      return row.id;
+    });
+
+  const containerRow = (id: string) =>
+    withTenant(tenantId, (tx) =>
+      tx.orgUnitContainer.findUniqueOrThrow({ where: { id } }),
+    );
+
+  it('creates the container and records its anchor, then places the account in it', async () => {
+    const rowId = await assignToSales();
+
+    const { runId } = await previewAndApply();
+
+    const actions = await actionsOf(runId);
+    const create = actions.find((a) => a.actionType === 'create_container');
+    expect(create?.status).toBe('applied');
+
+    const row = await containerRow(rowId);
+    expect(row.state).toBe('live');
+    expect(row.anchor).not.toBeNull();
+
+    // The container exists at the target now, and the account went into it.
+    expect(target.containers.map((c) => c.toLowerCase())).toContain(SALES.toLowerCase());
+    const account = [...target.objects.values()][0];
+    expect(account?.dn.toLowerCase()).toContain(SALES.toLowerCase());
+  });
+
+  it('applies the container before the account that lands in it', async () => {
+    // Not cosmetic: an account created before its container fails, and would
+    // fail again on every run after that.
+    await assignToSales();
+
+    const { runId } = await previewAndApply();
+
+    const actions = await actionsOf(runId);
+    const container = actions.findIndex((a) => a.actionType === 'create_container');
+    const account = actions.findIndex((a) => a.actionType === 'create_account');
+    expect(container).toBeGreaterThanOrEqual(0);
+    expect(account).toBeGreaterThanOrEqual(0);
+    expect(container).toBeLessThan(account);
+  });
+
+  it('adopts a container that already exists rather than failing the run', async () => {
+    // Somebody made the OU by hand between materialising and this run. The
+    // create comes back `conflict`, which is success by adoption.
+    const rowId = await assignToSales();
+    target.containers.push(SALES);
+
+    const { runId } = await previewAndApply();
+
+    const actions = await actionsOf(runId);
+    const create = actions.find((a) => a.actionType === 'create_container');
+    // No create is proposed at all once the container is visible to
+    // listContainers -- reconcile only asks for what is missing.
+    expect(create).toBeUndefined();
+
+    const row = await containerRow(rowId);
+    expect(row.state).toBe('desired');
+  });
+
+  it('leaves the row desired when the parent does not exist', async () => {
+    // not_found is not retryable, and the intent must survive so somebody can
+    // see what was asked for and create the parent.
+    const rowId = await withTenant(tenantId, async (tx) => {
+      const unit = await tx.orgUnit.create({ data: { tenantId, name: 'Deep' } });
+      const row = await tx.orgUnitContainer.create({
+        data: {
+          tenantId,
+          orgUnitId: unit.id,
+          targetSystemId: targetId,
+          dn: `OU=Child,OU=NoSuchParent,${USERS}`,
+          state: 'desired',
+        },
+      });
+      await tx.person.updateMany({ data: { orgUnitId: unit.id } });
+      return row.id;
+    });
+
+    const { runId } = await previewAndApply();
+
+    const actions = await actionsOf(runId);
+    const create = actions.find((a) => a.actionType === 'create_container');
+    expect(create?.status).toBe('failed');
+
+    const row = await containerRow(rowId);
+    expect(row.state).toBe('desired');
+    expect(row.anchor).toBeNull();
+
+    // And the parent was NOT invented on the way past.
+    expect(
+      target.containers.some((c) => c.toLowerCase().includes('nosuchparent')),
+    ).toBe(false);
+  });
+
+  it('records an intent event naming the container', async () => {
+    await assignToSales();
+    await previewAndApply();
+    const intents = await eventsOf('provision.action.intent');
+    const container = intents.find(
+      (e) => (e.payload as { actionType?: string }).actionType === 'create_container',
+    );
+    expect((container?.payload as { dn?: string }).dn).toBe(SALES);
+  });
+});
