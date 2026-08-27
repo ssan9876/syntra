@@ -1,10 +1,7 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Alert,
-  Button,
   Empty,
-  Field,
   Panel,
   SkeletonRows,
   Status,
@@ -12,8 +9,6 @@ import {
   buttonClasses,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
-import { RecordPanel } from './RecordPanel.js';
-import { StatusToggle } from './StatusToggle.js';
 
 interface PersonRow {
   id: string;
@@ -24,12 +19,24 @@ interface PersonRow {
   status: string;
 }
 
+/**
+ * The people, as a list and nothing else.
+ *
+ * Editing and deactivation moved to the person's own screen, for the same
+ * reason they moved off the accounts list: the record page was showing
+ * everything about somebody while being the one place nothing about them could
+ * be changed, and correcting a misspelt name meant coming back here and
+ * finding the row again.
+ *
+ * The two tabs also have to behave alike. A tab strip says "same subject,
+ * different view", so People editing inline while Accounts sent you to a
+ * screen would be two conventions presented as one thing — and the reader
+ * would learn which was which by clicking the wrong one.
+ */
 export function PeopleTab() {
-  const { data, error, loading, reload } = useApiResource<{ persons: PersonRow[] }>(
+  const { data, error, loading } = useApiResource<{ persons: PersonRow[] }>(
     '/api/admin/persons',
   );
-  // ONE editor for the page, opened by a row. See the same note on UsersPage.
-  const [editing, setEditing] = useState<PersonRow | null>(null);
   // Narrowed once, here, rather than `data?.persons.length` at each use.
   // The optional chain guards `data` and then walks straight into `.persons`,
   // so a 200 that arrives without its collection throws inside render and
@@ -51,72 +58,6 @@ export function PeopleTab() {
       </div>
 
       {error && <Alert tone="danger">{error}</Alert>}
-
-      {editing && (
-        <RecordPanel
-          key={editing.id}
-          title={`Edit ${editing.givenName} ${editing.familyName}`}
-          submitLabel="Save"
-          method="PATCH"
-          path={`/api/admin/persons/${editing.id}`}
-          initial={{
-            givenName: editing.givenName,
-            familyName: editing.familyName,
-            businessEmail: editing.businessEmail ?? '',
-            externalId: editing.externalId ?? '',
-          }}
-          onCancel={() => setEditing(null)}
-          onCreated={() => {
-            setEditing(null);
-            reload();
-          }}
-          build={(v) => ({
-            givenName: v.givenName ?? '',
-            familyName: v.familyName ?? '',
-            // NULL clears; omitting would mean "leave alone" and an emptied
-            // box would keep the old value.
-            businessEmail: v.businessEmail === '' ? null : (v.businessEmail ?? null),
-            externalId: v.externalId === '' ? null : (v.externalId ?? null),
-          })}
-          fields={(v, set, errs) => (
-            <>
-              <Field
-                label="Given name"
-                value={v.givenName ?? ''}
-                onChange={(x) => set('givenName', x)}
-                error={errs.givenName}
-              />
-              <Field
-                label="Family name"
-                value={v.familyName ?? ''}
-                onChange={(x) => set('familyName', x)}
-                error={errs.familyName}
-              />
-              <Field
-                label="Business email"
-                type="email"
-                value={v.businessEmail ?? ''}
-                onChange={(x) => set('businessEmail', x)}
-                error={errs.businessEmail}
-              />
-              <Field
-                label="External id"
-                value={v.externalId ?? ''}
-                onChange={(x) => set('externalId', x)}
-                error={errs.externalId}
-                warning={
-                  // Shown only when there is already a value to change. On a
-                  // new person there is nothing to break yet, and a warning
-                  // about breaking it would be a hint by another name.
-                  editing.externalId
-                    ? 'Changing this makes the next import create a second person rather than update this one.'
-                    : undefined
-                }
-              />
-            </>
-          )}
-        />
-      )}
 
       {/* The create form has moved to /admin/people/new.
           A four-field panel here recorded WHO somebody is and stopped, which
@@ -168,9 +109,6 @@ export function PeopleTab() {
                   <th scope="col">
                     Status
                   </th>
-                  <th scope="col">
-                    <span className="sr-only">Actions</span>
-                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -191,29 +129,16 @@ export function PeopleTab() {
                       {person.externalId ?? '—'}
                     </td>
                     <td>
+                      {/*
+                        Inactive people stay listed and labelled, as inactive
+                        accounts do. Hiding a leaver to keep the table tidy
+                        would make the register unauditable.
+                      */}
                       <Status
                         tone={person.status === 'active' ? 'active' : 'inactive'}
                       >
                         {person.status === 'active' ? 'Active' : 'Inactive'}
                       </Status>
-                    </td>
-                    <td className="text-right">
-                      <span className="mr-2 inline-block align-middle">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => setEditing(person)}
-                        >
-                          Edit
-                        </Button>
-                      </span>
-                      <StatusToggle
-                        active={person.status === 'active'}
-                        basePath={`/api/admin/persons/${person.id}`}
-                        label="person"
-                        consequences="Contracts end today. Sign-in accounts are not changed."
-                        onChanged={reload}
-                      />
                     </td>
                   </tr>
                 ))}

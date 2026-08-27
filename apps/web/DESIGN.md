@@ -273,6 +273,46 @@ A destructive control goes in the `destructive` slot and arrives behind a rule.
 It is the one thing there nobody arrived intending to click, and a gap is not
 enough to say so.
 
+### A row opens a record
+
+A row's job is to be found and clicked. **The first cell is a link to the
+record**, and anything that needs a sentence to say what it is about to do
+belongs on the record rather than in a cell.
+
+Users is where the rule came from. Every control an account had lived on its
+row — edit, unlock, factor removal, setup link, deactivate, delete — so
+clicking an account did nothing, and the answer to "what has happened to this
+account" was to read the whole audit log. The cost was structural, not
+cosmetic: the list had to hold six pieces of state that were each only ever
+about ONE account (which row is being edited, whose setup link is on screen,
+whose factors are open, which unlock is in flight), and a form opened from a
+cell can only ever be a form with no room to explain itself.
+
+What stays on a row is what can be read at a glance and what applies to the
+collection rather than a member of it: the status labels, and the button that
+creates a new one. What moved is everything that changes a record.
+
+Both tabs of one destination follow the same rule. A tab strip says "same
+subject, different view"; People editing inline while Accounts sent you to a
+screen would be two conventions presented as one, and a reader would learn
+which was which by clicking the wrong one.
+
+### A record shows its own history
+
+The audit log answers "everything, in order" — complete, and therefore useless
+as a place to notice something about one subject. Every record screen that has
+a history carries `SubjectLog`, which is the same log with the question
+narrowed to whoever is on screen.
+
+**The filter is the server's.** Fetching a recent page and narrowing it in the
+browser drops everything older than the window, so a quiet account reads as one
+nothing ever happened to — a wrong answer delivered confidently. The endpoint
+takes several subjects at once, because a person's history is their own record
+plus every account linked to them.
+
+It matches what the subject DID as well as what was done TO it. An account
+locked out and the administrator who locked it are one investigation.
+
 ### Figures
 
 `Metric`, `MetricRow` and `Meter`. **A number that matters is never delivered as

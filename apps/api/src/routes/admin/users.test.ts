@@ -4,6 +4,7 @@ import {
   ALL_PERMISSIONS,
   PERMISSIONS,
   assignRole,
+  createPerson,
   createRole,
   createUser,
   hashPassword,
@@ -415,6 +416,108 @@ describe('org unit administration', () => {
 
     const list = await get('/api/admin/org-units', cookie);
     expect(list.json().orgUnits).toHaveLength(2);
+  });
+});
+
+/**
+ * One account, read on its own.
+ *
+ * The account screen needs `locked`, the owning source and the person behind
+ * the account, and before this the only way to get any of them was
+ * `GET /users`, which returns the whole directory. Rendering one row by
+ * fetching every row is a page that gets slower for reasons that have nothing
+ * to do with the account being looked at.
+ */
+describe('GET /api/admin/users/:id', () => {
+  it('returns the account with its lock state and the person behind it', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const { user, person } = await withTenant(ctx.tenantId, async (tx) => {
+      const person = await createPerson(tx, {
+        givenName: 'Maya',
+        familyName: 'Okafor',
+      });
+      const user = await createUser(tx, {
+        login: 'mokafor',
+        email: 'maya@acme.test',
+        displayName: 'Maya Okafor',
+      });
+      await tx.user.update({
+        where: { id: user.id },
+        data: { personId: person.id },
+      });
+      return { user, person };
+    });
+
+    const res = await get(`/api/admin/users/${user.id}`, cookie);
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.login).toBe('mokafor');
+    expect(body.displayName).toBe('Maya Okafor');
+    expect(body.status).toBe('active');
+    expect(body.sourceId).toBeNull();
+    expect(body.passwordSource).toBe('local');
+    // Locked is answered rather than omitted: the screen has to decide whether
+    // to offer Unlock, and an absent field would read the same as "not locked".
+    expect(body.locked).toBe(false);
+    // Named, not just referenced. The account screen links back to the person
+    // and cannot render "Maya Okafor" from an id alone.
+    expect(body.person).toEqual({
+      id: person.id,
+      givenName: 'Maya',
+      familyName: 'Okafor',
+    });
+  });
+
+  it('says the account is locked while it is locked out', async () => {
+    const admin = await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.loginLockout.create({
+        data: {
+          tenantId: ctx.tenantId,
+          userId: admin.id,
+          failedCount: 5,
+          firstFailedAt: new Date(),
+          lastFailedAt: new Date(),
+          lockedAt: new Date(),
+          lockedUntil: new Date(Date.now() + 60_000),
+        },
+      }),
+    );
+
+    const res = await get(`/api/admin/users/${admin.id}`, cookie);
+    expect(res.json().locked).toBe(true);
+  });
+
+  it('reports an account with no person as having none', async () => {
+    const admin = await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await get(`/api/admin/users/${admin.id}`, cookie);
+    expect(res.json().person).toBeNull();
+  });
+
+  it('answers 404 for an account that does not exist', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await get(
+      '/api/admin/users/00000000-0000-4000-8000-000000000000',
+      cookie,
+    );
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller without directory.read', async () => {
+    const admin = await seedAdmin([PERMISSIONS.IDENTITY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await get(`/api/admin/users/${admin.id}`, cookie);
+    expect(res.statusCode).toBe(403);
   });
 });
 

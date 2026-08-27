@@ -110,6 +110,76 @@ describe('GET /api/admin/audit', () => {
     expect(res.json().brokenAtSequence).toBe(1);
   });
 
+  /**
+   * The log behind one account's or one person's screen.
+   *
+   * Filtering in the browser was the alternative and is not equivalent: a page
+   * of recent events narrowed client-side silently omits everything older than
+   * the window, so a quiet account reads as an account nothing ever happened
+   * to.
+   */
+  it('narrows to one subject, in both directions', async () => {
+    const cookie = await adminCookie([PERMISSIONS.AUDIT_READ]);
+
+    // The admin created above is the actor on its own sign-in events, so it
+    // is a subject with real history rather than a fixture id.
+    const all = await get('/api/admin/audit?limit=200', cookie);
+    const actorId = all
+      .json()
+      .events.find((e: { actorUserId: string | null }) => e.actorUserId)
+      .actorUserId as string;
+
+    const res = await get(`/api/admin/audit?subject=${actorId}`, cookie);
+    expect(res.statusCode).toBe(200);
+
+    const { events } = res.json();
+    expect(events.length).toBeGreaterThan(0);
+    for (const event of events) {
+      expect([event.actorUserId, event.targetId]).toContain(actorId);
+    }
+  });
+
+  it('takes several subjects at once', async () => {
+    const cookie = await adminCookie([PERMISSIONS.AUDIT_READ]);
+    const all = await get('/api/admin/audit?limit=200', cookie);
+    const actorId = all
+      .json()
+      .events.find((e: { actorUserId: string | null }) => e.actorUserId)
+      .actorUserId as string;
+    const absent = '99999999-9999-4999-8999-999999999999';
+
+    const one = await get(`/api/admin/audit?subject=${actorId}`, cookie);
+    const two = await get(
+      `/api/admin/audit?subject=${actorId}&subject=${absent}`,
+      cookie,
+    );
+
+    expect(two.json().events).toHaveLength(one.json().events.length);
+  });
+
+  it('answers a subject with no history with an empty log, not the whole one', async () => {
+    const cookie = await adminCookie([PERMISSIONS.AUDIT_READ]);
+
+    const res = await get(
+      '/api/admin/audit?subject=99999999-9999-4999-8999-999999999999',
+      cookie,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.json().events).toEqual([]);
+  });
+
+  /**
+   * `targetId` and `actorUserId` are `uuid` columns, so a subject that is not
+   * one is a database error rather than an empty result. Rejected at the edge,
+   * where it can be answered as a bad request.
+   */
+  it('rejects a subject that is not a uuid', async () => {
+    const cookie = await adminCookie([PERMISSIONS.AUDIT_READ]);
+
+    const res = await get('/api/admin/audit?subject=not-a-uuid', cookie);
+    expect(res.statusCode).toBe(400);
+  });
+
   it('refuses a caller without audit.read', async () => {
     const cookie = await adminCookie([PERMISSIONS.DIRECTORY_READ]);
 

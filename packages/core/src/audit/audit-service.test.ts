@@ -4,7 +4,7 @@ import {
   asDatabaseSuperuser,
   resetDatabase,
 } from '@syntra/db/src/test-support.js';
-import { recordEvent, verifyChain } from './audit-service.js';
+import { listEvents, recordEvent, verifyChain } from './audit-service.js';
 
 let tenantId: string;
 
@@ -141,5 +141,91 @@ describe('append-only rules', () => {
       tx.auditEvent.findUnique({ where: { id: e.id } }),
     );
     expect(after).not.toBeNull();
+  });
+});
+
+describe('listEvents', () => {
+  /**
+   * The per-subject log behind an account's or a person's screen.
+   *
+   * Both directions are asked for at once because both answer the same
+   * question. "What happened to this account" without "what this account did"
+   * shows an administrator being locked out and hides the administrator doing
+   * the locking, and the two are the same investigation.
+   */
+  const about = (
+    action: string,
+    parts: { targetId?: string; actorUserId?: string },
+  ) => ({
+    ...event(action),
+    targetId: parts.targetId ?? null,
+    actorUserId: parts.actorUserId ?? null,
+  });
+
+  const SUBJECT = '11111111-1111-4111-8111-111111111111';
+  const OTHER = '22222222-2222-4222-8222-222222222222';
+
+  it('returns events the subject was the target of and the actor of', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await recordEvent(tx, about('user.update', { targetId: SUBJECT }));
+      await recordEvent(tx, about('user.unlock', { actorUserId: SUBJECT }));
+      await recordEvent(tx, about('user.delete', { targetId: OTHER }));
+    });
+
+    const events = await withTenant(tenantId, (tx) =>
+      listEvents(tx, { subjectIds: [SUBJECT] }),
+    );
+
+    expect(events.map((e) => e.action)).toEqual(['user.unlock', 'user.update']);
+  });
+
+  it('takes several subjects, so a person can ask about their accounts too', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await recordEvent(tx, about('person.update', { targetId: SUBJECT }));
+      await recordEvent(tx, about('user.create', { targetId: OTHER }));
+      await recordEvent(tx, about('unrelated', {}));
+    });
+
+    const events = await withTenant(tenantId, (tx) =>
+      listEvents(tx, { subjectIds: [SUBJECT, OTHER] }),
+    );
+
+    expect(events.map((e) => e.action)).toEqual(['user.create', 'person.update']);
+  });
+
+  it('is unfiltered when no subject is named', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await recordEvent(tx, about('a', { targetId: SUBJECT }));
+      await recordEvent(tx, about('b', {}));
+    });
+
+    const events = await withTenant(tenantId, (tx) => listEvents(tx, {}));
+    expect(events).toHaveLength(2);
+  });
+
+  /**
+   * An empty array is not "no filter". It is what a person with no linked
+   * accounts and no id would produce, and answering it with the whole tenant's
+   * log would put every other account's history on their screen.
+   */
+  it('returns nothing when the subject list is empty', async () => {
+    await withTenant(tenantId, (tx) => recordEvent(tx, about('a', {})));
+
+    const events = await withTenant(tenantId, (tx) =>
+      listEvents(tx, { subjectIds: [] }),
+    );
+    expect(events).toEqual([]);
+  });
+
+  it('pages a filtered log with `before`', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await recordEvent(tx, about('first', { targetId: SUBJECT }));
+      await recordEvent(tx, about('second', { targetId: SUBJECT }));
+    });
+
+    const events = await withTenant(tenantId, (tx) =>
+      listEvents(tx, { subjectIds: [SUBJECT], before: 2 }),
+    );
+    expect(events.map((e) => e.action)).toEqual(['first']);
   });
 });

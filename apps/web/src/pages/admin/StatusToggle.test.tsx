@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
-import { AccountsTab } from './AccountsTab.js';
+import { AccountDetailPage } from './AccountDetailPage.js';
 
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), {
@@ -57,6 +57,15 @@ function mockApi(rows: {
     }
     // BEFORE the `/groups` branch: a members URL contains `/groups` too, and
     // answering it with the group list would look like an empty membership.
+    // BEFORE the `/users` branch, and matching the single-account path only:
+    // `/api/admin/users/u1` contains `/users` too, and answering it with the
+    // collection would give the account screen a body with no login in it.
+    if (/\/users\/[^/]+$/.test(url)) {
+      return Promise.resolve(json(rows.users?.[0] ?? {}));
+    }
+    if (url.includes('/audit')) {
+      return Promise.resolve(json({ events: [], chainValid: true }));
+    }
     if (url.includes('/members')) return Promise.resolve(json({ users: rows.members ?? [] }));
     if (url.includes('/groups')) return Promise.resolve(json({ groups: rows.groups ?? [] }));
     if (url.includes('/users')) return Promise.resolve(json({ users: rows.users ?? [] }));
@@ -66,6 +75,25 @@ function mockApi(rows: {
   });
   return posts;
 }
+
+/**
+ * The account's own screen, which is where the toggle for an account lives.
+ *
+ * It used to be rendered here through `AccountsTab`, because a row was the
+ * only place an account could be acted on. Both assertions are unchanged --
+ * what moved is the screen they are made against.
+ */
+// No `useCan` stub: with no provider it answers false, so the account screen
+// offers no Delete — which is what these tests want anyway, and what the org
+// unit case in this same file relies on.
+const renderAccount = () =>
+  render(
+    <MemoryRouter initialEntries={['/admin/users/u1']}>
+      <Routes>
+        <Route path="/admin/users/:id" element={<AccountDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -175,11 +203,7 @@ describe('deactivate, never delete', () => {
     // proposes reactivating it, so the button would appear to work and then
     // quietly undo itself. Saying who owns the account is the honest answer.
     mockApi({ users: [user({ sourceId: 'src-1' })] });
-    render(
-      <MemoryRouter>
-        <AccountsTab />
-      </MemoryRouter>,
-    );
+    renderAccount();
     await screen.findByText('mokafor');
 
     expect(screen.queryByRole('button', { name: 'Deactivate' })).toBeNull();
@@ -192,11 +216,7 @@ describe('deactivate, never delete', () => {
 
   it('offers it for a locally managed account', async () => {
     mockApi({ users: [user()] });
-    render(
-      <MemoryRouter>
-        <AccountsTab />
-      </MemoryRouter>,
-    );
+    renderAccount();
     await screen.findByText('mokafor');
     expect(screen.getByRole('button', { name: 'Deactivate' })).toBeInTheDocument();
   });

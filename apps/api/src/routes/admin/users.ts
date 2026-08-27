@@ -130,6 +130,50 @@ export async function registerAdminUserRoutes(
     },
   );
 
+  /**
+   * One account, for the screen that is about one account.
+   *
+   * Every field the account screen needs and cannot derive: the lock, the
+   * source that owns it, and the person behind it BY NAME. Reading the whole
+   * directory to render one row is what this replaces -- a page whose cost
+   * grew with the size of the tenant rather than with what it displayed.
+   *
+   * `person` is embedded rather than left as `personId` because the screen
+   * links back to the person and cannot render a name from an id. It is a
+   * three-field projection, not the person record: contracts and access belong
+   * to the person's own screen, and duplicating them here would be two places
+   * to keep true.
+   */
+  app.get(
+    '/users/:id',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      return request.db(async (tx) => {
+        const user = await tx.user.findUnique({ where: { id } });
+        // 404 rather than an empty body: an account that was deleted and an
+        // account the caller mistyped are the same URL, and both need to read
+        // as "no such account" instead of as an account with nothing in it.
+        if (!user) throw new ProblemError(404, 'not-found', 'User not found');
+
+        const lock = await tx.loginLockout.findUnique({
+          where: { userId: id },
+          select: { lockedAt: true, lockedUntil: true },
+        });
+
+        const person = user.personId
+          ? await tx.person.findUnique({
+              where: { id: user.personId },
+              select: { id: true, givenName: true, familyName: true },
+            })
+          : null;
+
+        return { ...user, locked: isLocked(lock, new Date()), person };
+      });
+    },
+  );
+
   app.post(
     '/users',
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
