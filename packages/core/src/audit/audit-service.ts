@@ -202,12 +202,39 @@ export async function verifyChain(tx: TenantClient): Promise<ChainResult> {
   return { valid: true };
 }
 
+/**
+ * A page of the log, newest first, optionally narrowed to a set of subjects.
+ *
+ * `subjectIds` matches BOTH directions -- what was done to the subject and
+ * what the subject did. Those are one investigation, not two: an account
+ * locked out and the administrator who locked it belong on the same screen,
+ * and a log that showed only `targetId` would hide half of every story it
+ * told.
+ *
+ * An empty array is a filter that matches nothing, not an absent filter. It is
+ * what a person with no id and no linked accounts produces, and answering that
+ * with the tenant's entire log would put every other account's history on
+ * their screen.
+ */
 export async function listEvents(
   tx: TenantClient,
-  opts: { limit?: number | undefined; before?: number | undefined } = {},
+  opts: {
+    limit?: number | undefined;
+    before?: number | undefined;
+    subjectIds?: string[] | undefined;
+  } = {},
 ) {
+  const where: Record<string, unknown> = {};
+  if (opts.before) where['sequence'] = { lt: opts.before };
+  if (opts.subjectIds) {
+    where['OR'] = [
+      { targetId: { in: opts.subjectIds } },
+      { actorUserId: { in: opts.subjectIds } },
+    ];
+  }
+
   return tx.auditEvent.findMany({
-    where: opts.before ? { sequence: { lt: opts.before } } : {},
+    where,
     orderBy: { sequence: 'desc' },
     take: opts.limit ?? 50,
   });

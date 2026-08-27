@@ -1,22 +1,16 @@
-import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Alert,
-  Button,
   Empty,
   Field,
   Panel,
   Select,
   SkeletonRows,
-  RowActions,
   Status,
   Table,
 } from '@syntra/ui';
-import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
-import { ApiError, api } from '../../session/api.js';
 import { RecordPanel } from './RecordPanel.js';
-import { DeleteButton } from './DeleteButton.js';
-import { StatusToggle } from './StatusToggle.js';
 
 interface UserRow {
   id: string;
@@ -28,20 +22,9 @@ interface UserRow {
   /** Set when a directory source owns this account. Null means locally managed. */
   sourceId: string | null;
   /**
-   * Where the password lives: 'local' means Syntra holds the hash, 'upstream'
-   * means an external provider does.
-   *
-   * Optional here rather than required, because the guard below reads it as
-   * "not upstream" rather than "is local". The server is the authority and
-   * answers 409 for a user it cannot set a password for; a UI guard that
-   * silently hid the button on an unrecognised value would leave an
-   * administrator with no control and no explanation.
-   */
-  passwordSource?: string;
-  /**
    * Too many failed sign-ins. Orthogonal to `status`: a locked account is
-   * active and cannot sign in, which is a different sentence from an
-   * inactive one and needs its own label and its own way out.
+   * active and cannot sign in, which is a different sentence from an inactive
+   * one and needs its own label.
    */
   locked?: boolean;
 }
@@ -49,119 +32,45 @@ interface UserRow {
 interface SourceRow {
   id: string;
   name: string;
-  /**
-   * Whether Syntra may disable an account in this directory. Both are needed:
-   * `writebackEnabled` is the master switch and `writebackDisable` the
-   * individual permission, and the server checks the same pair.
-   */
-  writebackEnabled: boolean;
-  writebackDisable: boolean;
 }
 
+/**
+ * The accounts, as a list and nothing else.
+ *
+ * Every control that used to live on a row is now on the account's own screen,
+ * reached by clicking its name. The row actions were not merely crowded — they
+ * forced this component to hold six pieces of state that were each only ever
+ * about ONE account (which row is being edited, whose setup link is on screen,
+ * whose factors are open, which unlock is in flight), and the consequence of
+ * that shape was that clicking an account did nothing at all. Reading an
+ * account meant reading a table row, and the account's history meant reading
+ * the whole audit log.
+ *
+ * What is left here is what a list is for: seeing which accounts exist, which
+ * are inactive or locked, and which are owned by a directory. Creating one
+ * stays, because that is an action on the collection rather than on a member
+ * of it.
+ */
 export function AccountsTab() {
-  const can = useCan();
   const { data, error, loading, reload } = useApiResource<{ users: UserRow[] }>(
     '/api/admin/users',
   );
-  // ONE editor for the page, opened by a row — not one collapsed panel per
-  // row, which would put a block-level trigger and a two-column form inside a
-  // table cell.
-  const [editing, setEditing] = useState<UserRow | null>(null);
-  /** The row whose unlock is in flight, so only its own button spins. */
-  const [unlocking, setUnlocking] = useState<string | null>(null);
-
-  async function unlock(id: string) {
-    setUnlocking(id);
-    try {
-      await api(`/api/admin/users/${id}/unlock`, { method: 'POST' });
-      reload();
-    } catch (cause) {
-      // Surfaced in the page's own error slot rather than swallowed: an
-      // unlock that quietly did nothing sends the administrator back to the
-      // support call with the same problem.
-      setUnlockError(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That account could not be unlocked. Try again.',
-      );
-    } finally {
-      setUnlocking(null);
-    }
-  }
-  // One at a time, like the editor above: a setup link is a credential, and a
-  // page holding several of them at once invites pasting the wrong one.
-  const [setupLink, setSetupLink] = useState<{
-    login: string;
-    url: string;
-    expiresAt: string;
-  } | null>(null);
-  const [linkError, setLinkError] = useState<string | null>(null);
-  const [unlockError, setUnlockError] = useState<string | null>(null);
-  /**
-   * FACTOR REMOVAL, which no screen reached.
-   *
-   * `DELETE /users/:id/factors/:type` is the way back in for somebody who lost
-   * their phone, and the way an administrator revokes a factor an attacker
-   * enrolled. It existed and wrote its own audit event naming the
-   * administrator -- a factor that disappears with nothing to show who removed
-   * it is indistinguishable from one the attacker removed -- and the answer to
-   * "I lost my authenticator" was still a database client.
-   */
-  const [factorsFor, setFactorsFor] = useState<UserRow | null>(null);
-  const [factorNotice, setFactorNotice] = useState<string | null>(null);
-
-  const removeFactor = async (userId: string, type: string) => {
-    setFactorNotice(null);
-    setLinkError(null);
-    try {
-      const result = await api<{ recoveryCodesRevoked: number }>(
-        `/api/admin/users/${userId}/factors/${type}`,
-        { method: 'DELETE' },
-      );
-      // The count is SAID. Taking the last real factor away takes the printed
-      // recovery codes with it, and nothing else tells the account's owner
-      // that the page in their drawer has stopped working.
-      setFactorNotice(
-        result.recoveryCodesRevoked > 0
-          ? `Removed, and ${result.recoveryCodesRevoked} unused recovery code${
-              result.recoveryCodesRevoked === 1 ? '' : 's'
-            } stopped working with it.`
-          : 'Removed.',
-      );
-    } catch (cause) {
-      setLinkError(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That factor could not be removed.',
-      );
-    }
-  };
-  // For the org-unit picker on the create form. Same tolerance as the sources
-  // read below: a caller without `directory.read` on units gets an empty list
-  // and a form that still works, rather than a page that will not render.
+  // For the org-unit picker on the create form. A caller without
+  // `directory.read` on units gets an empty list and a form that still works,
+  // rather than a page that will not render.
   const { data: unitsData } = useApiResource<{ orgUnits: { id: string; name: string }[] }>(
     '/api/admin/org-units',
   );
   // Fetched alongside the users so a synced account can name the directory
-  // that owns it, the way the sync run pages do. A caller holding
-  // directory.read but not sync.read gets a 403 here; the hook turns that into
-  // its own error state, which is deliberately ignored — a missing source name
-  // is not a reason to fail the page, and the row still says the account is
-  // managed elsewhere.
+  // that owns it. A caller holding directory.read but not sync.read gets a 403
+  // here; the hook turns that into its own error state, which is deliberately
+  // ignored — a missing source name is not a reason to fail the page, and the
+  // row still says the account is managed elsewhere.
   const { data: sourcesData } = useApiResource<{ sources: SourceRow[] }>(
     '/api/admin/sources',
   );
   const sourceNames = new Map(
     (sourcesData?.sources ?? []).map((source) => [source.id, source.name]),
-  );
-  // Which sources Syntra may disable an account in. A caller who cannot read
-  // sources gets an empty set and therefore no buttons, which is the right way
-  // round: the server would refuse the write anyway, and offering a control
-  // that always fails is worse than not offering it.
-  const writesDisable = new Set(
-    (sourcesData?.sources ?? [])
-      .filter((source) => source.writebackEnabled && source.writebackDisable)
-      .map((source) => source.id),
   );
   // Same narrowing as PeopleTab, and for the same reason: a 200 without its
   // collection must render an empty table, not a blank console.
@@ -170,128 +79,7 @@ export function AccountsTab() {
 
   return (
     <>
-      {/* Not a duplicate of People, and the description is what says so.
-          The two pages read as two lists of the same thing for as long as
-          this one sat in the onboarding path, which it never belonged in:
-          where a directory source owns the accounts, a joiner's login arrives
-          here by sync rather than by anybody typing it. */}
-
       {error && <Alert tone="danger">{error}</Alert>}
-
-      {linkError && <Alert tone="danger">{linkError}</Alert>}
-
-      {unlockError && <Alert tone="danger">{unlockError}</Alert>}
-
-      {factorsFor && (
-        <div className="mb-6">
-          <Panel
-            title={`Second factors for ${factorsFor.login}`}
-          >
-            <div className="space-y-3 p-4">
-              {factorNotice && <Alert tone="warning">{factorNotice}</Alert>}
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => void removeFactor(factorsFor.id, 'totp')}
-                >
-                  Remove authenticator app
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => void removeFactor(factorsFor.id, 'webauthn')}
-                >
-                  Remove security keys
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => void removeFactor(factorsFor.id, 'recovery_code')}
-                >
-                  Remove recovery codes
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => setFactorsFor(null)}>
-                  Done
-                </Button>
-              </div>
-            </div>
-          </Panel>
-        </div>
-      )}
-
-      {setupLink && (
-        <Panel>
-          <h2 className="font-medium text-ink">
-            Password setup link for {setupLink.login}
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            Send this to them. It can be used once, expires{' '}
-            {new Date(setupLink.expiresAt).toLocaleString()}, and generating
-            another one stops the previous link working.
-          </p>
-          {/*
-            A read-only input, not an anchor. An administrator who clicks a
-            link to check it has spent the token, and the joiner they send it
-            to gets a dead page.
-          */}
-          <input
-            readOnly
-            aria-label="Password setup link"
-            value={setupLink.url}
-            onFocus={(e) => e.currentTarget.select()}
-            className="mt-3 w-full rounded border border-border-control bg-surface px-3 py-2 font-mono text-sm"
-          />
-          <div className="mt-3 flex gap-2">
-            <Button
-              size="sm"
-              onClick={() => navigator.clipboard?.writeText(setupLink.url)}
-            >
-              Copy
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => setSetupLink(null)}>
-              Done
-            </Button>
-          </div>
-        </Panel>
-      )}
-
-      {editing && (
-        <RecordPanel
-          key={editing.id}
-          title={`Edit ${editing.login}`}
-          submitLabel="Save"
-          method="PATCH"
-          path={`/api/admin/users/${editing.id}/details`}
-          initial={{ displayName: editing.displayName, email: editing.email }}
-          onCancel={() => setEditing(null)}
-          onCreated={() => {
-            setEditing(null);
-            reload();
-          }}
-          build={(v) => ({
-            displayName: v.displayName ?? '',
-            email: v.email ?? '',
-          })}
-          fields={(v, set, errs) => (
-            <>
-              <Field
-                label="Display name"
-                value={v.displayName ?? ''}
-                onChange={(x) => set('displayName', x)}
-                error={errs.displayName}
-              />
-              <Field
-                label="Email"
-                type="email"
-                value={v.email ?? ''}
-                onChange={(x) => set('email', x)}
-                error={errs.email}
-              />
-            </>
-          )}
-        />
-      )}
 
       <RecordPanel
         title="New user"
@@ -353,10 +141,9 @@ export function AccountsTab() {
           product does not have. */}
 
       {!error && anySynced && (
-        // Said once, above the table, and again per row. An administrator who
-        // edits the wrong account here would have their change overwritten by
-        // the next run without explanation; the spec asks for synced fields to
-        // read-only wherever they appear and to name the source that owns them.
+        // Said once, above the table, and again on the account's own screen.
+        // An administrator who edits the wrong account would have their change
+        // overwritten by the next run without explanation.
         <div className="mb-4">
           <Alert tone="info" title="Some of these accounts are managed elsewhere">
             An account with a directory source named against it has its login,
@@ -389,31 +176,26 @@ export function AccountsTab() {
                   <th scope="col" className="max-sm:hidden">
                     Email
                   </th>
-                  <th scope="col">
-                    Managed by
-                  </th>
+                  <th scope="col">Managed by</th>
                   <th scope="col">Status</th>
-                  {/* The actions column HAD NO HEADER: five `th` over six
-                      `td`. A screen reader announcing this table read every
-                      control in the last column as belonging to "Status".
-                      Visually hidden rather than visible, because the column
-                      needs a name and the header row does not need the word
-                      "Actions" in it. */}
-                  <th scope="col" className="sr-only">
-                    Actions
-                  </th>
                 </tr>
               </thead>
               <tbody>
                 {users.map((user) => (
                   <tr key={user.id}>
-                    <td className="text-ink">
-                      {user.displayName}
+                    <td>
+                      {/* The name is the way in, as it is on People. A row
+                          that carried its own controls and no link was a row
+                          that could not be opened. */}
+                      <Link
+                        to={`/admin/users/${user.id}`}
+                        className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+                      >
+                        {user.displayName}
+                      </Link>
                     </td>
                     <td>{user.login}</td>
-                    <td className="max-sm:hidden">
-                      {user.email}
-                    </td>
+                    <td className="max-sm:hidden">{user.email}</td>
                     <td>
                       {!user.sourceId ? (
                         <span className="text-muted">Syntra</span>
@@ -421,8 +203,8 @@ export function AccountsTab() {
                         <span className="flex flex-wrap items-center gap-2">
                           {/* Named, not merely flagged: "synced" tells an
                               administrator nothing about where to go and
-                              change it. The id stands in when the caller
-                              cannot read the source list. */}
+                              change it. The generic word stands in when the
+                              caller cannot read the source list. */}
                           <Status tone="primary">
                             {sourceNames.get(user.sourceId) ?? 'Directory source'}
                           </Status>
@@ -439,9 +221,7 @@ export function AccountsTab() {
                       {user.status === 'active' ? (
                         <span className="flex flex-wrap items-center gap-2">
                           <Status tone="active">Active</Status>
-                          {user.locked && (
-                            <Status tone="warning">Locked out</Status>
-                          )}
+                          {user.locked && <Status tone="warning">Locked out</Status>}
                         </span>
                       ) : (
                         <span className="flex flex-wrap items-center gap-2">
@@ -453,136 +233,6 @@ export function AccountsTab() {
                           )}
                         </span>
                       )}
-                    </td>
-                    <td>
-                      <RowActions
-                        destructive={
-                          can('directory.delete') ? (
-                            <DeleteButton
-                              path={`/api/admin/users/${user.id}`}
-                              label="user"
-                              confirmWord={user.login}
-                              warning="The account is removed from the directory and from Syntra, and every session with it. The person and the audit trail are kept. This cannot be undone."
-                              onDeleted={reload}
-                            />
-                          ) : undefined
-                        }
-                      >
-                      {/*
-                        First, and only while it applies. Somebody is on this
-                        page because of a support call about exactly this, and
-                        a control that appears only when it would do something
-                        is what makes the table readable the rest of the time.
-                      */}
-                      {user.locked && (
-                        <Button
-                            size="sm"
-                            variant="secondary"
-                            loading={unlocking === user.id}
-                            onClick={() => void unlock(user.id)}
-                          >
-                            Unlock
-                        </Button>
-                      )}
-                      {user.sourceId === null && (
-                        <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setEditing(user)}
-                          >
-                            Edit
-                        </Button>
-                      )}
-                      <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => {
-                            setFactorsFor(user);
-                            setFactorNotice(null);
-                          }}
-                        >
-                          Factors
-                        </Button>
-                      {/*
-                        Offered for a synced account as well as a local one:
-                        a directory-owned user still authenticates against
-                        Syntra's own hash, so they need this exactly as much.
-                        It is the federated user, whose password lives
-                        somewhere else entirely, who cannot use it.
-                      */}
-                      {user.passwordSource !== 'upstream' && (
-                        <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={async () => {
-                              setLinkError(null);
-                              const res = await fetch(
-                                `/api/admin/users/${user.id}/password-setup`,
-                                { method: 'POST' },
-                              );
-                              if (!res.ok) {
-                                const problem = await res.json().catch(() => ({}));
-                                setLinkError(
-                                  problem.detail ??
-                                    problem.title ??
-                                    'Could not create a setup link.',
-                                );
-                                return;
-                              }
-                              const body = await res.json();
-                              setSetupLink({
-                                login: user.login,
-                                url: body.url,
-                                expiresAt: body.expiresAt,
-                              });
-                            }}
-                          >
-                            Password link
-                        </Button>
-                      )}
-                      {user.sourceId === null || writesDisable.has(user.sourceId) ? (
-                        // A source-owned account used to be refused here, and
-                        // the refusal was honest: the next run read it as
-                        // present in the directory and proposed reactivating
-                        // it, so the button would have undone itself. It works
-                        // now because the deactivation is written THROUGH to
-                        // the directory and sync no longer resurrects an
-                        // account the source reports disabled.
-                        <StatusToggle
-                          active={user.status === 'active'}
-                          basePath={`/api/admin/users/${user.id}`}
-                          label="user"
-                          consequences={
-                            user.sourceId === null
-                              ? 'Every session and refresh token is revoked immediately.'
-                              : // Says what actually happens, in order. A
-                                // confirmation that asks "are you sure?"
-                                // without saying what follows is one people
-                                // click through without reading.
-                                `The account is disabled in ${
-                                  sourceNames.get(user.sourceId) ?? 'the directory'
-                                } immediately, every session is revoked, and the leaver steps configured on the target follow from today.`
-                          }
-                          onChanged={reload}
-                        />
-                      ) : (
-                        // Write-back is off for this source, so a status
-                        // changed here would be undone by the next run. Naming
-                        // the source and the setting is the difference between
-                        // a dead end and something an administrator can act
-                        // on.
-                        <span className="text-sm text-muted">
-                          {sourceNames.get(user.sourceId) ?? 'A directory source'}{' '}
-                          owns this account, and write-back is off
-                        </span>
-                      )}
-                      {/* Deletion is passed to `RowActions` as its
-                          `destructive` slot rather than listed here, so it
-                          arrives behind a rule at the end of the row.
-                          Previously it was a block-level element inside the
-                          same cell, which pushed it onto its own line and made
-                          every row holding one taller than its neighbours. */}
-                      </RowActions>
                     </td>
                   </tr>
                 ))}

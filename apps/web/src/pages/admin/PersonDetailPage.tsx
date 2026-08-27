@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Alert,
+  Button,
   Empty,
   Field,
   Panel,
@@ -11,6 +13,8 @@ import {
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
+import { StatusToggle } from './StatusToggle.js';
+import { SubjectLog } from './SubjectLog.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
 
 interface Contract {
@@ -43,8 +47,18 @@ interface PersonDetail {
 const day = (iso: string | null) =>
   iso ? new Date(iso).toISOString().slice(0, 10) : null;
 
+/**
+ * One person: who they are, what they do, who can sign in as them, and what
+ * has happened to them.
+ *
+ * Editing and deactivation used to live on the LIST and only there, which made
+ * this -- the screen showing everything about somebody -- the one screen on
+ * which nothing about them could be changed. Correcting a misspelt name meant
+ * going back to a table and finding the row again.
+ */
 export function PersonDetailPage() {
   const { id } = useParams();
+  const [editing, setEditing] = useState(false);
   const { data, error, loading, reload } = useApiResource<PersonDetail>(
     `/api/admin/persons/${id}`,
   );
@@ -74,6 +88,22 @@ export function PersonDetailPage() {
     <>
       <PageHeader
         title={`${data.givenName} ${data.familyName}`}
+        actions={
+          <>
+            {!editing && (
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )}
+            <StatusToggle
+              active={data.status === 'active'}
+              basePath={`/api/admin/persons/${data.id}`}
+              label="person"
+              consequences="Contracts end today. Sign-in accounts are not changed."
+              onChanged={reload}
+            />
+          </>
+        }
       />
 
       {/* The key an HR import matches this person on. It was in the header as
@@ -83,6 +113,20 @@ export function PersonDetailPage() {
       <PageFacts
         facts={[
           {
+            label: 'Status',
+            value: (
+              <Status tone={data.status === 'active' ? 'active' : 'inactive'}>
+                {data.status === 'active' ? 'Active' : 'Inactive'}
+              </Status>
+            ),
+          },
+          {
+            label: 'Business email',
+            value: data.businessEmail ?? (
+              <span className="font-normal text-muted">None recorded</span>
+            ),
+          },
+          {
             label: 'Source reference',
             value: data.externalId ?? <span className="text-muted">None recorded</span>,
           },
@@ -90,6 +134,72 @@ export function PersonDetailPage() {
       />
 
       <div className="space-y-6">
+        {editing && (
+          <RecordPanel
+            title={`Edit ${data.givenName} ${data.familyName}`}
+            submitLabel="Save"
+            method="PATCH"
+            path={`/api/admin/persons/${data.id}`}
+            initial={{
+              givenName: data.givenName,
+              familyName: data.familyName,
+              businessEmail: data.businessEmail ?? '',
+              externalId: data.externalId ?? '',
+            }}
+            onCancel={() => setEditing(false)}
+            onCreated={() => {
+              setEditing(false);
+              reload();
+            }}
+            build={(v) => ({
+              givenName: v.givenName ?? '',
+              familyName: v.familyName ?? '',
+              // NULL clears; omitting would mean "leave alone" and an emptied
+              // box would keep the old value.
+              businessEmail: v.businessEmail === '' ? null : (v.businessEmail ?? null),
+              externalId: v.externalId === '' ? null : (v.externalId ?? null),
+            })}
+            fields={(v, set, errs) => (
+              <>
+                <Field
+                  label="Given name"
+                  value={v.givenName ?? ''}
+                  onChange={(x) => set('givenName', x)}
+                  error={errs.givenName}
+                />
+                <Field
+                  label="Family name"
+                  value={v.familyName ?? ''}
+                  onChange={(x) => set('familyName', x)}
+                  error={errs.familyName}
+                />
+                <Field
+                  label="Business email"
+                  type="email"
+                  value={v.businessEmail ?? ''}
+                  onChange={(x) => set('businessEmail', x)}
+                  error={errs.businessEmail}
+                />
+                <Field
+                  label="Source reference"
+                  value={v.externalId ?? ''}
+                  onChange={(x) => set('externalId', x)}
+                  error={errs.externalId}
+                  warning={
+                    // Shown only when there is already a value to change. On a
+                    // person with no reference there is nothing to break yet,
+                    // and a warning about breaking it would be a hint by
+                    // another name.
+                    data.externalId
+                      ? 'Changing this makes the next import create a second person rather than update this one.'
+                      : undefined
+                  }
+                />
+              </>
+            )}
+          />
+        )}
+
         <Panel
           title="Contracts"
         >
@@ -258,7 +368,15 @@ export function PersonDetailPage() {
                   key={user.id}
                   className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 last:border-0"
                 >
-                  <span className="font-medium text-ink">{user.login}</span>
+                  {/* The way in to the account, which had none. An account
+                      named here and not linked left the reader to find it
+                      again in a table on another tab. */}
+                  <Link
+                    to={`/admin/users/${user.id}`}
+                    className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+                  >
+                    {user.login}
+                  </Link>
                   <Status
                     tone={user.status === 'active' ? 'active' : 'inactive'}
                   >
@@ -297,6 +415,14 @@ export function PersonDetailPage() {
             />
           </div>
         </Panel>
+
+        {/*
+          The person AND every account linked to them. A person's own record
+          collects the joiner and mover events; the sign-ins, lockouts and
+          password resets are all against their accounts, and asking only about
+          the person id would hide most of what there is to see.
+        */}
+        <SubjectLog subjects={[data.id, ...data.users.map((u) => u.id)]} />
 
         {/* The one question every auditor asks, and it has to be reachable
             from the person rather than only by typing a URL. */}

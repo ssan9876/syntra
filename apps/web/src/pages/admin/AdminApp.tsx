@@ -19,6 +19,7 @@ import { TenantSettingsPage } from './TenantSettingsPage.js';
 import { TargetsPage } from './TargetsPage.js';
 import { TargetDetailPage } from './TargetDetailPage.js';
 import { AccountProfilePage } from './AccountProfilePage.js';
+import { AccountDetailPage } from './AccountDetailPage.js';
 import { BusinessRulesPage } from './BusinessRulesPage.js';
 import { ProvisionRunsPage } from './ProvisionRunsPage.js';
 import { ProvisionRunDetailPage } from './ProvisionRunDetailPage.js';
@@ -43,6 +44,10 @@ export function AdminApp() {
       <div className="w-full">
           <Routes>
             <Route path="users" element={<UsersPage />} />
+            {/* One account, on its own screen. Every control that used to sit
+                on a row of the accounts table lives here now, along with that
+                account's own slice of the audit log. */}
+            <Route path="users/:id" element={<AccountDetailPage />} />
             <Route path="groups" element={<GroupsPage />} />
             <Route path="org-units" element={<OrgUnitsPage />} />
             {/* People, accounts and import are tabs of Users now. The old

@@ -807,10 +807,10 @@ needs the password they do not have, and the reset form needs a mailbox that
 may not exist yet. Syntra verifies against its own hash and never binds to the
 directory, so the domain password Provision generated does nothing here.
 
-Users → the row → **Password link** mints a link and shows it to copy. It lasts
-24 hours, works once, and minting a second one kills the first — there is one
-live link per user, and a self-service reset the person requests themselves
-supersedes an admin-minted link just the same.
+Users → Accounts → the account → **Password link** mints a link and shows it to
+copy. It lasts 24 hours, works once, and minting a second one kills the first —
+there is one live link per user, and a self-service reset the person requests
+themselves supersedes an admin-minted link just the same.
 
 It is offered for synced accounts as well as local ones, because a
 directory-owned user still signs in against Syntra's own hash. The one case it

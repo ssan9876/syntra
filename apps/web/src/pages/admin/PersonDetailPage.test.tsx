@@ -4,6 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PersonDetailPage } from './PersonDetailPage.js';
 
+// Without a provider `useCan` answers false, which would hide the person's own
+// log on every test in this file. Granting everything keeps the subject of
+// these tests the SCREEN rather than the permission model, which has its own.
+vi.mock('../../session/SessionProvider.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../session/SessionProvider.js')>()),
+  useCan: () => () => true,
+}));
+
 const person = {
   id: 'p1',
   givenName: 'Jo',
@@ -211,6 +219,133 @@ describe('PersonDetailPage', () => {
     await user.click(screen.getByRole('button', { name: 'Link an account' }));
 
     await waitFor(() => expect(posted).toEqual([{ userId: 'u1' }]));
+  });
+
+  /**
+   * The person's own attributes, editable where the person is.
+   *
+   * These had a form on the LIST — a slide-in panel opened by a row — and none
+   * on the record itself. So the screen that showed everything about somebody
+   * was the one screen on which nothing about them could be changed, and
+   * correcting a misspelt name meant going back to a table and finding the row
+   * again.
+   */
+  it('edits the person from their own screen', async () => {
+    const user = userEvent.setup();
+    const patched: unknown[] = [];
+    mockRoutes({
+      '/api/admin/persons/p1': (init) => {
+        if (init?.method === 'PATCH') {
+          patched.push(JSON.parse(String(init.body)));
+          return json(person);
+        }
+        return json(person);
+      },
+      '/api/admin/users': () => json({ users: [] }),
+    });
+
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    const given = screen.getByLabelText('Given name');
+    await user.clear(given);
+    await user.type(given, 'Joanne');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(patched).toHaveLength(1));
+    expect(patched[0]).toMatchObject({ givenName: 'Joanne', familyName: 'Doe' });
+  });
+
+  it('clears an emptied field rather than leaving the old value', async () => {
+    const user = userEvent.setup();
+    const patched: Record<string, unknown>[] = [];
+    mockRoutes({
+      '/api/admin/persons/p1': (init) => {
+        if (init?.method === 'PATCH') {
+          patched.push(JSON.parse(String(init.body)));
+        }
+        return json(person);
+      },
+      '/api/admin/users': () => json({ users: [] }),
+    });
+
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    await user.clear(screen.getByLabelText('Business email'));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    // NULL clears; omitting the key would mean "leave alone", and an emptied
+    // box would silently keep the old address.
+    await waitFor(() => expect(patched).toHaveLength(1));
+    expect(patched[0]!['businessEmail']).toBeNull();
+  });
+
+  /**
+   * Only while there is something to break. On a person with no source
+   * reference there is nothing an import matches on yet, and a warning about
+   * breaking it would be a hint by another name.
+   */
+  it('warns that changing the source reference splits the person in two', async () => {
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/persons/p1': () => json(person),
+      '/api/admin/users': () => json({ users: [] }),
+    });
+
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(
+      screen.getByText(/create a second person rather than update this one/i),
+    ).toBeInTheDocument();
+  });
+
+  it('opens each linked account on its own screen', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(person));
+    renderPage();
+
+    expect(await screen.findByRole('link', { name: 'jdoe' })).toHaveAttribute(
+      'href',
+      '/admin/users/u1',
+    );
+  });
+
+  it('deactivates the person, saying what it does and does not touch', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(person));
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Deactivate' }));
+    // Sign-in accounts are a separate object with a separate status, and an
+    // administrator who assumes otherwise leaves a leaver able to sign in.
+    expect(
+      screen.getByText(/sign-in accounts are not changed/i),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * A person's history is their own record AND every account linked to them.
+   * Asking only about the person id would hide every sign-in, lockout and
+   * password reset, which is most of what there is to see.
+   */
+  it('asks for the log of the person and of their accounts', async () => {
+    const asked: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(((input: RequestInfo | URL) => {
+      const url = String(input);
+      asked.push(url);
+      if (url.includes('/audit')) return Promise.resolve(json({ events: [], chainValid: true }));
+      return Promise.resolve(json(person));
+    }) as never);
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(asked.some((url) => url.includes('/audit'))).toBe(true),
+    );
+    const audit = asked.find((url) => url.includes('/audit'))!;
+    expect(audit).toContain('subject=p1');
+    expect(audit).toContain('subject=u1');
   });
 
   it('says why it cannot link when every account already belongs to somebody', async () => {
