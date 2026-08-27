@@ -270,6 +270,14 @@ describe('CSV import', () => {
 });
 
 describe('assigning a person to an org unit', () => {
+  // PATCH /persons/:id is gated on DIRECTORY_WRITE, not IDENTITY_WRITE, and
+  // reading the unit list needs DIRECTORY_READ.
+  const CAN: Permission[] = [
+    ...BOTH,
+    PERMISSIONS.DIRECTORY_READ,
+    PERMISSIONS.DIRECTORY_WRITE,
+  ];
+
   const seedUnit = () =>
     withTenant(ctx.tenantId, (tx) =>
       tx.orgUnit
@@ -278,7 +286,7 @@ describe('assigning a person to an org unit', () => {
     );
 
   it('assigns and then clears the assignment', async () => {
-    await seedAdmin(BOTH);
+    await seedAdmin(CAN);
     const cookie = await adminCookie();
     const orgUnitId = await seedUnit();
     const person = await post('/api/admin/persons', cookie, {
@@ -304,7 +312,7 @@ describe('assigning a person to an org unit', () => {
   });
 
   it('leaves the assignment alone when the field is omitted', async () => {
-    await seedAdmin(BOTH);
+    await seedAdmin(CAN);
     const cookie = await adminCookie();
     const orgUnitId = await seedUnit();
     const person = await post('/api/admin/persons', cookie, {
@@ -322,7 +330,7 @@ describe('assigning a person to an org unit', () => {
   });
 
   it('refuses an org unit id that is not a uuid', async () => {
-    await seedAdmin(BOTH);
+    await seedAdmin(CAN);
     const cookie = await adminCookie();
     const person = await post('/api/admin/persons', cookie, {
       givenName: 'Jo',
