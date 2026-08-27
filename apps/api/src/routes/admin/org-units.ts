@@ -237,14 +237,17 @@ export async function registerAdminOrgUnitRoutes(
               outcome.children > 0
                 ? `${outcome.children} child unit${outcome.children === 1 ? '' : 's'}`
                 : null,
+              outcome.persons > 0
+                ? `${outcome.persons} assigned ${outcome.persons === 1 ? 'person' : 'people'}`
+                : null,
             ]
               .filter(Boolean)
-              .join(' and ');
+              .join(', ');
             throw new ProblemError(
               409,
               'org-unit-not-empty',
               'This unit is not empty',
-              `it still holds ${holds}; move them before deleting it. A deactivated user still occupies the unit`,
+              `it still holds ${holds}; move them before deleting it. A deactivated user still occupies the unit, and deleting a unit people are assigned to would move every one of their accounts back to the account profile's container on the next run`,
             );
           }
           case 'delete_not_enabled':

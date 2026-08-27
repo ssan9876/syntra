@@ -76,6 +76,7 @@ const del = (url: string, cookie: string) =>
 const ALL: Permission[] = [
   PERMISSIONS.DIRECTORY_READ,
   PERMISSIONS.DIRECTORY_WRITE,
+  PERMISSIONS.DIRECTORY_DELETE,
   PERMISSIONS.PROVISION_READ,
   PERMISSIONS.PROVISION_MANAGE,
 ];
@@ -268,5 +269,48 @@ describe('materialising an org unit against a target', () => {
     // endpoint can reach the directory at all.
     const units = await get('/api/admin/org-units', cookie);
     expect(units.json().orgUnits).toHaveLength(1);
+  });
+});
+
+describe('deleting a unit people are assigned to', () => {
+  it('refuses, and names the people', async () => {
+    // `Person.orgUnitId` is ON DELETE SET NULL, so this delete would SUCCEED
+    // and silently unassign everybody -- and the next provisioning run would
+    // then propose a container move for every one of their accounts back to
+    // whatever the template renders. A mass container move from one button,
+    // arriving from a direction the provisioning guard cannot see, because the
+    // plan is a correct plan for the state the database is now in.
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const { orgUnitId } = await seedUnitAndTarget();
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.person.create({
+        data: {
+          tenantId: ctx.tenantId,
+          givenName: 'Anna',
+          familyName: 'Novak',
+          orgUnitId,
+        },
+      }),
+    );
+
+    const res = await del(`/api/admin/org-units/${orgUnitId}`, cookie);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/1 assigned person/);
+
+    // Still there, and still holding them.
+    const person = await withTenant(ctx.tenantId, (tx) => tx.person.findFirst());
+    expect(person?.orgUnitId).toBe(orgUnitId);
+  });
+
+  it('still deletes a unit nobody is assigned to', async () => {
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const { orgUnitId } = await seedUnitAndTarget();
+
+    const res = await del(`/api/admin/org-units/${orgUnitId}`, cookie);
+
+    expect(res.statusCode).toBe(204);
   });
 });

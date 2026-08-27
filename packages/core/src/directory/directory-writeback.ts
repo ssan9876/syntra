@@ -394,7 +394,14 @@ export async function deleteDirectoryUser(
 export type DeleteOrgUnitOutcome =
   | { ok: true; viaDirectory: boolean }
   | { ok: false; reason: 'not_found' }
-  | { ok: false; reason: 'not_empty'; users: number; children: number }
+  | {
+      ok: false;
+      reason: 'not_empty';
+      users: number;
+      children: number;
+      /** People ASSIGNED to this unit, which decides where their accounts live. */
+      persons: number;
+    }
   | { ok: false; reason: 'delete_not_enabled'; sourceName: string }
   | { ok: false; reason: 'no_credential'; sourceName: string }
   | { ok: false; reason: 'directory_failed'; failure: WritebackFailure; message: string };
@@ -434,13 +441,24 @@ export async function deleteDirectoryOrgUnit(
     });
     if (!unit) return null;
 
-    const [users, children] = await Promise.all([
+    const [users, children, persons] = await Promise.all([
       tx.user.count({ where: { orgUnitId: input.orgUnitId } }),
       tx.orgUnit.count({ where: { parentId: input.orgUnitId } }),
+      // Counted for a reason the other two do not share. `Person.orgUnitId` is
+      // ON DELETE SET NULL, so deleting a unit people are assigned to does not
+      // fail -- it silently unassigns every one of them, and the next
+      // provisioning run reads them as having no unit and proposes a container
+      // move for each back to whatever the template renders.
+      //
+      // That is a mass container move triggered by one button, which is the
+      // exact shape the provisioning guard exists to prevent, arriving from a
+      // direction the guard cannot see: the plan is a correct plan for the
+      // state the database is now in.
+      tx.person.count({ where: { orgUnitId: input.orgUnitId } }),
     ]);
 
     if (unit.sourceId === null) {
-      return { unit, users, children, sourceName: '', deletes: false };
+      return { unit, users, children, persons, sourceName: '', deletes: false };
     }
     const source = await tx.directorySource.findUnique({
       where: { id: unit.sourceId },
@@ -450,6 +468,7 @@ export async function deleteDirectoryOrgUnit(
       unit,
       users,
       children,
+      persons,
       sourceName: source?.name ?? 'the directory source',
       deletes: Boolean(source?.writebackEnabled && source.writebackDelete),
     };
@@ -460,12 +479,13 @@ export async function deleteDirectoryOrgUnit(
   // Checked before anything is written anywhere. A directory delete that
   // succeeded and then found the unit occupied would have destroyed the
   // container and left Syntra holding the users that were in it.
-  if (resolved.users > 0 || resolved.children > 0) {
+  if (resolved.users > 0 || resolved.children > 0 || resolved.persons > 0) {
     return {
       ok: false,
       reason: 'not_empty',
       users: resolved.users,
       children: resolved.children,
+      persons: resolved.persons,
     };
   }
 
