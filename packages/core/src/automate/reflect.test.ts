@@ -22,6 +22,9 @@ let runId: string;
 const schedulerStub = () => ({
   schedule: vi.fn(async () => undefined),
   unschedule: vi.fn(async () => undefined),
+  // A fake schedules nothing in pg-boss, so nothing it was asked for can be
+  // missing. Tests that care about reconciliation build their own.
+  missingSchedules: vi.fn(async () => []),
   enqueue: vi.fn(async () => 'job-1'),
   register: vi.fn(),
   start: vi.fn(async () => undefined),

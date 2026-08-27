@@ -50,10 +50,48 @@ import { configuredCheckpointSigner } from './govern-signer.js';
  * Takes the `Scheduler` rather than constructing one, so it can be
  * exercised directly against a fake in tests without standing up pg-boss.
  */
+/**
+ * How many tenants each subsystem was attempted for, and how many failed.
+ *
+ * The per-tenant try/catch below is correct and stays: one tenant's bad cron
+ * must not cost every other tenant its sync. But it makes a SYSTEMIC failure
+ * -- a malformed key, a queue that was never created, a pg-boss upgrade that
+ * tightened validation -- look exactly like one tenant's bad data. It is one
+ * log line per tenant either way, so on an installation with five hundred
+ * tenants a defect arrives as fifteen hundred lines that read like
+ * configuration noise and get filtered.
+ *
+ * The distinction is cheap and worth drawing: if EVERY tenant failed, that is
+ * not data, it is code. Exactly that happened here -- three schedule-key
+ * builders used colons, which pg-boss refuses, and Automate, Govern and
+ * webhook delivery went unscheduled on every tenant for months while the
+ * process reported itself healthy.
+ */
+interface Tally {
+  attempted: number;
+  failed: number;
+}
+
+function tallyOf(tallies: Map<string, Tally>, subsystem: string): Tally {
+  const existing = tallies.get(subsystem);
+  if (existing) return existing;
+  const fresh = { attempted: 0, failed: 0 };
+  tallies.set(subsystem, fresh);
+  return fresh;
+}
+
 export async function scheduleBackgroundWork(
   scheduler: Scheduler,
   logger: FastifyBaseLogger,
 ): Promise<void> {
+  const tallies = new Map<string, Tally>();
+  const attempt = (subsystem: string) => {
+    tallyOf(tallies, subsystem).attempted += 1;
+  };
+  const failure = (subsystem: string) => {
+    tallyOf(tallies, subsystem).failed += 1;
+  };
+
   let tenants;
   try {
     tenants = await prisma.tenant.findMany();
@@ -71,8 +109,10 @@ export async function scheduleBackgroundWork(
       // Idempotent -- pg-boss keys the schedule row on (queue, key) and this
       // one names the tenant and the kind -- so re-running it at every boot
       // reconciles rather than accumulates.
+      attempt('signing key rotation');
       await scheduleKeyRotation(scheduler, tenant.id);
     } catch (cause) {
+      failure('signing key rotation');
       logger.error(
         { err: cause, tenantId: tenant.id },
         'failed to schedule signing key rotation',
@@ -160,9 +200,11 @@ export async function scheduleBackgroundWork(
   // any future loop added above the source loop breaks that test too.
   for (const tenant of tenants) {
     try {
+      attempt('Automate background work');
       const settings = await withTenant(tenant.id, (tx) => automateSettings(tx));
       await applyAutomateSchedules(scheduler, tenant.id, settings.sweepSchedule);
     } catch (cause) {
+      failure('Automate background work');
       logger.error(
         { err: cause, tenantId: tenant.id },
         'failed to schedule Automate background work',
@@ -176,8 +218,10 @@ export async function scheduleBackgroundWork(
   // no per-tenant setting to read first.
   for (const tenant of tenants) {
     try {
+      attempt('webhook delivery');
       await applyWebhookSchedule(scheduler, tenant.id);
     } catch (cause) {
+      failure('webhook delivery');
       logger.error(
         { err: cause, tenantId: tenant.id },
         'failed to schedule webhook delivery',
@@ -194,14 +238,74 @@ export async function scheduleBackgroundWork(
       // Get-or-create through `governSettings`, so a tenant that has never
       // opened the Govern screen is scheduled on the default cadence rather
       // than skipped.
+      attempt('Govern background work');
       const schedule = await governSnapshotSchedule(tenant.id);
       await applyGovernSchedules(scheduler, tenant.id, schedule);
     } catch (cause) {
+      failure('Govern background work');
       logger.error(
         { err: cause, tenantId: tenant.id },
         'failed to schedule Govern background work',
       );
     }
+  }
+
+  // --- did any of that actually take? -------------------------------------
+  //
+  // Everything above logs its own failures per tenant and carries on, which is
+  // the right shape and is also how this whole family of failure hid: a defect
+  // that hits every tenant is one log line per tenant, indistinguishable from
+  // configuration noise. The two checks below are the aggregate view over
+  // those lines, and they run in that order deliberately -- the first names
+  // the CAUSE where it can, the second catches everything else.
+
+  // 1. Systemic, not tenant data. If every tenant failed the same subsystem,
+  //    no amount of tenant configuration explains it.
+  //
+  //    The claim is weakened on a single-tenant installation, and deliberately.
+  //    With one tenant "every tenant failed" and "this tenant is misconfigured"
+  //    are the same observation, and asserting a build defect there would be
+  //    stating something this code cannot know. What IS true either way, and
+  //    is the part worth waking somebody for, is that the work is not running.
+  for (const [subsystem, tally] of tallies) {
+    if (tally.attempted === 0 || tally.failed < tally.attempted) continue;
+    logger.fatal(
+      { subsystem, tenants: tally.attempted },
+      tally.attempted > 1
+        ? `every one of ${tally.attempted} tenants failed to schedule ` +
+          `${subsystem}: that is a defect in this build rather than tenant ` +
+          'configuration, and none of that work is running'
+        : `${subsystem} could not be scheduled for the only tenant, and that ` +
+          'work is not running',
+    );
+  }
+
+  // 2. Trust nothing: ask pg-boss what it actually holds.
+  //
+  //    Catches what the tally cannot -- a subsystem that failed for only some
+  //    tenants, a schedule silently overwritten by one sharing its key, a
+  //    write rolled back under it -- and needs no new call site as subsystems
+  //    are added, because the wrapper records the intent.
+  try {
+    const missing = await scheduler.missingSchedules();
+    if (missing.length > 0) {
+      // A SAMPLE, not the list. This fires exactly when something systemic is
+      // wrong, which on a large installation means every tenant times every
+      // subsystem -- five hundred tenants would put several thousand entries
+      // in one log line, and a diagnostic that becomes unreadable at the scale
+      // it matters most is not a diagnostic. The count carries the size; ten
+      // entries carry the shape.
+      logger.fatal(
+        { missing: missing.slice(0, 10), count: missing.length },
+        `${missing.length} scheduled job(s) were requested and pg-boss does ` +
+          'not hold them: that work will not run',
+      );
+    }
+  } catch (cause) {
+    // Never rethrown, for the reason the whole function records: an API that
+    // comes up unable to VERIFY its schedules is still better than one that
+    // does not come up.
+    logger.error({ err: cause }, 'could not verify the registered schedules');
   }
 }
 

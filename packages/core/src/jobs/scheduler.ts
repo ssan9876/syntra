@@ -1,4 +1,5 @@
 import { PgBoss } from 'pg-boss';
+import { missingFrom, trackIntents, type ScheduleRef } from './reconcile.js';
 
 export type JobHandler<T> = (data: T) => Promise<void>;
 
@@ -16,6 +17,17 @@ export interface Scheduler {
    */
   schedule(name: string, cron: string, data?: unknown, key?: string): Promise<void>;
   unschedule(name: string, key?: string): Promise<void>;
+  /**
+   * Every schedule this process asked for that pg-boss does not hold a row
+   * for.
+   *
+   * The scheduler's callers catch per-tenant and carry on, which is right --
+   * one tenant's bad cron must not cost everybody else their sync -- and
+   * which means a failure hitting EVERY tenant looks exactly like one
+   * tenant's bad data. This is how startup finds out the difference. See
+   * `reconcile.ts` for what it cost to learn that.
+   */
+  missingSchedules(): Promise<ScheduleRef[]>;
 }
 
 /**
@@ -31,6 +43,8 @@ export function createScheduler(databaseUrl: string): Scheduler {
   const boss = new PgBoss({ connectionString: databaseUrl });
 
   const handlers = new Map<string, JobHandler<unknown>>();
+  // What this process has asked to be scheduled, so startup can check.
+  const intents = trackIntents();
   let started = false;
 
   const assertRegistered = (name: string) => {
@@ -79,14 +93,30 @@ export function createScheduler(databaseUrl: string): Scheduler {
 
     async schedule(name: string, cron: string, data: unknown = {}, key = '') {
       assertRegistered(name);
+      // Recorded BEFORE the attempt. A call that throws is precisely the one
+      // worth reporting, so recording it after a successful return would
+      // blind the reconciliation to every failure it exists to catch.
+      intents.scheduled(name, key);
       await boss.schedule(name, cron, data as object, { key });
     },
 
     async unschedule(name: string, key = '') {
+      intents.unscheduled(name, key);
       // Deliberately not gated on `assertRegistered`: removing a schedule has
       // to work for a queue this process never registered a handler for, or a
       // source deleted before the handler is wired up keeps firing forever.
       await boss.unschedule(name, key);
+    },
+
+    async missingSchedules() {
+      // `getSchedules()` returns every row in the table, including ones this
+      // process never asked for. `missingFrom` only ever asks whether what we
+      // requested is present, never the reverse.
+      const rows = await boss.getSchedules();
+      return missingFrom(
+        intents.list(),
+        rows.map((row) => ({ name: row.name, key: row.key ?? '' })),
+      );
     },
   };
 }

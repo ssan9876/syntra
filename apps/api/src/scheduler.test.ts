@@ -437,3 +437,121 @@ describe('startSyncScheduler', () => {
     expect(scheduler.registered).toContain(AUTOMATE_OUTBOX_JOB);
   });
 });
+
+/**
+ * Startup finding out that its own scheduling did not take.
+ *
+ * The per-tenant catch above is right -- one tenant's bad cron must not cost
+ * everybody else their sync -- and it is also how a whole family of failure
+ * stayed hidden: a defect that hits EVERY tenant is one log line per tenant,
+ * indistinguishable from configuration noise, and on a large installation it
+ * arrives as hundreds of lines that get filtered.
+ *
+ * That is not hypothetical. Three schedule-key builders separated their parts
+ * with colons, which pg-boss's `assertObjectName` refuses, so Automate's four
+ * jobs, all seven Govern purposes and webhook delivery were never once
+ * registered -- for months, while the process passed every health check.
+ */
+describe('when scheduling does not take', () => {
+  /** A logger that keeps what it was told, so a test can read it back. */
+  function recordingLogger(): {
+    logger: FastifyBaseLogger;
+    fatal: { context: Record<string, unknown>; message: string }[];
+  } {
+    const fatal: { context: Record<string, unknown>; message: string }[] = [];
+    const base = createFakeLogger() as unknown as Record<string, unknown>;
+    return {
+      fatal,
+      logger: {
+        ...base,
+        fatal: (context: Record<string, unknown>, message: string) => {
+          fatal.push({ context, message });
+        },
+      } as unknown as FastifyBaseLogger,
+    };
+  }
+
+  it('calls it a defect when EVERY tenant fails the same subsystem', async () => {
+    // Two tenants, both failing the same way. No tenant configuration
+    // explains that, so it is reported once as what it is rather than twice
+    // as two tenants' problems.
+    await createTenant('Acme', 'acme-sys');
+    await createTenant('Beta', 'beta-sys');
+
+    const scheduler = createFakeScheduler();
+    scheduler.schedule = async (name) => {
+      if (name.startsWith('automate.')) throw new Error('key rejected');
+    };
+
+    const { logger, fatal } = recordingLogger();
+    await scheduleBackgroundWork(scheduler, logger);
+
+    const systemic = fatal.find((line) => line.context.subsystem === 'Automate background work');
+    expect(systemic).toBeDefined();
+    // The claim that matters: this is the build, not the tenant.
+    expect(systemic!.message).toContain('defect in this build');
+    expect(systemic!.context.tenants).toBe(2);
+  });
+
+  it('says nothing systemic when only one tenant of two fails', async () => {
+    // This IS tenant data, and calling it a defect would train somebody to
+    // ignore the one message that means the build is broken.
+    const acme = await createTenant('Acme', 'acme-one');
+    await createTenant('Beta', 'beta-one');
+
+    const scheduler = createFakeScheduler();
+    scheduler.schedule = async (name, _cron, data) => {
+      const payload = data as { tenantId?: string } | undefined;
+      if (name.startsWith('automate.') && payload?.tenantId === acme.id) {
+        throw new Error('key rejected');
+      }
+    };
+
+    const { logger, fatal } = recordingLogger();
+    await scheduleBackgroundWork(scheduler, logger);
+
+    expect(
+      fatal.find((line) => line.context.subsystem === 'Automate background work'),
+    ).toBeUndefined();
+  });
+
+  it('reports work pg-boss does not actually hold', async () => {
+    // The check the tally cannot make: a schedule that failed for only some
+    // tenants, or was silently overwritten by one sharing its key, or was
+    // rolled back underneath. Asked of pg-boss rather than inferred.
+    await createTenant('Acme', 'acme-rec');
+
+    const scheduler = createFakeScheduler();
+    scheduler.missingSchedules = async () => [
+      { name: 'automate.sweep', key: 'automate/sweep/t1' },
+    ];
+
+    const { logger, fatal } = recordingLogger();
+    await scheduleBackgroundWork(scheduler, logger);
+
+    const report = fatal.find((line) => line.message.includes('pg-boss does not hold'));
+    expect(report).toBeDefined();
+    expect(report!.context.count).toBe(1);
+  });
+
+  it('still comes up when the verification itself fails', async () => {
+    // An API that cannot VERIFY its schedules is still better than one that
+    // does not come up. Same rule the rest of this function follows.
+    await createTenant('Acme', 'acme-vfail');
+
+    const scheduler = createFakeScheduler();
+    scheduler.missingSchedules = async () => {
+      throw new Error('pg-boss is not answering');
+    };
+
+    const { logger } = recordingLogger();
+    await expect(scheduleBackgroundWork(scheduler, logger)).resolves.toBeUndefined();
+  });
+
+  it('stays silent when everything registered', async () => {
+    await createTenant('Acme', 'acme-quiet');
+    const { logger, fatal } = recordingLogger();
+    await scheduleBackgroundWork(createFakeScheduler(), logger);
+    expect(fatal).toEqual([]);
+  });
+});

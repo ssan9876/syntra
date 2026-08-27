@@ -76,7 +76,10 @@ export const GOVERN_JOB_BY_PURPOSE: Record<GovernPurpose, string> = {
  * every schedule and unschedule this module makes.
  */
 export function governScheduleKey(tenantId: string, purpose: GovernPurpose): string {
-  return `govern:${purpose}:${tenantId}`;
+  // Slashes, not colons: pg-boss's `assertObjectName` refuses a colon and the
+  // refusal is swallowed by the scheduler's caller. See
+  // `jobs/schedule-key.test.ts`.
+  return `govern/${purpose}/${tenantId}`;
 }
 
 export interface GovernJobPayload {

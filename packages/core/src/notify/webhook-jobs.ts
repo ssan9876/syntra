@@ -19,7 +19,10 @@ export function webhookJobPayload(tenantId: string): WebhookJobPayload {
 }
 
 export function webhookScheduleKey(tenantId: string): string {
-  return `webhook:deliver:${tenantId}`;
+  // Slashes, not colons: pg-boss's `assertObjectName` refuses a colon and the
+  // refusal is swallowed by the scheduler's caller. See
+  // `jobs/schedule-key.test.ts`.
+  return `webhook/deliver/${tenantId}`;
 }
 
 /**

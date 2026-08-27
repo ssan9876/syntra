@@ -40,9 +40,18 @@ export type AutomatePurpose = 'outbox' | 'tick' | 'sweep' | 'digest';
  * pg-boss keys its schedule table on (queue, key), and `key` defaults to the
  * empty string. This slice runs three schedules per tenant, so a key that
  * named only the tenant would still collapse two of them.
+ *
+ * SLASHES, not colons. pg-boss validates the key with `assertObjectName`,
+ * which permits word characters, periods, hyphens and forward slashes and
+ * nothing else — a colon throws. It throws inside `scheduleBackgroundWork`,
+ * whose caller logs the failure and carries on, so the process starts, reports
+ * itself healthy, serves every request and silently has no scheduled work.
+ * This slice's schedules had never once run in the lab installation, and the
+ * only reason nobody noticed is that every one of them also has a manual path.
+ * See `jobs/schedule-key.test.ts`, which asserts the character class itself.
  */
 export function automateScheduleKey(tenantId: string, purpose: AutomatePurpose): string {
-  return `automate:${purpose}:${tenantId}`;
+  return `automate/${purpose}/${tenantId}`;
 }
 
 export interface AutomateJobPayload {

@@ -59,6 +59,8 @@ const fakeScheduler = () => {
       unschedule: async (name: string, key?: string) => {
         unscheduled.push({ name, key });
       },
+      // Nothing reaches pg-boss here, so nothing asked for can be missing.
+      missingSchedules: async () => [],
     } as Scheduler,
   };
 };

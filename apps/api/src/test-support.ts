@@ -78,6 +78,10 @@ export function createFakeScheduler(
     unschedule: async (name, key) => {
       unscheduled.push({ name, key });
     },
+    // This fake records intents rather than reaching pg-boss, so nothing it
+    // was asked for can be absent from a schedule table it never writes. A
+    // test about reconciliation supplies its own.
+    missingSchedules: async () => [],
   };
 }
 

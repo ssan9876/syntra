@@ -240,6 +240,7 @@ describe('previewExpirySweep and applyExpirySweep', () => {
   const schedulerStub = () => ({
     schedule: vi.fn(async () => undefined),
     unschedule: vi.fn(async () => undefined),
+    missingSchedules: vi.fn(async () => []),
     enqueue: vi.fn(async () => 'job-1'),
     register: vi.fn(),
     start: vi.fn(async () => undefined),
