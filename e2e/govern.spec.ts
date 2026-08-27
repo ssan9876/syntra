@@ -257,9 +257,17 @@ test('the segregation-of-duties screen refuses to be written over two groups', a
   await signIn(page, 'admin', ADMIN!);
   await elevateTo(page, '/admin/govern/sod', ADMIN!);
 
-  // The sentence is the product decision, and it is on the page rather than in
-  // a tooltip: a rule relates two business FUNCTIONS, never two entitlements.
-  await expect(page.getByText(/never two entitlements/)).toBeVisible();
+  // The product decision — a rule relates two business FUNCTIONS, never two
+  // entitlements — used to be a sentence above these controls. It is now IN
+  // them: both selects are named for the type they accept, and both are
+  // populated only from business functions, so an entitlement cannot be
+  // chosen here at all.
+  //
+  // Asserting the controls rather than the sentence is also the stronger
+  // test: the paragraph could have stayed correct while the select silently
+  // began offering entitlements.
+  await expect(page.getByLabel('Business function A')).toBeVisible();
+  await expect(page.getByLabel('Business function B')).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Show me who this would flag, before I save it' }),
   ).toBeDisabled();

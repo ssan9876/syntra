@@ -100,10 +100,18 @@ export function GovernSodTab() {
         >
           <div className="space-y-3 p-4">
             <div className="flex flex-wrap items-end gap-2">
+              {/* "Business function", not "Side". The panel used to carry a
+                  sentence — "a rule relates two business FUNCTIONS, never two
+                  entitlements" — explaining a constraint these two controls
+                  already enforce absolutely: both are populated from business
+                  functions and an entitlement cannot be chosen here at all.
+                  The sentence was describing the control instead of the
+                  control describing itself. Naming the type in the label
+                  makes it unmissable and deletes the paragraph. */}
               <label className="text-muted">
-                Side A
+                Business function A
                 <select
-                  aria-label="Side A"
+                  aria-label="Business function A"
                   className="ml-2 rounded border border-border-subtle px-2 py-1 text-ink"
                   value={functionAId}
                   onChange={(e) => {
@@ -120,9 +128,9 @@ export function GovernSodTab() {
                 </select>
               </label>
               <label className="text-muted">
-                Side B
+                Business function B
                 <select
-                  aria-label="Side B"
+                  aria-label="Business function B"
                   className="ml-2 rounded border border-border-subtle px-2 py-1 text-ink"
                   value={functionBId}
                   onChange={(e) => {
