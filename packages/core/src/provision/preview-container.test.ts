@@ -81,13 +81,60 @@ describe('previewContainerForFacts', () => {
       fallbackContainer: `OU=Unsorted,${BASE_DN}`,
     });
 
-    const preview = await previewContainerForFacts(tenantId, targetId, facts());
+    const preview = await previewContainerForFacts(tenantId, targetId, facts(), null);
 
     expect(preview).toEqual({
       container: `OU=Nursing,OU=Users,${BASE_DN}`,
       fallbackUsed: false,
       missing: [],
     });
+  });
+
+  it('shows the org unit container rather than the rendered template', async () => {
+    // This preview is the one screen where placement is checked while it is
+    // still free to correct. A preview that disagrees with the run is worse
+    // than none, because it is believed.
+    await seedTarget({
+      containerTemplate: `OU=%contract.department%,OU=Users,%baseDn%`,
+      fallbackContainer: `OU=Unsorted,${BASE_DN}`,
+    });
+    const orgUnitId = await withTenant(tenantId, async (tx) => {
+      const unit = await tx.orgUnit.create({ data: { tenantId, name: 'Sales' } });
+      await tx.orgUnitContainer.create({
+        data: {
+          tenantId,
+          orgUnitId: unit.id,
+          targetSystemId: targetId,
+          dn: `OU=Sales,OU=Users,${BASE_DN}`,
+          state: 'adopted',
+        },
+      });
+      return unit.id;
+    });
+
+    const preview = await previewContainerForFacts(tenantId, targetId, facts(), orgUnitId);
+
+    expect(preview).toEqual({
+      container: `OU=Sales,OU=Users,${BASE_DN}`,
+      fallbackUsed: false,
+      missing: [],
+    });
+  });
+
+  it('renders the template for an org unit not materialised on this target', async () => {
+    // Assigned to a unit that has no container HERE. There is no DN to place
+    // them at, so the ladder falls through rather than inventing one.
+    await seedTarget({
+      containerTemplate: `OU=%contract.department%,OU=Users,%baseDn%`,
+      fallbackContainer: `OU=Unsorted,${BASE_DN}`,
+    });
+    const orgUnitId = await withTenant(tenantId, (tx) =>
+      tx.orgUnit.create({ data: { tenantId, name: 'Sales' } }).then((u) => u.id),
+    );
+
+    const preview = await previewContainerForFacts(tenantId, targetId, facts(), orgUnitId);
+
+    expect(preview?.container).toBe(`OU=Nursing,OU=Users,${BASE_DN}`);
   });
 
   it('escapes a department that would otherwise inject into the DN', async () => {
@@ -100,6 +147,7 @@ describe('previewContainerForFacts', () => {
       tenantId,
       targetId,
       facts({ department: 'Finance,OU=Domain Controllers' }),
+      null,
     );
 
     // Through renderContainer, so the comma is escaped rather than treated as
@@ -122,6 +170,7 @@ describe('previewContainerForFacts', () => {
       tenantId,
       targetId,
       facts({ department: null }),
+      null,
     );
 
     // Naming the placeholder is the point: "it will go to Unsorted" without
@@ -139,7 +188,7 @@ describe('previewContainerForFacts', () => {
     // Not an error. A target nobody has configured a profile for simply has
     // no answer to give, and the form shows nothing rather than a warning
     // about configuration the reader did not come here to do.
-    expect(await previewContainerForFacts(tenantId, targetId, facts())).toBeNull();
+    expect(await previewContainerForFacts(tenantId, targetId, facts(), null)).toBeNull();
   });
 
   it('answers null for a target that is not there', async () => {
@@ -152,6 +201,7 @@ describe('previewContainerForFacts', () => {
       tenantId,
       '00000000-0000-4000-8000-000000000000',
       facts(),
+      null,
     );
     expect(missing).toBeNull();
   });

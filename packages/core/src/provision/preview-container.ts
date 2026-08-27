@@ -52,6 +52,15 @@ export async function previewContainerForFacts(
   tenantId: string,
   targetSystemId: string,
   facts: ContainerPreviewFacts,
+  /**
+   * The org unit the form has selected, or null.
+   *
+   * An ID rather than a DN, because the form has an ID and the mapping from
+   * unit to container is target-specific -- resolving it here keeps that
+   * lookup in one place instead of obliging every caller to repeat it and
+   * eventually disagree about it.
+   */
+  orgUnitId: string | null,
 ): Promise<ContainerPreview | null> {
   return withTenant(tenantId, async (tx) => {
     const target = await tx.targetSystem.findUnique({
@@ -100,6 +109,27 @@ export async function previewContainerForFacts(
       },
       baseDn: (target.config as { baseDn?: string }).baseDn ?? '',
     };
+
+    /**
+     * Step 2 of the placement ladder, and it short-circuits: there is no
+     * template to render, so nothing can be missing and no fallback can be
+     * used. Not escaped, for the reason `desiredState` does not escape it --
+     * a stored DN is a literal, and `renderContainer` would collapse its
+     * structural commas into one RDN value.
+     *
+     * A unit not materialised on THIS target yields nothing and the ladder
+     * falls through. There is no DN to place them at, and inventing one is
+     * the implicit creation Ruling P9 forbids.
+     */
+    if (orgUnitId !== null) {
+      const row = await tx.orgUnitContainer.findFirst({
+        where: { orgUnitId, targetSystemId },
+        select: { dn: true },
+      });
+      if (row !== null && row.dn.trim() !== '') {
+        return { container: row.dn, fallbackUsed: false, missing: [] };
+      }
+    }
 
     const rendered = renderContainer(profile.containerTemplate, context);
     if (rendered.ok) {

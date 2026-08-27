@@ -959,9 +959,87 @@ describe('previewAccountProfile', () => {
       correlationKey: 'anna.novak',
       taken: false,
       container: 'OU=Finance,OU=Users,DC=acme,DC=test',
+      containerSource: 'template',
       attributes: { displayName: 'Anna Novak', mail: 'anna@acme.test' },
       problems: [],
     });
+  });
+
+  it('previews the container the org unit puts this person in', async () => {
+    // An explanation that disagrees with the plan is worse than none, because
+    // it is believed. Before the ladder existed here, this screen rendered the
+    // template's answer for a person the run would place somewhere else.
+    await withTenant(tenantId, async (tx) => {
+      const unit = await tx.orgUnit.create({ data: { tenantId, name: 'Sales' } });
+      await tx.orgUnitContainer.create({
+        data: {
+          tenantId,
+          orgUnitId: unit.id,
+          targetSystemId: targetId,
+          dn: 'OU=Sales,OU=Users,DC=acme,DC=test',
+          state: 'adopted',
+        },
+      });
+      await tx.person.update({ where: { id: personId }, data: { orgUnitId: unit.id } });
+    });
+    const preview = await previewAccountProfile(
+      tenantId,
+      targetId,
+      profileInput,
+      personId,
+      NOW,
+    );
+    expect(preview.container).toBe('OU=Sales,OU=Users,DC=acme,DC=test');
+    expect(preview.containerSource).toBe('orgUnit');
+  });
+
+  it('previews a manual placement ahead of the org unit', async () => {
+    await withTenant(tenantId, async (tx) => {
+      const unit = await tx.orgUnit.create({ data: { tenantId, name: 'Sales' } });
+      await tx.orgUnitContainer.create({
+        data: {
+          tenantId,
+          orgUnitId: unit.id,
+          targetSystemId: targetId,
+          dn: 'OU=Sales,OU=Users,DC=acme,DC=test',
+          state: 'adopted',
+        },
+      });
+      await tx.person.update({ where: { id: personId }, data: { orgUnitId: unit.id } });
+      await tx.accountPlacement.create({
+        data: {
+          tenantId,
+          personId,
+          targetSystemId: targetId,
+          container: 'OU=Contractors,OU=Users,DC=acme,DC=test',
+          reason: 'seconded to the contractor team',
+        },
+      });
+    });
+    const preview = await previewAccountProfile(
+      tenantId,
+      targetId,
+      profileInput,
+      personId,
+      NOW,
+    );
+    expect(preview.container).toBe('OU=Contractors,OU=Users,DC=acme,DC=test');
+    expect(preview.containerSource).toBe('override');
+  });
+
+  it('names the fallback as the fallback when the template cannot render', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.contract.updateMany({ where: { personId }, data: { department: null } }),
+    );
+    const preview = await previewAccountProfile(
+      tenantId,
+      targetId,
+      profileInput,
+      personId,
+      NOW,
+    );
+    expect(preview.container).toBe('OU=Users,DC=acme,DC=test');
+    expect(preview.containerSource).toBe('fallback');
   });
 
   it('says when the key is already taken', async () => {
