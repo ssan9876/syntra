@@ -102,6 +102,7 @@ const evaluate = (
     existingCorrelationKey: null,
     takenCorrelationKeys: new Set<string>(),
     containerOverride: null,
+    orgUnitContainer: null,
     renameEnabled: false,
     now: NOW,
     horizon: NOW,
@@ -663,6 +664,7 @@ describe('desiredState — persons Provision cannot process', () => {
       existingCorrelationKey: null,
       takenCorrelationKeys: new Set(),
       containerOverride: null,
+      orgUnitContainer: null,
       renameEnabled: false,
       now: NOW,
       horizon: NOW,
@@ -782,6 +784,7 @@ describe('desiredState — persons Provision cannot process', () => {
       existingCorrelationKey: null,
       takenCorrelationKeys: new Set(),
       containerOverride: null,
+      orgUnitContainer: null,
       renameEnabled: false,
       now: NOW,
       horizon: NOW,
@@ -831,6 +834,74 @@ describe('desiredState — persons Provision cannot process', () => {
       containerOverride: '   ',
     });
     expect(result.account?.container).toBe('OU=Users,DC=acme,DC=test');
+  });
+
+  it('places an account in the container its org unit is materialised at', () => {
+    const result = evaluate([contract({ department: 'Finance' })], [everyoneRule], {
+      orgUnitContainer: 'OU=Sales,OU=Users,DC=acme,DC=test',
+    });
+    expect(result.account?.container).toBe('OU=Sales,OU=Users,DC=acme,DC=test');
+  });
+
+  it('lets a manual placement beat the org unit container', () => {
+    // The rung ORDER is the feature. An override is a decision somebody
+    // recorded a reason for; an org unit assignment is a rule. If the rule
+    // won, the five-minute tick would drag a moved account back to its unit
+    // and the Move button would be a lie -- the exact failure AccountPlacement
+    // was built to close, reintroduced one level up.
+    const result = evaluate([contract({ department: 'Finance' })], [everyoneRule], {
+      orgUnitContainer: 'OU=Sales,OU=Users,DC=acme,DC=test',
+      containerOverride: 'OU=Engineering,OU=Users,DC=acme,DC=test',
+    });
+    expect(result.account?.container).toBe('OU=Engineering,OU=Users,DC=acme,DC=test');
+  });
+
+  it('lets the org unit container beat the template', () => {
+    // The template would render OU=Finance here.
+    const result = evaluate([contract({ department: 'Finance' })], [everyoneRule], {
+      orgUnitContainer: 'OU=Sales,OU=Users,DC=acme,DC=test',
+    });
+    expect(result.account?.container).not.toContain('OU=Finance');
+  });
+
+  it('does not consult the fallback when an org unit container is set', () => {
+    // An unrenderable template would otherwise land this person in the
+    // fallback. The org unit answers first, so the fallback is never reached.
+    const result = evaluate([contract({ department: null })], [everyoneRule], {
+      orgUnitContainer: 'OU=Sales,OU=Users,DC=acme,DC=test',
+    });
+    expect(result.unprocessable).toBeNull();
+    expect(result.account?.container).toBe('OU=Sales,OU=Users,DC=acme,DC=test');
+  });
+
+  it('falls to the template when there is no org unit container', () => {
+    // The adoption path: a person with no unit behaves bit-identically to
+    // before this feature existed, which is what makes it safe to roll out
+    // one person at a time against a live target with autoApply on.
+    const result = evaluate([contract({ department: 'Finance' })], [everyoneRule], {
+      orgUnitContainer: null,
+    });
+    expect(result.account?.container).toBe('OU=Finance,OU=Users,DC=acme,DC=test');
+  });
+
+  it('is not a placement when the org unit container is blank', () => {
+    // Same rule as a blank override: it reads as "no unit", not as "the root".
+    const result = evaluate([contract({ department: 'Finance' })], [everyoneRule], {
+      orgUnitContainer: '   ',
+    });
+    expect(result.account?.container).toBe('OU=Finance,OU=Users,DC=acme,DC=test');
+  });
+
+  it('does not escape the org unit container, because it is not a template', () => {
+    // A unit legitimately named `Sales, West` produces an escaped RDN in the
+    // stored DN. Passing it through renderContainer here would escape the
+    // BACKSLASH and the structural commas too, collapsing the whole DN into
+    // one literal RDN value naming nothing.
+    const dn = 'OU=Sales\, West,OU=Users,DC=acme,DC=test';
+    const result = evaluate([contract({ department: 'Finance' })], [everyoneRule], {
+      orgUnitContainer: dn,
+    });
+    expect(result.account?.container).toBe(dn);
   });
 
   it('refuses to place an account when the container resolves to nothing and there is no fallback', () => {

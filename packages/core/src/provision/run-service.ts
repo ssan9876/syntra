@@ -885,6 +885,9 @@ export async function previewProvisionRun(
         existingCorrelationKey: knownByPerson.get(person.id)?.correlationKey ?? null,
         takenCorrelationKeys: takenKeys,
         containerOverride: placementByPerson.get(person.id) ?? null,
+        // Wired for real in the task that loads OrgUnitContainer rows; null
+        // here keeps every person on the pre-existing template behaviour.
+        orgUnitContainer: null,
         renameEnabled: prepared.target.renameEnabled,
         now,
         horizon,
