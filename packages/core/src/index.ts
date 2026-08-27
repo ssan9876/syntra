@@ -229,6 +229,13 @@ export type {
   RuleImpact as ProvisionRuleImpact,
 } from './provision/explain.js';
 export { previewContainerForFacts } from './provision/preview-container.js';
+export {
+  containersForOrgUnit,
+  containersForTarget,
+  materialiseOrgUnit,
+  unmaterialiseOrgUnit,
+  validateContainerDn,
+} from './provision/org-unit-container-service.js';
 export type {
   ContainerPreview,
   ContainerPreviewFacts,

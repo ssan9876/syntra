@@ -1,16 +1,21 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import {
   createOrgUnitRequest,
   deactivateOrgUnitRequest,
   idParam,
+  materialiseOrgUnitRequest,
   patchOrgUnitRequest,
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
+  containersForOrgUnit,
   createOrgUnit,
   deactivateOrgUnit,
   deleteDirectoryOrgUnit,
   listOrgUnits,
+  materialiseOrgUnit,
+  unmaterialiseOrgUnit,
   localMasterKeyProvider,
   reactivateOrgUnit,
   recordEvent,
@@ -24,6 +29,8 @@ export interface AdminOrgUnitRouteOptions {
   /** Unseals a directory source's bind credential for a write-back delete. */
   masterKey: Buffer;
 }
+
+const targetParam = z.object({ targetSystemId: z.string().uuid() });
 
 export async function registerAdminOrgUnitRoutes(
   app: FastifyInstance,
@@ -115,6 +122,97 @@ export async function registerAdminOrgUnitRoutes(
    * what is still inside rather than saying "not empty" — the reader's next
    * question is what to move.
    */
+  app.get(
+    '/org-units/:id/containers',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      return { containers: await request.db((tx) => containersForOrgUnit(tx, id)) };
+    },
+  );
+
+  /**
+   * Materialise a unit against one target: bind it to a container DN there.
+   *
+   * Deliberately a SECOND step, never folded into creating the unit. "I made a
+   * department in Syntra" and "put a container in my domain" are different
+   * decisions, and Ruling P9 (revised) rests on the second having been made
+   * explicitly -- Provision creates a container only where an administrator
+   * asked for one by name.
+   *
+   * Writes the row and nothing to the directory. The container itself is
+   * created by the next provisioning run, under the guard, in a plan somebody
+   * can preview.
+   */
+  app.post(
+    '/org-units/:id/containers',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = materialiseOrgUnitRequest.parse(request.body);
+
+      const outcome = await materialiseOrgUnit(request.tenantId, provider, {
+        orgUnitId: id,
+        targetSystemId: body.targetSystemId,
+        dn: body.dn,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
+      });
+
+      if (!outcome.ok) {
+        // Not collapsed into one 400. A malformed or out-of-base DN is the
+        // administrator's typo, on the field they just typed; a missing unit
+        // or target is a stale page. They need different answers.
+        switch (outcome.reason) {
+          case 'no_such_unit':
+            throw new ProblemError(404, 'not-found', 'Org unit not found');
+          case 'no_such_target':
+            throw new ProblemError(404, 'not-found', 'Target not found');
+          default:
+            throw new ProblemError(400, 'bad-request', outcome.message, undefined, {
+              reason: outcome.reason,
+              errors: [{ path: 'dn', message: outcome.message }],
+            });
+        }
+      }
+
+      reply.code(201);
+      return { targetSystemId: body.targetSystemId, dn: outcome.dn, state: outcome.state };
+    },
+  );
+
+  /**
+   * Stop tracking a unit's container on a target.
+   *
+   * Deletes the ROW and never the container: a container Syntra created and
+   * an administrator no longer wants tracked is still a container full of
+   * accounts. Removing one is `DELETE /org-units/:id`'s business, and only
+   * once it is empty.
+   */
+  app.delete(
+    '/org-units/:id/containers/:targetSystemId',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const { targetSystemId } = targetParam.parse(request.params);
+
+      const removed = await unmaterialiseOrgUnit(request.tenantId, {
+        orgUnitId: id,
+        targetSystemId,
+        actorUserId: request.session.userId,
+      });
+      if (!removed) {
+        throw new ProblemError(
+          404,
+          'not-found',
+          'This org unit is not materialised on that target',
+        );
+      }
+      reply.code(204);
+      return null;
+    },
+  );
+
   app.delete(
     '/org-units/:id',
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_DELETE) },
