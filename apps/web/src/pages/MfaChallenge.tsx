@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { Wordmark } from '../components/Wordmark.js';
+import { useT } from '../i18n/LocaleProvider.js';
 import {
   challengeFromQuery,
   isServerPath,
@@ -15,10 +16,13 @@ import { assertWebAuthn } from '../mfa/webauthn.js';
 import { ApiError, api } from '../session/api.js';
 import { useSession, type AuthOutcome } from '../session/SessionProvider.js';
 
-type Mode = 'totp' | 'webauthn' | 'recovery_code';
+type Mode = 'totp' | 'webauthn' | 'email_otp' | 'recovery_code';
 
 const isMode = (value: string | undefined): value is Mode =>
-  value === 'totp' || value === 'webauthn' || value === 'recovery_code';
+  value === 'totp' ||
+  value === 'webauthn' ||
+  value === 'email_otp' ||
+  value === 'recovery_code';
 
 /**
  * Which factor to open on. The first the server named, not "totp unless
@@ -30,12 +34,15 @@ const firstMode = (factors: string[]): Mode =>
   isMode(factors[0]) ? factors[0] : 'totp';
 
 export function MfaChallenge() {
+  const t = useT();
   const navigate = useNavigate();
   const { refresh } = useSession();
 
   const [challenge, setChallenge] = useState<PendingChallenge | null>(null);
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<Mode>('totp');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,6 +73,31 @@ export function MfaChallenge() {
     setReady(true);
   }, []);
 
+  /**
+   * Asks the server to mail a code.
+   *
+   * The answer is 202 whatever happened, so this reports only that it asked.
+   * The endpoint deliberately does not say whether a code went out — each of
+   * the reasons it might not is a fact about somebody else's account.
+   */
+  async function sendCode() {
+    if (!challenge) return;
+    setSending(true);
+    try {
+      await api('/api/auth/mfa/email-otp/send', {
+        method: 'POST',
+        body: JSON.stringify({ attemptToken: challenge.attemptToken }),
+      });
+    } catch {
+      // Swallowed on purpose. A failure here is either a rate limit or a dead
+      // attempt, and the next Verify says so properly — surfacing it against
+      // the send button would be a second, vaguer error for the same cause.
+    } finally {
+      setSent(true);
+      setSending(false);
+    }
+  }
+
   async function submit(event?: FormEvent) {
     event?.preventDefault();
     if (!challenge) return;
@@ -93,15 +125,23 @@ export function MfaChallenge() {
       // walking on as though it had sends the user to a page with no cookie,
       // which bounces them to /login with nothing to explain it.
       if (outcome.status !== 'authenticated') {
-        const kind = outcome.status === 'enrol' ? 'enrol' : 'verify';
+        const kind =
+          outcome.status === 'enrol'
+            ? 'enrol'
+            : outcome.status === 'renew'
+              ? 'renew'
+              : 'verify';
         const next: PendingChallenge = {
           kind,
           attemptToken: outcome.attemptToken,
           expiresAt: outcome.expiresAt,
+          // A renewal offers no choice of factor, so it carries none.
           factors:
             outcome.status === 'enrol'
               ? outcome.enrollableFactors
-              : outcome.acceptableFactors,
+              : outcome.status === 'renew'
+                ? []
+                : outcome.acceptableFactors,
           returnTo: challenge.returnTo,
         };
         storeChallenge(next);
@@ -188,15 +228,13 @@ export function MfaChallenge() {
       <div className="w-full max-w-sm">
         <Wordmark className="mb-8" />
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
-          <h1 className="text-lg font-semibold text-ink">One more step</h1>
-          <p className="mt-1 text-muted">
-            Your organization requires a second factor for this sign-in.
-          </p>
+          <h1 className="text-lg font-semibold text-ink">{t('mfa.title')}</h1>
+          <p className="mt-1 text-muted">{t('mfa.lead')}</p>
 
           <form onSubmit={submit} noValidate className="mt-6 space-y-4">
             {mode === 'totp' && (
               <Field
-                label="Six-digit code"
+                label={t('mfa.totp_code')}
                 value={code}
                 onChange={setCode}
                 inputMode="numeric"
@@ -206,22 +244,49 @@ export function MfaChallenge() {
                 invalid={Boolean(error)}
               />
             )}
+            {mode === 'email_otp' && (
+              <>
+                <Field
+                  label={t('mfa.email_code')}
+                  value={code}
+                  onChange={setCode}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  required
+                  invalid={Boolean(error)}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={sending}
+                  onClick={sendCode}
+                >
+                  {sent ? t('mfa.email_resend') : t('mfa.email_send')}
+                </Button>
+                {sent && (
+                  // Fixed wording whatever the server did. The endpoint's own
+                  // answer is deliberately the same for sent, too-soon, no
+                  // address and switched-off, so this must not claim more.
+                  <p className="text-sm text-muted">{t('mfa.email_sent')}</p>
+                )}
+              </>
+            )}
             {mode === 'recovery_code' && (
               <Field
-                label="Recovery code"
+                label={t('mfa.recovery_code')}
                 value={code}
                 onChange={setCode}
                 autoComplete="off"
                 autoFocus
                 required
-                hint="One of the codes you saved when you set up your second factor."
+                hint={t('mfa.recovery_hint')}
                 invalid={Boolean(error)}
               />
             )}
             {mode === 'webauthn' && (
-              <p className="text-muted">
-                Use your security key or passkey when the browser asks.
-              </p>
+              <p className="text-muted">{t('mfa.webauthn_lead')}</p>
             )}
 
             {error && (
@@ -231,19 +296,24 @@ export function MfaChallenge() {
             )}
 
             <Button type="submit" variant="primary" loading={busy} className="w-full">
-              Verify
+              {t('mfa.verify')}
             </Button>
           </form>
 
           <div className="mt-4 flex flex-wrap gap-3">
             {offers('webauthn') && (
               <Button size="sm" variant="ghost" onClick={() => setMode('webauthn')}>
-                Use a security key
+                {t('mfa.use_key')}
               </Button>
             )}
             {offers('totp') && (
               <Button size="sm" variant="ghost" onClick={() => setMode('totp')}>
-                Use a code from your app
+                {t('mfa.use_totp')}
+              </Button>
+            )}
+            {offers('email_otp') && (
+              <Button size="sm" variant="ghost" onClick={() => setMode('email_otp')}>
+                {t('mfa.use_email')}
               </Button>
             )}
             {/* `offers`, like the two above it. The server decides whether a
@@ -252,7 +322,7 @@ export function MfaChallenge() {
                 a loop with no way out of it. */}
             {offers('recovery_code') && (
               <Button size="sm" variant="ghost" onClick={() => setMode('recovery_code')}>
-                Use a recovery code
+                {t('mfa.use_recovery')}
               </Button>
             )}
           </div>

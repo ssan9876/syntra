@@ -8,6 +8,7 @@ import {
   Panel,
   SkeletonRows,
   Status,
+  Table,
   buttonClasses,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
@@ -126,36 +127,33 @@ export function PersonsPage() {
           )}
 
           {!loading && data && data.persons.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     Name
                   </th>
                   <th
                     scope="col"
-                    className="px-4 py-2.5 font-medium max-sm:hidden"
+                    className="max-sm:hidden"
                   >
                     Email
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Reference
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Status
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {data.persons.map((person) => (
-                  <tr
-                    key={person.id}
-                    className="border-b border-border-subtle transition-colors last:border-0 hover:bg-surface"
-                  >
-                    <td className="px-4 py-2.5">
+                  <tr key={person.id}>
+                    <td>
                       <Link
                         to={`/admin/people/${person.id}`}
                         className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
@@ -163,20 +161,20 @@ export function PersonsPage() {
                         {person.givenName} {person.familyName}
                       </Link>
                     </td>
-                    <td className="px-4 py-2.5 text-muted max-sm:hidden">
+                    <td className="max-sm:hidden">
                       {person.businessEmail ?? '—'}
                     </td>
-                    <td className="px-4 py-2.5 text-muted">
+                    <td>
                       {person.externalId ?? '—'}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td>
                       <Status
                         tone={person.status === 'active' ? 'active' : 'inactive'}
                       >
                         {person.status === 'active' ? 'Active' : 'Inactive'}
                       </Status>
                     </td>
-                    <td className="px-4 py-2.5 text-right">
+                    <td className="text-right">
                       <span className="mr-2 inline-block align-middle">
                         <Button
                           size="sm"
@@ -197,7 +195,7 @@ export function PersonsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

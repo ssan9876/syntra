@@ -24,6 +24,7 @@ import {
   resolveAcsUrl,
   resolveClaims,
   resolveSession,
+  revokeSession,
   startSamlSsoSession,
   type ParkedAuthnRequest,
   type SamlConfigRecord,
@@ -31,6 +32,7 @@ import {
 import {
   buildIdpMetadata,
   buildLogoutResponse,
+  buildSignedAssertion,
   buildSignedResponse,
   decodePostMessage,
   decodeRedirectMessage,
@@ -42,6 +44,12 @@ import {
   postBindingForm,
   verifyPostSignature,
   verifyRedirectSignature,
+  buildRstr,
+  passiveResponseForm,
+  parsePassiveRequest,
+  SIGN_IN as WSFED_SIGN_IN,
+  SIGN_OUT as WSFED_SIGN_OUT,
+  SIGN_OUT_CLEANUP as WSFED_SIGN_OUT_CLEANUP,
 } from '@syntra/protocols';
 import { ProblemError } from '../plugins/problem-json.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
@@ -49,6 +57,7 @@ import { SESSION_COOKIE } from '../plugins/require-session.js';
 import { assertProtocolHost, tenantProtocolIdentity } from './protocol-identity.js';
 import { challengeRedirect } from './session-reply.js';
 import { tenantRelyingParty } from './relying-party.js';
+import { clientFacts } from '../plugins/client-facts.js';
 
 /**
  * The SAML authentication context class that corresponds to the factor the
@@ -417,6 +426,13 @@ export async function registerSamlIdpRoutes(
         'urn:oasis:names:tc:SAML:2.0:nameid-format:transient',
       ],
       certificates: keys.flatMap((k) => (k.certificate ? [k.certificate] : [])),
+      // Published only when some application in this tenant actually accepts
+      // WS-Fed. Advertising the endpoint otherwise invites a relying party to
+      // configure itself against a door that answers 404 for every realm.
+      wsFedUrl: (await request.db((tx) => tx.samlConfig.count({ where: { wsFedEnabled: true } })))
+        > 0
+        ? identity.wsFedUrl
+        : null,
     });
 
     void tenant;
@@ -512,6 +528,7 @@ export async function registerSamlIdpRoutes(
       requestId: trusted.id,
       acsUrl,
       relayState: input.relayState,
+      protocol: 'saml',
       forceAuthn: trusted.forceAuthn,
       browserBinding: bindBrowser(request, reply),
     });
@@ -598,6 +615,120 @@ export async function registerSamlIdpRoutes(
   });
 
   /**
+   * WS-Federation, passive requestor profile.
+   *
+   * Lives under `/saml` because it IS the SAML machinery: the realm is the SP
+   * entity ID, `wreply` is checked against the same registered ACS URLs, the
+   * token is the same signed assertion, and the sign-in it produces goes
+   * through the same `authorize()`. WS-Fed names no well-known path, so the
+   * relying party is configured with whatever URL the console shows it.
+   *
+   * The parked row is created with `protocol: 'wsfed'`, so the rest of the
+   * flow — assignment, policy, factors, claims — is the SP-initiated SAML path
+   * unchanged, and only the delivery at the end differs.
+   */
+  app.get('/wsfed', rateLimited, async (request, reply) => {
+    const { tenant, identity } = await samlContext(request, options);
+    const wsfed = parsePassiveRequest(request.query as Record<string, unknown>);
+
+    // Sign-out first: it needs no realm and no application.
+    if (wsfed.action === WSFED_SIGN_OUT || wsfed.action === WSFED_SIGN_OUT_CLEANUP) {
+      /*
+       * The session is ended HERE, before anything is decided about where to
+       * send the browser. A `wsignout1.0` that redirected without ending it
+       * would be a sign-out link that signs nobody out — the relying party
+       * would clear its own cookie, the user would see a signed-out page, and
+       * the next visit to any application would let them straight back in.
+       *
+       * Ending it is safe to do unauthenticated in a way that ending a SAML
+       * session on a guessed NameID is not: this only ever ends the session
+       * belonging to the cookie the caller already holds. The worst a forged
+       * link achieves is signing its own clicker out.
+       */
+      const token = request.cookies[SESSION_COOKIE];
+      if (token) {
+        await request.db((tx) => revokeSession(tx, token));
+        reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      }
+
+      // `wreply` on a sign-out is a redirect target, so it is checked exactly
+      // as hard as one on a sign-in. Unregistered, or absent, and the browser
+      // lands on Syntra's own page — an unchecked one here is an open redirect
+      // reachable without any session at all.
+      let destination = '/logged-out';
+      if (wsfed.reply !== null && wsfed.realm !== null) {
+        const config = await request.db((tx) => findSamlConfigByEntityId(tx, wsfed.realm!));
+        if (config?.wsFedEnabled && resolveAcsUrl(config, wsfed.reply) !== null) {
+          destination = wsfed.reply;
+        }
+      }
+      return reply.redirect(destination, 302);
+    }
+
+    if (wsfed.action !== WSFED_SIGN_IN) {
+      throw new ProblemError(
+        400, 'wsfed-bad-request',
+        `This endpoint answers wa=${WSFED_SIGN_IN} and wa=${WSFED_SIGN_OUT}.`,
+      );
+    }
+    if (wsfed.realm === null) {
+      throw new ProblemError(400, 'wsfed-bad-request', 'No wtrealm');
+    }
+
+    const config = await request.db((tx) => findSamlConfigByEntityId(tx, wsfed.realm!));
+    // One refusal for "no such realm" and for "that realm has WS-Fed off", so
+    // an unauthenticated caller cannot enumerate which realms are registered.
+    if (!config || !config.wsFedEnabled) {
+      throw new ProblemError(404, 'wsfed-unknown-realm', 'Unknown realm');
+    }
+
+    /*
+     * Encryption is refused rather than skipped.
+     *
+     * An application asking for encrypted assertions asked for a property of
+     * every assertion it receives, and WS-Fed has no envelope for an
+     * EncryptedAssertion that relying parties agree on. Issuing an unencrypted
+     * one would quietly hand out the plaintext the administrator specifically
+     * turned that switch on to prevent — so this says no, at the point where
+     * somebody can act on it.
+     */
+    if (config.encryptAssertions) {
+      throw new ProblemError(
+        409, 'wsfed-encryption-unsupported',
+        'This application is configured to receive encrypted assertions, and WS-Federation has no agreed way to carry one. Turn encryption off for it, or use SAML.',
+      );
+    }
+
+    const acsUrl = resolveAcsUrl(config, wsfed.reply);
+    if (acsUrl === null) {
+      throw new ProblemError(
+        400, 'wsfed-reply-not-allowed',
+        wsfed.reply === null
+          ? 'This application has no default reply URL registered'
+          : 'That reply URL is not registered for this application',
+      );
+    }
+
+    const parked = await parkAuthnRequest(request.tenantId, {
+      applicationId: config.applicationId,
+      // No request id: WS-Fed has nothing an assertion echoes back, which is
+      // why `wctx` exists and why it is the relying party's own correlation.
+      requestId: null,
+      acsUrl,
+      relayState: wsfed.context,
+      protocol: 'wsfed',
+      // `wfresh=0` is the relying party asking for a fresh authentication now.
+      // Any other value is a maximum age this does not yet honour, and
+      // treating "at most 30 minutes old" as "re-authenticate" would prompt
+      // people who did not need to be prompted.
+      forceAuthn: wsfed.freshnessMinutes === 0,
+      browserBinding: bindBrowser(request, reply),
+    });
+
+    return completeSso(request, reply, { tenant, identity, config, parked });
+  });
+
+  /**
    * Identity-provider-initiated sign-on.
    *
    * There is no AuthnRequest, so there is no InResponseTo and nothing for the
@@ -641,6 +772,7 @@ export async function registerSamlIdpRoutes(
       requestId: null,
       acsUrl,
       relayState,
+      protocol: 'saml',
       forceAuthn: false,
       browserBinding: bindBrowser(request, reply),
     });
@@ -711,6 +843,7 @@ export async function registerSamlIdpRoutes(
       principal: { kind: 'session', userId: session.userId, sessionId: session.sessionId },
       applicationId: ctx.parked.applicationId,
       sourceIp: request.ip,
+      client: clientFacts(request),
       relyingParty: tenantRelyingParty(ctx.tenant, options.publicUrl),
       // Entering an application never elevates.
       scope: 'portal',
@@ -720,9 +853,15 @@ export async function registerSamlIdpRoutes(
       throw new ProblemError(403, 'not-assigned', 'Not available to you');
     }
 
-    if (decision.status === 'challenge' || decision.status === 'enrol') {
+    if (
+      decision.status === 'challenge' ||
+      decision.status === 'enrol' ||
+      decision.status === 'renew'
+    ) {
       // The MFA screen answers the attempt and returns to /saml/continue,
-      // where this function runs again and re-evaluates policy.
+      // where this function runs again and re-evaluates policy. The renewal
+      // screen does the same, so an expired password is changed before any
+      // assertion is signed.
       return challengeRedirect(
         reply,
         decision,
@@ -774,8 +913,11 @@ export async function registerSamlIdpRoutes(
       throw new ProblemError(409, 'saml-no-key', 'This organization has no SAML signing key yet');
     }
 
-    const xml = buildSignedResponse(
-      {
+    // Named once and used by whichever builder the protocol calls for. The
+    // two share every field: an assertion that differed between SAML and
+    // WS-Fed would be two audiences, two lifetimes and two authentication
+    // contexts the day somebody corrected one of them.
+    const assertionInput = {
         idpEntityId: ctx.identity.entityId,
         spEntityId: ctx.config.spEntityId,
         acsUrl: ctx.parked.acsUrl,
@@ -791,9 +933,18 @@ export async function registerSamlIdpRoutes(
         authnContextClassRef:
           AUTHN_CONTEXT[decision.satisfiedFactor ?? ''] ?? DEFAULT_AUTHN_CONTEXT,
         now,
-      },
-      { privateKeyPem: key.privateKeyPem, certificatePem: key.certificate },
-    );
+    };
+    const signingKey = {
+      privateKeyPem: key.privateKeyPem,
+      certificatePem: key.certificate,
+    };
+    const xml =
+      ctx.parked.protocol === 'wsfed'
+        ? // The bare assertion. WS-Fed carries it in a
+          // RequestSecurityTokenResponse, and recovering it by slicing a
+          // Response apart would be string surgery on a signed document.
+          buildSignedAssertion(assertionInput, signingKey)
+        : buildSignedResponse(assertionInput, signingKey);
 
     // Encryption happens BEFORE anything is recorded. It can fail — 409 when
     // the application asks for encrypted assertions and has no certificate
@@ -805,6 +956,17 @@ export async function registerSamlIdpRoutes(
     // trusts. Outside every transaction, as before: RSA plus AES over the
     // whole assertion.
     let deliverable = xml;
+    // A WS-Fed row reaching this with encryption on means the setting was
+    // changed while somebody was mid-sign-in. Refused on the same terms the
+    // `/wsfed` handler refuses it: WS-Fed has no envelope for an
+    // EncryptedAssertion that relying parties agree on, and issuing the
+    // plaintext instead would hand out exactly what the switch prevents.
+    if (ctx.config.encryptAssertions && ctx.parked.protocol === 'wsfed') {
+      throw new ProblemError(
+        409, 'wsfed-encryption-unsupported',
+        'This application is configured to receive encrypted assertions, and WS-Federation has no agreed way to carry one.',
+      );
+    }
     if (ctx.config.encryptAssertions) {
       if (!ctx.config.encryptionCertificate) {
         throw new ProblemError(
@@ -829,7 +991,10 @@ export async function registerSamlIdpRoutes(
       });
       await recordEvent(tx, {
         actorUserId: decision.userId,
-        action: 'saml.assertion_issued',
+        action:
+          ctx.parked.protocol === 'wsfed'
+            ? 'wsfed.token_issued'
+            : 'saml.assertion_issued',
         targetType: 'Application',
         targetId: ctx.parked.applicationId,
         outcome: 'success',
@@ -837,12 +1002,38 @@ export async function registerSamlIdpRoutes(
         payload: {
           spEntityId: ctx.config.spEntityId,
           acsUrl: ctx.parked.acsUrl,
+          protocol: ctx.parked.protocol,
           inResponseTo: ctx.parked.requestId,
           satisfiedFactor: decision.satisfiedFactor,
           encrypted: ctx.config.encryptAssertions,
         },
       });
     });
+
+    // The two protocols diverge only here, at delivery. Everything above —
+    // the assignment check, `authorize()`, the claims, the signature — is one
+    // path, which is what keeps a WS-Fed sign-in from being a second, weaker
+    // way into the same application.
+    if (ctx.parked.protocol === 'wsfed') {
+      return reply
+        .type('text/html; charset=utf-8')
+        .header('cache-control', 'no-store')
+        .send(
+          passiveResponseForm({
+            reply: ctx.parked.acsUrl,
+            result: buildRstr({
+              assertion: xml,
+              realm: ctx.config.spEntityId,
+              notBefore: new Date(now.getTime() - 60_000),
+              notOnOrAfter: new Date(now.getTime() + ctx.config.assertionLifetimeMs),
+            }),
+            // `wctx` travels in the same column `RelayState` does. Echoed
+            // verbatim and never interpreted — the destination came from
+            // `wreply` checked against the registered URLs.
+            context: ctx.parked.relayState,
+          }),
+        );
+    }
 
     return reply
       .type('text/html; charset=utf-8')

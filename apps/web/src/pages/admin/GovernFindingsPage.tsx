@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -145,30 +145,30 @@ export function GovernFindingsPage() {
           )}
 
           {!loading && sorted.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle text-sm text-muted">
+            <Table>
+              <thead>
                 <tr>
-                  <th className="px-4 py-2">What</th>
-                  <th className="px-4 py-2">Which</th>
-                  <th className="px-4 py-2">Severity</th>
-                  <th className="px-4 py-2">First seen</th>
-                  <th className="px-4 py-2" />
+                  <th>What</th>
+                  <th>Which</th>
+                  <th>Severity</th>
+                  <th>First seen</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
                 {sorted.map((finding) => (
-                  <tr key={finding.id} className="border-b border-border-subtle last:border-0">
-                    <td className="px-4 py-2 font-medium text-ink">
+                  <tr key={finding.id}>
+                    <td className="text-ink">
                       {HEADLINE[finding.kind] ?? finding.kind}
                     </td>
-                    <td className="px-4 py-2 text-muted">{describeFinding(finding)}</td>
-                    <td className="px-4 py-2">
+                    <td>{describeFinding(finding)}</td>
+                    <td>
                       <Status tone={SEVERITY_TONE[finding.severity]}>{finding.severity}</Status>
                     </td>
-                    <td className="px-4 py-2 text-muted">
+                    <td>
                       {new Date(finding.firstSeenAt).toLocaleDateString()}
                     </td>
-                    <td className="px-4 py-2 text-right">
+                    <td className="text-right">
                       {finding.status === 'open' && (
                         <Button
                           size="sm"
@@ -204,7 +204,7 @@ export function GovernFindingsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

@@ -69,6 +69,21 @@ export function OnboardPersonPage() {
     location: v.location ?? '',
   });
 
+  /**
+   * The targets that would put this person in the fallback container.
+   *
+   * A placement rule that needs a department and does not get one does not
+   * fail — it falls back, deliberately, so that a bulk import with patchy HR
+   * data does not make people unprocessable. That is the right behaviour for
+   * an import and the wrong one HERE: somebody is typing, the field is one
+   * keystroke away, and an account that lands in Unsorted is an account
+   * somebody has to find and move later.
+   *
+   * So the FORM refuses, and the API does not. The same endpoint serves the
+   * CSV importer and Directory Sync, where the fallback is correct.
+   */
+  const unplaced = hints.filter((hint) => hint.fallbackUsed);
+
   const set = (key: string, value: string) =>
     setV((current) => ({ ...current, [key]: value }));
 
@@ -406,12 +421,24 @@ export function OnboardPersonPage() {
           </div>
         </Panel>
 
+        {unplaced.length > 0 && (
+          <Alert tone="warning" title="This account would not be placed">
+            {/*
+              Names the field, not the outcome. "It will go to Unsorted" leaves
+              the reader guessing which box to fill in, which is their only
+              question.
+            */}
+            {unplaced[0]!.missing.join(', ')} decides which container this
+            account is created in, and there is nothing in it yet.
+          </Alert>
+        )}
+
         <div className="flex gap-2">
           <Button
             variant="primary"
             onClick={() => void submit()}
             loading={busy}
-            disabled={busy}
+            disabled={busy || unplaced.length > 0}
           >
             Add someone
           </Button>

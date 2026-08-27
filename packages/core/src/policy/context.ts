@@ -1,3 +1,4 @@
+import { countryOf, devicePlatformOf } from './device-match.js';
 import type { TenantClient } from '@syntra/db';
 import { listGroupsForUser } from '../directory/group-service.js';
 import { activeContracts } from '../identity/contract-service.js';
@@ -7,6 +8,21 @@ export interface AuthContextInput {
   userId: string;
   applicationId: string | null;
   sourceIp: string | null;
+  /**
+   * The request's user agent, or null.
+   *
+   * The RAW header, parsed here rather than at the caller: `devicePlatformOf`
+   * is the one reading of it, so the live decision and the console's impact
+   * preview cannot disagree about what a string means.
+   */
+  userAgent?: string | null | undefined;
+  /**
+   * Whatever the configured country header carried, or null.
+   *
+   * Null covers both "this deployment names no header" and "the proxy could
+   * not place the address", which are the same thing to a rule: unevaluable.
+   */
+  countryHeader?: string | null | undefined;
   now: Date;
 }
 
@@ -58,6 +74,8 @@ export async function buildAuthContext(
     applicationId: input.applicationId,
     groupIds: groups.map((g) => g.id),
     contracts,
+    devicePlatform: devicePlatformOf(input.userAgent ?? null),
+    country: countryOf(input.countryHeader ?? null),
     sourceIp: input.sourceIp,
     now: input.now,
   };

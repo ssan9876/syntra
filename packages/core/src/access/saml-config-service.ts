@@ -22,6 +22,16 @@ export interface SamlConfigRecord {
   sloUrl: string | null;
   sloBinding: SamlBinding;
   allowIdpInitiated: boolean;
+  /**
+   * Whether this application may also sign in over WS-Federation.
+   *
+   * On the SAML record because WS-Fed reuses all of it: the realm is
+   * `spEntityId`, the reply URL is checked against `acsUrls`, and the token is
+   * the same signed assertion. Off unless somebody asked for it — WS-Fed
+   * carries no request signature, so it must not appear on an application that
+   * never chose it.
+   */
+  wsFedEnabled: boolean;
   assertionLifetimeMs: number;
 }
 
@@ -44,8 +54,20 @@ export interface SamlConfigRecord {
  */
 export type SamlConfigInput = Omit<
   SamlConfigRecord,
-  'id' | 'applicationId' | 'wantAuthnRequestsSigned'
-> & { wantAuthnRequestsSigned?: boolean };
+  'id' | 'applicationId' | 'wantAuthnRequestsSigned' | 'wsFedEnabled'
+> & {
+  wantAuthnRequestsSigned?: boolean | undefined;
+  /**
+   * Optional, defaulting to FALSE.
+   *
+   * The opposite default to `wantAuthnRequestsSigned` above, and for the same
+   * reason: saying nothing has to mean the safe answer. A dropped
+   * `wantAuthnRequestsSigned` must not stop requiring a signature; a dropped
+   * `wsFedEnabled` must not open a second, unsigned way into an application.
+   * Both defaults close a door rather than open one.
+   */
+  wsFedEnabled?: boolean | undefined;
+};
 
 /**
  * Ruling A2-10. A service provider that registers without saying anything
@@ -78,6 +100,7 @@ const toRecord = (row: Record<string, unknown>): SamlConfigRecord => ({
   sloUrl: (row.sloUrl as string | null) ?? null,
   sloBinding: asBinding(row.sloBinding as string),
   allowIdpInitiated: row.allowIdpInitiated as boolean,
+  wsFedEnabled: row.wsFedEnabled as boolean,
   assertionLifetimeMs: row.assertionLifetimeMs as number,
 });
 
@@ -94,6 +117,7 @@ export async function upsertSamlConfig(
     ...input,
     wantAuthnRequestsSigned:
       input.wantAuthnRequestsSigned ?? REQUIRE_SIGNED_AUTHN_REQUESTS_BY_DEFAULT,
+    wsFedEnabled: input.wsFedEnabled ?? false,
   };
   const row = await tx.samlConfig.upsert({
     where: { applicationId },

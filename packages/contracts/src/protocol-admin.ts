@@ -70,6 +70,14 @@ export const samlConfigRequest = z
      */
     sloBinding: binding.default('HTTP-POST'),
     allowIdpInitiated: z.boolean().default(false),
+    /**
+     * Whether this application may also sign in over WS-Federation.
+     *
+     * Defaults to false, which is what a body that omits it means. WS-Fed
+     * carries no request signature, so a dropped field must close the door
+     * rather than open one.
+     */
+    wsFedEnabled: z.boolean().default(false),
     assertionLifetimeMs: z.number().int().min(60_000).max(3_600_000).default(300_000),
   })
   .refine((v) => v.defaultAcsUrl === null || v.acsUrls.includes(v.defaultAcsUrl), {
@@ -286,3 +294,24 @@ export const spMetadataImportRequest = z.union([
   z.object({ url: endpoint, ...importOptions }),
 ]);
 export type SpMetadataImportRequest = z.input<typeof spMetadataImportRequest>;
+
+/**
+ * A named set of claim mappings, stamped onto many applications.
+ *
+ * `mappings` reuses `claimMappingRequest` — the same validation a single
+ * mapping gets, because a set is a list of exactly those. A second, looser
+ * schema here would let a set hold a mapping the direct route refuses, and the
+ * refusal would surface only when somebody applied it.
+ */
+export const claimMappingSetRequest = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    description: z.string().trim().max(500).nullable().default(null),
+    protocol: z.enum(['saml', 'oidc']),
+    mappings: z.array(claimMappingRequest).min(1).max(64),
+  })
+  .refine((v) => v.mappings.every((m) => m.protocol === v.protocol), {
+    message: 'Every mapping in a set must be for the set’s own protocol',
+    path: ['mappings'],
+  });
+export type ClaimMappingSetRequest = z.input<typeof claimMappingSetRequest>;

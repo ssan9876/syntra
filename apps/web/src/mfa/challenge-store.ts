@@ -1,11 +1,12 @@
-export type PendingKind = 'verify' | 'enrol';
+export type PendingKind = 'verify' | 'enrol' | 'renew';
 
 export interface PendingChallenge {
   /**
    * 'verify' — present a factor you already hold, at /mfa.
    * 'enrol'  — register one of the required kind, at /enrol.
-   * The two screens are separate because the endpoints behind them are
-   * separate, and a token issued for one is refused by the other.
+   * 'renew'  — choose a new password, at /renew-password.
+   * The screens are separate because the endpoints behind them are separate,
+   * and a token issued for one is refused by the others.
    */
   kind: PendingKind;
   attemptToken: string;
@@ -38,7 +39,13 @@ export function takeChallenge(): PendingChallenge | null {
   try {
     const parsed = JSON.parse(raw) as PendingChallenge;
     if (typeof parsed.attemptToken !== 'string') return null;
-    if (parsed.kind !== 'verify' && parsed.kind !== 'enrol') return null;
+    if (
+      parsed.kind !== 'verify' &&
+      parsed.kind !== 'enrol' &&
+      parsed.kind !== 'renew'
+    ) {
+      return null;
+    }
     if (new Date(parsed.expiresAt).getTime() <= Date.now()) return null;
     return parsed;
   } catch {
@@ -47,7 +54,12 @@ export function takeChallenge(): PendingChallenge | null {
 }
 
 /** Where a stored challenge should send the browser. */
-export const routeFor = (kind: PendingKind) => (kind === 'enrol' ? '/enrol' : '/mfa');
+const ROUTES: Record<PendingKind, string> = {
+  verify: '/mfa',
+  enrol: '/enrol',
+  renew: '/renew-password',
+};
+export const routeFor = (kind: PendingKind) => ROUTES[kind];
 
 /**
  * A `next` value that may be navigated to, or `/`.

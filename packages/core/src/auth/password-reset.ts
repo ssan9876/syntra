@@ -7,6 +7,7 @@ import { queueMessage } from '../notify/delivery.js';
 import { renderMessage, type Transport } from '../notify/notification-service.js';
 import { currentTenant } from '../tenant-context.js';
 import { hashPassword, setPasswordHash } from './password.js';
+import { passwordWasUsedBefore } from './password-ageing.js';
 import { validateNewPassword } from './password-policy.js';
 import { revokeAllForUser } from './session-service.js';
 import { revokeAllRefreshTokensForUser } from './refresh-token.js';
@@ -410,7 +411,15 @@ export type ResetOutcome =
       ok: false;
       reason: 'invalid_token' | 'factor_required' | 'factor_invalid' | 'weak_password';
       detail?: string;
-    };
+    }
+  /**
+   * One of the last `depth` passwords this user retired.
+   *
+   * Checked here as well as on the change path, because a reuse rule with a
+   * way around it is not a rule — and a mailed reset link is the obvious way
+   * around one that only guards the change form.
+   */
+  | { ok: false; reason: 'reused'; depth: number };
 
 /**
  * Steps 3 and 4 of spec section 9.
@@ -441,6 +450,7 @@ export async function completePasswordReset(
       tokenId: row.id,
       user,
       minLength: tenant.passwordMinLength,
+      historyDepth: tenant.passwordHistoryDepth,
       // Carried out of the transaction so the confirmation mail can be
       // rendered without opening another one.
       tenantName: tenant.name,
@@ -458,6 +468,17 @@ export async function completePasswordReset(
     email: context.user.email,
   });
   if (!check.ok) return { ok: false, reason: 'weak_password', detail: check.reason };
+
+  // Also before the token is spent, and for the same reason: choosing a
+  // password you used two years ago is a mistake to correct, not one that
+  // should cost you your link.
+  const reused = await withTenant(tenantId, (tx) =>
+    passwordWasUsedBefore(tx, context.user.id, input.newPassword, {
+      passwordMaxAgeDays: 0,
+      passwordHistoryDepth: context.historyDepth,
+    }),
+  );
+  if (reused) return { ok: false, reason: 'reused', depth: context.historyDepth };
 
   if (context.acceptable.length > 0) {
     if (!input.factor) return { ok: false, reason: 'factor_required' };
@@ -502,7 +523,7 @@ export async function completePasswordReset(
     });
     if (consumed.count !== 1) return false;
 
-    await setPasswordHash(tx, context.user.id, hash);
+    await setPasswordHash(tx, context.user.id, hash, { now });
     await revokeAllForUser(tx, context.user.id);
     await revokeAllRefreshTokensForUser(tx, context.user.id);
     await recordEvent(tx, {

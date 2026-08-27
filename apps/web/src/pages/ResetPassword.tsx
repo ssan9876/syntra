@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { Wordmark } from '../components/Wordmark.js';
+import { useT } from '../i18n/LocaleProvider.js';
 import { ApiError, api } from '../session/api.js';
 import { assertWebAuthnForReset } from '../mfa/webauthn.js';
 
@@ -12,6 +13,7 @@ interface Preflight {
 }
 
 export function ResetPassword() {
+  const t = useT();
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const token = params.get('token') ?? '';
@@ -86,7 +88,7 @@ export function ResetPassword() {
             Reset links work once and expire after thirty minutes.
           </Alert>
           <p className="mt-4 text-center text-sm text-muted">
-            <Link to="/forgot-password" className="text-accent underline-offset-2 hover:underline">
+            <Link to="/forgot-password" className="link">
               Request a new one
             </Link>
           </p>
@@ -100,28 +102,28 @@ export function ResetPassword() {
       <div className="w-full max-w-sm">
         <Wordmark className="mb-8" />
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
-          <h1 className="text-lg font-semibold text-ink">Choose a new password</h1>
+          <h1 className="text-lg font-semibold text-ink">{t('reset.title')}</h1>
 
           <form onSubmit={submit} noValidate className="mt-6 space-y-4">
             <Field
-              label="New password"
+              label={t('reset.password')}
               type="password"
               value={password}
               onChange={setPassword}
               autoComplete="new-password"
               autoFocus
               required
-              hint="At least twelve characters. A short sentence works well."
+              hint={t('reset.hint')}
             />
 
             {preflight?.requiresFactor && factorMode !== 'webauthn' && (
               <Field
-                label={factorMode === 'totp' ? 'Code from your app' : 'Recovery code'}
+                label={factorMode === 'totp' ? t('reset.factor_totp') : t('mfa.recovery_code')}
                 value={factorCode}
                 onChange={setFactorCode}
                 autoComplete="one-time-code"
                 required
-                hint="Your account has a second factor, so resetting the password needs it too."
+                hint={t('reset.factor_hint')}
               />
             )}
             {preflight?.requiresFactor && factorMode === 'webauthn' && (

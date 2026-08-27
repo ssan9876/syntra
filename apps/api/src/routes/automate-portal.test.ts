@@ -5,6 +5,7 @@ import {
   assignRole,
   createProduct,
   createRole,
+  createTask,
   createUser,
   hashPassword,
   setPasswordHash,
@@ -465,4 +466,122 @@ it('answers 400 for a subjectPersonId that is not a uuid', async () => {
     annaCookie,
   );
   expect(res.statusCode).toBe(400);
+});
+
+/**
+ * A delegated task, and the account it must not be allowed to reach.
+ *
+ * Anna holds no permissions in this file; Bo is given one, which is what makes
+ * Bo out of reach for Anna. That asymmetry is the whole test.
+ */
+describe('delegated tasks', () => {
+  const unlockTask = {
+    name: 'Unlock an account',
+    description: 'For the service desk.',
+    actionKey: 'unlock_account',
+    formSchema: [
+      { key: 'user', type: 'lookup', label: 'Account', dataSource: 'user', required: true },
+    ],
+    audienceCondition: { all: [] },
+    enabled: true,
+  };
+
+  const seedTask = (over: Record<string, unknown> = {}) =>
+    withTenant(ctx.tenantId, (tx) => createTask(tx, { ...unlockTask, ...over } as never));
+
+  const userIdFor = (login: string) =>
+    withTenant(ctx.tenantId, async (tx) => {
+      const user = await tx.user.findFirstOrThrow({ where: { login } });
+      return user.id;
+    });
+
+  it('offers a task to somebody its audience admits', async () => {
+    await seedTask();
+    const res = await call('GET', '/api/portal/tasks', annaCookie);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().tasks.map((t: { name: string }) => t.name)).toEqual([
+      'Unlock an account',
+    ]);
+  });
+
+  it('offers nothing when the task admits nobody', async () => {
+    await seedTask({ audienceCondition: null });
+    expect((await call('GET', '/api/portal/tasks', annaCookie)).json().tasks).toEqual([]);
+  });
+
+  it('fills the picker with names', async () => {
+    const task = await seedTask();
+    const res = await call('GET', `/api/portal/tasks/${task.id}/options`, annaCookie);
+    expect(res.statusCode).toBe(200);
+    // A picker of UUIDs is not a picker.
+    expect(res.json().options.user).toEqual(
+      expect.arrayContaining([expect.objectContaining({ label: expect.stringContaining('anna') })]),
+    );
+  });
+
+  it('will not fill a picker for a task the caller may not run', async () => {
+    // Otherwise this endpoint is a directory listing available to anybody who
+    // can guess a task id.
+    const task = await seedTask({ audienceCondition: null });
+    expect(
+      (await call('GET', `/api/portal/tasks/${task.id}/options`, annaCookie)).statusCode,
+    ).toBe(404);
+  });
+
+  it('runs the action', async () => {
+    const task = await seedTask();
+    const annaId = await userIdFor('anna');
+
+    const res = await call('POST', `/api/portal/tasks/${task.id}/run`, annaCookie, {
+      values: { user: annaId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+
+    const record = await withTenant(ctx.tenantId, (tx) =>
+      tx.delegatedTaskRun.findFirstOrThrow(),
+    );
+    expect(record.outcome).toBe('success');
+  });
+
+  it('REFUSES an account more privileged than the runner, with 403 and the rule', async () => {
+    // A delegated task runs with Syntra's authority, not the runner's. Without
+    // this rule, a task delegated to the service desk reaches an
+    // administrator's account.
+    const task = await seedTask();
+    const boId = await userIdFor('bo');
+    await withTenant(ctx.tenantId, async (tx) => {
+      const role = await createRole(tx, 'Privileged', ALL_PERMISSIONS);
+      await assignRole(tx, boId, role.id);
+    });
+
+    const res = await call('POST', `/api/portal/tasks/${task.id}/run`, annaCookie, {
+      values: { user: boId },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().detail).toMatch(/permission you do not/i);
+  });
+
+  it('does not offer an out-of-reach account in the picker either', async () => {
+    // A control that offers what it will then refuse is a control that needs
+    // a paragraph of explanation attached to a failure.
+    const task = await seedTask();
+    const boId = await userIdFor('bo');
+    await withTenant(ctx.tenantId, async (tx) => {
+      const role = await createRole(tx, 'Privileged', ALL_PERMISSIONS);
+      await assignRole(tx, boId, role.id);
+    });
+
+    const res = await call('GET', `/api/portal/tasks/${task.id}/options`, annaCookie);
+    const values = res.json().options.user.map((o: { value: string }) => o.value);
+    expect(values).not.toContain(boId);
+  });
+
+  it('refuses a body with a field the form does not declare', async () => {
+    const task = await seedTask();
+    const res = await call('POST', `/api/portal/tasks/${task.id}/run`, annaCookie, {
+      values: {},
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });

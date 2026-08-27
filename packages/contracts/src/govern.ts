@@ -26,6 +26,21 @@ export const personReportQuery = z.object({
  */
 export const personParam = z.object({ personId: z.string().uuid() });
 
+/**
+ * The knobs on rule mining, as query parameters.
+ *
+ * Exposed rather than fixed because the useful threshold depends on the
+ * organization: 0.8 surfaces plenty in a tidy directory and nothing in a
+ * messy one, and an administrator who cannot lower it concludes the feature
+ * is broken rather than that their data is loose.
+ */
+export const ruleMiningQuery = z.object({
+  minConfidence: z.coerce.number().min(0.5).max(1).optional(),
+  minPopulation: z.coerce.number().int().min(2).max(1000).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+export type RuleMiningQuery = z.infer<typeof ruleMiningQuery>;
+
 export const changeReportQuery = z.object({
   fromSnapshotId: z.string().uuid(),
   toSnapshotId: z.string().uuid(),

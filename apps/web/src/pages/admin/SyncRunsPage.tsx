@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -79,33 +79,30 @@ export function SyncRunsPage() {
           )}
 
           {!loading && data && data.runs.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     Started
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Source
                   </th>
                   <th
                     scope="col"
-                    className="px-4 py-2.5 font-medium max-sm:hidden"
+                    className="max-sm:hidden"
                   >
                     Records read
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Status
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {data.runs.map((run) => (
-                  <tr
-                    key={run.id}
-                    className="border-b border-border-subtle transition-colors last:border-0 hover:bg-surface"
-                  >
-                    <td className="px-4 py-2.5">
+                  <tr key={run.id}>
+                    <td>
                       <Link
                         to={`/admin/sync-runs/${run.id}`}
                         className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
@@ -113,15 +110,15 @@ export function SyncRunsPage() {
                         {when(run.startedAt)}
                       </Link>
                     </td>
-                    <td className="px-4 py-2.5 text-muted">
+                    <td>
                       {/* A source that no longer exists still leaves its runs
                           behind; showing the id is better than a blank cell. */}
                       {sourceNames.get(run.sourceId) ?? run.sourceId}
                     </td>
-                    <td className="px-4 py-2.5 text-muted tabular-nums max-sm:hidden">
+                    <td className="tabular-nums max-sm:hidden">
                       {run.recordsRead}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td>
                       <Status tone={TONE[run.status] ?? 'neutral'}>
                         {LABEL[run.status] ?? run.status}
                       </Status>
@@ -129,7 +126,7 @@ export function SyncRunsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

@@ -12,6 +12,9 @@ const settings = {
   adminMfaRequired: false,
   selfEnrolmentEnabled: true,
   passwordMinLength: 12,
+  lockoutThreshold: 0,
+  lockoutWindowMinutes: 15,
+  lockoutDurationMinutes: 15,
   webauthnAvailable: true,
 };
 
@@ -253,5 +256,60 @@ describe('the primary domain, and the passkeys it would break', () => {
       String(calls.find((c) => c.init?.method === 'PUT')!.init!.body),
     );
     expect(sent.primaryDomain).toBeNull();
+  });
+});
+
+describe('TenantSettingsPage and account lockout', () => {
+  const bodyOf = (init?: RequestInit) =>
+    JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+
+  it('hides the numbers until lockout is switched on', async () => {
+    stub();
+    renderPage();
+
+    expect(await screen.findByLabelText(/lock an account after/i)).not.toBeChecked();
+    expect(screen.queryByLabelText(/failures before locking/i)).toBeNull();
+  });
+
+  it('saves zero for a tenant that leaves it off', async () => {
+    const user = userEvent.setup();
+    stub();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /save settings/i }));
+
+    const put = calls.find((c) => c.init?.method === 'PUT')!;
+    expect(bodyOf(put.init).lockoutThreshold).toBe(0);
+  });
+
+  it('saves the default threshold when it is switched on', async () => {
+    const user = userEvent.setup();
+    stub();
+    renderPage();
+
+    await user.click(await screen.findByLabelText(/lock an account after/i));
+    await user.click(screen.getByRole('button', { name: /save settings/i }));
+
+    const put = calls.find((c) => c.init?.method === 'PUT')!;
+    // Five, not the contract's floor of three: the floor and the default are
+    // different questions, and starting somebody at three costs them two more
+    // attempts on their first typo.
+    expect(bodyOf(put.init).lockoutThreshold).toBe(5);
+  });
+
+  it('warns when the lock will never lift itself', async () => {
+    const user = userEvent.setup();
+    stub(() => json({ ...settings, lockoutThreshold: 5, lockoutDurationMinutes: 0 }));
+    renderPage();
+
+    expect(
+      await screen.findByText(/do not lift themselves/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/has to be reachable to unlock them/i)).toBeInTheDocument();
+    await user.clear(screen.getByLabelText(/lock lasts/i));
+    await user.type(screen.getByLabelText(/lock lasts/i), '30');
+    await waitFor(() =>
+      expect(screen.queryByText(/do not lift themselves/i)).toBeNull(),
+    );
   });
 });

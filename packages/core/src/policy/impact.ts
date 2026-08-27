@@ -159,6 +159,8 @@ export async function previewRuleImpact(
   const membershipCap = caps.membershipCap ?? IMPACT_MEMBERSHIP_CAP;
   const unevaluatedConditions: string[] = [];
   if ((rule.ipRanges ?? []).length > 0) unevaluatedConditions.push('source address');
+  if ((rule.devicePlatforms ?? []).length > 0) unevaluatedConditions.push('device');
+  if ((rule.countries ?? []).length > 0) unevaluatedConditions.push('country');
   if (
     (rule.daysOfWeek ?? []).length > 0 ||
     (rule.startMinute ?? null) !== null ||
@@ -241,6 +243,10 @@ export async function previewRuleImpact(
     select: { userId: true },
   });
   const webauthn = await tx.webAuthnCredential.findMany({ select: { userId: true } });
+  const emailOtp = await tx.emailOtpCredential.findMany({
+    where: { confirmedAt: { not: null } },
+    select: { userId: true },
+  });
   const recovery = await tx.recoveryCode.findMany({
     where: { usedAt: null },
     select: { userId: true },
@@ -269,6 +275,7 @@ export async function previewRuleImpact(
   const withTotp = new Set(totp.map((r) => r.userId));
   const withWebauthn = new Set(webauthn.map((r) => r.userId));
   const withRecovery = new Set(recovery.map((r) => r.userId));
+  const withEmailOtp = new Set(emailOtp.map((r) => r.userId));
 
   // The rule as the engine would see it, minus the two dimensions a preview
   // cannot supply. The id and position are placeholders: ruleMatches reads
@@ -285,6 +292,12 @@ export async function previewRuleImpact(
     contractField: rule.contractField ?? null,
     contractValues: rule.contractValues ?? [],
     ipRanges: [],
+    // The same class as `ipRanges` and the time window above: a preview has no
+    // request, so it has no user agent and no country header. Left empty, they
+    // are unconstrained, which is the only honest reading — a preview cannot
+    // tell you how many people sign in from a phone.
+    devicePlatforms: [],
+    countries: [],
     daysOfWeek: [],
     startMinute: null,
     endMinute: null,
@@ -298,11 +311,19 @@ export async function previewRuleImpact(
       const wanted = rule.factorType;
       if (wanted === 'totp') return withTotp.has(userId);
       if (wanted === 'webauthn') return withWebauthn.has(userId);
+      // Named explicitly rather than left to the `false` below. A rule naming
+      // a factor this preview did not know about would report every user as
+      // needing enrolment — the preview would say a rule affects four thousand
+      // people when it affects none, which is worse than no preview.
+      if (wanted === 'email_otp') return withEmailOtp.has(userId);
       return false;
     }
     // require_mfa: anything counts, including recovery codes.
     return (
-      withTotp.has(userId) || withWebauthn.has(userId) || withRecovery.has(userId)
+      withTotp.has(userId) ||
+      withWebauthn.has(userId) ||
+      withEmailOtp.has(userId) ||
+      withRecovery.has(userId)
     );
   };
 
@@ -316,6 +337,8 @@ export async function previewRuleImpact(
       groupIds: groupsByUser.get(user.id) ?? [],
       contracts: user.personId ? (contractsByPerson.get(user.personId) ?? []) : [],
       sourceIp: null,
+      devicePlatform: null,
+      country: null,
       now,
     };
     if (!ruleMatches(candidate, context)) continue;

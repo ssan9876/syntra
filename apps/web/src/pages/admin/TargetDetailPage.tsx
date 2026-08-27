@@ -29,7 +29,7 @@ interface TestResult {
   rights?: ConnectorRight[];
 }
 
-type TargetType = 'activeDirectory' | 'scim2';
+type TargetType = 'activeDirectory' | 'scim2' | 'httpJson';
 
 interface Target {
   id: string;
@@ -152,6 +152,12 @@ interface Form {
   archiveContainer: string;
   // SCIM 2.0 only.
   baseUrl: string;
+  // Declarative HTTP only. `documentKey` is which shipped document was
+  // started from -- kept so the picker can show it, never sent: the document
+  // itself is what is stored, so editing a shipped one later cannot change a
+  // target that was built from it.
+  documentKey: string;
+  documentJson: string;
   schedule: string;
   enabled: boolean;
   autoApply: boolean;
@@ -186,6 +192,8 @@ const BLANK: Form = {
   entitlementSearchBase: '',
   archiveContainer: '',
   baseUrl: 'https://',
+  documentKey: '',
+  documentJson: '',
   schedule: '',
   enabled: true,
   autoApply: false,
@@ -279,12 +287,132 @@ function skipAdvice(reason: string | null): string {
   );
 }
 
+/**
+ * Parses a connector document, or null.
+ *
+ * Used both to show a message under the box and to build the config, so the
+ * form and the request can never disagree about whether the document is
+ * readable.
+ */
+function parseDocument(json: string): Record<string, unknown> | null {
+  if (json.trim() === '') return null;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Configuring a REST API target.
+ *
+ * The shape of this form is the whole design decision. A connector document
+ * is a hundred lines of JSON, and a screen that opened with an empty textarea
+ * and a link to the documentation would be a screen that needs a manual to
+ * use — which means it is the wrong screen. So the first control is a PICKER:
+ * an administrator connecting Entra ID chooses Entra ID, and the document is
+ * filled in for them, already correct.
+ *
+ * The textarea is still there, below, because a declarative connector whose
+ * documents cannot be edited is a fixed integration wearing a general-purpose
+ * name. It is just not the thing you meet first.
+ */
+function HttpConnectorFields({
+  isNew,
+  documentKey,
+  documentJson,
+  credential,
+  onPick,
+  onDocumentChange,
+  onCredentialChange,
+}: {
+  isNew: boolean;
+  documentKey: string;
+  documentJson: string;
+  credential: string;
+  onPick(key: string, document: Record<string, unknown>): void;
+  onDocumentChange(value: string): void;
+  onCredentialChange(value: string): void;
+}) {
+  const { data } = useApiResource<{
+    documents: { key: string; name: string; document: Record<string, unknown> }[];
+  }>('/api/admin/targets/connector-documents');
+  const [showJson, setShowJson] = useState(false);
+
+  const documents = data?.documents ?? [];
+  const parsed = parseDocument(documentJson);
+  const unreadable = documentJson.trim() !== '' && parsed === null;
+
+  return (
+    <div className="sm:col-span-2 space-y-4">
+      <div>
+        <span className="font-medium text-ink">System</span>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {documents.map((entry) => (
+            <Button
+              key={entry.key}
+              type="button"
+              variant={documentKey === entry.key ? 'primary' : 'secondary'}
+              onClick={() => onPick(entry.key, entry.document)}
+            >
+              {entry.name}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <Field
+        label="Client secret"
+        type="password"
+        autoComplete="new-password"
+        value={credential}
+        onChange={onCredentialChange}
+        hint={
+          isNew
+            ? 'Stored in the secrets vault, never on the target record.'
+            : 'Leave blank to keep the stored secret. It is never sent to this page.'
+        }
+      />
+
+      <div>
+        <Button type="button" variant="ghost" onClick={() => setShowJson(!showJson)}>
+          {showJson ? 'Hide the connector document' : 'Edit the connector document'}
+        </Button>
+        {showJson && (
+          <>
+            <textarea
+              aria-label="Connector document"
+              value={documentJson}
+              onChange={(event) => onDocumentChange(event.target.value)}
+              spellCheck={false}
+              rows={20}
+              className="mt-2 w-full rounded-control border border-border-control bg-bg p-3 font-mono text-sm text-ink"
+            />
+            {unreadable && <Alert tone="danger">That is not valid JSON.</Alert>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formFrom(target: Target): Form {
   const config = target.config ?? {};
   const url = text(config.url, BLANK.url);
   return {
     name: target.name,
-    type: target.type === 'scim2' ? 'scim2' : 'activeDirectory',
+    type:
+      target.type === 'scim2'
+        ? 'scim2'
+        : target.type === 'httpJson'
+          ? 'httpJson'
+          : 'activeDirectory',
+    documentKey: '',
+    documentJson:
+      config.document === undefined ? '' : JSON.stringify(config.document, null, 2),
     baseUrl: text(config.baseUrl, BLANK.baseUrl),
     url,
     tlsMode:
@@ -397,6 +525,12 @@ export function TargetDetailPage() {
   }
 
   function configFromForm(): Record<string, unknown> {
+    if (form.type === 'httpJson') {
+      // Parsed here so a malformed document is a message under the box rather
+      // than a 400 from a field the reader cannot see. `submit` checks the
+      // same thing first and stops; this is the shape the server gets.
+      return { document: parseDocument(form.documentJson) ?? {} };
+    }
     if (form.type === 'scim2') {
       return { ...extraConfig, baseUrl: form.baseUrl.trim() };
     }
@@ -700,10 +834,31 @@ export function TargetDetailPage() {
             options={[
               { value: 'activeDirectory', label: 'Active Directory' },
               { value: 'scim2', label: 'SCIM 2.0' },
+              { value: 'httpJson', label: 'REST API' },
             ]}
             className="sm:col-span-2"
           />
-          {form.type === 'activeDirectory' ? (
+          {form.type === 'httpJson' ? (
+            <HttpConnectorFields
+              isNew={isNew}
+              documentKey={form.documentKey}
+              documentJson={form.documentJson}
+              credential={form.bindPassword}
+              onPick={(key, document) => {
+                setForm((current) => ({
+                  ...current,
+                  documentKey: key,
+                  documentJson: JSON.stringify(document, null, 2),
+                  // The document names the target. Taking the name from it
+                  // saves the one keystroke everybody would spend typing what
+                  // they just picked.
+                  name: current.name === '' ? String(document.name ?? '') : current.name,
+                }));
+              }}
+              onDocumentChange={(v) => set('documentJson', v)}
+              onCredentialChange={(v) => set('bindPassword', v)}
+            />
+          ) : form.type === 'activeDirectory' ? (
             <>
               <Field
                 label="URL"

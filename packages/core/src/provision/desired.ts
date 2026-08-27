@@ -36,6 +36,20 @@ export interface DesiredStateInput {
   existingCorrelationKey: string | null;
   takenCorrelationKeys: ReadonlySet<string>;
   /**
+   * A container somebody pinned this person's account to by hand, or null.
+   *
+   * When set it REPLACES the rendered template — it does not merge with it and
+   * it is not a default. That is the whole point of the row: the planner
+   * proposes a `modifyDN` whenever the account is not where the desired
+   * container says, so a manual move that left the template in charge would be
+   * undone on the next five-minute tick. See `AccountPlacement`.
+   *
+   * The fallback is not consulted either. An override is a decision somebody
+   * made and recorded a reason for; falling back from it would silently
+   * discard that decision at exactly the moment it mattered.
+   */
+  containerOverride: string | null;
+  /**
    * The target's `renameEnabled`. Without it here the setting has nothing
    * behind it: the existing key is returned unconditionally, so the planner's
    * `state.account.correlationKey !== current.correlationKey` can never hold
@@ -577,9 +591,15 @@ export function desiredState(input: DesiredStateInput): DesiredState {
   // (Ruling P22). `fallbackContainer` is not rendered at all — it is a literal
   // DN from target configuration with no HR data in it.
   const containerRendered = renderContainer(profile.containerTemplate, context);
-  const container = containerRendered.ok
-    ? containerRendered.value
-    : profile.fallbackContainer;
+  // An override wins outright. Not rendered, because it is a literal DN a
+  // human chose from the target's own inventory rather than a template with
+  // HR data in it — the same reason `fallbackContainer` is not rendered.
+  const container =
+    input.containerOverride !== null && input.containerOverride.trim() !== ''
+      ? input.containerOverride
+      : containerRendered.ok
+        ? containerRendered.value
+        : profile.fallbackContainer;
 
   // The write boundary requires a non-empty fallback, so this is a profile
   // that got past it by some other route. Placing an account at an empty DN

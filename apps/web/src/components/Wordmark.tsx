@@ -1,9 +1,28 @@
+import { brandName, useBrand } from '../branding/BrandProvider.js';
+
 /**
  * The mark is three converging strokes: separate identities resolving into a
  * single point of access. Drawn rather than lettered so it holds at 20px in a
  * browser tab and at 32px in the sidebar.
  */
 export function Wordmark({ className = '' }: { className?: string }) {
+  const brand = useBrand();
+
+  // A tenant that uploaded a logo gets THEIR mark and their name, and Syntra's
+  // drawn mark does not sit beside it. Two marks side by side reads as a
+  // partnership, which is not what this is.
+  if (brand.logo) {
+    return (
+      <div className={`flex items-center gap-2.5 ${className}`}>
+        <img
+          src={brand.logo}
+          alt={brandName(brand)}
+          className="h-7 w-auto max-w-40 shrink-0 object-contain"
+        />
+      </div>
+    );
+  }
+
   return (
     <div className={`flex items-center gap-2.5 ${className}`}>
       <svg
@@ -26,7 +45,7 @@ export function Wordmark({ className = '' }: { className?: string }) {
         />
       </svg>
       <span className="text-md font-semibold tracking-tight text-ink">
-        Syntra
+        {brandName(brand)}
       </span>
     </div>
   );

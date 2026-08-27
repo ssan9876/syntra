@@ -21,8 +21,9 @@ import {
 import { ProblemError } from '../plugins/problem-json.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
-import { issueSession } from './session-reply.js';
+import { issueSession, renewReply } from './session-reply.js';
 import { qrDataUrl, tellOwnerAFactorWasAdded, webauthnContext } from './mfa.js';
+import { clientFacts } from '../plugins/client-facts.js';
 
 export interface EnrolRouteOptions {
   masterKey: Buffer;
@@ -110,6 +111,7 @@ export async function registerEnrolRoutes(
       attemptToken: token,
       enrolledFactor: factor,
       sourceIp: request.ip,
+      client: clientFacts(request),
       relyingParty: tenantRelyingParty(tenant, options.publicUrl),
     });
 
@@ -136,6 +138,14 @@ export async function registerEnrolRoutes(
     // The scope comes off the attempt through authorize(), which is where the
     // issuer recorded it. An elevation that ended in forced enrolment must come
     // back as an administrative session, and a portal sign-in must not.
+
+    // The password aged past the tenant's limit. Same shape as `enrol` above,
+    // and for the same reason: a half-finished sign-in holding a token that
+    // buys exactly one next step.
+    if (result.status === 'renew') {
+      return reply.status(200).send(renewReply(result));
+    }
+
     return issueSession(request, reply, result);
   }
 

@@ -272,7 +272,7 @@ export function valuesOf(record: SourceRecord, attribute: string): string[] {
  * one; a function that is safe only because of what happens to be upstream of
  * it is a function that will eventually be called with something else.
  */
-function placeAt(correlationKey: string, container: string): string {
+export function placeAt(correlationKey: string, container: string): string {
   return `CN=${escapeDnValue(correlationKey)},${container}`;
 }
 

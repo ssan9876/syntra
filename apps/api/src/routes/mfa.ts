@@ -28,6 +28,7 @@ import {
   removeWebAuthnCredential,
   renderMessage,
   revokeOrphanedRecoveryCodes,
+  sendEmailOtp,
   type RelyingPartyIdentity,
   type Transport,
 } from '@syntra/core';
@@ -35,7 +36,8 @@ import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession } from '../plugins/require-session.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { assertWebAuthnUsable, tenantRelyingParty } from './relying-party.js';
-import { issueSession } from './session-reply.js';
+import { issueSession, renewReply } from './session-reply.js';
+import { clientFacts } from '../plugins/client-facts.js';
 
 export interface MfaRouteOptions {
   masterKey: Buffer;
@@ -224,6 +226,7 @@ export async function registerMfaRoutes(
       attemptToken: body.attemptToken,
       factor,
       sourceIp: request.ip,
+      client: clientFacts(request),
       relyingParty: tenantRelyingParty(tenant, options.publicUrl),
     });
 
@@ -272,6 +275,14 @@ export async function registerMfaRoutes(
     // Never from whether this request happened to carry a cookie — the web
     // client sends one on every call, so that inference hands an
     // administrative session to any portal user completing a step-up.
+
+    // The password aged past the tenant's limit. Same shape as `enrol` above,
+    // and for the same reason: a half-finished sign-in holding a token that
+    // buys exactly one next step.
+    if (result.status === 'renew') {
+      return reply.status(200).send(renewReply(result));
+    }
+
     return issueSession(request, reply, result);
   });
 
@@ -292,6 +303,33 @@ export async function registerMfaRoutes(
 
     const { rp } = await webauthnContext(request, options.publicUrl);
     return beginWebAuthnAuthentication(request.tenantId, attempt.userId, rp);
+  });
+
+  /**
+   * Mails a one-time code for a live challenge.
+   *
+   * Behind the same rate limit as `/verify`, and gated on the same attempt
+   * token: without that, this endpoint is an unauthenticated way to make
+   * Syntra send mail to any address it holds, one request at a time.
+   *
+   * The answer is FIXED whatever happens inside — sent, refused for being too
+   * soon, no address on the account, the tenant has it switched off. Each of
+   * those is a fact about somebody else's account, and an endpoint that
+   * reported them would answer "does this person have email OTP" for anybody
+   * holding a valid attempt.
+   */
+  app.post('/email-otp/send', { ...LIMIT }, async (request, reply) => {
+    const body = webauthnChallengeRequest.parse(request.body);
+    const attempt = await request.db((tx) =>
+      findAttempt(tx, body.attemptToken, new Date()),
+    );
+    if (!attempt || attempt.purpose !== 'verify') {
+      throw new ProblemError(401, 'invalid-credentials', 'Invalid credentials');
+    }
+
+    // Awaited, and its outcome is discarded on purpose. See above.
+    await sendEmailOtp(request.tenantId, options.transport, attempt.userId);
+    return reply.status(202).send({ ok: true });
   });
 
   // ---- Enrolment by a user who is already signed in. Everything below needs

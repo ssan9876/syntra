@@ -62,12 +62,21 @@ export interface SigningMaterial {
  * service provider and rejected with `Invalid signature` after one attribute
  * value was altered.
  */
-export function buildSignedResponse(
+/**
+ * The signed Assertion on its own, without the SAML protocol Response around
+ * it.
+ *
+ * Extracted because WS-Federation carries the same assertion inside a
+ * `RequestSecurityTokenResponse` instead of a `samlp:Response`. Two builders
+ * would be two subtly different assertions the day somebody fixed a
+ * `NotBefore` in one of them, and the assertion is the part a service provider
+ * actually trusts.
+ */
+export function buildSignedAssertion(
   input: AssertionInput,
   key: SigningMaterial,
 ): string {
   const assertionId = newId();
-  const responseId = newId();
   const notBefore = new Date(input.now.getTime() - 60_000);
   const notOnOrAfter = new Date(input.now.getTime() + input.lifetimeMs);
 
@@ -134,13 +143,25 @@ export function buildSignedResponse(
     insertAfterXPath: "/*[local-name(.)='Assertion']/*[local-name(.)='Issuer']",
   });
 
+  return signedAssertion;
+}
+
+export function buildSignedResponse(
+  input: AssertionInput,
+  key: SigningMaterial,
+): string {
+  const responseId = newId();
+  const inResponseToAttr = input.inResponseTo
+    ? ` InResponseTo="${xmlAttr(input.inResponseTo)}"`
+    : '';
+
   return (
     `<samlp:Response xmlns:samlp="${SAMLP_NS}" xmlns:saml="${SAML_NS}" ID="${responseId}" Version="2.0" IssueInstant="${instant(
       input.now,
     )}" Destination="${xmlAttr(input.acsUrl)}"${inResponseToAttr}>` +
     `<saml:Issuer>${xmlText(input.idpEntityId)}</saml:Issuer>` +
     `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>` +
-    signedAssertion +
+    buildSignedAssertion(input, key) +
     `</samlp:Response>`
   );
 }

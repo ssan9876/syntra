@@ -86,6 +86,19 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260905000000_deployment_manage_backfill',
   '20260906000000_writeback_delete',
   '20260907000000_directory_delete_backfill',
+  '20260908000000_login_lockout',
+  '20260909000000_password_ageing',
+  '20260910000000_webhook_endpoints',
+  '20260911000000_application_catalog_key',
+  '20260912000000_account_placement',
+  '20260913000000_delegated_tasks',
+  '20260914000000_application_category',
+  '20260915000000_claim_mapping_sets',
+  '20260916000000_email_otp',
+  '20260917000000_policy_device_country',
+  '20260918000000_tenant_branding',
+  '20260919000000_wsfed_enabled',
+  '20260920000000_parked_request_protocol',
 ];
 
 /**

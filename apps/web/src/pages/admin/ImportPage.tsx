@@ -78,7 +78,7 @@ export function ImportPage() {
               rows={10}
               spellCheck={false}
               placeholder={SAMPLE}
-              className="w-full rounded-control border border-border-subtle bg-bg px-3 py-2 font-mono text-sm text-ink placeholder:text-muted hover:border-border-strong"
+              className="w-full rounded-control border border-border-control bg-bg px-3 py-2 font-mono text-sm text-ink placeholder:text-muted hover:border-border-strong"
             />
             <div className="mt-3 flex items-center gap-3">
               <Button

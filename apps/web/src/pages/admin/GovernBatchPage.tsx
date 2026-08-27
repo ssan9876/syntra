@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -107,26 +107,26 @@ export function GovernBatchPage() {
       {data !== null && (
         <div className="mt-6 space-y-6">
           <Panel title={`${dispatchable.length} removals Govern can dispatch`}>
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle text-sm text-muted">
+            <Table>
+              <thead>
                 <tr>
-                  <th className="px-4 py-2">Person</th>
-                  <th className="px-4 py-2">Resource</th>
-                  <th className="px-4 py-2">What happens</th>
-                  <th className="px-4 py-2" />
+                  <th>Person</th>
+                  <th>Resource</th>
+                  <th>What happens</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
                 {dispatchable.map((d) => (
-                  <tr key={d.id} className="border-b border-border-subtle last:border-0">
-                    <td className="px-4 py-2">{d.holdingDescriptor.subjectKey ?? 'a subject'}</td>
-                    <td className="px-4 py-2">
+                  <tr key={d.id}>
+                    <td>{d.holdingDescriptor.subjectKey ?? 'a subject'}</td>
+                    <td>
                       {d.holdingDescriptor.resourceName ?? 'this holding'}
                     </td>
-                    <td className="px-4 py-2">
+                    <td>
                       <Status tone="primary">{ROUTE_LABEL[d.route] ?? d.route}</Status>
                     </td>
-                    <td className="px-4 py-2 text-right">
+                    <td className="text-right">
                       {d.status === 'proposed' && !finished ? (
                         <Button
                           size="sm"
@@ -154,7 +154,7 @@ export function GovernBatchPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </Panel>
 
           {/* Its own panel. These are NOT revocations, this screen does not call

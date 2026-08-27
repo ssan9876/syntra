@@ -1,5 +1,14 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Empty,
+  Field,
+  Panel,
+  Select,
+  SkeletonRows,
+  Table,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -192,22 +201,22 @@ export function GovernReportsPage() {
               </Empty>
             </div>
           ) : (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle text-sm text-muted">
+            <Table>
+              <thead>
                 <tr>
-                  <th className="px-4 py-2">Who</th>
-                  <th className="px-4 py-2">Why they are on this list</th>
-                  <th className="px-4 py-2">What they hold</th>
+                  <th>Who</th>
+                  <th>Why they are on this list</th>
+                  <th>What they hold</th>
                 </tr>
               </thead>
               <tbody>
                 {data.body.rows.map((row) => (
-                  <tr key={row.subjectKey} className="border-b border-border-subtle last:border-0">
-                    <td className="px-4 py-2 font-medium text-ink">{row.displayName}</td>
-                    <td className="px-4 py-2 text-muted">
+                  <tr key={row.subjectKey}>
+                    <td className="text-ink">{row.displayName}</td>
+                    <td>
                       {BUCKET_LABEL[row.bucket] ?? row.bucket}
                     </td>
-                    <td className="px-4 py-2 text-muted">
+                    <td>
                       <ul>
                         {row.resources.map((resource) => (
                           <li key={`${resource.resourceName}:${resource.observedAt}`}>
@@ -221,7 +230,7 @@ export function GovernReportsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

@@ -2,15 +2,25 @@ import type { FastifyInstance } from 'fastify';
 import {
   assignApplicationRequest,
   assignmentParams,
+  catalogCreateRequest,
+  catalogCreateResponse,
   createApplicationRequest,
   idParam,
   updateApplicationRequest,
 } from '@syntra/contracts';
 import {
+  CatalogVariableMissingError,
+  EntityIdTakenError,
   PERMISSIONS,
+  UnknownCatalogEntryError,
   assignApplication,
+  catalogEntry,
   createApplication,
+  createFromCatalog,
+  ensureActiveKey,
   findApplication,
+  localMasterKeyProvider,
+  listCatalog,
   listApplications,
   listAssignments,
   recordEvent,
@@ -20,6 +30,7 @@ import {
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
+import { tenantProtocolIdentity } from '../protocol-identity.js';
 
 /**
  * Drops explicit `undefined` values from a parsed partial request body.
@@ -42,10 +53,18 @@ function withoutUndefined<T extends Record<string, unknown>>(
   return out as { [K in keyof T]?: Exclude<T[K], undefined> };
 }
 
+export interface AdminApplicationRouteOptions {
+  /** Unseals the tenant's SAML signing key. See the catalog route below. */
+  masterKey: Buffer;
+  publicUrl: string;
+}
+
 export async function registerAdminApplicationRoutes(
   app: FastifyInstance,
+  options: AdminApplicationRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
+  const provider = localMasterKeyProvider(options.masterKey);
 
   app.get(
     '/applications',
@@ -53,6 +72,124 @@ export async function registerAdminApplicationRoutes(
     async (request) => ({
       applications: await request.db((tx) => listApplications(tx)),
     }),
+  );
+
+  /**
+   * The catalog: which applications Syntra knows how to configure.
+   *
+   * `ACCESS_READ`, and a constant — identical for every tenant, carrying no
+   * credential and no tenant data. It is served rather than bundled into the
+   * console so that the list the form offers and the list the service accepts
+   * are the same list.
+   *
+   * The console offers SP metadata import FIRST, where the service provider
+   * publishes any: that is exact, carries the certificates and cannot go
+   * stale. This is for the many SaaS applications that publish none.
+   */
+  app.get(
+    '/catalog',
+    { preHandler: requirePermission(PERMISSIONS.ACCESS_READ) },
+    async () => ({ entries: listCatalog() }),
+  );
+
+  app.post(
+    '/applications/from-catalog',
+    { preHandler: requirePermission(PERMISSIONS.ACCESS_MANAGE) },
+    async (request, reply) => {
+      const body = catalogCreateRequest.parse(request.body);
+
+      // The SIGNING KEY, before the transaction, exactly as
+      // `registerAdminProtocolRoutes` does for `PUT /applications/:id/saml`.
+      //
+      // Writing a `SamlConfig` is the moment a tenant commits to being an
+      // identity provider. `createFromCatalog` calls the bare
+      // `upsertSamlConfig` because it runs inside one transaction and RSA-2048
+      // generation has no business in Prisma's 5000 ms budget — so the seam
+      // `saveSamlConfig` provides has to be honoured here instead. Without it a
+      // tenant whose FIRST SAML application comes from the catalog has no key,
+      // and every sign-in dead-ends at 409 `saml-no-key` with nothing
+      // self-healing it. `ensureActiveKey` is idempotent, so every call after
+      // the first is a single read.
+      //
+      // Only for a SAML entry: a tenant that registers only OIDC clients has
+      // no business holding a SAML key, and the OIDC provider establishes its
+      // own at request time (`oidc-op.ts`).
+      // Resolved HERE, with its own refusal, because this lookup now happens
+      // BEFORE `createFromCatalog` and therefore before the `.catch` below
+      // that maps its errors. Left unmapped, an unknown key threw out of the
+      // route as a 500 — the 404 the service raises by name never reached the
+      // handler that turns it into one.
+      const entry = (() => {
+        try {
+          return catalogEntry(body.key);
+        } catch (cause) {
+          if (cause instanceof UnknownCatalogEntryError) {
+            throw new ProblemError(
+              404,
+              'unknown-catalog-entry',
+              'No such application',
+              cause.message,
+            );
+          }
+          throw cause;
+        }
+      })();
+
+      if (entry.saml) {
+        const tenant = await request.db((tx) =>
+          tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+        );
+        const identity = tenantProtocolIdentity(
+          { primaryDomain: tenant.primaryDomain },
+          options.publicUrl,
+        );
+        await ensureActiveKey(request.tenantId, provider, 'saml', {
+          commonName: identity.acsHost,
+        });
+      }
+
+      const created = await request
+        .db((tx) => createFromCatalog(tx, body))
+        .catch((cause: unknown) => {
+          // Three named refusals, each of which the form can act on. Anything
+          // else is a fault and goes up to the problem-json handler as a 500 —
+          // catching everything is how a lost connection comes to read as a
+          // duplicate entity ID.
+          if (cause instanceof UnknownCatalogEntryError) {
+            throw new ProblemError(404, 'unknown-catalog-entry', 'No such application', cause.message);
+          }
+          if (cause instanceof CatalogVariableMissingError) {
+            throw new ProblemError(
+              400,
+              'missing-value',
+              'That application needs another value',
+              cause.message,
+            );
+          }
+          if (cause instanceof EntityIdTakenError) {
+            // 409, and the message names the application already holding it
+            // and what to do about it.
+            throw new ProblemError(409, 'entity-id-taken', 'Already registered', cause.message);
+          }
+          throw cause;
+        });
+
+      await request.db((tx) =>
+        recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'access.application_created',
+          targetType: 'Application',
+          targetId: created.applicationId,
+          outcome: 'success',
+          sourceIp: request.ip,
+          // The entry it came from, so the trail says this was a catalog
+          // registration rather than a hand-built one. Never the secret.
+          payload: { catalogKey: body.key, slug: created.slug, protocol: created.protocol },
+        }),
+      );
+
+      return reply.status(201).send(catalogCreateResponse.parse(created));
+    },
   );
 
   app.post(

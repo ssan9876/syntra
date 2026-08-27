@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { PageHeader } from './PageHeader.js';
 import { useApiResource } from './hooks.js';
 
@@ -43,19 +43,19 @@ export function ProductsPage() {
             </div>
           )}
           {!loading && (data?.products ?? []).length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     Name
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Kind
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Visible to
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Status
                   </th>
                 </tr>
@@ -63,7 +63,7 @@ export function ProductsPage() {
               <tbody className="divide-y divide-border-subtle">
                 {data!.products.map((product) => (
                   <tr key={product.id}>
-                    <td className="px-4 py-3">
+                    <td className="py-3">
                       <Link
                         to={`/admin/automate/products/${product.id}`}
                         className="text-ink hover:text-primary"
@@ -71,8 +71,8 @@ export function ProductsPage() {
                         {product.name}
                       </Link>
                     </td>
-                    <td className="px-4 py-3 text-muted">{product.kind}</td>
-                    <td className="px-4 py-3">
+                    <td className="py-3">{product.kind}</td>
+                    <td className="py-3">
                       {/* A product with no audience is visible to nobody, and
                           the list says so rather than leaving a blank cell. */}
                       {product.audienceCondition === null ? (
@@ -81,7 +81,7 @@ export function ProductsPage() {
                         <Status tone="neutral">An audience rule</Status>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="py-3">
                       <Status
                         tone={
                           product.status === 'active' ? 'active' : 'neutral'
@@ -93,7 +93,7 @@ export function ProductsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

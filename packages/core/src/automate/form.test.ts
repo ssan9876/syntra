@@ -168,3 +168,120 @@ describe('formSchemaSchema', () => {
     }
   });
 });
+
+const conditional: FormSchema = [
+  { key: 'escalated', type: 'checkbox', label: 'Escalated to me', required: false },
+  {
+    key: 'note',
+    type: 'text',
+    label: 'Who escalated it',
+    required: true,
+    visibleWhen: { field: 'escalated', equals: true },
+  },
+];
+
+describe('a conditional field', () => {
+  it('is not required while its condition does not hold', () => {
+    // An unticked checkbox is `false`, not "unknown". Reading absence as
+    // unknown made every conditional field appear before its condition could
+    // possibly hold, which is the whole feature not working.
+    const result = validateFormValues(conditional, { escalated: false }, []);
+    expect(result).toEqual({ ok: true, values: { escalated: false } });
+  });
+
+  it('is not required when its trigger was never answered at all', () => {
+    expect(validateFormValues(conditional, {}, [])).toEqual({ ok: true, values: {} });
+  });
+
+  it('is required once its condition holds', () => {
+    const result = validateFormValues(conditional, { escalated: true }, []);
+    expect(result).toEqual({
+      ok: false,
+      errors: [{ path: 'note', message: 'This is required' }],
+    });
+  });
+
+  it('is not stored when it was not shown', () => {
+    // A hidden field's value is not an answer anybody gave. Storing it
+    // records an answer to a question that was never asked.
+    const result = validateFormValues(
+      conditional,
+      { escalated: false, note: 'left over from before the box was unticked' },
+      [],
+    );
+    expect(result).toEqual({ ok: true, values: { escalated: false } });
+  });
+
+  it('shows a field whose rule names something not on the form', () => {
+    // The typo protection. Silently deleting a question because a rule
+    // misspelt its trigger is the quieter and worse of the two failures.
+    const typo: FormSchema = [
+      {
+        key: 'note',
+        type: 'text',
+        label: 'Note',
+        required: true,
+        visibleWhen: { field: 'escalted', equals: true },
+      },
+    ];
+    expect(validateFormValues(typo, {}, [])).toEqual({
+      ok: false,
+      errors: [{ path: 'note', message: 'This is required' }],
+    });
+  });
+});
+
+const withLookup: FormSchema = [
+  { key: 'user', type: 'lookup', label: 'Account', dataSource: 'user', required: true },
+];
+
+describe('a lookup field', () => {
+  it('accepts a value the caller offered', () => {
+    expect(validateFormValues(withLookup, { user: 'u1' }, [], { user: ['u1', 'u2'] })).toEqual({
+      ok: true,
+      values: { user: 'u1' },
+    });
+  });
+
+  it('refuses a value the caller did not offer', () => {
+    // The submitted value is an id from a picker, and a picker's contents are
+    // a suggestion. The check against the caller's own set is the control.
+    expect(validateFormValues(withLookup, { user: 'u9' }, [], { user: ['u1'] })).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it('refuses everything when the caller offered nothing for that source', () => {
+    // A missing set is a caller that has not decided, and the safe reading of
+    // "has not decided" is no.
+    expect(validateFormValues(withLookup, { user: 'u1' }, [], {})).toMatchObject({ ok: false });
+  });
+});
+
+describe('the schema guard', () => {
+  it('refuses a lookup that does not say what it looks up', () => {
+    expect(
+      formSchemaSchema.safeParse([
+        { key: 'user', type: 'lookup', label: 'Account', required: true },
+      ]).success,
+    ).toBe(false);
+  });
+
+  it('refuses a data source on something that is not a lookup', () => {
+    // A `dataSource` on a text box is somebody who believes they built a
+    // picker, and a form that silently accepts it lets them keep believing it.
+    expect(
+      formSchemaSchema.safeParse([
+        { key: 'note', type: 'text', label: 'Note', required: true, dataSource: 'user' },
+      ]).success,
+    ).toBe(false);
+  });
+
+  it('accepts a well-formed lookup', () => {
+    expect(
+      formSchemaSchema.safeParse([
+        { key: 'user', type: 'lookup', label: 'Account', required: true, dataSource: 'user' },
+      ]).success,
+    ).toBe(true);
+  });
+});

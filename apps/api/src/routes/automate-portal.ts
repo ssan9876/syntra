@@ -6,12 +6,17 @@ import {
   decideRequestBody,
   delegatedGrantBody,
   resourceParam,
+  runTaskRequest,
   submitRequestBody,
 } from '@syntra/contracts';
 import {
   DecisionRefusedError,
   DelegationRefusedError,
+  EscalationRefusedError,
   PERMISSIONS,
+  TaskInputInvalidError,
+  TaskNotAvailableError,
+  actionableUserIds,
   cancelRequest,
   createApprovalDelegation,
   delegatedGrant,
@@ -24,15 +29,27 @@ import {
   resourcesManagedBy,
   searchVisibleProducts,
   sodImpactForProducts,
+  runTask,
   submitRequest,
+  tasksForPerson,
   visibleProducts,
   type Scheduler,
+  type Transport,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { requireSession } from '../plugins/require-session.js';
 
 export interface AutomatePortalRouteOptions {
   publicUrl: string;
+  /**
+   * How a delegated task's `send_password_reset` action leaves the process.
+   *
+   * NOT optional. An action registered with no transport mails nobody, and
+   * the failure is silent: the task reports success, the run record says
+   * success, and the person waiting for a link never gets one. The same
+   * argument `registerAutomateJobs` makes about the outbox.
+   */
+  transport: Transport;
   /**
    * How a decision or a hand-back reaches the job scheduler.
    *
@@ -80,6 +97,151 @@ export async function registerAutomatePortalRoutes(
     }
     return user.personId;
   };
+
+  /**
+   * The delegated tasks this person may run.
+   *
+   * A PORTAL surface, deliberately. Somebody who holds no administrative
+   * permission at all can see and run these — that is the feature. What keeps
+   * it safe is `runTask`: the audience is re-evaluated, the form is checked
+   * against the sets this route computed, and the run is refused when its
+   * subject holds a permission the runner does not.
+   */
+  app.get('/tasks', async (request) => {
+    const personId = await personFor(request);
+    const tasks = await request.db((tx) => tasksForPerson(tx, personId));
+    return { tasks };
+  });
+
+  /**
+   * What a `lookup` field may resolve to at all.
+   *
+   * An EXISTENCE check, not the privilege boundary — the two are different
+   * jobs and conflating them produces the wrong error. This set stops a
+   * submitted value being an arbitrary string, a group id where an account id
+   * belongs, or a record from a table nobody named. Whether this person may
+   * act on that account is `assertNotMorePrivileged`'s question, and it
+   * answers it with a sentence that says why.
+   *
+   * The picker below narrows this further, so the ordinary path never offers a
+   * choice that would be refused. That is presentation; this is the floor.
+   */
+  const lookupsFor = async (request: FastifyRequest) => {
+    return request.db(async (tx) => ({
+      user: (await tx.user.findMany({ select: { id: true } })).map((u) => u.id),
+      group: (await tx.group.findMany({ select: { id: true } })).map((g) => g.id),
+      orgUnit: (await tx.orgUnit.findMany({ select: { id: true } })).map((o) => o.id),
+      person: (await tx.person.findMany({ select: { id: true } })).map((p) => p.id),
+    }));
+  };
+
+  app.get('/tasks/:id/options', async (request) => {
+    const personId = await personFor(request);
+    const { id } = idParam.parse(request.params);
+
+    // The task has to be one this person may run before its pickers are
+    // filled in. Otherwise this endpoint is a directory listing available to
+    // anybody who can guess a task id.
+    const available = await request.db((tx) => tasksForPerson(tx, personId));
+    const task = available.find((candidate) => candidate.id === id);
+    if (task === undefined) {
+      throw new ProblemError(404, 'no-such-task', 'Not available to you');
+    }
+
+    // Narrowed to what this person may actually act on. A picker that offered
+    // accounts the run will refuse is a control that needs a paragraph of
+    // explanation attached to a failure — the list should simply not contain
+    // what cannot be chosen. The refusal still exists, for anybody submitting
+    // an id they did not get from here.
+    const allowed = {
+      ...(await lookupsFor(request)),
+      user: await request.db((tx) => actionableUserIds(tx, request.session.userId)),
+    };
+    const wanted = new Set(
+      task.formSchema
+        .filter((field) => field.type === 'lookup' && field.dataSource !== undefined)
+        .map((field) => field.dataSource as string),
+    );
+
+    // Labels, not just ids: a picker of UUIDs is not a picker. Only for the
+    // sources this task actually asks for — the rest are not read and are not
+    // returned.
+    return request.db(async (tx) => {
+      const options: Record<string, { value: string; label: string }[]> = {};
+      if (wanted.has('user')) {
+        const rows = await tx.user.findMany({
+          where: { id: { in: allowed.user } },
+          select: { id: true, login: true, displayName: true },
+          orderBy: { login: 'asc' },
+        });
+        options.user = rows.map((r) => ({
+          value: r.id,
+          label: `${r.displayName} (${r.login})`,
+        }));
+      }
+      if (wanted.has('group')) {
+        const rows = await tx.group.findMany({
+          select: { id: true, name: true },
+          orderBy: { name: 'asc' },
+        });
+        options.group = rows.map((r) => ({ value: r.id, label: r.name }));
+      }
+      if (wanted.has('orgUnit')) {
+        const rows = await tx.orgUnit.findMany({
+          select: { id: true, name: true },
+          orderBy: { name: 'asc' },
+        });
+        options.orgUnit = rows.map((r) => ({ value: r.id, label: r.name }));
+      }
+      if (wanted.has('person')) {
+        const rows = await tx.person.findMany({
+          select: { id: true, givenName: true, familyName: true },
+          orderBy: { familyName: 'asc' },
+        });
+        options.person = rows.map((r) => ({
+          value: r.id,
+          label: `${r.givenName} ${r.familyName}`.trim(),
+        }));
+      }
+      return { options };
+    });
+  });
+
+  app.post('/tasks/:id/run', async (request) => {
+    const personId = await personFor(request);
+    const { id } = idParam.parse(request.params);
+    const body = runTaskRequest.parse(request.body);
+
+    return runTask(request.tenantId, {
+      taskId: id,
+      values: body.values,
+      runByUserId: request.session.userId,
+      runByPersonId: personId,
+      sourceIp: request.ip,
+      publicUrl: options.publicUrl,
+      transport: options.transport,
+      lookups: await lookupsFor(request),
+    }).catch((cause: unknown) => {
+      if (cause instanceof TaskNotAvailableError) {
+        throw new ProblemError(404, 'no-such-task', 'Not available to you', cause.message);
+      }
+      if (cause instanceof TaskInputInvalidError) {
+        throw new ProblemError(
+          400,
+          'invalid-form',
+          'Check the form',
+          cause.errors.map((e) => `${e.path}: ${e.message}`).join('; '),
+        );
+      }
+      if (cause instanceof EscalationRefusedError) {
+        // 403, and the message says why rather than "forbidden". Somebody
+        // running a delegated task against an administrator has hit a rule,
+        // not a bug, and the rule is worth stating.
+        throw new ProblemError(403, 'would-escalate', 'That account is out of reach', cause.message);
+      }
+      throw cause;
+    });
+  });
 
   /**
    * Whose catalog this is.

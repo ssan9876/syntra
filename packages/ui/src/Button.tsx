@@ -20,8 +20,11 @@ const VARIANTS: Record<Variant, string> = {
   // reads brighter than its luminance suggests, and dark text on it muddies.
   primary:
     'bg-primary text-bg hover:bg-primary-hover active:bg-primary-hover border-transparent',
+  // `border-control`, not `border-subtle`. A secondary button is a control
+  // somebody has to find; 1.4.11 asks 3:1 of its boundary and the divider
+  // token measured 1.44:1.
   secondary:
-    'bg-bg text-ink border-border-subtle hover:bg-surface active:bg-surface-2',
+    'bg-bg text-ink border-border-control hover:bg-surface hover:border-border-strong active:bg-surface-2',
   ghost:
     'bg-transparent text-muted border-transparent hover:bg-surface-2 hover:text-ink',
   danger:
@@ -40,7 +43,7 @@ const VARIANTS: Record<Variant, string> = {
    * completes it.
    */
   'danger-quiet':
-    'bg-bg text-danger border-border-subtle hover:bg-danger-soft hover:border-danger active:bg-danger-soft',
+    'bg-bg text-danger border-border-control hover:bg-danger-soft hover:border-danger active:bg-danger-soft',
 };
 
 const SIZES: Record<Size, string> = {

@@ -343,6 +343,31 @@ describe('the org-unit scope on EVERY read path — §21', () => {
     ]);
   });
 
+  /**
+   * A mined candidate names no person, which is the argument for exempting it
+   * from the scope — and the argument is wrong. It names a COHORT and counts
+   * it: "everyone in Engineering holds all-staff, and forty others do too"
+   * tells a department lead the size and the access shape of a department they
+   * cannot otherwise see. Aggregates over people are still about people.
+   *
+   * This case only proves the scoped route answers a scoped reader at all —
+   * the two-person fixture here has no departments, so it can produce no
+   * cohorts and an assertion about withheld rows would pass vacuously. The
+   * filtering itself is held by `rule-mining-scope.test.ts`, which seeds a
+   * population large enough to mine.
+   */
+  it('answers a scoped reader rather than failing under the scope', async () => {
+    await seedTwoDepartments();
+    await seedAdmin('lead', [PERMISSIONS.GOVERN_READ], { scopeOrgUnitId: leadOrgUnitId });
+
+    const res = await get(
+      `/api/admin/govern/snapshots/${secondSnapshotId}/rule-candidates`,
+      await cookieFor('lead'),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.json().candidates).toEqual([]);
+  });
+
   it('404s a person report outside the caller’s org-unit scope', async () => {
     await seedTwoDepartments();
     await seedAdmin('lead', [PERMISSIONS.GOVERN_READ], { scopeOrgUnitId: leadOrgUnitId });

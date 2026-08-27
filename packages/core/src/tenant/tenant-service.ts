@@ -25,6 +25,44 @@ export interface TenantSettings {
   selfEnrolmentEnabled: boolean;
   passwordMinLength: number;
   /**
+   * Failed password attempts before an account stops accepting even the right
+   * password. Zero is off, and is the default.
+   *
+   * This is the account's protection; the API's rate limit is the service's.
+   * A rate limit keyed on the caller's address is spent by one attacker and
+   * refills a minute later — it bounds how fast guesses arrive, not how many
+   * an account will tolerate before one of them lands.
+   */
+  lockoutThreshold: number;
+  /** How long failures accumulate, measured from the first of a run. */
+  lockoutWindowMinutes: number;
+  /** How long a lock holds. Zero means until an administrator lifts it. */
+  lockoutDurationMinutes: number;
+  /**
+   * Days a password stays good for. Zero never expires one.
+   *
+   * Off by default and usually best left there: NIST SP 800-63B stopped
+   * recommending scheduled rotation years ago, because a person required to
+   * change a password every ninety days picks one they can iterate. It exists
+   * for organizations audited against policies that still demand it.
+   */
+  passwordMaxAgeDays: number;
+  /**
+   * How many retired passwords may not be chosen again. Zero disables the
+   * check. This is the half of password ageing worth switching on — it costs
+   * a user nothing until they try to put an old password back into service.
+   */
+  passwordHistoryDepth: number;
+  /**
+   * Whether a user may enrol a code mailed to the address on their account.
+   *
+   * Off by default. Wherever that same mailbox can reset the password, this
+   * adds nothing an attacker holding the mailbox does not already have — so
+   * it is for organizations whose mail is itself behind strong
+   * authentication, and they are the ones who should switch it on.
+   */
+  emailOtpEnabled: boolean;
+  /**
    * The hostname this tenant answers on, and the WebAuthn relying party.
    *
    * Writable, which it was not: `slug` and this were both frozen as "the two
@@ -81,6 +119,12 @@ export async function readTenant(tx: TenantClient): Promise<TenantView> {
     adminMfaRequired: tenant.adminMfaRequired,
     selfEnrolmentEnabled: tenant.selfEnrolmentEnabled,
     passwordMinLength: tenant.passwordMinLength,
+    lockoutThreshold: tenant.lockoutThreshold,
+    lockoutWindowMinutes: tenant.lockoutWindowMinutes,
+    lockoutDurationMinutes: tenant.lockoutDurationMinutes,
+    passwordMaxAgeDays: tenant.passwordMaxAgeDays,
+    passwordHistoryDepth: tenant.passwordHistoryDepth,
+    emailOtpEnabled: tenant.emailOtpEnabled,
     webauthnAvailable: tenant.primaryDomain !== null,
   };
 }
@@ -121,6 +165,28 @@ export async function updateTenant(
       ...(input.passwordMinLength === undefined
         ? {}
         : { passwordMinLength: input.passwordMinLength }),
+      ...(input.lockoutThreshold === undefined
+        ? {}
+        : { lockoutThreshold: input.lockoutThreshold }),
+      ...(input.lockoutWindowMinutes === undefined
+        ? {}
+        : { lockoutWindowMinutes: input.lockoutWindowMinutes }),
+      ...(input.lockoutDurationMinutes === undefined
+        ? {}
+        : { lockoutDurationMinutes: input.lockoutDurationMinutes }),
+      ...(input.passwordMaxAgeDays === undefined
+        ? {}
+        : { passwordMaxAgeDays: input.passwordMaxAgeDays }),
+      ...(input.passwordHistoryDepth === undefined
+        ? {}
+        : { passwordHistoryDepth: input.passwordHistoryDepth }),
+      // Listed here as well as on the read. A field accepted by the request
+      // schema and absent from this hand-maintained list is a PUT that answers
+      // 200 and changes nothing — which is exactly what happened to the
+      // lockout fields when they were first added.
+      ...(input.emailOtpEnabled === undefined
+        ? {}
+        : { emailOtpEnabled: input.emailOtpEnabled }),
       ...(input.primaryDomain === undefined
         ? {}
         : { primaryDomain: input.primaryDomain }),

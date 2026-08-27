@@ -4,6 +4,7 @@ import { Alert, Button, Empty, Panel, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { ApplicationSso } from './ApplicationSso.js';
 
 type SubjectType = 'user' | 'group' | 'orgUnit';
 
@@ -122,7 +123,7 @@ export function ApplicationDetailPage() {
           id={`pick-${type}`}
           value={chosen[type]}
           onChange={(e) => setChosen((c) => ({ ...c, [type]: e.target.value }))}
-          className="h-9 w-full rounded-control border border-border-subtle bg-bg px-3 text-ink"
+          className="h-9 w-full rounded-control border border-border-control bg-bg px-3 text-ink"
         >
           <option value="">Choose one…</option>
           {options.map((row) => (
@@ -187,6 +188,17 @@ export function ApplicationDetailPage() {
             </div>
           </div>
         </Panel>
+      )}
+
+      {/*
+        Below the assignments, because who holds it is the question people
+        arrive with and how it signs in is the question they come back for.
+        Renders nothing when the application uses neither protocol.
+      */}
+      {id && (
+        <div className="mt-4 space-y-4">
+          <ApplicationSso applicationId={id} />
+        </div>
       )}
     </>
   );

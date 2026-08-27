@@ -24,7 +24,13 @@ export const policyRuleOutcome = z.enum([
   'deny',
   'federate',
 ]);
-export const policyFactorType = z.enum(['totp', 'webauthn']);
+/**
+ * Kept in step with `FACTOR_TYPES` in the policy engine by hand, because the
+ * contracts package cannot import from core. A factor the engine knows and
+ * this enum does not is a factor no rule can name from the console — which is
+ * what happened to `email_otp` between its being added and being listed here.
+ */
+export const policyFactorType = z.enum(['totp', 'webauthn', 'email_otp']);
 export const contractField = z.enum(['department', 'jobTitle', 'employer', 'location']);
 
 const minuteOfDay = z.number().int().min(0).max(1439);
@@ -40,6 +46,17 @@ export const policyRuleRequest = z
     contractField: contractField.nullable().default(null),
     contractValues: z.array(z.string().min(1).max(256)).default([]),
     ipRanges: z.array(z.string().min(1).max(64)).default([]),
+    devicePlatforms: z
+      .array(z.enum(['windows', 'macos', 'linux', 'ios', 'android', 'other']))
+      .default([]),
+    countries: z
+      .array(
+        z
+          .string()
+          .regex(/^[A-Za-z]{2}$/, { message: 'Use a two-letter country code, like NL' }),
+      )
+      .max(64)
+      .default([]),
     daysOfWeek: z.array(z.number().int().min(0).max(6)).default([]),
     startMinute: minuteOfDay.nullable().default(null),
     endMinute: minuteOfDay.nullable().default(null),

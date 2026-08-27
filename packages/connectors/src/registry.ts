@@ -4,6 +4,8 @@ import { adTargetConnector } from './ad/connector.js';
 import { adTargetConfigSchema } from './ad/config.js';
 import { scimTargetConnector } from './scim/connector.js';
 import { scim2TargetConfigSchema } from './scim/config.js';
+import { httpTargetConnector } from './http/connector.js';
+import { httpTargetConfigSchema } from './http/document.js';
 
 /**
  * Every `TargetSystem.type` this package can read. A plain lookup, not
@@ -14,7 +16,7 @@ import { scim2TargetConfigSchema } from './scim/config.js';
  * imported before this file existed. Adding a third connector is one more
  * entry in each of the two records below, not a new mechanism.
  */
-export const TARGET_CONNECTOR_TYPES = ['activeDirectory', 'scim2'] as const;
+export const TARGET_CONNECTOR_TYPES = ['activeDirectory', 'scim2', 'httpJson'] as const;
 export type TargetConnectorType = (typeof TARGET_CONNECTOR_TYPES)[number];
 
 export class UnknownTargetConnectorTypeError extends Error {
@@ -40,11 +42,15 @@ export class UnknownTargetConnectorTypeError extends Error {
 const CONNECTORS: Record<TargetConnectorType, TargetConnector<never>> = {
   activeDirectory: adTargetConnector as unknown as TargetConnector<never>,
   scim2: scimTargetConnector as unknown as TargetConnector<never>,
+  // One entry, like the others -- but this one covers many targets rather
+  // than one. Its config carries the document that describes which.
+  httpJson: httpTargetConnector as unknown as TargetConnector<never>,
 };
 
 const CONFIG_SCHEMAS: Record<TargetConnectorType, z.ZodTypeAny> = {
   activeDirectory: adTargetConfigSchema,
   scim2: scim2TargetConfigSchema,
+  httpJson: httpTargetConfigSchema,
 };
 
 function isKnownType(type: string): type is TargetConnectorType {

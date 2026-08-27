@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { GovernRuleCandidates } from './GovernRuleCandidates.js';
 
 interface SourceLine {
   sourceKind: string;
@@ -108,31 +109,28 @@ export function GovernSnapshotDetailPage() {
             title="Sources"
             description="When each system was last read, and how completely. This is the clock that matters."
           >
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle text-sm text-muted">
+            <Table>
+              <thead>
                 <tr>
-                  <th className="px-4 py-2">Source</th>
-                  <th className="px-4 py-2">Last successful read</th>
-                  <th className="px-4 py-2">Freshness</th>
-                  <th className="px-4 py-2">Completeness</th>
-                  <th className="px-4 py-2" />
+                  <th>Source</th>
+                  <th>Last successful read</th>
+                  <th>Freshness</th>
+                  <th>Completeness</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
                 {snapshot.sources.map((source) => (
-                  <tr
-                    key={`${source.sourceKind}:${source.sourceId}`}
-                    className="border-b border-border-subtle last:border-0"
-                  >
-                    <td className="px-4 py-2 font-medium text-ink">{source.sourceName}</td>
-                    <td className="px-4 py-2 text-muted">
+                  <tr key={`${source.sourceKind}:${source.sourceId}`}>
+                    <td className="text-ink">{source.sourceName}</td>
+                    <td>
                       {source.lastSuccessfulReadAt === null
                         ? 'never'
                         : `${longDate(source.lastSuccessfulReadAt)} — ${Math.round(
                             source.ageHours ?? 0,
                           )} hours ago`}
                     </td>
-                    <td className="px-4 py-2">
+                    <td>
                       {/* Words, not a colour alone. A badge that only differs by
                           hue is unreadable to a reader who cannot see the hue,
                           and this is the number the whole report rests on. */}
@@ -143,12 +141,12 @@ export function GovernSnapshotDetailPage() {
                         against a {source.freshnessSlaHours}-hour SLA
                       </span>
                     </td>
-                    <td className="px-4 py-2">
+                    <td>
                       <Status tone={source.completeness === 'complete' ? 'active' : 'warning'}>
                         {COMPLETENESS_LABEL[source.completeness] ?? source.completeness}
                       </Status>
                     </td>
-                    <td className="px-4 py-2 text-right">
+                    <td className="text-right">
                       {source.sourceKind !== 'syntraInternal' && (
                         <Button
                           size="sm"
@@ -183,8 +181,10 @@ export function GovernSnapshotDetailPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </Panel>
+
+          <GovernRuleCandidates snapshotId={snapshot.id} />
 
           {data.gapsByKind.length > 0 && (
             <Panel title="Coverage gaps">

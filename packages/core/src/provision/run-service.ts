@@ -692,6 +692,15 @@ export async function previewProvisionRun(
         where: { targetSystemId, status: { in: ['applied', 'partially_applied'] } },
         orderBy: { startedAt: 'desc' },
       });
+      // Read in the SAME transaction as the persons, not afterwards. A
+      // placement written between the two reads would otherwise be a manual
+      // move this run does not know about — and the action it would propose
+      // is a `modifyDN` putting the person straight back where the template
+      // says, which is the exact failure this table exists to prevent.
+      const placements = await tx.accountPlacement.findMany({
+        where: { targetSystemId },
+        select: { personId: true, container: true },
+      });
       return {
         persons,
         rules,
@@ -699,6 +708,7 @@ export async function previewProvisionRun(
         accounts,
         users,
         grants,
+        placements,
         previousPersons: previous?.personsWithActiveContract ?? null,
         hasEverApplied: prepared.target.lastAppliedRunAt !== null,
       };
@@ -800,6 +810,9 @@ export async function previewProvisionRun(
       ...objects.map((o) => o.correlationKey),
     ]);
     const knownByPerson = new Map(snapshot.accounts.map((a) => [a.personId, a]));
+    const placementByPerson = new Map(
+      snapshot.placements.map((p) => [p.personId, p.container]),
+    );
 
     const desired: DesiredState[] = [];
     const contractsByPerson = new Map<string, ContractFacts[]>();
@@ -871,6 +884,7 @@ export async function previewProvisionRun(
         entitlementStatus,
         existingCorrelationKey: knownByPerson.get(person.id)?.correlationKey ?? null,
         takenCorrelationKeys: takenKeys,
+        containerOverride: placementByPerson.get(person.id) ?? null,
         renameEnabled: prepared.target.renameEnabled,
         now,
         horizon,

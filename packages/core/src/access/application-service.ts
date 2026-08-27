@@ -9,6 +9,8 @@ export interface CreateApplicationInput {
   description?: string | null | undefined;
   iconUrl?: string | null | undefined;
   launchUrl?: string | null | undefined;
+  /** The heading this tile appears under in the portal. */
+  category?: string | null | undefined;
   /** 'bookmark' today. Access II adds 'saml' and 'oidc'. */
   type?: string | undefined;
   visibility?: ApplicationVisibility | undefined;
@@ -33,6 +35,7 @@ export async function createApplication(
       description: input.description ?? null,
       iconUrl: input.iconUrl ?? null,
       launchUrl: input.launchUrl ?? null,
+      category: input.category ?? null,
       type: input.type ?? 'bookmark',
       visibility: input.visibility ?? 'assigned',
     },
@@ -58,6 +61,11 @@ export async function updateApplication(
       // API, and the API said it had worked.
       ...(input.type === undefined ? {} : { type: input.type }),
       ...(input.launchUrl === undefined ? {} : { launchUrl: input.launchUrl }),
+      // Listed here as well as on the create, because the comment above is
+      // about exactly this: a field accepted by the request schema and absent
+      // from this hand-maintained list is a PUT that answers 200 and changes
+      // nothing.
+      ...(input.category === undefined ? {} : { category: input.category }),
       ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
       ...(input.status === undefined ? {} : { status: input.status }),
     },

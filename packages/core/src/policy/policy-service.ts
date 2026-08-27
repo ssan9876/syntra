@@ -2,6 +2,7 @@ import type { TenantClient } from '@syntra/db';
 import type { RoutingRule } from '../federation/routing.js';
 import { currentTenant } from '../tenant-context.js';
 import { isIpRangeUsable } from './ip-match.js';
+import { isDevicePlatform } from './device-match.js';
 import { isValidTimeZone } from './time-window.js';
 import {
   CONTRACT_FIELDS,
@@ -36,6 +37,8 @@ export interface RuleInput {
   contractField?: ContractField | null | undefined;
   contractValues?: string[] | undefined;
   ipRanges?: string[] | undefined;
+  devicePlatforms?: string[] | undefined;
+  countries?: string[] | undefined;
   daysOfWeek?: number[] | undefined;
   startMinute?: number | null | undefined;
   endMinute?: number | null | undefined;
@@ -58,6 +61,8 @@ type RuleRow = {
   contractField: string | null;
   contractValues: string[];
   ipRanges: string[];
+  devicePlatforms: string[];
+  countries: string[];
   daysOfWeek: number[];
   startMinute: number | null;
   endMinute: number | null;
@@ -97,6 +102,8 @@ function toRule(row: RuleRow): PolicyRule {
     contractField: asContractField(row.contractField),
     contractValues: row.contractValues,
     ipRanges: row.ipRanges,
+    devicePlatforms: row.devicePlatforms,
+    countries: row.countries,
     daysOfWeek: row.daysOfWeek,
     startMinute: row.startMinute,
     endMinute: row.endMinute,
@@ -198,6 +205,27 @@ function validate(input: RuleInput): void {
       throw new Error(`ipRanges holds something that is not an address or CIDR: ${range}`);
     }
   }
+  for (const platform of input.devicePlatforms ?? []) {
+    // A closed list rather than free text. A rule naming `Windows` or `win32`
+    // would save cleanly and then never match anything, and a policy that
+    // silently never fires is worse than one that refuses to be written.
+    if (!isDevicePlatform(platform)) {
+      throw new Error(
+        `devicePlatforms holds something that is not a device kind: ${platform}`,
+      );
+    }
+  }
+  for (const country of input.countries ?? []) {
+    // Two letters, ISO 3166-1 alpha-2, which is what every header that carries
+    // a country sends. Not checked against a list of countries that exist:
+    // that list changes, and refusing a code because this release predates it
+    // would be a bug nobody could work around.
+    if (!/^[A-Za-z]{2}$/.test(country.trim())) {
+      throw new Error(
+        `countries holds something that is not a two-letter country code: ${country}`,
+      );
+    }
+  }
 }
 
 /**
@@ -216,12 +244,22 @@ async function assertFactorUsable(
   outcome: RuleOutcome,
   factorType: FactorType | null | undefined,
 ): Promise<void> {
-  if (outcome !== 'require_factor' || factorType !== 'webauthn') return;
+  if (outcome !== 'require_factor') return;
+  if (factorType !== 'webauthn' && factorType !== 'email_otp') return;
   const tenantId = await currentTenant(tx);
   const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
-  if (!tenant.primaryDomain) {
+  if (factorType === 'webauthn' && !tenant.primaryDomain) {
     throw new Error(
       'this tenant has no primary domain set, so security keys cannot be registered — set one before requiring them',
+    );
+  }
+  // The same dead end as the one above, one switch along. Emailed codes are
+  // off until a tenant turns them on, and a rule requiring one while they are
+  // off sends every user it matches to an enrolment screen that cannot
+  // enrol them.
+  if (factorType === 'email_otp' && !tenant.emailOtpEnabled) {
+    throw new Error(
+      'emailed codes are switched off for this tenant — turn them on before requiring one',
     );
   }
 }
@@ -292,6 +330,8 @@ const data = (input: RuleInput) => ({
   contractField: input.contractField ?? null,
   contractValues: input.contractValues ?? [],
   ipRanges: input.ipRanges ?? [],
+  devicePlatforms: input.devicePlatforms ?? [],
+  countries: (input.countries ?? []).map((c) => c.trim().toUpperCase()),
   daysOfWeek: input.daysOfWeek ?? [],
   startMinute: input.startMinute ?? null,
   endMinute: input.endMinute ?? null,

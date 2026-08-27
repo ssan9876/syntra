@@ -355,3 +355,163 @@ describe('changing the tenant domain', () => {
     spy.mockRestore();
   });
 });
+
+describe('PUT /api/admin/tenant and the password policy', () => {
+  let cookie: string;
+  beforeEach(async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    cookie = await adminCookie();
+  });
+
+  /**
+   * Reads back what was SAVED, not what was sent. `updateTenant` writes a
+   * hand-maintained list of fields, so a setting can be accepted by the
+   * contract, echoed by the response and never persisted — which is exactly
+   * what happened to the lockout fields when they were first added.
+   */
+  it('persists the lockout policy', async () => {
+    const res = await put(cookie, {
+      lockoutThreshold: 5,
+      lockoutWindowMinutes: 30,
+      lockoutDurationMinutes: 0,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const saved = await prisma.tenant.findUniqueOrThrow({
+      where: { id: ctx.tenantId },
+    });
+    expect(saved).toMatchObject({
+      lockoutThreshold: 5,
+      lockoutWindowMinutes: 30,
+      lockoutDurationMinutes: 0,
+    });
+  });
+
+  it('persists the password ageing policy', async () => {
+    const res = await put(cookie, { passwordMaxAgeDays: 90, passwordHistoryDepth: 5 });
+    expect(res.statusCode).toBe(200);
+
+    const saved = await prisma.tenant.findUniqueOrThrow({
+      where: { id: ctx.tenantId },
+    });
+    expect(saved).toMatchObject({
+      passwordMaxAgeDays: 90,
+      passwordHistoryDepth: 5,
+    });
+  });
+
+  it('refuses an expiry short enough to be a denial of service', async () => {
+    // Zero is off and 30 is the floor; one day would ask every user in the
+    // tenant to choose a new password daily.
+    expect((await put(cookie, { passwordMaxAgeDays: 1 })).statusCode).toBe(400);
+    expect((await put(cookie, { passwordMaxAgeDays: 0 })).statusCode).toBe(200);
+  });
+
+  it('refuses a lockout threshold of one', async () => {
+    expect((await put(cookie, { lockoutThreshold: 1 })).statusCode).toBe(400);
+  });
+});
+
+/**
+ * The branding routes.
+ *
+ * Every refusal here is about the SIGN-IN page: a colour nobody can read, or a
+ * logo that fetches from somewhere, renders before anybody has authenticated.
+ */
+describe('the tenant brand', () => {
+  const putBrand = (cookie: string, payload: unknown) =>
+    ctx.app.inject({
+      method: 'PUT',
+      url: '/api/admin/tenant/brand',
+      headers: { host: ctx.host, cookie },
+      payload: payload as object,
+    });
+
+  const getBrand = (cookie: string) =>
+    ctx.app.inject({
+      method: 'GET',
+      url: '/api/admin/tenant/brand',
+      headers: { host: ctx.host, cookie },
+    });
+
+  it('needs tenant.manage, like every other tenant setting', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    expect((await getBrand(await adminCookie())).statusCode).toBe(403);
+  });
+
+  it('saves a name and a readable colour', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    const res = await putBrand(cookie, { name: 'Acme', primary: '#2563eb' });
+    expect(res.statusCode).toBe(200);
+    expect(await getBrand(cookie).then((r) => r.json())).toMatchObject({
+      name: 'Acme',
+      primary: '#2563eb',
+    });
+  });
+
+  it('refuses a colour that cannot be read, and says by how much', async () => {
+    // "That colour is not allowed" sends an administrator back to guessing.
+    // The measured ratio and the direction to move in is the difference.
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const res = await putBrand(await adminCookie(), { primary: '#fffbe6' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().detail).toMatch(/:1/);
+    expect(res.json().detail).toMatch(/light page/);
+  });
+
+  it('refuses a logo that would be fetched from somewhere else', async () => {
+    // A logo that fetches is a logo that tells its host who is signing in and
+    // when — and it stops rendering the day that host moves.
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const res = await putBrand(await adminCookie(), {
+      logo: 'https://cdn.example.test/logo.png',
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('refuses an SVG logo', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const res = await putBrand(await adminCookie(), {
+      logo: 'data:image/svg+xml;base64,QUFB',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().detail).toMatch(/SVG/);
+  });
+
+  it('refuses a misspelled field rather than saving nothing and reporting success', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const res = await putBrand(await adminCookie(), { brandPrimay: '#2563eb' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('keeps the logo out of the audit payload', async () => {
+    // An audit event is read far more often than a logo changes, and a
+    // quarter-megabyte data URI in every export is a cost nobody signed up
+    // for. Whether one is set is the fact an auditor wants.
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    await putBrand(await adminCookie(), { logo: 'data:image/png;base64,QUFB' });
+
+    // Through `withTenant`, like every other audit assertion in the suite.
+    // The raw client sets no `app.current_tenant`, and `FORCE ROW LEVEL
+    // SECURITY` hides the row from it entirely — which reads as "no event was
+    // written" and is not.
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirst({
+        where: { action: 'tenant.brand_updated' },
+        orderBy: { occurredAt: 'desc' },
+      }),
+    );
+    expect(event).not.toBeNull();
+    expect(JSON.stringify(event!.payload)).not.toContain('QUFB');
+    expect(JSON.stringify(event!.payload)).toContain('set');
+  });
+
+  it('clears back to Syntra on a null', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    await putBrand(cookie, { name: 'Acme' });
+    await putBrand(cookie, { name: null });
+    expect(await getBrand(cookie).then((r) => r.json())).toMatchObject({ name: null });
+  });
+});

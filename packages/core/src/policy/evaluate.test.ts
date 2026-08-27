@@ -17,6 +17,8 @@ const rule = (over: Partial<PolicyRule> = {}): PolicyRule => ({
   contractField: null,
   contractValues: [],
   ipRanges: [],
+  devicePlatforms: [],
+  countries: [],
   daysOfWeek: [],
   startMinute: null,
   endMinute: null,
@@ -30,6 +32,8 @@ const ctx = (over: Partial<AuthContext> = {}): AuthContext => ({
   groupIds: [],
   contracts: [],
   sourceIp: '10.1.2.3',
+  devicePlatform: 'windows',
+  country: 'US',
   now: new Date('2026-08-12T09:00:00Z'),
   ...over,
 });
@@ -179,6 +183,41 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy([r], ALLOW, ctx({ now: new Date('2026-08-12T12:00:00Z') })).outcome).toBe(
       'allow',
     );
+  });
+
+  it('matches on the device kind', () => {
+    const r = rule({ outcome: 'require_mfa', devicePlatforms: ['ios', 'android'] });
+    expect(evaluatePolicy([r], ALLOW, ctx({ devicePlatform: 'ios' })).outcome).toBe(
+      'require_mfa',
+    );
+    expect(evaluatePolicy([r], ALLOW, ctx({ devicePlatform: 'windows' })).outcome).toBe(
+      'allow',
+    );
+  });
+
+  it('matches on the country', () => {
+    const r = rule({ outcome: 'deny', countries: ['KP'] });
+    expect(evaluatePolicy([r], ALLOW, ctx({ country: 'KP' })).outcome).toBe('deny');
+    expect(evaluatePolicy([r], ALLOW, ctx({ country: 'NL' })).outcome).toBe('allow');
+  });
+
+  it('denies when there is no device to test a deny rule against', () => {
+    // The same fail-closed reading as a missing source address. A request that
+    // did not say what it is is not evidence that it is something allowed.
+    const r = rule({ outcome: 'deny', devicePlatforms: ['android'] });
+    expect(evaluatePolicy([r], ALLOW, ctx({ devicePlatform: null })).outcome).toBe('deny');
+  });
+
+  it('does not let a country nobody supplied turn an allow rule on', () => {
+    // The other direction, and the one that matters most in practice: almost
+    // every deployment names no country header, so `country` is null on every
+    // request. An allow rule that fired anyway would hand out an exemption
+    // written for one country to the entire internet.
+    const r = rule({ outcome: 'allow', countries: ['NL'] });
+    expect(
+      evaluatePolicy([r], { outcome: 'require_mfa', factorType: null }, ctx({ country: null }))
+        .outcome,
+    ).toBe('require_mfa');
   });
 
   it('requires every condition a rule sets, not just one', () => {

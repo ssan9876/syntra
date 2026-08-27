@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, Empty, SkeletonRows } from '@syntra/ui';
 import { AppShell } from '../components/AppShell.js';
+import { useT } from '../i18n/LocaleProvider.js';
 import { useSession } from '../session/SessionProvider.js';
 import { ApiError, api } from '../session/api.js';
 import { useApiResource } from '../session/use-api-resource.js';
@@ -45,7 +46,44 @@ function Monogram({ name }: { name: string }) {
   );
 }
 
+
+/**
+ * The tiles, grouped under their headings.
+ *
+ * Uncategorised tiles go LAST, under a heading of their own, rather than
+ * first or scattered: somebody who has categorised most of their applications
+ * has said what the important groups are, and the remainder is the leftover.
+ *
+ * A single group carries no heading at all. "General" above every tile a small
+ * organisation has is a word that says nothing and one more thing to read on a
+ * screen PRODUCT.md says people look at for four seconds.
+ *
+ * Categories are ordered by name, not by tile count. A page whose headings
+ * move when somebody is assigned an application is a page nobody can learn.
+ */
+function groupTiles(tiles: ApplicationTile[]) {
+  const byCategory = new Map<string | null, ApplicationTile[]>();
+  for (const tile of tiles) {
+    const key = tile.category?.trim() || null;
+    byCategory.set(key, [...(byCategory.get(key) ?? []), tile]);
+  }
+
+  const named = [...byCategory.entries()]
+    .filter(([name]) => name !== null)
+    .sort(([a], [b]) => a!.localeCompare(b!));
+  const rest = byCategory.get(null);
+
+  const groups = [
+    ...named.map(([name, group]) => ({ name, tiles: group })),
+    ...(rest ? [{ name: null as string | null, tiles: rest }] : []),
+  ];
+
+  const showHeading = groups.length > 1;
+  return groups.map((group) => ({ ...group, showHeading }));
+}
+
 export function Portal() {
+  const t = useT();
   const { session } = useSession();
   const firstName = session?.displayName.split(' ')[0] ?? 'there';
   const { data, error, loading } = useApiResource<{ applications: ApplicationTile[] }>(
@@ -115,10 +153,10 @@ export function Portal() {
     <AppShell>
       <div className="mx-auto w-full max-w-5xl px-6 py-10">
         <header>
-          <h1 className="text-xl font-semibold text-ink">Good day, {firstName}</h1>
-          <p className="mt-1 text-muted">
-            Applications your organization has assigned to you.
-          </p>
+          <h1 className="text-2xl font-semibold text-ink">
+            {t('portal.greeting', { name: firstName })}
+          </h1>
+          <p className="mt-1 text-muted">{t('portal.lead')}</p>
         </header>
 
         <div className="mt-8 space-y-4">
@@ -128,22 +166,40 @@ export function Portal() {
           {loading && <SkeletonRows rows={3} cols={2} />}
 
           {!loading && data?.applications.length === 0 && (
-            <Empty title="No applications assigned yet">
-              When your administrator assigns applications to you, they appear here
-              and open with a single click.
-            </Empty>
+            <Empty title={t('portal.empty_title')}>{t('portal.empty_body')}</Empty>
           )}
 
-          {!loading && data && data.applications.length > 0 && (
-            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {data.applications.map((tile) => (
+          {!loading &&
+            data &&
+            data.applications.length > 0 &&
+            groupTiles(data.applications).map((group) => (
+              <section key={group.name ?? 'uncategorised'}>
+                {/*
+                  The heading is shown only when there is more than one group.
+                  A single "General" above every tile a small organisation has
+                  is a word that carries no information and one more thing to
+                  read on a screen PRODUCT.md says people see for four seconds.
+                */}
+                {group.showHeading && (
+                  <h2 className="mb-2 text-md font-semibold text-ink">
+                    {group.name ?? t('portal.other_group')}
+                  </h2>
+                )}
+                <ul className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {group.tiles.map((tile) => (
                 <li key={tile.id}>
                   <button
                     type="button"
                     onClick={() => launch(tile)}
                     disabled={busy === tile.id}
                     aria-busy={busy === tile.id || undefined}
-                    className="flex h-full w-full items-start gap-3 rounded-panel border border-border-subtle bg-bg p-4 text-left transition-colors duration-150 ease-out-quart hover:bg-surface disabled:opacity-55"
+                    /* `border-control`, not `border-subtle`: the whole tile
+                       IS the button, so its edge is the boundary of a control
+                       and 1.4.11 asks 3:1 of it. At 1.44:1 the tiles read as
+                       floating text on a white page rather than as things to
+                       press — which is the entire portal for the person who
+                       only ever sees this screen. */
+                    className="flex h-full w-full items-start gap-3 rounded-panel border border-border-control bg-bg p-4 text-left transition-[background-color,border-color,box-shadow] duration-150 ease-out-quart hover:border-primary hover:bg-surface hover:shadow-raised disabled:opacity-55"
                   >
                     <Monogram name={tile.name} />
                     <span className="min-w-0">
@@ -156,9 +212,10 @@ export function Portal() {
                     </span>
                   </button>
                 </li>
-              ))}
-            </ul>
-          )}
+                  ))}
+                </ul>
+              </section>
+            ))}
         </div>
       </div>
     </AppShell>

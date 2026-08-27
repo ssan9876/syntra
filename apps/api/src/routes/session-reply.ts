@@ -81,6 +81,30 @@ export async function sessionBody(
 }
 
 /**
+ * The body for a decision that ended in `renew`: the password aged out, and
+ * no session exists until a new one is chosen.
+ *
+ * Shaped exactly like the `enrol` and `challenge` bodies because it is the
+ * same kind of answer — a half-finished sign-in holding a token that buys one
+ * specific next step. A client that already knows those two shapes needs no
+ * new idea to handle this one.
+ *
+ * Shared rather than written out at each of the five call sites, because that
+ * is precisely how `issueSession` came to have four slightly different roads
+ * into it.
+ */
+export function renewReply(decision: {
+  attemptToken: string;
+  expiresAt: Date;
+}): { status: 'renew'; attemptToken: string; expiresAt: string } {
+  return {
+    status: 'renew',
+    attemptToken: decision.attemptToken,
+    expiresAt: decision.expiresAt.toISOString(),
+  };
+}
+
+/**
  * Mints the session for a decision, sets the cookie, and answers with the body
  * every signed-in response shares.
  *
@@ -131,14 +155,27 @@ export async function issueSession(
  */
 export function challengeRedirect(
   reply: FastifyReply,
-  decision: Extract<AuthorizeResult, { status: 'challenge' | 'enrol' }>,
+  decision: Extract<
+    AuthorizeResult,
+    { status: 'challenge' | 'enrol' | 'renew' }
+  >,
   returnTo: string,
 ): FastifyReply {
-  const path = decision.status === 'challenge' ? '/mfa' : '/enrol';
+  const PATHS = {
+    challenge: '/mfa',
+    enrol: '/enrol',
+    renew: '/renew-password',
+  } as const;
+  const path = PATHS[decision.status];
+  // A renewal offers no choice of factor, so it carries none. The parameter
+  // stays in the URL as an empty string rather than being dropped, because the
+  // screens read it positionally-shaped rather than optionally.
   const factors =
     decision.status === 'challenge'
       ? decision.acceptableFactors
-      : decision.enrollableFactors;
+      : decision.status === 'enrol'
+        ? decision.enrollableFactors
+        : [];
   // Insertion order is preserved, and `attempt` stays first.
   const query = new URLSearchParams({
     attempt: decision.attemptToken,

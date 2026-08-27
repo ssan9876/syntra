@@ -1,20 +1,32 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import {
+  containerListResponse,
   createTargetRequestSchema,
   idParam,
+  movePlacementRequest,
+  placementResponse,
   testTargetRequestSchema,
   updateTargetRequestSchema,
 } from '@syntra/contracts';
-import { targetConnectorFor } from '@syntra/connectors';
+import { BUILTIN_CONNECTOR_DOCUMENTS, targetConnectorFor } from '@syntra/connectors';
 import {
   PERMISSIONS,
+  ContainerNotInTargetError,
   LadderConfigurationError,
+  NoAccountToMoveError,
+  NoCorrelationKeyError,
   PairedDirectorySourceNotFoundError,
   TargetNotFoundError,
+  clearPlacement,
   createTarget,
   deleteTarget,
+  findPlacement,
   localMasterKeyProvider,
+  moveAccount,
+  recordEvent,
   refreshEntitlements,
+  targetContainers,
   testTargetConfiguration,
   updateTarget,
   type Scheduler,
@@ -98,6 +110,12 @@ function defined<T extends object>(value: T): Defined<T> {
   ) as Defined<T>;
 }
 
+/** Both ids, so a route cannot read one and forget to validate the other. */
+const placementParams = z.object({
+  id: z.string().uuid(),
+  personId: z.string().uuid(),
+});
+
 export async function registerAdminTargetRoutes(
   app: FastifyInstance,
   options: TargetRouteOptions,
@@ -114,6 +132,149 @@ export async function registerAdminTargetRoutes(
         tx.targetSystem.findMany({ select: TARGET_FIELDS, orderBy: { name: 'asc' } }),
       ),
     }),
+  );
+
+  /**
+   * The connector documents that ship with the product.
+   *
+   * Served rather than bundled into the console, because
+   * `@syntra/connectors` reaches for `node:dns` and `node:https` and does not
+   * belong in a browser bundle. This route is also the only place the two
+   * ever have to agree, so the console cannot drift from what the connector
+   * will actually run.
+   *
+   * `PROVISION_READ`, not `MANAGE`: these are constants, identical for every
+   * tenant, and carry no credential — the `{clientId}` and `{tenant}` in them
+   * are placeholders an administrator replaces, not values.
+   */
+  app.get(
+    '/targets/connector-documents',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async () => ({
+      documents: Object.entries(BUILTIN_CONNECTOR_DOCUMENTS).map(([key, document]) => ({
+        key,
+        name: document.name,
+        document,
+      })),
+    }),
+  );
+
+  /**
+   * The containers this target holds.
+   *
+   * A live read through the connector, not a cached list. Provision creates no
+   * containers, so this is the closed set an account may be moved into, and a
+   * stale copy is a Move screen offering somewhere that no longer exists —
+   * or, worse, omitting the one somebody is trying to move an account to.
+   */
+  app.get(
+    '/targets/:id/containers',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const containers = await targetContainers(request.tenantId, provider, id).catch(
+        (cause: unknown) => {
+          throw new ProblemError(
+            502,
+            'target-unreachable',
+            'The target could not be read',
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        },
+      );
+      return containerListResponse.parse({ containers });
+    },
+  );
+
+  app.get(
+    '/targets/:id/placements/:personId',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id, personId } = placementParams.parse(request.params);
+      const placement = await request.db((tx) => findPlacement(tx, personId, id));
+      // `null` rather than a 404: "this person follows the rule" is an answer,
+      // and the ordinary one. A 404 would make the common case look like an
+      // error on every person page that renders this.
+      return placement === null
+        ? { placement: null }
+        : {
+            placement: placementResponse.parse({
+              ...placement,
+              updatedAt: placement.updatedAt.toISOString(),
+            }),
+          };
+    },
+  );
+
+  /**
+   * Move one person's account, and record the decision that keeps it moved.
+   *
+   * `PROVISION_MANAGE`, the same permission as every other write against a
+   * target. This is not a read-shaped operation: it writes to the directory
+   * and it overrides a placement rule for as long as it stands.
+   */
+  app.put(
+    '/targets/:id/placements/:personId',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id, personId } = placementParams.parse(request.params);
+      const body = movePlacementRequest.parse(request.body);
+
+      const result = await moveAccount(request.tenantId, provider, {
+        personId,
+        targetSystemId: id,
+        container: body.container,
+        reason: body.reason,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
+      }).catch((cause: unknown) => {
+        if (cause instanceof ContainerNotInTargetError) {
+          throw new ProblemError(
+            400,
+            'no-such-container',
+            'That container does not exist',
+            cause.message,
+          );
+        }
+        if (cause instanceof NoAccountToMoveError || cause instanceof NoCorrelationKeyError) {
+          throw new ProblemError(409, 'nothing-to-move', 'There is no account to move', cause.message);
+        }
+        throw cause;
+      });
+
+      // 200 either way, with `moved` on it. A directory write that failed is
+      // not a failed request: the placement stands and the next run retries
+      // the move, and answering 500 would tell the administrator their
+      // decision was lost when it was not.
+      return result;
+    },
+  );
+
+  app.delete(
+    '/targets/:id/placements/:personId',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request, reply) => {
+      const { id, personId } = placementParams.parse(request.params);
+      const cleared = await request.db((tx) => clearPlacement(tx, personId, id));
+
+      if (cleared) {
+        await request.db((tx) =>
+          recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: 'provision.placement_cleared',
+            targetType: 'Person',
+            targetId: personId,
+            outcome: 'success',
+            sourceIp: request.ip,
+            // No account is moved here. The next run computes the rule's
+            // answer and proposes the move, through the guard, in a plan
+            // somebody reviews.
+            payload: { targetSystemId: id },
+          }),
+        );
+      }
+      return reply.status(204).send();
+    },
   );
 
   app.get(

@@ -37,9 +37,104 @@ model Tenant {
   /// self-service way back. A tenant that issues hardware keys by hand turns
   /// this off, and then a missing factor really is a refusal.
   selfEnrolmentEnabled Boolean  @default(true)
+  /// Failed password attempts before an account stops accepting even its own
+  /// password. Zero disables lockout and is the default, because switching it
+  /// on for a tenant that never asked for it is how the first administrator
+  /// discovers the feature from the outside of it.
+  ///
+  /// This is not the API rate limit and does not replace it. A rate limit
+  /// keyed on the caller's address is spent by one attacker and refills; a
+  /// password guessed on the thousandth try is guessed for good.
+  lockoutThreshold     Int      @default(0)
+  /// How long failures accumulate toward the threshold, measured from the
+  /// first failure of the current run rather than the most recent one — so a
+  /// slow drip cannot hold a window open indefinitely, and one typo a month
+  /// for five months never locks anybody out.
+  lockoutWindowMinutes Int      @default(15)
+  /// How long a lock holds before it lifts itself. Zero means it does not:
+  /// the account stays locked until an administrator lifts it by hand.
+  lockoutDurationMinutes Int    @default(15)
+  /// How many days a password stays good for. Zero never expires it, and is
+  /// the default.
+  ///
+  /// Off by default on purpose, and not merely for compatibility. NIST
+  /// SP 800-63B stopped recommending scheduled rotation years ago: forced
+  /// expiry reliably produces weaker passwords, because people who must
+  /// change one every ninety days pick one they can iterate. It is here
+  /// because organizations are held to policies that still demand it, not
+  /// because turning it on makes a tenant safer.
+  passwordMaxAgeDays   Int      @default(0)
+  /// How many previous passwords may not be chosen again. Zero disables the
+  /// check.
+  ///
+  /// This one IS worth turning on, and is the half of "password ageing"
+  /// that survives current guidance: it costs the user nothing at all until
+  /// they try to reuse a password they have already retired.
+  passwordHistoryDepth Int      @default(0)
+  /// Whether a user may enrol a one-time code sent to their email address.
+  ///
+  /// **Off by default, and that default is a judgement rather than caution.**
+  /// A code mailed to the address on the account is a weak second factor
+  /// wherever that same mailbox can also reset the password — an attacker who
+  /// holds the mailbox holds both, and the factor adds nothing. It is a real
+  /// answer for people with no phone and no security key, in organizations
+  /// where mail is itself behind strong authentication, and it is those
+  /// organizations that should be the ones turning it on.
+  emailOtpEnabled      Boolean  @default(false)
+  /// What this tenant calls the sign-in surfaces their staff see. Null means
+  /// Syntra's own name, which is the right default for a tenant that has not
+  /// thought about it — an empty header is worse than somebody else's brand.
+  brandName            String?
+  /// The logo, as a `data:` URI.
+  ///
+  /// A URI and not a file path, because this product is installed on premises
+  /// and often air-gapped: a logo served from a URL somewhere is a logo that
+  /// stops loading the day that somewhere moves, and the sign-in page is the
+  /// one page that must render when everything else is unreachable. Capped in
+  /// the service, not here — a column limit would truncate rather than refuse.
+  brandLogo            String?
+  /// The tenant's primary colour, `#rrggbb`.
+  ///
+  /// Refused unless it carries enough contrast against the page to be read;
+  /// see `brand-service.ts`. A tenant that can paint their own console
+  /// unreadable will, and the support call arrives weeks later described as a
+  /// bug.
+  brandPrimary         String?
+  brandAccent          String?
   createdAt            DateTime @default(now())
 
   orgUnits OrgUnit[]
+}
+
+/// One row per user with a recent failed sign-in. Absent is the ordinary
+/// case, so this table stays the size of the problem rather than the size of
+/// the directory.
+///
+/// Written only for a login that resolved to a real user. An unknown login
+/// must never create a row: it would make the table an oracle for which
+/// logins exist, and would let anybody grow it without bound by inventing
+/// names.
+model LoginLockout {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @db.Uuid
+  userId        String    @unique @db.Uuid
+  failedCount   Int       @default(0)
+  /// When the current run of failures began. The window is measured from
+  /// here; `lastFailedAt` exists for the administrator reading the screen,
+  /// not for the arithmetic.
+  firstFailedAt DateTime
+  lastFailedAt  DateTime
+  /// When the threshold was crossed. Null means not locked, and is the only
+  /// thing that means not locked — a row may exist with failures counted
+  /// against it and no lock applied.
+  lockedAt      DateTime?
+  /// When the lock lifts itself, or null for a lock that does not. Read only
+  /// when `lockedAt` is set, because a stale value left over from a previous
+  /// lock says nothing about the current one.
+  lockedUntil   DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  @@index([tenantId])
 }
 
 model OrgUnit {
@@ -165,6 +260,7 @@ model Person {
   contracts           Contract[]
   targetAccounts      TargetAccount[]
   provisionExceptions ProvisionException[]
+  placements          AccountPlacement[]
 
   @@unique([tenantId, externalId])
   @@index([tenantId])
@@ -275,9 +371,34 @@ model PasswordCredential {
   tenantId  String   @db.Uuid
   userId    String   @unique @db.Uuid
   hash      String
+  /// When this password was chosen, which is what expiry is measured from.
+  ///
+  /// Separate from `updatedAt` deliberately. `@updatedAt` moves whenever the
+  /// row is written for any reason, and the day somebody adds a column to
+  /// this table and backfills it, every password in the tenant silently
+  /// becomes new again. Expiry has to read a field that means one thing.
+  changedAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([tenantId])
+}
+
+/// Passwords a user may not choose again. Holds the Argon2id hash only, the
+/// same as the live credential — this is a reuse check, not a way to read
+/// somebody's old passwords.
+///
+/// Trimmed to the tenant's configured depth on every change rather than kept
+/// forever: an unbounded history is a growing pile of hashes protecting
+/// nothing, since a password nobody remembers is one nobody will retype.
+model PasswordHistory {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  userId    String   @db.Uuid
+  hash      String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([userId, createdAt])
 }
 
 model Session {
@@ -461,6 +582,21 @@ model AuthPolicyRule {
   contractValues String[]   @default([])
   /// CIDR ranges or bare addresses, IPv4 or IPv6.
   ipRanges       String[]   @default([])
+  /// Device kinds this rule applies to. Empty is unconstrained.
+  ///
+  /// Derived from the user agent, which the client chooses — a speed bump
+  /// rather than a control. Reasonable for asking a second factor of phones;
+  /// a `deny` resting on it is a `deny` anybody can walk past by editing a
+  /// header, and the console says so.
+  devicePlatforms String[]  @default([])
+  /// ISO 3166-1 alpha-2 codes this rule applies to. Empty is unconstrained.
+  ///
+  /// Read from a header the deployment names (`POLICY_COUNTRY_HEADER`), never
+  /// from a GeoIP database: that is a licensed monthly binary and this product
+  /// runs air-gapped. Where no header is configured every country condition is
+  /// unevaluable, which refuses on a `deny` rule and does not match on the
+  /// others.
+  countries       String[]  @default([])
   /// 0 = Sunday .. 6 = Saturday. Empty means every day.
   daysOfWeek     Int[]      @default([])
   /// Minutes from local midnight. A window may wrap past midnight.
@@ -492,6 +628,25 @@ model Application {
   iconUrl     String?
   launchUrl   String?
   type        String   @default("bookmark")
+  /// How the portal groups this tile — 'Finance', 'Engineering', or null.
+  ///
+  /// Free text rather than a table, deliberately. A category is a heading on a
+  /// page of tiles, not a thing anything is granted on: nothing resolves by
+  /// it, nothing is scoped to it, and a second table would buy referential
+  /// integrity for a label whose only consumer is a `<h2>`. `Product.category`
+  /// is the same shape for the same reason, and matching it means an
+  /// administrator meets one idea rather than two.
+  category    String?
+  /// Which catalog entry this application was created from, or null for one
+  /// configured by hand.
+  ///
+  /// A RECORD, not a link. The entry's values were copied at creation and are
+  /// the application's own from that moment: an entry corrected in a later
+  /// release must not silently change an integration that is working, and an
+  /// entry removed must not orphan the application that came from it. What
+  /// this buys is the ability to say "this came from the Slack entry" on a
+  /// screen, and to tell an administrator that the entry has since changed.
+  catalogKey  String?
   /// 'assigned' shows the tile to users it resolves for; 'hidden' keeps it
   /// out of the portal entirely while leaving it assignable.
   visibility  String   @default("assigned")
@@ -506,6 +661,51 @@ model Application {
 
   @@unique([tenantId, slug])
   @@index([tenantId])
+}
+
+/// Where one person's account sits in one target, when somebody has moved it
+/// by hand.
+///
+/// **This exists so that a manual move survives the next run.** The container
+/// is normally computed from the account profile's template -- typically from
+/// the contract's department -- and the planner proposes an `update_account`
+/// carrying a `modifyDN` whenever the account is not where the template says
+/// it should be. So an administrator who moves an account in Active Directory,
+/// or who moves it here without this row, is moving it back on the next
+/// five-minute tick. A Move button that silently reverts within the hour is
+/// worse than no Move button: it teaches people the product cannot be trusted
+/// with the thing they just watched it do.
+///
+/// An override is therefore a recorded DECISION, not a cached value. It names
+/// who made it and why, it is visible on the person's page, and clearing it
+/// hands the person back to the rule -- at which point the next run moves them
+/// where the template says, which is the behaviour somebody clearing it is
+/// asking for.
+///
+/// Per (person, target) because a person may hold accounts in several targets
+/// and their placement in one says nothing about their placement in another.
+model AccountPlacement {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  personId       String       @db.Uuid
+  person         Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
+  targetSystemId String       @db.Uuid
+  targetSystem   TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  /// The container this account is pinned to. A distinguished name in the
+  /// target, checked against the target's own inventory before it is written:
+  /// Provision does not create containers.
+  container      String
+  /// Why, in the mover's own words. Required, and it is on the audit event
+  /// too -- "who moved this and why" is the only question anybody asks about a
+  /// placement that disagrees with the rule.
+  reason         String
+  movedByUserId  String?      @db.Uuid
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([personId, targetSystemId])
+  @@index([tenantId])
+  @@index([targetSystemId])
 }
 
 /// Grants an application to a user, a group, or an organizational unit.
@@ -524,6 +724,47 @@ model AppAssignment {
 
   @@index([tenantId])
   @@index([applicationId])
+}
+
+/// A one-time code mailed to the address on the account.
+///
+/// One row per user carrying BOTH roles — whether this factor is enrolled, and
+/// the code currently outstanding. They are the same lifecycle: enrolment is a
+/// code the person proves they received, and a later challenge is the same
+/// thing again. Two tables would be two places to forget to clear.
+///
+/// There is no shared secret to keep. Unlike TOTP the whole credential is "can
+/// this person read that mailbox", which is why `confirmedAt` is the entire
+/// enrolment state and why nothing here is sealed in the vault.
+model EmailOtpCredential {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @db.Uuid
+  userId   String @unique @db.Uuid
+
+  /// Set when the user first entered a code correctly. Null means enrolment
+  /// was started and never finished, which is not a factor.
+  confirmedAt DateTime?
+
+  /// SHA-256 of the outstanding code, or null when none is.
+  ///
+  /// Not Argon2, deliberately, and the reasoning is the opposite of the
+  /// password path's. A password is long-lived and its hash is what an
+  /// attacker takes away; this is six digits that expire in minutes, are
+  /// single-use, and are bounded by `attempts`. Argon2 would put ~100ms of CPU
+  /// into every sign-in for a secret whose entire value has evaporated by the
+  /// time anybody could grind it.
+  codeHash  String?
+  expiresAt DateTime?
+  /// Wrong guesses against the OUTSTANDING code. Six digits is twenty bits, so
+  /// the code is only as strong as the number of tries allowed against it.
+  attempts  Int       @default(0)
+  /// When the last code went out, so a resend can be rationed.
+  sentAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 /// The encrypted shared secret lives in the vault under `secretName`; this row
@@ -721,6 +962,17 @@ model SamlConfig {
   /// be issued to this SP.
   allowIdpInitiated       Boolean     @default(false)
   assertionLifetimeMs     Int         @default(300000)
+  /// Whether this application may also sign in over WS-Federation.
+  ///
+  /// A flag on the SAML configuration rather than a model of its own, because
+  /// WS-Fed reuses every field here: the realm IS `spEntityId`, the reply URL
+  /// is checked against `acsUrls`, and the token is the same signed assertion.
+  /// A separate model would be the same eight columns with different names,
+  /// and the day somebody rotated a certificate they would rotate one of them.
+  ///
+  /// Off by default. WS-Fed carries no request signature, so an application
+  /// that never asked for it should not have a second unauthenticated way in.
+  wsFedEnabled            Boolean     @default(false)
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
@@ -767,6 +1019,41 @@ model OidcClient {
   updatedAt                DateTime    @updatedAt
 
   @@unique([tenantId, clientId])
+  @@index([tenantId])
+}
+
+/// A named set of claim mappings, applied to many applications at once.
+///
+/// **The problem it solves is a set of applications that must agree.** An
+/// organization that sends `email`, `given_name`, `family_name` and a group
+/// list to fourteen applications has fourteen copies of the same four rows,
+/// and the fifteenth application is configured from memory. A mapping that
+/// differs by one character produces an application that signs people in and
+/// then cannot tell who they are.
+///
+/// Applied by COPY, not by reference, and the distinction is the whole design.
+/// `ClaimMapping` rows stay the single thing the assertion builder reads —
+/// there is no second lookup path at sign-in and no way for a set to change
+/// what an application sends without somebody applying it. A set is a
+/// template an administrator stamps out, and the stamped rows are then that
+/// application's own: editable, removable, and visible in one list beside the
+/// ones added by hand.
+model ClaimMappingSet {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String  @db.Uuid
+  name        String
+  description String?
+  /// 'saml' | 'oidc'. A set is per protocol: the same claim means a different
+  /// wire format in each, and a set that spanned both would be two sets
+  /// wearing one name.
+  protocol    String
+  /// The mappings themselves, in the shape `claimMappingRequest` accepts.
+  mappings    Json    @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, name])
   @@index([tenantId])
 }
 
@@ -1016,6 +1303,16 @@ model SamlAuthnRequest {
   /// Already matched against the allowlist when this row was written.
   acsUrl         String
   relayState     String?
+  /// 'saml' or 'wsfed'. Which protocol asked, and therefore what shape the
+  /// answer takes.
+  ///
+  /// On the parked row rather than looked up from the application, because an
+  /// application may be reachable over both: the decision belongs to the
+  /// request that started, and reading it back off configuration would answer
+  /// a WS-Fed sign-in with a SAML Response the moment somebody also enabled
+  /// SAML. `relayState` carries `wctx` for a WS-Fed row — the same field doing
+  /// the same job under the other protocol's name.
+  protocol       String    @default("saml")
   forceAuthn     Boolean   @default(false)
   /// SHA-256 of the high-entropy nonce written to the browser as a cookie
   /// when this request was parked, and required to match when it is
@@ -1148,6 +1445,7 @@ model TargetSystem {
   entitlements Entitlement[]
   accounts     TargetAccount[]
   runs         ProvisionRun[]
+  placements   AccountPlacement[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -1587,6 +1885,73 @@ model AutomateSettings {
   updatedAt DateTime @updatedAt
 
   @@index([tenantId])
+}
+
+/// A form somebody may fill in to make one narrow change, without holding the
+/// permission that change would normally need.
+///
+/// **This is the delegation primitive, and its authority is Syntra's rather
+/// than the runner's.** That is the whole point: a helpdesk user who holds no
+/// administrative permission can nevertheless unlock an account, because the
+/// task — not the person — carries the right to do it. Two things keep that
+/// from becoming a privilege escalation, and both are enforced in code rather
+/// than described here:
+///
+///  - `actionKey` names one entry in a CLOSED library. There is no script, no
+///    command, and no field that could become one.
+///  - A run is refused when the account it would act on holds a permission the
+///    runner does not (`assertNotMorePrivileged`). Without that rule, an
+///    "unlock an account" task pointed at the owner is a takeover.
+///
+/// `audienceCondition` decides who may run it, in the same language the
+/// catalog uses — a tenant learns one expression language, not two. NULL
+/// admits nobody, which is `audienceAdmits`'s security default.
+model DelegatedTask {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String  @db.Uuid
+  name        String
+  description String?
+  /// One key from `ACTION_KEYS`. Validated on write against the library.
+  actionKey   String
+  /// The fields shown, in order, validated against `formSchemaSchema` and
+  /// against the action's declared inputs.
+  formSchema  Json    @default("[]")
+  /// Who may run it. NULL admits nobody.
+  audienceCondition Json?
+  enabled     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runs DelegatedTaskRun[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+/// One run of one delegated task.
+///
+/// Kept whatever the outcome, and never deleted. A delegated task is the one
+/// place in this product where somebody exercises authority they do not hold,
+/// so "who ran what, against whom, and what happened" is not an optional
+/// convenience — it is the evidence that makes delegating safe to agree to.
+/// The audit chain records it too; this table is what the console reads.
+model DelegatedTaskRun {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @db.Uuid
+  taskId    String        @db.Uuid
+  task      DelegatedTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  runByUserId String      @db.Uuid
+  /// The account acted on, where the action names one.
+  subjectUserId String?   @db.Uuid
+  /// What was submitted, after validation. Never raw input.
+  values    Json          @default("{}")
+  outcome   String
+  message   String
+  createdAt DateTime      @default(now())
+
+  @@index([tenantId])
+  @@index([taskId, createdAt])
 }
 
 /// One thing a person may ask for. `audienceCondition` NULL means visible to
@@ -2111,6 +2476,80 @@ model NotificationOutbox {
   @@index([tenantId])
   /// The sender's read: unsent rows, oldest first.
   @@index([tenantId, sentAt, createdAt])
+}
+
+/**
+ * Somewhere outside Syntra that wants to be told when something happens here.
+ *
+ * The URL is a plain column and the SIGNING SECRET is not: it lives in
+ * `Secret`, sealed, and is shown to the administrator exactly once when it is
+ * generated. A shared secret sitting in a settings table is one `SELECT` away
+ * from letting anybody forge a delivery the receiver will trust, which is the
+ * only thing the signature is protecting against.
+ */
+model WebhookEndpoint {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @db.Uuid
+  name     String
+  url      String
+  enabled  Boolean @default(true)
+  /// Template names, or a prefix ending in `*` (`automate-*`). EMPTY MEANS
+  /// EVERY enqueueable event, which is the useful default for a receiver that
+  /// filters at its own end -- and is why the column is a list rather than a
+  /// nullable one: "all of them" and "none of them yet" would otherwise be
+  /// the same value, and a newly created endpoint would silently deliver
+  /// nothing.
+  events   String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  /// Names are how an administrator tells two endpoints apart on a screen.
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+/**
+ * One event, addressed to one endpoint, with its own attempt count.
+ *
+ * Per endpoint rather than per event, deliberately. Two endpoints subscribed
+ * to the same event fail independently -- one receiver being down for a day
+ * must not hold up or exhaust the other's deliveries -- and there is no way to
+ * express that on a single row shared between them.
+ *
+ * Rows are never deleted by the sender. One that exhausts its attempts is the
+ * only evidence there is when somebody says the integration missed something.
+ */
+model WebhookDelivery {
+  id         String @id @default(uuid()) @db.Uuid
+  tenantId   String @db.Uuid
+  endpointId String @db.Uuid
+  /// The template name the event was enqueued under.
+  event      String
+  /// The exact body that is signed and sent, frozen at enqueue time. Built
+  /// once and stored, so a retry three hours later sends what the event said
+  /// then rather than what the rows say now.
+  payload    Json
+
+  attempts      Int       @default(0)
+  /// When the next attempt becomes due. Set on creation, so the sender's read
+  /// is one indexed range scan and a first attempt needs no special case.
+  nextAttemptAt DateTime
+  deliveredAt   DateTime?
+  /// The HTTP status of the last attempt, or null if it never got one.
+  lastStatus    Int?
+  lastError     String?
+
+  createdAt DateTime @default(now())
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([endpointId])
+  /// The sender's read: undelivered rows that are due, oldest first.
+  @@index([tenantId, deliveredAt, nextAttemptAt])
 }
 
 model NotificationPreference {

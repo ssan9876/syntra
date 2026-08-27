@@ -4,6 +4,7 @@ import type { RelyingParty } from './relying-party.js';
 export type FactorPresentation =
   | { type: 'totp'; code: string }
   | { type: 'webauthn'; assertion: unknown }
+  | { type: 'email_otp'; code: string }
   | { type: 'recovery_code'; code: string };
 
 export type FactorPresentationType = FactorPresentation['type'];

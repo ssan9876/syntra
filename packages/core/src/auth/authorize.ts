@@ -13,9 +13,11 @@ import {
   consumeAttempt,
   findAttempt,
   issueAttempt,
+  type AttemptPurpose,
   type ResolvedAttempt,
 } from './attempt-service.js';
 import { authenticate } from './login-service.js';
+import { passwordExpired } from './password-ageing.js';
 import { readSession, type SessionScope } from './session-service.js';
 import {
   enrolledFactorTypes,
@@ -49,12 +51,28 @@ export type Principal =
    */
   | { kind: 'external'; userId: string; issuer: string };
 
+/**
+ * What a request says about itself beyond its address.
+ *
+ * Optional on every arm because most callers are not an HTTP request — a
+ * SCIM-driven decision or a test has no user agent, and no country header
+ * either. Absent means unevaluable, which is the honest reading and the one
+ * the engine already handles.
+ */
+export interface ClientFacts {
+  /** The raw `user-agent` header. Parsed in `buildAuthContext`, not here. */
+  userAgent?: string | null | undefined;
+  /** Whatever the deployment's configured country header carried. */
+  countryHeader?: string | null | undefined;
+}
+
 export type AuthorizeRequest =
   | {
       kind: 'primary';
       principal: Principal;
       applicationId: string | null;
       sourceIp: string | null;
+      client?: ClientFacts | undefined;
       relyingParty: RelyingParty;
       /**
        * What kind of session to issue if this succeeds, and what to record on
@@ -76,6 +94,7 @@ export type AuthorizeRequest =
       attemptToken: string;
       factor: FactorPresentation;
       sourceIp: string | null;
+      client?: ClientFacts | undefined;
       relyingParty: RelyingParty;
       now?: Date | undefined;
     }
@@ -89,6 +108,22 @@ export type AuthorizeRequest =
       attemptToken: string;
       enrolledFactor: FactorType;
       sourceIp: string | null;
+      client?: ClientFacts | undefined;
+      relyingParty: RelyingParty;
+      now?: Date | undefined;
+    }
+  | {
+      /**
+       * The user has just chosen a new password under a renewal attempt. The
+       * claim is not trusted any more than the enrolment claim above is: this
+       * re-decides from scratch, and if the password is somehow still expired
+       * the decision comes back as `renew` again rather than letting anybody
+       * through on the strength of having asked.
+       */
+      kind: 'renewed';
+      attemptToken: string;
+      sourceIp: string | null;
+      client?: ClientFacts | undefined;
       relyingParty: RelyingParty;
       now?: Date | undefined;
     };
@@ -96,6 +131,18 @@ export type AuthorizeRequest =
 export type DenyReason =
   | 'invalid_credentials'
   | 'user_inactive'
+  /**
+   * The password was right and the account is locked out after too many
+   * failures. Distinct from `invalid_credentials` for the same reason
+   * `factor_used_for_enrolment` is distinct from `factor_invalid`: the person
+   * is holding the correct password and being refused, and an unexplained
+   * refusal there is a support ticket.
+   *
+   * Only ever reached by somebody who supplied the right password —
+   * `authenticate()` checks the lock after the password precisely so that
+   * this reason cannot be used to discover which logins exist.
+   */
+  | 'account_locked'
   | 'policy_denied'
   | 'factor_not_enrolled'
   | 'factor_invalid'
@@ -140,6 +187,23 @@ export type AuthorizeResult =
       attemptToken: string;
       expiresAt: Date;
       enrollableFactors: FactorType[];
+    }
+  | {
+      /**
+       * The password was right, every factor the policy wanted was presented,
+       * and the password has aged past the tenant's limit. Choose a new one;
+       * no session until you do.
+       *
+       * Deliberately raised HERE, at the point a session would otherwise be
+       * issued, rather than straight after the password is checked. Raising it
+       * earlier would let somebody holding a stolen password reach the change
+       * form without satisfying the second factor the policy demands — which
+       * is not a password expiry flow, it is account takeover with extra
+       * steps.
+       */
+      status: 'renew';
+      attemptToken: string;
+      expiresAt: Date;
     }
   | { status: 'deny'; reason: DenyReason };
 
@@ -231,6 +295,9 @@ export async function authorize(
   if (request.kind === 'continue') {
     return continueAttempt(tenantId, request, now);
   }
+  if (request.kind === 'renewed') {
+    return completeRenewal(tenantId, request, now);
+  }
   return completeEnrolment(tenantId, request, now);
 }
 
@@ -252,6 +319,7 @@ async function primary(
     userId: identified.userId,
     applicationId: request.applicationId,
     sourceIp: request.sourceIp,
+    client: request.client,
     scope: request.scope,
     floor: request.floor,
     // A session principal brings whatever factor established it. Launching an
@@ -264,7 +332,10 @@ async function primary(
 
 type Identified =
   | { ok: true; userId: string; satisfied: FactorPresentationType | null }
-  | { ok: false; reason: 'invalid_credentials' | 'user_inactive' };
+  | {
+      ok: false;
+      reason: 'invalid_credentials' | 'user_inactive' | 'account_locked';
+    };
 
 async function identify(
   tenantId: string,
@@ -276,15 +347,13 @@ async function identify(
       password: request.principal.password,
       sourceIp: request.sourceIp,
     });
+    // `authenticate` returns exactly the three refusals this type names, and
+    // each of them is carried through as itself. The ternary this replaces
+    // collapsed everything that was not `user_inactive` into
+    // `invalid_credentials`, which would have silently swallowed the lockout.
     return result.ok
       ? { ok: true, userId: result.userId, satisfied: null }
-      : {
-          ok: false,
-          reason:
-            result.reason === 'user_inactive'
-              ? 'user_inactive'
-              : 'invalid_credentials',
-        };
+      : { ok: false, reason: result.reason };
   }
 
   const principal = request.principal;
@@ -365,6 +434,7 @@ interface DecideInput {
   userId: string;
   applicationId: string | null;
   sourceIp: string | null;
+  client: ClientFacts | undefined;
   /** What session to issue, and what to stamp on any attempt opened here. */
   scope: SessionScope;
   floor: PolicyOutcome | undefined;
@@ -390,6 +460,8 @@ async function decide(
       userId: input.userId,
       applicationId: input.applicationId,
       sourceIp: input.sourceIp,
+      userAgent: input.client?.userAgent ?? null,
+      countryHeader: input.client?.countryHeader ?? null,
       now: input.now,
     });
 
@@ -415,6 +487,38 @@ async function decide(
     }
 
     const allow = async (): Promise<AuthorizeResult> => {
+      // The last gate before a session exists, and the only one every path
+      // shares — password sign-in, a completed factor, a completed enrolment
+      // and an application launch all arrive here.
+      if (await passwordExpired(tx, input.userId, tenant, input.now)) {
+        const attempt = await issueAttempt(tx, {
+          userId: input.userId,
+          applicationId: input.applicationId,
+          sourceIp: input.sourceIp,
+          purpose: 'renew',
+          scope: input.scope,
+          // Carried so the session issued at the far end is the one this
+          // sign-in earned. Renewal changes the password; it does not change
+          // what the policy already decided.
+          requiredOutcome: 'require_mfa',
+          requiredFactor: null,
+          ruleId: decision.ruleId,
+          now: input.now,
+        });
+        await audit(tx, {
+          userId: input.userId,
+          action: 'auth.password_expired',
+          outcome: 'failure',
+          sourceIp: input.sourceIp,
+          payload: { maxAgeDays: tenant.passwordMaxAgeDays },
+        });
+        return {
+          status: 'renew',
+          attemptToken: attempt.token,
+          expiresAt: attempt.expiresAt,
+        };
+      }
+
       const mayElevate = await isAdministrator(tx, input.userId);
       return {
         status: 'allow',
@@ -509,6 +613,13 @@ async function decide(
       // a plain `require_mfa` rule reaches the same dead end by another door,
       // and offering the type at all is what walks the user into it.
       if (type === 'webauthn' && !tenant.primaryDomain) return false;
+      // The same dead end, one switch along, and the one the email-OTP
+      // verifier's own docstring promised was handled here and was not.
+      // `enrollableFactorTypes()` answers what this DEPLOYMENT can do and has
+      // no tenant to consult; emailed codes are off per tenant until somebody
+      // turns them on, and offering the type to a tenant that has not is an
+      // enrolment screen whose only option answers 409.
+      if (type === 'email_otp' && !tenant.emailOtpEnabled) return false;
       if (decision.outcome === 'require_factor' && decision.factorType) {
         return type === decision.factorType;
       }
@@ -574,7 +685,7 @@ async function decide(
 async function liveAttempt(
   tenantId: string,
   token: string,
-  purpose: 'verify' | 'enrol',
+  purpose: AttemptPurpose,
   now: Date,
 ): Promise<ResolvedAttempt | null> {
   const attempt = await withTenant(tenantId, (tx) =>
@@ -696,6 +807,7 @@ async function continueAttempt(
     userId: attempt.userId,
     applicationId: attempt.applicationId,
     sourceIp: request.sourceIp,
+    client: request.client,
     // From the attempt, which recorded what its issuer intended. Never from
     // whether this request happened to arrive with a cookie.
     scope: attempt.scope,
@@ -774,9 +886,62 @@ async function completeEnrolment(
     userId: attempt.userId,
     applicationId: attempt.applicationId,
     sourceIp: request.sourceIp,
+    client: request.client,
     scope: attempt.scope,
     floor: undefined,
     satisfied: request.enrolledFactor,
+    now,
+  });
+}
+
+/**
+ * Spends a renewal attempt and re-decides the sign-in it belongs to.
+ *
+ * Mirrors `completeEnrolment`: the attempt is consumed and audited together,
+ * and then the whole decision is taken again rather than resumed. A policy
+ * rule tightened while the user was choosing a password still applies, and the
+ * expiry check inside `allow()` runs again against the credential they just
+ * wrote — so a renewal that did not actually change anything comes back as
+ * `renew` rather than as a session.
+ */
+async function completeRenewal(
+  tenantId: string,
+  request: Extract<AuthorizeRequest, { kind: 'renewed' }>,
+  now: Date,
+): Promise<AuthorizeResult> {
+  const attempt = await liveAttempt(tenantId, request.attemptToken, 'renew', now);
+  if (!attempt) return { status: 'deny', reason: 'attempt_invalid' };
+  if (!(await stillActive(tenantId, attempt.userId))) {
+    return { status: 'deny', reason: 'user_inactive' };
+  }
+
+  const consumed = await withTenant(tenantId, async (tx) => {
+    const ok = await consumeAttempt(tx, attempt.id, now);
+    if (ok) {
+      await audit(tx, {
+        userId: attempt.userId,
+        action: 'auth.password_renewal_completed',
+        outcome: 'success',
+        sourceIp: request.sourceIp,
+        payload: {},
+      });
+    }
+    return ok;
+  });
+  if (!consumed) return { status: 'deny', reason: 'attempt_invalid' };
+
+  return decide(tenantId, {
+    userId: attempt.userId,
+    applicationId: attempt.applicationId,
+    sourceIp: request.sourceIp,
+    client: request.client,
+    scope: attempt.scope,
+    floor: undefined,
+    // The renewal carried the factor requirement past, because the attempt was
+    // only issued after `allow()` was already reachable. Re-deciding with no
+    // satisfied factor would re-challenge somebody who answered one a minute
+    // ago, so the requirement the attempt recorded is honoured here.
+    satisfied: null,
     now,
   });
 }

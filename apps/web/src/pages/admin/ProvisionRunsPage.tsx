@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -134,19 +134,19 @@ export function ProvisionRunsPage() {
           )}
 
           {!loading && runs.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     Started
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Status
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Persons
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Could not be processed
                   </th>
                 </tr>
@@ -155,11 +155,8 @@ export function ProvisionRunsPage() {
                 {runs.map((run) => {
                   const status = displayStatus(run);
                   return (
-                    <tr
-                      key={run.id}
-                      className="border-b border-border-subtle last:border-0"
-                    >
-                      <td className="px-4 py-2.5">
+                    <tr key={run.id}>
+                      <td>
                         <Link
                           to={`/admin/targets/${id}/runs/${run.id}`}
                           className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
@@ -167,12 +164,12 @@ export function ProvisionRunsPage() {
                           {new Date(run.startedAt).toLocaleString()}
                         </Link>
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td>
                         <span title={run.blockedReason ?? run.error ?? undefined}>
                           <Status tone={tone(status)}>{status}</Status>
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 tabular-nums text-ink">
+                      <td className="tabular-nums text-ink">
                         {run.personsEvaluated}
                       </td>
                       <td
@@ -188,7 +185,7 @@ export function ProvisionRunsPage() {
                   );
                 })}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
 

@@ -400,6 +400,107 @@ describe('TargetDetailPage', () => {
     expect(screen.getByLabelText(/bearer token/i)).toBeInTheDocument();
   });
 
+  it('offers the systems it ships a document for, rather than an empty box', async () => {
+    // The design decision this whole form rests on. An administrator
+    // connecting Entra ID picks Entra ID; they do not author a hundred lines
+    // of JSON from a documentation page.
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      if (String(input).includes('/connector-documents')) {
+        return Promise.resolve(
+          json({
+            documents: [
+              { key: 'entra-id', name: 'Microsoft Entra ID', document: { name: 'Microsoft Entra ID', version: 1 } },
+            ],
+          }),
+        );
+      }
+      return Promise.resolve(json(target()));
+    });
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    expect(
+      await screen.findByRole('button', { name: /microsoft entra id/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the document out of the way until it is asked for', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
+      Promise.resolve(
+        String(input).includes('/connector-documents')
+          ? json({ documents: [] })
+          : json(target()),
+      ),
+    );
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    expect(screen.queryByLabelText(/connector document/i)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /edit the connector document/i }));
+    expect(screen.getByLabelText(/connector document/i)).toBeInTheDocument();
+  });
+
+  it('submits an httpJson create carrying the picked document', async () => {
+    const document = { name: 'Microsoft Entra ID', version: 1, baseUrl: 'https://graph' };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).includes('/connector-documents')) {
+        return Promise.resolve(
+          json({ documents: [{ key: 'entra-id', name: 'Microsoft Entra ID', document }] }),
+        );
+      }
+      if (init?.method === 'POST' && String(input).endsWith('/api/admin/targets')) {
+        return Promise.resolve(json({ id: 't1' }));
+      }
+      if (init?.method === 'PATCH') return Promise.resolve(json(null));
+      return Promise.resolve(json(target({ type: 'httpJson' })));
+    });
+
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    await userEvent.click(
+      await screen.findByRole('button', { name: /microsoft entra id/i }),
+    );
+    await userEvent.type(screen.getByLabelText(/client secret/i), 'a-secret');
+    await userEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await waitFor(() => {
+      const create = (
+        fetchMock.mock.calls as [unknown, RequestInit | undefined][]
+      ).find(
+        ([input, init]) =>
+          String(input).endsWith('/api/admin/targets') && init?.method === 'POST',
+      );
+      expect(create).toBeDefined();
+      const body = JSON.parse(String(create![1]!.body));
+      expect(body.type).toBe('httpJson');
+      // The document is COPIED into the target. Editing the shipped one later
+      // must not change a target already built from it.
+      expect(body.config).toEqual({ document });
+      expect(body.bindPassword).toBe('a-secret');
+    });
+  });
+
+  it('names the target after the system that was picked', async () => {
+    const document = { name: 'Microsoft Entra ID', version: 1 };
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
+      Promise.resolve(
+        String(input).includes('/connector-documents')
+          ? json({ documents: [{ key: 'entra-id', name: 'Microsoft Entra ID', document }] })
+          : json(target()),
+      ),
+    );
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    await userEvent.click(
+      await screen.findByRole('button', { name: /microsoft entra id/i }),
+    );
+    // One keystroke nobody has to spend typing what they just clicked.
+    expect(screen.getByLabelText(/^name$/i)).toHaveValue('Microsoft Entra ID');
+  });
+
   it('submits a scim2 create with the scim2-shaped config', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       if (init?.method === 'POST' && String(input).endsWith('/api/admin/targets')) {

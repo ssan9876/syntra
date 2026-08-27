@@ -9,8 +9,14 @@ export const ATTEMPT_LIFETIME_MS = 5 * 60 * 1000;
 /**
  * 'verify' — present a factor you already hold.
  * 'enrol'  — enrol a factor of the required kind, because you hold none.
+ * 'renew'  — choose a new password, because the one you gave has expired.
+ *
+ * All three are half-open doors and none of them is interchangeable with
+ * another: an attempt issued for one purpose must not be spendable on
+ * a different one, or a user could be walked into enrolling a factor and
+ * signing in with something else entirely.
  */
-export type AttemptPurpose = 'verify' | 'enrol';
+export type AttemptPurpose = 'verify' | 'enrol' | 'renew';
 
 const hashToken = (token: string) =>
   createHash('sha256').update(token).digest('hex');

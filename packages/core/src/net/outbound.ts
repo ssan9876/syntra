@@ -43,6 +43,68 @@ export function classifyAddress(address: string): 'allowed' | 'blocked' {
   return BLOCKED_RANGES.has(parsed.range()) ? 'blocked' : 'allowed';
 }
 
+/**
+ * Refuses a URL an administrator typed, without making a request.
+ *
+ * The same four judgements `fetchExternalDocument` and `guardedFetch` make,
+ * minus the fetch — for the case where a URL is being SAVED and the operator
+ * should be told now rather than by a delivery that silently never lands.
+ * `classifyAddress` is imported rather than reimplemented, so a settings form
+ * and the socket cannot disagree about which addresses are reachable.
+ *
+ * It is not a substitute for the check at request time. A name that resolves
+ * publicly today can be repointed inside the network tomorrow, and only the
+ * check that runs against the connection — the one that pins the socket to the
+ * address it classified — closes that. This is the early, friendly half.
+ */
+export async function assertOutboundUrl(
+  rawUrl: string,
+  options: OutboundOptions & { resolve?: (host: string) => Promise<string[]> },
+): Promise<void> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error(`not a usable address: ${rawUrl}`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(
+      `only http and https addresses may be used, not ${url.protocol.replace(':', '')}`,
+    );
+  }
+  // A credential in a URL is sent on every request and shown on every settings
+  // screen, and nothing in this system treats it as a secret. Refused at the
+  // door rather than stored and leaked.
+  if (url.username !== '' || url.password !== '') {
+    throw new Error(
+      'put the credential in a header at the receiving end, not in the URL — ' +
+        'a URL is shown on every settings screen and nothing here treats it as a secret',
+    );
+  }
+
+  if (options.allowPrivateAddresses) return;
+
+  const resolver =
+    options.resolve ??
+    (async (host: string) => (await lookup(host, { all: true })).map((a) => a.address));
+  const addresses = await resolver(url.hostname).catch(() => []);
+  if (addresses.length === 0) {
+    throw new Error(`${url.hostname} resolves to no address this deployment may reach`);
+  }
+  for (const address of addresses) {
+    if (classifyAddress(address) === 'blocked') {
+      // The ADDRESS is deliberately not in this message. It reaches an
+      // administrator's screen, and reporting what a name resolves to inside
+      // the network turns the settings form into the reconnaissance tool this
+      // check exists to prevent.
+      throw new Error(
+        `${url.hostname} resolves inside this deployment's own network. ` +
+          'Set OUTBOUND_ALLOW_PRIVATE=true if that is intended.',
+      );
+    }
+  }
+}
+
 export interface OutboundOptions {
   /** Lifts the private-address refusal. From `OUTBOUND_ALLOW_PRIVATE`. */
   allowPrivateAddresses?: boolean | undefined;

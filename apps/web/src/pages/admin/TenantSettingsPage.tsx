@@ -12,8 +12,23 @@ interface TenantView {
   adminMfaRequired: boolean;
   selfEnrolmentEnabled: boolean;
   passwordMinLength: number;
+  lockoutThreshold: number;
+  lockoutWindowMinutes: number;
+  lockoutDurationMinutes: number;
+  passwordMaxAgeDays: number;
+  passwordHistoryDepth: number;
+  emailOtpEnabled: boolean;
   webauthnAvailable: boolean;
 }
+
+/**
+ * What the toggle turns lockout on to.
+ *
+ * Five, not the contract's floor of three: three is the lowest a tenant may
+ * choose deliberately, and starting somebody there means their first typo
+ * costs two more. The floor and the default are different questions.
+ */
+const DEFAULT_THRESHOLD = 5;
 
 function Toggle({
   checked,
@@ -57,6 +72,14 @@ export function TenantSettingsPage() {
   const [adminMfaRequired, setAdminMfaRequired] = useState(false);
   const [selfEnrolmentEnabled, setSelfEnrolmentEnabled] = useState(true);
   const [minLength, setMinLength] = useState('12');
+  const [lockoutOn, setLockoutOn] = useState(false);
+  const [threshold, setThreshold] = useState(String(DEFAULT_THRESHOLD));
+  const [windowMinutes, setWindowMinutes] = useState('15');
+  const [duration, setDuration] = useState('15');
+  const [expiryOn, setExpiryOn] = useState(false);
+  const [maxAge, setMaxAge] = useState('90');
+  const [historyDepth, setHistoryDepth] = useState('0');
+  const [emailOtp, setEmailOtp] = useState(false);
   const [domain, setDomain] = useState('');
   /**
    * One per line, because that is how somebody pastes a list of hostnames.
@@ -81,6 +104,19 @@ export function TenantSettingsPage() {
     setAdminMfaRequired(data.adminMfaRequired);
     setSelfEnrolmentEnabled(data.selfEnrolmentEnabled);
     setMinLength(String(data.passwordMinLength));
+    setLockoutOn(data.lockoutThreshold > 0);
+    // Zero is "off", not a threshold anybody typed. Showing the default in the
+    // field instead means switching lockout on does not start from a number
+    // the contract rejects.
+    setThreshold(
+      String(data.lockoutThreshold > 0 ? data.lockoutThreshold : DEFAULT_THRESHOLD),
+    );
+    setWindowMinutes(String(data.lockoutWindowMinutes));
+    setDuration(String(data.lockoutDurationMinutes));
+    setExpiryOn(data.passwordMaxAgeDays > 0);
+    setMaxAge(String(data.passwordMaxAgeDays > 0 ? data.passwordMaxAgeDays : 90));
+    setHistoryDepth(String(data.passwordHistoryDepth));
+    setEmailOtp(data.emailOtpEnabled);
     setDomain(data.primaryDomain ?? '');
     setExtraDomains(data.additionalDomains.join('\n'));
   }, [data]);
@@ -97,6 +133,12 @@ export function TenantSettingsPage() {
           adminMfaRequired,
           selfEnrolmentEnabled,
           passwordMinLength: Number(minLength),
+          lockoutThreshold: lockoutOn ? Number(threshold) : 0,
+          lockoutWindowMinutes: Number(windowMinutes),
+          lockoutDurationMinutes: Number(duration),
+          passwordMaxAgeDays: expiryOn ? Number(maxAge) : 0,
+          passwordHistoryDepth: Number(historyDepth),
+          emailOtpEnabled: emailOtp,
           // Empty clears it, which turns WebAuthn off rather than leaving the
           // old value behind.
           primaryDomain: domain.trim() === '' ? null : domain.trim(),
@@ -170,6 +212,15 @@ export function TenantSettingsPage() {
             hint="On, a user the policy asks a factor from is offered enrolment after their password is accepted, and is signed in straight afterwards. Off, they are refused outright — right for an organization that issues security keys by hand, and a lockout for one that does not."
           />
 
+          <Toggle
+            checked={emailOtp}
+            onChange={setEmailOtp}
+            label="Allow a code sent by email as a second factor"
+            // The hint states the trade rather than selling the feature. An
+            // administrator turning this on should know what it is worth.
+            hint="For people with no phone and no security key. Weaker than the others: wherever the same mailbox can also reset the password, somebody holding that mailbox holds both."
+          />
+
           {adminMfaRequired && !selfEnrolmentEnabled && (
             <Alert tone="warning" title="Nobody can enrol their way in">
               Together, these two refuse every administrator who does not
@@ -203,7 +254,7 @@ export function TenantSettingsPage() {
               rows={3}
               spellCheck={false}
               placeholder={'192.168.1.10\nsyntra.example.com'}
-              className="w-full max-w-md rounded-control border border-border-subtle bg-bg px-3 py-2 font-mono text-ink placeholder:text-muted hover:border-border-strong"
+              className="w-full max-w-md rounded-control border border-border-control bg-bg px-3 py-2 font-mono text-ink placeholder:text-muted hover:border-border-strong"
             />
             <span className="mt-1.5 block text-sm text-muted">
               One hostname per line. An instance is reached by address while it
@@ -235,6 +286,104 @@ export function TenantSettingsPage() {
             hint="Twelve is the floor this product enforces; a tenant can ask for more."
             className="max-w-xs"
           />
+
+          <Field
+            label="Previous passwords that may not be reused"
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={24}
+            value={historyDepth}
+            onChange={setHistoryDepth}
+            hint="Zero keeps no history. This one costs a person nothing until they try to put an old password back into service, so it is the half of password ageing worth switching on."
+            className="max-w-xs"
+          />
+
+          <Toggle
+            checked={expiryOn}
+            onChange={setExpiryOn}
+            label="Expire passwords on a schedule"
+            hint="Off, and usually best left off. NIST stopped recommending scheduled rotation years ago: somebody required to change a password every ninety days picks one they can iterate, and Summer2026! becomes Autumn2026!. Turn it on if you are audited against a policy that still asks for it."
+          />
+
+          {expiryOn && (
+            <>
+              <Field
+                label="Password lasts (days)"
+                type="number"
+                inputMode="numeric"
+                min={30}
+                max={3650}
+                value={maxAge}
+                onChange={setMaxAge}
+                hint="Thirty is the lowest allowed. When it lapses, the next sign-in asks for a new password before it issues a session."
+                className="max-w-xs"
+              />
+              <Alert tone="warning" title="Everyone with a local password is affected">
+                Accounts whose password lives in an upstream provider are left
+                alone — Syntra does not own those and a change form here would
+                do nothing. Everyone else is asked to choose a new password the
+                first time they sign in after their current one lapses.
+              </Alert>
+            </>
+          )}
+        </Panel>
+
+        <Panel title="Failed sign-ins" bodyClassName="space-y-5 p-4">
+          <Toggle
+            checked={lockoutOn}
+            onChange={setLockoutOn}
+            label="Lock an account after repeated failures"
+            hint="This protects the account; the rate limit in front of the API protects the service. A rate limit bounds how fast guesses arrive and refills a minute later — it does not bound how many an account will tolerate before one of them lands."
+          />
+
+          {lockoutOn && (
+            <>
+              <div className="flex flex-wrap gap-4">
+                <Field
+                  label="Failures before locking"
+                  type="number"
+                  inputMode="numeric"
+                  min={3}
+                  max={100}
+                  value={threshold}
+                  onChange={setThreshold}
+                  hint="Three is the lowest allowed. Below that, one mistyped password is a support call."
+                  className="max-w-[13rem]"
+                />
+                <Field
+                  label="Counted over (minutes)"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={1440}
+                  value={windowMinutes}
+                  onChange={setWindowMinutes}
+                  hint="Measured from the first failure of a run, so one typo a month never adds up."
+                  className="max-w-[13rem]"
+                />
+                <Field
+                  label="Lock lasts (minutes)"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={10080}
+                  value={duration}
+                  onChange={setDuration}
+                  hint="Zero holds the lock until an administrator lifts it from the user's page."
+                  className="max-w-[13rem]"
+                />
+              </div>
+
+              {Number(duration) === 0 && (
+                <Alert tone="warning" title="These locks do not lift themselves">
+                  Every locked account waits for an administrator. Someone has
+                  to be reachable to unlock them, including out of hours and
+                  including the last administrator who can.
+                </Alert>
+              )}
+            </>
+          )}
         </Panel>
 
         {saveError && <Alert tone="danger">{saveError}</Alert>}

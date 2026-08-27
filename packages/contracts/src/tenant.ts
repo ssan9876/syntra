@@ -48,6 +48,35 @@ export const tenantSettingsRequest = z
     // not the tenant's: a tenant that could set four would have no policy at all.
     passwordMinLength: z.number().int().min(12).max(128).optional(),
     /**
+     * Failed password attempts before an account stops accepting its own
+     * password. Zero switches lockout off, which is the default.
+     *
+     * The lower bound on a lockout that is *on* is 3, not 1: a threshold of
+     * one turns a single mistyped password into a support call, and a
+     * threshold anybody can set to one is a way to lock a colleague out on
+     * purpose.
+     */
+    lockoutThreshold: z
+      .union([z.literal(0), z.number().int().min(3).max(100)])
+      .optional(),
+    lockoutWindowMinutes: z.number().int().min(1).max(1440).optional(),
+    /** Zero means the lock holds until an administrator lifts it. */
+    lockoutDurationMinutes: z.number().int().min(0).max(10080).optional(),
+    /**
+     * Days a password stays good for. Zero never expires it, and is both the
+     * default and the recommendation — see the schema comment for why.
+     *
+     * The lower bound on an expiry that is ON is 30. A tenant that could set
+     * one day would be asking every user to choose a new password daily,
+     * which is a denial of service dressed as a policy.
+     */
+    passwordMaxAgeDays: z
+      .union([z.literal(0), z.number().int().min(30).max(3650)])
+      .optional(),
+    /** How many retired passwords may not be chosen again. Zero disables it. */
+    passwordHistoryDepth: z.number().int().min(0).max(24).optional(),
+    emailOtpEnabled: z.boolean().optional(),
+    /**
      * A bare hostname: no scheme, no port, no path. Lower-cased on the way in,
      * because `resolveTenantId` lower-cases the Host header before comparing and
      * a stored `Acme.Example.Com` would simply never match.
@@ -79,3 +108,26 @@ export const tenantSettingsRequest = z
   })
   .strict();
 export type TenantSettingsRequest = z.infer<typeof tenantSettingsRequest>;
+
+/**
+ * The tenant's own name, logo and colours on the screens their staff see.
+ *
+ * `.strict()` like the settings above, and for the same reason one layer over:
+ * a misspelled `brandPrimay` that came back 200 leaves an administrator
+ * believing they set a colour they did not.
+ *
+ * Every field is sent whole and nullable — the form owns all four, and null
+ * clears one back to Syntra's own. The real constraints (a readable contrast
+ * ratio, a logo that is not an SVG and does not fetch from anywhere) live in
+ * `brand-service.ts`: they need arithmetic and they need to be enforced
+ * wherever a brand is written, not only where this schema is parsed.
+ */
+export const brandRequest = z
+  .object({
+    name: z.string().max(64).nullable().optional(),
+    logo: z.string().max(400_000).nullable().optional(),
+    primary: z.string().max(7).nullable().optional(),
+    accent: z.string().max(7).nullable().optional(),
+  })
+  .strict();
+export type BrandRequest = z.infer<typeof brandRequest>;

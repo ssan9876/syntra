@@ -11,8 +11,10 @@ import {
   storeChallenge,
 } from '../mfa/challenge-store.js';
 import { leaveTo } from '../mfa/leave.js';
+import { LanguagePicker, useT } from '../i18n/LocaleProvider.js';
 
 export function Login() {
+  const t = useT();
   const { login } = useSession();
   const navigate = useNavigate();
 
@@ -50,15 +52,23 @@ export function Login() {
         return;
       }
 
-      const kind = outcome.status === 'enrol' ? 'enrol' : 'verify';
+      const kind =
+        outcome.status === 'enrol'
+          ? 'enrol'
+          : outcome.status === 'renew'
+            ? 'renew'
+            : 'verify';
       storeChallenge({
         kind,
         attemptToken: outcome.attemptToken,
         expiresAt: outcome.expiresAt,
+        // A renewal offers no choice of factor, so it carries none.
         factors:
           outcome.status === 'enrol'
             ? outcome.enrollableFactors
-            : outcome.acceptableFactors,
+            : outcome.status === 'renew'
+              ? []
+              : outcome.acceptableFactors,
         // Where the sign-in was headed. A SAML service provider or an OIDC
         // relying party sends an unauthenticated browser to `/login?next=...`
         // and expects it back; without carrying that through the step-up, a
@@ -86,14 +96,12 @@ export function Login() {
         <Wordmark className="mb-8" />
 
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
-          <h1 className="text-lg font-semibold text-ink">Sign in</h1>
-          <p className="mt-1 text-muted">
-            Use the account your organization issued you.
-          </p>
+          <h1 className="text-lg font-semibold text-ink">{t('login.title')}</h1>
+          <p className="mt-1 text-muted">{t('login.lead')}</p>
 
           <form onSubmit={onSubmit} noValidate className="mt-6 space-y-4">
             <Field
-              label="Login"
+              label={t('login.login')}
               value={loginName}
               onChange={setLoginName}
               autoComplete="username"
@@ -102,7 +110,7 @@ export function Login() {
               invalid={Boolean(error)}
             />
             <Field
-              label="Password"
+              label={t('login.password')}
               type="password"
               value={password}
               onChange={setPassword}
@@ -123,19 +131,21 @@ export function Login() {
               loading={busy}
               className="w-full"
             >
-              Sign in
+              {t('login.submit')}
             </Button>
           </form>
         </div>
 
         <p className="mt-6 text-center text-sm text-muted">
-          <Link to="/forgot-password" className="text-accent underline-offset-2 hover:underline">
-            Forgot your password?
+          <Link to="/forgot-password" className="link">
+            {t('login.forgot')}
           </Link>
         </p>
 
-        <p className="mt-2 text-center text-sm text-muted">
-          Trouble signing in? Contact your IT administrator.
+        <p className="mt-2 text-center text-sm text-muted">{t('login.help')}</p>
+
+        <p className="mt-4 text-center">
+          <LanguagePicker />
         </p>
       </div>
     </main>

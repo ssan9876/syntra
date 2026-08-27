@@ -29,6 +29,7 @@ const ITEMS = [
   { to: '/access', label: 'My access', end: false },
   { to: '/approvals', label: 'Approvals', end: false },
   { to: '/managed', label: 'Managed by me', end: false },
+  { to: '/tasks', label: 'Tasks', end: false },
   { to: '/govern/reviews', label: 'Reviews', end: false },
 ];
 

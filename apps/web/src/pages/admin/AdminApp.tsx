@@ -19,6 +19,9 @@ import { ApplicationDetailPage } from './ApplicationDetailPage.js';
 import { PoliciesPage } from './PoliciesPage.js';
 import { RolesPage } from './RolesPage.js';
 import { TenantSettingsPage } from './TenantSettingsPage.js';
+import { BrandingPage } from './BrandingPage.js';
+import { WebhooksPage } from './WebhooksPage.js';
+import { IncidentsPage } from './IncidentsPage.js';
 import { TargetsPage } from './TargetsPage.js';
 import { TargetDetailPage } from './TargetDetailPage.js';
 import { AccountProfilePage } from './AccountProfilePage.js';
@@ -27,6 +30,7 @@ import { ProvisionRunsPage } from './ProvisionRunsPage.js';
 import { ProvisionRunDetailPage } from './ProvisionRunDetailPage.js';
 import { PersonAccessPage } from './PersonAccessPage.js';
 import { ProductsPage } from './ProductsPage.js';
+import { DelegatedTasksPage } from './DelegatedTasksPage.js';
 import { ProductEditorPage } from './ProductEditorPage.js';
 import { WorkflowEditorPage } from './WorkflowEditorPage.js';
 import { RequestQueuePage } from './RequestQueuePage.js';
@@ -96,6 +100,7 @@ export function AdminApp() {
             <Route path="automate/requests" element={<RequestQueuePage />} />
             <Route path="automate/requests/:id" element={<RequestDetailAdminPage />} />
             <Route path="automate/sweeps" element={<SweepsPage />} />
+            <Route path="automate/tasks" element={<DelegatedTasksPage />} />
             <Route path="automate/sweeps/:id" element={<SweepDetailPage />} />
             {/* Relative paths, and the literal segment before the parametric one. */}
             <Route path="govern/findings" element={<GovernFindingsPage />} />
@@ -117,6 +122,9 @@ export function AdminApp() {
             <Route path="audit" element={<AuditPage />} />
             <Route path="roles" element={<RolesPage />} />
             <Route path="settings" element={<TenantSettingsPage />} />
+            <Route path="branding" element={<BrandingPage />} />
+            <Route path="webhooks" element={<WebhooksPage />} />
+            <Route path="incidents" element={<IncidentsPage />} />
             <Route path="updates" element={<UpdatesPage />} />
             <Route path="*" element={<Navigate to="/admin/users" replace />} />
           </Routes>

@@ -4,6 +4,7 @@ import { Button } from '@syntra/ui';
 import { useSession } from '../session/SessionProvider.js';
 import { PortalNav } from './PortalNav.js';
 import { Wordmark } from './Wordmark.js';
+import { LanguagePicker, useT } from '../i18n/LocaleProvider.js';
 
 /**
  * The chrome shared by the portal and the console: identity, then exit.
@@ -24,6 +25,7 @@ export function AppShell({
   sidebar?: ReactNode;
 }) {
   const { session, logout } = useSession();
+  const t = useT();
   const navigate = useNavigate();
 
   async function onSignOut() {
@@ -52,14 +54,14 @@ export function AppShell({
                 to={session.scope === 'admin' ? '/admin/users' : '/elevate'}
                 className="rounded-control px-2.5 py-1.5 text-sm font-medium text-muted transition-colors duration-150 ease-out-quart hover:bg-surface-2 hover:text-ink"
               >
-                Administration
+                {t('shell.administration')}
               </Link>
             )}
             <Link
               to="/security"
               className="rounded-control px-2.5 py-1.5 text-sm font-medium text-muted transition-colors duration-150 ease-out-quart hover:bg-surface-2 hover:text-ink"
             >
-              Security
+              {t('shell.security')}
             </Link>
             {/* A rule, not a gap. Who you are is a different kind of thing
                 from where you can go, and the separation says so without a
@@ -71,8 +73,12 @@ export function AppShell({
             <span className="hidden text-sm text-muted sm:inline">
               {session?.displayName}
             </span>
+            {/* In the header rather than buried in a settings page: the
+                reader who needs it is, by definition, the one who cannot read
+                the settings page's name. */}
+            <LanguagePicker className="hidden sm:inline-flex" />
             <Button size="sm" variant="ghost" onClick={onSignOut}>
-              Sign out
+              {t('portal.sign_out')}
             </Button>
           </div>
         </div>

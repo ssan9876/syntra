@@ -5,6 +5,7 @@ import {
   Panel,
   SkeletonRows,
   Status,
+  Table,
   buttonClasses,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
@@ -102,39 +103,36 @@ export function SourcesPage() {
           )}
 
           {!loading && data && data.sources.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     Name
                   </th>
                   <th
                     scope="col"
-                    className="px-4 py-2.5 font-medium max-sm:hidden"
+                    className="max-sm:hidden"
                   >
                     Schedule
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Transport
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Auto-apply
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Last run
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Status
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {data.sources.map((source) => (
-                  <tr
-                    key={source.id}
-                    className="border-b border-border-subtle last:border-0"
-                  >
-                    <td className="px-4 py-2.5">
+                  <tr key={source.id}>
+                    <td>
                       <Link
                         to={`/admin/sources/${source.id}`}
                         className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
@@ -145,10 +143,10 @@ export function SourcesPage() {
                         {source.type}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 text-muted max-sm:hidden">
+                    <td className="max-sm:hidden">
                       {source.schedule ?? 'Manual only'}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td>
                       <Status tone={transport(source).tone}>
                         {transport(source).label}
                       </Status>
@@ -158,15 +156,15 @@ export function SourcesPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td>
                       <Status tone={source.autoApply ? 'primary' : 'neutral'}>
                         {source.autoApply ? 'On' : 'Off'}
                       </Status>
                     </td>
-                    <td className="px-4 py-2.5 text-muted">
+                    <td>
                       {when(source.lastRunAt)}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td>
                       <Status tone={source.enabled ? 'active' : 'inactive'}>
                         {source.enabled ? 'Enabled' : 'Disabled'}
                       </Status>
@@ -174,7 +172,7 @@ export function SourcesPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

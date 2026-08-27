@@ -4,7 +4,9 @@ export * from './net/outbound.js';
 export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
+export * from './tenant/brand-service.js';
 export * from './health/readiness.js';
+export * from './health/incidents.js';
 export * from './update/update-service.js';
 export * from './health/version.js';
 export * from './directory/user-service.js';
@@ -18,6 +20,7 @@ export * from './keys/signing-key-service.js';
 export * from './keys/key-change.js';
 export * from './keys/jobs.js';
 export * from './identity/person-service.js';
+export * from './identity/population-drop.js';
 export * from './identity/contract-service.js';
 export * from './identity/csv-import.js';
 export * from './rbac/permissions.js';
@@ -32,6 +35,12 @@ export * from './auth/session-service.js';
 // authorize(), and a caller that reached it directly would skip policy
 // evaluation, second factors and the audit event. authorize() is the door.
 export type { AuthFailure, AuthResult } from './auth/login-service.js';
+export { clearLockout, isLocked, readLockout } from './auth/login-lockout.js';
+export { passwordExpired, passwordWasUsedBefore } from './auth/password-ageing.js';
+export type { AgeingPolicy } from './auth/password-ageing.js';
+export { renewExpiredPassword } from './auth/password-renewal.js';
+export type { RenewOutcome } from './auth/password-renewal.js';
+export type { LockoutPolicy, LockoutState } from './auth/login-lockout.js';
 export * from './auth/authorize.js';
 // Only the read. `issueAttempt` plus `authorize({ kind: 'continue' })` is a
 // second door into an allow: an attempt issued by hand names its own userId,
@@ -46,9 +55,11 @@ export * from './auth/mfa/relying-party.js';
 export * from './auth/mfa/types.js';
 export * from './auth/mfa/registry.js';
 export * from './auth/mfa/totp.js';
+export * from './auth/mfa/email-otp.js';
 export * from './auth/mfa/webauthn.js';
 export * from './auth/mfa/recovery-codes.js';
 export * from './policy/types.js';
+export * from './policy/device-match.js';
 export * from './policy/ip-match.js';
 export * from './policy/time-window.js';
 export * from './policy/evaluate.js';
@@ -58,6 +69,11 @@ export * from './policy/impact.js';
 export * from './notify/notification-service.js';
 export * from './notify/delivery.js';
 export * from './notify/templates/index.js';
+export * from './notify/webhook-event.js';
+export * from './notify/webhook-jobs.js';
+export * from './notify/webhook-retry.js';
+export * from './notify/webhook-service.js';
+export * from './notify/webhook-signature.js';
 export * from './jobs/scheduler.js';
 export * from './sync/mapping.js';
 export * from './sync/correlate.js';
@@ -69,6 +85,7 @@ export * from './sync/run-service.js';
 export * from './sync/apply.js';
 export * from './sync/jobs.js';
 export * from './access/application-service.js';
+export * from './access/catalog/index.js';
 export * from './access/assignment-service.js';
 export * from './access/resolve.js';
 export * from './access/claims/types.js';
@@ -147,6 +164,7 @@ export type {
 // (Task 10) both collided with `sync/`, and under TS2308 the barrel exports
 // NEITHER side silently. Nothing in these two modules collides today.
 export * from './provision/target-service.js';
+export * from './provision/placement-service.js';
 export * from './provision/entitlement-service.js';
 // Grepped as well: `previewProvisionRun`, `ProvisionRunInFlightError`,
 // `PreviewProvisionRunOptions` and `ProvisionRunSummary` appear nowhere else in
@@ -227,7 +245,11 @@ export * from './automate/form.js';
 export * from './automate/duration.js';
 export * from './automate/approvers.js';
 export * from './automate/notify.js';
+export * from './tasks/actions.js';
+export * from './tasks/task-service.js';
 export * from './automate/catalog-service.js';
+export * from './tasks/actions.js';
+export * from './tasks/task-service.js';
 export * from './automate/workflow-service.js';
 export * from './automate/eligibility.js';
 export * from './automate/fulfil.js';
@@ -250,6 +272,7 @@ export * from './govern/snapshot-service.js';
 export * from './govern/finding-service.js';
 export * from './govern/drift-link.js';
 export * from './govern/orphan-service.js';
+export * from './govern/rule-mining.js';
 export * from './govern/audit-integrity.js';
 export * from './govern/settings-service.js';
 export * from './govern/report-service.js';

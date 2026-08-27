@@ -49,6 +49,15 @@ export type AuthOutcome =
       attemptToken: string;
       expiresAt: string;
       enrollableFactors: FactorKind[];
+    }
+  | {
+      /**
+       * The password aged past the tenant's limit. Still no session: the token
+       * buys a password change and nothing else.
+       */
+      status: 'renew';
+      attemptToken: string;
+      expiresAt: string;
     };
 
 interface SessionContextValue {

@@ -5,6 +5,7 @@ import {
   assignFindingBody,
   buildSnapshotBody,
   changeReportQuery,
+  ruleMiningQuery,
   classificationBody,
   denyOrphanBody,
   evidencePackBody,
@@ -40,6 +41,7 @@ import {
   ExceptionRefusedError,
   PERMISSIONS,
   PROVISION_JOB,
+  mineFromSnapshot,
   RevocationRefusedError,
   SYNC_JOB,
   acceptFinding,
@@ -161,6 +163,17 @@ export const GOVERN_READ_ROUTES: readonly { path: string; scoped: boolean; why?:
     path: 'GET /govern/snapshots/:id/coverage',
     scoped: false,
     why: 'regions of the world, not people',
+  },
+  {
+    // SCOPED, and not exempt like the three snapshot routes above it.
+    //
+    // A candidate names no person, which is the argument for exempting it and
+    // the argument is wrong: it names a COHORT and counts it. "Everyone in
+    // Engineering holds all-staff, and forty others do too" tells a
+    // department lead the size and the access shape of a department they
+    // cannot otherwise see. Aggregates over people are still about people.
+    path: 'GET /govern/snapshots/:id/rule-candidates',
+    scoped: true,
   },
   { path: 'GET /govern/reports/system', scoped: true },
   { path: 'GET /govern/reports/person/:personId', scoped: true },
@@ -300,6 +313,32 @@ export async function registerAdminGovernRoutes(
         _count: { _all: true },
       });
       return { snapshot, gapsByKind };
+    });
+  });
+
+  /**
+   * The rules this snapshot's data already implies.
+   *
+   * A READ, and only a read. Nothing here creates a business rule: a rule
+   * mined from current state encodes the accidents along with the policy,
+   * including the ones a certification campaign is about to revoke. The value
+   * is entirely in showing somebody a candidate with its numbers attached.
+   *
+   * Read behind `requireGovernRead` like every other snapshot view, because
+   * that is what it is — a different arithmetic over rows the caller can
+   * already see.
+   */
+  app.get('/govern/snapshots/:id/rule-candidates', { preHandler: requireGovernRead() }, async (request) => {
+    const { id } = idParam.parse(request.params);
+    const query = ruleMiningQuery.parse(request.query);
+    const scope = scopeOf(request);
+    return request.db(async (tx) => {
+      await readableSnapshot(tx, id);
+      const admitted =
+        scope.kind === 'tenant' ? null : [...(await personIdsInScope(tx, scope))];
+      return {
+        candidates: await mineFromSnapshot(tx, id, { ...query, personIds: admitted }),
+      };
     });
   });
 

@@ -43,7 +43,8 @@ import {
   type ProtocolIdentity,
 } from './protocol-identity.js';
 import { tenantRelyingParty } from './relying-party.js';
-import { challengeRedirect, issueSession } from './session-reply.js';
+import { challengeRedirect, issueSession, renewReply } from './session-reply.js';
+import { clientFacts } from '../plugins/client-facts.js';
 
 export interface FederationRouteOptions {
   publicUrl: string;
@@ -292,6 +293,7 @@ export async function registerFederationRoutes(
       },
       applicationId: ticket.applicationId,
       sourceIp: request.ip,
+      client: clientFacts(request),
       relyingParty: tenantRelyingParty(tenant, options.publicUrl),
       scope: 'portal',
     });
@@ -307,7 +309,11 @@ export async function registerFederationRoutes(
     if (decision.status === 'deny') {
       throw new ProblemError(403, 'federation-denied', 'Sign-in refused');
     }
-    if (decision.status === 'challenge' || decision.status === 'enrol') {
+    if (
+      decision.status === 'challenge' ||
+      decision.status === 'enrol' ||
+      decision.status === 'renew'
+    ) {
       return challengeRedirect(reply, decision, returnTo);
     }
     // `issueSession` takes the allow object and nothing else, so this cannot

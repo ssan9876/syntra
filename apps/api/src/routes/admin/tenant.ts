@@ -1,16 +1,19 @@
 import { invalidateProvider } from '@syntra/protocols';
 import type { FastifyInstance } from 'fastify';
-import { tenantSettingsRequest } from '@syntra/contracts';
+import { brandRequest, tenantSettingsRequest } from '@syntra/contracts';
 import {
   PERMISSIONS,
+  BrandRefusedError,
   enrolledFactorTypes,
   DomainTakenError,
   assertDomainsFree,
   hasRecoveryCodes,
   PasskeysWouldBreakError,
   passkeysAtRisk,
+  readBrand,
   readTenant,
   recordEvent,
+  setBrand,
   updateTenant,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -36,6 +39,59 @@ export async function registerAdminTenantRoutes(
     '/tenant',
     { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
     async (request) => request.db((tx) => readTenant(tx)),
+  );
+
+  app.get(
+    '/tenant/brand',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => request.db((tx) => readBrand(tx)),
+  );
+
+  /**
+   * The refusals here are the point of the endpoint.
+   *
+   * A colour that cannot be read, or a logo that fetches from somewhere, is
+   * not a validation nicety — both render on the unauthenticated sign-in page.
+   * They come back as 400 with the reason and the measured number attached,
+   * because the administrator is standing in front of the message and "that
+   * colour is not allowed" sends them back to guessing.
+   */
+  app.put(
+    '/tenant/brand',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const body = brandRequest.parse(request.body);
+      return request.db(async (tx) => {
+        let brand;
+        try {
+          brand = await setBrand(tx, body);
+        } catch (cause) {
+          if (cause instanceof BrandRefusedError) {
+            throw new ProblemError(400, 'brand-refused', 'That branding cannot be used', cause.message);
+          }
+          throw cause;
+        }
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'tenant.brand_updated',
+          targetType: 'Tenant',
+          targetId: null,
+          outcome: 'success',
+          sourceIp: request.ip,
+          // The logo itself is NOT in the payload. An audit event is read far
+          // more often than a logo changes, and a quarter-megabyte data URI in
+          // every export is a cost nobody signed up for. Whether one is set is
+          // the fact anybody auditing this actually wants.
+          payload: {
+            name: brand.name,
+            primary: brand.primary,
+            accent: brand.accent,
+            logo: brand.logo === null ? 'none' : 'set',
+          },
+        });
+        return brand;
+      });
+    },
   );
 
   app.put(
@@ -134,6 +190,11 @@ export async function registerAdminTenantRoutes(
             adminMfaRequired: saved.adminMfaRequired,
             selfEnrolmentEnabled: saved.selfEnrolmentEnabled,
             passwordMinLength: saved.passwordMinLength,
+            lockoutThreshold: saved.lockoutThreshold,
+            lockoutWindowMinutes: saved.lockoutWindowMinutes,
+            lockoutDurationMinutes: saved.lockoutDurationMinutes,
+            passwordMaxAgeDays: saved.passwordMaxAgeDays,
+            passwordHistoryDepth: saved.passwordHistoryDepth,
             primaryDomain: saved.primaryDomain,
             additionalDomains: saved.additionalDomains,
             // On the event whether or not any broke, so "who moved the domain,

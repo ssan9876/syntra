@@ -4,6 +4,7 @@ import { recordEvent } from '../audit/audit-service.js';
 import { sourceWithPassword } from '../sync/source-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { validateNewPassword } from './password-policy.js';
+import { passwordWasUsedBefore } from './password-ageing.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import { revokeAllForUserExcept } from './session-service.js';
 import { revokeAllRefreshTokensForUser } from './refresh-token.js';
@@ -30,6 +31,13 @@ export type ChangeOwnPasswordOutcome =
   | { ok: false; reason: 'wrong_password' }
   | { ok: false; reason: 'weak_password'; detail: string }
   | { ok: false; reason: 'unchanged' }
+  /**
+   * One of the last `depth` passwords this user retired. The number is carried
+   * so the screen can say "any of your last five" rather than "a previous
+   * one", which is the difference between a rule somebody can comply with and
+   * one they have to guess at.
+   */
+  | { ok: false; reason: 'reused'; depth: number }
   /** The DIRECTORY refused the new password: its complexity, history or age. */
   | { ok: false; reason: 'directory_policy' }
   /** The directory could not be reached, or refused the change outright. */
@@ -81,6 +89,7 @@ export async function changeOwnPassword(
       user,
       credential,
       minLength: tenant.passwordMinLength,
+      historyDepth: tenant.passwordHistoryDepth,
       // The source owns this password only if somebody deliberately said so.
       // Off, the change stays local and behaves exactly as it did before.
       writesPassword: Boolean(source?.writebackEnabled && source.writebackPassword),
@@ -288,6 +297,19 @@ export async function changeOwnPassword(
   // if the two differ in some way the hash does not.
   if (await verifyPassword(context.credential.hash, input.newPassword)) {
     return { ok: false, reason: 'unchanged' };
+  }
+
+  // Checked last of the local checks, and outside a transaction: it costs one
+  // Argon2 verification per remembered password, which is why the depth is
+  // capped in the schema rather than left open.
+  const reused = await withTenant(tenantId, (tx) =>
+    passwordWasUsedBefore(tx, context.user.id, input.newPassword, {
+      passwordMaxAgeDays: 0,
+      passwordHistoryDepth: context.historyDepth,
+    }),
+  );
+  if (reused) {
+    return { ok: false, reason: 'reused', depth: context.historyDepth };
   }
 
   return { ok: true, otherSessionsRevoked: await commit() };

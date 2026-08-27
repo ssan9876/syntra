@@ -30,6 +30,8 @@ export interface ProtocolIdentity {
   entityId: string;
   ssoUrl: string;
   sloUrl: string;
+  /** Where a WS-Federation relying party sends its passive requests. */
+  wsFedUrl: string;
   /** The host the request must have arrived on. Lower case, no port. */
   acsHost: string;
 }
@@ -49,6 +51,10 @@ export function tenantProtocolIdentity(
     entityId: `${base}/saml/idp`,
     ssoUrl: `${base}/saml/sso`,
     sloUrl: `${base}/saml/slo`,
+    // Under `/saml` because it is the SAML machinery. WS-Fed names no
+    // well-known path, so this is simply the URL the metadata publishes and
+    // the console shows.
+    wsFedUrl: `${base}/saml/wsfed`,
     acsHost: host.toLowerCase(),
   };
 }

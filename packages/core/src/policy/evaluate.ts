@@ -1,4 +1,5 @@
 import { evaluateIpRanges, type ConditionResult } from './ip-match.js';
+import { evaluateCountries, evaluateDevicePlatforms } from './device-match.js';
 import { evaluateTimeWindow } from './time-window.js';
 import type {
   AuthContext,
@@ -48,11 +49,13 @@ function matchesGroups(rule: PolicyRule, groupIds: string[]): boolean {
  * stored. That preview and the live decision must agree, so they share this
  * function rather than each carrying their own reading of the conditions.
  *
- * THE ASYMMETRY, WHICH IS DELIBERATE. Two of the five conditions can be
+ * THE ASYMMETRY, WHICH IS DELIBERATE. Four of the seven conditions can be
  * undecidable rather than simply false: a source-address condition with no
- * address to test or a malformed range, and a time window in a timezone the
- * platform cannot resolve. An undecidable condition resolves to *false* on
- * `allow`, `require_mfa` and `require_factor`, and to *true* on `deny`.
+ * address to test or a malformed range, a time window in a timezone the
+ * platform cannot resolve, a device condition with no user agent, and a
+ * country condition on a deployment that has no header to read one from. An
+ * undecidable condition resolves to *false* on `allow`, `require_mfa` and
+ * `require_factor`, and to *true* on `deny`.
  *
  * It looks like an inconsistency and it is not. Resolving to false everywhere
  * means a rule written to refuse people quietly stops refusing them the moment
@@ -77,6 +80,12 @@ export function ruleMatches(rule: PolicyRule, context: AuthContext): boolean {
     matchesGroups(rule, context.groupIds) &&
     matchesContracts(rule, context.contracts) &&
     decided(evaluateIpRanges(context.sourceIp, rule.ipRanges)) &&
+    // Both can be `unevaluable` — no user agent, no country header — and both
+    // go through `decided` for the same reason the address and the time window
+    // do: a `deny` rule whose own condition cannot be read must refuse rather
+    // than quietly stop refusing.
+    decided(evaluateDevicePlatforms(context.devicePlatform, rule.devicePlatforms)) &&
+    decided(evaluateCountries(context.country, rule.countries)) &&
     decided(evaluateTimeWindow(rule, context.now))
   );
 }

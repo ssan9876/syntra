@@ -3,6 +3,7 @@ import { currentTenant } from '../tenant-context.js';
 import type { TemplateName } from '../notify/templates/index.js';
 import type { Permission } from '../rbac/permissions.js';
 import type { ResourceType } from './types.js';
+import { enqueueWebhooks } from '../notify/webhook-service.js';
 
 /**
  * The templates this slice adds. A narrowing of `TemplateName` rather than a
@@ -111,7 +112,48 @@ export async function enqueueOutbox(
     })),
   });
 
+  // The webhook fan-out lives HERE, inside the one function that writes the
+  // outbox, rather than beside each of the twenty-odd places that call it.
+  // Every one of those would otherwise be a place somebody could add a new
+  // notification and leave the integrations silently not hearing about it --
+  // and a webhook nobody can tell has stopped firing is the same class of
+  // defect as a notification nobody can tell has stopped sending.
+  //
+  // Digest preference is deliberately ignored: it is a preference about
+  // somebody's INBOX, and an integration is not an inbox. Delaying a machine's
+  // notification until tomorrow morning because a person asked for a daily
+  // summary would be honouring the preference against everything it meant.
+  await enqueueWebhooks(tx, groupForWebhooks(drafts));
+
   return drafts.length;
+}
+
+/**
+ * Collapses the drafts into one event per template.
+ *
+ * `enqueueOutbox` is called once per thing-that-happened with a draft per
+ * person to tell, so the drafts of one call describe one event addressed to
+ * several people -- except where a caller enqueues two different templates
+ * together, which is why this groups rather than assuming.
+ *
+ * `vars` is taken from the first draft of each group. The recipient-specific
+ * variable is the greeting; everything a receiver would act on -- what was
+ * requested, by whom, for what -- is the same across the group by construction,
+ * because it is a description of the same event.
+ */
+function groupForWebhooks(drafts: readonly OutboxDraft[]) {
+  const byTemplate = new Map<string, OutboxDraft[]>();
+  for (const draft of drafts) {
+    const list = byTemplate.get(draft.template) ?? [];
+    list.push(draft);
+    byTemplate.set(draft.template, list);
+  }
+  return [...byTemplate].map(([template, group]) => ({
+    event: template,
+    requestId: group[0]!.requestId,
+    recipients: group.map((d) => d.to),
+    data: group[0]!.vars as Record<string, unknown>,
+  }));
 }
 
 export interface Recipient {

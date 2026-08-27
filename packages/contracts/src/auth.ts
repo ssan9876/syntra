@@ -26,6 +26,20 @@ export const changePasswordRequest = z.object({
 });
 export type ChangePasswordRequest = z.infer<typeof changePasswordRequest>;
 
+/**
+ * Choosing a new password after the old one expired mid-sign-in.
+ *
+ * No `currentPassword`, and that is deliberate: the attempt token exists only
+ * because `authorize()` already accepted the old password and satisfied
+ * whatever factor the policy asked for. Asking for it again would be friction
+ * bought with nothing.
+ */
+export const renewPasswordRequest = z.object({
+  attemptToken: z.string().min(1).max(512),
+  newPassword: z.string().min(1).max(1024),
+});
+export type RenewPasswordRequest = z.infer<typeof renewPasswordRequest>;
+
 export const sessionResponse = z.object({
   userId: z.string().uuid(),
   displayName: z.string(),

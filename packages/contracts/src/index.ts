@@ -8,6 +8,7 @@ export * from './reset.js';
 export * from './access.js';
 export * from './policy.js';
 export * from './tenant.js';
+export * from './webhook.js';
 export * from './protocol.js';
 export * from './protocol-admin.js';
 export * from './provision.js';

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { PageHeader } from './PageHeader.js';
 import { useApiResource } from './hooks.js';
 import { REQUEST_LABEL, REQUEST_TONE, when } from '../automate/status.js';
@@ -57,19 +57,19 @@ export function RequestQueuePage() {
             </div>
           )}
           {!loading && rows.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     Product
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     For
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Asked
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Status
                   </th>
                 </tr>
@@ -77,7 +77,7 @@ export function RequestQueuePage() {
               <tbody className="divide-y divide-border-subtle">
                 {rows.map((row) => (
                   <tr key={row.id}>
-                    <td className="px-4 py-3">
+                    <td className="py-3">
                       <Link
                         to={`/admin/automate/requests/${row.id}`}
                         className="text-ink hover:text-primary"
@@ -97,13 +97,13 @@ export function RequestQueuePage() {
                           </p>
                         ))}
                     </td>
-                    <td className="px-4 py-3 text-muted">
+                    <td className="py-3">
                       {row.subjectPersonId}
                     </td>
-                    <td className="px-4 py-3 text-muted">
+                    <td className="py-3">
                       {when(row.submittedAt)}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="py-3">
                       <Status tone={REQUEST_TONE[row.status] ?? 'neutral'}>
                         {REQUEST_LABEL[row.status] ?? row.status}
                       </Status>
@@ -111,7 +111,7 @@ export function RequestQueuePage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

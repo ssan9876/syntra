@@ -25,6 +25,7 @@ const baseConfig = (overrides: Partial<SamlConfigRecord> = {}): SamlConfigRecord
   sloUrl: null,
   sloBinding: 'HTTP-POST',
   allowIdpInitiated: false,
+  wsFedEnabled: false,
   assertionLifetimeMs: 300_000,
   ...overrides,
 });

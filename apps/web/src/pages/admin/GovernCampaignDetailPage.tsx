@@ -1,6 +1,17 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Meter,
+  Metric,
+  MetricRow,
+  Panel,
+  Select,
+  SkeletonRows,
+  Status,
+  Table,
+} from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -83,43 +94,70 @@ export function GovernCampaignDetailPage() {
       {data !== null && (
         <div className="mt-6 space-y-6">
           <Panel title="Progress">
-            <div className="p-4">
+            <div className="space-y-5 p-4">
               {/* THE PERCENTAGE NEVER APPEARS ALONE, and it names its own
                   denominator inline. `(decided + moot) / total` is the
                   definition, printed rather than assumed: a reader who does not
                   know whether mooted items count is a reader who cannot use the
-                  number. */}
-              <p className="text-ink">
-                {data.coverage.percent === null ? (
-                  <span className="text-muted">Not yet closed.</span>
-                ) : (
-                  <>
-                    <strong>{data.coverage.percent}% covered</strong>{' '}
-                    <span className="text-muted">
+                  number.
+
+                  Now drawn as well as printed. A reviewer scanning for "is
+                  this review nearly done" was being asked to parse a sentence
+                  to find out; the bar answers it before the sentence is
+                  read, and the sentence still carries the definition that
+                  makes the figure mean anything. */}
+              {data.coverage.percent === null ? (
+                <p className="text-muted">Not yet closed.</p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <span className="text-xl font-semibold tabular-nums text-ink">
+                      {data.coverage.percent}% covered
+                    </span>
+                    <span className="text-sm text-muted">
                       of {data.coverage.denominator} items, where coverage is{' '}
                       {data.coverage.statement}
                     </span>
-                  </>
-                )}
-              </p>
-              <p className="mt-2 text-muted">
-                {data.counts.certified} certified, {data.counts.revoked} revoked,{' '}
-                {data.counts.requiresChange} require a change somewhere else, {data.counts.moot}{' '}
-                moot, {data.counts.undecided} undecided.
-              </p>
+                  </div>
+                  <Meter
+                    percent={data.coverage.percent}
+                    label={`covered of ${data.coverage.denominator} items`}
+                  />
+                </div>
+              )}
+
+              {/* Was a comma-separated sentence: "12 certified, 3 revoked, 1
+                  require a change somewhere else, 0 moot, 4 undecided." Five
+                  governance outcomes with nothing to tell them apart, on the
+                  screen somebody opens specifically to find out where a review
+                  stands. Nobody scans a sentence. */}
+              <MetricRow>
+                <Metric label="Certified" value={data.counts.certified} tone="success" />
+                <Metric label="Revoked" value={data.counts.revoked} tone="primary" />
+                <Metric
+                  label="Require a change"
+                  value={data.counts.requiresChange}
+                  hint="Not counted as revoked anywhere in this product. Each has a remediation item with an owner."
+                  quietWhenZero
+                />
+                <Metric
+                  label="Moot"
+                  value={data.counts.moot}
+                  hint="The access had already gone before anybody decided."
+                />
+                <Metric
+                  label="Undecided"
+                  value={data.counts.undecided}
+                  tone="warning"
+                  quietWhenZero
+                />
+              </MetricRow>
+
               {data.counts.blocked > 0 && (
                 <Alert tone="warning" title="Some items resolved to nobody">
                   {data.counts.blocked} item(s) have no reviewer and no fallback. They cannot be
                   decided by anybody until somebody is named.
                 </Alert>
-              )}
-              {/* NOT a revocation, and this screen does not call it one. */}
-              {data.counts.requiresChange > 0 && (
-                <p className="mt-2 text-muted">
-                  The {data.counts.requiresChange} that require a change elsewhere are not counted
-                  as revoked anywhere in this product, and each has a remediation item with an
-                  owner.
-                </p>
               )}
             </div>
           </Panel>
@@ -216,7 +254,7 @@ export function GovernCampaignDetailPage() {
                 Compute the revocation batch
               </Button>
               {batchId !== null && (
-                <Link className="text-ink underline" to={`/admin/govern/batches/${batchId}`}>
+                <Link className="link" to={`/admin/govern/batches/${batchId}`}>
                   Open the batch
                 </Link>
               )}
@@ -238,36 +276,36 @@ export function GovernCampaignDetailPage() {
                   Nothing computed yet. These are produced when the campaign closes.
                 </p>
               ) : (
-                <table className="mt-3 w-full text-left">
-                  <thead className="border-b border-border-subtle text-sm text-muted">
+                <div className="mt-3"><Table>
+                  <thead>
                     <tr>
-                      <th className="px-4 py-2">Reviewer</th>
-                      <th className="px-4 py-2">Decided</th>
-                      <th className="px-4 py-2">Share certified</th>
-                      <th className="px-4 py-2">Median time on an item</th>
-                      <th className="px-4 py-2">Share in bulk</th>
-                      <th className="px-4 py-2">Longest run of consecutive decisions</th>
-                      <th className="px-4 py-2">Never opened the detail</th>
+                      <th>Reviewer</th>
+                      <th>Decided</th>
+                      <th>Share certified</th>
+                      <th>Median time on an item</th>
+                      <th>Share in bulk</th>
+                      <th>Longest run of consecutive decisions</th>
+                      <th>Never opened the detail</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.signals.map((s) => (
-                      <tr key={s.personId} className="border-b border-border-subtle last:border-0">
-                        <td className="px-4 py-2">{s.personId}</td>
-                        <td className="px-4 py-2">
+                      <tr key={s.personId}>
+                        <td>{s.personId}</td>
+                        <td>
                           {s.itemsDecided} of {s.itemsAssigned}
                         </td>
-                        <td className="px-4 py-2">{Math.round(s.certifiedShare * 100)}%</td>
-                        <td className="px-4 py-2">{Math.round(s.medianIntervalMs / 1000)}s</td>
-                        <td className="px-4 py-2">{Math.round(s.bulkShare * 100)}%</td>
-                        <td className="px-4 py-2">
+                        <td>{Math.round(s.certifiedShare * 100)}%</td>
+                        <td>{Math.round(s.medianIntervalMs / 1000)}s</td>
+                        <td>{Math.round(s.bulkShare * 100)}%</td>
+                        <td>
                           {s.largestBurst} in {Math.round(s.largestBurstMs / 1000)}s
                         </td>
-                        <td className="px-4 py-2">{Math.round(s.neverOpenedShare * 100)}%</td>
+                        <td>{Math.round(s.neverOpenedShare * 100)}%</td>
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </Table></div>
               )}
             </div>
           </Panel>

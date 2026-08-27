@@ -8,6 +8,7 @@ export * from './saml/authn-request.js';
 export * from './saml/assertion.js';
 export * from './saml/encrypt.js';
 export * from './saml/logout.js';
+export * from './wsfed/passive.js';
 export * from './oidc/adapter.js';
 export * from './oidc/interaction-prompt.js';
 export * from './oidc/provider-factory.js';

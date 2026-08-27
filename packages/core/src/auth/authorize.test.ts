@@ -819,8 +819,38 @@ describe('authorize — forced enrolment', () => {
       where: { id: tenantId },
       data: { primaryDomain: 'acme.syntra.test' },
     });
+    // `FACTOR_TYPES` order, which is documented as strongest first and is
+    // the order the enrolment screen offers them in — not the order this
+    // assertion happened to be written in before that constant existed.
     expect(await signIn()).toMatchObject({
-      enrollableFactors: ['totp', 'webauthn'],
+      enrollableFactors: ['webauthn', 'totp'],
+    });
+  });
+
+  it('does not offer an emailed code to a tenant that has them switched off', async () => {
+    // The same dead end as the security key above, one switch along. Emailed
+    // codes are off until a tenant turns them on, and the enrolment endpoint
+    // refuses one for a tenant that has not — so offering the type walks the
+    // user to a screen whose only new option cannot work.
+    //
+    // The verifier registers `enrollable: true` unconditionally, because
+    // `enrollableFactorTypes()` answers what the DEPLOYMENT can do and has no
+    // tenant in scope. That makes this gate the only thing standing between a
+    // switched-off tenant and the offer, and its absence is what this catches.
+    // This describe registers only totp and webauthn, so the type has to be
+    // present in the registry before the gate can be the thing being tested.
+    registerFactorVerifier(stubVerifier('email_otp'));
+    // No primary domain in this describe, so webauthn is already filtered and
+    // what remains isolates the switch under test.
+    await requireMfa();
+    expect(await signIn()).toMatchObject({ enrollableFactors: ['totp'] });
+
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { emailOtpEnabled: true },
+    });
+    expect((await signIn()) as { enrollableFactors: string[] }).toMatchObject({
+      enrollableFactors: ['totp', 'email_otp'],
     });
   });
 

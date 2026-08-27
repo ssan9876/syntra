@@ -56,7 +56,7 @@ export function Select({
           disabled ? 'cursor-not-allowed opacity-60' : '',
           error
             ? 'border-danger'
-            : 'border-border-subtle hover:border-border-strong',
+            : 'border-border-control hover:border-border-strong',
         ].join(' ')}
       >
         {options.map((option) => (

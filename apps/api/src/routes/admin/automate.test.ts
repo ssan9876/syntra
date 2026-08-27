@@ -669,3 +669,89 @@ describe('listing workflows', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+/**
+ * The delegated-task admin routes.
+ *
+ * Every route in this file is prefixed `/automate/`, and the task routes were
+ * added without it — so the console called `/api/admin/automate/tasks` and the
+ * API served `/api/admin/tasks`. Nothing caught it because these routes had no
+ * test at all. That is what this describe block is for as much as the
+ * behaviour below.
+ */
+describe('delegated tasks', () => {
+  const unlockTask = (over: Record<string, unknown> = {}) => ({
+    name: 'Unlock an account',
+    description: 'For the service desk.',
+    actionKey: 'unlock_account',
+    formSchema: [
+      { key: 'user', type: 'lookup', label: 'Account', dataSource: 'user', required: true },
+    ],
+    audienceCondition: { all: [] },
+    enabled: true,
+    ...over,
+  });
+
+  it('serves the action library under the automate prefix', async () => {
+    const res = await call('GET', '/api/admin/automate/tasks/actions');
+    expect(res.statusCode).toBe(200);
+    expect(
+      res.json().actions.map((a: { key: string }) => a.key),
+    ).toContain('unlock_account');
+  });
+
+  it('creates a task and lists it', async () => {
+    const created = await call('POST', '/api/admin/automate/tasks', unlockTask());
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ actionKey: 'unlock_account' });
+
+    const list = await call('GET', '/api/admin/automate/tasks');
+    expect(list.statusCode).toBe(200);
+    expect(list.json().tasks).toHaveLength(1);
+  });
+
+  it('refuses a form that does not ask for what the action reads', async () => {
+    const res = await call(
+      'POST',
+      '/api/admin/automate/tasks',
+      unlockTask({
+        formSchema: [{ key: 'note', type: 'text', label: 'Note', required: true }],
+      }),
+    );
+    expect(res.statusCode).toBe(400);
+    expect(res.json().detail).toContain('user');
+  });
+
+  it('refuses an action that does not exist', async () => {
+    const res = await call(
+      'POST',
+      '/api/admin/automate/tasks',
+      unlockTask({ actionKey: 'rm_rf' }),
+    );
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('updates and deletes one', async () => {
+    const id = (await call('POST', '/api/admin/automate/tasks', unlockTask())).json().id;
+
+    const updated = await call(
+      'PUT',
+      `/api/admin/automate/tasks/${id}`,
+      unlockTask({ enabled: false }),
+    );
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().enabled).toBe(false);
+
+    expect(
+      (await call('DELETE', `/api/admin/automate/tasks/${id}`)).statusCode,
+    ).toBe(204);
+    expect((await call('GET', '/api/admin/automate/tasks')).json().tasks).toEqual([]);
+  });
+
+  it('reports what a task has done', async () => {
+    const id = (await call('POST', '/api/admin/automate/tasks', unlockTask())).json().id;
+    const res = await call('GET', `/api/admin/automate/tasks/${id}/runs`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().runs).toEqual([]);
+  });
+});

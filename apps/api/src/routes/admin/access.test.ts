@@ -84,6 +84,126 @@ const newApp = (slug = 'crm') =>
     launchUrl: 'https://crm.acme.test/',
   });
 
+describe('the application catalog', () => {
+  it('lists what the console can offer', async () => {
+    const res = await call('GET', '/api/admin/catalog');
+    expect(res.statusCode).toBe(200);
+    const entries = res.json().entries as { key: string; docsUrl: string }[];
+    expect(entries.some((e) => e.key === 'slack')).toBe(true);
+    // Every entry carries the vendor's page, because an entry is a
+    // convenience and the vendor's page is the authority.
+    for (const entry of entries) expect(entry.docsUrl).toMatch(/^https:\/\//);
+  });
+
+  it('registers an application with its SSO configuration in one call', async () => {
+    const res = await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'slack',
+      variables: { workspace: 'acme' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ slug: 'slack', protocol: 'saml' });
+    // No secret on a SAML application: there is no shared secret to leak.
+    expect(res.json().clientSecret).toBeUndefined();
+
+    const config = await withTenant(ctx.tenantId, (tx) =>
+      tx.samlConfig.findFirstOrThrow(),
+    );
+    expect(config.acsUrls).toEqual(['https://acme.slack.com/sso/saml']);
+  });
+
+  it('leaves the tenant with a SAML signing key', async () => {
+    // Writing a `SamlConfig` is the moment a tenant commits to being an
+    // identity provider. `createFromCatalog` calls the bare `upsertSamlConfig`
+    // because it runs in one transaction, so the route has to establish the
+    // key itself — without it, a tenant whose FIRST SAML application comes
+    // from the catalog has none, and every sign-in dead-ends at 409
+    // `saml-no-key` with nothing self-healing it.
+    expect(await withTenant(ctx.tenantId, (tx) => tx.signingKey.count())).toBe(0);
+
+    const res = await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'slack',
+      variables: { workspace: 'acme' },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const keys = await withTenant(ctx.tenantId, (tx) =>
+      tx.signingKey.findMany({ where: { kind: 'saml' } }),
+    );
+    expect(keys.length).toBeGreaterThan(0);
+  });
+
+  it('does not mint a signing key for an application that does not use SAML', async () => {
+    // `ensureActiveKey` is idempotent but not free, and a tenant that only
+    // ever registers OIDC clients has no business holding a SAML key.
+    await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'grafana',
+      variables: { host: 'grafana.acme.test' },
+    });
+    expect(
+      await withTenant(ctx.tenantId, (tx) =>
+        tx.signingKey.count({ where: { kind: 'saml' } }),
+      ),
+    ).toBe(0);
+  });
+
+  it('returns an OIDC client secret once', async () => {
+    const res = await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'grafana',
+      variables: { host: 'grafana.acme.test' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().clientSecret).toEqual(expect.any(String));
+
+    // And nothing reads it back.
+    const list = await call('GET', '/api/admin/applications');
+    expect(list.payload).not.toContain(res.json().clientSecret);
+  });
+
+  it('asks for a value it was not given, by name', async () => {
+    const res = await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'slack',
+      variables: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().detail).toContain('workspace');
+  });
+
+  it('says which application already holds an entity ID', async () => {
+    await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'slack',
+      variables: { workspace: 'acme' },
+    });
+    const res = await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'slack',
+      variables: { workspace: 'acme-eu' },
+    });
+    // 409 and an actionable sentence, not a 500 carrying a driver message.
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toContain('Slack');
+  });
+
+  it('refuses an entry that does not exist', async () => {
+    const res = await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'not-a-real-app',
+      variables: {},
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a field it does not know', async () => {
+    const res = await call('POST', '/api/admin/applications/from-catalog', {
+      key: 'slack',
+      variables: { workspace: 'acme' },
+      allowIdpInitiated: true,
+    });
+    // Emphatically not accepted-and-ignored: `allowIdpInitiated` is a posture
+    // an administrator adopts deliberately, and a body that appears to set it
+    // must not come back 201 having done nothing of the kind.
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe('applications', () => {
   it('creates one and lists it', async () => {
     const created = await newApp();

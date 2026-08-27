@@ -19,6 +19,8 @@ const policy = {
       contractField: 'department',
       contractValues: ['Finance'],
       ipRanges: [],
+      devicePlatforms: [],
+      countries: [],
       daysOfWeek: [],
       startMinute: null,
       endMinute: null,
@@ -36,6 +38,8 @@ const policy = {
       contractField: null,
       contractValues: [],
       ipRanges: ['203.0.113.0/24'],
+      devicePlatforms: ['ios', 'android'],
+      countries: ['NL'],
       daysOfWeek: [],
       startMinute: null,
       endMinute: null,
@@ -213,5 +217,86 @@ describe('PoliciesPage', () => {
 
     await userEvent.click((await screen.findAllByRole('button', { name: 'Remove' }))[0]!);
     expect(await screen.findByText('Requires policy.manage')).toBeInTheDocument();
+  });
+
+  it('reads a device and country rule back in words', async () => {
+    // A rule is only auditable if somebody can read what it does without
+    // reconstructing it from the form that made it — and the stored values
+    // are `ios` and `NL`, which are not what anybody calls those things.
+    vi.stubGlobal('fetch', vi.fn(async () => json(policy)));
+    renderPage();
+
+    expect(await screen.findByText(/iPhone & iPad or Android/)).toBeInTheDocument();
+    expect(screen.getByText(/Netherlands/)).toBeInTheDocument();
+  });
+
+  it('sends the devices as a list, chosen by pressing them', async () => {
+    const spy = vi.fn(async (url: unknown, init?: RequestInit) =>
+      String(url).includes('/impact')
+        ? json({
+            matchedUsers: 1,
+            totalActiveUsers: 3,
+            usersNeedingEnrolment: 0,
+            unevaluatedConditions: [],
+          })
+        : json(policy),
+    );
+    vi.stubGlobal('fetch', spy);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /add a rule/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Android' }));
+    await userEvent.click(screen.getByRole('button', { name: /check who this affects/i }));
+
+    await waitFor(() => {
+      const call = spy.mock.calls.find(([u]) => String(u).includes('/impact'));
+      expect(call).toBeDefined();
+      expect(JSON.parse(String(call![1]!.body))).toMatchObject({
+        devicePlatforms: ['android'],
+      });
+    });
+  });
+
+  it('presses a device off again', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(policy)));
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /add a rule/i }));
+    const android = screen.getByRole('button', { name: 'Android' });
+    await userEvent.click(android);
+    expect(android).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(android);
+    expect(android).toHaveAttribute('aria-pressed', 'false');
+    // The state of the control, said in the same place the reader is looking.
+    // The difference between a rule matching everybody and one matching
+    // nobody is otherwise invisible.
+    expect(screen.getByText('Any device')).toBeInTheDocument();
+  });
+
+  it('warns that a deny rule on a device is a deny anybody can walk past', async () => {
+    // A user agent is a string the client chooses. Requiring a second factor
+    // of phones is reasonable; refusing them outright reads as a control and
+    // is not one, and the page has to say so where the choice is made.
+    vi.stubGlobal('fetch', vi.fn(async () => json(policy)));
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /add a rule/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Android' }));
+    expect(screen.queryByText(/what the browser claims to be/i)).toBeNull();
+
+    await userEvent.selectOptions(screen.getByLabelText("Outcome"), 'deny');
+    expect(await screen.findByText(/what the browser claims to be/i)).toBeInTheDocument();
+  });
+
+  it('picks a country by name and shows it as a removable chip', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(policy)));
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /add a rule/i }));
+    await userEvent.selectOptions(screen.getByLabelText('Countries'), 'NL');
+    const chip = screen.getByRole('button', { name: /Remove Netherlands/i });
+    expect(chip).toBeInTheDocument();
+    await userEvent.click(chip);
+    expect(screen.queryByRole('button', { name: /Remove Netherlands/i })).toBeNull();
   });
 });

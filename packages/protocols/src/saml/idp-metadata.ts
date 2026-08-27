@@ -26,6 +26,15 @@ export interface IdpMetadataInput {
   nameIdFormats: string[];
   /** PEM certificates, active first. Every published key appears. */
   certificates: string[];
+  /**
+   * Where a WS-Federation relying party sends its passive requests, or null.
+   *
+   * Null omits the WS-Fed role entirely, which is what a tenant with no
+   * WS-Fed application should publish: a metadata document advertising an
+   * endpoint nobody enabled invites a relying party to configure itself
+   * against a door that answers 404.
+   */
+  wsFedUrl?: string | null | undefined;
 }
 
 /**
@@ -67,6 +76,38 @@ export function buildIdpMetadata(input: IdpMetadataInput): string {
     // URL length limits least badly for a request and best for a response.
     `<md:SingleSignOnService Binding="${BINDING_REDIRECT}" Location="${xmlAttr(input.ssoUrl)}"/>` +
     `<md:SingleSignOnService Binding="${BINDING_POST}" Location="${xmlAttr(input.ssoUrl)}"/>` +
-    `</md:IDPSSODescriptor></md:EntityDescriptor>`
+    `</md:IDPSSODescriptor>` +
+    wsFedRole(input, keys) +
+    `</md:EntityDescriptor>`
+  );
+}
+
+const FED = 'http://docs.oasis-open.org/wsfed/federation/200706';
+const WSA = 'http://www.w3.org/2005/08/addressing';
+
+/**
+ * The `SecurityTokenServiceType` role a WS-Federation relying party reads.
+ *
+ * ADFS publishes this alongside its SAML roles in one document, and .NET's
+ * `WsFederationConfigurationRetriever` looks for exactly this element — an
+ * `IDPSSODescriptor` on its own means "no WS-Fed here" to it, however
+ * willing the endpoint actually is. Same entity ID, same certificates: it is
+ * one identity provider speaking a second protocol, not a second one.
+ */
+function wsFedRole(input: IdpMetadataInput, keys: string): string {
+  if (!input.wsFedUrl) return '';
+  const endpoint =
+    `<wsa:EndpointReference xmlns:wsa="${WSA}">` +
+    `<wsa:Address>${xmlText(input.wsFedUrl)}</wsa:Address>` +
+    `</wsa:EndpointReference>`;
+  return (
+    `<md:RoleDescriptor xmlns:fed="${FED}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
+    ` xsi:type="fed:SecurityTokenServiceType"` +
+    ` protocolSupportEnumeration="${FED}">` +
+    keys +
+    `<fed:TokenTypesOffered><fed:TokenType Uri="urn:oasis:names:tc:SAML:2.0:assertion"/></fed:TokenTypesOffered>` +
+    `<fed:SecurityTokenServiceEndpoint>${endpoint}</fed:SecurityTokenServiceEndpoint>` +
+    `<fed:PassiveRequestorEndpoint>${endpoint}</fed:PassiveRequestorEndpoint>` +
+    `</md:RoleDescriptor>`
   );
 }

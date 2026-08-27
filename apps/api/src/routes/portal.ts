@@ -12,6 +12,7 @@ import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { requireSession } from '../plugins/require-session.js';
 import { tenantProtocolIdentity } from './protocol-identity.js';
 import { tenantRelyingParty } from './relying-party.js';
+import { clientFacts } from '../plugins/client-facts.js';
 
 export interface PortalRouteOptions {
   /** Attempts per minute, per tenant per address. */
@@ -41,6 +42,7 @@ export async function registerPortalRoutes(
       slug: row.slug,
       description: row.description,
       iconUrl: row.iconUrl,
+      category: row.category,
     }));
     return { applications };
   });
@@ -90,6 +92,7 @@ export async function registerPortalRoutes(
         principal: { kind: 'session', userId, sessionId },
         applicationId: id,
         sourceIp: request.ip,
+        client: clientFacts(request),
         relyingParty: tenantRelyingParty(tenant, options.publicUrl),
         // A launch never elevates. Recorded on any attempt this opens, so the
         // session issued at the far end of a step-up is a portal one even

@@ -3,10 +3,12 @@ import {
   changePasswordRequest,
   elevateRequest,
   loginRequest,
+  renewPasswordRequest,
 } from '@syntra/contracts';
 import {
   changeOwnPassword,
   authorize,
+  renewExpiredPassword,
   isAdministrator,
   localMasterKeyProvider,
   recordEvent,
@@ -17,7 +19,8 @@ import { passwordRejectionMessage } from './password-rejection.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
-import { issueSession, sessionBody } from './session-reply.js';
+import { issueSession, sessionBody, renewReply } from './session-reply.js';
+import { clientFacts } from '../plugins/client-facts.js';
 
 /**
  * Password endpoints are limited far more tightly than ordinary reads, and in
@@ -79,14 +82,30 @@ export async function registerAuthRoutes(
       principal: { kind: 'password', login: body.login, password: body.password },
       applicationId: null,
       sourceIp: request.ip,
+      client: clientFacts(request),
       relyingParty: rp,
       scope: 'portal',
     });
 
-    // Every failure reason collapses into one response. Which of them applied
-    // is recorded in the audit log, where an administrator can see it and an
-    // attacker cannot — a policy denial must not be distinguishable from a
-    // wrong password, or the policy itself becomes an oracle.
+    // Every failure reason collapses into one response, with one exception
+    // below. Which of them applied is recorded in the audit log, where an
+    // administrator can see it and an attacker cannot — a policy denial must
+    // not be distinguishable from a wrong password, or the policy itself
+    // becomes an oracle.
+    //
+    // The exception is a locked account, and it is safe for a reason that
+    // belongs to `authenticate()` rather than to this route: the lock is
+    // checked *after* the password, so this reason is only ever produced for
+    // somebody who supplied the correct one. It therefore tells an attacker
+    // nothing they did not already have, and withholding it leaves a real
+    // user retrying a password they know is right until they raise a ticket.
+    if (result.status === 'deny' && result.reason === 'account_locked') {
+      throw new ProblemError(
+        401,
+        'account-locked',
+        'Too many failed sign-in attempts. Wait until the lock lifts, or ask an administrator to unlock the account.',
+      );
+    }
     if (result.status === 'deny') {
       throw new ProblemError(401, 'invalid-credentials', 'Invalid credentials');
     }
@@ -110,6 +129,14 @@ export async function registerAuthRoutes(
         expiresAt: result.expiresAt.toISOString(),
         enrollableFactors: result.enrollableFactors,
       });
+    }
+
+
+    // The password aged past the tenant's limit. Same shape as `enrol` above,
+    // and for the same reason: a half-finished sign-in holding a token that
+    // buys exactly one next step.
+    if (result.status === 'renew') {
+      return reply.status(200).send(renewReply(result));
     }
 
     return issueSession(request, reply, result);
@@ -151,6 +178,7 @@ export async function registerAuthRoutes(
         },
         applicationId: null,
         sourceIp: request.ip,
+        client: clientFacts(request),
         relyingParty: rp,
         // The scope stamped on any attempt opened here, and the scope of the
         // session issued at the end of it. Recorded, never inferred.
@@ -183,6 +211,14 @@ export async function registerAuthRoutes(
           expiresAt: decision.expiresAt.toISOString(),
           enrollableFactors: decision.enrollableFactors,
         });
+      }
+
+      // An expired password stops an elevation too. The console is precisely
+      // where it matters most, and letting it through here because the caller
+      // already holds a portal session would make expiry a rule that binds
+      // everyone except administrators.
+      if (decision.status === 'renew') {
+        return reply.status(200).send(renewReply(decision));
       }
 
       // The decision's user id, not the ambient one. They agree today — the
@@ -302,9 +338,118 @@ export async function registerAuthRoutes(
             'That is already your password. Choose a different one.',
             { errors: [{ path: 'newPassword', message: 'unchanged' }] },
           );
+        case 'reused':
+          // The depth is SAID. "A previous password" is a rule somebody has to
+          // guess at; "any of your last five" is one they can comply with.
+          throw new ProblemError(
+            422,
+            'password-reused',
+            'Password rejected',
+            `That is one of your last ${outcome.depth} passwords. Choose one you have not used before.`,
+            { errors: [{ path: 'newPassword', message: 'reused' }] },
+          );
       }
     },
   );
+
+  /**
+   * Choosing a new password after the old one expired mid-sign-in.
+   *
+   * No session yet, and no `requireSession` — the attempt token is the
+   * credential, exactly as it is for the MFA and enrolment endpoints. It buys
+   * one thing and expires in minutes.
+   *
+   * Two steps rather than one: the password is written, and then the sign-in
+   * is re-decided by `authorize()`, which spends the attempt. Re-deciding is
+   * what makes a rule tightened while the user was typing still apply, and it
+   * runs the expiry check again against the credential they just wrote.
+   */
+  app.post('/renew-password', { ...PASSWORD_RATE_LIMIT }, async (request, reply) => {
+    const body = renewPasswordRequest.parse(request.body);
+    const { rp } = await relyingPartyFor(request);
+
+    const outcome = await renewExpiredPassword(request.tenantId, {
+      attemptToken: body.attemptToken,
+      newPassword: body.newPassword,
+      sourceIp: request.ip,
+    });
+
+    if (!outcome.ok) {
+      switch (outcome.reason) {
+        case 'attempt_invalid':
+        case 'user_inactive':
+          // One answer for both, as everywhere else: which of them applied is
+          // in the audit log, and the caller holds an expired token either
+          // way. The fix is the same — start again.
+          throw new ProblemError(
+            401,
+            'attempt-invalid',
+            'That sign-in has expired',
+            'Start signing in again.',
+          );
+        case 'weak_password':
+          throw new ProblemError(
+            422,
+            'weak-password',
+            'Password rejected',
+            passwordRejectionMessage(outcome.detail),
+            { errors: [{ path: 'newPassword', message: outcome.detail }] },
+          );
+        case 'unchanged':
+          throw new ProblemError(
+            422,
+            'password-unchanged',
+            'Password rejected',
+            'That is the password that expired. Choose a different one.',
+            { errors: [{ path: 'newPassword', message: 'unchanged' }] },
+          );
+        case 'reused':
+          throw new ProblemError(
+            422,
+            'password-reused',
+            'Password rejected',
+            `That is one of your last ${outcome.depth} passwords. Choose one you have not used before.`,
+            { errors: [{ path: 'newPassword', message: 'reused' }] },
+          );
+      }
+    }
+
+    const decision = await authorize(request.tenantId, {
+      kind: 'renewed',
+      attemptToken: body.attemptToken,
+      sourceIp: request.ip,
+      client: clientFacts(request),
+      relyingParty: rp,
+    });
+
+    if (decision.status === 'deny') {
+      throw new ProblemError(401, 'invalid-credentials', 'Invalid credentials');
+    }
+    if (decision.status === 'challenge') {
+      return reply.status(200).send({
+        status: 'challenge',
+        attemptToken: decision.attemptToken,
+        expiresAt: decision.expiresAt.toISOString(),
+        acceptableFactors: decision.acceptableFactors,
+      });
+    }
+    if (decision.status === 'enrol') {
+      return reply.status(200).send({
+        status: 'enrol',
+        attemptToken: decision.attemptToken,
+        expiresAt: decision.expiresAt.toISOString(),
+        enrollableFactors: decision.enrollableFactors,
+      });
+    }
+    // Still expired after a change that reported success would be a bug, not a
+    // state to loop the user through. It comes back as `renew` rather than a
+    // session, and the screen says so.
+    if (decision.status === 'renew') {
+      return reply.status(200).send(renewReply(decision));
+    }
+
+    return issueSession(request, reply, decision);
+  });
 
   app.get(
     '/session',

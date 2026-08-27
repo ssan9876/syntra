@@ -364,3 +364,79 @@ describe('taking a factor off a user', () => {
     expect(sent[0]!.url).toContain('/factors/webauthn');
   });
 });
+
+describe('UsersPage and account lockout', () => {
+  const lockedOut = { ...users[0]!, locked: true };
+
+  it('labels a locked-out account without calling it inactive', async () => {
+    // Locked and inactive are different sentences with different ways out.
+    // Collapsing them would send an administrator to Reactivate, which is not
+    // the control that helps.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({ users: [lockedOut] }));
+    renderPage();
+
+    const row = (await screen.findByText('J Doe')).closest('tr')!;
+    expect(row).toHaveTextContent(/locked out/i);
+    expect(row).toHaveTextContent(/active/i);
+    expect(row).not.toHaveTextContent(/inactive/i);
+  });
+
+  it('offers Unlock only on a locked row', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json({ users: [lockedOut, users[1]!] }),
+    );
+    renderPage();
+
+    const locked = (await screen.findByText('J Doe')).closest('tr')!;
+    const other = screen.getByText('S Roe').closest('tr')!;
+    expect(within(locked).getByRole('button', { name: /unlock/i })).toBeInTheDocument();
+    expect(within(other).queryByRole('button', { name: /unlock/i })).toBeNull();
+  });
+
+  it('posts the unlock and reloads the list', async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    let locked = true;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      const method = (init as RequestInit | undefined)?.method ?? 'GET';
+      calls.push(`${method} ${url}`);
+      if (url.includes('/unlock')) {
+        locked = false;
+        return Promise.resolve(json({}));
+      }
+      if (url.includes('/sources')) return Promise.resolve(json({ sources: [] }));
+      return Promise.resolve(json({ users: [{ ...users[0]!, locked }] }));
+    });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /unlock/i }));
+
+    expect(calls).toContain('POST /api/admin/users/u1/unlock');
+    // The row stops offering it, which is how the administrator knows it took.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /unlock/i })).toBeNull(),
+    );
+  });
+
+  it('says so when the unlock is refused', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/unlock')) {
+        return Promise.resolve(
+          json({ title: 'Forbidden', detail: 'You cannot unlock accounts.' }, 403),
+        );
+      }
+      if (url.includes('/sources')) return Promise.resolve(json({ sources: [] }));
+      return Promise.resolve(json({ users: [lockedOut] }));
+    });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /unlock/i }));
+
+    expect(
+      await screen.findByText(/you cannot unlock accounts/i),
+    ).toBeInTheDocument();
+  });
+});

@@ -1,3 +1,4 @@
+import { populationDropRefusal } from '../identity/population-drop.js';
 import type { ProvisionActionType } from '@syntra/connectors';
 import type { PlannedAction } from './types.js';
 
@@ -273,23 +274,20 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
     return { blocked: true, requiresConfirmation: false, reasons: hard };
   }
 
-  // A run with no persons at all is refused unconditionally, before anything
+  // The person-register collapse, refused unconditionally and before anything
   // else: it is upstream of every leaver action in the plan.
-  if (input.personsWithActiveContract === 0) {
-    hard.push(
-      'this run found no persons holding an active contract at all, which is upstream of every leaver action a plan could contain',
-    );
-  } else if (input.previousPersonsWithActiveContract !== null) {
-    const previous = input.previousPersonsWithActiveContract;
-    if (previous > 0) {
-      const drop = ((previous - input.personsWithActiveContract) / previous) * 100;
-      if (drop > input.thresholds.personPopulationDropPercent) {
-        hard.push(
-          `the number of persons holding an active contract has fallen from ${previous} to ${input.personsWithActiveContract} (${drop.toFixed(1)}%), above the ${input.thresholds.personPopulationDropPercent}% limit; this is the signature of a broken HR feed`,
-        );
-      }
-    }
-  }
+  //
+  // `populationDropRefusal` rather than the arithmetic inline. This rule was
+  // written twice — here and in `automate/sweep-guard.ts` — and the two copies
+  // had already drifted over whether to guard the division. See that function
+  // for why one place.
+  const collapse = populationDropRefusal({
+    current: input.personsWithActiveContract,
+    previous: input.previousPersonsWithActiveContract,
+    thresholdPercent: input.thresholds.personPopulationDropPercent,
+    subject: 'run',
+  });
+  if (collapse !== null) hard.push(collapse);
 
   // An empty target and an unreachable one look identical from here.
   //

@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import {
   buildInfo,
   installRecoveryCodeVerifier,
+  installEmailOtpVerifier,
   installTotpVerifier,
   installWebAuthnVerifier,
   localMasterKeyProvider,
@@ -23,13 +24,16 @@ import { registerEnrolRoutes } from './routes/enrol.js';
 import { registerPasswordResetRoutes } from './routes/password-reset.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerBrandingRoutes } from './routes/branding.js';
 import { registerAdminRoleRoutes } from './routes/admin/roles.js';
 import { registerAdminTenantRoutes } from './routes/admin/tenant.js';
+import { registerAdminWebhookRoutes } from './routes/admin/webhooks.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
 import { registerAdminPersonRoutes } from './routes/admin/persons.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
+import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
 import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
@@ -180,6 +184,10 @@ export async function buildApp(
     },
   );
 
+  // Before the auth routes and outside every session guard: this is what the
+  // sign-in page reads in order to render itself.
+  await app.register(registerBrandingRoutes, { prefix: '/api/branding' });
+
   await app.register(registerAuthRoutes, {
     prefix: '/api/auth',
     authRateLimitMax: config.authRateLimitMax,
@@ -197,6 +205,10 @@ export async function buildApp(
   // AuthorizeRequest, which is why there is no ambient store here and why a
   // background job that has no relying party cannot compile.
   installTotpVerifier(localMasterKeyProvider(config.masterKey));
+  // No master key: an email code has no secret to seal. Whether a tenant may
+  // offer it at all is `Tenant.emailOtpEnabled`, checked where a tenant is in
+  // scope — registering the verifier only says this deployment can.
+  installEmailOtpVerifier();
   installWebAuthnVerifier();
   installRecoveryCodeVerifier();
 
@@ -247,7 +259,13 @@ export async function buildApp(
   // Every route below requires an administrative session; the guard is
   // applied inside each plugin so a new admin route cannot forget it.
   await app.register(registerAdminTenantRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminWebhookRoutes, {
+    prefix: '/api/admin',
+    masterKey: config.masterKey,
+    outboundAllowPrivate: config.outboundAllowPrivate,
+  });
   await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminIncidentRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminUserRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,
@@ -276,7 +294,14 @@ export async function buildApp(
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminSyncRunRoutes, { prefix: '/api/admin' });
-  await app.register(registerAdminApplicationRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminApplicationRoutes, {
+    prefix: '/api/admin',
+    // Both needed by the catalog route, which has to establish the tenant's
+    // SAML signing key before it writes a `SamlConfig` — see the comment
+    // there.
+    masterKey: config.masterKey,
+    publicUrl: config.publicUrl,
+  });
   await app.register(registerAdminPolicyRoutes, {
     prefix: '/api/admin',
     authRateLimitMax: config.authRateLimitMax,
@@ -353,6 +378,10 @@ export async function buildApp(
   await app.register(registerAutomatePortalRoutes, {
     prefix: '/api/portal',
     publicUrl: config.publicUrl,
+    // The same transport every other mailing path uses. Not optional on the
+    // route options: a `send_password_reset` task registered without one
+    // reports success and mails nobody.
+    transport,
     // Spec section 5: an approval that produces target grants enqueues a run
     // of the affected target system. Without this the portal's own decisions
     // wait for the tick job, up to five minutes.

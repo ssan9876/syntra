@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import type { SyncRunSummary } from '@syntra/contracts';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
@@ -328,33 +328,30 @@ export function SyncRunDetailPage() {
               key={type}
               title={`${LABELS[type] ?? type} (${changes.length})`}
             >
-              <table className="w-full text-left">
-                <thead className="border-b border-border-subtle bg-surface-2">
-                  <tr className="text-sm text-muted">
-                    <th scope="col" className="w-10 px-4 py-2.5 font-medium">
+              <Table>
+                <thead>
+                  <tr>
+                    <th scope="col" className="w-10">
                       <span className="sr-only">Apply</span>
                     </th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">
+                    <th scope="col">
                       From
                     </th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">
+                    <th scope="col">
                       To
                     </th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">
+                    <th scope="col">
                       Status
                     </th>
-                    <th scope="col" className="px-4 py-2.5 font-medium">
+                    <th scope="col">
                       <span className="sr-only">Skip</span>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {changes.map((change) => (
-                    <tr
-                      key={change.id}
-                      className="border-b border-border-subtle last:border-0"
-                    >
-                      <td className="px-4 py-2.5">
+                    <tr key={change.id}>
+                      <td>
                         {change.status === 'proposed' && (
                           <input
                             type="checkbox"
@@ -374,13 +371,13 @@ export function SyncRunDetailPage() {
                           />
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-muted">
+                      <td>
                         {summarise(change.before)}
                       </td>
-                      <td className="px-4 py-2.5 text-ink">
+                      <td className="text-ink">
                         {summarise(change.after)}
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td>
                         {change.status === 'conflict' ? (
                           <span className="flex flex-wrap items-center gap-2">
                             <Status tone="warning">Conflict</Status>
@@ -403,7 +400,7 @@ export function SyncRunDetailPage() {
                           <Status tone="neutral">{change.status}</Status>
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-right">
+                      <td className="text-right">
                         {/* Only a proposed change can be skipped, and the
                             server says so with a 409. Offering the control on
                             an applied one would be offering a lie about what
@@ -422,7 +419,7 @@ export function SyncRunDetailPage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </Table>
             </Panel>
           ))
         )}

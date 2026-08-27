@@ -7,9 +7,16 @@ export const POLICY_OUTCOMES: PolicyOutcome[] = [
   'deny',
 ];
 
-export type FactorType = 'totp' | 'webauthn';
+export type FactorType = 'totp' | 'webauthn' | 'email_otp';
 
-export const FACTOR_TYPES: FactorType[] = ['totp', 'webauthn'];
+/**
+ * The policy-visible factors, in the order a person is offered them.
+ *
+ * Strongest first, and `email_otp` last on purpose: a rule that says
+ * "require a factor" should not be satisfiable by the weakest one when a
+ * better one is available, and the enrolment screen offers these in order.
+ */
+export const FACTOR_TYPES: FactorType[] = ['webauthn', 'totp', 'email_otp'];
 
 export type ContractField = 'department' | 'jobTitle' | 'employer' | 'location';
 
@@ -44,6 +51,22 @@ export interface PolicyRule {
   contractField: ContractField | null;
   contractValues: string[];
   ipRanges: string[];
+  /**
+   * Device kinds this rule applies to. Empty is unconstrained.
+   *
+   * Derived from the user agent, which the client chooses — so this is a
+   * speed bump, not a control. Reasonable for "ask for a second factor from
+   * phones"; think twice before building a `deny` on it.
+   */
+  devicePlatforms: string[];
+  /**
+   * ISO 3166-1 alpha-2 codes this rule applies to. Empty is unconstrained.
+   *
+   * Read from a header the deployment names, because a GeoIP database is a
+   * licensed monthly binary and this product runs air-gapped. Where no header
+   * is configured every country condition is unevaluable.
+   */
+  countries: string[];
   daysOfWeek: number[];
   startMinute: number | null;
   endMinute: number | null;
@@ -68,6 +91,10 @@ export interface AuthContext {
   /** One entry per contract in force right now. Empty is ordinary. */
   contracts: ContractFacts[];
   sourceIp: string | null;
+  /** From the user agent. Null when none was sent. */
+  devicePlatform: string | null;
+  /** From the configured header. Null when unset or unrecognised. */
+  country: string | null;
   now: Date;
 }
 

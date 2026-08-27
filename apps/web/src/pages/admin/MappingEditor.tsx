@@ -1,4 +1,4 @@
-import { Panel } from '@syntra/ui';
+import { Panel, Table } from '@syntra/ui';
 
 export type ObjectType = 'user' | 'group' | 'orgUnit';
 
@@ -95,7 +95,7 @@ export function MappingEditor({
               type="button"
               disabled={disabled}
               onClick={() => onSeed('activeDirectory')}
-              className="rounded-control border border-border-subtle px-2 py-1 font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
+              className="rounded-control border border-border-control px-2 py-1 font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
             >
               Active Directory
             </button>
@@ -103,7 +103,7 @@ export function MappingEditor({
               type="button"
               disabled={disabled}
               onClick={() => onSeed('openLdap')}
-              className="rounded-control border border-border-subtle px-2 py-1 font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
+              className="rounded-control border border-border-control px-2 py-1 font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
             >
               OpenLDAP
             </button>
@@ -133,19 +133,19 @@ export function MappingEditor({
                 Nothing mapped, so nothing of this kind is synced.
               </p>
             ) : (
-              <table className="mt-3 w-full text-left">
+              <div className="mt-3"><Table>
                 <thead>
-                  <tr className="text-sm text-muted">
-                    <th scope="col" className="pb-1.5 pr-3 font-medium">
+                  <tr>
+                    <th scope="col" className="pb-1.5 pr-3">
                       Directory attribute
                     </th>
-                    <th scope="col" className="pb-1.5 pr-3 font-medium">
+                    <th scope="col" className="pb-1.5 pr-3">
                       Syntra field
                     </th>
-                    <th scope="col" className="pb-1.5 pr-3 font-medium">
+                    <th scope="col" className="pb-1.5 pr-3">
                       Transform
                     </th>
-                    <th scope="col" className="pb-1.5 pr-3 font-medium">
+                    <th scope="col" className="pb-1.5 pr-3">
                       Correlation key
                     </th>
                     <th scope="col" className="pb-1.5">
@@ -156,7 +156,7 @@ export function MappingEditor({
                 <tbody>
                   {indexed.map(({ rule, index }, position) => (
                     <tr key={index}>
-                      <td className="py-1 pr-3 align-middle">
+                      <td className="pr-3 align-middle">
                         <input
                           aria-label={`${TYPE_LABEL[objectType]} directory attribute ${
                             position + 1
@@ -169,7 +169,7 @@ export function MappingEditor({
                           className={control}
                         />
                       </td>
-                      <td className="py-1 pr-3 align-middle">
+                      <td className="pr-3 align-middle">
                         <select
                           aria-label={`${TYPE_LABEL[objectType]} Syntra field ${
                             position + 1
@@ -194,7 +194,7 @@ export function MappingEditor({
                           )}
                         </select>
                       </td>
-                      <td className="py-1 pr-3 align-middle">
+                      <td className="pr-3 align-middle">
                         <select
                           aria-label={`${TYPE_LABEL[objectType]} transform ${
                             position + 1
@@ -216,7 +216,7 @@ export function MappingEditor({
                           ))}
                         </select>
                       </td>
-                      <td className="py-1 pr-3 align-middle">
+                      <td className="pr-3 align-middle">
                         <input
                           type="radio"
                           name={`correlation-${objectType}`}
@@ -229,7 +229,7 @@ export function MappingEditor({
                           className="size-4 accent-primary"
                         />
                       </td>
-                      <td className="py-1 align-middle text-right">
+                      <td className="align-middle text-right">
                         <button
                           type="button"
                           disabled={disabled}
@@ -244,14 +244,14 @@ export function MappingEditor({
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </Table></div>
             )}
 
             <button
               type="button"
               disabled={disabled}
               onClick={() => add(objectType)}
-              className="mt-3 rounded-control border border-border-subtle px-2.5 py-1 text-sm font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
+              className="mt-3 rounded-control border border-border-control px-2.5 py-1 text-sm font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
             >
               Add a {objectType === 'orgUnit' ? 'unit' : objectType} mapping
             </button>

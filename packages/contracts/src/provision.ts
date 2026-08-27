@@ -82,8 +82,24 @@ export const scim2TargetConfigSchema = z
   })
   .strict();
 
+/**
+ * The declarative connector's config: one embedded document.
+ *
+ * Deliberately NOT restated field by field here, unlike the two above.
+ * `httpConnectorDocument` in `@syntra/connectors` is a hundred lines of nested
+ * unions, and a hand-kept parallel copy of it would be wrong within a release
+ * — the parallel copies above earn their keep because they are a dozen flat
+ * fields each. What this schema still buys is the `.strict()` on the wrapper:
+ * a body that puts anything but `document` in `config` is a 400 here, and the
+ * route's own `targetConfigSchemaFor(type)` re-validation is what checks the
+ * document itself, against the one definition of it that exists.
+ */
+export const httpTargetConfigSchema = z
+  .object({ document: z.record(z.unknown()) })
+  .strict();
+
 /** Every `TargetSystem.type` the API accepts, kept in step with `@syntra/connectors`' `TARGET_CONNECTOR_TYPES`. */
-export const targetTypeSchema = z.enum(['activeDirectory', 'scim2']);
+export const targetTypeSchema = z.enum(['activeDirectory', 'scim2', 'httpJson']);
 
 /**
  * Either connector's config shape. Not a discriminated union on `type`
@@ -93,7 +109,11 @@ export const targetTypeSchema = z.enum(['activeDirectory', 'scim2']);
  * two together; this union exists so a mistyped field name is still a 400 at
  * this outer boundary rather than silently accepted as `unknown`.
  */
-const anyTargetConfigSchema = z.union([targetConfigSchema, scim2TargetConfigSchema]);
+const anyTargetConfigSchema = z.union([
+  targetConfigSchema,
+  scim2TargetConfigSchema,
+  httpTargetConfigSchema,
+]);
 
 /**
  * `.strict()` on the request bodies, and it is not decoration.
@@ -338,3 +358,35 @@ export const acknowledgeDriftRequestSchema = z
     status: z.enum(['acknowledged', 'resolved']),
   })
   .strict();
+
+/**
+ * Moving one person's account to a container somebody chose.
+ *
+ * `reason` is required and non-blank, deliberately. This row is what stops the
+ * planner putting the account back, so it is a standing disagreement with the
+ * placement rule — and "who moved this and why" is the only question anybody
+ * asks about an account that is not where the rule says it should be. A
+ * reason nobody had to give is a reason nobody gives.
+ */
+export const movePlacementRequest = z
+  .object({
+    container: z.string().trim().min(1).max(1024),
+    reason: z.string().trim().min(1).max(512),
+  })
+  .strict();
+
+export const placementResponse = z.object({
+  personId: z.string().uuid(),
+  targetSystemId: z.string().uuid(),
+  container: z.string(),
+  reason: z.string(),
+  movedByUserId: z.string().uuid().nullable(),
+  updatedAt: z.string(),
+});
+
+export const containerListResponse = z.object({
+  containers: z.array(z.string()),
+});
+
+export type MovePlacementRequest = z.infer<typeof movePlacementRequest>;
+export type PlacementResponse = z.infer<typeof placementResponse>;

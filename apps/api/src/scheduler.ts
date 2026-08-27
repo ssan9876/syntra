@@ -4,6 +4,7 @@ import {
   applyAutomateSchedules,
   applyGovernSchedules,
   applySourceSchedule,
+  applyWebhookSchedule,
   applyTargetSchedule,
   automateSettings,
   createScheduler,
@@ -16,6 +17,7 @@ import {
   registerGovernJobs,
   registerProvisionJobs,
   registerSyncJobs,
+  registerWebhookJobs,
   scheduleKeyRotation,
   smtpTransport,
   type Config,
@@ -168,6 +170,21 @@ export async function scheduleBackgroundWork(
     }
   }
 
+  // Webhook delivery. Appended for the same reason as the two loops above --
+  // `scheduler.test.ts` identifies the transaction to fail by count -- though
+  // this loop opens no transaction at all: the cadence is fixed, so there is
+  // no per-tenant setting to read first.
+  for (const tenant of tenants) {
+    try {
+      await applyWebhookSchedule(scheduler, tenant.id);
+    } catch (cause) {
+      logger.error(
+        { err: cause, tenantId: tenant.id },
+        'failed to schedule webhook delivery',
+      );
+    }
+  }
+
   // AFTER the Automate loop, for the reason the comment above records: the
   // plan put this between the key-rotation and source loops, and
   // `scheduler.test.ts` identifies the transaction to fail BY COUNT. Any loop
@@ -224,6 +241,15 @@ export async function startSyncScheduler(
     // watching.
     const transport = options.transport ?? smtpTransport(config.smtpUrl);
     registerSyncJobs(scheduler, provider);
+    // The master key provider is NOT optional: the sender unseals each
+    // endpoint's signing secret to sign the body, and one registered without
+    // it would post every delivery unsigned, to receivers that would correctly
+    // reject all of them. The private-address policy is passed for the same
+    // reason it is passed to the routes -- the default is the on-prem one, and
+    // a shared installation says otherwise in its configuration.
+    registerWebhookJobs(scheduler, provider, {
+      allowPrivateAddresses: config.outboundAllowPrivate,
+    });
     registerKeyRotationJob(scheduler, provider);
     registerProvisionJobs(scheduler, provider, transport);
     // The transport is NOT optional here. Ruling P16 made this point about

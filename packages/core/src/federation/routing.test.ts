@@ -131,7 +131,7 @@ describe('loadPolicy keeps routing rules out of the authorization engine', () =>
     // Or, worse, a future change to asOutcome would make it an allow.
     const decision = evaluatePolicy(loaded.rules, loaded.fallback, {
       userId: 'u1', applicationId: null, groupIds: [], contracts: [],
-      sourceIp: null, now: new Date(),
+      sourceIp: null, devicePlatform: null, country: null, now: new Date(),
     });
     expect(decision.outcome).toBe('require_mfa');
   });

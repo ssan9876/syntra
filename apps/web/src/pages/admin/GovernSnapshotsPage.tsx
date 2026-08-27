@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -69,43 +69,43 @@ export function GovernSnapshotsPage() {
           </div>
         )}
         {!loading && data && data.snapshots.length > 0 && (
-          <table className="w-full text-left">
-            <thead className="border-b border-border-subtle text-sm text-muted">
+          <Table>
+            <thead>
               <tr>
-                <th className="px-4 py-2">As of</th>
-                <th className="px-4 py-2">Status</th>
-                <th className="px-4 py-2">Holdings</th>
-                <th className="px-4 py-2">Nobody can explain</th>
-                <th className="px-4 py-2">Coverage gaps</th>
+                <th>As of</th>
+                <th>Status</th>
+                <th>Holdings</th>
+                <th>Nobody can explain</th>
+                <th>Coverage gaps</th>
               </tr>
             </thead>
             <tbody>
               {data.snapshots.map((s) => (
-                <tr key={s.id} className="border-b border-border-subtle last:border-0">
-                  <td className="px-4 py-2">
+                <tr key={s.id}>
+                  <td>
                     <Link className="text-primary" to={`/admin/govern/snapshots/${s.id}`}>
                       {new Date(s.asOf).toLocaleString()}
                     </Link>
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     <Status tone={TONE[s.status] ?? 'neutral'}>{s.status}</Status>
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     {/* A `building` or `failed` snapshot is invisible to every
                         report, so its counts are shown as pending rather than
                         as a zero somebody could read as an empty organization. */}
                     {s.status === 'complete' ? s.holdingCount.toLocaleString() : '—'}
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     {s.status === 'complete' ? s.unattributableCount : '—'}
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     {s.status === 'complete' ? s.coverageGapCount : (s.error ?? '—')}
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
       </Panel>
     </>

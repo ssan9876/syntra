@@ -241,3 +241,48 @@ export const resourceParam = z.object({
 export const catalogSearchQuery = z.object({
   q: z.string().max(200).default(''),
 });
+
+/**
+ * Delegated tasks: a form somebody may fill in to make one narrow change,
+ * without holding the permission that change would normally need.
+ *
+ * `actionKey` is validated against the library in `@syntra/core` rather than
+ * restated as an enum here. A parallel copy of a list that lives in code —
+ * unlike the flat connector configs, which earn their copies — is a list that
+ * drifts, and the service refuses an unknown key by name anyway.
+ */
+export const delegatedTaskRequest = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    description: z.string().trim().max(500).nullable().default(null),
+    actionKey: z.string().trim().min(1).max(64),
+    formSchema: z.array(z.record(z.unknown())).max(40).default([]),
+    /**
+     * Who may run it. `null` admits NOBODY, which is `audienceAdmits`'s own
+     * default — a task nobody finished configuring must not be runnable by
+     * everyone.
+     */
+    audienceCondition: z.record(z.unknown()).nullable().default(null),
+    enabled: z.boolean().default(true),
+  })
+  .strict();
+
+export const runTaskRequest = z
+  .object({
+    values: z.record(z.unknown()).default({}),
+  })
+  .strict();
+
+export const delegatedTaskResponse = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  description: z.string().nullable(),
+  actionKey: z.string(),
+  actionLabel: z.string(),
+  formSchema: z.array(z.record(z.unknown())),
+  audienceCondition: z.record(z.unknown()).nullable(),
+  enabled: z.boolean(),
+});
+
+export type DelegatedTaskRequest = z.infer<typeof delegatedTaskRequest>;
+export type DelegatedTaskResponse = z.infer<typeof delegatedTaskResponse>;

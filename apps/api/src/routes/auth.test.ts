@@ -608,3 +608,118 @@ describe('the session cookie takes Secure from PUBLIC_URL', () => {
     expect(cookie.secure).toBeFalsy();
   });
 });
+
+describe('POST /api/auth/login and account lockout', () => {
+  beforeEach(async () => {
+    await seedUser();
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { lockoutThreshold: 3 },
+    });
+  });
+
+  it('says the account is locked once the right password is refused', async () => {
+    // The one refusal this endpoint states plainly. It reaches only somebody
+    // who supplied the correct password, so it discloses nothing an attacker
+    // could use to find an account -- and leaving it unexplained means a user
+    // holding the right password retries until they raise a ticket.
+    await login('wrong');
+    await login('wrong');
+    await login('wrong');
+
+    const res = await login(PASSWORD);
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ type: expect.stringContaining('account-locked') });
+    expect(cookieOf(res)).toBeUndefined();
+  });
+
+  it('still answers a wrong password identically while locked', async () => {
+    await login('wrong');
+    await login('wrong');
+    await login('wrong');
+
+    const res = await login('wrong');
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({
+      type: expect.stringContaining('invalid-credentials'),
+    });
+  });
+})
+
+describe('POST /api/auth/renew-password', () => {
+  const OLD = new Date('2026-01-01T00:00:00Z');
+
+  beforeEach(async () => {
+    const user = await seedUser();
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { passwordMaxAgeDays: 30, passwordHistoryDepth: 3 },
+    });
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.passwordCredential.update({
+        where: { userId: user.id },
+        data: { changedAt: OLD },
+      }),
+    );
+  });
+
+  const renew = (attemptToken: string, newPassword: string) =>
+    ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/renew-password',
+      headers: { host: ctx.host },
+      payload: { attemptToken, newPassword },
+    });
+
+  it('answers a sign-in with renew rather than a session', async () => {
+    const res = await login(PASSWORD);
+
+    expect(res.json()).toMatchObject({ status: 'renew' });
+    expect(res.json().attemptToken).toEqual(expect.any(String));
+    // No cookie. An expired password gets you a token and nothing else.
+    expect(cookieOf(res)).toBeUndefined();
+  });
+
+  it('signs the user in once a new password is chosen', async () => {
+    const { attemptToken } = (await login(PASSWORD)).json();
+
+    const res = await renew(attemptToken, 'a brand new password 999');
+
+    expect(res.json()).toMatchObject({ status: 'authenticated' });
+    expect(cookieOf(res)).toBeDefined();
+  });
+
+  it('refuses the password that just expired', async () => {
+    const { attemptToken } = (await login(PASSWORD)).json();
+
+    // Accepting it would set changedAt to now and leave the same password in
+    // place — the loop would close and reopen at the next expiry.
+    const res = await renew(attemptToken, PASSWORD);
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({
+      type: expect.stringContaining('password-unchanged'),
+    });
+  });
+
+  it('spends the attempt, so it cannot be replayed', async () => {
+    const { attemptToken } = (await login(PASSWORD)).json();
+    expect((await renew(attemptToken, 'a brand new password 999')).statusCode).toBe(200);
+
+    const again = await renew(attemptToken, 'yet another password 888');
+    expect(again.statusCode).toBe(401);
+  });
+
+  it('lets the new password straight in afterwards', async () => {
+    const { attemptToken } = (await login(PASSWORD)).json();
+    await renew(attemptToken, 'a brand new password 999');
+
+    const res = await login('a brand new password 999');
+    expect(res.json()).toMatchObject({ status: 'authenticated' });
+  });
+
+  it('refuses a made-up attempt token', async () => {
+    const res = await renew('not-a-real-token', 'a brand new password 999');
+    expect(res.statusCode).toBe(401);
+  });
+});

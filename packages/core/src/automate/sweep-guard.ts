@@ -1,3 +1,4 @@
+import { populationDropRefusal } from '../identity/population-drop.js';
 export interface SweepGuardThresholds {
   sweepThresholdPercent: number;
   perProductSweepThresholdPercent: number;
@@ -40,24 +41,21 @@ export function evaluateSweepGuard(input: SweepGuardInput): SweepGuardVerdict {
   const hard: string[] = [];
   const soft: string[] = [];
 
-  // A tenant with no persons at all is refused unconditionally. There is
-  // nothing a human could usefully confirm about a sweep whose entire
-  // population went missing.
-  if (input.personsWithActiveContract === 0) {
-    hard.push(
-      'no person in this tenant holds an active contract; refusing to sweep anything',
-    );
-  } else if (input.previousPersonsWithActiveContract !== null) {
-    const drop =
-      ((input.previousPersonsWithActiveContract - input.personsWithActiveContract) /
-        input.previousPersonsWithActiveContract) *
-      100;
-    if (drop > input.thresholds.personPopulationDropPercent) {
-      hard.push(
-        `the number of people with an active contract has fallen from ${input.previousPersonsWithActiveContract} to ${input.personsWithActiveContract} (${drop.toFixed(1)}%) since the last applied sweep; every lapse in this sweep is downstream of that count`,
-      );
-    }
-  }
+  // The person-register collapse. Refused unconditionally: there is nothing a
+  // human could usefully confirm about a sweep whose entire population went
+  // missing.
+  //
+  // `populationDropRefusal` rather than the arithmetic inline. The copy that
+  // used to live here divided by `previousPersonsWithActiveContract` without
+  // checking it was non-zero, and reached the right answer by way of
+  // `-Infinity` failing the comparison. See that function.
+  const collapse = populationDropRefusal({
+    current: input.personsWithActiveContract,
+    previous: input.previousPersonsWithActiveContract,
+    thresholdPercent: input.thresholds.personPopulationDropPercent,
+    subject: 'sweep',
+  });
+  if (collapse !== null) hard.push(collapse);
 
   if (hard.length > 0) return { blocked: true, confirmable: false, reasons: hard };
 

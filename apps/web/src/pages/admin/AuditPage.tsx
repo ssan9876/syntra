@@ -1,4 +1,4 @@
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -77,24 +77,24 @@ export function AuditPage() {
           )}
 
           {!loading && data && data.events.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     #
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     When
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Action
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Outcome
                   </th>
                   <th
                     scope="col"
-                    className="px-4 py-2.5 font-medium max-lg:hidden"
+                    className="max-lg:hidden"
                   >
                     Detail
                   </th>
@@ -102,33 +102,30 @@ export function AuditPage() {
               </thead>
               <tbody>
                 {data.events.map((event) => (
-                  <tr
-                    key={event.id}
-                    className="border-b border-border-subtle last:border-0"
-                  >
-                    <td className="px-4 py-2.5 text-muted tabular-nums">
+                  <tr key={event.id}>
+                    <td className="tabular-nums">
                       {event.sequence}
                     </td>
-                    <td className="px-4 py-2.5 whitespace-nowrap text-muted">
+                    <td className="whitespace-nowrap">
                       {when(event.occurredAt)}
                     </td>
-                    <td className="px-4 py-2.5 font-medium text-ink">
+                    <td className="text-ink">
                       {event.action}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td>
                       <Status
                         tone={event.outcome === 'success' ? 'active' : 'danger'}
                       >
                         {event.outcome}
                       </Status>
                     </td>
-                    <td className="max-w-[28ch] truncate px-4 py-2.5 text-muted max-lg:hidden">
+                    <td className="max-w-[28ch] truncate max-lg:hidden">
                       {summarize(event.payload)}
                     </td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

@@ -317,8 +317,66 @@ describe('OnboardPersonPage', () => {
       }),
     ).toBeInTheDocument();
     // Naming the placeholder is the point: "it will go to Unsorted" without
-    // saying why leaves the reader guessing which field to fill in.
-    expect(screen.getByText(/contract\.department/)).toBeInTheDocument();
+    // saying why leaves the reader guessing which field to fill in. Said in
+    // two places now — beside the container, and in the refusal to submit —
+    // so this asserts it appears rather than that it appears once.
+    expect(screen.getAllByText(/contract\.department/).length).toBeGreaterThan(0);
+  });
+
+  it('will not submit while the account would land in the fallback', async () => {
+    // A placement rule that needs a department and does not get one falls
+    // back rather than failing, deliberately, so a bulk import with patchy HR
+    // data does not make people unprocessable. That is right for an import
+    // and wrong here: somebody is typing, the field is one keystroke away,
+    // and an account in Unsorted is one somebody has to find and move later.
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () =>
+        json({ targets: [{ id: 't1', name: 'Acme AD', enabled: true }] }),
+      '/api/admin/targets/t1/profile/preview-container': () =>
+        json({
+          container: 'OU=Unsorted,DC=acme,DC=test',
+          fallbackUsed: true,
+          missing: ['contract.department'],
+        }),
+    });
+
+    renderPage();
+    await user.type(screen.getByLabelText('Given name'), 'Maya');
+    await user.type(screen.getByLabelText('Family name'), 'Okafor');
+
+    expect(
+      await screen.findByText(/would not be placed/i, undefined, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add someone/i })).toBeDisabled();
+  });
+
+  it('submits once the container resolves', async () => {
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () =>
+        json({ targets: [{ id: 't1', name: 'Acme AD', enabled: true }] }),
+      '/api/admin/targets/t1/profile/preview-container': () =>
+        json({
+          container: 'OU=Finance,OU=Company,DC=acme,DC=test',
+          fallbackUsed: false,
+          missing: [],
+        }),
+    });
+
+    renderPage();
+    await user.type(screen.getByLabelText('Given name'), 'Maya');
+    await user.type(screen.getByLabelText('Family name'), 'Okafor');
+
+    expect(
+      await screen.findByText(/OU=Finance,OU=Company,DC=acme,DC=test/, undefined, {
+        timeout: 3000,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/would not be placed/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /add someone/i })).not.toBeDisabled();
   });
 
   it('says nothing at all when the target has no account profile', async () => {

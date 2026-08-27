@@ -2,14 +2,25 @@ import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { isAdministrator } from '../rbac/rbac-service.js';
 import { hashPassword, verifyPassword } from './password.js';
+import {
+  clearLockout,
+  isLocked,
+  readLockout,
+  recordFailure,
+} from './login-lockout.js';
 
 export interface AuthenticateInput {
   login: string;
   password: string;
   sourceIp: string | null;
+  /** Injectable for tests; the lockout window and duration are read against it. */
+  now?: Date;
 }
 
-export type AuthFailure = 'invalid_credentials' | 'user_inactive';
+export type AuthFailure =
+  | 'invalid_credentials'
+  | 'user_inactive'
+  | 'account_locked';
 
 export type AuthResult =
   | { ok: true; userId: string; mayElevate: boolean }
@@ -49,13 +60,24 @@ export async function authenticate(
 ): Promise<AuthResult> {
   // Phase 1 — read the user and their stored hash. A transaction, and a short
   // one: two indexed reads and nothing else.
+  const now = input.now ?? new Date();
   const found = await withTenant(tenantId, async (tx) => {
     const user = await tx.user.findFirst({ where: { login: input.login } });
     if (!user) return null;
     const credential = await tx.passwordCredential.findUnique({
       where: { userId: user.id },
     });
-    return { user, hash: credential?.hash ?? null };
+    const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+    return {
+      user,
+      hash: credential?.hash ?? null,
+      lockout: await readLockout(tx, user.id),
+      policy: {
+        threshold: tenant.lockoutThreshold,
+        windowMinutes: tenant.lockoutWindowMinutes,
+        durationMinutes: tenant.lockoutDurationMinutes,
+      },
+    };
   });
 
   // Phase 2 — Argon2id, outside every transaction.
@@ -81,10 +103,32 @@ export async function authenticate(
   }
 
   if (!passwordOk) {
-    await withTenant(tenantId, (tx) =>
-      audit(tx, found.user.id, input, 'failure', 'invalid_credentials'),
-    );
+    await withTenant(tenantId, async (tx) => {
+      await recordFailure(tx, {
+        tenantId,
+        userId: found.user.id,
+        login: input.login,
+        sourceIp: input.sourceIp,
+        policy: found.policy,
+        now,
+      });
+      await audit(tx, found.user.id, input, 'failure', 'invalid_credentials');
+    });
     return { ok: false, reason: 'invalid_credentials' };
+  }
+
+  // Checked after the password, for the same reason the inactive check below
+  // is: told to anyone who asks, a lock is a way to find out that a login
+  // exists. Somebody who supplied the right password has already proved they
+  // know it, and is owed the real reason they are not getting in.
+  //
+  // The Argon2 verification above ran either way, so a locked account costs
+  // exactly what an unlocked one costs and the refusal leaks no timing.
+  if (isLocked(found.lockout, now)) {
+    await withTenant(tenantId, (tx) =>
+      audit(tx, found.user.id, input, 'failure', 'account_locked'),
+    );
+    return { ok: false, reason: 'account_locked' };
   }
 
   // Checked after the password, so a disabled account cannot be probed
@@ -98,6 +142,10 @@ export async function authenticate(
 
   const mayElevate = await withTenant(tenantId, async (tx) => {
     const admin = await isAdministrator(tx, found.user.id);
+    // The run of failures ends here. Anything less — decrementing, ageing the
+    // count out — leaves an account one bad morning away from a lock it did
+    // not earn.
+    await clearLockout(tx, found.user.id);
     await audit(tx, found.user.id, input, 'success', null);
     return admin;
   });

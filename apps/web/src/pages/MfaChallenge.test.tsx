@@ -233,4 +233,47 @@ describe('MfaChallenge', () => {
       });
     });
   });
+
+  it('offers an emailed code only when the server named it', () => {
+    // `offers`, like every other factor button here: the server decides what
+    // is acceptable, and offering one it will refuse walks somebody into a
+    // loop with no way out.
+    storeChallenge({
+      kind: 'verify',
+      attemptToken: 'token-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      factors: ['totp'],
+      returnTo: '/',
+    });
+    stubFetch(() => ok({ status: 'authenticated' }));
+    renderPage();
+
+    expect(screen.queryByRole('button', { name: /email me a code/i })).toBeNull();
+  });
+
+  it('asks for a code to be sent, and claims nothing more', async () => {
+    const user = userEvent.setup();
+    storeChallenge({
+      kind: 'verify',
+      attemptToken: 'token-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      factors: ['email_otp'],
+      returnTo: '/',
+    });
+    const spy = stubFetch(() => ok({ ok: true }));
+    renderPage();
+
+    // The only factor offered, so the screen already opens on it — there is
+    // no button to switch to the mode you are already in.
+    await user.click(await screen.findByRole('button', { name: /send me a code/i }));
+
+    await waitFor(() =>
+      expect(
+        spy.mock.calls.some(([url]) => String(url).includes('/mfa/email-otp/send')),
+      ).toBe(true),
+    );
+    // The endpoint answers the same for sent, too-soon, no address and
+    // switched-off, so the screen must not claim a code went out.
+    expect(screen.getByText(/if a code can be sent/i)).toBeInTheDocument();
+  });
 });

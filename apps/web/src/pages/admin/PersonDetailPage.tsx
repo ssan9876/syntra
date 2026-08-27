@@ -1,5 +1,14 @@
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Empty,
+  Field,
+  Panel,
+  Select,
+  SkeletonRows,
+  Status,
+  Table,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
@@ -85,33 +94,30 @@ export function PersonDetailPage() {
               </Empty>
             </div>
           ) : (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     Role
                   </th>
                   <th
                     scope="col"
-                    className="px-4 py-2.5 font-medium max-sm:hidden"
+                    className="max-sm:hidden"
                   >
                     Department
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     From
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Until
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {data.contracts.map((contract) => (
-                  <tr
-                    key={contract.id}
-                    className="border-b border-border-subtle last:border-0"
-                  >
-                    <td className="px-4 py-2.5">
+                  <tr key={contract.id}>
+                    <td>
                       <span className="flex flex-wrap items-center gap-2">
                         <span className="font-medium text-ink">
                           {contract.jobTitle ?? '—'}
@@ -121,20 +127,20 @@ export function PersonDetailPage() {
                         )}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 text-muted max-sm:hidden">
+                    <td className="max-sm:hidden">
                       {contract.department ?? '—'}
                     </td>
-                    <td className="px-4 py-2.5 text-muted">
+                    <td>
                       {day(contract.startDate)}
                     </td>
-                    <td className="px-4 py-2.5 text-muted">
+                    <td>
                       {/* Open-ended is ongoing, not missing data. */}
                       {day(contract.endDate) ?? 'Ongoing'}
                     </td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
 
           {/* The endpoint has existed since Identity and nothing called it, so

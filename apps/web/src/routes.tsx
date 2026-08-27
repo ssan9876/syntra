@@ -8,6 +8,7 @@ import { MfaChallenge } from './pages/MfaChallenge.js';
 import { EnrolFactor } from './pages/EnrolFactor.js';
 import { Security } from './pages/Security.js';
 import { ForgotPassword } from './pages/ForgotPassword.js';
+import { RenewPassword } from './pages/RenewPassword.js';
 import { ResetPassword } from './pages/ResetPassword.js';
 import { CatalogPage } from './pages/automate/CatalogPage.js';
 import { RequestFormPage } from './pages/automate/RequestFormPage.js';
@@ -16,6 +17,7 @@ import { RequestDetailPage } from './pages/automate/RequestDetailPage.js';
 import { MyAccessPage } from './pages/automate/MyAccessPage.js';
 import { MyApprovalsPage } from './pages/automate/MyApprovalsPage.js';
 import { ManagedResourcesPage } from './pages/automate/ManagedResourcesPage.js';
+import { TasksPage } from './pages/TasksPage.js';
 import { MyReviewsPage } from './pages/govern/MyReviewsPage.js';
 
 /**
@@ -85,6 +87,12 @@ export function AppRoutes() {
       */}
       <Route path="/enrol" element={<EnrolFactor />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
+      {/*
+        Outside RequireSession for the same reason /enrol is: a user here has
+        had their password accepted and holds an attempt token, but has no
+        session yet — that is the whole point of the screen.
+      */}
+      <Route path="/renew-password" element={<RenewPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route
         path="/security"
@@ -147,6 +155,17 @@ export function AppRoutes() {
         element={
           <RequireSession scope="portal">
             <ManagedResourcesPage />
+          </RequireSession>
+        }
+      />
+      {/* A PORTAL route, inside `scope="portal"`. A delegated task is run by
+          somebody who holds no administrative permission — putting it behind
+          the console would put it behind the thing it exists to avoid. */}
+      <Route
+        path="/tasks"
+        element={
+          <RequireSession scope="portal">
+            <TasksPage />
           </RequireSession>
         }
       />

@@ -10,6 +10,8 @@ import {
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
+  clearLockout,
+  isLocked,
   createUser,
   deactivateDirectoryUser,
   deleteDirectoryUser,
@@ -108,10 +110,23 @@ export async function registerAdminUserRoutes(
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
     async (request) => {
       const { status } = listQuery.parse(request.query);
-      const users = await request.db((tx) =>
-        listUsers(tx, status ? { status: status as UserStatus } : {}),
+      const { users, locks } = await request.db(async (tx) => ({
+        users: await listUsers(tx, status ? { status: status as UserStatus } : {}),
+        // One read for the page rather than one per row. The table is small
+        // by construction — a row exists only for a user with a recent failed
+        // sign-in — so this is cheaper than the join it replaces.
+        locks: await tx.loginLockout.findMany({
+          select: { userId: true, lockedAt: true, lockedUntil: true },
+        }),
+      }));
+
+      const now = new Date();
+      const lockedIds = new Set(
+        locks.filter((l) => isLocked(l, now)).map((l) => l.userId),
       );
-      return { users };
+      return {
+        users: users.map((u) => ({ ...u, locked: lockedIds.has(u.id) })),
+      };
     },
   );
 
@@ -186,6 +201,40 @@ export async function registerAdminUserRoutes(
       });
       raiseIfRefused(outcome);
       return request.db((tx) => tx.user.findUniqueOrThrow({ where: { id } }));
+    },
+  );
+
+  /**
+   * Lifts an account lockout by hand.
+   *
+   * Needed because `lockoutDurationMinutes` of zero is a legitimate setting —
+   * a lock that never lifts itself — and because the alternative for the
+   * strictest tenants is telling a locked-out user to wait a week.
+   *
+   * Deliberately idempotent and deliberately silent about whether there was a
+   * lock: DIRECTORY_WRITE is already required to reach it, so there is no
+   * enumeration concern, and refusing an unlock on an unlocked account is a
+   * confusing error for an administrator acting on a support call.
+   */
+  app.post(
+    '/users/:id/unlock',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      return request.db(async (tx) => {
+        const user = await tx.user.findUniqueOrThrow({ where: { id } });
+        await clearLockout(tx, id);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'auth.lockout_cleared',
+          targetType: 'User',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { login: user.login },
+        });
+        return user;
+      });
     },
   );
 

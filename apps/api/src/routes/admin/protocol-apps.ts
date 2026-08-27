@@ -2,16 +2,22 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   claimMappingRequest,
+  claimMappingSetRequest,
   idParam,
   oidcClientRequest,
   samlConfigRequest,
   spMetadataImportRequest,
 } from '@syntra/contracts';
 import {
+  ClaimMappingSetProtocolMismatchError,
   PERMISSIONS,
   REQUIRE_SIGNED_AUTHN_REQUESTS_BY_DEFAULT,
+  applyClaimMappingSet,
   createClaimMapping,
+  createClaimMappingSet,
   deleteClaimMapping,
+  deleteClaimMappingSet,
+  listClaimMappingSets,
   ensureActiveKey,
   fetchExternalDocument,
   findApplication,
@@ -153,6 +159,7 @@ export async function registerAdminProtocolRoutes(
           acsUrls: body.acsUrls,
           wantAuthnRequestsSigned: body.wantAuthnRequestsSigned,
           allowIdpInitiated: body.allowIdpInitiated,
+          wsFedEnabled: body.wsFedEnabled,
         },
       });
       return saved;
@@ -252,6 +259,7 @@ export async function registerAdminProtocolRoutes(
       sloUrl: parsed.sloUrl,
       sloBinding: existing?.sloBinding ?? 'HTTP-POST',
       allowIdpInitiated: existing?.allowIdpInitiated ?? false,
+      wsFedEnabled: existing?.wsFedEnabled ?? false,
       assertionLifetimeMs: existing?.assertionLifetimeMs ?? 300_000,
     };
 
@@ -337,6 +345,59 @@ export async function registerAdminProtocolRoutes(
     // one offline guess away from being one for a client that chose its own.
     const { clientSecretHash: _hidden, ...rest } = row;
     return rest;
+  });
+
+  /**
+   * Reusable claim mapping sets.
+   *
+   * A tenant-level template rather than something hanging off an application:
+   * the whole point is that many applications receive the same four claims,
+   * and a set owned by one of them would be a set the others could not see.
+   */
+  app.get('/claim-sets', read, async (request) => ({
+    sets: await request.db((tx) => listClaimMappingSets(tx)),
+  }));
+
+  app.post('/claim-sets', manage, async (request, reply) => {
+    const body = claimMappingSetRequest.parse(request.body);
+    const created = await request.db((tx) => createClaimMappingSet(tx, body as never));
+    return reply.status(201).send(created);
+  });
+
+  app.delete('/claim-sets/:id', manage, async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    // The applications keep what was stamped onto them. Deleting a template is
+    // not a decision about the integrations built from it.
+    await request.db((tx) => deleteClaimMappingSet(tx, id));
+    return reply.status(204).send();
+  });
+
+  /**
+   * Stamps a set onto one application.
+   *
+   * Answers with what it ADDED and what was already there. "Applied" with no
+   * numbers is indistinguishable from "did nothing", and doing nothing is the
+   * ordinary outcome of applying a set twice.
+   */
+  app.post('/applications/:id/claims/apply-set', manage, async (request) => {
+    const { id } = idParam.parse(request.params);
+    const { setId } = z.object({ setId: z.string().uuid() }).parse(request.body);
+
+    return request
+      .db((tx) => applyClaimMappingSet(tx, id, setId))
+      .catch((cause: unknown) => {
+        if (cause instanceof ClaimMappingSetProtocolMismatchError) {
+          // 409, and the message names both protocols. A SAML set on an OIDC
+          // application would write rows that protocol's builder never reads.
+          throw new ProblemError(
+            409,
+            'protocol-mismatch',
+            'That set is for a different protocol',
+            cause.message,
+          );
+        }
+        throw cause;
+      });
   });
 
   app.get('/applications/:id/claims', read, async (request) => {

@@ -160,6 +160,17 @@ export async function registerPasswordResetRoutes(
     if (outcome.reason === 'factor_invalid') {
       throw new ProblemError(400, 'factor-invalid', 'That second factor was not accepted');
     }
+    if (outcome.reason === 'reused') {
+      // Emphatically NOT the fall-through below. The link is still usable and
+      // the password is the problem — telling somebody to request a new link
+      // would send them to their inbox to make the same mistake again.
+      throw new ProblemError(
+        400,
+        'password-reused',
+        'That password does not meet the policy',
+        `That is one of your last ${outcome.depth} passwords. Choose one you have not used before.`,
+      );
+    }
     // Unknown, spent and expired all land here and read the same.
     throw new ProblemError(
       400,

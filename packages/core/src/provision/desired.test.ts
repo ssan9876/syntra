@@ -101,6 +101,7 @@ const evaluate = (
     entitlementStatus: present,
     existingCorrelationKey: null,
     takenCorrelationKeys: new Set<string>(),
+    containerOverride: null,
     renameEnabled: false,
     now: NOW,
     horizon: NOW,
@@ -661,6 +662,7 @@ describe('desiredState — persons Provision cannot process', () => {
       entitlementStatus: present,
       existingCorrelationKey: null,
       takenCorrelationKeys: new Set(),
+      containerOverride: null,
       renameEnabled: false,
       now: NOW,
       horizon: NOW,
@@ -779,6 +781,7 @@ describe('desiredState — persons Provision cannot process', () => {
       entitlementStatus: present,
       existingCorrelationKey: null,
       takenCorrelationKeys: new Set(),
+      containerOverride: null,
       renameEnabled: false,
       now: NOW,
       horizon: NOW,
@@ -797,6 +800,36 @@ describe('desiredState — persons Provision cannot process', () => {
     // in reconcile.
     const result = evaluate([contract({ department: null })], [everyoneRule]);
     expect(result.unprocessable).toBeNull();
+    expect(result.account?.container).toBe('OU=Users,DC=acme,DC=test');
+  });
+
+  it('lets a manual placement beat the template', () => {
+    // The whole point of `AccountPlacement`. Without this, the planner
+    // computes the template's answer, finds the account somewhere else, and
+    // proposes a `modifyDN` putting the person straight back — within five
+    // minutes, silently, with the console still showing the move as done.
+    const result = evaluate([contract({ department: 'Finance' })], [everyoneRule], {
+      containerOverride: 'OU=Engineering,OU=Users,DC=acme,DC=test',
+    });
+    expect(result.account?.container).toBe('OU=Engineering,OU=Users,DC=acme,DC=test');
+  });
+
+  it('lets a manual placement beat the fallback too', () => {
+    // An override is a decision somebody recorded a reason for. Falling back
+    // from it would discard that decision at the moment it mattered.
+    const result = evaluate([contract({ department: null })], [everyoneRule], {
+      containerOverride: 'OU=Engineering,OU=Users,DC=acme,DC=test',
+    });
+    expect(result.unprocessable).toBeNull();
+    expect(result.account?.container).toBe('OU=Engineering,OU=Users,DC=acme,DC=test');
+  });
+
+  it('is not a placement when the override is blank', () => {
+    // A blank DN is a write into somebody else's directory at a location
+    // nobody chose. It has to read as "no override", not as "the root".
+    const result = evaluate([contract({ department: null })], [everyoneRule], {
+      containerOverride: '   ',
+    });
     expect(result.account?.container).toBe('OU=Users,DC=acme,DC=test');
   });
 
@@ -820,6 +853,7 @@ describe('desiredState — persons Provision cannot process', () => {
     for (let n = 2; n <= 20; n += 1) taken.add(`anna.novak${n}`);
     const result = evaluate([contract()], [financeRule], {
       takenCorrelationKeys: taken,
+      containerOverride: null,
     });
     expect(result.unprocessable).toEqual({
       kind: 'name_generation_exhausted',
@@ -835,6 +869,7 @@ describe('desiredState — persons Provision cannot process', () => {
     for (let n = 2; n <= 20; n += 1) taken.add(`anna.novak${n}`);
     const result = evaluate([contract({ endDate: day('2026-01-01') })], [financeRule], {
       takenCorrelationKeys: taken,
+      containerOverride: null,
     });
     expect(result.unprocessable).toBeNull();
     expect(result.account?.required).toBe(false);
@@ -898,6 +933,7 @@ describe('desiredState — renaming', () => {
       existingCorrelationKey: 'anna.novak',
       renameEnabled: true,
       takenCorrelationKeys: new Set(['Anna.Novak']),
+      containerOverride: null,
     });
     expect(result.account?.correlationKey).toBe('anna.novak');
   });
@@ -911,6 +947,7 @@ describe('desiredState — renaming', () => {
       existingCorrelationKey: 'a.novak',
       renameEnabled: true,
       takenCorrelationKeys: taken,
+      containerOverride: null,
     });
     expect(result.unprocessable).toBeNull();
     expect(result.account?.correlationKey).toBe('a.novak');

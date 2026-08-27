@@ -76,6 +76,14 @@ const applicationFields = z.object({
    * the tenant's own protocol identity and never stored.
    */
   launchUrl: webUrl.optional(),
+  /**
+   * The heading this tile appears under in the portal.
+   *
+   * Nullable as well as optional: absent means "leave it alone" on an update,
+   * and `null` means "put it back under the general heading". A field that
+   * could only be set and never cleared would make the first typo permanent.
+   */
+  category: z.string().trim().max(64).nullable().optional(),
   visibility: z.enum(['assigned', 'hidden']).default('assigned'),
 });
 
@@ -112,5 +120,50 @@ export const applicationTile = z.object({
   slug: z.string(),
   description: z.string().nullable(),
   iconUrl: z.string().nullable(),
+  /** The heading this tile appears under. Null groups it with the rest. */
+  category: z.string().nullable(),
 });
 export type ApplicationTile = z.infer<typeof applicationTile>;
+
+/**
+ * The application catalog: known service providers, with their SSO settings
+ * already filled in.
+ *
+ * Only the request is validated here. The catalog itself is a constant in
+ * `@syntra/core` and is served as it is — a hand-kept parallel schema for a
+ * static list would be a second definition to drift from the first, and there
+ * is no untrusted input on that side to check.
+ */
+export const catalogCreateRequest = z
+  .object({
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z][a-z0-9-]*$/, 'A catalog key'),
+    /**
+     * What the administrator supplied for the entry's variables.
+     *
+     * Bounded on both sides: these land in entity IDs and assertion consumer
+     * URLs, which are compared byte for byte at sign-in. The service refuses a
+     * blank one — see `fill` — so this only has to stop an oversized body.
+     */
+    variables: z.record(z.string().trim().max(512)).default({}),
+    /** Overrides the entry's own name, for a second instance of one. */
+    name: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export const catalogCreateResponse = z.object({
+  applicationId: z.string().uuid(),
+  slug: z.string(),
+  name: z.string(),
+  protocol: z.enum(['saml', 'oidc', 'bookmark']),
+  clientId: z.string().optional(),
+  /** Returned once. There is no route that reads it back. */
+  clientSecret: z.string().optional(),
+});
+
+export type CatalogCreateRequest = z.infer<typeof catalogCreateRequest>;
+export type CatalogCreateResponse = z.infer<typeof catalogCreateResponse>;

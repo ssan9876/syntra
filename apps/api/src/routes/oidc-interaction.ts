@@ -13,6 +13,7 @@ import { SESSION_COOKIE } from '../plugins/require-session.js';
 import { tenantRelyingParty } from './relying-party.js';
 import { challengeRedirect } from './session-reply.js';
 import { oidcProviderFor, type OidcRouteOptions } from './oidc-op.js';
+import { clientFacts } from '../plugins/client-facts.js';
 
 /**
  * The only place an OIDC interaction is resolved.
@@ -77,6 +78,7 @@ export async function registerOidcInteractionRoutes(
         principal: { kind: 'session', userId: session.userId, sessionId: session.sessionId },
         applicationId: oidcClient.applicationId,
         sourceIp: request.ip,
+        client: clientFacts(request),
         relyingParty: tenantRelyingParty(tenant, options.publicUrl),
         scope: 'portal',
       });
@@ -85,7 +87,14 @@ export async function registerOidcInteractionRoutes(
         throw new ProblemError(403, 'not-assigned', 'Not available to you');
       }
 
-      if (decision.status === 'challenge' || decision.status === 'enrol') {
+      // `renew` rides the same redirect as the other two: the browser is
+      // mid-flow here, and an expired password has to be changed before an
+      // authorization code can exist for it.
+      if (
+        decision.status === 'challenge' ||
+        decision.status === 'enrol' ||
+        decision.status === 'renew'
+      ) {
         return challengeRedirect(reply, decision, `/oidc/interaction/${uid}`);
       }
 

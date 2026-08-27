@@ -90,7 +90,11 @@ describe('evaluateProvisionGuard — the unconditional refusals', () => {
   it('refuses a run with no persons at all, unconditionally', () => {
     const verdict = guard({ personsWithActiveContract: 0 });
     expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
-    expect(reasonsOf(verdict)[0]).toContain('no persons');
+    // The sentence now comes from `populationDropRefusal`, which both this
+    // guard and the sweep guard share. Asserted on what it MEANS rather than
+    // on a phrase, so the shared rule can be reworded without two subsystems'
+    // tests having to agree on prose.
+    expect(reasonsOf(verdict)[0]).toContain('no person in this tenant');
   });
 
   it('refuses a run where the person population collapsed', () => {
@@ -627,7 +631,11 @@ describe('evaluateProvisionGuard — the person population axis', () => {
       hasEverApplied: false,
     });
     expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
-    expect(reasonsOf(verdict)[0]).toContain('no persons');
+    // The sentence now comes from `populationDropRefusal`, which both this
+    // guard and the sweep guard share. Asserted on what it MEANS rather than
+    // on a phrase, so the shared rule can be reworded without two subsystems'
+    // tests having to agree on prose.
+    expect(reasonsOf(verdict)[0]).toContain('no person in this tenant');
   });
 
   it('reports both hard refusals when both hold', () => {

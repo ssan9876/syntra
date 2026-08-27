@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Meter, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -37,19 +37,41 @@ const TONE: Record<string, Tone> = {
  * items were mooted is a different fact from one where 300 people decided, and
  * a percentage on its own cannot tell them apart.
  */
+/**
+ * One campaign's coverage, in a table cell.
+ *
+ * This was a single running sentence — "62% covered of 240 items: 130
+ * certified, 8 revoked, 2 require a change, 4 moot, 96 undecided" — set in one
+ * `td`. In a column beside three narrow ones it wrapped to four lines, so
+ * every row was four rows tall and a page of campaigns could not be compared
+ * by eye at all, which is the only thing this list is for.
+ *
+ * The bar carries the comparison, the figure carries the value, and the
+ * breakdown stays available underneath at caption weight. Nothing is removed:
+ * an auditor still gets every number without opening the campaign.
+ */
 function Coverage({ campaign }: { campaign: CampaignRow }) {
   if (campaign.coveragePercent === null) {
     return <span className="text-muted">not yet closed</span>;
   }
   return (
-    <>
-      <strong className="text-ink">{campaign.coveragePercent}% covered</strong>
-      <span className="ml-2 text-muted">
-        of {campaign.totalItems} items: {campaign.certifiedItems} certified,{' '}
-        {campaign.revokedItems} revoked, {campaign.requiresChangeItems} require a change,{' '}
-        {campaign.mootItems} moot, {campaign.undecidedItems} undecided
-      </span>
-    </>
+    <div className="min-w-[11rem] space-y-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <strong className="tabular-nums text-ink">{campaign.coveragePercent}%</strong>
+        <span className="text-sm text-muted tabular-nums">
+          of {campaign.totalItems}
+        </span>
+      </div>
+      <Meter
+        percent={campaign.coveragePercent}
+        label={`covered of ${campaign.totalItems} items`}
+      />
+      <p className="text-sm text-muted text-pretty">
+        {campaign.certifiedItems} certified · {campaign.revokedItems} revoked ·{' '}
+        {campaign.requiresChangeItems} require a change · {campaign.mootItems} moot ·{' '}
+        {campaign.undecidedItems} undecided
+      </p>
+    </div>
   );
 }
 
@@ -96,20 +118,20 @@ export function GovernCampaignsPage() {
 
       {campaigns.length > 0 && (
         <Panel title="Campaigns">
-          <table className="w-full text-left">
-            <thead className="border-b border-border-subtle text-sm text-muted">
+          <Table>
+            <thead>
               <tr>
-                <th className="px-4 py-2">Campaign</th>
-                <th className="px-4 py-2">Status</th>
-                <th className="px-4 py-2">Due</th>
-                <th className="px-4 py-2">Coverage</th>
+                <th>Campaign</th>
+                <th>Status</th>
+                <th>Due</th>
+                <th>Coverage</th>
               </tr>
             </thead>
             <tbody>
               {campaigns.map((campaign) => (
-                <tr key={campaign.id} className="border-b border-border-subtle last:border-0">
-                  <td className="px-4 py-2">
-                    <Link className="text-ink underline" to={`/admin/govern/campaigns/${campaign.id}`}>
+                <tr key={campaign.id}>
+                  <td>
+                    <Link className="link" to={`/admin/govern/campaigns/${campaign.id}`}>
                       {campaign.name}
                     </Link>
                     {campaign.blockedItems > 0 && (
@@ -118,12 +140,12 @@ export function GovernCampaignsPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     <Status tone={TONE[campaign.status] ?? 'neutral'}>
                       {campaign.status.replace(/_/g, ' ')}
                     </Status>
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     {new Date(campaign.dueAt).toLocaleDateString()}
                     {/* An extension is a recorded fact, not a silent edit of the
                         date: a campaign that closes on time because its due date
@@ -134,13 +156,13 @@ export function GovernCampaignsPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     <Coverage campaign={campaign} />
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         </Panel>
       )}
     </>

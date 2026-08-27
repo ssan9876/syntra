@@ -4,6 +4,7 @@ import {
   approvalDelegationBody,
   audiencePreviewBody,
   decideRequestBody,
+  delegatedTaskRequest,
   productBody,
   resolutionPreviewBody,
   resourceDelegationBody,
@@ -14,10 +15,18 @@ import {
   workflowBody,
 } from '@syntra/contracts';
 import {
+  ACTIONS,
   DecisionRefusedError,
   DelegationRefusedError,
+  FormMissingInputError,
   PERMISSIONS,
   ProductConfigurationError,
+  UnknownActionError,
+  createTask,
+  deleteTask,
+  recordEvent,
+  listTasks,
+  updateTask,
   WorkflowConfigurationError,
   applyExpirySweep,
   automateSettings,
@@ -79,6 +88,157 @@ export async function registerAdminAutomateRoutes(
 
   /** Resolved per request: the scheduler exists only after the app is built. */
   const scheduler = (): Scheduler | null => options.scheduler?.() ?? null;
+
+  /**
+   * The two refusals a task definition can produce, as messages the form can
+   * put beside the control that caused them.
+   *
+   * Everything else goes up. A unique-name clash and a database failure are
+   * not the same thing as a form that does not match its action, and
+   * flattening them together is how a 500 comes to read like a validation
+   * error.
+   */
+  const asTaskProblem = (cause: unknown): never => {
+    if (cause instanceof UnknownActionError) {
+      throw new ProblemError(400, 'unknown-action', 'No such action', cause.message);
+    }
+    if (cause instanceof FormMissingInputError) {
+      throw new ProblemError(
+        400,
+        'form-missing-input',
+        'The form does not ask for what the action needs',
+        cause.message,
+      );
+    }
+    throw cause;
+  };
+
+  /**
+   * The action library: what a delegated task may be made to do.
+   *
+   * A constant in code, served rather than restated in the console, so the
+   * list the form offers and the list the service accepts cannot drift. There
+   * is no entry that takes a command — see `ACTIONS` for why this is a list
+   * rather than a script host.
+   */
+  app.get(
+    '/automate/tasks/actions',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
+    async () => ({
+      actions: Object.values(ACTIONS).map((action) => ({
+        key: action.key,
+        label: action.label,
+        description: action.description,
+        inputs: action.inputs,
+      })),
+    }),
+  );
+
+  app.get(
+    '/automate/tasks',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
+    async (request) => ({ tasks: await request.db((tx) => listTasks(tx)) }),
+  );
+
+  /**
+   * Defining a delegated task is granting authority, so it needs
+   * `AUTOMATE_MANAGE` — the permission that already covers creating products
+   * and workflows.
+   *
+   * Worth saying out loud: whoever holds this can build a task that a
+   * helpdesk user runs against accounts the helpdesk user could not otherwise
+   * touch. What bounds it is that the task can only do what the library does,
+   * and that no run may reach an account more privileged than its runner.
+   */
+  app.post(
+    '/automate/tasks',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_MANAGE) },
+    async (request, reply) => {
+      const body = delegatedTaskRequest.parse(request.body);
+      const created = await request
+        .db((tx) => createTask(tx, body as never))
+        .catch(asTaskProblem);
+
+      await request.db((tx) =>
+        recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'automate.task_created',
+          targetType: 'DelegatedTask',
+          targetId: created.id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { name: created.name, actionKey: created.actionKey },
+        }),
+      );
+      return reply.status(201).send(created);
+    },
+  );
+
+  app.put(
+    '/automate/tasks/:id',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = delegatedTaskRequest.parse(request.body);
+      const saved = await request
+        .db((tx) => updateTask(tx, id, body as never))
+        .catch(asTaskProblem);
+
+      await request.db((tx) =>
+        recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'automate.task_updated',
+          targetType: 'DelegatedTask',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { name: saved.name, actionKey: saved.actionKey, enabled: saved.enabled },
+        }),
+      );
+      return saved;
+    },
+  );
+
+  app.delete(
+    '/automate/tasks/:id',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      await request.db((tx) => deleteTask(tx, id));
+      await request.db((tx) =>
+        recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'automate.task_deleted',
+          targetType: 'DelegatedTask',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: {},
+        }),
+      );
+      return reply.status(204).send();
+    },
+  );
+
+  /**
+   * What this task has done. The evidence that makes delegating safe to agree
+   * to — including the refusals, which are the interesting ones.
+   */
+  app.get(
+    '/automate/tasks/:id/runs',
+    { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const runs = await request.db((tx) =>
+        tx.delegatedTaskRun.findMany({
+          where: { taskId: id },
+          orderBy: { createdAt: 'desc' },
+          take: 100,
+        }),
+      );
+      return { runs };
+    },
+  );
 
   app.get(
     '/automate/products',

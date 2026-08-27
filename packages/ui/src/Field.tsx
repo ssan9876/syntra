@@ -52,7 +52,7 @@ export function Field({
           'disabled:bg-surface-2 disabled:text-muted',
           isInvalid
             ? 'border-danger'
-            : 'border-border-subtle hover:border-border-strong',
+            : 'border-border-control hover:border-border-strong',
         ].join(' ')}
       />
       {hint && !error && (

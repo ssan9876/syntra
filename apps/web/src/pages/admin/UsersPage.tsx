@@ -1,5 +1,16 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Empty,
+  Field,
+  Panel,
+  Select,
+  SkeletonRows,
+  RowActions,
+  Status,
+  Table,
+} from '@syntra/ui';
 import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
 import { ApiError, api } from '../../session/api.js';
@@ -28,6 +39,12 @@ interface UserRow {
    * administrator with no control and no explanation.
    */
   passwordSource?: string;
+  /**
+   * Too many failed sign-ins. Orthogonal to `status`: a locked account is
+   * active and cannot sign in, which is a different sentence from an
+   * inactive one and needs its own label and its own way out.
+   */
+  locked?: boolean;
 }
 
 interface SourceRow {
@@ -51,6 +68,27 @@ export function UsersPage() {
   // row, which would put a block-level trigger and a two-column form inside a
   // table cell.
   const [editing, setEditing] = useState<UserRow | null>(null);
+  /** The row whose unlock is in flight, so only its own button spins. */
+  const [unlocking, setUnlocking] = useState<string | null>(null);
+
+  async function unlock(id: string) {
+    setUnlocking(id);
+    try {
+      await api(`/api/admin/users/${id}/unlock`, { method: 'POST' });
+      reload();
+    } catch (cause) {
+      // Surfaced in the page's own error slot rather than swallowed: an
+      // unlock that quietly did nothing sends the administrator back to the
+      // support call with the same problem.
+      setUnlockError(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That account could not be unlocked. Try again.',
+      );
+    } finally {
+      setUnlocking(null);
+    }
+  }
   // One at a time, like the editor above: a setup link is a credential, and a
   // page holding several of them at once invites pasting the wrong one.
   const [setupLink, setSetupLink] = useState<{
@@ -59,6 +97,7 @@ export function UsersPage() {
     expiresAt: string;
   } | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
   /**
    * FACTOR REMOVAL, which no screen reached.
    *
@@ -143,6 +182,8 @@ export function UsersPage() {
 
       {linkError && <Alert tone="danger">{linkError}</Alert>}
 
+      {unlockError && <Alert tone="danger">{unlockError}</Alert>}
+
       {factorsFor && (
         <div className="mb-6">
           <Panel
@@ -202,7 +243,7 @@ export function UsersPage() {
             aria-label="Password setup link"
             value={setupLink.url}
             onFocus={(e) => e.currentTarget.select()}
-            className="mt-3 w-full rounded border border-line bg-surface px-3 py-2 font-mono text-sm"
+            className="mt-3 w-full rounded border border-border-control bg-surface px-3 py-2 font-mono text-sm"
           />
           <div className="mt-3 flex gap-2">
             <Button
@@ -346,34 +387,40 @@ export function UsersPage() {
           )}
 
           {!loading && data && data.users.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">Name</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Login</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium max-sm:hidden">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Login</th>
+                  <th scope="col" className="max-sm:hidden">
                     Email
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Managed by
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
+                  <th scope="col">Status</th>
+                  {/* The actions column HAD NO HEADER: five `th` over six
+                      `td`. A screen reader announcing this table read every
+                      control in the last column as belonging to "Status".
+                      Visually hidden rather than visible, because the column
+                      needs a name and the header row does not need the word
+                      "Actions" in it. */}
+                  <th scope="col" className="sr-only">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {data.users.map((user) => (
-                  <tr
-                    key={user.id}
-                    className="border-b border-border-subtle last:border-0 transition-colors hover:bg-surface"
-                  >
-                    <td className="px-4 py-2.5 font-medium text-ink">
+                  <tr key={user.id}>
+                    <td className="text-ink">
                       {user.displayName}
                     </td>
-                    <td className="px-4 py-2.5 text-muted">{user.login}</td>
-                    <td className="px-4 py-2.5 text-muted max-sm:hidden">
+                    <td>{user.login}</td>
+                    <td className="max-sm:hidden">
                       {user.email}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td>
                       {!user.sourceId ? (
                         <span className="text-muted">Syntra</span>
                       ) : (
@@ -389,14 +436,19 @@ export function UsersPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td>
                       {/*
                         Inactive accounts stay listed and labelled. Hiding a
                         deactivation to keep the table tidy would make the
                         directory unauditable.
                       */}
                       {user.status === 'active' ? (
-                        <Status tone="active">Active</Status>
+                        <span className="flex flex-wrap items-center gap-2">
+                          <Status tone="active">Active</Status>
+                          {user.locked && (
+                            <Status tone="warning">Locked out</Status>
+                          )}
+                        </span>
                       ) : (
                         <span className="flex flex-wrap items-center gap-2">
                           <Status tone="inactive">Inactive</Status>
@@ -408,20 +460,46 @@ export function UsersPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-right">
+                    <td>
+                      <RowActions
+                        destructive={
+                          can('directory.delete') ? (
+                            <DeleteButton
+                              path={`/api/admin/users/${user.id}`}
+                              label="user"
+                              confirmWord={user.login}
+                              warning="The account is removed from the directory and from Syntra, and every session with it. The person and the audit trail are kept. This cannot be undone."
+                              onDeleted={reload}
+                            />
+                          ) : undefined
+                        }
+                      >
+                      {/*
+                        First, and only while it applies. Somebody is on this
+                        page because of a support call about exactly this, and
+                        a control that appears only when it would do something
+                        is what makes the table readable the rest of the time.
+                      */}
+                      {user.locked && (
+                        <Button
+                            size="sm"
+                            variant="secondary"
+                            loading={unlocking === user.id}
+                            onClick={() => void unlock(user.id)}
+                          >
+                            Unlock
+                        </Button>
+                      )}
                       {user.sourceId === null && (
-                        <span className="mr-2 inline-block align-middle">
-                          <Button
+                        <Button
                             size="sm"
                             variant="secondary"
                             onClick={() => setEditing(user)}
                           >
                             Edit
-                          </Button>
-                        </span>
+                        </Button>
                       )}
-                      <span className="mr-2 inline-block align-middle">
-                        <Button
+                      <Button
                           size="sm"
                           variant="secondary"
                           onClick={() => {
@@ -431,7 +509,6 @@ export function UsersPage() {
                         >
                           Factors
                         </Button>
-                      </span>
                       {/*
                         Offered for a synced account as well as a local one:
                         a directory-owned user still authenticates against
@@ -440,8 +517,7 @@ export function UsersPage() {
                         somewhere else entirely, who cannot use it.
                       */}
                       {user.passwordSource !== 'upstream' && (
-                        <span className="mr-2 inline-block align-middle">
-                          <Button
+                        <Button
                             size="sm"
                             variant="secondary"
                             onClick={async () => {
@@ -468,8 +544,7 @@ export function UsersPage() {
                             }}
                           >
                             Password link
-                          </Button>
-                        </span>
+                        </Button>
                       )}
                       {user.sourceId === null || writesDisable.has(user.sourceId) ? (
                         // A source-owned account used to be refused here, and
@@ -507,27 +582,18 @@ export function UsersPage() {
                           owns this account, and write-back is off
                         </span>
                       )}
-                      {/* Offered second, and only to a caller holding the
-                          separate permission. Deactivation is the answer for
-                          a leaver; this is for an account that should stop
-                          existing, and the server refuses it anyway for a
-                          source not configured to allow it. */}
-                      {can('directory.delete') && (
-                        <span className="mt-2 block">
-                          <DeleteButton
-                            path={`/api/admin/users/${user.id}`}
-                            label="user"
-                            confirmWord={user.login}
-                            warning="The account is removed from the directory and from Syntra, and every session with it. The person and the audit trail are kept. This cannot be undone."
-                            onDeleted={reload}
-                          />
-                        </span>
-                      )}
+                      {/* Deletion is passed to `RowActions` as its
+                          `destructive` slot rather than listed here, so it
+                          arrives behind a rule at the end of the row.
+                          Previously it was a block-level element inside the
+                          same cell, which pushed it onto its own line and made
+                          every row holding one taller than its neighbours. */}
+                      </RowActions>
                     </td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

@@ -5,6 +5,7 @@ import {
   Panel,
   SkeletonRows,
   Status,
+  Table,
   buttonClasses,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
@@ -27,8 +28,21 @@ interface TargetRow {
 const when = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString() : 'Never run';
 
-/** How each connector type reads on the list, so targets are distinguishable at a glance. */
-const typeLabel = (type: string) => (type === 'scim2' ? 'SCIM 2.0' : 'Active Directory');
+/**
+ * How each connector type reads on the list, so targets are distinguishable
+ * at a glance.
+ *
+ * A record rather than a chain of ternaries: the previous shape read
+ * "anything that is not scim2 is Active Directory", which labelled a third
+ * connector type as the wrong system rather than as an unknown one.
+ */
+const TYPE_LABELS: Record<string, string> = {
+  activeDirectory: 'Active Directory',
+  scim2: 'SCIM 2.0',
+  httpJson: 'REST API',
+};
+
+const typeLabel = (type: string) => TYPE_LABELS[type] ?? type;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -221,18 +235,18 @@ export function TargetsPage() {
           )}
 
           {!loading && data && data.targets.length > 0 && (
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-2">
-                <tr className="text-sm text-muted">
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">
                     Name
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Enforcement
                   </th>
                   <th
                     scope="col"
-                    className="px-4 py-2.5 font-medium max-sm:hidden"
+                    className="max-sm:hidden"
                   >
                     Schedule
                   </th>
@@ -240,10 +254,10 @@ export function TargetsPage() {
                       the Status column's judgement is made from, and hiding it
                       on the screens most likely to be in somebody's hand left
                       the badge unfalsifiable. */}
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Last run
                   </th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">
+                  <th scope="col">
                     Status
                   </th>
                 </tr>
@@ -252,11 +266,8 @@ export function TargetsPage() {
                 {data.targets.map((target) => {
                   const state = health(target, now);
                   return (
-                    <tr
-                      key={target.id}
-                      className="border-b border-border-subtle last:border-0"
-                    >
-                      <td className="px-4 py-2.5">
+                    <tr key={target.id}>
+                      <td>
                         <Link
                           to={`/admin/targets/${target.id}`}
                           className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
@@ -267,7 +278,7 @@ export function TargetsPage() {
                           <Status tone="neutral">{typeLabel(target.type)}</Status>
                         </span>
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td>
                         {/* Ruling P2: the mode is per target and visible on
                             the target's own screen. Authoritative is the mode
                             that removes what Provision did not grant, so it
@@ -282,13 +293,13 @@ export function TargetsPage() {
                           {target.enforcementMode}
                         </Status>
                       </td>
-                      <td className="px-4 py-2.5 text-muted max-sm:hidden">
+                      <td className="max-sm:hidden">
                         {target.schedule ?? 'By hand only'}
                       </td>
-                      <td className="px-4 py-2.5 text-muted">
+                      <td>
                         {when(target.lastRunAt)}
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td>
                         <span title={state.title}>
                           <Status tone={state.tone}>{state.label}</Status>
                         </span>
@@ -297,7 +308,7 @@ export function TargetsPage() {
                   );
                 })}
               </tbody>
-            </table>
+            </Table>
           )}
         </Panel>
       )}

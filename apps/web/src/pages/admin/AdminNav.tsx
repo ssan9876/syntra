@@ -60,6 +60,7 @@ const GROUPS: NavGroup[] = [
       { to: '/admin/automate/workflows', label: 'Approval workflows', permission: 'automate.read' },
       { to: '/admin/automate/requests', label: 'Request queue', permission: 'automate.read' },
       { to: '/admin/automate/sweeps', label: 'Expiry sweeps', permission: 'automate.read' },
+      { to: '/admin/automate/tasks', label: 'Delegated tasks', permission: 'automate.read' },
     ],
   },
   {
@@ -81,8 +82,13 @@ const GROUPS: NavGroup[] = [
     items: [
       // `rbac.manage`, which until the role API existed gated nothing at all.
       { to: '/admin/roles', label: 'Roles', permission: 'rbac.manage' },
+      // FIRST in System, and deliberately: it is the only entry here somebody
+      // opens without already knowing what they are looking for.
+      { to: '/admin/incidents', label: 'What needs attention', permission: 'audit.read' },
       { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
       { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
+      { to: '/admin/branding', label: 'Branding', permission: 'tenant.manage' },
+      { to: '/admin/webhooks', label: 'Webhooks', permission: 'tenant.manage' },
       // `deployment.manage`, not `tenant.manage`: this updates the
       // installation every tenant shares, not one tenant's configuration.
       { to: '/admin/updates', label: 'Updates', permission: 'deployment.manage' },

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
 import { Wordmark } from '../components/Wordmark.js';
+import { useT } from '../i18n/LocaleProvider.js';
 import {
   challengeFromQuery,
   isServerPath,
@@ -22,6 +23,7 @@ interface Enrolment {
 }
 
 export function EnrolFactor() {
+  const t = useT();
   const navigate = useNavigate();
   const { refresh } = useSession();
 
@@ -99,15 +101,23 @@ export function EnrolFactor() {
    */
   function handedBack(outcome: AuthOutcome): boolean {
     if (outcome.status === 'authenticated') return false;
-    const kind = outcome.status === 'enrol' ? 'enrol' : 'verify';
+    const kind =
+      outcome.status === 'enrol'
+        ? 'enrol'
+        : outcome.status === 'renew'
+          ? 'renew'
+          : 'verify';
     const next: PendingChallenge = {
       kind,
       attemptToken: outcome.attemptToken,
       expiresAt: outcome.expiresAt,
+      // A renewal offers no choice of factor, so it carries none.
       factors:
         outcome.status === 'enrol'
           ? outcome.enrollableFactors
-          : outcome.acceptableFactors,
+          : outcome.status === 'renew'
+            ? []
+            : outcome.acceptableFactors,
       returnTo: challenge!.returnTo,
     };
     storeChallenge(next);
@@ -202,42 +212,34 @@ export function EnrolFactor() {
       <div className="w-full max-w-sm">
         <Wordmark className="mb-8" />
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
-          <h1 className="text-lg font-semibold text-ink">Set up a second factor</h1>
-          <p className="mt-1 text-muted">
-            Your organization now requires one. It takes a minute, and you will
-            be signed in straight afterwards.
-          </p>
+          <h1 className="text-lg font-semibold text-ink">{t('enrol.title')}</h1>
+          <p className="mt-1 text-muted">{t('enrol.lead')}</p>
 
           {mode === 'totp' && (
             <div className="mt-6 space-y-4">
               {!enrolment && (
                 <>
-                  <p className="text-muted">
-                    Use an authenticator app — the one your organization
-                    recommends, or any that shows six-digit codes.
-                  </p>
+                  <p className="text-muted">{t('enrol.totp_lead')}</p>
                   <Button variant="primary" loading={busy} className="w-full" onClick={beginTotp}>
-                    Start
+                    {t('enrol.start')}
                   </Button>
                 </>
               )}
 
               {enrolment && (
                 <form onSubmit={confirmTotp} noValidate className="space-y-4">
-                  <p className="text-muted">
-                    Scan this with your app, then type the code it shows.
-                  </p>
+                  <p className="text-muted">{t('enrol.scan')}</p>
                   <img
                     src={enrolment.qr}
-                    alt="QR code for your authenticator app"
+                    alt={t('enrol.qr_alt')}
                     className="size-48 rounded-control border border-border-subtle"
                   />
                   <p className="text-sm text-muted">
-                    Cannot scan? Enter this key instead:{' '}
+                    {t('enrol.cannot_scan')}{' '}
                     <code className="font-mono text-ink">{enrolment.secret}</code>
                   </p>
                   <Field
-                    label="Six-digit code"
+                    label={t('mfa.totp_code')}
                     value={code}
                     onChange={setCode}
                     inputMode="numeric"
@@ -247,7 +249,7 @@ export function EnrolFactor() {
                     invalid={Boolean(error)}
                   />
                   <Button type="submit" variant="primary" loading={busy} className="w-full">
-                    Confirm
+                    {t('enrol.confirm')}
                   </Button>
                 </form>
               )}
@@ -256,13 +258,10 @@ export function EnrolFactor() {
 
           {mode === 'webauthn' && (
             <div className="mt-6 space-y-4">
-              <p className="text-muted">
-                Use a security key, or the fingerprint or face unlock built into
-                this device.
-              </p>
-              <Field label="Name this key" value={label} onChange={setLabel} />
+              <p className="text-muted">{t('enrol.webauthn_lead')}</p>
+              <Field label={t('enrol.name_key')} value={label} onChange={setLabel} />
               <Button variant="primary" loading={busy} className="w-full" onClick={addKey}>
-                Continue
+                {t('common.continue')}
               </Button>
             </div>
           )}
@@ -284,7 +283,7 @@ export function EnrolFactor() {
                   setMode(mode === 'totp' ? 'webauthn' : 'totp');
                 }}
               >
-                {mode === 'totp' ? 'Use a security key instead' : 'Use an app instead'}
+                {mode === 'totp' ? t('enrol.switch_to_key') : t('enrol.switch_to_app')}
               </Button>
             </div>
           )}

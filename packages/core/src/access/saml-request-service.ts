@@ -9,6 +9,14 @@ export interface ParkedAuthnRequest {
   requestId: string | null;
   acsUrl: string;
   relayState: string | null;
+  /**
+   * Which protocol asked: `'saml'` or `'wsfed'`.
+   *
+   * Decided when the request was parked, never re-derived. An application
+   * reachable over both would otherwise answer a WS-Fed sign-in with a SAML
+   * Response as soon as somebody enabled SAML on it.
+   */
+  protocol: 'saml' | 'wsfed';
   forceAuthn: boolean;
   /**
    * When the request was parked.
@@ -55,6 +63,7 @@ export async function parkAuthnRequest(
         requestId: input.requestId,
         acsUrl: input.acsUrl,
         relayState: input.relayState,
+        protocol: input.protocol,
         forceAuthn: input.forceAuthn,
         browserBinding: input.browserBinding,
         expiresAt: new Date(Date.now() + (input.ttlMs ?? DEFAULT_TTL_MS)),
@@ -68,10 +77,22 @@ export async function parkAuthnRequest(
     requestId: row.requestId,
     acsUrl: row.acsUrl,
     relayState: row.relayState,
+    protocol: asProtocol(row.protocol),
     forceAuthn: row.forceAuthn,
     createdAt: row.createdAt,
   };
 }
+
+/**
+ * A stored protocol string, narrowed.
+ *
+ * Anything unrecognised reads as `'saml'` — the default the column carries and
+ * the shape every row written before WS-Fed existed has. Throwing instead
+ * would turn a stray value into a sign-in that cannot complete, and there is
+ * no value here an attacker chooses.
+ */
+const asProtocol = (value: string): 'saml' | 'wsfed' =>
+  value === 'wsfed' ? 'wsfed' : 'saml';
 
 /**
  * The parked request a handle names, if the browser presenting it is the one
@@ -104,6 +125,7 @@ export async function findParkedAuthnRequest(
       requestId: row.requestId,
       acsUrl: row.acsUrl,
       relayState: row.relayState,
+      protocol: asProtocol(row.protocol),
       forceAuthn: row.forceAuthn,
     createdAt: row.createdAt,
     };

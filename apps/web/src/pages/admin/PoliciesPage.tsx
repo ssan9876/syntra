@@ -3,6 +3,7 @@ import { Alert, Button, Empty, Field, Panel, SkeletonRows, Status } from '@syntr
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { CountryPicker, DEVICE_OPTIONS, DevicePicker, countryName } from './policy-conditions.js';
 // The CONTRACT, not a local restatement. The API builds this response by hand
 // and this file described it independently, so the two could drift with
 // nothing anywhere to notice -- which is the whole reason the schema exists.
@@ -16,12 +17,14 @@ interface Rule {
   enabled: boolean;
   position: number;
   outcome: 'allow' | 'require_mfa' | 'require_factor' | 'deny';
-  factorType: 'totp' | 'webauthn' | null;
+  factorType: 'totp' | 'webauthn' | 'email_otp' | null;
   applicationIds: string[];
   groupIds: string[];
   contractField: string | null;
   contractValues: string[];
   ipRanges: string[];
+  devicePlatforms: string[];
+  countries: string[];
   daysOfWeek: number[];
   startMinute: number | null;
   endMinute: number | null;
@@ -67,6 +70,16 @@ function conditions(rule: Rule): string[] {
     parts.push(`${rule.contractField} is ${rule.contractValues.join(' or ')}`);
   }
   if (rule.ipRanges.length > 0) parts.push(`from ${rule.ipRanges.join(', ')}`);
+  if (rule.devicePlatforms.length > 0) {
+    parts.push(
+      `on ${rule.devicePlatforms
+        .map((p) => DEVICE_OPTIONS.find((o) => o.value === p)?.label ?? p)
+        .join(' or ')}`,
+    );
+  }
+  if (rule.countries.length > 0) {
+    parts.push(`in ${rule.countries.map(countryName).join(' or ')}`);
+  }
   if (rule.daysOfWeek.length > 0) {
     parts.push(`on ${rule.daysOfWeek.map((d) => DAYS[d]).join(', ')}`);
   }
@@ -95,8 +108,12 @@ export function PoliciesPage() {
 
   const [name, setName] = useState('');
   const [outcome, setOutcome] = useState<Rule['outcome']>('require_mfa');
-  const [factorType, setFactorType] = useState<'totp' | 'webauthn'>('webauthn');
+  const [factorType, setFactorType] = useState<'totp' | 'webauthn' | 'email_otp'>(
+    'webauthn',
+  );
   const [ipRanges, setIpRanges] = useState('');
+  const [devicePlatforms, setDevicePlatforms] = useState<string[]>([]);
+  const [countries, setCountries] = useState<string[]>([]);
   const [contractField, setContractField] = useState('');
   const [contractValues, setContractValues] = useState('');
   const [impact, setImpact] = useState<RuleImpactResponse | null>(null);
@@ -112,6 +129,8 @@ export function PoliciesPage() {
     outcome,
     factorType: outcome === 'require_factor' ? factorType : null,
     ipRanges: list(ipRanges),
+    devicePlatforms,
+    countries,
     contractField: contractField || null,
     contractValues: list(contractValues),
   });
@@ -158,6 +177,8 @@ export function PoliciesPage() {
       setAdding(false);
       setName('');
       setIpRanges('');
+      setDevicePlatforms([]);
+      setCountries([]);
       setContractField('');
       setContractValues('');
       setImpact(null);
@@ -247,7 +268,7 @@ export function PoliciesPage() {
                 id="policy-outcome"
                 value={outcome}
                 onChange={(e) => setOutcome(e.target.value as Rule['outcome'])}
-                className="h-9 w-full rounded-control border border-border-subtle bg-bg px-3 text-ink"
+                className="h-9 w-full rounded-control border border-border-control bg-bg px-3 text-ink"
               >
                 {(Object.keys(OUTCOME_LABEL) as Rule['outcome'][]).map((value) => (
                   <option key={value} value={value}>
@@ -265,11 +286,14 @@ export function PoliciesPage() {
                 <select
                   id="policy-factor"
                   value={factorType}
-                  onChange={(e) => setFactorType(e.target.value as 'totp' | 'webauthn')}
-                  className="h-9 w-full rounded-control border border-border-subtle bg-bg px-3 text-ink"
+                  onChange={(e) =>
+                    setFactorType(e.target.value as 'totp' | 'webauthn' | 'email_otp')
+                  }
+                  className="h-9 w-full rounded-control border border-border-control bg-bg px-3 text-ink"
                 >
                   <option value="webauthn">Security key or passkey</option>
                   <option value="totp">Authenticator app</option>
+                  <option value="email_otp">Emailed code</option>
                 </select>
                 {factorType === 'webauthn' && (
                   <p className="mt-1.5 text-sm text-muted">
@@ -287,6 +311,17 @@ export function PoliciesPage() {
               onChange={setIpRanges}
               hint="CIDR ranges or single addresses, comma separated. Leave empty to match any address."
             />
+            <DevicePicker value={devicePlatforms} onChange={setDevicePlatforms} />
+            {outcome === 'deny' && devicePlatforms.length > 0 && (
+              <Alert tone="warning" title="A device is what the browser claims to be">
+                <p>
+                  Anyone can change it. This will stop an ordinary user on that
+                  device and will not stop someone who wants through.
+                </p>
+              </Alert>
+            )}
+            <CountryPicker value={countries} onChange={setCountries} />
+
             <Field
               label="Contract field"
               value={contractField}

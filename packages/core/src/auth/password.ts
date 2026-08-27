@@ -45,12 +45,48 @@ export async function setPasswordHash(
   tx: TenantClient,
   userId: string,
   hash: string,
+  opts: { now?: Date } = {},
 ): Promise<void> {
   const tenantId = await currentTenant(tx);
+  const now = opts.now ?? new Date();
+
+  const existing = await tx.passwordCredential.findUnique({
+    where: { userId },
+    select: { hash: true },
+  });
+
+  // Filing the outgoing hash happens HERE rather than in the two callers,
+  // because this function's own docstring is the reason: one entry point that
+  // cannot do the wrong thing beats two that explain which is which. A reuse
+  // check that a third caller could forget to feed is not a reuse check.
+  if (existing) {
+    const { passwordHistoryDepth } = await tx.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: { passwordHistoryDepth: true },
+    });
+    if (passwordHistoryDepth > 0) {
+      await tx.passwordHistory.create({
+        data: { tenantId, userId, hash: existing.hash },
+      });
+      // Trim to the tenant's depth. An unbounded history is a growing pile of
+      // hashes protecting nothing: a password nobody remembers is one nobody
+      // will retype.
+      const keep = await tx.passwordHistory.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: passwordHistoryDepth,
+        select: { id: true },
+      });
+      await tx.passwordHistory.deleteMany({
+        where: { userId, id: { notIn: keep.map((r) => r.id) } },
+      });
+    }
+  }
+
   await tx.passwordCredential.upsert({
     where: { userId },
-    create: { tenantId, userId, hash },
-    update: { hash },
+    create: { tenantId, userId, hash, changedAt: now },
+    update: { hash, changedAt: now },
   });
 }
 

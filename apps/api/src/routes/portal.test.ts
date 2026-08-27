@@ -126,8 +126,14 @@ describe('GET /api/portal/applications', () => {
         slug: 'crm',
         description: 'Customer records',
         iconUrl: null,
+        // The portal groups tiles under this. Null puts it with the rest.
+        category: null,
       },
     ]);
+    // `toEqual` on the whole object is deliberate and stays: it is what caught
+    // `category` being added to the contract, and it is what would catch a
+    // field being added that should not reach a tile at all — `launchUrl`
+    // above all, which the next case is about.
   });
 
   it('never returns the launch URL in the tile list', async () => {

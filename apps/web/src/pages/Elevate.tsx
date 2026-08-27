@@ -41,15 +41,23 @@ export function Elevate() {
       // The handoff is the login page's, with one difference: the return is to
       // wherever the guard bounced them from, so satisfying the factor does not
       // also cost them their place.
-      const kind = outcome.status === 'enrol' ? 'enrol' : 'verify';
+      const kind =
+        outcome.status === 'enrol'
+          ? 'enrol'
+          : outcome.status === 'renew'
+            ? 'renew'
+            : 'verify';
       storeChallenge({
         kind,
         attemptToken: outcome.attemptToken,
         expiresAt: outcome.expiresAt,
+        // A renewal offers no choice of factor, so it carries none.
         factors:
           outcome.status === 'enrol'
             ? outcome.enrollableFactors
-            : outcome.acceptableFactors,
+            : outcome.status === 'renew'
+              ? []
+              : outcome.acceptableFactors,
         returnTo: intended,
       });
       navigate(routeFor(kind), { replace: true });

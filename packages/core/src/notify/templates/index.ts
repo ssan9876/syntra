@@ -24,6 +24,20 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nA {{factor}} was added to your account on {{when}}, from {{sourceIp}}.\n\nIf that was you, nothing further is needed. If it was not, contact your administrator immediately and change your password — a second factor added by someone else survives a password change, so the factor has to be removed too.',
     html: '<p>Hello {{displayName}},</p><p>A <strong>{{factor}}</strong> was added to your account on {{when}}, from {{sourceIp}}.</p><p>If that was you, nothing further is needed. If it was not, contact your administrator immediately and change your password — a second factor added by someone else survives a password change, so the factor has to be removed too.</p>',
   },
+  /**
+   * The sign-in code itself.
+   *
+   * Says what to do if it was not you, and deliberately does NOT name the
+   * application or the address it was requested from: this mail reaches
+   * somebody who may not have asked for it, and the useful facts are 'a code
+   * exists' and 'ignore it if you did not ask' — not a description of
+   * whoever is trying to get in.
+   */
+  'email-otp': {
+    subject: 'Your {{tenantName}} sign-in code',
+    text: 'Hello {{displayName}},\n\nYour code is {{code}}. It works for the next {{minutes}} minutes and once only.\n\nIf you did not ask to sign in, ignore this message and tell your administrator — somebody has your password.',
+    html: '<p>Hello {{displayName}},</p><p>Your code is <strong>{{code}}</strong></p><p>It works for the next {{minutes}} minutes and once only.</p><p>If you did not ask to sign in, ignore this message and tell your administrator — somebody has your password.</p>',
+  },
   'factor-removed': {
     subject: 'A second factor was removed from your {{tenantName}} account',
     text: 'Hello {{displayName}},\n\nA {{factor}} was removed from your account on {{when}}, from {{sourceIp}}.{{codesNote}}\n\nIf that was you, nothing further is needed. If it was not, change your password and contact your administrator immediately \u2014 removing a factor is what an attacker holding your session does before they do anything else, and it is the step nobody notices.',

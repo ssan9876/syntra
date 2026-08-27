@@ -1,5 +1,5 @@
 import type { TenantClient } from '@syntra/db';
-import type { FactorType } from '../../policy/types.js';
+import { FACTOR_TYPES, type FactorType } from '../../policy/types.js';
 import type {
   FactorPresentation,
   FactorPresentationType,
@@ -38,7 +38,12 @@ export async function enrolledFactorTypes(
   userId: string,
 ): Promise<FactorType[]> {
   const found: FactorType[] = [];
-  for (const type of ['totp', 'webauthn'] as const) {
+  // `FACTOR_TYPES`, not a literal pair. The docstring above says adding a
+  // factor means adding an entry to this registry and never editing
+  // `authorize()` — which was true of the chokepoint and not of these two
+  // functions, where a third type would have been silently unenrollable and
+  // silently uncounted.
+  for (const type of FACTOR_TYPES) {
     const verifier = VERIFIERS.get(type);
     if (verifier && (await verifier.enrolled(tx, userId))) found.push(type);
   }
@@ -52,7 +57,7 @@ export async function enrolledFactorTypes(
  * challenge nobody can answer.
  */
 export function enrollableFactorTypes(): FactorType[] {
-  return (['totp', 'webauthn'] as const).filter((type) => {
+  return FACTOR_TYPES.filter((type) => {
     const verifier = VERIFIERS.get(type);
     return Boolean(verifier?.enrollable);
   });

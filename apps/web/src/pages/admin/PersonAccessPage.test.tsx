@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PersonAccessPage } from './PersonAccessPage.js';
 
@@ -372,5 +373,154 @@ describe('PersonAccessPage', () => {
     expect(await screen.findByText('Granted by hand')).toBeVisible();
     expect(screen.getAllByText('—')).toHaveLength(2);
     expect(screen.queryByText('nothing asks for this now')).toBeNull();
+  });
+});
+
+/**
+ * A fetch that answers per URL, for the placement control.
+ *
+ * The blanket `mockFetch` above answers every request with the access body,
+ * which reads as "no placement" and is exactly right for the tests that do not
+ * care. These do.
+ */
+function mockPlacement(options: {
+  placement?: { container: string; reason: string; updatedAt: string } | null;
+  containers?: string[];
+  put?: () => Response;
+}) {
+  const sent: { url: string; method: string; body: unknown }[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    if (method !== 'GET') {
+      sent.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return Promise.resolve(
+        options.put ? (options.put() as never) : json({ moved: true, message: 'moved' }),
+      );
+    }
+    if (url.includes('/containers')) {
+      return Promise.resolve(json({ containers: options.containers ?? [] }));
+    }
+    if (url.includes('/placements/')) {
+      return Promise.resolve(json({ placement: options.placement ?? null }));
+    }
+    return Promise.resolve(json({ personId: 'p1', accounts: [account()] }));
+  });
+  return sent;
+}
+
+describe('the placement control', () => {
+  it('says the account follows the rule when nothing has moved it', async () => {
+    mockPlacement({});
+    renderPage();
+    expect(await screen.findByText(/placed by the rule/i)).toBeVisible();
+  });
+
+  it('shows what moved it, and why, when something did', async () => {
+    // A placement is a standing disagreement with the rule. "Who moved this
+    // and why" is the only question anybody asks about one.
+    mockPlacement({
+      placement: {
+        container: 'OU=Engineering,OU=Company,DC=acme,DC=test',
+        reason: 'seconded to the platform team',
+        updatedAt: '2026-08-26T12:00:00.000Z',
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByText(/moved by hand/i)).toBeVisible();
+    expect(screen.getByText('OU=Engineering,OU=Company,DC=acme,DC=test')).toBeVisible();
+    expect(screen.getByText('seconded to the platform team')).toBeVisible();
+  });
+
+  it('reads the containers from the target only when the form is opened', async () => {
+    const user = userEvent.setup();
+    mockPlacement({ containers: ['OU=Finance,DC=acme,DC=test'] });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /^move$/i }));
+    // Provision creates no containers, so this is the closed set an account
+    // may go to — and reading it up front would be a live call to every
+    // target on every page load, for a control most visits never touch.
+    expect(await screen.findByRole('option', { name: 'OU=Finance,DC=acme,DC=test' })).toBeInTheDocument();
+  });
+
+  it('will not move without a reason', async () => {
+    const user = userEvent.setup();
+    mockPlacement({ containers: ['OU=Finance,DC=acme,DC=test'] });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /^move$/i }));
+    await user.selectOptions(
+      await screen.findByLabelText(/container/i),
+      'OU=Finance,DC=acme,DC=test',
+    );
+    // A reason nobody had to give is a reason nobody gives.
+    expect(screen.getAllByRole('button', { name: /^move$/i }).at(-1)).toBeDisabled();
+  });
+
+  it('sends the container and the reason', async () => {
+    const user = userEvent.setup();
+    const sent = mockPlacement({ containers: ['OU=Finance,DC=acme,DC=test'] });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /^move$/i }));
+    await user.selectOptions(
+      await screen.findByLabelText(/container/i),
+      'OU=Finance,DC=acme,DC=test',
+    );
+    await user.type(screen.getByLabelText(/why/i), 'moved after the reorg');
+    await user.click(screen.getAllByRole('button', { name: /^move$/i }).at(-1)!);
+
+    await waitFor(() =>
+      expect(sent[0]).toMatchObject({
+        method: 'PUT',
+        body: { container: 'OU=Finance,DC=acme,DC=test', reason: 'moved after the reorg' },
+      }),
+    );
+  });
+
+  it('says the move is recorded when the directory refused it', async () => {
+    const user = userEvent.setup();
+    mockPlacement({
+      containers: ['OU=Finance,DC=acme,DC=test'],
+      put: () =>
+        json({
+          moved: false,
+          message: 'the server is unwilling to perform. The move is recorded and the next run will retry it.',
+        }) as unknown as Response,
+    });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /^move$/i }));
+    await user.selectOptions(
+      await screen.findByLabelText(/container/i),
+      'OU=Finance,DC=acme,DC=test',
+    );
+    await user.type(screen.getByLabelText(/why/i), 'moved after the reorg');
+    await user.click(screen.getAllByRole('button', { name: /^move$/i }).at(-1)!);
+
+    // Not an error. The decision is stored and the next run retries it, and
+    // saying "that failed" would tell the administrator their decision was
+    // lost when it was not.
+    expect(await screen.findByText(/next run will retry it/i)).toBeVisible();
+  });
+
+  it('offers to hand the person back to the rule', async () => {
+    const user = userEvent.setup();
+    const sent = mockPlacement({
+      placement: {
+        container: 'OU=Engineering,DC=acme,DC=test',
+        reason: 'seconded',
+        updatedAt: '2026-08-26T12:00:00.000Z',
+      },
+    });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /follow the rule/i }));
+    await waitFor(() => expect(sent[0]?.method).toBe('DELETE'));
+    // Nothing moves now: the next run computes the rule's answer and proposes
+    // the move, in a plan somebody reviews.
+    expect(await screen.findByText(/on its next run/i)).toBeVisible();
   });
 });
