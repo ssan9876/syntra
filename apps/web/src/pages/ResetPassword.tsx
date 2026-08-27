@@ -12,6 +12,8 @@ interface Preflight {
   acceptableFactors: string[];
 }
 
+const MIN_PASSWORD = 12;
+
 export function ResetPassword() {
   const t = useT();
   const [params] = useSearchParams();
@@ -113,7 +115,19 @@ export function ResetPassword() {
               autoComplete="new-password"
               autoFocus
               required
-              hint={t('reset.hint')}
+              warning={
+                // The length rule, shown while it is being broken and silent
+                // once it is met. As a permanent hint this sat under the box
+                // for everybody, including the reader who had already typed
+                // a good password — so the one person who needed it read it
+                // in the same grey as the person who did not.
+                //
+                // Not shown on an empty box either: somebody who has not
+                // started typing has not got it wrong yet.
+                password.length > 0 && password.length < MIN_PASSWORD
+                  ? t('reset.too_short')
+                  : undefined
+              }
             />
 
             {preflight?.requiresFactor && factorMode !== 'webauthn' && (
@@ -123,7 +137,6 @@ export function ResetPassword() {
                 onChange={setFactorCode}
                 autoComplete="one-time-code"
                 required
-                hint={t('reset.factor_hint')}
               />
             )}
             {preflight?.requiresFactor && factorMode === 'webauthn' && (

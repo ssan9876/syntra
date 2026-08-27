@@ -169,7 +169,6 @@ export function UpdatesPage() {
     <>
       <PageHeader
         title="Updates"
-        description="The version this deployment is running, and what is available."
       />
 
       {error && (

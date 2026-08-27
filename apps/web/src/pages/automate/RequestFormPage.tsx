@@ -182,7 +182,6 @@ export function RequestFormPage() {
                 label="Why do you need this?"
                 value={justification}
                 onChange={setJustification}
-                hint="Whoever decides this will read exactly what you write here."
               />
 
               {data.durationMode === 'requesterChoice' && (
@@ -191,7 +190,6 @@ export function RequestFormPage() {
                   value={days}
                   onChange={setDays}
                   type="number"
-                  hint={`Up to ${data.maxDurationDays ?? 0} days.`}
                 />
               )}
 

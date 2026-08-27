@@ -123,7 +123,6 @@ export function SweepDetailPage() {
             <div className="mt-6">
               <Panel
                 title="People it could not understand"
-                description="Nothing of theirs was touched. A person the system cannot understand produces no actions."
               >
                 <ul className="divide-y divide-border-subtle">
                   {data.exceptions.map((exception) => (

@@ -29,7 +29,7 @@ export function StatusToggle({
   active,
   basePath,
   label,
-  reasonPrompt,
+  consequences,
   onChanged,
 }: {
   active: boolean;
@@ -37,7 +37,7 @@ export function StatusToggle({
   basePath: string;
   /** What is being deactivated, for the confirmation: "group", "person". */
   label: string;
-  reasonPrompt: string;
+  consequences: string;
   onChanged(): void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -81,11 +81,16 @@ export function StatusToggle({
       // column past the viewport and put a horizontal scrollbar on the page.
       <div className="flex w-full flex-col items-stretch gap-2 text-left">
         {problem && <Alert tone="danger">{problem}</Alert>}
+        {/* What this press actually does, at the weight of the thing it does.
+            This used to be the Reason field's `hint` — grey caption text,
+            under the box, the quietest thing in a form whose only button is
+            destructive. A confirmation that lists consequences in the style
+            of placeholder text is a confirmation people click through. */}
+        <Alert tone="warning">{consequences}</Alert>
         <Field
           label="Reason"
           value={reason}
           onChange={setReason}
-          hint={reasonPrompt}
         />
         <div className="flex justify-end gap-2">
           <Button

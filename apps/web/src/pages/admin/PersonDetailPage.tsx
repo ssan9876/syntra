@@ -74,17 +74,11 @@ export function PersonDetailPage() {
     <>
       <PageHeader
         title={`${data.givenName} ${data.familyName}`}
-        description={
-          data.externalId
-            ? `Source reference ${data.externalId}`
-            : 'No source reference recorded'
-        }
       />
 
       <div className="space-y-6">
         <Panel
           title="Contracts"
-          description="Every engagement this person holds, including concurrent ones."
         >
           {data.contracts.length === 0 ? (
             <div className="p-6">
@@ -187,7 +181,6 @@ export function PersonDetailPage() {
                     value={v.department ?? ''}
                     onChange={(x) => set('department', x)}
                     error={errs.department}
-                    hint="Business rules match on this, and the account's container in the directory is built from it."
                     placeholder="Nursing"
                   />
                   <Field
@@ -203,7 +196,6 @@ export function PersonDetailPage() {
                     value={v.endDate ?? ''}
                     onChange={(x) => set('endDate', x)}
                     error={errs.endDate}
-                    hint="Leave empty for an open-ended engagement."
                   />
                   <Field
                     label="Cost centre"
@@ -228,7 +220,6 @@ export function PersonDetailPage() {
                     value={v.fte ?? ''}
                     onChange={(x) => set('fte', x)}
                     error={errs.fte}
-                    hint="Between 0 and 2. Rules can compare on it."
                     placeholder="1.0"
                   />
                 </>
@@ -239,7 +230,6 @@ export function PersonDetailPage() {
 
         <Panel
           title="Accounts"
-          description="The logins this person signs in with. One person may hold several."
         >
           {data.users.length === 0 ? (
             <div className="p-6">
@@ -285,7 +275,6 @@ export function PersonDetailPage() {
                   value={v.userId ?? ''}
                   onChange={(x) => set('userId', x)}
                   error={errs.userId}
-                  hint="Only accounts not already linked to a person are listed."
                   options={[
                     { value: '', label: 'Choose an account' },
                     ...unlinked.map((u) => ({ value: u.id, label: u.login })),
@@ -306,15 +295,11 @@ export function PersonDetailPage() {
             >
               Why does this person hold what they hold?
             </Link>
-            <p className="mt-1 text-muted">
-              Every target-system account and entitlement, with the rule and the
-              contract behind it.
-            </p>
           </div>
         </Panel>
 
         <Link
-          to="/admin/people"
+          to="/admin/users?tab=people"
           className="inline-block text-muted underline-offset-2 hover:text-ink hover:underline"
         >
           Back to people

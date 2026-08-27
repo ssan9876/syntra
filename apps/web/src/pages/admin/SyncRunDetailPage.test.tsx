@@ -401,6 +401,6 @@ describe('SyncRunDetailPage', () => {
 
     expect(
       await screen.findByRole('link', { name: /back to sync runs/i }),
-    ).toHaveAttribute('href', '/admin/sync-runs');
+    ).toHaveAttribute('href', '/admin/sources?tab=runs');
   });
 });

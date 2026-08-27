@@ -352,9 +352,14 @@ describe('the bind password', () => {
     const password = screen.getByLabelText('Bind password');
     expect(password).toHaveValue('');
     expect(password).toHaveAttribute('type', 'password');
-    expect(
-      screen.getByText(/leave blank to keep the stored password/i),
-    ).toBeInTheDocument();
+    // In the box rather than under it. A blank password box on a saved
+    // source is genuinely ambiguous — it could mean "clear it" — and the
+    // answer is wanted by somebody looking at the box, which is exactly when
+    // a placeholder is read.
+    expect(password).toHaveAttribute(
+      'placeholder',
+      'Leave blank to keep the stored password',
+    );
   });
 
   it('is left out of an edit that did not change it', async () => {

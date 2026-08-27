@@ -13,6 +13,7 @@ import {
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { StatCard, StatGrid } from '../../components/StatCards.js';
 
 interface Holder {
   userId: string;
@@ -52,6 +53,9 @@ export function RolesPage() {
     catalog: string[];
     roles: RoleRow[];
   }>('/api/admin/roles');
+
+  // Narrowed once, and shared by the summary cards and the table below.
+  const roles = data?.roles ?? [];
 
   const [editing, setEditing] = useState<RoleRow | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -187,8 +191,21 @@ export function RolesPage() {
     <>
       <PageHeader
         title="Roles"
-        description="What an administrator may do, and who holds it. A role's permissions are stored on the role, so a permission added by an upgrade has to be granted here before anybody has it."
       />
+
+      {/* A role nobody holds is the one worth seeing: it is either a
+          mistake or a permission set that quietly stopped being used, and
+          neither is visible from a table sorted by name. */}
+      <StatGrid>
+        <StatCard label="Roles" value={roles.length} />
+        <StatCard label="Built in" value={roles.filter((r) => r.builtIn).length} />
+        <StatCard
+          label="Held by nobody"
+          value={roles.filter((r) => r.assignmentCount === 0).length}
+          tone="warning"
+          quietWhenZero
+        />
+      </StatGrid>
 
       {error && <Alert tone="danger">{error}</Alert>}
       {problem && <Alert tone="warning">{problem}</Alert>}

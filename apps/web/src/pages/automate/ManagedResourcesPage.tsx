@@ -65,7 +65,6 @@ function ResourcePanel({ resource }: { resource: Managed }) {
   return (
     <Panel
       title={resource.resourceId}
-      description={`You manage this ${resource.resourceType}`}
     >
       <div className="space-y-3 p-4">
         {error && <Alert tone="danger">{error}</Alert>}

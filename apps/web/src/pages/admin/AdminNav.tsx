@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { useSession } from '../../session/SessionProvider.js';
+import { useCan } from '../../session/SessionProvider.js';
 
 export interface NavItem {
   to: string;
@@ -14,28 +14,38 @@ interface NavGroup {
 }
 
 /**
- * The console's navigation, in six groups.
+ * The console's navigation, in four groups and thirteen links.
  *
- * It was twenty-three links in one flat list — every one the same weight, the
- * same colour, in source order. That is a list of routes, not a navigation.
- * An administrator working a joiner ticket has to read all of it to find
- * "People", and the length alone made the console look like scaffolding.
+ * It was twenty-nine links in six groups, and before that twenty-three in one
+ * flat list. Grouping them fixed the flatness but not the length: an
+ * administrator still met a wall of labels and had to read most of it to find
+ * the one destination they wanted, and several of those labels existed only to
+ * distinguish themselves from a neighbour — "Users" against "People", "Sync
+ * runs" against "Directory sources", "What needs attention" against "Audit
+ * log".
  *
- * The groups are the product's own modules, in the order somebody meets them:
- * the directory first because that is where a ticket starts, governance last
- * because it is periodic rather than daily. Naming them after the modules
- * rather than inventing task-based headings keeps the navigation and the
- * documentation using the same nouns.
+ * Sixteen of them are gone, into tabs. The rule applied was that two links
+ * belong together when they are two VIEWS of one subject rather than two
+ * subjects: a run is a source's history, attention is the audit log filtered,
+ * branding is part of configuring a tenant. Where they are genuinely different
+ * subjects they stayed apart — Groups is not a view of Users, and Targets is
+ * not a view of Sources.
+ *
+ * Nothing here is a group of one. "Requests" inside a group labelled
+ * "Requests" is a heading that repeats its only child, which is the same
+ * failure as a paragraph explaining a control: structure spent saying nothing.
+ * The four groups that remain each hold real siblings.
  */
 const GROUPS: NavGroup[] = [
   {
     label: 'Directory',
     items: [
+      // People, accounts and import are one destination. They were three
+      // links in this group, and every one of them carried a paragraph
+      // pointing at the other two.
       { to: '/admin/users', label: 'Users', permission: 'directory.read' },
       { to: '/admin/groups', label: 'Groups', permission: 'directory.read' },
       { to: '/admin/org-units', label: 'Org units', permission: 'directory.read' },
-      { to: '/admin/people', label: 'People', permission: 'identity.read' },
-      { to: '/admin/import', label: 'Import', permission: 'identity.write' },
     ],
   },
   {
@@ -43,38 +53,19 @@ const GROUPS: NavGroup[] = [
     items: [
       { to: '/admin/applications', label: 'Applications', permission: 'access.read' },
       { to: '/admin/policy', label: 'Authentication policy', permission: 'policy.read' },
+      // The five stages of one request pipeline, and the seven objects of one
+      // governance module. Both sit under Access because that is what they are
+      // about: asking for it, and checking who has it.
+      { to: '/admin/requests', label: 'Requests', permission: 'automate.read' },
+      { to: '/admin/govern', label: 'Governance', permission: 'govern.read' },
     ],
   },
   {
     label: 'Connected systems',
     items: [
+      // Runs are a tab of Sources: a run is a source's history, not its peer.
       { to: '/admin/sources', label: 'Directory sources', permission: 'sync.read' },
-      { to: '/admin/sync-runs', label: 'Sync runs', permission: 'sync.read' },
       { to: '/admin/targets', label: 'Target systems', permission: 'provision.read' },
-    ],
-  },
-  {
-    label: 'Requests',
-    items: [
-      { to: '/admin/automate/products', label: 'Catalog', permission: 'automate.read' },
-      { to: '/admin/automate/workflows', label: 'Approval workflows', permission: 'automate.read' },
-      { to: '/admin/automate/requests', label: 'Request queue', permission: 'automate.read' },
-      { to: '/admin/automate/sweeps', label: 'Expiry sweeps', permission: 'automate.read' },
-      { to: '/admin/automate/tasks', label: 'Delegated tasks', permission: 'automate.read' },
-    ],
-  },
-  {
-    label: 'Governance',
-    items: [
-      // Findings first: the module leads with what is wrong, not with a
-      // certification rate.
-      { to: '/admin/govern/findings', label: 'Findings', permission: 'govern.read' },
-      { to: '/admin/govern/campaigns', label: 'Access reviews', permission: 'govern.read' },
-      { to: '/admin/govern/reports', label: 'Access reports', permission: 'govern.read' },
-      { to: '/admin/govern/snapshots', label: 'Snapshots', permission: 'govern.read' },
-      { to: '/admin/govern/sod', label: 'Segregation of duties', permission: 'govern.read' },
-      { to: '/admin/govern/orphans', label: 'Orphan accounts', permission: 'govern.read' },
-      { to: '/admin/govern/integrity', label: 'Audit integrity', permission: 'govern.read' },
     ],
   },
   {
@@ -82,13 +73,13 @@ const GROUPS: NavGroup[] = [
     items: [
       // `rbac.manage`, which until the role API existed gated nothing at all.
       { to: '/admin/roles', label: 'Roles', permission: 'rbac.manage' },
-      // FIRST in System, and deliberately: it is the only entry here somebody
-      // opens without already knowing what they are looking for.
-      { to: '/admin/incidents', label: 'What needs attention', permission: 'audit.read' },
-      { to: '/admin/audit', label: 'Audit log', permission: 'audit.read' },
-      { to: '/admin/settings', label: 'Tenant settings', permission: 'tenant.manage' },
-      { to: '/admin/branding', label: 'Branding', permission: 'tenant.manage' },
-      { to: '/admin/webhooks', label: 'Webhooks', permission: 'tenant.manage' },
+      // Its label used to be a sentence — "What needs attention" — because
+      // "Incidents" would not have explained itself. As a pair of tabs,
+      // Attention beside All events, the filter shows what it is.
+      { to: '/admin/activity', label: 'Activity', permission: 'audit.read' },
+      // Sign-in, branding and webhooks: three links all gated on
+      // `tenant.manage`, all configuring the same tenant.
+      { to: '/admin/settings', label: 'Settings', permission: 'tenant.manage' },
       // `deployment.manage`, not `tenant.manage`: this updates the
       // installation every tenant shares, not one tenant's configuration.
       { to: '/admin/updates', label: 'Updates', permission: 'deployment.manage' },
@@ -104,13 +95,17 @@ const GROUPS: NavGroup[] = [
  * page background with nothing separating it from the content — the tokens
  * were right and the markup had drifted from them.
  *
- * Sticky under the header rather than scrolling with the page: twenty-three
- * links is more than one screen on a laptop, and an administrator two thirds
- * of the way down a table of people should not have to scroll back up to
- * move between sections.
+ * Sticky under the header rather than scrolling with the page. Thirteen links
+ * now fit a laptop screen where twenty-nine did not, but an administrator two
+ * thirds of the way down a table of people should still not have to scroll
+ * back up to move between sections.
  */
 export function AdminNav() {
-  const { can } = useSession();
+  // `useCan`, not `useSession`. This component only decides whether to OFFER
+  // a link, which is the case `useCan` documents itself for: it answers false
+  // where there is no provider instead of throwing, so a rail rendered out of
+  // context hides links rather than taking the page down with it.
+  const can = useCan();
 
   // Hiding a link the caller cannot use is courtesy, not enforcement: the
   // server refuses the request either way. A group whose every item is hidden

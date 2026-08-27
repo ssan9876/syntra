@@ -136,7 +136,7 @@ heading that shrinks inside a panel looks worse rather than better.
 | Token | Size | Use |
 |---|---|---|
 | `--text-xs` | 0.75rem | Sidebar group labels |
-| `--text-sm` | 0.8125rem | Hints, captions, table headers |
+| `--text-sm` | 0.8125rem | Warnings, captions, table headers |
 | `--text-base` | 0.875rem | Body, table cells |
 | `--text-md` | 1rem | Panel titles |
 | `--text-lg` | 1.25rem | Auth-card headings |
@@ -174,18 +174,66 @@ permanently raised panel says nothing.
 
 Two shapes, one header.
 
-**The console is a workspace.** A rail anchored to the left edge of the
-viewport on `--color-surface-2` — the token this system assigns to "sidebar,
-toolbars, table head". Content is capped at `max-w-6xl` and LEFT-ALIGNED
-against the rail; centring it opened a gap that grew with the monitor, so on a
-wide screen the page looked as though it had come loose.
+**The console is a workspace, centred as one slab.** The rail and the content
+share a single container capped at `--shell-max` (100rem) and centred in the
+viewport. The rail sits on `--color-surface-2` — the token this system assigns
+to "sidebar, toolbars, table head".
 
-Navigation is grouped into the product's own modules — Directory, Access,
-Connected systems, Requests, Governance, System — in the order somebody meets
-them: the directory first because that is where a ticket starts, governance
-last because it is periodic rather than daily. Twenty-three links in one flat
-list is a list of routes, not a navigation. A group whose every item is hidden
-by permission takes its heading with it.
+This reverses an earlier rule, and the reversal is worth recording because the
+earlier reasoning was half right. The rail used to be pinned to the viewport
+edge with content left-aligned beside it, because an attempt at centring had
+left "the navigation floating in from nowhere with dead space either side".
+That was an accurate diagnosis of centring the CONTENT INSIDE the space a
+pinned rail left over — the gap between rail and table then grows with the
+monitor. Centring the PAIR has no such failure mode: the rail is glued to the
+content by the same container, and the leftover width lands outside both. On a
+34" ultrawide the old layout put the navigation against the left bezel and the
+table most of a metre away, and reading a row meant turning your head.
+
+**One cap, written once.** `--shell-max` is the only place the width is
+recorded. A second `max-w-*` on a page container wins over the outer one and
+silently undoes it, which is exactly how the console came to look narrow and
+rail-hugging on a wide monitor. Asserted in `shell-layout.test.ts`.
+
+Navigation is **thirteen links in four groups** — Directory, Access, Connected
+systems, System. It was twenty-nine in six, and before that twenty-three in one
+flat list. Sixteen went into tabs, under one rule: two links belong together
+when they are two VIEWS of one subject, not two subjects. A run is a source's
+history; "attention" is the audit log filtered; branding is part of configuring
+a tenant. Where they are genuinely different subjects they stayed apart —
+Groups is not a view of Users.
+
+**No group of one.** A heading that repeats its only child is structure spent
+saying nothing, the same failure as a paragraph explaining a control. A group
+whose every item is hidden by permission takes its heading with it. Both are
+asserted in `AdminNav.test.tsx`, along with a ceiling of twenty links: past
+roughly that many a reader stops reading the rail and starts searching it.
+
+### Tabs are locations, not widgets
+
+A merged destination puts its views in a tab strip, and the selection lives in
+the URL rather than in `useState`. An administrator pasting "the orphan
+accounts screen" into a ticket must be pasting a link that opens on orphan
+accounts; with component state, eleven screens would silently become
+unlinkable the day they were merged — and the reply to that ticket would be a
+sentence explaining which tab to click, which is the failure this system
+exists to remove. An unknown tab id falls back to the first tab: tabs get
+renamed, tickets outlive them, and a blank page reads as broken where the
+first tab reads as the page.
+
+### Every destination opens with its figures
+
+A merged page holds what used to be up to seven screens, so "is anything wrong
+here" has to be answerable before the tab strip is read at all. `StatCard` and
+`StatGrid` carry that row: the value at `--text-2xl`, tabular, linked to where
+the figure lives in full. A card reporting three blocked runs that cannot be
+clicked is a dead end — the reader has been told there is a problem and handed
+no route to it, and the console's answer to "now what" becomes a sentence
+somebody has to write underneath.
+
+`quietWhenZero` is not decoration. A healthy console shows a lot of noughts at
+once, and colouring them is how a reader learns that red on this screen means
+nothing.
 
 **The portal is a page.** Centred, narrow, tile-first, with a slim row of links
 above the tiles at the weight of a caption. Its reader opens it, taps the tile
@@ -256,6 +304,54 @@ all.
 drawn inside a panel's border is a card inside a card: two containers describing
 one absence, with the padding counted twice.
 
+## The console does not explain itself
+
+**If a section has to be explained in words, the design is wrong.** This is the
+rule the rest of this document now answers to, and applying it removed a
+hundred and forty explanatory strings: fifty-five page descriptions,
+thirty-four panel descriptions and eighty-nine field hints.
+
+They were not removed because prose is ugly. They were removed because reading
+them together was an argument against them:
+
+- **Several existed only to explain the navigation.** "People" ended with
+  "their sign-in accounts are listed under Users"; "Users" ended with "to
+  onboard a new joiner, start under People". Merging the two destinations
+  deleted both sentences and neither was missed. A paragraph explaining where
+  something else lives is a navigation defect wearing a paragraph.
+- **Several restated the title in a longer sentence.** "Access ending" was
+  captioned "Access about to expire, expired, or swept away".
+- **Most described what the control underneath already showed.** The policy
+  page said "the first rule that matches decides, evaluated top to bottom",
+  above a numbered ordered list terminating in a row that reads "When no rule
+  matches".
+
+Seven carried something real. They did not become better prose; they became
+structure:
+
+| Was | Is | Why |
+|---|---|---|
+| `hint` — permanent, grey, under every field | `warning` — conditional, `--color-warning`, shown only while it applies | A hint shown to everybody forever is a hint nobody reads. A warning that is always on is a hint wearing a warning's colour. |
+| "Leave blank to keep the stored password" | `placeholder`, in the box | Wanted only by somebody looking at the box, which is exactly when a placeholder is read. |
+| "At least twelve characters" | Live validation as they type | Silent while satisfied, stated while broken. Strictly better than the caption it replaced. |
+| Panel description holding a client ID | `PageFacts` — a labelled value | It was never prose. It was data smuggled into a sentence. |
+| Deactivation consequences as a field hint | `Alert tone="warning"` on the confirmation | A confirmation listing consequences in the style of placeholder text is a confirmation people click through. |
+| `Metric` hint explaining "Moot" | The label became "Access already gone" | A figure that needs a paragraph to be read is a figure whose LABEL has not been written. The caption let the label stay bad. |
+
+**The props are gone, not merely unused.** `PageHeader` takes a title and
+actions. `Panel` takes a title and actions. `Field` and `Check` take a
+`warning` and no `hint`. An optional slot next to a title gets filled, and
+eventually filled with something that is not prose — which is how a client ID
+ended up as a sentence. `no-prose.test.ts` asserts all of it, including that no
+page declares the props locally: the last one in was a `Toggle` that was
+`Check` plus a REQUIRED hint, so every use of it had to invent a sentence.
+
+**Two things this rule does not cover.** Accessibility is not prose: `warning`
+keeps the `aria-describedby` association `hint` had, because removing text
+that only screen-reader users were consuming is not the trade being made here.
+And an empty state is conditional by nature — it appears only when there is
+nothing — so it stays, and names the next action.
+
 ## Component rules
 
 - Every interactive element ships default, hover, focus-visible, active,
@@ -271,3 +367,7 @@ one absence, with the padding counted twice.
   rejected CSV line, a broken audit sequence number.
 - A control's boundary uses `border-control`. If you are reaching for
   `border-subtle` on something clickable, it is the wrong token.
+- **No control carries a permanent explanation.** If you are reaching for a
+  sentence to make a control usable, the control is wrong — rename it, split
+  it, or show its consequence as state. See "The console does not explain
+  itself".

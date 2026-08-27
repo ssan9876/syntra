@@ -60,7 +60,6 @@ export function GovernRuleCandidates({ snapshotId }: { snapshotId: string }) {
   return (
     <Panel
       title="Rules this data already follows"
-      description="Suggestions only. Nothing here is created, and a pattern in current access is not proof it was ever intended."
       actions={
         <Button size="sm" variant="secondary" loading={loading} onClick={look}>
           {candidates === null ? 'Look for rules' : 'Look again'}

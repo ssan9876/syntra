@@ -93,7 +93,6 @@ export function ApplicationClaims({
   return (
     <Panel
       title="What the application is told"
-      description="The attributes sent with each sign-in."
       actions={
         <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)}>
           Add a mapping
@@ -312,11 +311,6 @@ function ClaimForm({
           value={claimName}
           onChange={setClaimName}
           required
-          hint={
-            protocol === 'saml'
-              ? 'The SAML attribute name the application expects.'
-              : 'The claim name the application expects.'
-          }
         />
 
         <Select
@@ -339,7 +333,6 @@ function ClaimForm({
             checked={multiValued}
             onChange={setMultiValued}
             label="Send every group, not just the first"
-            hint="Most applications expecting a group list want this."
           />
         )}
 

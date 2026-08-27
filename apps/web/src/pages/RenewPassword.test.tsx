@@ -150,3 +150,45 @@ describe('RenewPassword', () => {
     expect(refresh).toHaveBeenCalled();
   });
 });
+
+/**
+ * The password rules, as live constraints rather than permanent captions.
+ *
+ * Both boxes used to carry a `hint` — a grey sentence shown to everybody,
+ * always, including the reader who had already typed a good password. The
+ * rule is unchanged; what changed is when it is said. This matters most on
+ * exactly this screen: somebody reaches it because they are already locked
+ * out, so a round trip to the server to be told the two boxes differ is the
+ * worst possible moment to spend one.
+ */
+describe('the password rules', () => {
+  it('says nothing before anything is typed', async () => {
+    pending();
+    renderPage();
+    await screen.findByLabelText(/^new password$/i);
+    expect(screen.queryByText(/at least twelve characters/i)).not.toBeInTheDocument();
+  });
+
+  it('states the length rule only while it is being broken', async () => {
+    pending();
+    renderPage();
+    const box = await screen.findByLabelText(/^new password$/i);
+
+    await userEvent.type(box, 'short');
+    expect(await screen.findByText(/at least twelve characters/i)).toBeInTheDocument();
+
+    await userEvent.type(box, 'enough-to-pass-now');
+    await waitFor(() =>
+      expect(screen.queryByText(/at least twelve characters/i)).not.toBeInTheDocument(),
+    );
+  });
+
+  it('catches a mismatch without a round trip to the server', async () => {
+    pending();
+    renderPage();
+    await userEvent.type(await screen.findByLabelText(/^new password$/i), 'a-long-enough-one');
+    await userEvent.type(screen.getByLabelText(/new password again/i), 'a-different-one');
+
+    expect(await screen.findByText(/are not the same/i)).toBeInTheDocument();
+  });
+});

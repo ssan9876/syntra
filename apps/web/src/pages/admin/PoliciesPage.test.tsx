@@ -77,10 +77,25 @@ describe('PoliciesPage', () => {
     expect(rows[1]).toHaveTextContent('Offsite is refused');
   });
 
-  it('states first-match-wins on the page rather than leaving it implicit', async () => {
+  it('shows evaluation order structurally rather than describing it', async () => {
+    // This used to assert a sentence in the page header: "The first rule that
+    // matches decides. Rules are evaluated top to bottom." The sentence is
+    // gone, and what it described was already on the screen — an ORDERED
+    // list, each rule carrying its own position, terminating in a row that
+    // begins "When no rule matches". A reader who can see a numbered sequence
+    // ending in a default does not need to be told it is a sequence.
+    //
+    // Asserting the structure rather than the prose is also the stronger
+    // test: the sentence could have stayed correct while the list silently
+    // rendered unordered.
     vi.stubGlobal('fetch', vi.fn(async () => json(policy)));
     renderPage();
-    expect(await screen.findByText(/first rule that matches/i)).toBeInTheDocument();
+
+    const rows = await screen.findAllByRole('listitem');
+    expect(rows[0]!.closest('ol')).not.toBeNull();
+    expect(rows[0]).toHaveTextContent('1');
+    expect(rows[1]).toHaveTextContent('2');
+    expect(screen.getByText(/when no rule matches/i)).toBeInTheDocument();
   });
 
   it('shows the tenant default as the last resort', async () => {

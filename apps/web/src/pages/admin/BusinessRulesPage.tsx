@@ -461,7 +461,6 @@ export function BusinessRulesPage() {
     <>
       <PageHeader
         title="Business rules"
-        description="Who gets an account in this target, and which entitlements come with it."
         actions={
           <Button
             onClick={onRefresh}
@@ -632,13 +631,11 @@ export function BusinessRulesPage() {
               checked={draft.grantsAccount}
               onChange={(v) => set('grantsAccount', v)}
               label="A match requires an account in this target"
-              hint="Off, the rule grants entitlements to people who already have an account here and creates none."
             />
             <Check
               checked={draft.enabled}
               onChange={(v) => set('enabled', v)}
               label="Enabled"
-              hint="A disabled rule grants nothing, and its entitlements fall outside what Provision considers its remit — so under authoritative enforcement they are reported as drift rather than revoked."
             />
 
             <fieldset className="rounded-panel border border-border-subtle p-4">

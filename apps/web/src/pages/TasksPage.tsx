@@ -180,7 +180,6 @@ function RunTask({ task, onDone }: { task: Task; onDone(): void }) {
                       label={field.label}
                       value={String(values[field.key] ?? '')}
                       onChange={set}
-                      hint={field.help}
                       options={[{ value: '', label: 'Choose one' }, ...options]}
                     />
                   );
@@ -192,7 +191,6 @@ function RunTask({ task, onDone }: { task: Task; onDone(): void }) {
                       label={field.label}
                       value={String(values[field.key] ?? '')}
                       onChange={set}
-                      hint={field.help}
                       options={[{ value: '', label: 'Choose one' }, ...(field.options ?? [])]}
                     />
                   );
@@ -214,7 +212,6 @@ function RunTask({ task, onDone }: { task: Task; onDone(): void }) {
                     label={field.label}
                     value={String(values[field.key] ?? '')}
                     onChange={set}
-                    hint={field.help}
                     required={field.required}
                   />
                 );

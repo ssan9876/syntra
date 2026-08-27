@@ -200,7 +200,6 @@ export function GovernCampaignNewPage() {
     <>
       <PageHeader
         title="New access review"
-        description="A campaign is a scope, a set of reviewers and a due date, frozen against one snapshot. Nothing is created until you press the button at the bottom, and nothing is sent until it is started."
       />
 
       {problem && <Alert tone="danger">{problem}</Alert>}
@@ -226,19 +225,16 @@ export function GovernCampaignNewPage() {
             label="System ids"
             value={systemIds}
             onChange={setSystemIds}
-            hint="Comma separated. Leave empty for every system."
           />
           <Check
             checked={privilegedOnly}
             onChange={setPrivilegedOnly}
             label="Privileged holdings only"
-            hint="Narrows the scope to the holdings Govern has flagged as privileged."
           />
           <Select
             label="Point in time"
             value={snapshotId}
             onChange={setSnapshotId}
-            hint="The snapshot the campaign is frozen against. The latest, unless you name another."
             options={snapshotOptions}
           />
 
@@ -265,7 +261,6 @@ export function GovernCampaignNewPage() {
       <div className="mt-6">
         <Panel
           title="Who reviews it"
-          description="The fallback catches the items the first selector cannot resolve. An item neither can resolve is blocked and cannot be decided by anybody."
         >
           <div className="space-y-4 p-4">
             <Select
@@ -317,7 +312,6 @@ export function GovernCampaignNewPage() {
               checked={allowBulkCertify}
               onChange={setAllowBulkCertify}
               label="Allow bulk certify"
-              hint="High-risk items are always decided one at a time, whatever this says."
             />
           </div>
         </Panel>

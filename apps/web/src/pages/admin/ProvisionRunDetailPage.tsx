@@ -333,9 +333,6 @@ export function ProvisionRunDetailPage() {
     <>
       <PageHeader
         title="Run detail"
-        description={`Started ${new Date(run.startedAt).toLocaleString()} — ${
-          run.personsEvaluated
-        } persons evaluated.`}
       />
 
       <div className="space-y-6">
@@ -555,7 +552,6 @@ export function ProvisionRunDetailPage() {
         {tab === 'drift' && (
           <Panel
             title="Drift"
-            description="What the target holds that Provision did not put there, and what it granted that has gone — the findings still open. Reported under both enforcement modes."
           >
             {drift === null ? (
               <div className="p-4">
@@ -660,7 +656,6 @@ export function ProvisionRunDetailPage() {
                   checked={confirm}
                   onChange={setConfirm}
                   label="I have read what needs confirmation and want to apply it"
-                  hint="A rename, or a re-enable outside the window, is never applied without this."
                 />
               )}
               <Button

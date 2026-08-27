@@ -4,7 +4,7 @@ import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntr
 import type { SyncRunSummary } from '@syntra/contracts';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
-import { PageHeader } from './PageHeader.js';
+import { PageFacts, PageHeader } from './PageHeader.js';
 
 interface Change {
   id: string;
@@ -185,16 +185,6 @@ export function SyncRunDetailPage() {
     <>
       <PageHeader
         title="Sync run"
-        // A run that read 5,000 records and mapped 4,900 is not a clean run,
-        // so the shortfall is in the same sentence as the total rather than
-        // buried further down the page.
-        description={
-          `${sourceName} — ${data.recordsRead} records read` +
-          (data.mappingFailures > 0
-            ? `, ${data.mappingFailures} not mapped`
-            : '') +
-          `, ${data.changes.length} proposed changes`
-        }
         actions={
           <div className="flex flex-wrap items-center gap-3">
             {partial && (
@@ -218,6 +208,16 @@ export function SyncRunDetailPage() {
             </Button>
           </div>
         }
+      />
+      {/* The source and the shortfall were in the header's sentence. A run
+          that read 5,000 records and mapped 4,900 is not a clean run, and
+          two numbers side by side say that faster than a clause did. */}
+      <PageFacts
+        facts={[
+          { label: 'Source', value: sourceName },
+          { label: 'Records read', value: data.recordsRead },
+          { label: 'Mapped', value: data.recordsRead - data.mappingFailures },
+        ]}
       />
 
       <div className="space-y-6">
@@ -425,7 +425,7 @@ export function SyncRunDetailPage() {
         )}
 
         <Link
-          to="/admin/sync-runs"
+          to="/admin/sources?tab=runs"
           className="inline-block text-muted underline-offset-2 hover:text-ink hover:underline"
         >
           Back to sync runs

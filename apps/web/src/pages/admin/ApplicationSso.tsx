@@ -261,7 +261,6 @@ function SamlPanel({
   return (
     <Panel
       title="SAML"
-      description="Where assertions go, and what the service provider is trusted to send."
     >
       <div className="space-y-5 p-4">
         {/*
@@ -349,21 +348,18 @@ function SamlPanel({
           checked={form.wantAuthnRequestsSigned}
           onChange={(v) => set('wantAuthnRequestsSigned', v)}
           label="Require the service provider to sign its requests"
-          hint="Off, anybody who can send a link can make Syntra issue an assertion for whoever clicks it."
         />
 
         <Check
           checked={form.allowIdpInitiated}
           onChange={(v) => set('allowIdpInitiated', v)}
           label="Allow sign-in started from Syntra"
-          hint="Off, a sign-in must begin at the application. On, a tile in the portal can start one."
         />
 
         <Check
           checked={form.wsFedEnabled}
           onChange={(v) => set('wsFedEnabled', v)}
           label="Also accept WS-Federation"
-          hint="For applications built on .NET that cannot speak SAML directly. They use the same entity ID as the realm and the same reply URLs."
         />
         {form.wsFedEnabled && (
           <Alert>
@@ -379,7 +375,6 @@ function SamlPanel({
           label="Single logout URL"
           value={form.sloUrl}
           onChange={(v) => set('sloUrl', v)}
-          hint="Optional. Where Syntra tells the application somebody signed out."
         />
 
         {problem && <Alert tone="danger">{problem}</Alert>}
@@ -484,8 +479,18 @@ function OidcPanel({
   }
 
   return (
-    <Panel title="OpenID Connect" description={`Client ID: ${client.clientId}`}>
+    <Panel title="OpenID Connect">
       <div className="space-y-5 p-4">
+        {/* The client ID rode in on the panel's `description`, which made a
+            value the application needs look like a sentence about the panel.
+            It is data: labelled, monospaced and selectable like every other
+            identifier in this console. */}
+        <div>
+          <div className="text-sm font-medium text-muted">Client ID</div>
+          <code className="mt-0.5 block break-all font-mono text-sm text-ink">
+            {client.clientId}
+          </code>
+        </div>
         {secret && (
           <Alert tone="warning" title="New client secret">
             <code className="mt-1 block break-all font-mono text-sm">{secret}</code>
@@ -500,7 +505,6 @@ function OidcPanel({
           // The reason this control exists at all: the grant was implemented,
           // enforced at the token endpoint and advertised by the provider, and
           // could be turned on only with SQL.
-          hint="Issues tokens to the application itself with no user behind them. Such a token may not carry openid, profile, email or offline_access."
         />
 
         {!form.clientCredentialsEnabled && (
@@ -526,14 +530,18 @@ function OidcPanel({
           label="Scopes"
           value={form.scopes}
           onChange={(v) => set('scopes', v)}
-          hint="Separated by spaces."
         />
 
         <Check
           checked={form.rotateSecret}
           onChange={(v) => set('rotateSecret', v)}
           label="Issue a new client secret"
-          hint="The old one stops working as soon as this is saved."
+          warning={
+            // Only while the box is ticked. Off, nothing is about to break.
+            form.rotateSecret
+              ? 'The current secret stops working the moment this is saved.'
+              : undefined
+          }
         />
 
         {problem && <Alert tone="danger">{problem}</Alert>}

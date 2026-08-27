@@ -17,6 +17,8 @@ import { leaveTo } from '../mfa/leave.js';
  * old password is not asked for again — it was accepted a moment ago, and the
  * attempt is the proof.
  */
+const MIN_PASSWORD = 12;
+
 export function RenewPassword() {
   const t = useT();
   const navigate = useNavigate();
@@ -122,7 +124,12 @@ export function RenewPassword() {
               autoComplete="new-password"
               autoFocus
               required
-              hint={t('renew.hint')}
+              warning={
+                // Live, not permanent. See the same note on ResetPassword.
+                password.length > 0 && password.length < MIN_PASSWORD
+                  ? t('renew.too_short')
+                  : undefined
+              }
             />
             <Field
               label={t('reset.confirm')}
@@ -131,6 +138,15 @@ export function RenewPassword() {
               onChange={setConfirm}
               autoComplete="new-password"
               required
+              warning={
+                // The mismatch is caught here rather than on submit. On a
+                // screen somebody reaches because they are already locked
+                // out, a round trip to be told the two boxes differ is the
+                // worst moment to spend one.
+                confirm.length > 0 && confirm !== password
+                  ? t('reset.mismatch')
+                  : undefined
+              }
             />
 
             {error && <Alert tone="danger">{error}</Alert>}

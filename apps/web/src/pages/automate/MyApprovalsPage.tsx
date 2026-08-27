@@ -88,7 +88,6 @@ export function MyApprovalsPage() {
               <Panel
                 key={approval.id}
                 title={approval.request.product?.name ?? 'Requested access'}
-                description={`For ${approval.request.subjectPersonId}, waiting since ${when(approval.openedAt)}`}
               >
                 <div className="space-y-3 p-4">
                   <p className="text-ink">{approval.request.justification}</p>
@@ -104,7 +103,6 @@ export function MyApprovalsPage() {
                       onChange={(value) =>
                         setShorten({ ...shorten, [approval.id]: value })
                       }
-                      hint="You can shorten this. You cannot lengthen it."
                     />
                   )}
                   <Field
@@ -113,7 +111,6 @@ export function MyApprovalsPage() {
                     onChange={(value) =>
                       setComments({ ...comments, [approval.id]: value })
                     }
-                    hint="Required if you refuse."
                   />
                   <div className="flex gap-2">
                     <Button

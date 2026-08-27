@@ -281,7 +281,6 @@ export function MfaChallenge() {
                 autoComplete="off"
                 autoFocus
                 required
-                hint={t('mfa.recovery_hint')}
                 invalid={Boolean(error)}
               />
             )}

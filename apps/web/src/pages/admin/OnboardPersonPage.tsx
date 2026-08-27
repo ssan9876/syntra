@@ -209,7 +209,6 @@ export function OnboardPersonPage() {
     <>
       <PageHeader
         title="Add someone"
-        description="Who they are, and what they do. Their account in the directory is created by provisioning; their Syntra login appears on the next sync."
       />
 
       {/* Named rather than counted, and only for what was actually written.
@@ -271,7 +270,6 @@ export function OnboardPersonPage() {
               value={v.externalId ?? ''}
               onChange={(x) => set('externalId', x)}
               error={errors.externalId}
-              hint="What the HR system knows them by. A CSV import matches on it, and it must be unique."
               placeholder="E1042"
             />
           </div>
@@ -279,7 +277,6 @@ export function OnboardPersonPage() {
 
         <Panel
           title="What they do"
-          description="The contract. Business rules match on these fields and the account's directory container is built from them — without one, provisioning has nothing to act on."
         >
           <div className="grid gap-4 p-4 sm:grid-cols-2">
             <Field
@@ -309,7 +306,6 @@ export function OnboardPersonPage() {
               value={v.endDate ?? ''}
               onChange={(x) => set('endDate', x)}
               error={errors.endDate}
-              hint="Leave empty for an open-ended engagement."
             />
             <Field
               label="Cost centre"
@@ -334,7 +330,6 @@ export function OnboardPersonPage() {
               value={v.fte ?? ''}
               onChange={(x) => set('fte', x)}
               error={errors.fte}
-              hint="Between 0 and 2. Rules can compare on it."
               placeholder="1.0"
             />
           </div>
@@ -383,7 +378,6 @@ export function OnboardPersonPage() {
               label="Also create a Syntra login"
               checked={wantsLogin}
               onChange={setWantsLogin}
-              hint="Not needed for most people: provisioning creates their directory account and their login appears on the next sync. Tick it for an administrator, or somebody with no directory presence."
             />
             {wantsLogin && (
               <div className="grid gap-4 sm:grid-cols-2">
@@ -392,7 +386,6 @@ export function OnboardPersonPage() {
                   value={v.login ?? ''}
                   onChange={(x) => set('login', x)}
                   error={errors.login}
-                  hint="How they sign in. Unique within this tenant."
                   placeholder="mokafor"
                 />
                 <Field
@@ -407,7 +400,6 @@ export function OnboardPersonPage() {
                   value={v.orgUnitId ?? ''}
                   onChange={(x) => set('orgUnitId', x)}
                   error={errors.orgUnitId}
-                  hint="Scopes administrative roles and org-unit application grants. Unrelated to the directory container the account is created in, which comes from the contract."
                   options={[
                     { value: '', label: 'None' },
                     ...(unitsData?.orgUnits ?? []).map((u) => ({
@@ -444,7 +436,7 @@ export function OnboardPersonPage() {
           </Button>
           <Button
             variant="secondary"
-            onClick={() => navigate('/admin/people')}
+            onClick={() => navigate('/admin/users?tab=people')}
             disabled={busy}
           >
             Cancel

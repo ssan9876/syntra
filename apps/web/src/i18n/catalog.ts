@@ -57,12 +57,12 @@ export const en = {
 
   'renew.title': 'Your password has expired',
   'renew.lead': 'Choose a new one to carry on.',
-  'reset.hint': 'At least twelve characters. A short sentence works well.',
+  'reset.too_short': 'At least twelve characters. A short sentence works well.',
   'reset.factor_totp': 'Code from your app',
   'reset.factor_hint':
     'Your account has a second factor, so resetting the password needs it too.',
   'renew.lead_full': 'Choose a new one to finish signing in. You are not signed in yet.',
-  'renew.hint':
+  'renew.too_short':
     'At least twelve characters, and not one you have used before. A short sentence works well.',
   'renew.submit': 'Save and sign in',
 
@@ -109,7 +109,6 @@ export const en = {
   'portal.search': 'Search',
   'portal.sign_out': 'Sign out',
   'portal.greeting': 'Good day, {name}',
-  'portal.lead': 'Applications your organization has assigned to you.',
   'portal.empty_title': 'No applications assigned yet',
   'portal.empty_body':
     'When your administrator assigns applications to you, they appear here and open with a single click.',
@@ -171,12 +170,12 @@ export const nl: Catalog = {
 
   'renew.title': 'Je wachtwoord is verlopen',
   'renew.lead': 'Kies een nieuw wachtwoord om verder te gaan.',
-  'reset.hint': 'Minstens twaalf tekens. Een korte zin werkt goed.',
+  'reset.too_short': 'Minstens twaalf tekens. Een korte zin werkt goed.',
   'reset.factor_totp': 'Code uit je app',
   'reset.factor_hint':
     'Je account heeft een tweede factor, dus die is ook nodig om je wachtwoord opnieuw in te stellen.',
   'renew.lead_full': 'Kies een nieuw wachtwoord om het aanmelden af te ronden. Je bent nog niet aangemeld.',
-  'renew.hint':
+  'renew.too_short':
     'Minstens twaalf tekens, en niet één die je eerder gebruikt hebt. Een korte zin werkt goed.',
   'renew.submit': 'Opslaan en aanmelden',
 
@@ -223,7 +222,6 @@ export const nl: Catalog = {
   'portal.search': 'Zoeken',
   'portal.sign_out': 'Afmelden',
   'portal.greeting': 'Goedendag, {name}',
-  'portal.lead': 'Applicaties die je organisatie aan je heeft toegewezen.',
   'portal.empty_title': 'Nog geen applicaties toegewezen',
   'portal.empty_body':
     'Zodra je beheerder applicaties aan je toewijst, verschijnen ze hier en open je ze met één klik.',
@@ -273,13 +271,13 @@ export const de: Catalog = {
 
   'renew.title': 'Ihr Passwort ist abgelaufen',
   'renew.lead': 'Wählen Sie ein neues, um fortzufahren.',
-  'reset.hint': 'Mindestens zwölf Zeichen. Ein kurzer Satz eignet sich gut.',
+  'reset.too_short': 'Mindestens zwölf Zeichen. Ein kurzer Satz eignet sich gut.',
   'reset.factor_totp': 'Code aus Ihrer App',
   'reset.factor_hint':
     'Ihr Konto hat einen zweiten Faktor, der auch zum Zurücksetzen des Passworts nötig ist.',
   'renew.lead_full':
     'Wählen Sie ein neues, um die Anmeldung abzuschließen. Sie sind noch nicht angemeldet.',
-  'renew.hint':
+  'renew.too_short':
     'Mindestens zwölf Zeichen, und keines, das Sie schon verwendet haben. Ein kurzer Satz eignet sich gut.',
   'renew.submit': 'Speichern und anmelden',
 
@@ -326,7 +324,6 @@ export const de: Catalog = {
   'portal.search': 'Suchen',
   'portal.sign_out': 'Abmelden',
   'portal.greeting': 'Guten Tag, {name}',
-  'portal.lead': 'Anwendungen, die Ihre Organisation Ihnen zugewiesen hat.',
   'portal.empty_title': 'Noch keine Anwendungen zugewiesen',
   'portal.empty_body':
     'Sobald Ihre Administration Ihnen Anwendungen zuweist, erscheinen sie hier und öffnen sich mit einem Klick.',

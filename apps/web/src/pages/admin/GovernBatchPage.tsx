@@ -76,7 +76,6 @@ export function GovernBatchPage() {
     <>
       <PageHeader
         title="Revocations"
-        description="Nothing here has happened yet. This is the last point at which a mistake costs nothing."
       />
 
       {error !== null && <Alert tone="danger">{error}</Alert>}
@@ -162,7 +161,6 @@ export function GovernBatchPage() {
           {requiresChange.length > 0 && (
             <Panel
               title={`${requiresChange.length} that require a change somewhere else`}
-              description="These will not be removed by this batch. Each gets a remediation item with an owner when the batch is confirmed."
             >
               <ul className="divide-y divide-border-subtle">
                 {requiresChange.map((d) => (

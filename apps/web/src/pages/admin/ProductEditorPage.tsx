@@ -227,20 +227,17 @@ export function ProductEditorPage() {
             label="Description"
             value={description}
             onChange={setDescription}
-            hint="What somebody gets, in the words they would use for it."
           />
           <Field label="Category" value={category} onChange={setCategory} />
           <Field
             label="Request instructions"
             value={requestInstructions}
             onChange={setRequestInstructions}
-            hint="Shown on the request form. Say what the approver will need to know."
           />
           <Field
             label="Kind"
             value={kind}
             onChange={setKind}
-            hint="application, localGroup or targetEntitlement"
           />
           <Field
             label="Resource id it grants"
@@ -252,7 +249,6 @@ export function ProductEditorPage() {
             value={workflowId}
             onChange={setWorkflowId}
             error={errors.workflowId}
-            hint="Who has to agree before this is granted. A workflow with no stages grants immediately."
             options={[
               { value: '', label: 'Choose one…' },
               ...(workflowList?.workflows ?? []).map((w) => ({
@@ -267,7 +263,6 @@ export function ProductEditorPage() {
       <div className="mt-6">
         <Panel
           title="How long it lasts"
-          description="A permanent grant is reviewed by a campaign; a fixed one expires on its own."
         >
           <div className="space-y-4 p-4">
             <Select
@@ -310,16 +305,24 @@ export function ProductEditorPage() {
       </div>
 
       <div className="mt-6">
-        <Panel
-          title="Who can see it"
-          description='Leave this empty and NOBODY sees it. To offer it to everybody with an active contract, write { "all": [] }.'
-        >
+        <Panel title="Who can see it">
           <div className="space-y-3 p-4">
             <Field
               label="Audience condition (JSON)"
               value={audience}
               onChange={setAudience}
               error={errors.audienceCondition}
+              // The syntax goes in the control, where somebody about to type
+              // is already looking, instead of in a sentence above it.
+              placeholder='{ "all": [] }'
+              warning={
+                // The one genuinely dangerous state, and it is a state: an
+                // empty condition publishes nothing, which looks identical to
+                // a saved product that simply nobody has requested yet.
+                audience.trim() === ''
+                  ? 'Empty means nobody can see this. Use { "all": [] } for everybody with an active contract.'
+                  : undefined
+              }
             />
             <Button onClick={runPreview}>Show me who</Button>
             {preview && (

@@ -370,11 +370,6 @@ function HttpConnectorFields({
         autoComplete="new-password"
         value={credential}
         onChange={onCredentialChange}
-        hint={
-          isNew
-            ? 'Stored in the secrets vault, never on the target record.'
-            : 'Leave blank to keep the stored secret. It is never sent to this page.'
-        }
       />
 
       <div>
@@ -745,11 +740,6 @@ export function TargetDetailPage() {
     <>
       <PageHeader
         title={isNew ? 'New target' : form.name || 'Target system'}
-        description={
-          isNew
-            ? 'Where Syntra creates and maintains accounts. Nothing is written until a run is reviewed.'
-            : 'Provisioning settings for this target.'
-        }
         actions={
           <>
             <Button onClick={onTest} loading={busy === 'test'} disabled={!!busy}>
@@ -812,7 +802,6 @@ export function TargetDetailPage() {
             label="Name"
             value={form.name}
             onChange={(v) => set('name', v)}
-            hint="What this target system is called here."
             {...mark('name')}
             className="sm:col-span-2"
           />
@@ -826,11 +815,6 @@ export function TargetDetailPage() {
             // any accounts.
             disabled={!isNew}
             {...mark('type')}
-            hint={
-              isNew
-                ? undefined
-                : "A target's type cannot be changed after it is created."
-            }
             options={[
               { value: 'activeDirectory', label: 'Active Directory' },
               { value: 'scim2', label: 'SCIM 2.0' },
@@ -864,7 +848,6 @@ export function TargetDetailPage() {
                 label="URL"
                 value={form.url}
                 onChange={(v) => set('url', v)}
-                hint="Writes require LDAPS or StartTLS. A Samba AD domain controller refuses even a bind in the clear."
                 {...mark('url')}
               />
               <Select
@@ -872,11 +855,6 @@ export function TargetDetailPage() {
                 value={form.tlsMode}
                 onChange={(v) => set('tlsMode', v as TlsMode)}
                 {...mark('tlsMode')}
-                hint={
-                  form.tlsMode === 'ldaps'
-                    ? 'TLS from the first byte. Needs an ldaps:// URL.'
-                    : 'The connection is upgraded to TLS before the bind, so the password never crosses in the clear.'
-                }
                 options={[
                   { value: 'ldaps', label: 'LDAPS' },
                   { value: 'starttls', label: 'StartTLS' },
@@ -887,17 +865,11 @@ export function TargetDetailPage() {
                 checked={form.rejectUnauthorized}
                 onChange={(v) => set('rejectUnauthorized', v)}
                 label="Verify the directory server's TLS certificate"
-                hint={
-                  form.rejectUnauthorized
-                    ? 'Leave this on unless the server presents a self-signed certificate you cannot install.'
-                    : 'Off: any certificate is accepted, including one presented by an impostor. The connection is encrypted but not authenticated.'
-                }
               />
               <Field
                 label="Bind DN"
                 value={form.bindDn}
                 onChange={(v) => set('bindDn', v)}
-                hint="The account Provision writes as. It needs create, modify, move and membership rights — the test below reports which of them it could confirm."
                 {...mark('bindDn')}
               />
               <Field
@@ -906,32 +878,24 @@ export function TargetDetailPage() {
                 autoComplete="new-password"
                 value={form.bindPassword}
                 onChange={(v) => set('bindPassword', v)}
-                hint={
-                  isNew
-                    ? 'Stored in the secrets vault, never on the target record.'
-                    : 'Leave blank to keep the stored password. It is never sent to this page.'
-                }
                 {...mark('bindPassword')}
               />
               <Field
                 label="Base DN"
                 value={form.baseDn}
                 onChange={(v) => set('baseDn', v)}
-                hint="The subtree accounts are read from and created under."
                 {...mark('baseDn')}
               />
               <Field
                 label="Entitlement search base"
                 value={form.entitlementSearchBase}
                 onChange={(v) => set('entitlementSearchBase', v)}
-                hint="Where the grantable groups live. Anything outside it is invisible to Provision."
                 {...mark('entitlementSearchBase')}
               />
               <Field
                 label="Archive container"
                 value={form.archiveContainer}
                 onChange={(v) => set('archiveContainer', v)}
-                hint="Where an archived account is moved to. Provision never deletes; archiving moves the object and strips its managed entitlements."
                 {...mark('archiveContainer')}
                 className="sm:col-span-2"
               />
@@ -942,7 +906,6 @@ export function TargetDetailPage() {
                 label="Base URL"
                 value={form.baseUrl}
                 onChange={(v) => set('baseUrl', v)}
-                hint="Scheme and host, e.g. https://api.example.test/scim/v2. The Users and Groups collections are read beneath it."
                 {...mark('baseUrl')}
                 className="sm:col-span-2"
               />
@@ -952,11 +915,6 @@ export function TargetDetailPage() {
                 autoComplete="new-password"
                 value={form.bindPassword}
                 onChange={(v) => set('bindPassword', v)}
-                hint={
-                  isNew
-                    ? 'Stored in the secrets vault, never on the target record.'
-                    : 'Leave blank to keep the stored token. It is never sent to this page.'
-                }
                 {...mark('bindPassword')}
                 className="sm:col-span-2"
               />
@@ -979,10 +937,6 @@ export function TargetDetailPage() {
                 >
                   Account profile
                 </Link>
-                <span className="ml-2 text-muted">
-                  How an account is named, where it is placed, and what it is
-                  given.
-                </span>
               </li>
               <li>
                 <Link
@@ -1019,7 +973,6 @@ export function TargetDetailPage() {
             value={form.schedule}
             onChange={(v) => set('schedule', v)}
             placeholder="0 3 * * *"
-            hint="A cron expression, in UTC. Leave empty to run this target by hand only."
             {...mark('schedule')}
           />
           <Select
@@ -1029,11 +982,6 @@ export function TargetDetailPage() {
             {...mark('enforcementMode')}
             // Ruling P2, on the target's own screen. Drift is reported under
             // both modes; what changes is whether Provision acts on it.
-            hint={
-              form.enforcementMode === 'additive'
-                ? 'Provision revokes only what it granted. Anything else it finds is reported as drift and left alone.'
-                : 'Provision also removes holdings it did not grant, within its remit. Everything it removes is still reported.'
-            }
             options={[
               { value: 'additive', label: 'Additive' },
               { value: 'authoritative', label: 'Authoritative' },
@@ -1044,20 +992,17 @@ export function TargetDetailPage() {
             checked={form.enabled}
             onChange={(v) => set('enabled', v)}
             label="Enabled"
-            hint="A disabled target is never run on its schedule. Run now still works, so a new target can be saved disabled and checked before it runs unattended."
           />
           <Check
             className="sm:col-span-2"
             checked={form.autoApply}
             onChange={(v) => set('autoApply', v)}
             label="Apply scheduled runs automatically"
-            hint="The guard is not advisory: a blocked run never applies on a schedule, whatever this says."
           />
         </Panel>
 
         <Panel
           title="Deprovisioning ladder"
-          description="Provision never deletes. A departure walks down these steps, in this order."
           bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
         >
           <Field
@@ -1065,7 +1010,6 @@ export function TargetDetailPage() {
             value={form.preHireDays}
             onChange={(v) => set('preHireDays', v)}
             inputMode="numeric"
-            hint="How far ahead of a start date an account is created. Zero means on the day."
             {...mark('preHireDays')}
           />
           <Field
@@ -1087,7 +1031,6 @@ export function TargetDetailPage() {
             value={form.archiveAfterDays}
             onChange={(v) => set('archiveAfterDays', v)}
             inputMode="numeric"
-            hint="Blank means never. Archiving moves the object and strips its remaining managed entitlements, so it is opted into."
             {...mark('archiveAfterDays')}
           />
           <Field
@@ -1095,7 +1038,6 @@ export function TargetDetailPage() {
             value={form.reenableWithoutConfirmationDays}
             onChange={(v) => set('reenableWithoutConfirmationDays', v)}
             inputMode="numeric"
-            hint="Re-enabling an account disabled for longer than this asks for a tick."
             {...mark('reenableWithoutConfirmationDays')}
           />
           <Check
@@ -1103,13 +1045,11 @@ export function TargetDetailPage() {
             checked={form.renameEnabled}
             onChange={(v) => set('renameEnabled', v)}
             label="Rename an account when the person's name changes"
-            hint="A rename breaks certificate subjects, profile paths, file ownership and mailbox aliases. Off by default, and always confirmable when on."
           />
         </Panel>
 
         <Panel
           title="Safety thresholds"
-          description="A run proposing to change more than this share of a population is held for confirmation rather than applied."
           bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
         >
           {THRESHOLDS.map(([key, label]) => (

@@ -152,11 +152,15 @@ export function Portal() {
   return (
     <AppShell>
       <div className="mx-auto w-full max-w-5xl px-6 py-10">
+        {/* The greeting, and nothing under it. The lead said "Applications
+            your organization has assigned to you", above a grid of the
+            applications the organization has assigned to you — a sentence
+            describing the thing directly beneath it, on the one screen
+            PRODUCT.md says people look at for four seconds. */}
         <header>
           <h1 className="text-2xl font-semibold text-ink">
             {t('portal.greeting', { name: firstName })}
           </h1>
-          <p className="mt-1 text-muted">{t('portal.lead')}</p>
         </header>
 
         <div className="mt-8 space-y-4">

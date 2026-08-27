@@ -77,8 +77,10 @@ describe('GovernSnapshotDetailPage', () => {
     renderPage();
     await waitFor(() => expect(screen.getByText(/Acme AD/)).toBeInTheDocument());
 
-    // The snapshot was assembled on the 15th...
-    const assembled = screen.getByText(/Assembled/).textContent ?? '';
+    // The snapshot was assembled on the 15th. The instant used to ride in
+    // the page header's `description` as part of a sentence; it is a fact
+    // about the record, so it is now a labelled value beside its label.
+    const assembled = screen.getByText('Assembled').nextElementSibling?.textContent ?? '';
     expect(assembled).toContain(ASSEMBLED);
     expect(assembled).not.toContain(LAST_READ);
 

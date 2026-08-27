@@ -320,7 +320,6 @@ export function AccountProfilePage() {
   const header = (
     <PageHeader
       title="Account profile"
-      description="Rules answer whether somebody gets an account. This answers what that account looks like."
       {...(load.state === 'ready'
         ? {
             actions: (
@@ -413,7 +412,6 @@ export function AccountProfilePage() {
             label="Account name template"
             value={profile.correlationKeyTemplate}
             onChange={(v) => set('correlationKeyTemplate', v)}
-            hint="The sAMAccountName. %person.givenName.first%.%person.familyName% gives anna.novak."
             {...mark('correlationKeyTemplate')}
           />
           <Field
@@ -421,28 +419,24 @@ export function AccountProfilePage() {
             value={profile.maxUniquenessAttempts}
             onChange={(v) => set('maxUniquenessAttempts', v)}
             inputMode="numeric"
-            hint="When the name is taken, how many numbered variants to try before giving up and reporting the person as unprocessable. Between 1 and 200."
             {...mark('maxUniquenessAttempts')}
           />
           <Field
             label="Container template"
             value={profile.containerTemplate}
             onChange={(v) => set('containerTemplate', v)}
-            hint="Where the account is created. Every value substituted into it is escaped, so a department containing a comma cannot name a different container."
             {...mark('containerTemplate')}
           />
           <Field
             label="Fallback container"
             value={profile.fallbackContainer}
             onChange={(v) => set('fallbackContainer', v)}
-            hint="Required. Used when the container template resolves to nothing: Provision does not create organizational units in somebody else's domain."
             {...mark('fallbackContainer')}
           />
         </Panel>
 
         <Panel
           title="Attributes"
-          description="Written on create and rewritten whenever the person's record changes."
           actions={
             <Button size="sm" onClick={() => setRows([...rows, ['', '']])}>
               Add attribute
@@ -515,7 +509,6 @@ export function AccountProfilePage() {
             value={profile.passwordLength}
             onChange={(v) => set('passwordLength', v)}
             inputMode="numeric"
-            hint="Between 12 and 256, or blank for the default. Provision generates it, seals it into the vault and never shows it again."
             {...mark('length')}
           />
           <Select
@@ -533,7 +526,6 @@ export function AccountProfilePage() {
 
         <Panel
           title="Live preview"
-          description="A template language nobody can try is a template language everybody gets wrong."
         >
           <div className="space-y-4 p-4">
             <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">

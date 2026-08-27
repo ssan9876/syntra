@@ -14,6 +14,7 @@ import { isLaunchableUrl } from '@syntra/contracts';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { StatCard, StatGrid } from '../../components/StatCards.js';
 
 interface CatalogEntry {
   key: string;
@@ -21,7 +22,7 @@ interface CatalogEntry {
   category: string;
   description: string;
   docsUrl: string;
-  variables: { key: string; label: string; example: string; hint?: string }[];
+  variables: { key: string; label: string; example: string }[];
   saml?: unknown;
   oidc?: unknown;
 }
@@ -131,7 +132,6 @@ function CatalogPicker({
               onChange={(v) => setValues((current) => ({ ...current, [variable.key]: v }))}
               placeholder={variable.example}
               required
-              {...(variable.hint ? { hint: variable.hint } : {})}
             />
           ))}
           {chosen.variables.length === 0 && (
@@ -206,6 +206,11 @@ export function ApplicationsPage() {
   const { data, error, loading, reload } = useApiResource<{ applications: Row[] }>(
     '/api/admin/applications',
   );
+  // Narrowed once, and reused by both the summary cards and the table.
+  // The optional chain used to guard `data` and then walk straight into
+  // the collection, so a 200 arriving without it threw inside render.
+  const applications = data?.applications ?? [];
+
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -274,7 +279,6 @@ export function ApplicationsPage() {
     <>
       <PageHeader
         title="Applications"
-        description="What your people can reach from the portal, and who each one is assigned to."
         actions={
           <>
             {/*
@@ -308,6 +312,16 @@ export function ApplicationsPage() {
         }
       />
 
+      <StatGrid>
+        <StatCard label="Applications" value={applications.length} />
+        <StatCard
+          label="Hidden from the portal"
+          value={applications.filter((a) => a.visibility === 'hidden').length}
+          tone="warning"
+          quietWhenZero
+        />
+      </StatGrid>
+
       {error && <Alert tone="danger">{error}</Alert>}
 
       {picking && (
@@ -328,8 +342,13 @@ export function ApplicationsPage() {
               label="Slug"
               value={slug}
               onChange={setSlug}
+              warning={
+                // Only once they have typed one. An empty field has nothing
+                // to warn about, and a permanent caption under an empty box
+                // is the hint this replaced.
+                slug ? 'This appears in URLs and cannot be changed after the application is created.' : undefined
+              }
               required
-              hint="Lower-case letters, digits and hyphens. It appears in URLs and cannot be changed later."
               {...(slugError ? { error: slugError } : {})}
             />
             <Field label="Description" value={description} onChange={setDescription} />
@@ -337,7 +356,6 @@ export function ApplicationsPage() {
               label="Category"
               value={category}
               onChange={setCategory}
-              hint="Groups the tile in the portal. Leave it blank and it sits with the rest."
             />
             <Field
               label="Launch URL"
@@ -347,7 +365,6 @@ export function ApplicationsPage() {
                 if (launchUrlError) setLaunchUrlError(null);
               }}
               required
-              hint="Where the tile opens. https:// only."
               {...(launchUrlError ? { error: launchUrlError } : {})}
             />
             {formError && (

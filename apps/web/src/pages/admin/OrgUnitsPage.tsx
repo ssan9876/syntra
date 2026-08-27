@@ -6,6 +6,7 @@ import { RecordPanel } from './RecordPanel.js';
 import { DeleteButton } from './DeleteButton.js';
 import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
+import { StatCard, StatGrid } from '../../components/StatCards.js';
 
 interface OrgUnitRow {
   id: string;
@@ -20,6 +21,10 @@ export function OrgUnitsPage() {
   const { data, error, loading, reload } = useApiResource<{ orgUnits: OrgUnitRow[] }>(
     '/api/admin/org-units',
   );
+  // Narrowed once, and shared by the summary cards and the table below.
+  // A 200 without its collection must render empty, not blank the console.
+  const orgUnits = data?.orgUnits ?? [];
+
   // ONE editor for the page, opened by a row. See the same note on UsersPage.
   const [editing, setEditing] = useState<OrgUnitRow | null>(null);
 
@@ -34,8 +39,21 @@ export function OrgUnitsPage() {
     <>
       <PageHeader
         title="Org units"
-        description="The organizational hierarchy. Administrative roles can be scoped to a single unit."
       />
+
+      <StatGrid>
+        <StatCard label="Org units" value={orgUnits.length} />
+        <StatCard
+          label="From a directory"
+          value={orgUnits.filter((u) => u.sourceId !== null).length}
+        />
+        <StatCard
+          label="Inactive"
+          value={orgUnits.filter((u) => u.status !== 'active').length}
+          tone="warning"
+          quietWhenZero
+        />
+      </StatGrid>
 
       {error && <Alert tone="danger">{error}</Alert>}
 
@@ -71,7 +89,6 @@ export function OrgUnitsPage() {
                 value={v.parentId ?? ''}
                 onChange={(x) => set('parentId', x)}
                 error={errs.parentId}
-                hint="A unit cannot be moved inside itself or anything below it."
                 options={[
                   { value: '', label: 'No parent — top level' },
                   // ITSELF EXCLUDED. The API refuses a cycle and marks the
@@ -113,7 +130,6 @@ export function OrgUnitsPage() {
               value={v.parentId ?? ''}
               onChange={(x) => set('parentId', x)}
               error={errs.parentId}
-              hint="Leave at the top level for a unit with no parent."
               options={[
                 { value: '', label: 'No parent — top level' },
                 ...(data?.orgUnits ?? []).map((u) => ({ value: u.id, label: u.name })),
@@ -220,7 +236,7 @@ function Row({
             active={unit.status === 'active'}
             basePath={`/api/admin/org-units/${unit.id}`}
             label="org unit"
-            reasonPrompt="Why is this unit being deactivated? The users in it stay where they are, and it will grant nothing — neither its applications nor a role scoped to it."
+            consequences="Users stay where they are. The unit grants nothing — neither its applications nor a role scoped to it."
             onChanged={onChanged}
           />
         )}

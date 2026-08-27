@@ -10,6 +10,7 @@ import {
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { StatCard, StatGrid } from '../../components/StatCards.js';
 
 interface TargetRow {
   id: string;
@@ -193,6 +194,11 @@ export function TargetsPage() {
   const { data, error, loading } = useApiResource<{ targets: TargetRow[] }>(
     '/api/admin/targets',
   );
+  // Narrowed once, and reused by both the summary cards and the table.
+  // The optional chain used to guard `data` and then walk straight into
+  // the collection, so a 200 arriving without it threw inside render.
+  const targets = data?.targets ?? [];
+
   // Read once per paint rather than per row, so two rows in one table cannot
   // be judged against two different clocks.
   const now = Date.now();
@@ -201,13 +207,26 @@ export function TargetsPage() {
     <>
       <PageHeader
         title="Target systems"
-        description="Where Provision creates and maintains accounts. Nothing is written until a run is reviewed."
         actions={
           <Link to="/admin/targets/new" className={buttonClasses('primary')}>
             New target
           </Link>
         }
       />
+
+      {/* A target that is skipping its schedule is this module's quiet
+          failure: it looks healthy, it is enabled, and nothing is being
+          provisioned. Silent while it is zero. */}
+      <StatGrid>
+        <StatCard label="Targets" value={targets.length} />
+        <StatCard label="Enabled" value={targets.filter((t) => t.enabled).length} tone="success" />
+        <StatCard
+          label="Skipping runs"
+          value={targets.filter((t) => t.consecutiveSkippedRuns > 0).length}
+          tone="warning"
+          quietWhenZero
+        />
+      </StatGrid>
 
       {error && <Alert tone="danger">{error}</Alert>}
 

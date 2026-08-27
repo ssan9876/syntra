@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
-import { UsersPage } from './UsersPage.js';
+import { AccountsTab } from './AccountsTab.js';
 
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), {
@@ -177,7 +177,7 @@ describe('deactivate, never delete', () => {
     mockApi({ users: [user({ sourceId: 'src-1' })] });
     render(
       <MemoryRouter>
-        <UsersPage />
+        <AccountsTab />
       </MemoryRouter>,
     );
     await screen.findByText('mokafor');
@@ -194,7 +194,7 @@ describe('deactivate, never delete', () => {
     mockApi({ users: [user()] });
     render(
       <MemoryRouter>
-        <UsersPage />
+        <AccountsTab />
       </MemoryRouter>,
     );
     await screen.findByText('mokafor');

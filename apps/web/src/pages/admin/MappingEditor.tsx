@@ -86,7 +86,6 @@ export function MappingEditor({
   return (
     <Panel
       title="Attribute mappings"
-      description="Which directory attribute becomes which field in Syntra. A mapped field is owned by the source and rewritten on every run."
       actions={
         onSeed && (
           <span className="flex items-center gap-2 text-sm text-muted">

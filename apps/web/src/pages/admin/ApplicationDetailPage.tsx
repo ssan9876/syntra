@@ -141,7 +141,7 @@ export function ApplicationDetailPage() {
 
   return (
     <>
-      <PageHeader title="Assignments" description="Who can reach this application, and how." />
+      <PageHeader title="Assignments" />
 
       {error && <Alert tone="danger">{error}</Alert>}
       {problem && <Alert tone="warning">{problem}</Alert>}
@@ -155,7 +155,6 @@ export function ApplicationDetailPage() {
       {!loading && assignments && (
         <Panel
           title="Assigned to"
-          description="Assignments are a union: a person reaches this application if any one of them matches, and an assignment on a parent organizational unit reaches everyone below it."
         >
           <div className="space-y-4 p-4">
             {assignments.length === 0 && (

@@ -139,7 +139,6 @@ export function RequestDetailAdminPage() {
             <div className="mt-6">
               <Panel
                 title="Decide this by hand"
-                description="Recorded as a decision with your name on it, and subject to the same rule as every other decision: you cannot decide a request you are the subject or submitter of."
               >
                 <div className="space-y-3 p-4">
                   <Field

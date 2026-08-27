@@ -11,7 +11,21 @@ export interface FieldProps
   // undefined` -- so without it the ordinary usage is a type error and the
   // call sites grow conditional spreads for a value the component is happy to
   // receive. Widening here permits strictly more and changes no behaviour.
-  hint?: string | undefined;
+  /**
+   * A consequence of using this control that the control cannot show.
+   *
+   * NOT help text, and deliberately not the `hint` it replaced. A hint was
+   * permanent: a sentence under every field, shown to everybody, forever,
+   * whether or not it applied — and eighty-nine of them turned the console's
+   * forms into prose about themselves. Anything a hint said about what a
+   * field IS belongs in its label; what is left is the smaller set of things
+   * a field can DO that a reader could not have predicted, and those are
+   * states.
+   *
+   * So pass this conditionally. A warning that is always on is a hint wearing
+   * a warning's colour, and the reader will learn to skip it just as fast.
+   */
+  warning?: string | undefined;
   error?: string | undefined;
   /** Marks the control invalid without repeating a message shown elsewhere. */
   invalid?: boolean | undefined;
@@ -21,7 +35,7 @@ export function Field({
   label,
   value,
   onChange,
-  hint,
+  warning,
   error,
   invalid,
   className = '',
@@ -29,7 +43,10 @@ export function Field({
 }: FieldProps) {
   const id = useId();
   const isInvalid = Boolean(error) || Boolean(invalid);
-  const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
+  // The warning keeps the accessible description the hint used to provide.
+  // Dropping `hint` without this would have taken information away from
+  // screen-reader users in the name of removing prose.
+  const describedBy = error ? `${id}-error` : warning ? `${id}-warning` : undefined;
 
   return (
     <div className={className}>
@@ -55,9 +72,12 @@ export function Field({
             : 'border-border-control hover:border-border-strong',
         ].join(' ')}
       />
-      {hint && !error && (
-        <p id={`${id}-hint`} className="mt-1.5 text-sm text-muted">
-          {hint}
+      {/* An error wins. An error is about what the reader just did; a
+          warning is about what happens next, and showing both leaves them
+          working out which one is blocking. */}
+      {warning && !error && (
+        <p id={`${id}-warning`} className="mt-1.5 text-sm text-warning">
+          {warning}
         </p>
       )}
       {error && (

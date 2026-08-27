@@ -13,13 +13,6 @@ const TONES: Record<Tone, string> = {
 export interface MetricProps {
   label: string;
   value: ReactNode;
-  /**
-   * What the figure means, when the label cannot carry it. Governance numbers
-   * are almost never self-describing: "certified" and "revoked" are outcomes,
-   * "requires a change" is neither, and a reader who does not know which of
-   * them count as decided cannot use any of them.
-   */
-  hint?: string | undefined;
   tone?: Tone | undefined;
   /**
    * Draws no attention when the figure is zero. A campaign with no blocked
@@ -37,11 +30,17 @@ export interface MetricProps {
  * somewhere else, 0 moot, 4 undecided" — a sentence nobody can scan, on the
  * screen somebody opens specifically to find out where a review stands.
  *
+ * The `hint` is gone. It argued that governance numbers are never
+ * self-describing — that "requires a change" means nothing without a sentence
+ * — and it was right that the labels were failing. It was wrong that a caption
+ * was the fix: a figure that needs a paragraph to be read is a figure whose
+ * LABEL has not been written yet, and the caption let the label stay bad.
+ *
  * The value is `text-xl` and tabular. Everything else on a console page sits
  * at or below body size, so a figure at 1.5rem is the only thing on the panel
  * that reads from a metre away, which is the whole job.
  */
-export function Metric({ label, value, hint, tone = 'neutral', quietWhenZero }: MetricProps) {
+export function Metric({ label, value, tone = 'neutral', quietWhenZero }: MetricProps) {
   const isZero = value === 0 || value === '0';
   const applied = quietWhenZero && isZero ? 'neutral' : tone;
   return (
@@ -55,7 +54,6 @@ export function Metric({ label, value, hint, tone = 'neutral', quietWhenZero }: 
         {value}
       </div>
       <div className="mt-0.5 text-sm font-medium text-ink">{label}</div>
-      {hint && <div className="mt-0.5 text-sm text-muted text-pretty">{hint}</div>}
     </div>
   );
 }

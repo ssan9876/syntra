@@ -4,24 +4,18 @@ import { AdminNav } from './AdminNav.js';
 import { UsersPage } from './UsersPage.js';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
-import { PersonsPage } from './PersonsPage.js';
 import { OnboardPersonPage } from './OnboardPersonPage.js';
 import { PersonDetailPage } from './PersonDetailPage.js';
-import { ImportPage } from './ImportPage.js';
-import { AuditPage } from './AuditPage.js';
+import { ActivityPage } from './ActivityPage.js';
 import { UpdatesPage } from './UpdatesPage.js';
 import { SourcesPage } from './SourcesPage.js';
 import { SourceDetailPage } from './SourceDetailPage.js';
-import { SyncRunsPage } from './SyncRunsPage.js';
 import { SyncRunDetailPage } from './SyncRunDetailPage.js';
 import { ApplicationsPage } from './ApplicationsPage.js';
 import { ApplicationDetailPage } from './ApplicationDetailPage.js';
 import { PoliciesPage } from './PoliciesPage.js';
 import { RolesPage } from './RolesPage.js';
 import { TenantSettingsPage } from './TenantSettingsPage.js';
-import { BrandingPage } from './BrandingPage.js';
-import { WebhooksPage } from './WebhooksPage.js';
-import { IncidentsPage } from './IncidentsPage.js';
 import { TargetsPage } from './TargetsPage.js';
 import { TargetDetailPage } from './TargetDetailPage.js';
 import { AccountProfilePage } from './AccountProfilePage.js';
@@ -29,39 +23,35 @@ import { BusinessRulesPage } from './BusinessRulesPage.js';
 import { ProvisionRunsPage } from './ProvisionRunsPage.js';
 import { ProvisionRunDetailPage } from './ProvisionRunDetailPage.js';
 import { PersonAccessPage } from './PersonAccessPage.js';
-import { ProductsPage } from './ProductsPage.js';
-import { DelegatedTasksPage } from './DelegatedTasksPage.js';
+import { RequestsPage } from './RequestsPage.js';
 import { ProductEditorPage } from './ProductEditorPage.js';
-import { WorkflowEditorPage } from './WorkflowEditorPage.js';
-import { RequestQueuePage } from './RequestQueuePage.js';
 import { RequestDetailAdminPage } from './RequestDetailAdminPage.js';
-import { SweepsPage } from './SweepsPage.js';
 import { SweepDetailPage } from './SweepDetailPage.js';
-import { GovernSnapshotsPage } from './GovernSnapshotsPage.js';
+import { GovernPage } from './GovernPage.js';
 import { GovernSnapshotDetailPage } from './GovernSnapshotDetailPage.js';
-import { GovernReportsPage } from './GovernReportsPage.js';
-import { GovernFindingsPage } from './GovernFindingsPage.js';
-import { GovernOrphansPage } from './GovernOrphansPage.js';
-import { GovernIntegrityPage } from './GovernIntegrityPage.js';
-import { GovernCampaignsPage } from './GovernCampaignsPage.js';
 import { GovernCampaignNewPage } from './GovernCampaignNewPage.js';
 import { GovernCampaignDetailPage } from './GovernCampaignDetailPage.js';
 import { GovernBatchPage } from './GovernBatchPage.js';
-import { GovernSodPage } from './GovernSodPage.js';
 
 export function AdminApp() {
   return (
     <AppShell sidebar={<AdminNav />}>
-      {/* Capped, and LEFT-ALIGNED against the rail rather than centred in what
-          is left. Centring opened a gap between the navigation and the content
-          that grew with the monitor, so on a wide screen the page looked like
-          it had come loose. A console reads left to right from its rail. */}
-      <div className="w-full max-w-6xl">
+      {/* No cap here. The shell caps and centres the rail and the content
+          together at `--shell-max`; a second cap on this container would win
+          over the outer one and silently undo it, which is how the console
+          ended up narrow and hugging its rail on a wide monitor. */}
+      <div className="w-full">
           <Routes>
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
             <Route path="org-units" element={<OrgUnitsPage />} />
-            <Route path="people" element={<PersonsPage />} />
+            {/* People, accounts and import are tabs of Users now. The old
+                paths are kept as redirects rather than deleted: they are in
+                bookmarks, in tickets, and in the `to=` of links on pages that
+                have not been touched yet, and a 404 for each of those is a
+                worse answer than the screen they meant. */}
+            <Route path="people" element={<Navigate to="/admin/users?tab=people" replace />} />
+            <Route path="import" element={<Navigate to="/admin/users?tab=import" replace />} />
             {/* Listed before the parametric route for readability, as
                 sources/new is. React Router ranks the static segment above the
                 dynamic one regardless, so "new" is never read as an id. */}
@@ -70,13 +60,15 @@ export function AdminApp() {
             {/* After the person, so the more specific path is reached rather
                 than shadowed by the less specific one. */}
             <Route path="people/:id/access" element={<PersonAccessPage />} />
-            <Route path="import" element={<ImportPage />} />
             <Route path="sources" element={<SourcesPage />} />
             {/* Before the parametric route, so "new" is a page rather than an
                 id that will 404 on its way to the editor. */}
             <Route path="sources/new" element={<SourceDetailPage />} />
             <Route path="sources/:id" element={<SourceDetailPage />} />
-            <Route path="sync-runs" element={<SyncRunsPage />} />
+            {/* Runs are a tab of Sources now — a run is a source's history,
+                not a peer of it. Redirected rather than dropped: the path is
+                in bookmarks and in links from run detail pages. */}
+            <Route path="sync-runs" element={<Navigate to="/admin/sources?tab=runs" replace />} />
             <Route path="sync-runs/:id" element={<SyncRunDetailPage />} />
             <Route path="targets" element={<TargetsPage />} />
             {/* React Router ranks a static segment above a dynamic one however
@@ -91,40 +83,51 @@ export function AdminApp() {
               path="targets/:id/runs/:runId"
               element={<ProvisionRunDetailPage />}
             />
-            <Route path="automate/products" element={<ProductsPage />} />
+            {/* One destination for the whole request pipeline. The five old
+                paths redirect: they are linked from approval emails, which
+                outlive any navigation change. */}
+            <Route path="requests" element={<RequestsPage />} />
+            <Route path="automate/products" element={<Navigate to="/admin/requests?tab=catalog" replace />} />
             {/* Before the parametric route, so "new" is a page rather than an
                 id that will 404 on its way to the editor. */}
             <Route path="automate/products/new" element={<ProductEditorPage />} />
             <Route path="automate/products/:id" element={<ProductEditorPage />} />
-            <Route path="automate/workflows" element={<WorkflowEditorPage />} />
-            <Route path="automate/requests" element={<RequestQueuePage />} />
+            <Route path="automate/workflows" element={<Navigate to="/admin/requests?tab=workflows" replace />} />
+            <Route path="automate/requests" element={<Navigate to="/admin/requests?tab=queue" replace />} />
             <Route path="automate/requests/:id" element={<RequestDetailAdminPage />} />
-            <Route path="automate/sweeps" element={<SweepsPage />} />
-            <Route path="automate/tasks" element={<DelegatedTasksPage />} />
+            <Route path="automate/sweeps" element={<Navigate to="/admin/requests?tab=sweeps" replace />} />
+            <Route path="automate/tasks" element={<Navigate to="/admin/requests?tab=tasks" replace />} />
             <Route path="automate/sweeps/:id" element={<SweepDetailPage />} />
             {/* Relative paths, and the literal segment before the parametric one. */}
-            <Route path="govern/findings" element={<GovernFindingsPage />} />
-            <Route path="govern/snapshots" element={<GovernSnapshotsPage />} />
+            {/* One governance destination. The seven old paths redirect —
+                they appear in exported reports and in audit tickets. */}
+            <Route path="govern" element={<GovernPage />} />
+            <Route path="govern/findings" element={<Navigate to="/admin/govern?tab=findings" replace />} />
+            <Route path="govern/snapshots" element={<Navigate to="/admin/govern?tab=snapshots" replace />} />
             <Route path="govern/snapshots/:id" element={<GovernSnapshotDetailPage />} />
-            <Route path="govern/reports" element={<GovernReportsPage />} />
-            <Route path="govern/campaigns" element={<GovernCampaignsPage />} />
+            <Route path="govern/reports" element={<Navigate to="/admin/govern?tab=reports" replace />} />
+            <Route path="govern/campaigns" element={<Navigate to="/admin/govern?tab=reviews" replace />} />
             {/* Before the parametric route, so "new" is a page rather than an
                 id that will 404 on its way to the detail screen. */}
             <Route path="govern/campaigns/new" element={<GovernCampaignNewPage />} />
             <Route path="govern/campaigns/:id" element={<GovernCampaignDetailPage />} />
             <Route path="govern/batches/:id" element={<GovernBatchPage />} />
-            <Route path="govern/sod" element={<GovernSodPage />} />
-            <Route path="govern/orphans" element={<GovernOrphansPage />} />
-            <Route path="govern/integrity" element={<GovernIntegrityPage />} />
+            <Route path="govern/sod" element={<Navigate to="/admin/govern?tab=sod" replace />} />
+            <Route path="govern/orphans" element={<Navigate to="/admin/govern?tab=orphans" replace />} />
+            <Route path="govern/integrity" element={<Navigate to="/admin/govern?tab=integrity" replace />} />
             <Route path="applications" element={<ApplicationsPage />} />
             <Route path="applications/:id" element={<ApplicationDetailPage />} />
             <Route path="policy" element={<PoliciesPage />} />
-            <Route path="audit" element={<AuditPage />} />
+            {/* Attention is the audit log filtered, not a second place. */}
+            <Route path="activity" element={<ActivityPage />} />
+            <Route path="audit" element={<Navigate to="/admin/activity?tab=all" replace />} />
             <Route path="roles" element={<RolesPage />} />
             <Route path="settings" element={<TenantSettingsPage />} />
-            <Route path="branding" element={<BrandingPage />} />
-            <Route path="webhooks" element={<WebhooksPage />} />
-            <Route path="incidents" element={<IncidentsPage />} />
+            {/* Branding and webhooks are tabs of Settings. Redirected, not
+                dropped: both paths are linked from the tenant docs. */}
+            <Route path="branding" element={<Navigate to="/admin/settings?tab=branding" replace />} />
+            <Route path="webhooks" element={<Navigate to="/admin/settings?tab=webhooks" replace />} />
+            <Route path="incidents" element={<Navigate to="/admin/activity?tab=attention" replace />} />
             <Route path="updates" element={<UpdatesPage />} />
             <Route path="*" element={<Navigate to="/admin/users" replace />} />
           </Routes>

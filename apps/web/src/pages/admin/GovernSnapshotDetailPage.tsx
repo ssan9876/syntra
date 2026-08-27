@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Alert, Button, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
-import { PageHeader } from './PageHeader.js';
+import { PageFacts, PageHeader } from './PageHeader.js';
 import { GovernRuleCandidates } from './GovernRuleCandidates.js';
 
 interface SourceLine {
@@ -53,14 +53,12 @@ export function GovernSnapshotDetailPage() {
 
   return (
     <>
-      <PageHeader
-        title="Snapshot"
-        {...(snapshot
-          ? {
-              description: `Assembled ${longDate(snapshot.asOf)}. That is when Govern put the picture together — not when any of these systems was last read.`,
-            }
-          : {})}
-      />
+      <PageHeader title="Snapshot" />
+      {/* "Assembled" and not "as of": the distinction the deleted sentence
+          spent a clause on is carried by the word itself, beside the two
+          per-source read times the page already shows. Put next to those, the
+          contrast is visible rather than described. */}
+      {snapshot && <PageFacts facts={[{ label: 'Assembled', value: longDate(snapshot.asOf) }]} />}
 
       {error && <Alert tone="danger">{error}</Alert>}
       {actionError && <Alert tone="danger">{actionError}</Alert>}
@@ -107,7 +105,6 @@ export function GovernSnapshotDetailPage() {
 
           <Panel
             title="Sources"
-            description="When each system was last read, and how completely. This is the clock that matters."
           >
             <Table>
               <thead>

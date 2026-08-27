@@ -86,7 +86,6 @@ export function PasswordPanel() {
   return (
     <Panel
       title="Password"
-      description="Changing it signs out every other session, but not this one."
     >
       <form onSubmit={submit} className="space-y-4">
         {done && <Alert tone="success">{done}</Alert>}

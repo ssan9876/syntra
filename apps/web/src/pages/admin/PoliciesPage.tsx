@@ -10,6 +10,7 @@ import { CountryPicker, DEVICE_OPTIONS, DevicePicker, countryName } from './poli
 // Type-only: a runtime parse in the browser would strip a field the server had
 // legitimately started sending.
 import type { RuleImpactResponse } from '@syntra/contracts';
+import { StatCard, StatGrid } from '../../components/StatCards.js';
 
 interface Rule {
   id: string;
@@ -244,13 +245,30 @@ export function PoliciesPage() {
     <>
       <PageHeader
         title="Authentication policy"
-        description="The first rule that matches decides. Rules are evaluated top to bottom on every sign-in and every application launch."
         actions={
           <Button variant="primary" size="sm" onClick={() => setAdding((v) => !v)}>
             Add a rule
           </Button>
         }
       />
+
+      {/* A disabled rule is the failure mode here: it sits in the numbered
+          list looking like policy and decides nothing.
+
+          No card for the fallback, though it was the obvious third one. The
+          ordered list already ends in a row reading "When no rule matches",
+          and that row's POSITION — last, after every rule — is what says it
+          is the last resort. A card repeating the words at the top of the
+          page would state it twice and mean it less. */}
+      <StatGrid>
+        <StatCard label="Rules" value={policy?.rules.length ?? 0} />
+        <StatCard
+          label="Disabled"
+          value={(policy?.rules ?? []).filter((r) => !r.enabled).length}
+          tone="warning"
+          quietWhenZero
+        />
+      </StatGrid>
 
       {error && <Alert tone="danger">{error}</Alert>}
       {actionError && <Alert tone="danger">{actionError}</Alert>}
@@ -309,7 +327,6 @@ export function PoliciesPage() {
               label="Source addresses"
               value={ipRanges}
               onChange={setIpRanges}
-              hint="CIDR ranges or single addresses, comma separated. Leave empty to match any address."
             />
             <DevicePicker value={devicePlatforms} onChange={setDevicePlatforms} />
             {outcome === 'deny' && devicePlatforms.length > 0 && (
@@ -326,13 +343,11 @@ export function PoliciesPage() {
               label="Contract field"
               value={contractField}
               onChange={setContractField}
-              hint="department, jobTitle, employer or location. Leave empty to ignore contracts."
             />
             <Field
               label="Contract values"
               value={contractValues}
               onChange={setContractValues}
-              hint="Comma separated. A person with several concurrent contracts matches if any one of them does."
             />
 
             {impact && (

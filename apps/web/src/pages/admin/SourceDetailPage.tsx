@@ -525,11 +525,6 @@ export function SourceDetailPage() {
     <>
       <PageHeader
         title={isNew ? 'New directory source' : form.name || 'Directory source'}
-        description={
-          isNew
-            ? 'Where users, groups and org units are read from. Nothing is written to the directory, ever.'
-            : 'Every mapped field below is owned by this source and rewritten on each run.'
-        }
         actions={
           <>
             <Button onClick={onTest} loading={busy === 'test'} disabled={!!busy}>
@@ -568,7 +563,6 @@ export function SourceDetailPage() {
             label="Name"
             value={form.name}
             onChange={(v) => set('name', v)}
-            hint="What this directory is called here."
             {...mark('name')}
             className="sm:col-span-2"
           />
@@ -576,7 +570,6 @@ export function SourceDetailPage() {
             label="Server URL"
             value={form.url}
             onChange={(v) => set('url', v)}
-            hint="ldap://host:389, or ldaps://host:636 for implicit TLS."
             {...mark('url')}
           />
           <Select
@@ -584,13 +577,6 @@ export function SourceDetailPage() {
             value={form.tlsMode}
             onChange={(v) => set('tlsMode', v as TlsMode)}
             {...mark('tlsMode')}
-            hint={
-              form.tlsMode === 'plain'
-                ? 'The bind password crosses the network in the clear.'
-                : form.tlsMode === 'starttls'
-                  ? 'The connection is upgraded to TLS before the bind, so the password never crosses in the clear.'
-                  : 'TLS from the first byte. Needs an ldaps:// URL.'
-            }
             options={[
               { value: 'plain', label: 'Not encrypted' },
               { value: 'starttls', label: 'StartTLS' },
@@ -602,17 +588,11 @@ export function SourceDetailPage() {
             checked={form.rejectUnauthorized}
             onChange={(v) => set('rejectUnauthorized', v)}
             label="Verify the directory server's TLS certificate"
-            hint={
-              form.rejectUnauthorized
-                ? 'Leave this on unless the server presents a self-signed certificate you cannot install.'
-                : 'Off: any certificate is accepted, including one presented by an impostor. The connection is encrypted but not authenticated.'
-            }
           />
           <Field
             label="Bind DN"
             value={form.bindDn}
             onChange={(v) => set('bindDn', v)}
-            hint="The account Syntra reads the directory as. Read access is enough."
             {...mark('bindDn')}
           />
           <Field
@@ -621,18 +601,17 @@ export function SourceDetailPage() {
             autoComplete="new-password"
             value={form.bindPassword}
             onChange={(v) => set('bindPassword', v)}
-            hint={
-              isNew
-                ? 'Stored in the secrets vault, never on the source record.'
-                : 'Leave blank to keep the stored password. It is never sent to this page.'
-            }
+            // In the box rather than under it. On a saved source an empty
+            // password field is genuinely ambiguous — it could mean "clear
+            // it" — and the answer is only wanted by somebody looking at the
+            // box, which is exactly when a placeholder is read.
+            placeholder={isNew ? undefined : 'Leave blank to keep the stored password'}
             {...mark('bindPassword')}
           />
         </Panel>
 
         <Panel
           title="What to read"
-          description="Each search base is read in pages. Anything outside them is invisible to Syntra."
           bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
         >
           <Field
@@ -663,7 +642,6 @@ export function SourceDetailPage() {
             label="Org unit search base"
             value={form.orgUnitSearchBase}
             onChange={(v) => set('orgUnitSearchBase', v)}
-            hint="Optional. Left empty, organizational units are not read."
             {...mark('orgUnitSearchBase')}
           />
           <Field
@@ -676,7 +654,6 @@ export function SourceDetailPage() {
             label="Anchor attribute"
             value={form.anchorAttribute}
             onChange={(v) => set('anchorAttribute', v)}
-            hint="The immutable id: objectGUID on Active Directory, entryUUID on OpenLDAP. Never the DN — a person who moves department changes theirs."
             {...mark('anchorAttribute')}
             className="sm:col-span-2"
           />
@@ -702,7 +679,6 @@ export function SourceDetailPage() {
             value={form.schedule}
             onChange={(v) => set('schedule', v)}
             placeholder="0 3 * * *"
-            hint="A cron expression, in UTC. Leave empty to run this source by hand only."
             {...mark('schedule')}
           />
           <Field
@@ -710,7 +686,6 @@ export function SourceDetailPage() {
             value={form.deactivationThresholdPercent}
             onChange={(v) => set('deactivationThresholdPercent', v)}
             inputMode="numeric"
-            hint="A run proposing to deactivate more than this share of this source's active users is held for confirmation."
             {...mark('deactivationThresholdPercent')}
           />
           <Check
@@ -722,20 +697,17 @@ export function SourceDetailPage() {
             // scheduler; Run now still works, because running one by hand is
             // how you check a source before letting it run unattended, and
             // saying otherwise would be copy that the product contradicts.
-            hint="A disabled source is never read on its schedule. Run now still works, so a new source can be saved disabled and checked before it runs unattended."
           />
           <Check
             className="sm:col-span-2"
             checked={form.autoApply}
             onChange={(v) => set('autoApply', v)}
             label="Apply scheduled runs automatically"
-            hint="A scheduled run applies its own diff without review. A run the guard held back is never applied this way — nobody is watching an unattended schedule."
           />
         </Panel>
 
         <Panel
           title="Write-back"
-          description="Whether Syntra may change accounts in this directory, rather than only read them."
         >
           <div className="grid gap-4 p-4 sm:grid-cols-2">
             <Check
@@ -747,7 +719,6 @@ export function SourceDetailPage() {
               // actually stops working. An administrator who turns this on
               // without delegating the rights gets a refusal at the moment
               // somebody leaves, which is the worst possible time to find out.
-              hint="Off, this source is read-only and nothing here can change an account in it. On, the bind account needs permission to write userAccountControl on the accounts in scope. Changing a password needs no extra rights: Syntra binds as the user."
             />
             <Check
               className="sm:col-span-2"
@@ -755,7 +726,6 @@ export function SourceDetailPage() {
               disabled={!form.writebackEnabled}
               onChange={(v) => set('writebackDisable', v)}
               label="Deactivating a user disables their account here"
-              hint="Lets an administrator deactivate a directory-managed user from the Users page. The account is disabled in the directory immediately, and the leaver steps configured on the paired target follow from that day."
             />
             <Check
               className="sm:col-span-2"
@@ -766,7 +736,6 @@ export function SourceDetailPage() {
               // The consequence people do not expect: the directory's policy
               // starts applying, including the minimum age, and it will refuse
               // things Syntra's own policy would have accepted.
-              hint="Off, changing a password in the portal changes it only in Syntra, and the user keeps a different password for this directory. On, the directory verifies the current password and applies its own rules for the new one — complexity, history and minimum age."
             />
             <Check
               className="sm:col-span-2"
@@ -779,7 +748,6 @@ export function SourceDetailPage() {
               // account is enabled again, a changed password is changed again.
               // This is not, so the hint leads with that rather than with what
               // the feature does.
-              hint="The only write here that cannot be reversed by doing it again — a deleted object is gone, and re-running the sync does not bring it back. Off, deleting from the console is refused for any account owned by this directory. On, the bind account also needs permission to delete the objects in scope. Deactivating remains the default everywhere; this is for an account or container that should stop existing."
             />
           </div>
         </Panel>

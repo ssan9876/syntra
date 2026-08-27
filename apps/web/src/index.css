@@ -104,6 +104,13 @@
   --text-xl: 1.5rem;
   --text-2xl: 1.875rem;
 
+  /* The width of the whole console: rail and content together, centred.
+     Chosen from the content rather than from a round number -- a 15rem rail
+     plus a table that stops being readable much past 1200px. Past this the
+     extra pixels are margin, and on a 34" ultrawide margin is what stops the
+     reader turning their head to get from the navigation to the row. */
+  --shell-max: 100rem;
+
   --radius-control: 0.375rem;
   --radius-panel: 0.625rem;
 

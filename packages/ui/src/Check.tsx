@@ -1,29 +1,38 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 
 export interface CheckProps {
   checked: boolean;
   onChange(value: boolean): void;
   label: ReactNode;
-  hint?: string;
+  /**
+   * Something that will override this box, shown only while it actually
+   * will. See `Field`'s note: this replaced a permanent `hint`.
+   */
+  warning?: string | undefined;
   className?: string;
   disabled?: boolean;
 }
 
 /**
- * A checkbox with its label and its consequence.
+ * A checkbox, its label, and anything currently overriding it.
  *
- * The `hint` is not decoration on this product: every checkbox in the console
- * turns something on that has an effect somebody has to be able to predict,
- * and a bare label rarely says what that effect is.
+ * This used to carry a permanent `hint`, on the reasoning that a bare label
+ * rarely says what a checkbox actually does. That reasoning was right about
+ * the symptom and wrong about the cure: a checkbox whose label does not say
+ * what it does needs a better label, not a sentence underneath it. The one
+ * thing a label genuinely cannot carry is a condition that changes — that
+ * something ELSE is currently going to overrule this box — and that is what
+ * `warning` is for.
  */
 export function Check({
   checked,
   onChange,
   label,
-  hint,
+  warning,
   className = '',
   disabled,
 }: CheckProps) {
+  const id = useId();
   return (
     <div className={className}>
       <label className="flex items-start gap-2.5">
@@ -32,11 +41,16 @@ export function Check({
           checked={checked}
           disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
+          aria-describedby={warning ? `${id}-warning` : undefined}
           className="mt-1 size-4 shrink-0 accent-primary"
         />
         <span>
           <span className="font-medium text-ink">{label}</span>
-          {hint && <span className="mt-0.5 block text-sm text-muted">{hint}</span>}
+          {warning && (
+            <span id={`${id}-warning`} className="mt-0.5 block text-sm text-warning">
+              {warning}
+            </span>
+          )}
         </span>
       </label>
     </div>

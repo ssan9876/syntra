@@ -58,11 +58,6 @@ export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEd
               inputMode={kind === 'number' ? 'decimal' : undefined}
               // Ruling P20, said on the screen rather than discovered from a
               // 400: a blank pattern is the universal pattern.
-              hint={
-                kind === 'list'
-                  ? 'Separated by commas. A blank list matches nobody and is refused.'
-                  : 'A blank value is refused: it would match every person in the tenant.'
-              }
             />
           )}
         </div>

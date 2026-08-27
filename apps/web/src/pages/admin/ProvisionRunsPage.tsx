@@ -103,7 +103,6 @@ export function ProvisionRunsPage() {
     <>
       <PageHeader
         title="Runs"
-        description="What each run proposed, what was applied, and what it refused to do."
         actions={
           <>
             <Button onClick={reload} disabled={busy}>

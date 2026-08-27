@@ -197,10 +197,6 @@ export function Security() {
       <div className="mx-auto w-full max-w-3xl space-y-6 px-6 py-10">
         <header>
           <h1 className="text-xl font-semibold text-ink">Security</h1>
-          <p className="mt-1 text-muted">
-            Your password, and the second factors that keep the account usable
-            only by you even if it is guessed.
-          </p>
         </header>
 
         {error && <Alert tone="danger">{error}</Alert>}
@@ -210,7 +206,6 @@ export function Security() {
 
         <Panel
           title="Authenticator app"
-          description="A six-digit code that changes every thirty seconds."
           actions={
             status?.totp.enrolled ? (
               <span className="flex items-center gap-2">
@@ -257,7 +252,6 @@ export function Security() {
 
         <Panel
           title="Security keys and passkeys"
-          description="A hardware key, or the fingerprint or face unlock built into this device."
         >
           <div className="space-y-4 p-4">
             {status?.webauthn.credentials.length === 0 && (
@@ -306,7 +300,6 @@ export function Security() {
 
         <Panel
           title="Recovery codes"
-          description="Single-use codes for when you lose your phone or key."
           actions={
             <Button size="sm" loading={busy} onClick={issueCodes}>
               {status && status.recoveryCodes.remaining > 0 ? 'Replace codes' : 'Generate codes'}

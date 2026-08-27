@@ -83,7 +83,6 @@ export function GovernCampaignDetailPage() {
     <>
       <PageHeader
         title={data?.campaign.name ?? 'Access review'}
-        description="Frozen against one snapshot. Extending the due date and rebasing onto a newer snapshot are both recorded, because a campaign that closed on time after four extensions did not close on time."
       />
 
       {error !== null && <Alert tone="danger">{error}</Alert>}
@@ -135,15 +134,13 @@ export function GovernCampaignDetailPage() {
                 <Metric label="Certified" value={data.counts.certified} tone="success" />
                 <Metric label="Revoked" value={data.counts.revoked} tone="primary" />
                 <Metric
-                  label="Require a change"
+                  label="Sent for remediation"
                   value={data.counts.requiresChange}
-                  hint="Not counted as revoked anywhere in this product. Each has a remediation item with an owner."
                   quietWhenZero
                 />
                 <Metric
-                  label="Moot"
+                  label="Access already gone"
                   value={data.counts.moot}
-                  hint="The access had already gone before anybody decided."
                 />
                 <Metric
                   label="Undecided"
@@ -263,7 +260,7 @@ export function GovernCampaignDetailPage() {
 
           {/* NOT hidden behind a toggle, and the sentence is on the panel rather
               than in a tooltip nobody opens. */}
-          <Panel title="Reviewer quality" description="Context for a human, not a control.">
+          <Panel title="Reviewer quality">
             <div className="p-4">
               <Alert tone="info">
                 None of these are violations and this screen does not call them violations. A

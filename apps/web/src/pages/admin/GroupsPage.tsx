@@ -5,6 +5,7 @@ import { ApiError, api } from '../../session/api.js';
 import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
 import { PageHeader } from './PageHeader.js';
+import { StatCard, StatGrid } from '../../components/StatCards.js';
 
 interface GroupRow {
   id: string;
@@ -19,6 +20,11 @@ export function GroupsPage() {
   const { data, error, loading, reload } = useApiResource<{ groups: GroupRow[] }>(
     '/api/admin/groups',
   );
+  // Narrowed once, and reused by both the summary cards and the table.
+  // The optional chain used to guard `data` and then walk straight into
+  // the collection, so a 200 arriving without it threw inside render.
+  const groups = data?.groups ?? [];
+
   // ONE editor for the whole page, opened by a row. Not one collapsed panel
   // per row: that puts a block-level trigger inside a flex row and, opened, a
   // two-column form inside it.
@@ -63,8 +69,18 @@ export function GroupsPage() {
     <>
       <PageHeader
         title="Groups"
-        description="Collections of users. Access is granted to groups rather than to people one at a time."
       />
+
+      <StatGrid>
+        <StatCard label="Groups" value={groups.length} />
+        <StatCard label="From a directory" value={groups.filter((g) => g.sourceId !== null).length} />
+        <StatCard
+          label="Inactive"
+          value={groups.filter((g) => g.status !== 'active').length}
+          tone="warning"
+          quietWhenZero
+        />
+      </StatGrid>
 
       {error && <Alert tone="danger">{error}</Alert>}
 
@@ -72,7 +88,6 @@ export function GroupsPage() {
         <div className="mb-6">
           <Panel
             title={`Members of ${members.name}`}
-            description="Access is granted to the group; everybody in it holds whatever the group holds."
           >
             <div className="space-y-4 p-4">
               {memberProblem && <Alert tone="warning">{memberProblem}</Alert>}
@@ -190,7 +205,6 @@ export function GroupsPage() {
               value={v.description ?? ''}
               onChange={(x) => set('description', x)}
               error={errs.description}
-              hint="What this group is for. Shown wherever the group is granted access."
             />
           </>
         )}
@@ -258,7 +272,7 @@ export function GroupsPage() {
                       active={group.status === 'active'}
                       basePath={`/api/admin/groups/${group.id}`}
                       label="group"
-                      reasonPrompt="Why is this group being deactivated? Its members are kept and it will grant nothing."
+                      consequences="Members are kept. The group grants nothing."
                       onChanged={reload}
                     />
                   </span>

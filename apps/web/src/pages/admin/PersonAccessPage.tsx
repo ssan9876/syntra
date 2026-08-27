@@ -420,7 +420,6 @@ export function PersonAccessPage() {
     <>
       <PageHeader
         title="Why does this person hold this?"
-        description="Every target-system account and every entitlement on it: the rules that hold it in place today, beside the rule recorded when it was granted."
       />
 
       <div className="space-y-6">
@@ -451,7 +450,6 @@ export function PersonAccessPage() {
             <Panel
               key={account.targetSystemId}
               title={account.targetName}
-              description={account.correlationKey}
               actions={(() => {
                 const state = accountStatus(account.status);
                 return (
