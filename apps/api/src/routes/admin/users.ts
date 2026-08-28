@@ -187,7 +187,14 @@ export async function registerAdminUserRoutes(
         try {
           created = await createUser(tx, body);
         } catch (error) {
-          if (error instanceof Error && /login already exists/i.test(error.message)) {
+          // Both pre-checks in `createUser` raise a plain Error so the domain
+          // stays free of HTTP, and both are the same answer to the caller:
+          // something already here has this, and it is not a request that can
+          // be confirmed past.
+          if (
+            error instanceof Error &&
+            /(login already exists|email already in use)/i.test(error.message)
+          ) {
             throw new ProblemError(409, 'conflict', 'Conflict', error.message);
           }
           throw error;
@@ -550,6 +557,28 @@ export async function registerAdminUserRoutes(
             'Managed by a directory source',
             'This account is read from a directory source, and the next sync run would overwrite the change. Edit it where it comes from.',
           );
+        }
+
+        if (body.email !== undefined) {
+          // Same rule as the create path and the partial index behind it:
+          // among locally managed accounts only, and case-insensitively.
+          // Excluding this account is what lets a rename leave the address
+          // alone without colliding with itself.
+          const sharing = await tx.user.findFirst({
+            where: {
+              email: { equals: body.email, mode: 'insensitive' },
+              sourceId: null,
+              id: { not: id },
+            },
+          });
+          if (sharing) {
+            throw new ProblemError(
+              409,
+              'conflict',
+              'Conflict',
+              `email already in use: ${body.email}`,
+            );
+          }
         }
 
         if (body.orgUnitId !== undefined && body.orgUnitId !== null) {

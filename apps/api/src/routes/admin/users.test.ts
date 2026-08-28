@@ -939,3 +939,101 @@ describe('deleting a user', () => {
     );
   });
 });
+
+/**
+ * The two duplicates that are always a mistake, and are therefore refused
+ * outright rather than confirmed past. See migration
+ * `20260922000000_user_duplicate_guards` for the indexes behind them.
+ */
+describe('duplicate guards on POST /api/admin/users', () => {
+  const patch = (url: string, cookie: string, payload: unknown) =>
+    ctx.app.inject({
+      method: 'PATCH',
+      url,
+      headers: { host: ctx.host, cookie },
+      payload: payload as object,
+    });
+
+  it('refuses a login that differs only in case', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    await post('/api/admin/users', cookie, {
+      login: 'jdoe',
+      email: 'a@acme.test',
+      displayName: 'A',
+    });
+    const res = await post('/api/admin/users', cookie, {
+      login: 'JDoe',
+      email: 'b@acme.test',
+      displayName: 'B',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/login already exists/i);
+  });
+
+  it('refuses a second local account on one email', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    await post('/api/admin/users', cookie, {
+      login: 'a',
+      email: 'shared@acme.test',
+      displayName: 'A',
+    });
+    const res = await post('/api/admin/users', cookie, {
+      login: 'b',
+      email: 'shared@acme.test',
+      displayName: 'B',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/email already in use/i);
+  });
+
+  it('refuses an edit that collides with another local account email', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    await post('/api/admin/users', cookie, {
+      login: 'a',
+      email: 'taken@acme.test',
+      displayName: 'A',
+    });
+    const other = await post('/api/admin/users', cookie, {
+      login: 'b',
+      email: 'free@acme.test',
+      displayName: 'B',
+    });
+
+    const res = await patch(
+      `/api/admin/users/${other.json().id}/details`,
+      cookie,
+      { email: 'TAKEN@acme.test' },
+    );
+
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('lets an account keep its own email through an edit', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const user = await post('/api/admin/users', cookie, {
+      login: 'a',
+      email: 'mine@acme.test',
+      displayName: 'A',
+    });
+
+    // The `id: { not: id }` in the guard is what this covers: without it,
+    // renaming an account while leaving its address alone would collide with
+    // itself and be refused.
+    const res = await patch(`/api/admin/users/${user.json().id}/details`, cookie, {
+      displayName: 'A Renamed',
+      email: 'mine@acme.test',
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+});
