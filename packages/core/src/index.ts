@@ -36,7 +36,7 @@ export * from './auth/session-service.js';
 // evaluation, second factors and the audit event. authorize() is the door.
 export type { AuthFailure, AuthResult } from './auth/login-service.js';
 export { clearLockout, isLocked, readLockout } from './auth/login-lockout.js';
-export { passwordExpired, passwordWasUsedBefore } from './auth/password-ageing.js';
+export { mustRenewPassword, passwordWasUsedBefore } from './auth/password-ageing.js';
 export type { AgeingPolicy } from './auth/password-ageing.js';
 export { renewExpiredPassword } from './auth/password-renewal.js';
 export type { RenewOutcome } from './auth/password-renewal.js';

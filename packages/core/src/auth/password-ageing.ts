@@ -27,19 +27,27 @@ export interface AgeingPolicy {
 /**
  * Whether this user must choose a new password before they get a session.
  *
+ * Two independent reasons, and the order matters. An administrator's demand is
+ * honoured whatever the ageing policy says, because `passwordMaxAgeDays` is
+ * zero in most tenants and should be — see the note above — and a flag that
+ * only fired where scheduled expiry happened to be switched on would be a
+ * control that silently did nothing almost everywhere it was used.
+ *
+ * That is why the `passwordMaxAgeDays <= 0` early return sits BELOW the
+ * credential read rather than at the top where it used to: the flag has to be
+ * consulted before expiry is ruled out.
+ *
  * Answers false for anything Syntra does not own. A user whose password lives
- * upstream cannot be helped by a change form here — expiring them would strand
+ * upstream cannot be helped by a change form here — demanding one would strand
  * them in front of a screen that changes nothing at their provider — and a
- * user with no password credential at all has nothing to age.
+ * user with no password credential at all has nothing to renew.
  */
-export async function passwordExpired(
+export async function mustRenewPassword(
   tx: TenantClient,
   userId: string,
   policy: AgeingPolicy,
   now: Date,
 ): Promise<boolean> {
-  if (policy.passwordMaxAgeDays <= 0) return false;
-
   const user = await tx.user.findUnique({
     where: { id: userId },
     select: { passwordSource: true },
@@ -48,9 +56,13 @@ export async function passwordExpired(
 
   const credential = await tx.passwordCredential.findUnique({
     where: { userId },
-    select: { changedAt: true },
+    select: { changedAt: true, mustChange: true },
   });
   if (!credential) return false;
+
+  if (credential.mustChange) return true;
+
+  if (policy.passwordMaxAgeDays <= 0) return false;
 
   const age = now.getTime() - credential.changedAt.getTime();
   return age > policy.passwordMaxAgeDays * DAY_MS;
