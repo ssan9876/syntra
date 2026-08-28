@@ -25,6 +25,15 @@ interface Contract {
   endDate: string | null;
   jobTitle: string | null;
   department: string | null;
+  /**
+   * Not shown in the table, which has four columns and room for no more, but
+   * carried so the edit form can round-trip them. A form that silently dropped
+   * a cost centre it never displayed would be a correction that quietly
+   * deleted data.
+   */
+  costCentre?: string | null;
+  employer?: string | null;
+  location?: string | null;
 }
 
 interface LinkedUser {
@@ -60,6 +69,15 @@ const day = (iso: string | null) =>
 export function PersonDetailPage() {
   const { id } = useParams();
   const [editing, setEditing] = useState(false);
+  /**
+   * Which contract is being corrected, held as its sequence.
+   *
+   * One at a time and one panel above the table, the shape the accounts rework
+   * settled on: a collapsed panel per row would put a block-level form inside
+   * a table cell, and holding one piece of state per row is how the accounts
+   * list ended up carrying six.
+   */
+  const [editingSequence, setEditingSequence] = useState<number | null>(null);
   const { data, error, loading, reload } = useApiResource<PersonDetail>(
     `/api/admin/persons/${id}`,
   );
@@ -226,6 +244,97 @@ export function PersonDetailPage() {
           />
         )}
 
+        {editingSequence !== null &&
+          (() => {
+            const target = data.contracts.find(
+              (c) => c.sequence === editingSequence,
+            );
+            // Gone from under the form — reloaded after somebody else removed
+            // it. Rendering nothing beats rendering a form that would PATCH a
+            // sequence this person no longer holds.
+            if (!target) return null;
+            return (
+              <RecordPanel
+                title={`Edit contract ${target.sequence}`}
+                submitLabel="Save"
+                method="PATCH"
+                path={`/api/admin/persons/${data.id}/contracts/${target.sequence}`}
+                initial={{
+                  jobTitle: target.jobTitle ?? '',
+                  department: target.department ?? '',
+                  costCentre: target.costCentre ?? '',
+                  employer: target.employer ?? '',
+                  location: target.location ?? '',
+                  endDate: day(target.endDate) ?? '',
+                }}
+                onCancel={() => setEditingSequence(null)}
+                onCreated={() => {
+                  setEditingSequence(null);
+                  reload();
+                }}
+                // An emptied box CLEARS the field rather than being dropped.
+                // This is an edit form: the difference between "leave it" and
+                // "there is no department" is the whole reason the schema
+                // takes a null, and dropping the empty string would make a
+                // field uncorrectable in the direction of removing it.
+                build={(v) => ({
+                  jobTitle: v.jobTitle?.trim() ? v.jobTitle : null,
+                  department: v.department?.trim() ? v.department : null,
+                  costCentre: v.costCentre?.trim() ? v.costCentre : null,
+                  employer: v.employer?.trim() ? v.employer : null,
+                  location: v.location?.trim() ? v.location : null,
+                  endDate: v.endDate?.trim() ? v.endDate : null,
+                })}
+                fields={(v, set, errs) => (
+                  <>
+                    <Field
+                      label="Job title"
+                      value={v.jobTitle ?? ''}
+                      onChange={(x) => set('jobTitle', x)}
+                      error={errs.jobTitle}
+                    />
+                    <Field
+                      label="Department"
+                      value={v.department ?? ''}
+                      onChange={(x) => set('department', x)}
+                      error={errs.department}
+                    />
+                    <Field
+                      label="Cost centre"
+                      value={v.costCentre ?? ''}
+                      onChange={(x) => set('costCentre', x)}
+                      error={errs.costCentre}
+                    />
+                    <Field
+                      label="Employer"
+                      value={v.employer ?? ''}
+                      onChange={(x) => set('employer', x)}
+                      error={errs.employer}
+                    />
+                    <Field
+                      label="Location"
+                      value={v.location ?? ''}
+                      onChange={(x) => set('location', x)}
+                      error={errs.location}
+                    />
+                    <Field
+                      label="End date"
+                      type="date"
+                      value={v.endDate ?? ''}
+                      onChange={(x) => set('endDate', x)}
+                      error={errs.endDate}
+                    />
+                  </>
+                )}
+              />
+            );
+          })()}
+
+        {/* `isPrimary` is deliberately absent from that form. Promoting a
+            contract is a different decision from correcting one — the API
+            supports it, and a checkbox for it beside a typo fix is how
+            somebody demotes a primary contract while fixing a department. */}
+
         <Panel
           title="Contracts"
         >
@@ -255,6 +364,9 @@ export function PersonDetailPage() {
                   <th scope="col">
                     Until
                   </th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -279,6 +391,19 @@ export function PersonDetailPage() {
                     <td>
                       {/* Open-ended is ongoing, not missing data. */}
                       {day(contract.endDate) ?? 'Ongoing'}
+                    </td>
+                    <td>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setEditingSequence(contract.sequence)}
+                      >
+                        {/* Named with its sequence rather than a bare "Edit":
+                            a column of identical buttons is announced one
+                            after another with no way to tell the rows
+                            apart. */}
+                        Edit contract {contract.sequence}
+                      </Button>
                     </td>
                   </tr>
                 ))}
