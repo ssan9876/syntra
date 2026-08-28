@@ -119,6 +119,13 @@ export async function fetchLatestRelease(
         headers: {
           authorization: `Bearer ${token}`,
           accept: 'application/vnd.github+json',
+          // REQUIRED, not courtesy. GitHub answers a request without one with
+          // 403 "Request forbidden by administrative rules", and every
+          // non-ok response here becomes `null` -- which the console renders
+          // as "nothing to show". A deployment with a valid token, a
+          // reachable forge and a published release sat on the previous
+          // version for exactly this reason, saying nothing about why.
+          'user-agent': 'syntra',
         },
         signal: AbortSignal.timeout(10_000),
       },

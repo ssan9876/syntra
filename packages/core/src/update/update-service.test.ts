@@ -90,6 +90,24 @@ describe('fetchLatestRelease', () => {
     });
   });
 
+  /**
+   * GitHub REFUSES a request without one -- 403, "Request forbidden by
+   * administrative rules. Please make sure your request has a User-Agent
+   * header" -- and `fetchLatestRelease` turns any non-ok response into `null`,
+   * which the console renders as "nothing to show". The lab sat on 1.5.0 with
+   * a valid token, a reachable forge and a published 1.6.0 for exactly this
+   * reason, and the case above did not catch it because `toMatchObject`
+   * asserts the headers that ARE sent and says nothing about the one missing.
+   */
+  it('identifies itself, because the forge rejects a request that does not', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(release()));
+    await fetchLatestRelease('tok', 'acme/syntra', fetchImpl as never);
+
+    const [, init] = fetchImpl.mock.calls[0]!;
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers['user-agent']).toBeTruthy();
+  });
+
   it('strips the v from the tag', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(release({ tag_name: 'v2.0.0' })));
     expect((await fetchLatestRelease('t', 'r', fetchImpl as never))?.version).toBe('2.0.0');
