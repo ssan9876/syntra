@@ -4,6 +4,7 @@ import {
   patchRoleBody,
   roleAssignmentBody,
   roleAssignmentParams,
+  roleAssignmentQuery,
   roleBody,
 } from '@syntra/contracts';
 import {
@@ -215,12 +216,22 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
     { preHandler: requirePermission(PERMISSIONS.RBAC_MANAGE) },
     async (request, reply) => {
       const { id, userId } = roleAssignmentParams.parse(request.params);
+      // Which grant, where somebody holds the role more than once. Absent is
+      // every scope, which is what the path alone has always meant.
+      //
+      // It could not be said before, and the old comment here claimed a
+      // caller wanting to keep one department's grant "does it by
+      // re-assigning" -- but assigning only ever adds, so withdrawing one of
+      // two grants was not expressible at all. `revokeRole` has taken this
+      // argument since it was written; only this layer never passed it.
+      const { scopeOrgUnitId } = roleAssignmentQuery.parse(request.query);
       try {
         await request.db(async (tx) => {
-          // Every scope, because the path names none. A caller who wants to
-          // remove one department's grant and keep another's does it by
-          // re-assigning; taking "the role" off somebody means all of it.
-          await revokeRole(tx, userId, id);
+          await revokeRole(tx, userId, id, scopeOrgUnitId);
+          // Unchanged by the scope, and deliberately: `countHoldersOf` counts
+          // UNSCOPED holders only, so withdrawing a tenant-wide grant is
+          // refused even where a scoped one survives it. Authority over one
+          // department cannot restore authority over the tenant.
           await guardRbac(tx);
           await recordEvent(tx, {
             actorUserId: request.session.userId,
@@ -229,7 +240,10 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
             targetId: userId,
             outcome: 'success',
             sourceIp: request.ip,
-            payload: { roleId: id },
+            // Recorded even when absent: "every scope" and "the Cardiology
+            // one" are different acts, and a payload that omits the field
+            // leaves the log unable to say which happened.
+            payload: { roleId: id, scopeOrgUnitId: scopeOrgUnitId ?? null },
           });
         });
       } catch (cause) {

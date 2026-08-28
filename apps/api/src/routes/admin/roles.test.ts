@@ -4,6 +4,7 @@ import {
   ALL_PERMISSIONS,
   PERMISSIONS,
   assignRole,
+  createOrgUnit,
   createRole,
   createUser,
   hashPassword,
@@ -301,5 +302,108 @@ describe('the role API that did not exist', () => {
 
     expect(res.statusCode).toBe(404);
     expect(res.json().title).toMatch(/role/i);
+  });
+});
+
+/**
+ * Revoking ONE scope, which the path alone cannot name.
+ *
+ * `DELETE /roles/:id/assignments/:userId` removes every scope, deliberately
+ * and documented -- taking "the role" off somebody means all of it. That is
+ * the right default and it was also the only behaviour, so a grant over one
+ * department could not be withdrawn without withdrawing the tenant-wide one
+ * beside it. The route's own docstring said such a caller "does it by
+ * re-assigning"; assigning only ever adds, so there was no way back at all.
+ *
+ * `revokeRole` has taken an optional scope since it was written. Only the
+ * HTTP layer never passed one.
+ */
+describe('DELETE /api/admin/roles/:id/assignments/:userId?scopeOrgUnitId', () => {
+  it('removes the scoped grant and leaves the tenant-wide one standing', async () => {
+    await seedAdmin('owner', ALL_PERMISSIONS);
+    const cookie = await authCookie('owner');
+
+    const { subject, roleId, unitId } = await withTenant(ctx.tenantId, async (tx) => {
+      const user = await createUser(tx, {
+        login: 'jo',
+        email: 'jo@acme.test',
+        displayName: 'Jo',
+      });
+      const unit = await createOrgUnit(tx, 'Cardiology');
+      const role = await createRole(tx, 'Auditor', [PERMISSIONS.AUDIT_READ]);
+      await assignRole(tx, user.id, role.id);
+      await assignRole(tx, user.id, role.id, unit.id);
+      return { subject: user, roleId: role.id, unitId: unit.id };
+    });
+
+    const res = await send(
+      'DELETE',
+      `/api/admin/roles/${roleId}/assignments/${subject.id}?scopeOrgUnitId=${unitId}`,
+      cookie,
+    );
+    expect(res.statusCode).toBe(204);
+
+    const listed = (await send('GET', '/api/admin/roles', cookie)).json() as {
+      roles: { id: string; holders: { userId: string; scopeOrgUnitId: string | null }[] }[];
+    };
+    const holders = listed.roles.find((r) => r.id === roleId)!.holders;
+    expect(holders).toEqual([{ ...holders[0], userId: subject.id, scopeOrgUnitId: null }]);
+  });
+
+  it('still removes every scope when none is named', async () => {
+    await seedAdmin('owner', ALL_PERMISSIONS);
+    const cookie = await authCookie('owner');
+
+    const { subject, roleId } = await withTenant(ctx.tenantId, async (tx) => {
+      const user = await createUser(tx, {
+        login: 'jo',
+        email: 'jo@acme.test',
+        displayName: 'Jo',
+      });
+      const unit = await createOrgUnit(tx, 'Cardiology');
+      const role = await createRole(tx, 'Auditor', [PERMISSIONS.AUDIT_READ]);
+      await assignRole(tx, user.id, role.id);
+      await assignRole(tx, user.id, role.id, unit.id);
+      return { subject: user, roleId: role.id };
+    });
+
+    expect(
+      (await send('DELETE', `/api/admin/roles/${roleId}/assignments/${subject.id}`, cookie))
+        .statusCode,
+    ).toBe(204);
+
+    const listed = (await send('GET', '/api/admin/roles', cookie)).json() as {
+      roles: { id: string; holders: unknown[] }[];
+    };
+    expect(listed.roles.find((r) => r.id === roleId)!.holders).toEqual([]);
+  });
+
+  /**
+   * A SCOPED grant of `rbac.manage` is not a way out of a lockout:
+   * `countHoldersOf` counts unscoped assignments only, because authority over
+   * one department cannot restore authority over the tenant. So revoking the
+   * last tenant-wide holder must still be refused even where a scoped grant
+   * of the same role survives it.
+   */
+  it('refuses to leave rbac.manage held only within one unit', async () => {
+    const { user, roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const cookie = await authCookie('owner');
+
+    const unitId = await withTenant(ctx.tenantId, async (tx) => {
+      const unit = await createOrgUnit(tx, 'Cardiology');
+      await assignRole(tx, user.id, roleId, unit.id);
+      return unit.id;
+    });
+
+    const res = await send(
+      'DELETE',
+      `/api/admin/roles/${roleId}/assignments/${user.id}`,
+      cookie,
+    );
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      detail: expect.stringContaining('rbac.manage'),
+    });
+    expect(unitId).toBeTruthy();
   });
 });

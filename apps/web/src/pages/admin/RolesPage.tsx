@@ -76,6 +76,8 @@ export function RolesPage() {
   /** Which role's grant picker is open, and who is selected in it. */
   const [granting, setGranting] = useState<string | null>(null);
   const [grantee, setGrantee] = useState('');
+  /** Where the grant applies. '' is the whole tenant, which is the default. */
+  const [grantScope, setGrantScope] = useState('');
 
   /**
    * The accounts a role can be granted to.
@@ -97,6 +99,21 @@ export function RolesPage() {
   } = useApiResource<{
     users: { id: string; login: string; displayName: string; status: string }[];
   }>('/api/admin/users');
+
+  /**
+   * The units a grant can be confined to.
+   *
+   * Gated on `directory.read`, the same permission as the account list above,
+   * so the two fail together and the one refusal already on screen covers
+   * both. Read here rather than resolved by the server because the picker
+   * needs the whole list anyway, and the holders' unit names are then a
+   * lookup in memory rather than a second shape on the roles response.
+   */
+  const { data: unitsData } = useApiResource<{
+    orgUnits: { id: string; name: string }[];
+  }>('/api/admin/org-units');
+
+  const unitNames = new Map((unitsData?.orgUnits ?? []).map((u) => [u.id, u.name]));
 
   const open = (role: RoleRow) => {
     setForm({ id: role.id, builtIn: role.builtIn });
@@ -195,9 +212,21 @@ export function RolesPage() {
     return [...byModule];
   })();
 
-  /** Accounts not already holding this role. */
-  const grantable = (role: RoleRow) => {
-    const held = new Set(role.holders.map((h) => h.userId));
+  /**
+   * Accounts not already holding this role AT THE CHOSEN SCOPE.
+   *
+   * Scope-dependent, not merely "does not hold it anywhere". Somebody holding
+   * the role over Cardiology is a perfectly good candidate for Oncology, and
+   * excluding them for holding it somewhere makes the second grant
+   * unreachable; offering them for Cardiology again invites the refusal of the
+   * unique index on (role, user, scope).
+   */
+  const grantable = (role: RoleRow, scope: string) => {
+    const held = new Set(
+      role.holders
+        .filter((h) => (h.scopeOrgUnitId ?? '') === scope)
+        .map((h) => h.userId),
+    );
     return (usersData?.users ?? []).filter((u) => !held.has(u.id));
   };
 
@@ -208,15 +237,17 @@ export function RolesPage() {
     try {
       await api(`/api/admin/roles/${role.id}/assignments`, {
         method: 'POST',
-        // No scope. `RoleAssignment` carries `scopeOrgUnitId` and the API
-        // accepts one, but a scoped grant is a different question from "who
-        // administers this tenant" and needs a unit picker with its own
-        // explanation of what scoping does. Unscoped is what this screen
-        // means, and it is what the anti-lockout guard counts.
-        body: JSON.stringify({ userId: grantee }),
+        // Explicitly null for the tenant-wide case, never absent. The two
+        // readings of a missing field are "everywhere" and "I forgot", and
+        // that is the difference between one department and the whole tenant.
+        body: JSON.stringify({
+          userId: grantee,
+          scopeOrgUnitId: grantScope === '' ? null : grantScope,
+        }),
       });
       setGranting(null);
       setGrantee('');
+      setGrantScope('');
       reload();
     } catch (cause) {
       setProblem(
@@ -232,7 +263,14 @@ export function RolesPage() {
   const revoke = async (role: RoleRow, holder: Holder) => {
     setProblem(null);
     try {
-      await api(`/api/admin/roles/${role.id}/assignments/${holder.userId}`, {
+      // The scope only where there is one. A bare path has always meant every
+      // scope, and a tenant-wide holder has exactly one — so saying nothing is
+      // both correct and unchanged for them.
+      const scope =
+        holder.scopeOrgUnitId === null
+          ? ''
+          : `?scopeOrgUnitId=${encodeURIComponent(holder.scopeOrgUnitId)}`;
+      await api(`/api/admin/roles/${role.id}/assignments/${holder.userId}${scope}`, {
         method: 'DELETE',
       });
       reload();
@@ -433,10 +471,22 @@ export function RolesPage() {
                     <ul className="flex flex-wrap items-center gap-x-4 gap-y-1">
                       {role.holders.map((holder) => (
                         <li
-                          key={holder.userId}
+                          // The scope is part of the identity: one account can
+                          // hold the role tenant-wide AND over a unit, which is
+                          // two rows and was two identical ones.
+                          key={`${holder.userId}:${holder.scopeOrgUnitId ?? ''}`}
                           className="flex items-center gap-2 text-sm"
                         >
                           <span className="text-ink">{holder.login}</span>
+                          {/* Only where there is one. Saying "everywhere" on
+                              every tenant-wide row would put the word on
+                              almost every row on the screen, which is how a
+                              distinction stops being visible. */}
+                          {holder.scopeOrgUnitId !== null && (
+                            <Status tone="neutral">
+                              {unitNames.get(holder.scopeOrgUnitId) ?? 'scoped'}
+                            </Status>
+                          )}
                           {holder.status !== 'active' && (
                             // Shown rather than filtered away: a deactivated
                             // account still holds the role, and still counts
@@ -446,7 +496,16 @@ export function RolesPage() {
                           <Button
                             size="sm"
                             variant="ghost"
-                            aria-label={`Revoke ${holder.login}`}
+                            // Named by scope where there is one, so two
+                            // grants to one account are two distinguishable
+                            // controls rather than the same label twice.
+                            aria-label={
+                              holder.scopeOrgUnitId === null
+                                ? `Revoke ${holder.login}`
+                                : `Revoke ${holder.login} in ${
+                                    unitNames.get(holder.scopeOrgUnitId) ?? 'one unit'
+                                  }`
+                            }
                             onClick={() => revoke(role, holder)}
                           >
                             Revoke
@@ -458,13 +517,35 @@ export function RolesPage() {
 
                   {granting === role.id ? (
                     <div className="mt-2 flex flex-wrap items-end gap-2">
+                      {/* No explanation beside it, deliberately. The option
+                          text IS the explanation: "Everywhere in this tenant"
+                          says what the grant will DO, where "unscoped" names a
+                          column. A control that needs a paragraph to be usable
+                          is a control that should be reworded. */}
+                      <Select
+                        label="Scope"
+                        value={grantScope}
+                        onChange={(value) => {
+                          setGrantScope(value);
+                          // The candidates depend on it, so a choice made
+                          // before the scope changed may no longer be one.
+                          setGrantee('');
+                        }}
+                        options={[
+                          { value: '', label: 'Everywhere in this tenant' },
+                          ...(unitsData?.orgUnits ?? []).map((unit) => ({
+                            value: unit.id,
+                            label: unit.name,
+                          })),
+                        ]}
+                      />
                       <Select
                         label="Account"
                         value={grantee}
                         onChange={setGrantee}
                         options={[
                           { value: '', label: 'Choose an account' },
-                          ...grantable(role).map((u) => ({
+                          ...grantable(role, grantScope).map((u) => ({
                             value: u.id,
                             label: u.login,
                           })),
@@ -485,6 +566,7 @@ export function RolesPage() {
                         onClick={() => {
                           setGranting(null);
                           setGrantee('');
+                          setGrantScope('');
                         }}
                       >
                         Cancel
@@ -500,7 +582,7 @@ export function RolesPage() {
                     <p className="mt-2 text-sm text-muted">
                       Granting needs directory.read, which this account does not hold.
                     </p>
-                  ) : usersLoading ? null : grantable(role).length === 0 ? (
+                  ) : usersLoading ? null : grantable(role, '').length === 0 ? (
                     <p className="mt-2 text-sm text-muted">
                       Everybody who can sign in already holds it.
                     </p>
@@ -512,6 +594,7 @@ export function RolesPage() {
                       onClick={() => {
                         setGranting(role.id);
                         setGrantee('');
+                        setGrantScope('');
                         setProblem(null);
                       }}
                     >

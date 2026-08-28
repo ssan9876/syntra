@@ -433,3 +433,161 @@ describe('when the caller cannot read the directory', () => {
     expect(screen.getByText('ssander')).toBeInTheDocument();
   });
 });
+/**
+ * Granting over one organizational unit rather than the whole tenant.
+ *
+ * `RoleAssignment.scopeOrgUnitId` has worked end to end since it was written
+ * -- `hasPermission` honours it, and a scoped grant on a deactivated unit
+ * stops counting -- and the console could only ever grant tenant-wide. The
+ * holders it renders have carried `scopeOrgUnitId` the whole time and it was
+ * dropped on the floor, so two grants to one person drew two identical rows
+ * over a count that deduplicated them.
+ */
+describe('granting within one org unit', () => {
+  const UNITS = [
+    { id: 'ou1', name: 'Cardiology' },
+    { id: 'ou2', name: 'Oncology' },
+  ];
+
+  /** A role held tenant-wide by one account and over Cardiology by another. */
+  const scopedRoles = [
+    {
+      id: 'r1',
+      name: 'Auditor',
+      description: null,
+      permissions: ['audit.read'],
+      builtIn: false,
+      assignmentCount: 2,
+      holders: [
+        {
+          userId: 'u1',
+          login: 'ssander',
+          displayName: 'Seth Sander',
+          status: 'active',
+          scopeOrgUnitId: null,
+        },
+        {
+          userId: 'u2',
+          login: 'agray',
+          displayName: 'Andrew Gray',
+          status: 'active',
+          scopeOrgUnitId: 'ou1',
+        },
+      ],
+    },
+  ];
+
+  function mockScoped() {
+    const sent: { url: string; method: string; body: unknown }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (method !== 'GET') {
+        sent.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
+        return Promise.resolve(json({}, 204) as never);
+      }
+      if (url.includes('/api/admin/org-units')) {
+        return Promise.resolve(json({ orgUnits: UNITS }) as never);
+      }
+      if (url.includes('/api/admin/users')) {
+        return Promise.resolve(json({ users: USERS }) as never);
+      }
+      return Promise.resolve(json({ catalog: CATALOG, roles: scopedRoles }) as never);
+    });
+    return sent;
+  }
+
+  it('grants over the chosen unit rather than the whole tenant', async () => {
+    const user = userEvent.setup();
+    const sent = mockScoped();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
+    await user.selectOptions(screen.getByLabelText('Scope'), 'ou2');
+    await user.selectOptions(screen.getByLabelText('Account'), 'u2');
+    await user.click(screen.getByRole('button', { name: 'Grant' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({ userId: 'u2', scopeOrgUnitId: 'ou2' });
+  });
+
+  /**
+   * Tenant-wide is the default and says what it DOES rather than what it is
+   * called. "Unscoped" is a word about the data model; "Everywhere in this
+   * tenant" is the consequence, and it is the whole of the explanation this
+   * control needs.
+   */
+  it('grants tenant-wide by default, sending an explicit null', async () => {
+    const user = userEvent.setup();
+    const sent = mockScoped();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
+    expect(screen.getByLabelText('Scope')).toHaveDisplayValue('Everywhere in this tenant');
+    await user.selectOptions(screen.getByLabelText('Account'), 'u2');
+    await user.click(screen.getByRole('button', { name: 'Grant' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    // Null and not absent: the two readings of a missing field are "tenant-wide"
+    // and "I forgot", which is the difference between one department and
+    // everything.
+    expect(sent[0]!.body).toEqual({ userId: 'u2', scopeOrgUnitId: null });
+  });
+
+  /**
+   * The candidates depend on the scope. Somebody holding the role over
+   * Cardiology is a perfectly good candidate for Oncology, and excluding them
+   * on the strength of holding it somewhere makes the second grant
+   * unreachable; offering them for Cardiology again invites the refusal of a
+   * unique index.
+   */
+  it('offers an account that holds the role in a different unit', async () => {
+    const user = userEvent.setup();
+    mockScoped();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
+    const picker = screen.getByLabelText('Account');
+
+    await user.selectOptions(screen.getByLabelText('Scope'), 'ou1');
+    expect(within(picker).queryByText('agray')).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Scope'), 'ou2');
+    expect(within(picker).getByText('agray')).toBeInTheDocument();
+  });
+
+  it('names the unit a scoped holder holds it in', async () => {
+    mockScoped();
+    renderPage();
+
+    await screen.findByText('agray');
+    // Otherwise the two holders draw as one repeated login with no way to tell
+    // which grant a Revoke would take.
+    expect(screen.getByText('Cardiology')).toBeInTheDocument();
+  });
+
+  it('revokes one scope without touching the other', async () => {
+    const user = userEvent.setup();
+    const sent = mockScoped();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Revoke agray in Cardiology' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.method).toBe('DELETE');
+    expect(sent[0]!.url).toContain('/assignments/u2?scopeOrgUnitId=ou1');
+  });
+
+  it('revokes every scope when the holder is tenant-wide', async () => {
+    const user = userEvent.setup();
+    const sent = mockScoped();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Revoke ssander' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    // No query at all: the path alone has always meant every scope, and a
+    // tenant-wide holder has exactly one.
+    expect(sent[0]!.url).not.toContain('scopeOrgUnitId');
+  });
+});

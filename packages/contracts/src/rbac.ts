@@ -59,3 +59,19 @@ export const roleAssignmentParams = z.object({
   id: z.string().uuid(),
   userId: z.string().uuid(),
 });
+
+/**
+ * Which grant to withdraw, when somebody holds the role more than once.
+ *
+ * ABSENT means every scope, which is what the path alone has always meant and
+ * remains the right default: taking "the role" off somebody means all of it.
+ * Naming a unit withdraws that one grant and leaves the others -- including
+ * the tenant-wide one -- standing.
+ *
+ * A query parameter rather than a body. DELETE bodies are permitted and widely
+ * mishandled, and this names WHICH of a set the path already identifies, which
+ * is what a query string is for.
+ */
+export const roleAssignmentQuery = z.object({
+  scopeOrgUnitId: z.string().uuid().optional(),
+});
