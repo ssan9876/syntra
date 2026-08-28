@@ -77,13 +77,47 @@ describe('SubjectLog', () => {
    * missing anything they can act on, and a red box on every account screen
    * telling them so is a permanent apology.
    */
-  it('renders nothing at all without audit.read', async () => {
+  it('says the log is not visible, rather than rendering nothing', async () => {
+    // It used to render nothing at all. A panel missing from the middle of a
+    // record does not read as absence, it reads as FAILURE: the reader knows
+    // the screen has sections, sees a gap where one should be, and concludes
+    // the feature did not load. The heading stays so every reader gets the
+    // same record shape, and only the contents differ.
     permitted = false;
     const fetchSpy = mockAudit();
-    const { container } = render(<SubjectLog subjects={['u1']} />);
+    render(<SubjectLog subjects={['u1']} />);
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByRole('heading', { name: 'Activity' })).toBeInTheDocument();
+    expect(screen.getByText(/not visible to you/i)).toBeInTheDocument();
+
+    // Still no request. The server would refuse it, and a 403 in the network
+    // log is a support question nobody needs to answer.
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('names the permission, so the reader can ask for it', async () => {
+    // The reader cannot grant `audit.read` to themselves — which is the
+    // argument that first made this panel silent. The answer is that they can
+    // ASK, and they cannot ask for a thing they cannot name. It is a literal
+    // row on the Roles screen, so it is a concrete noun to this audience.
+    permitted = false;
+    mockAudit();
+    render(<SubjectLog subjects={['u1']} />);
+
+    expect(screen.getByText('audit.read')).toBeInTheDocument();
+  });
+
+  it('shows no rows and no chain warning when it may not be read', async () => {
+    // The panel is present, so it must not imply anything about the log's
+    // contents or its integrity — a reader who cannot see the log has been
+    // told nothing about whether it is intact.
+    permitted = false;
+    mockAudit();
+    render(<SubjectLog subjects={['u1']} />);
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.queryByText(/altered/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/nothing recorded/i)).not.toBeInTheDocument();
   });
 
   it('says so when the subject has no history', async () => {

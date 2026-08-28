@@ -51,9 +51,29 @@ const when = (iso: string) =>
  *    return the entire tenant's log, which is the opposite of what this panel
  *    is for.
  *
- * Rendered only for a caller with `audit.read`, and rendered as NOTHING
- * otherwise. A permanent permission error on every account screen tells an
- * administrator about a right they cannot grant themselves, once per visit.
+ * Without `audit.read` the panel still renders, and says the log is not
+ * visible.
+ *
+ * It used to render as nothing at all, on the reasoning that a permanent
+ * permission error tells an administrator about a right they cannot grant
+ * themselves, once per visit. That reasoning is right where this console
+ * applies it elsewhere — a nav link the reader cannot use is invisible among a
+ * dozen others, and a tab that is never offered leaves a strip that still
+ * looks complete. Absence there is unremarkable.
+ *
+ * A panel missing from the middle of a RECORD is not unremarkable. The reader
+ * knows the screen has sections, sees a gap where one should be, and concludes
+ * the feature failed to load — which is the one thing this is not. So the
+ * heading stays, every reader gets the same record shape, and only the
+ * contents differ.
+ *
+ * The permission is NAMED, deliberately. The objection to naming it was that a
+ * reader cannot grant it to themselves; the answer is that without the name
+ * they cannot ask the person who can. `audit.read` is a concrete noun on the
+ * Roles screen, not jargon, to the only audience that sees this.
+ *
+ * Still makes no request: the server would refuse it, and a 403 in the network
+ * log is a support question nobody needs to answer.
  */
 export function SubjectLog({ subjects }: { subjects: string[] }) {
   const can = useCan();
@@ -70,7 +90,16 @@ export function SubjectLog({ subjects }: { subjects: string[] }) {
 
   const { data, error, loading } = useApiResource<AuditResponse>(path);
 
-  if (!allowed) return null;
+  if (!allowed) {
+    return (
+      <Panel title="Activity">
+        <Empty title="Not visible to you">
+          Reading an account&apos;s history needs the <code>audit.read</code>{' '}
+          permission.
+        </Empty>
+      </Panel>
+    );
+  }
 
   // Narrowed once, here. A 200 that arrives without its collection — an error
   // document, a truncated proxy reply — must render as an empty log rather
