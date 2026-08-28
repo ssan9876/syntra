@@ -451,3 +451,69 @@ describe('AccountDetailPage set password', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The org unit on the account's own edit form.
+ *
+ * `PATCH /users/:id/details` has accepted and validated `orgUnitId` since it
+ * was written; only the form never sent one, so an account's unit could be set
+ * at creation and never corrected.
+ */
+describe('AccountDetailPage org unit', () => {
+  const UNITS = { orgUnits: [{ id: 'ou1', name: 'Sales' }, { id: 'ou2', name: 'Care' }] };
+
+  it('offers the unit on the edit form and sends what was chosen', async () => {
+    let sent: Record<string, unknown> | undefined;
+    mockApi(ACCOUNT, {
+      '/org-units': () => json(UNITS),
+      '/details': (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return json({ ...ACCOUNT, orgUnitId: 'ou2' });
+      },
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Org unit'), 'ou2');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent!.orgUnitId).toBe('ou2');
+  });
+
+  it('sends null when the unit is cleared', async () => {
+    let sent: Record<string, unknown> | undefined;
+    mockApi(
+      { ...ACCOUNT, orgUnitId: 'ou1' },
+      {
+        '/org-units': () => json(UNITS),
+        '/details': (_url, init) => {
+          sent = JSON.parse(String(init?.body));
+          return json({ ...ACCOUNT, orgUnitId: null });
+        },
+      },
+    );
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Org unit'), '');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // Null takes the account out of the hierarchy, which the schema
+    // distinguishes from an omitted field. Sending '' would be a 400 on a uuid.
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent!.orgUnitId).toBeNull();
+  });
+
+  it('opens the picker on the unit the account already has', async () => {
+    mockApi(
+      { ...ACCOUNT, orgUnitId: 'ou1' },
+      { '/org-units': () => json(UNITS) },
+    );
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    expect(await screen.findByLabelText('Org unit')).toHaveValue('ou1');
+  });
+});

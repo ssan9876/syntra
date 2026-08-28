@@ -5,6 +5,7 @@ import {
   Button,
   Field,
   Panel,
+  Select,
   SkeletonRows,
   Status,
 } from '@syntra/ui';
@@ -35,6 +36,15 @@ interface AccountDetail {
   passwordSource?: string;
   /** Too many failed sign-ins. Orthogonal to `status`. */
   locked: boolean;
+  /**
+   * The unit this ACCOUNT sits in, which feeds access resolution.
+   *
+   * Not the same column as `Person.orgUnitId`, which is what drives where a
+   * provisioned account is placed on each target. An account can be in a unit
+   * for access while the person behind it is placed from another, and the two
+   * are edited on their own screens.
+   */
+  orgUnitId: string | null;
   person: { id: string; givenName: string; familyName: string } | null;
 }
 
@@ -78,6 +88,12 @@ export function AccountDetailPage() {
   const { data: sourcesData } = useApiResource<{ sources: SourceRow[] }>(
     '/api/admin/sources',
   );
+  // For the org-unit picker on the edit form. Its error state is tolerated the
+  // same way: a caller who may write the directory but not read its units gets
+  // an empty picker and a form that still saves the other two fields.
+  const { data: unitsData } = useApiResource<{
+    orgUnits: { id: string; name: string }[];
+  }>('/api/admin/org-units');
 
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -273,7 +289,11 @@ export function AccountDetailPage() {
             submitLabel="Save"
             method="PATCH"
             path={`/api/admin/users/${data.id}/details`}
-            initial={{ displayName: data.displayName, email: data.email }}
+            initial={{
+              displayName: data.displayName,
+              email: data.email,
+              orgUnitId: data.orgUnitId ?? '',
+            }}
             onCancel={() => setEditing(false)}
             onCreated={() => {
               setEditing(false);
@@ -282,6 +302,9 @@ export function AccountDetailPage() {
             build={(v) => ({
               displayName: v.displayName ?? '',
               email: v.email ?? '',
+              // Null, not ''. The schema takes a uuid or null — null takes the
+              // account out of the hierarchy — and '' satisfies neither.
+              orgUnitId: v.orgUnitId ? v.orgUnitId : null,
             })}
             fields={(v, set, errs) => (
               <>
@@ -297,6 +320,19 @@ export function AccountDetailPage() {
                   value={v.email ?? ''}
                   onChange={(x) => set('email', x)}
                   error={errs.email}
+                />
+                <Select
+                  label="Org unit"
+                  value={v.orgUnitId ?? ''}
+                  onChange={(x) => set('orgUnitId', x)}
+                  error={errs.orgUnitId}
+                  options={[
+                    { value: '', label: 'None' },
+                    ...(unitsData?.orgUnits ?? []).map((u) => ({
+                      value: u.id,
+                      label: u.name,
+                    })),
+                  ]}
                 />
               </>
             )}
