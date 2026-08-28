@@ -302,13 +302,25 @@ themselves" means, and no caller has to remember to.
 beside `changeOwnPassword`:
 
 1. refuse a non-`local` `passwordSource` — Syntra does not hold that password;
-2. validate against the tenant's policy via `password-policy.ts`;
-3. refuse a password in `PasswordHistory` within the configured depth;
-4. write the hash with `mustChange: true`, and push the previous hash to
+2. refuse an account whose directory source has `writebackPassword` enabled.
+   That source owns the password, and `changeOwnPassword` writes it to the
+   directory first for the reason its docstring gives at length: a local-only
+   change leaves Syntra accepting a password the domain refuses, and the
+   support call that follows has no visible cause. The connector's
+   `SourceWriteback.changePassword` takes a `currentPassword`, which is exactly
+   what an administrator does not have — there is no admin-set writeback in
+   `packages/connectors/src/ldap/writeback.ts` and adding one is its own
+   change. So this refuses, naming the source, rather than quietly diverging.
+   A source-owned account whose source does **not** write passwords is allowed,
+   matching what `changeOwnPassword` already permits and what the existing
+   password-setup link is already offered for;
+3. validate against the tenant's policy via `password-policy.ts`;
+4. refuse a password in `PasswordHistory` within the configured depth;
+5. write the hash with `mustChange: true`, and push the previous hash to
    history, trimming to depth;
-5. revoke every session and every refresh token.
+6. revoke every session and every refresh token.
 
-All five in one transaction. The revocation is the same shape `deactivateUser`
+All of it in one transaction. The revocation is the same shape `deactivateUser`
 and `completePasswordReset` both use, and for the reason `deactivateUser`'s
 docstring gives: a credential change whose sessions survive reads as done and is
 not. An administrator setting a password because an account is compromised is
