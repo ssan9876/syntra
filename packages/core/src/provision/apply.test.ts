@@ -735,6 +735,45 @@ describe('applyProvisionRun', () => {
     expect(action.attempts).toBe(1);
   });
 
+  it('records an outcome whose message carries a NUL byte', async () => {
+    /**
+     * PostgreSQL refuses U+0000 in a text column -- `22021, invalid byte
+     * sequence for encoding "UTF8": 0x00` -- and a connector's message is
+     * foreign text that has been nowhere near a validator. Writing it
+     * unsanitised threw out of the finish transaction, so an action the target
+     * had ALREADY answered was recorded nowhere and left `in_flight` for the
+     * next run to resolve against the directory.
+     *
+     * The message is diagnostic. It must never be the thing that decides
+     * whether an outcome can be recorded at all, and a rejection that is known
+     * to be permanent must not be laundered into "we do not know".
+     */
+    const refusing = intercepting('create_account', () => ({
+      ok: false,
+      message: 'the directory refused this entry: \u0000 unexpected end of input',
+      failure: 'rejected',
+    }));
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: refusing as never,
+    });
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: refusing as never,
+      sleep: noSleep,
+    });
+
+    const create = (await actionsOf(run.id)).find(
+      (a) => a.actionType === 'create_account',
+    )!;
+    expect(create.status).toBe('failed');
+    expect(result.inFlight).toBe(0);
+    // The diagnosis survives; only the byte the column cannot hold is gone.
+    expect(create.message).toContain('unexpected end of input');
+    expect(create.message).not.toContain('\u0000');
+  });
+
   it('marks a conflict as conflict and puts the account in conflict', async () => {
     // Seeded AFTER the preview, which is the only way this case arises. The
     // preview's `taken` set unions Syntra's own keys with the target's

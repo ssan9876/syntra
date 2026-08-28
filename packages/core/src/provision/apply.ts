@@ -984,6 +984,30 @@ async function applyOneAction(
 }
 
 /**
+ * A message from outside, made storable.
+ *
+ * PostgreSQL refuses U+0000 in a text column and in a jsonb string —
+ * `22021, invalid byte sequence for encoding "UTF8": 0x00` — and every message
+ * that reaches this module is foreign text: a directory's diagnostic, a
+ * driver's exception, whatever a future connector chooses to put in a
+ * `WriteResult`. None of it has been near a validator.
+ *
+ * Stripped where the string is derived rather than at each write, because one
+ * message reaches three text columns and an audit payload, and a sanitiser
+ * that has to be remembered at four call sites is one that will be forgotten
+ * at the fifth.
+ *
+ * The byte is dropped and the message kept. The text is diagnostic and nothing
+ * reads it programmatically, whereas refusing to record an outcome because its
+ * explanation is unstorable is what turned a permanent rejection into
+ * `in_flight` and sent a create that had already landed looking for the next
+ * run to resolve it.
+ */
+function storableMessage(raw: string): string {
+  return raw.replaceAll('\u0000', '');
+}
+
+/**
  * An action whose OUTCOME could not be recorded, after the connector was asked
  * to perform it.
  *
@@ -1005,7 +1029,7 @@ async function recordActionUnresolved(
   actorUserId: string | null,
   cause: unknown,
 ): Promise<'in_flight'> {
-  const message = cause instanceof Error ? cause.message : String(cause);
+  const message = storableMessage(cause instanceof Error ? cause.message : String(cause));
   await withTenant(tenantId, async (tx) => {
     await tx.provisionAction.update({
       where: { id: actionId },
@@ -1124,7 +1148,7 @@ async function recordActionThrew(
   actorUserId: string | null,
   cause: unknown,
 ): Promise<'failed'> {
-  const message = cause instanceof Error ? cause.message : String(cause);
+  const message = storableMessage(cause instanceof Error ? cause.message : String(cause));
   await withTenant(tenantId, async (tx) => {
     await tx.provisionAction.update({
       where: { id: actionId },
@@ -1205,6 +1229,11 @@ async function finish(
   result: WriteResult,
   meta: FinishMeta = {},
 ): Promise<'applied' | 'failed' | 'pending_retry' | 'conflict'> {
+  // Derived once, before the transaction, because it reaches the action's
+  // message, the account's status reason and the audit payload — and a throw
+  // out of any of those is a throw out of step 3, which leaves an action the
+  // target has already answered stranded `in_flight`.
+  const message = storableMessage(result.message);
   const settled = await withTenant(tenantId, async (tx) => {
     const action = await tx.provisionAction.findUniqueOrThrow({ where: { id: actionId } });
 
@@ -1225,7 +1254,7 @@ async function finish(
       data: {
         status,
         attempts: meta.attempts ?? action.attempts,
-        message: result.message,
+        message,
         ...(status === 'applied' ? { appliedAt: new Date() } : {}),
       },
     });
@@ -1462,7 +1491,7 @@ async function finish(
       // an existing person's account.
       await tx.targetAccount.update({
         where: { id: meta.accountId },
-        data: { status: 'conflict', statusReason: result.message },
+        data: { status: 'conflict', statusReason: message },
       });
     }
 
@@ -1478,7 +1507,7 @@ async function finish(
         status,
         // The connector's own message. Never a password: no code path puts one
         // in a WriteResult, and no code path puts `unicodePwd` in one either.
-        message: result.message,
+        message,
         ...(result.failure === undefined ? {} : { failure: result.failure }),
       },
     });
