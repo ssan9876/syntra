@@ -76,9 +76,9 @@ const jsonResponse = (body: unknown, ok = true, status = 200) =>
 describe('fetchLatestRelease', () => {
   it('reads the version, notes and date', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(release()));
-    const latest = await fetchLatestRelease('tok', 'acme/syntra', fetchImpl as never);
+    const result = await fetchLatestRelease('tok', 'acme/syntra', fetchImpl as never);
 
-    expect(latest).toMatchObject({
+    expect(result.ok && result.release).toMatchObject({
       version: '1.5.0',
       released: '2026-08-24T19:02:11Z',
       notes: 'Directory write-back.',
@@ -110,7 +110,8 @@ describe('fetchLatestRelease', () => {
 
   it('strips the v from the tag', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(release({ tag_name: 'v2.0.0' })));
-    expect((await fetchLatestRelease('t', 'r', fetchImpl as never))?.version).toBe('2.0.0');
+    const result = await fetchLatestRelease('t', 'r', fetchImpl as never);
+    expect(result.ok && result.release.version).toBe('2.0.0');
   });
 
   /**
@@ -118,19 +119,34 @@ describe('fetchLatestRelease', () => {
    * settings page down. "We could not check" is a fine answer; a 500 because
    * a third party is unreachable is not.
    */
-  it('returns null rather than throwing when the forge is unreachable', async () => {
+  it('answers, rather than throwing, when the forge is unreachable', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('ENOTFOUND'));
-    expect(await fetchLatestRelease('t', 'r', fetchImpl as never)).toBeNull();
+    const result = await fetchLatestRelease('t', 'r', fetchImpl as never);
+    expect(result).toEqual({ ok: false, reason: 'the forge could not be reached' });
   });
 
-  it('returns null on an error response', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}, false, 401));
-    expect(await fetchLatestRelease('t', 'r', fetchImpl as never)).toBeNull();
+  /**
+   * Each of these is a DIFFERENT thing for an operator to do, which is the
+   * whole reason the result carries a sentence rather than a null: rotate a
+   * token, widen its scope, wait out a limit, or publish a first release.
+   */
+  it.each([
+    [401, /rejected \(401\)/],
+    [403, /refused the request \(403\)/],
+    [404, /no published release was found for acme\/syntra \(404\)/],
+    [500, /answered 500/],
+  ])('says what a %s from the forge means', async (status, expected) => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}, false, status));
+    const result = await fetchLatestRelease('t', 'acme/syntra', fetchImpl as never);
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toMatch(expected);
   });
 
-  it('returns null for a response with no tag', async () => {
+  it('says so when the answer carries no tag', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ body: 'notes' }));
-    expect(await fetchLatestRelease('t', 'r', fetchImpl as never)).toBeNull();
+    const result = await fetchLatestRelease('t', 'r', fetchImpl as never);
+    expect(!result.ok && result.reason).toMatch(/no tag/);
   });
 });
 
@@ -200,6 +216,70 @@ describe('checkForUpdate', () => {
  * rate limit spent on re-learning a release list that cannot change during an
  * update, and a settings page whose load time is somebody else's uptime.
  */
+/**
+ * The console renders `reason` under a heading, and for a long time every
+ * failure arrived there as "the release list could not be read just now" --
+ * true, useless, and indistinguishable from a deployment with no releases.
+ * A 403 from a request missing a header read exactly like an empty forge.
+ */
+describe('checkForUpdate reports why a lookup found nothing', () => {
+  it('passes the refusal from the forge through, rather than a generic sentence', async () => {
+    resetUpdateCache();
+    const spy = vi.spyOn(version, 'buildInfo').mockReturnValue({
+      version: '1.5.0',
+      isRelease: true,
+      commit: null,
+      released: null,
+      migrations: [],
+    });
+    try {
+      const result = await checkForUpdate({
+        repo: 'acme/syntra',
+        token: 'tok',
+        root: '/opt/syntra',
+        readyUrl: 'http://127.0.0.1:3000/health/ready',
+        fetchImpl: vi.fn(async () => new Response('{}', { status: 403 })) as never,
+      });
+
+      expect(result.latest).toBeNull();
+      expect(result.reason).toMatch(/403/);
+      // Still updatable: the deployment is fine, the lookup is not.
+      expect(result.updatable).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not cache a failure, so a fixed token is seen on the next look', async () => {
+    resetUpdateCache();
+    const spy = vi.spyOn(version, 'buildInfo').mockReturnValue({
+      version: '1.5.0',
+      isRelease: true,
+      commit: null,
+      released: null,
+      migrations: [],
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(release())));
+    const env = {
+      repo: 'acme/syntra',
+      token: 'tok',
+      root: '/opt/syntra',
+      readyUrl: 'http://127.0.0.1:3000/health/ready',
+      fetchImpl: fetchImpl as never,
+    };
+    try {
+      expect((await checkForUpdate(env)).latest).toBeNull();
+      expect((await checkForUpdate(env)).latest).not.toBeNull();
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('checkForUpdate caching', () => {
   it('asks the forge once for repeated checks', async () => {
     resetUpdateCache();

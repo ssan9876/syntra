@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Empty, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -246,11 +246,18 @@ export function UpdatesPage() {
 
           {data.updatable && (
             <Panel title="Available">
+              {/* A FAILED LOOKUP IS NOT AN EMPTY ONE. This read "Nothing to
+                  show" for both, with the reason as body text under it, so a
+                  revoked token and a healthy deployment on the newest release
+                  presented the same heading -- and the heading is what a
+                  reader takes away. The reason was always here; what was
+                  missing was saying it had gone wrong. */}
               {latest === null && (
-                <div className="p-6">
-                  <Empty title="Nothing to show">
-                    {data.reason ?? 'No releases were found for this deployment.'}
-                  </Empty>
+                <div className="p-4">
+                  <Alert tone="warning" title="Could not check for updates">
+                    {data.reason ??
+                      'No releases were found for this deployment.'}
+                  </Alert>
                 </div>
               )}
 

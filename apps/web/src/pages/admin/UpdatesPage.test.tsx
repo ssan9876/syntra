@@ -127,6 +127,29 @@ describe('UpdatesPage', () => {
     });
   });
 
+  /**
+   * A FAILED LOOKUP IS NOT AN EMPTY ONE.
+   *
+   * Both used to render as "Nothing to show" with the reason beneath, so a
+   * deployment whose token had been revoked looked exactly like one already
+   * on the newest release. The heading is what a reader takes away, and it
+   * was telling four different faults and one healthy state apart for nobody.
+   */
+  it('says the check failed, rather than that there is nothing', async () => {
+    mockApi(
+      availability({
+        latest: null,
+        updateAvailable: false,
+        reason: 'the forge refused the request (403)',
+      }),
+    );
+    render(<UpdatesPage />);
+
+    expect(await screen.findByText(/could not check for updates/i)).toBeInTheDocument();
+    expect(screen.getByText(/refused the request \(403\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing to show/i)).not.toBeInTheDocument();
+  });
+
   it('surfaces the reason the server refused', async () => {
     mockApi(availability(), () =>
       json(

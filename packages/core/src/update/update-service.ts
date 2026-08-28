@@ -104,6 +104,39 @@ const forgeFetch: typeof fetch = guardedFetch({ timeoutMs: 10_000 }) as typeof f
  * it — "we could not check" is a perfectly good answer, and a page that 500s
  * because a third party is unreachable is worse than one that says so.
  */
+/**
+ * Why a lookup produced no release, in words an operator can act on.
+ *
+ * `null` said only "no release", and every distinct cause -- a revoked token,
+ * a repository the token cannot see, a rate limit, a forge that is down, and
+ * a repository with genuinely no releases yet -- arrived at the console as
+ * the same sentence. One of those is a deployment working correctly and the
+ * other four are faults, and the page could not tell anyone which it had.
+ */
+export type LatestReleaseResult =
+  | { ok: true; release: AvailableRelease }
+  | { ok: false; reason: string };
+
+/** What a non-ok answer from the forge means, said plainly. */
+function refusal(status: number, repo: string): string {
+  if (status === 401) {
+    return 'the release token was rejected (401) — it may have been revoked or expired';
+  }
+  if (status === 403) {
+    return (
+      'the forge refused the request (403) — either a rate limit, or a request ' +
+      'it will not serve as sent'
+    );
+  }
+  if (status === 404) {
+    return (
+      `no published release was found for ${repo} (404) — either the repository ` +
+      'has none yet, or the token cannot see it'
+    );
+  }
+  return `the forge answered ${status}`;
+}
+
 export async function fetchLatestRelease(
   token: string,
   repo: string,
@@ -111,9 +144,10 @@ export async function fetchLatestRelease(
   // no redirects and streams no bodies. The cast is safe here and only here,
   // because this call site is one GET whose whole response is JSON.
   fetchImpl: typeof fetch = forgeFetch,
-): Promise<AvailableRelease | null> {
+): Promise<LatestReleaseResult> {
+  let response: Response;
   try {
-    const response = await fetchImpl(
+    response = await fetchImpl(
       `https://api.github.com/repos/${repo}/releases/latest`,
       {
         headers: {
@@ -130,25 +164,38 @@ export async function fetchLatestRelease(
         signal: AbortSignal.timeout(10_000),
       },
     );
-    if (!response.ok) return null;
+  } catch {
+    // The forge being unreachable must not take the settings page down, so
+    // this is still an answer rather than a throw -- but it is now an answer
+    // that says which of the possible nothings this one is.
+    return { ok: false, reason: 'the forge could not be reached' };
+  }
 
+  if (!response.ok) return { ok: false, reason: refusal(response.status, repo) };
+
+  try {
     const body = (await response.json()) as ReleaseApi;
     const tag = typeof body.tag_name === 'string' ? body.tag_name : null;
-    if (tag === null) return null;
+    if (tag === null) {
+      return { ok: false, reason: 'the forge returned a release with no tag' };
+    }
 
     return {
-      version: tag.replace(/^v/, ''),
-      released: typeof body.published_at === 'string' ? body.published_at : null,
-      notes: typeof body.body === 'string' ? body.body : '',
-      // What the release CONTAINS is read from the release itself once it is
-      // downloaded; the API's notes are prose. Migrations are surfaced from
-      // RELEASE.json after unpacking, and until then the console says
-      // "unknown" rather than "none" -- claiming a release does not touch the
-      // database when nobody has looked is the wrong way to be wrong.
-      migrations: [],
+      ok: true,
+      release: {
+        version: tag.replace(/^v/, ''),
+        released: typeof body.published_at === 'string' ? body.published_at : null,
+        notes: typeof body.body === 'string' ? body.body : '',
+        // What the release CONTAINS is read from the release itself once it is
+        // downloaded; the API's notes are prose. Migrations are surfaced from
+        // RELEASE.json after unpacking, and until then the console says
+        // "unknown" rather than "none" -- claiming a release does not touch the
+        // database when nobody has looked is the wrong way to be wrong.
+        migrations: [],
+      },
     };
   } catch {
-    return null;
+    return { ok: false, reason: 'the forge returned something that was not a release' };
   }
 }
 
@@ -234,16 +281,24 @@ export async function checkForUpdate(
   // can collide by concatenating to the same string.
   const key = `${env.repo}\u0000${env.token}`;
   let latest: AvailableRelease | null = null;
+  // Carried out of the branch below so the caller is told WHICH nothing this
+  // is. Only a failed lookup sets it; a cache hit cannot fail.
+  let failure: string | null = null;
   if (releaseCache !== null && releaseCache.key === key && Date.now() - releaseCache.at < RELEASE_CACHE_MS) {
     latest = releaseCache.value;
   } else {
-    latest = await fetchLatestRelease(env.token, env.repo, env.fetchImpl);
-    if (latest !== null) releaseCache = { key, at: Date.now(), value: latest };
+    const result = await fetchLatestRelease(env.token, env.repo, env.fetchImpl);
+    if (result.ok) {
+      latest = result.release;
+      releaseCache = { key, at: Date.now(), value: latest };
+    } else {
+      failure = result.reason;
+    }
   }
   return {
     current: build.version,
     updatable: true,
-    reason: latest === null ? 'the release list could not be read just now' : null,
+    reason: latest === null ? (failure ?? 'the release list could not be read just now') : null,
     latest,
     updateAvailable: latest !== null && isNewer(latest.version, build.version),
   };
