@@ -348,3 +348,106 @@ describe('AccountDetailPage', () => {
     expect(back).toHaveAttribute('href', '/admin/users?tab=accounts');
   });
 });
+
+/**
+ * Setting a password from the account's own screen.
+ *
+ * The setup link beside it is right for a joiner and wrong for the support
+ * call where somebody is reading a password down the phone.
+ */
+describe('AccountDetailPage set password', () => {
+  it('warns what it will cost before anything is typed', async () => {
+    mockApi();
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+
+    // The consequence is stated UP FRONT, because it is irreversible and the
+    // page knows it for certain. The length rule is not, because the page does
+    // not know the tenant's minimum and a wrong number is worse than none.
+    expect(await screen.findByText(/every session is revoked/i)).toBeInTheDocument();
+    expect(screen.getByText(/choose their own/i)).toBeInTheDocument();
+  });
+
+  it('sets a password and says what happened, in order', async () => {
+    let sent: unknown;
+    mockApi(ACCOUNT, {
+      '/password': (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return json({ sessionsRevoked: 2, mustChange: true });
+      },
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+    await userEvent.type(
+      await screen.findByLabelText('New password'),
+      'a-long-enough-password',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
+
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent).toEqual({ password: 'a-long-enough-password' });
+    expect(
+      await screen.findByText(/2 sessions were revoked/i),
+    ).toBeInTheDocument();
+  });
+
+  it('counts one revoked session as a session', async () => {
+    mockApi(ACCOUNT, {
+      '/password': () => json({ sessionsRevoked: 1, mustChange: true }),
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+    await userEvent.type(
+      await screen.findByLabelText('New password'),
+      'a-long-enough-password',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
+
+    expect(await screen.findByText(/1 session was revoked/i)).toBeInTheDocument();
+  });
+
+  it('shows the server’s reason when the password is refused', async () => {
+    mockApi(ACCOUNT, {
+      '/password': () =>
+        json(
+          {
+            type: 'https://syntra.dev/problems/weak-password',
+            title: 'That password was refused',
+            status: 422,
+            detail: 'too_short',
+          },
+          422,
+        ),
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+    await userEvent.type(await screen.findByLabelText('New password'), 'x');
+    await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
+
+    // The server owns the rule, so the server's words are what the reader
+    // gets — the same decision the portal's own change form made.
+    expect(await screen.findByText(/too_short/)).toBeInTheDocument();
+  });
+
+  it('is not offered for an account whose password lives upstream', async () => {
+    mockApi({ ...ACCOUNT, passwordSource: 'upstream' });
+    renderPage();
+
+    await screen.findByText('jdoe');
+    expect(
+      screen.queryByRole('button', { name: 'Set password' }),
+    ).not.toBeInTheDocument();
+  });
+});

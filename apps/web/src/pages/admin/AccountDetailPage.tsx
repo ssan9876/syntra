@@ -95,6 +95,19 @@ export function AccountDetailPage() {
     expiresAt: string;
   } | null>(null);
   const [factorNotice, setFactorNotice] = useState<string | null>(null);
+  /**
+   * The set-password form, and what it did.
+   *
+   * Held here for the same reason `setupLink` is: it can only ever be about
+   * the account on screen, which is what lets the result sentence name what
+   * happened to THIS account's sessions rather than say something general.
+   *
+   * The typed password is cleared the moment it is spent, and on cancel. It is
+   * a credential and has no business sitting in a React tree.
+   */
+  const [settingPassword, setSettingPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [passwordDone, setPasswordDone] = useState<string | null>(null);
 
   const failed = (cause: unknown, fallback: string) =>
     setProblem(
@@ -317,6 +330,23 @@ export function AccountDetailPage() {
                   Password link
                 </Button>
               )}
+              {/*
+                Beside the link and under the same condition, because they
+                answer the same question by different routes: the link is for
+                a joiner who can reach their mail, and this is for the support
+                call where they cannot.
+              */}
+              {data.passwordSource !== 'upstream' && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setPasswordDone(null);
+                    setSettingPassword(true);
+                  }}
+                >
+                  Set password
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 onClick={() => void removeFactor('totp')}
@@ -374,6 +404,80 @@ export function AccountDetailPage() {
                 </div>
               </div>
             )}
+
+            {settingPassword && (
+              <div className="rounded border border-border-subtle p-4">
+                <h3 className="font-medium text-ink">Set a password</h3>
+                <p className="mt-1 text-sm text-muted">
+                  {/*
+                    The CONSEQUENCE up front, and not the length rule. The
+                    consequence is irreversible and this page knows it for
+                    certain; the tenant's minimum length is not carried in any
+                    response this screen reads, and a number stated here would
+                    be wrong for the first tenant that changes theirs. The
+                    server owns the rule and says so on refusal — the same
+                    decision the portal's own change form made.
+                  */}
+                  Every session is revoked immediately, and they must choose
+                  their own password the next time they sign in.
+                </p>
+                <div className="mt-3">
+                  <Field
+                    label="New password"
+                    type="password"
+                    value={newPassword}
+                    onChange={setNewPassword}
+                  />
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    size="sm"
+                    loading={busy}
+                    disabled={newPassword.length === 0}
+                    onClick={() =>
+                      void run(async () => {
+                        try {
+                          const result = await api<{ sessionsRevoked: number }>(
+                            `/api/admin/users/${data.id}/password`,
+                            {
+                              method: 'POST',
+                              body: JSON.stringify({ password: newPassword }),
+                            },
+                          );
+                          setPasswordDone(
+                            `Password set. ${result.sessionsRevoked} session${
+                              result.sessionsRevoked === 1 ? ' was' : 's were'
+                            } revoked, and they must choose their own the next time they sign in.`,
+                          );
+                          setSettingPassword(false);
+                          setNewPassword('');
+                        } catch (cause) {
+                          // Kept on screen with what was typed still there: a
+                          // refusal names what was wrong with the password,
+                          // and clearing the box would make them retype a
+                          // password they are about to adjust.
+                          failed(cause, 'That password could not be set.');
+                        }
+                      })
+                    }
+                  >
+                    Set it
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setSettingPassword(false);
+                      setNewPassword('');
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {passwordDone && <Alert tone="warning">{passwordDone}</Alert>}
           </div>
         </Panel>
 
