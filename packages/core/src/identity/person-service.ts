@@ -7,6 +7,16 @@ export interface CreatePersonInput {
   businessEmail?: string | undefined;
   personalEmail?: string | undefined;
   externalId?: string | undefined;
+  /**
+   * Where this person sits, which is what the placement ladder reads to decide
+   * the container their account is created in on each target.
+   *
+   * Distinct from `User.orgUnitId`, which feeds access resolution. A person
+   * routinely has no User at all in a Syntra-front-door deployment, so
+   * placement hangs off the person or it does not apply to most of the
+   * population it exists for.
+   */
+  orgUnitId?: string | undefined;
 }
 
 export async function createPerson(
@@ -22,6 +32,7 @@ export async function createPerson(
       businessEmail: input.businessEmail ?? null,
       personalEmail: input.personalEmail ?? null,
       externalId: input.externalId ?? null,
+      orgUnitId: input.orgUnitId ?? null,
     },
   });
 }
