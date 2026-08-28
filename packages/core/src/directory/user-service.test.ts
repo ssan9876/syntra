@@ -95,6 +95,25 @@ describe('createUser', () => {
     expect(synced.email).toBe('shared@acme.test');
   });
 
+  it('lets a replacement take a leaver’s email address', async () => {
+    const leaver = await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'leaver', email: 'post@acme.test', displayName: 'L' }),
+    );
+    await withTenant(tenantId, (tx) =>
+      deactivateUser(tx, leaver.id, 'left the company'),
+    );
+
+    // This directory deactivates rather than deletes, so without a status
+    // clause on the guard a leaver would reserve their address for ever and
+    // the person hired into their post could not be given the mailbox they
+    // have already been handed.
+    const replacement = await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'joiner', email: 'post@acme.test', displayName: 'J' }),
+    );
+
+    expect(replacement.email).toBe('post@acme.test');
+  });
+
   it('allows the same login in a different tenant', async () => {
     const other = await prisma.tenant.create({
       data: { name: 'Other', slug: 'other' },

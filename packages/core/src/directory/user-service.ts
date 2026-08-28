@@ -25,14 +25,22 @@ export async function createUser(tx: TenantClient, input: CreateUserInput) {
     throw new Error(`login already exists: ${input.login}`);
   }
 
-  // Locally managed accounts only, matching the partial index. A directory
-  // owns the addresses on the accounts it syncs, and Syntra refusing one of
-  // them would fail a sync run mid-apply over a shared mailbox somebody set up
-  // years ago — stopping a typo is not worth breaking a run.
+  // Active, locally managed accounts only, matching the partial index.
+  //
+  // A directory owns the addresses on the accounts it syncs, and Syntra
+  // refusing one of them would fail a sync run mid-apply over a shared mailbox
+  // somebody set up years ago — stopping a typo is not worth breaking a run.
+  //
+  // Active, because this directory deactivates rather than deletes: a leaver's
+  // account would otherwise reserve their address for ever, and the person
+  // hired into their post could not be created with the mailbox they have been
+  // given. The rule is "no second USABLE account on one address"; an inactive
+  // account is a record, not a login.
   const sharing = await tx.user.findFirst({
     where: {
       email: { equals: input.email, mode: 'insensitive' },
       sourceId: null,
+      status: 'active',
     },
   });
   if (sharing) {

@@ -747,13 +747,14 @@ export async function registerAdminUserRoutes(
 
         if (body.email !== undefined) {
           // Same rule as the create path and the partial index behind it:
-          // among locally managed accounts only, and case-insensitively.
+          // active, locally managed accounts only, case-insensitively.
           // Excluding this account is what lets a rename leave the address
           // alone without colliding with itself.
           const sharing = await tx.user.findFirst({
             where: {
               email: { equals: body.email, mode: 'insensitive' },
               sourceId: null,
+              status: 'active',
               id: { not: id },
             },
           });
