@@ -39,6 +39,7 @@ interface PersonDetail {
   familyName: string;
   businessEmail: string | null;
   externalId: string | null;
+  orgUnitId: string | null;
   status: string;
   contracts: Contract[];
   users: LinkedUser[];
@@ -69,6 +70,12 @@ export function PersonDetailPage() {
   const { data: usersData } = useApiResource<{
     users: { id: string; login: string; personId: string | null; status: string }[];
   }>('/api/admin/users');
+
+  // Same treatment as the users list above: a caller who may not read the
+  // directory gets an empty selector rather than a page that will not render.
+  const { data: orgUnitsData } = useApiResource<{
+    orgUnits: { id: string; name: string; status: string }[];
+  }>('/api/admin/org-units');
 
   // An account already carrying a person is not offered. `link-user` would
   // move it rather than refuse, so listing one is offering to detach somebody
@@ -145,6 +152,7 @@ export function PersonDetailPage() {
               familyName: data.familyName,
               businessEmail: data.businessEmail ?? '',
               externalId: data.externalId ?? '',
+              orgUnitId: data.orgUnitId ?? '',
             }}
             onCancel={() => setEditing(false)}
             onCreated={() => {
@@ -158,6 +166,10 @@ export function PersonDetailPage() {
               // box would keep the old value.
               businessEmail: v.businessEmail === '' ? null : (v.businessEmail ?? null),
               externalId: v.externalId === '' ? null : (v.externalId ?? null),
+              // NULL sends them back to the account profile's template. As
+              // above, omitting would mean "leave alone" and an emptied
+              // selector would keep the old unit.
+              orgUnitId: v.orgUnitId === '' ? null : (v.orgUnitId ?? null),
             })}
             fields={(v, set, errs) => (
               <>
@@ -179,6 +191,20 @@ export function PersonDetailPage() {
                   value={v.businessEmail ?? ''}
                   onChange={(x) => set('businessEmail', x)}
                   error={errs.businessEmail}
+                />
+                <Select
+                  label="Org unit"
+                  value={v.orgUnitId ?? ''}
+                  onChange={(x) => set('orgUnitId', x)}
+                  error={errs.orgUnitId}
+                  options={[
+                    { value: '', label: 'None — placed by the account profile' },
+                    ...(orgUnitsData?.orgUnits ?? [])
+                      // A deactivated unit grants nothing and is not somewhere
+                      // to put anybody new.
+                      .filter((u) => u.status === 'active')
+                      .map((u) => ({ value: u.id, label: u.name })),
+                  ]}
                 />
                 <Field
                   label="Source reference"

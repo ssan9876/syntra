@@ -182,6 +182,14 @@ export const thresholdsSchema = z
     deactivateSyntraUserThresholdPercent: z.number().int().min(0).max(100).optional(),
     perEntitlementThresholdPercent: z.number().int().min(0).max(100).optional(),
     personPopulationDropPercent: z.number().int().min(0).max(100).optional(),
+    /**
+     * An absolute COUNT, which is why its bound is 1000 rather than 100 and
+     * its name carries no `Percent`.
+     *
+     * Containers have no population to be a share of, so this axis is a cap.
+     * Zero is permitted and means no run may create a container at all.
+     */
+    maxContainerCreatesPerRun: z.number().int().min(0).max(1000).optional(),
   })
   .strict();
 
@@ -390,3 +398,17 @@ export const containerListResponse = z.object({
 
 export type MovePlacementRequest = z.infer<typeof movePlacementRequest>;
 export type PlacementResponse = z.infer<typeof placementResponse>;
+
+/**
+ * Materialising an org unit against one target.
+ *
+ * The DN is typed by an administrator rather than chosen from a list, because
+ * the container usually does not exist yet -- that is the point of the
+ * request. It is validated against the target's base DN on the way in.
+ */
+export const materialiseOrgUnitRequest = z
+  .object({
+    targetSystemId: z.string().uuid(),
+    dn: z.string().min(1).max(1024),
+  })
+  .strict();

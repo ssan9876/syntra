@@ -178,6 +178,22 @@ const THRESHOLD_FIELDS = [
 ] as const;
 
 /**
+ * Guard settings that are COUNTS rather than percentages.
+ *
+ * Split from `THRESHOLD_FIELDS` because that list's whole purpose is that
+ * every member is validated `0..100` and backed by
+ * `target_system_thresholds_are_percent`. A cap is neither: containers have no
+ * population to be a share of, so `maxContainerCreatesPerRun` is a count, and
+ * folding it into the percent list would have capped it at 100 for a reason
+ * that does not apply and asserted a database constraint it does not carry.
+ *
+ * The two lists together are still exactly `keyof GuardThresholds`, asserted
+ * below, so a new guard setting cannot arrive here unvalidated whichever kind
+ * it is.
+ */
+const COUNT_FIELDS = ['maxContainerCreatesPerRun'] as const;
+
+/**
  * The seven thresholds, as percentages.
  *
  * `target_system_thresholds_are_percent` says the same thing in the database,
@@ -202,6 +218,16 @@ export const provisionThresholdsSchema = z
       [K in (typeof THRESHOLD_FIELDS)[number]]: z.ZodOptional<z.ZodNumber>;
     },
   )
+  .extend(
+    Object.fromEntries(
+      // Capped at 1000 rather than 100: the ceiling is "obviously a mistake",
+      // not "a percentage". Zero is permitted and means no container may be
+      // created by a run at all, which is a coherent thing to want.
+      COUNT_FIELDS.map((field) => [field, z.number().int().min(0).max(1000).optional()]),
+    ) as {
+      [K in (typeof COUNT_FIELDS)[number]]: z.ZodOptional<z.ZodNumber>;
+    },
+  )
   .strict();
 
 /**
@@ -216,18 +242,18 @@ export const provisionThresholdsSchema = z
  */
 type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 const _thresholdFieldsMatchGuard: MutuallyAssignable<
-  (typeof THRESHOLD_FIELDS)[number],
+  (typeof THRESHOLD_FIELDS)[number] | (typeof COUNT_FIELDS)[number],
   keyof GuardThresholds
 > = true;
 void _thresholdFieldsMatchGuard;
 
 function pickThresholds(
   thresholds: Partial<GuardThresholds> | undefined,
-): Partial<Record<(typeof THRESHOLD_FIELDS)[number], number>> {
+): Partial<Record<keyof GuardThresholds, number>> {
   if (thresholds === undefined) return {};
   const parsed = provisionThresholdsSchema.parse(thresholds);
-  const picked: Partial<Record<(typeof THRESHOLD_FIELDS)[number], number>> = {};
-  for (const field of THRESHOLD_FIELDS) {
+  const picked: Partial<Record<keyof GuardThresholds, number>> = {};
+  for (const field of [...THRESHOLD_FIELDS, ...COUNT_FIELDS]) {
     const value = parsed[field];
     if (value !== undefined) picked[field] = value;
   }

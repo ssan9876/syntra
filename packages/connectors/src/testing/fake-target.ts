@@ -283,6 +283,40 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
 
   private perform(op: WriteOperation, provenanceAttribute: string): WriteResult {
     switch (op.op) {
+      case 'create_container': {
+        // Every branch the real connector has, so no branch of the caller
+        // goes untested: conflict for a container already present, not_found
+        // for a missing parent, and never the invention of that parent.
+        const present = this.containers.some(
+          (dn) => dn.toLowerCase() === op.dn.toLowerCase(),
+        );
+        if (present) {
+          return {
+            ok: false,
+            message: `${op.dn} already exists`,
+            failure: 'conflict',
+          };
+        }
+        const separator = indexOfUnescapedComma(op.dn);
+        const parent = separator === -1 ? '' : op.dn.slice(separator + 1);
+        const parentPresent =
+          parent !== '' &&
+          this.containers.some((dn) => dn.toLowerCase() === parent.toLowerCase());
+        if (!parentPresent) {
+          return {
+            ok: false,
+            message: `the parent of ${op.dn} does not exist`,
+            failure: 'not_found',
+          };
+        }
+        this.containers.push(op.dn);
+        return {
+          ok: true,
+          message: `created ${op.dn}`,
+          anchor: this.nextAnchor(),
+        };
+      }
+
       case 'create_account': {
         const existing = [...this.objects.values()].find(
           (o) => foldKey(o.correlationKey) === foldKey(op.correlationKey),
@@ -442,4 +476,16 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
     this.counter += 1;
     return `fake-anchor-${String(this.counter).padStart(4, '0')}`;
   }
+}
+
+/** The first comma that is not escaped, or -1. Mirrors `splitDn`. */
+function indexOfUnescapedComma(dn: string): number {
+  for (let index = 0; index < dn.length; index += 1) {
+    if (dn[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (dn[index] === ',') return index;
+  }
+  return -1;
 }

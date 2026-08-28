@@ -82,6 +82,7 @@ const run = (over: Partial<Parameters<typeof reconcile>[0]> = {}) =>
       'ou=users,dc=acme,dc=test',
     ]),
     desiredContainers: new Map([['person-1', 'OU=Finance,OU=Users,DC=acme,DC=test']]),
+    desiredContainerRows: new Map(),
     enforcementMode: 'additive',
     ...over,
   });
@@ -1087,5 +1088,109 @@ describe('reconcile — Ruling P23: a broken rule must not freeze an account', (
     });
     expect(result.findings.map((f) => f.kind)).toEqual(['account_missing_at_target']);
     expect(result.actual.get('person-1')!.status).toBe('missing_at_target');
+  });
+});
+
+describe('Ruling P9, narrowed', () => {
+  const dn = 'OU=Nowhere,OU=Users,DC=acme,DC=test';
+
+  it('asks for a missing container that an administrator materialised', () => {
+    const result = run({
+      desiredContainers: new Map([['person-1', dn]]),
+      desiredContainerRows: new Map([
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired' }],
+      ]),
+    });
+    expect([...result.containersToCreate]).toEqual([['ouc-1', dn]]);
+    // And the person is NOT taken out of the run: the container is coming.
+    expect(result.extraUnprocessable.get('person-1')).toBeUndefined();
+  });
+
+  it('leaves an unbacked missing container unprocessable, exactly as before', () => {
+    // The other half of the ruling, and the more important half. These two
+    // tests differ in ONE row. Without this one, create_container reads as a
+    // licence to auto-vivify from %contract.department% -- an inverted
+    // condition or a bad HR export minting containers across the domain at
+    // the same rate it mints accounts.
+    const result = run({
+      desiredContainers: new Map([['person-1', dn]]),
+      desiredContainerRows: new Map(),
+    });
+    expect([...result.containersToCreate]).toEqual([]);
+    expect(result.extraUnprocessable.get('person-1')?.kind).toBe('container_missing');
+  });
+
+  it('does not re-create a container whose row is already live', () => {
+    // Somebody removed it in the directory. Re-creating it on the next
+    // five-minute tick is Syntra silently fighting a domain administrator,
+    // indefinitely and invisibly. It is a finding, not an action.
+    const result = run({
+      desiredContainers: new Map([['person-1', dn]]),
+      desiredContainerRows: new Map([[dn.toLowerCase(), { id: 'ouc-1', state: 'live' }]]),
+    });
+    expect([...result.containersToCreate]).toEqual([]);
+    expect(result.extraUnprocessable.get('person-1')?.kind).toBe('container_missing');
+  });
+
+  it('does not re-create an adopted container that vanished either', () => {
+    const result = run({
+      desiredContainers: new Map([['person-1', dn]]),
+      desiredContainerRows: new Map([
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'adopted' }],
+      ]),
+    });
+    expect([...result.containersToCreate]).toEqual([]);
+  });
+
+  it('raises a finding for a confirmed container the target no longer returns', () => {
+    const result = run({
+      desiredContainers: new Map([['person-1', dn]]),
+      desiredContainerRows: new Map([[dn.toLowerCase(), { id: 'ouc-1', state: 'live' }]]),
+    });
+    const finding = result.findings.find((f) => f.kind === 'container_vanished');
+    expect(finding).toBeDefined();
+    expect(finding?.detail.dn).toBe(dn);
+    expect(finding?.detail.state).toBe('live');
+  });
+
+  it('raises no finding for a container that was never confirmed', () => {
+    // A 'desired' row whose container is absent is the ordinary state before
+    // the first run applies. Reporting it as drift would make every
+    // materialisation raise a finding it then resolves itself.
+    const result = run({
+      desiredContainers: new Map([['person-1', dn]]),
+      desiredContainerRows: new Map([
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired' }],
+      ]),
+    });
+    expect(result.findings.some((f) => f.kind === 'container_vanished')).toBe(false);
+  });
+
+  it('asks once for a container two people share', () => {
+    const result = run({
+      desired: [desired(), desired({ personId: 'person-2' })],
+      known: [known(), known({ personId: 'person-2', anchor: 'anchor-2' })],
+      objects: [object(), object({ anchor: 'anchor-2', correlationKey: 'b.novak' })],
+      desiredContainers: new Map([
+        ['person-1', dn],
+        ['person-2', dn],
+      ]),
+      desiredContainerRows: new Map([
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired' }],
+      ]),
+    });
+    // A department of forty people is one container, not forty creates -- and
+    // forty would blow the per-run cap on its own.
+    expect([...result.containersToCreate]).toHaveLength(1);
+  });
+
+  it('matches the row case-insensitively, because DNs are', () => {
+    const result = run({
+      desiredContainers: new Map([['person-1', 'ou=NOWHERE,OU=Users,DC=acme,DC=test']]),
+      desiredContainerRows: new Map([
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired' }],
+      ]),
+    });
+    expect([...result.containersToCreate]).toHaveLength(1);
   });
 });

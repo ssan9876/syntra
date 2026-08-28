@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ABSOLUTE_CAP_ACTION_TYPES,
   GUARDED_ACTION_TYPES,
   evaluateProvisionGuard,
   type GuardInput,
@@ -39,6 +40,7 @@ const thresholds = {
   deactivateSyntraUserThresholdPercent: 10,
   perEntitlementThresholdPercent: 50,
   personPopulationDropPercent: 20,
+  maxContainerCreatesPerRun: 5,
 };
 
 const guard = (over: Partial<GuardInput> = {}) =>
@@ -802,6 +804,10 @@ describe('evaluateProvisionGuard — the action types it does and does not guard
     // a `modifyDN` — the same LDAP operation as the archive. Only its moving
     // half is counted; a plain attribute write is still unguarded.
     const classification: Record<ProvisionActionType, boolean> = {
+      // Guarded by an ABSOLUTE cap rather than a share -- see
+      // ABSOLUTE_CAP_ACTION_TYPES. Guarded is guarded; how it is measured is
+      // the next assertion's business, not this one's.
+      create_container: true,
       create_account: true,
       disable_account: true,
       archive_account: true,
@@ -817,7 +823,17 @@ describe('evaluateProvisionGuard — the action types it does and does not guard
       .filter(([, guarded]) => guarded)
       .map(([type]) => type)
       .sort();
-    expect([...GUARDED_ACTION_TYPES].sort()).toEqual(expected);
+    expect(
+      [...GUARDED_ACTION_TYPES, ...ABSOLUTE_CAP_ACTION_TYPES].sort(),
+    ).toEqual(expected);
+  });
+
+  it('measures container creates by an absolute cap and not by a share', () => {
+    // The two sets are disjoint, and create_container is in the absolute one.
+    // If somebody later moves it into POPULATIONS by inventing a denominator,
+    // this fails -- which is the point of asserting it separately.
+    expect([...ABSOLUTE_CAP_ACTION_TYPES]).toEqual(['create_container']);
+    expect(GUARDED_ACTION_TYPES).not.toContain('create_container');
   });
 
   it('counts only the action type each population names', () => {
@@ -827,6 +843,72 @@ describe('evaluateProvisionGuard — the action types it does and does not guard
       actions: [...many('update_account', 1000), ...many('create_account', 201)],
     });
     expect(reasonsOf(verdict)[0]).toContain('create 201 of 1000 accounts');
+  });
+});
+
+describe('evaluateProvisionGuard — the container-create cap', () => {
+  /** `create_container` names an object, not a person, so personId is null. */
+  const containers = (count: number): PlannedAction[] =>
+    Array.from({ length: count }, (_unused, index) => ({
+      actionType: 'create_container' as const,
+      personId: null,
+      accountId: null,
+      entitlementId: null,
+      before: null,
+      after: { dn: `OU=Unit${index},OU=Users,DC=acme,DC=test` },
+      attributedRuleIds: [],
+      attributedGrantIds: [],
+      requiresConfirmation: false,
+      revocationOrderId: null,
+      message: null,
+    }));
+
+  it('allows a run exactly at the cap', () => {
+    expect(guard({ actions: containers(5) }).blocked).toBe(false);
+  });
+
+  it('blocks a run one over the cap', () => {
+    const verdict = guard({ actions: containers(6) });
+    expect(verdict.blocked).toBe(true);
+    expect(reasonsOf(verdict).join(' ')).toContain('6');
+  });
+
+  it('is an absolute count and not a share of anything', () => {
+    // The distinguishing test. Every other axis is a percentage of a
+    // population; containers have no denominator, so six containers against
+    // 10,000 accounts is not 0.06% of anything -- there is no population of
+    // containers this run is a fraction of. A share-based axis would wave
+    // this through. An absolute cap does not.
+    const verdict = guard({ actions: containers(6), accountsAtTarget: 10_000 });
+    expect(verdict.blocked).toBe(true);
+  });
+
+  it('blocks the whole run rather than applying a partial tree', () => {
+    // Half a tree is worse than none of it: accounts land under the
+    // containers that made the cut and go unprocessable under the ones that
+    // did not, and the next run proposes the remainder against a population
+    // that has already shifted.
+    const verdict = guard({
+      actions: [...containers(6), ...many('create_account', 1)],
+    });
+    expect(verdict.blocked).toBe(true);
+  });
+
+  it('says nothing about containers when the run creates none', () => {
+    const verdict = guard({ actions: many('create_account', 1) });
+    expect(verdict.blocked).toBe(false);
+  });
+
+  it('refuses a cap that is not a count rather than passing every run', () => {
+    // The same fail-closed rule the percentage thresholds get: a cap nobody
+    // can state is not a cap, and NaN > NaN is false, which would turn this
+    // axis off while continuing to look exactly like an axis.
+    const verdict = guard({
+      actions: containers(6),
+      thresholds: { ...thresholds, maxContainerCreatesPerRun: Number.NaN },
+    });
+    expect(verdict.blocked).toBe(true);
+    expect(verdict).toMatchObject({ requiresConfirmation: false });
   });
 });
 

@@ -99,6 +99,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260918000000_tenant_branding',
   '20260919000000_wsfed_enabled',
   '20260920000000_parked_request_protocol',
+  '20260921000000_org_unit_container',
 ];
 
 /**

@@ -40,6 +40,7 @@ const person = {
     },
   ],
   users: [{ id: 'u1', login: 'jdoe', status: 'active' }],
+  orgUnitId: null,
 };
 
 const json = (body: unknown) =>
@@ -362,5 +363,76 @@ describe('PersonDetailPage', () => {
     expect(
       await screen.findByText(/every account already belongs to somebody/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe('PersonDetailPage org unit assignment', () => {
+  const orgUnits = {
+    orgUnits: [
+      { id: 'ou-1', name: 'Sales', status: 'active' },
+      { id: 'ou-2', name: 'Closed', status: 'inactive' },
+    ],
+  };
+
+  const routes = (onPatch?: (init: RequestInit | undefined) => void) => ({
+    '/api/admin/persons/p1': (init: RequestInit | undefined) => {
+      if (init?.method === 'PATCH') {
+        onPatch?.(init);
+        return json({ ...person, orgUnitId: 'ou-1' });
+      }
+      return json(person);
+    },
+    '/api/admin/users': () => json({ users: [] }),
+    '/api/admin/org-units': () => json(orgUnits),
+  });
+
+  it('sends the chosen unit on save', async () => {
+    let body: string | undefined;
+    mockRoutes(routes((init) => { body = String(init?.body); }));
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+    await userEvent.selectOptions(await screen.findByLabelText(/org unit/i), 'ou-1');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(JSON.parse(body!).orgUnitId).toBe('ou-1');
+  });
+
+  it('sends null when the selection is cleared', async () => {
+    // NULL sends them back to the account profile's template. Omitting the
+    // field would mean "leave alone", so an emptied selector would silently
+    // keep the old unit -- the same trap the e-mail fields document.
+    let body: string | undefined;
+    mockRoutes({
+      ...routes((init) => { body = String(init?.body); }),
+      '/api/admin/persons/p1': (init: RequestInit | undefined) => {
+        if (init?.method === 'PATCH') {
+          body = String(init.body);
+          return json({ ...person, orgUnitId: null });
+        }
+        return json({ ...person, orgUnitId: 'ou-1' });
+      },
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+    await userEvent.selectOptions(await screen.findByLabelText(/org unit/i), '');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(JSON.parse(body!).orgUnitId).toBeNull();
+  });
+
+  it('does not offer a deactivated unit', async () => {
+    // A deactivated unit grants nothing and is not somewhere to put anybody.
+    mockRoutes(routes());
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+    const select = await screen.findByLabelText(/org unit/i);
+
+    expect(within(select).getByRole('option', { name: 'Sales' })).toBeInTheDocument();
+    expect(within(select).queryByRole('option', { name: 'Closed' })).toBeNull();
   });
 });

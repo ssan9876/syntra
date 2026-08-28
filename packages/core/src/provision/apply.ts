@@ -285,6 +285,11 @@ function toWriteOperation(
   const after = asRecord(action.after);
   const before = asRecord(action.before);
   switch (action.actionType) {
+    case 'create_container':
+      // Applied by `applyContainerAction`, which never reaches this function:
+      // it needs no account context and no initial password. Present so the
+      // switch stays exhaustive rather than falling to a default nobody reads.
+      return null;
     case 'create_account': {
       const correlationKey = text(after.correlationKey) || context.correlationKey;
       const container = text(after.container);
@@ -718,6 +723,94 @@ type ActionOutcome =
  * landed", and `resolveInFlightActions` is the machinery that asks the target
  * and resolves it on the next run.
  */
+/**
+ * `create_container`, which is unlike every other connector action: it names
+ * an object rather than a person, so there is no account row to read, no
+ * anchor to resolve and no initial password to generate.
+ *
+ * It is also not retried in a loop. `createContainer` either lands, comes back
+ * `conflict` (which is success by adoption), or comes back `not_found` because
+ * the parent is missing -- and none of those becomes true on a fourth attempt.
+ * A genuinely transient failure leaves the row in state 'desired', so the next
+ * run proposes it again, through the guard, in a plan somebody reviews. That
+ * is the right place for a write that could not be made now.
+ */
+async function applyContainerAction(
+  tenantId: string,
+  action: ActionRow,
+  options: ApplyOneOptions,
+): Promise<ActionOutcome> {
+  const after = asRecord(action.after);
+  const dn = text(after.dn);
+  const orgUnitContainerId = text(after.orgUnitContainerId);
+  if (dn === '' || orgUnitContainerId === '') {
+    return finish(tenantId, action.id, {
+      ok: false,
+      message: 'this action names no container to create',
+      failure: 'rejected',
+    });
+  }
+
+  await withTenant(tenantId, async (tx) => {
+    await tx.provisionAction.update({
+      where: { id: action.id },
+      data: { status: 'in_flight' },
+    });
+    await recordEvent(tx, {
+      actorUserId: options.actorUserId,
+      action: 'provision.action.intent',
+      targetType: 'ProvisionAction',
+      targetId: action.id,
+      outcome: 'success',
+      sourceIp: null,
+      payload: { actionType: action.actionType, dn, attempt: action.attempts + 1 },
+    });
+  });
+
+  const result = await options.connector.write(options.config as never, {
+    op: 'create_container',
+    actionId: action.id,
+    dn,
+  });
+
+  if (result.ok) {
+    await withTenant(tenantId, (tx) =>
+      tx.orgUnitContainer.update({
+        where: { id: orgUnitContainerId },
+        data: {
+          state: 'live',
+          ...(result.anchor === undefined ? {} : { anchor: result.anchor }),
+        },
+      }),
+    );
+    return finish(tenantId, action.id, result, { attempts: action.attempts + 1 });
+  }
+
+  if (result.failure === 'conflict') {
+    // Success by adoption. The container is there; Syntra did not put it
+    // there. Recorded as 'adopted' rather than 'live' because "we made this"
+    // and "this was already here" are different answers to the question
+    // somebody asks when a container turns up in a domain nobody expected it
+    // in -- and no anchor is recorded, because a conflict returns none.
+    await withTenant(tenantId, (tx) =>
+      tx.orgUnitContainer.update({
+        where: { id: orgUnitContainerId },
+        data: { state: 'adopted' },
+      }),
+    );
+    return finish(
+      tenantId,
+      action.id,
+      { ok: true, message: `${dn} already existed at the target and was adopted` },
+      { attempts: action.attempts + 1 },
+    );
+  }
+
+  // Everything else leaves the row in 'desired', untouched, so the intent
+  // survives and the next run proposes it again.
+  return finish(tenantId, action.id, result, { attempts: action.attempts + 1 });
+}
+
 async function applyOneAction(
   tenantId: string,
   provider: MasterKeyProvider,
@@ -729,6 +822,12 @@ async function applyOneAction(
     // event, in `syntra-user.ts`, which checks the type and the status itself.
     await applySyntraUserAction(tenantId, action.id, options.actorUserId);
     return 'applied';
+  }
+
+  if (action.actionType === 'create_container') {
+    // Handled before `readActionContext`, which resolves an ACCOUNT and would
+    // answer null for the one action type that names an object instead.
+    return applyContainerAction(tenantId, action, options);
   }
 
   const context = await readActionContext(tenantId, action, options);

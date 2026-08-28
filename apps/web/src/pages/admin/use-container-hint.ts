@@ -23,6 +23,16 @@ export interface HintFacts {
   costCentre: string;
   employer: string;
   location: string;
+  /**
+   * The org unit the form has selected, or ''.
+   *
+   * It outranks every HR field here: a person assigned to a unit is placed in
+   * that unit's container on each target, and the template is never consulted.
+   * Without it this preview shows the department's answer for somebody the run
+   * will place somewhere else -- and this is the one screen the answer is
+   * checked on while it is still free to correct.
+   */
+  orgUnitId: string;
 }
 
 /** Long enough that typing a department does not fire a request per keystroke. */
@@ -66,7 +76,13 @@ export function useContainerHints(
     }
     // Nothing to render a name from yet. Asking would return the fallback for
     // every target and tell the reader only that they have not typed anything.
-    if (facts.givenName.trim() === '' && facts.department.trim() === '') {
+    if (
+      facts.givenName.trim() === '' &&
+      facts.department.trim() === '' &&
+      // An org unit answers on its own: it needs no name and no department,
+      // so a form with only a unit chosen still has something true to show.
+      facts.orgUnitId.trim() === ''
+    ) {
       setHints([]);
       return;
     }
@@ -82,7 +98,13 @@ export function useContainerHints(
               missing: string[];
             }>(`/api/admin/targets/${target.id}/profile/preview-container`, {
               method: 'POST',
-              body: JSON.stringify(facts),
+              // `orgUnitId` is a uuid or null at the boundary. '' is neither,
+              // and sending it makes the whole request a 400 -- which this
+              // swallows, so the hint would simply stop appearing.
+              body: JSON.stringify({
+                ...facts,
+                orgUnitId: facts.orgUnitId === '' ? null : facts.orgUnitId,
+              }),
             });
             return {
               targetId: target.id,

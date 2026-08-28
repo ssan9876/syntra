@@ -365,6 +365,67 @@ function anchorOf(config: Resolved, entry: Record<string, unknown>): string {
   );
 }
 
+/**
+ * Creates ONE organizational unit, and never its parents.
+ *
+ * Reached only from an `OrgUnitContainer` row an administrator materialised
+ * (Ruling P9, revised). Building the tree above a container would be the
+ * implicit creation that ruling forbids, and is how a single typo in a DN
+ * becomes three containers nobody asked for -- so a missing parent comes back
+ * `not_found` and stays that way.
+ *
+ * The anchor is read back rather than assumed: an LDAP add response does not
+ * carry the new object's `objectGUID`, and a container recorded without its
+ * anchor is one nothing can follow across a rename.
+ */
+async function createContainer(
+  client: Client,
+  config: Resolved,
+  dn: string,
+): Promise<WriteResult> {
+  const { rdn } = splitDn(dn);
+  const separator = rdn.indexOf('=');
+  const name = separator === -1 ? '' : rdn.slice(separator + 1);
+  if (name.trim() === '') {
+    return {
+      ok: false,
+      message: `${dn} has no name to create a container under`,
+      failure: 'rejected',
+    };
+  }
+
+  try {
+    await client.add(dn, { objectClass: ['top', 'organizationalUnit'], ou: name });
+  } catch (cause) {
+    return {
+      ok: false,
+      message: cause instanceof Error ? cause.message : String(cause),
+      // `alreadyExists` maps to `conflict` here, which the caller treats as
+      // success by adoption rather than an error: two administrators
+      // materialising one unit, and a re-materialise after somebody made the
+      // OU by hand, both arrive at exactly this branch.
+      failure: classifyLdapError(cause),
+    };
+  }
+
+  try {
+    const { searchEntries } = await client.search(dn, {
+      scope: 'base',
+      filter: '(objectClass=*)',
+      attributes: [config.anchorAttribute],
+    });
+    const entry = searchEntries[0] as unknown as Record<string, unknown> | undefined;
+    const anchor = entry === undefined ? '' : anchorOf(config, entry);
+    // The container exists either way. A read-back that fails leaves the row
+    // without an anchor rather than undoing a successful create.
+    return anchor === ''
+      ? { ok: true, message: `created ${dn}` }
+      : { ok: true, message: `created ${dn}`, anchor };
+  } catch {
+    return { ok: true, message: `created ${dn}` };
+  }
+}
+
 async function createAccount(
   client: Client,
   config: Resolved,
@@ -1072,6 +1133,11 @@ export const adTargetConnector: TargetConnector<Config> = {
 
       if (op.op === 'create_account') {
         return await createAccount(client, config, op);
+      }
+
+      // Before `findByAnchor`, like `create_account`: there is no anchor yet.
+      if (op.op === 'create_container') {
+        return await createContainer(client, config, op.dn);
       }
 
       const found = await findByAnchor(client, config, op.anchor);

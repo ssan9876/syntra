@@ -701,6 +701,14 @@ export async function previewProvisionRun(
         where: { targetSystemId },
         select: { personId: true, container: true },
       });
+      // Read in the SAME transaction as the persons and the placements, for
+      // the reason stated above them: a materialisation written between two
+      // reads is one this run would not know about, and the plan it produced
+      // would disagree with the console that ordered it.
+      const orgUnitContainers = await tx.orgUnitContainer.findMany({
+        where: { targetSystemId },
+        select: { id: true, orgUnitId: true, dn: true, state: true },
+      });
       return {
         persons,
         rules,
@@ -709,6 +717,7 @@ export async function previewProvisionRun(
         users,
         grants,
         placements,
+        orgUnitContainers,
         previousPersons: previous?.personsWithActiveContract ?? null,
         hasEverApplied: prepared.target.lastAppliedRunAt !== null,
       };
@@ -814,6 +823,25 @@ export async function previewProvisionRun(
       snapshot.placements.map((p) => [p.personId, p.container]),
     );
 
+    /**
+     * The materialisations, in the two shapes the run needs them.
+     *
+     * By org unit for the placement ladder -- a person carries a unit id and
+     * needs the DN. By lowercased DN for Ruling P9 (revised) -- reconcile
+     * holds a container and needs to know whether anybody asked for it.
+     *
+     * Two views of one read rather than two reads, so they cannot disagree.
+     */
+    const containerByOrgUnit = new Map(
+      snapshot.orgUnitContainers.map((c) => [c.orgUnitId, c.dn]),
+    );
+    const containerRowsByDn = new Map(
+      snapshot.orgUnitContainers.map((c) => [
+        c.dn.trim().toLowerCase(),
+        { id: c.id, state: c.state },
+      ]),
+    );
+
     const desired: DesiredState[] = [];
     const contractsByPerson = new Map<string, ContractFacts[]>();
     // Only the people who have one, which is almost nobody.
@@ -885,6 +913,14 @@ export async function previewProvisionRun(
         existingCorrelationKey: knownByPerson.get(person.id)?.correlationKey ?? null,
         takenCorrelationKeys: takenKeys,
         containerOverride: placementByPerson.get(person.id) ?? null,
+        // Null for a person with no unit, and for a unit not materialised on
+        // THIS target: there is no DN to place them at, and inventing one is
+        // the implicit creation Ruling P9 forbids. They fall to the template,
+        // which is what makes this adoptable one person at a time.
+        orgUnitContainer:
+          person.orgUnitId === null
+            ? null
+            : (containerByOrgUnit.get(person.orgUnitId) ?? null),
         renameEnabled: prepared.target.renameEnabled,
         now,
         horizon,
@@ -930,6 +966,7 @@ export async function previewProvisionRun(
           .filter((d) => d.account?.required)
           .map((d) => [d.personId, d.account!.container]),
       ),
+      desiredContainerRows: containerRowsByDn,
       enforcementMode: prepared.target.enforcementMode as 'additive' | 'authoritative',
     });
 
@@ -967,6 +1004,7 @@ export async function previewProvisionRun(
     const actions = planActions({
       desired,
       actual: reconciled.actual,
+      containersToCreate: reconciled.containersToCreate,
       contractsByPerson,
       departureOverrideByPerson,
       syntraUserByPerson,
@@ -1010,6 +1048,7 @@ export async function previewProvisionRun(
         deactivateSyntraUserThresholdPercent:
           prepared.target.deactivateSyntraUserThresholdPercent,
         perEntitlementThresholdPercent: prepared.target.perEntitlementThresholdPercent,
+        maxContainerCreatesPerRun: prepared.target.maxContainerCreatesPerRun,
         personPopulationDropPercent: prepared.target.personPopulationDropPercent,
       },
       accountsAtTarget: objects.length,

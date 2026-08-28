@@ -71,6 +71,14 @@ const post = (url: string, cookie: string, payload: unknown) =>
 const get = (url: string, cookie: string) =>
   ctx.app.inject({ method: 'GET', url, headers: { host: ctx.host, cookie } });
 
+const patch = (url: string, cookie: string, payload: unknown) =>
+  ctx.app.inject({
+    method: 'PATCH',
+    url,
+    headers: { host: ctx.host, cookie },
+    payload: payload as object,
+  });
+
 const BOTH: Permission[] = [
   PERMISSIONS.IDENTITY_READ,
   PERMISSIONS.IDENTITY_WRITE,
@@ -258,5 +266,81 @@ describe('CSV import', () => {
       csv: `${HEADER}\nE1,Jo,Doe,jo@acme.test,1,true,2026-01-01,,Nurse,Care`,
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('assigning a person to an org unit', () => {
+  // PATCH /persons/:id is gated on DIRECTORY_WRITE, not IDENTITY_WRITE, and
+  // reading the unit list needs DIRECTORY_READ.
+  const CAN: Permission[] = [
+    ...BOTH,
+    PERMISSIONS.DIRECTORY_READ,
+    PERMISSIONS.DIRECTORY_WRITE,
+  ];
+
+  const seedUnit = () =>
+    withTenant(ctx.tenantId, (tx) =>
+      tx.orgUnit
+        .create({ data: { tenantId: ctx.tenantId, name: 'Sales' } })
+        .then((u) => u.id),
+    );
+
+  it('assigns and then clears the assignment', async () => {
+    await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    const orgUnitId = await seedUnit();
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Jo',
+      familyName: 'Doe',
+    });
+    const personId = person.json().id;
+
+    const assigned = await patch(`/api/admin/persons/${personId}`, cookie, {
+      orgUnitId,
+    });
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json().orgUnitId).toBe(orgUnitId);
+
+    // An explicit null clears it and sends this person back to the template.
+    // Omitting the field would leave the assignment alone, which is why the
+    // schema distinguishes the two.
+    const cleared = await patch(`/api/admin/persons/${personId}`, cookie, {
+      orgUnitId: null,
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().orgUnitId).toBeNull();
+  });
+
+  it('leaves the assignment alone when the field is omitted', async () => {
+    await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    const orgUnitId = await seedUnit();
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Jo',
+      familyName: 'Doe',
+    });
+    const personId = person.json().id;
+    await patch(`/api/admin/persons/${personId}`, cookie, { orgUnitId });
+
+    const renamed = await patch(`/api/admin/persons/${personId}`, cookie, {
+      givenName: 'Joanna',
+    });
+
+    expect(renamed.json().orgUnitId).toBe(orgUnitId);
+  });
+
+  it('refuses an org unit id that is not a uuid', async () => {
+    await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Jo',
+      familyName: 'Doe',
+    });
+
+    const res = await patch(`/api/admin/persons/${person.json().id}`, cookie, {
+      orgUnitId: 'Sales',
+    });
+
+    expect(res.statusCode).toBe(400);
   });
 });

@@ -752,6 +752,16 @@ export interface ProfilePreview {
   correlationKey: string | null;
   taken: boolean;
   container: string | null;
+  /**
+   * Which rung of the placement ladder produced `container`.
+   *
+   * A preview that names the value without naming where it came from does not
+   * explain anything: `OU=Sales,...` looks identical whether it came from a
+   * manual move, this person's org unit, or a template that happens to render
+   * their department that way -- and those three answer completely different
+   * questions about what happens when the department changes.
+   */
+  containerSource: 'override' | 'orgUnit' | 'template' | 'fallback';
   attributes: Record<string, string>;
   problems: string[];
 }
@@ -854,9 +864,57 @@ export async function previewAccountProfile(
     // they check it on. `fallbackContainer` is not rendered at all — it is a
     // literal, exactly as `desiredState` treats it.
     const containerRendered = renderContainer(profile.containerTemplate, context);
-    const container = containerRendered.ok
-      ? containerRendered.value
-      : profile.fallbackContainer;
+
+    /**
+     * The same ladder `desiredState` applies, in the same order, because a
+     * preview that disagrees with the run is worse than no preview: it is the
+     * one screen somebody checks placement on while it is still free to
+     * correct, and being believed is the whole point of it.
+     *
+     * This previously rendered the template unconditionally, which was already
+     * wrong for anybody carrying an `AccountPlacement` -- the screen showed
+     * the template's answer for a person the run would leave exactly where
+     * somebody had moved them.
+     */
+    const placement = await tx.accountPlacement.findFirst({
+      where: { personId, targetSystemId },
+      select: { container: true },
+    });
+    const orgUnitRow =
+      person.orgUnitId === null
+        ? null
+        : await tx.orgUnitContainer.findFirst({
+            where: { orgUnitId: person.orgUnitId, targetSystemId },
+            select: { dn: true },
+          });
+
+    const override =
+      placement !== null && placement.container.trim() !== ''
+        ? placement.container
+        : null;
+    const orgUnitContainer =
+      orgUnitRow !== null && orgUnitRow.dn.trim() !== '' ? orgUnitRow.dn : null;
+
+    const containerSource: ProfilePreview['containerSource'] =
+      override !== null
+        ? 'override'
+        : orgUnitContainer !== null
+          ? 'orgUnit'
+          : containerRendered.ok
+            ? 'template'
+            : 'fallback';
+    const container =
+      override !== null
+        ? override
+        : orgUnitContainer !== null
+          ? orgUnitContainer
+          : containerRendered.ok
+            ? containerRendered.value
+            : profile.fallbackContainer;
+
+    // Only the template rungs can fail to resolve, so only they raise the
+    // problem. An override or an org unit answering means the template was
+    // never consulted and its missing fields are not this person's problem.
     if (container.trim() === '') {
       // The same condition `desiredState` reports as `container_missing`. The
       // schema requires a non-empty fallback, so reaching this means one made
@@ -898,6 +956,7 @@ export async function previewAccountProfile(
       correlationKey: unique.ok ? unique.correlationKey : null,
       taken: base.ok && unique.ok && base.correlationKey !== unique.correlationKey,
       container,
+      containerSource,
       attributes,
       problems,
     };

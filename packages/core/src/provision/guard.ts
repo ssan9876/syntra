@@ -10,6 +10,17 @@ export interface GuardThresholds {
   deactivateSyntraUserThresholdPercent: number;
   perEntitlementThresholdPercent: number;
   personPopulationDropPercent: number;
+  /**
+   * The most containers one run may create. An ABSOLUTE COUNT, not a share,
+   * and deliberately unlike every other field here.
+   *
+   * Containers have no population to be a percentage of. Ten new containers
+   * against four people is not 250% of anything, because the denominator does
+   * not exist -- so this axis is a cap, is validated as a count rather than a
+   * percentage, and lives outside `POPULATIONS`. Do not "fix" it into a
+   * percentage; the number that would produce has no meaning.
+   */
+  maxContainerCreatesPerRun: number;
 }
 
 export interface GuardInput {
@@ -195,6 +206,18 @@ export const GUARDED_ACTION_TYPES: readonly ProvisionActionType[] = POPULATIONS.
   (p) => p.actionType,
 );
 
+/**
+ * Action types measured against an ABSOLUTE CAP rather than a share.
+ *
+ * Exported for the same reason `GUARDED_ACTION_TYPES` is: the exhaustiveness
+ * test asserts that the guarded types and the deliberately unguarded ones
+ * together cover `ProvisionActionType`, and a type guarded by a cap would
+ * otherwise read as unguarded and arrive silently.
+ */
+export const ABSOLUTE_CAP_ACTION_TYPES: readonly ProvisionActionType[] = [
+  'create_container',
+];
+
 const THRESHOLD_KEYS = [
   'createAccountThresholdPercent',
   'disableAccountThresholdPercent',
@@ -254,6 +277,15 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
       );
     }
   }
+  // Validated as a COUNT, not a percentage, and so not in THRESHOLD_KEYS.
+  // Same fail-closed rule though: `count > NaN` is false, which would turn
+  // this axis off while it continued to look exactly like an axis.
+  if (!isCount(input.thresholds.maxContainerCreatesPerRun)) {
+    hard.push(
+      `the maxContainerCreatesPerRun cap is ${input.thresholds.maxContainerCreatesPerRun}, which is not a count; a cap nobody can state is not a cap`,
+    );
+  }
+
   for (const key of COUNT_KEYS) {
     const value = input[key];
     if (!isCount(value)) {
@@ -370,6 +402,30 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
         `would ${population.verb} ${count} of ${total} ${population.noun} (${share.toFixed(1)}%), above the ${threshold}% threshold`,
       );
     }
+  }
+
+  /**
+   * The container cap: an absolute count, deliberately not a share.
+   *
+   * `POPULATIONS` measures each action type against a denominator. Containers
+   * have none, and inventing one -- containers already at the target, say --
+   * would make the axis meaningless in exactly the case it exists for: a
+   * first materialisation against a target holding two containers would be
+   * allowed to add two hundred.
+   *
+   * Reported as a tripped threshold rather than a hard refusal, so a genuine
+   * bulk materialisation stays confirmable by a person. It blocks the WHOLE
+   * run rather than trimming to the cap: half a tree is a worse state than
+   * none of it, because accounts land under the containers that made the cut
+   * and go unprocessable under the ones that did not.
+   */
+  const containerCreates = input.actions.filter(
+    (a) => a.actionType === 'create_container',
+  ).length;
+  if (containerCreates > input.thresholds.maxContainerCreatesPerRun) {
+    tripped.push(
+      `would create ${containerCreates} containers, above the limit of ${input.thresholds.maxContainerCreatesPerRun} per run (maxContainerCreatesPerRun — an absolute count, not a percentage)`,
+    );
   }
 
   // The second axis. Revoking every holder of one entitlement is the exact

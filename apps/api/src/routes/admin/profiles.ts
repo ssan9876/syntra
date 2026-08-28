@@ -38,6 +38,10 @@ const containerPreviewRequest = z
     location: z.string().max(256).optional(),
     businessEmail: z.string().max(320).optional(),
     personalEmail: z.string().max(320).optional(),
+    // The unit the form has selected. Nullable rather than merely optional:
+    // clearing the selector must be able to say "no unit" and get the
+    // template's answer back, which an absent field cannot express.
+    orgUnitId: z.string().uuid().nullish(),
   })
   .strict();
 
@@ -125,7 +129,13 @@ export async function registerAdminProfileRoutes(app: FastifyInstance): Promise<
       const { id } = idParam.parse(request.params);
       const facts = containerPreviewRequest.parse(request.body ?? {});
 
-      const preview = await previewContainerForFacts(request.tenantId, id, facts);
+      const { orgUnitId, ...personFacts } = facts;
+      const preview = await previewContainerForFacts(
+        request.tenantId,
+        id,
+        personFacts,
+        orgUnitId ?? null,
+      );
       // One 404 for both "no such target" and "no profile on it". They are the
       // same answer to the caller — there is no container to name — and the
       // form shows nothing either way rather than raising configuration

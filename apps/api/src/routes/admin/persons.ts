@@ -362,6 +362,10 @@ export async function registerAdminPersonRoutes(
             ...(body.businessEmail === undefined ? {} : { businessEmail: body.businessEmail }),
             ...(body.personalEmail === undefined ? {} : { personalEmail: body.personalEmail }),
             ...(body.externalId === undefined ? {} : { externalId: body.externalId }),
+            // `null` clears the assignment and sends this person back to the
+            // template; omitted leaves it alone. The two are different
+            // requests and Zod keeps them apart.
+            ...(body.orgUnitId === undefined ? {} : { orgUnitId: body.orgUnitId }),
           },
         });
         await recordEvent(tx, {

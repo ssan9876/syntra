@@ -67,6 +67,7 @@ export function OnboardPersonPage() {
     costCentre: v.costCentre ?? '',
     employer: v.employer ?? '',
     location: v.location ?? '',
+    orgUnitId: v.orgUnitId ?? '',
   });
 
   /**
@@ -117,6 +118,12 @@ export function OnboardPersonPage() {
           ...(v.businessEmail ? { businessEmail: v.businessEmail } : {}),
           ...(v.personalEmail ? { personalEmail: v.personalEmail } : {}),
           ...(v.externalId ? { externalId: v.externalId } : {}),
+          // The same unit the login gets, and for a different reason: on the
+          // PERSON it decides where the provisioned account lands, through
+          // the placement ladder. One selection, because being in Sales and
+          // having an account in Sales are not two decisions anybody wants to
+          // make separately.
+          ...(v.orgUnitId ? { orgUnitId: v.orgUnitId } : {}),
         }),
       });
       done.personId = person.id;

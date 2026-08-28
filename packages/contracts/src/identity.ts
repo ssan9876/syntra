@@ -23,6 +23,16 @@ export const patchPersonRequest = z
     businessEmail: z.string().email().nullable().optional(),
     personalEmail: z.string().email().nullable().optional(),
     externalId: z.string().max(128).nullable().optional(),
+    /**
+     * The unit this person belongs to, which places their account in the
+     * container that unit is materialised at on each target.
+     *
+     * Nullable as well as optional, and the two mean different things:
+     * omitted leaves the assignment alone, `null` clears it. Without the
+     * null there would be no way to un-assign somebody, and the only
+     * remaining route back to the template would be deleting the unit.
+     */
+    orgUnitId: z.string().uuid().nullable().optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });

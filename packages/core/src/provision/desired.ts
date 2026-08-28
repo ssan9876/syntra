@@ -50,6 +50,28 @@ export interface DesiredStateInput {
    */
   containerOverride: string | null;
   /**
+   * The DN of the container this person's org unit is materialised at on THIS
+   * target, or null when they have no org unit, their org unit is not
+   * materialised here, or no row exists yet.
+   *
+   * Required rather than optional for the reason `containerOverride` is: an
+   * optional field is one a run can forget to load, and a placement that
+   * silently reverted to the template would be indistinguishable from a
+   * person nobody ever assigned.
+   *
+   * Ranks BELOW `containerOverride` and ABOVE the template. Not rendered and
+   * not escaped — it is a stored literal validated once on write by
+   * `validateContainerDn`, not a template with HR data in it. Passing it
+   * through `renderContainer` would escape its structural commas and collapse
+   * the whole DN into one literal RDN value (Ruling P22 cuts the other way
+   * here, which is why the obligation lives on the write path instead).
+   *
+   * It is also the ONLY rung backed by an `OrgUnitContainer` row, which is
+   * what makes Ruling P9 (revised) structural: `create_container` can only be
+   * emitted for a container that has one, and the template rungs never do.
+   */
+  orgUnitContainer: string | null;
+  /**
    * The target's `renameEnabled`. Without it here the setting has nothing
    * behind it: the existing key is returned unconditionally, so the planner's
    * `state.account.correlationKey !== current.correlationKey` can never hold
@@ -591,15 +613,34 @@ export function desiredState(input: DesiredStateInput): DesiredState {
   // (Ruling P22). `fallbackContainer` is not rendered at all — it is a literal
   // DN from target configuration with no HR data in it.
   const containerRendered = renderContainer(profile.containerTemplate, context);
-  // An override wins outright. Not rendered, because it is a literal DN a
-  // human chose from the target's own inventory rather than a template with
-  // HR data in it — the same reason `fallbackContainer` is not rendered.
+  // The placement ladder, most specific first:
+  //
+  //   1. containerOverride  — a manual Move, absolute, ignores the fallback
+  //   2. orgUnitContainer   — the person's org unit, on this target
+  //   3. the rendered template
+  //   4. fallbackContainer
+  //
+  // Neither of the first two is rendered: each is a literal DN a human chose
+  // — one from the target's own inventory, one validated on write — rather
+  // than a template with HR data in it, which is the same reason
+  // `fallbackContainer` is not rendered either.
+  //
+  // The order is load-bearing in both directions. An override must beat an
+  // org unit or the next tick undoes every manual move, which is the failure
+  // `AccountPlacement` exists to close. An org unit must beat the template or
+  // assigning somebody to a unit does nothing visible.
+  const orgUnit =
+    input.orgUnitContainer !== null && input.orgUnitContainer.trim() !== ''
+      ? input.orgUnitContainer
+      : null;
   const container =
     input.containerOverride !== null && input.containerOverride.trim() !== ''
       ? input.containerOverride
-      : containerRendered.ok
-        ? containerRendered.value
-        : profile.fallbackContainer;
+      : orgUnit !== null
+        ? orgUnit
+        : containerRendered.ok
+          ? containerRendered.value
+          : profile.fallbackContainer;
 
   // The write boundary requires a non-empty fallback, so this is a profile
   // that got past it by some other route. Placing an account at an empty DN

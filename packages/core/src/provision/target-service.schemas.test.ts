@@ -217,21 +217,42 @@ describe('provisionThresholdsSchema', () => {
     ).toBe(false);
   });
 
-  it('names all seven thresholds', () => {
-    // The guard reads seven. A threshold missing from this schema is one an
-    // administrator cannot set; one that is here and not in the guard is one
-    // nothing reads.
+  it('names every guard setting: seven percentages and one cap', () => {
+    // A setting missing from this schema is one an administrator cannot set;
+    // one that is here and not in the guard is one nothing reads.
+    //
+    // `maxContainerCreatesPerRun` is the odd one and stays odd on purpose: it
+    // is an absolute COUNT, bounded 0..1000 rather than 0..100, and it is not
+    // covered by `target_system_thresholds_are_percent`. Containers have no
+    // population to be a share of.
     expect(Object.keys(provisionThresholdsSchema.shape).sort()).toEqual(
       [
         'archiveAccountThresholdPercent',
         'createAccountThresholdPercent',
         'deactivateSyntraUserThresholdPercent',
         'disableAccountThresholdPercent',
+        'maxContainerCreatesPerRun',
         'perEntitlementThresholdPercent',
         'personPopulationDropPercent',
         'revokeEntitlementThresholdPercent',
       ].sort(),
     );
+  });
+
+  it('bounds the container cap as a count rather than a percentage', () => {
+    // 500 containers is a lot and probably a mistake; it is not, however, an
+    // impossible percentage, and refusing it as one would be refusing it for
+    // the wrong reason.
+    expect(
+      provisionThresholdsSchema.safeParse({ maxContainerCreatesPerRun: 500 }).success,
+    ).toBe(true);
+    expect(
+      provisionThresholdsSchema.safeParse({ maxContainerCreatesPerRun: 1001 }).success,
+    ).toBe(false);
+    // Zero is a coherent thing to want: no run may create a container at all.
+    expect(
+      provisionThresholdsSchema.safeParse({ maxContainerCreatesPerRun: 0 }).success,
+    ).toBe(true);
   });
 });
 
