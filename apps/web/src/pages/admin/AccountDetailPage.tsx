@@ -55,6 +55,27 @@ interface SourceRow {
   writebackDisable: boolean;
 }
 
+/** Somebody this account might belong to, and why the matcher thinks so. */
+interface Candidate {
+  personId: string;
+  givenName: string;
+  familyName: string;
+  rule: 'businessEmail' | 'personalEmail' | 'displayName';
+  hasActiveAccount: boolean;
+}
+
+/**
+ * WHY it is being suggested, in the reader's words rather than the matcher's.
+ *
+ * A suggestion with no reason is a claim an administrator has to verify from
+ * scratch, which is the work the suggestion exists to save.
+ */
+const REASON: Record<Candidate['rule'], string> = {
+  businessEmail: 'same work email',
+  personalEmail: 'same personal email',
+  displayName: 'same name',
+};
+
 /**
  * One sign-in account: what it is, what can be done to it, and its history.
  *
@@ -94,6 +115,13 @@ export function AccountDetailPage() {
   const { data: unitsData } = useApiResource<{
     orgUnits: { id: string; name: string }[];
   }>('/api/admin/org-units');
+  // Asked unconditionally and answered with an empty list for an account that
+  // already has a person, rather than called only when one is missing: a hook
+  // that runs on some renders and not others breaks the moment somebody adds
+  // a branch above it.
+  const { data: candidatesData } = useApiResource<{ candidates: Candidate[] }>(
+    `/api/admin/users/${id}/person-candidates`,
+  );
 
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -171,6 +199,19 @@ export function AccountDetailPage() {
         // sends the administrator back to the support call with the same
         // problem.
         failed(cause, 'That account could not be unlocked. Try again.');
+      }
+    });
+
+  const linkTo = (candidate: Candidate) =>
+    run(async () => {
+      try {
+        await api(`/api/admin/persons/${candidate.personId}/link-user`, {
+          method: 'POST',
+          body: JSON.stringify({ userId: data!.id }),
+        });
+        reload();
+      } catch (cause) {
+        failed(cause, 'That account could not be linked.');
       }
     });
 
@@ -271,10 +312,38 @@ export function AccountDetailPage() {
               >
                 {data.person.givenName} {data.person.familyName}
               </Link>
-            ) : (
+            ) : (candidatesData?.candidates ?? []).length === 0 ? (
               // A service account is the ordinary case here, not a fault. It
-              // is stated flatly and given no call to action for that reason.
+              // is stated flatly and given no call to action for that reason,
+              // and that stays true whenever nothing matched.
               <span className="font-normal text-muted">Not linked</span>
+            ) : (
+              <span className="flex flex-col gap-2">
+                <span className="font-normal text-muted">Not linked</span>
+                {(candidatesData?.candidates ?? []).map((candidate) => (
+                  <span
+                    key={candidate.personId}
+                    className="flex flex-wrap items-center gap-2"
+                  >
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={busy}
+                      onClick={() => void linkTo(candidate)}
+                    >
+                      {/* Names the person, so a column of suggestions is not
+                          a column of identical "Link" buttons. */}
+                      Link {candidate.givenName} {candidate.familyName}
+                    </Button>
+                    <span className="text-sm font-normal text-muted">
+                      {REASON[candidate.rule]}
+                      {/* The contractor-with-two-accounts case is legitimate,
+                          so it is offered and labelled rather than hidden. */}
+                      {candidate.hasActiveAccount && ' — already has an account'}
+                    </span>
+                  </span>
+                ))}
+              </span>
             ),
           },
         ]}

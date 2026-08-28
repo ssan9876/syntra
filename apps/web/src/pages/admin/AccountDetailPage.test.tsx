@@ -517,3 +517,102 @@ describe('AccountDetailPage org unit', () => {
     expect(await screen.findByLabelText('Org unit')).toHaveValue('ou1');
   });
 });
+
+/**
+ * Offering a person for an account that has none.
+ *
+ * The suggestion carries its REASON. One without is a claim an administrator
+ * has to verify from scratch, which is the work the suggestion was meant to
+ * save.
+ */
+describe('AccountDetailPage person suggestions', () => {
+  const ORPHAN = { ...ACCOUNT, personId: null, person: null };
+
+  const withCandidates = (candidates: Record<string, unknown>[]) =>
+    mockApi(ORPHAN, { '/person-candidates': () => json({ candidates }) });
+
+  it('offers a candidate, naming both the person and the reason', async () => {
+    withCandidates([
+      {
+        personId: 'p1',
+        givenName: 'Maya',
+        familyName: 'Okafor',
+        rule: 'personalEmail',
+        hasActiveAccount: false,
+      },
+    ]);
+    renderPage();
+
+    expect(
+      await screen.findByRole('button', { name: /link Maya Okafor/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/same personal email/i)).toBeInTheDocument();
+  });
+
+  it('says when a candidate already signs in somewhere', async () => {
+    withCandidates([
+      {
+        personId: 'p1',
+        givenName: 'Maya',
+        familyName: 'Okafor',
+        rule: 'businessEmail',
+        hasActiveAccount: true,
+      },
+    ]);
+    renderPage();
+
+    // The contractor-with-two-accounts case is legitimate, so it is offered
+    // and labelled rather than hidden.
+    expect(await screen.findByText(/already has an account/i)).toBeInTheDocument();
+  });
+
+  it('links the account when the button is pressed', async () => {
+    let linked: { url: string; body: unknown } | undefined;
+    mockApi(ORPHAN, {
+      '/person-candidates': () => json({ candidates: [
+        {
+          personId: 'p1',
+          givenName: 'Maya',
+          familyName: 'Okafor',
+          rule: 'businessEmail',
+          hasActiveAccount: false,
+        },
+      ] }),
+      '/link-user': (url, init) => {
+        linked = { url, body: JSON.parse(String(init?.body)) };
+        return json({ ok: true });
+      },
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: /link Maya Okafor/i }),
+    );
+
+    await waitFor(() => expect(linked).toBeDefined());
+    expect(linked!.url).toContain('/api/admin/persons/p1/link-user');
+    expect(linked!.body).toEqual({ userId: 'u1' });
+  });
+
+  it('says only "Not linked" when nothing matches', async () => {
+    withCandidates([]);
+    renderPage();
+
+    // A service account is the ordinary case here, not a fault. It is stated
+    // flatly and given no call to action for that reason.
+    expect(await screen.findByText('Not linked')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^link /i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers nothing for an account that already has a person', async () => {
+    mockApi(ACCOUNT, { '/person-candidates': () => json({ candidates: [] }) });
+    renderPage();
+
+    expect(await screen.findByRole('link', { name: 'Jo Doe' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^link /i }),
+    ).not.toBeInTheDocument();
+  });
+});

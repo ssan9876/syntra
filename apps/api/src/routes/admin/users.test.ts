@@ -1430,3 +1430,210 @@ describe('linking a new account to a person', () => {
     expect(person!.orgUnitId).toBe(chosen.json().id);
   });
 });
+
+/**
+ * Who an orphaned account might belong to.
+ *
+ * Offered rather than applied: everything the matcher is not confident about
+ * ends up here, which is where a human decides.
+ */
+describe('GET /api/admin/users/:id/person-candidates', () => {
+  const BOTH: Permission[] = [
+    PERMISSIONS.DIRECTORY_READ,
+    PERMISSIONS.DIRECTORY_WRITE,
+    PERMISSIONS.IDENTITY_READ,
+    PERMISSIONS.IDENTITY_WRITE,
+  ];
+
+  it('suggests a person for an unlinked account, with the reason', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      personalEmail: 'maya@gmail.test',
+    });
+    const user = await post('/api/admin/users', cookie, {
+      login: 'm',
+      email: 'maya@gmail.test',
+      displayName: 'M',
+      personId: null,
+    });
+
+    const res = await get(
+      `/api/admin/users/${user.json().id}/person-candidates`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().candidates[0]).toMatchObject({ rule: 'personalEmail' });
+  });
+
+  it('suggests nothing for an account that already has a person', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      personalEmail: 'maya@gmail.test',
+    });
+    const user = await post('/api/admin/users', cookie, {
+      login: 'm',
+      email: 'maya@gmail.test',
+      displayName: 'M',
+      personId: person.json().id,
+    });
+
+    const res = await get(
+      `/api/admin/users/${user.json().id}/person-candidates`,
+      cookie,
+    );
+
+    // An empty list rather than a 409: the caller is a screen deciding whether
+    // to render a control, and a refusal it has to catch is a worse contract
+    // than nothing to show.
+    expect(res.statusCode).toBe(200);
+    expect(res.json().candidates).toEqual([]);
+  });
+
+  it('offers a confident match that was not auto-linked', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      businessEmail: 'maya@acme.test',
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'first',
+      email: 'first@acme.test',
+      displayName: 'M',
+      personId: person.json().id,
+    });
+    // Same work address, so confident by rule — but she already signs in, so
+    // the create path demoted it rather than making a second account silently.
+    const second = await post('/api/admin/users', cookie, {
+      login: 'second',
+      email: 'maya@acme.test',
+      displayName: 'M',
+    });
+
+    const res = await get(
+      `/api/admin/users/${second.json().id}/person-candidates`,
+      cookie,
+    );
+
+    expect(res.json().candidates[0]).toMatchObject({
+      rule: 'businessEmail',
+      hasActiveAccount: true,
+    });
+  });
+
+  it('404s for an account that is not there', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+
+    const res = await get(
+      `/api/admin/users/${crypto.randomUUID()}/person-candidates`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller who may not read people', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const res = await get(
+      `/api/admin/users/${crypto.randomUUID()}/person-candidates`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+/**
+ * The backlog of accounts with nobody behind them, which the console created
+ * itself: the Accounts form had no person field, so every account made there
+ * orphaned itself and the only fix was one person's screen at a time.
+ */
+describe('GET /api/admin/users/unlinked', () => {
+  const BOTH: Permission[] = [
+    PERMISSIONS.DIRECTORY_READ,
+    PERMISSIONS.DIRECTORY_WRITE,
+    PERMISSIONS.IDENTITY_READ,
+    PERMISSIONS.IDENTITY_WRITE,
+  ];
+
+  it('lists unlinked accounts with their best candidate', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      businessEmail: 'maya@acme.test',
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'm',
+      email: 'maya@acme.test',
+      displayName: 'M',
+      personId: null,
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'svc-backup',
+      email: 'svc@acme.test',
+      displayName: 'Backup',
+      personId: null,
+    });
+
+    const res = await get('/api/admin/users/unlinked', cookie);
+
+    const accounts = res.json().accounts as {
+      login: string;
+      topCandidate: unknown;
+    }[];
+    // The seeded admin is unlinked too, so filter to what this test made.
+    expect(accounts.find((a) => a.login === 'm')!.topCandidate).toMatchObject({
+      rule: 'businessEmail',
+    });
+    // A service account with nothing matching is LISTED with no suggestion
+    // rather than hidden: the point of the screen is the whole backlog, and a
+    // count that cannot be reconciled against the accounts table is worse
+    // than a row somebody reads once.
+    expect(
+      accounts.find((a) => a.login === 'svc-backup')!.topCandidate,
+    ).toBeNull();
+  });
+
+  it('does not list an account that already has a person', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'linked',
+      email: 'l@acme.test',
+      displayName: 'L',
+      personId: person.json().id,
+    });
+
+    const res = await get('/api/admin/users/unlinked', cookie);
+
+    const logins = (res.json().accounts as { login: string }[]).map((a) => a.login);
+    expect(logins).not.toContain('linked');
+  });
+
+  it('is not read as an account id', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+
+    const res = await get('/api/admin/users/unlinked', cookie);
+
+    // `/users/:id` would parse `unlinked` as a uuid and 400 on it.
+    expect(res.statusCode).toBe(200);
+  });
+});

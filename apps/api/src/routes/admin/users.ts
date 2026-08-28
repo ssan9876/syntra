@@ -136,6 +136,84 @@ export async function registerAdminUserRoutes(
   );
 
   /**
+   * Every account with nobody behind it, and who it might be.
+   *
+   * Declared BEFORE `/users/:id` so a reader meets the static path first.
+   * Fastify's radix router prefers a static segment over a parametric one, so
+   * the ordering is not load-bearing — but a file that depends on that being
+   * remembered is a file that breaks the day somebody reorders it.
+   *
+   * `identity.read` rather than `directory.read`: the answer is a list of
+   * people, and reading people is what that permission is for.
+   */
+  app.get(
+    '/users/unlinked',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_READ) },
+    async (request) => {
+      return request.db(async (tx) => {
+        const users = await tx.user.findMany({
+          where: { personId: null, status: 'active' },
+          orderBy: { login: 'asc' },
+          select: { id: true, login: true, displayName: true, email: true },
+        });
+
+        const accounts = [];
+        for (const user of users) {
+          // Reads the person table once per account. That is the honest cost
+          // of the matcher's shape and is accepted here: this serves one
+          // screen, run rarely, over a backlog somebody is actively clearing.
+          // If it ever matters the fix is to hoist the person read out of the
+          // matcher, not to cache it here.
+          const match = await matchPersonForAccount(tx, {
+            email: user.email,
+            displayName: user.displayName,
+          });
+          accounts.push({
+            ...user,
+            topCandidate: match.confident ?? match.candidates[0] ?? null,
+          });
+        }
+        return { accounts };
+      });
+    },
+  );
+
+  /**
+   * Who this account might belong to.
+   *
+   * An account that already has a person answers with an empty list rather
+   * than a 409: the caller is a screen deciding whether to render a control,
+   * and a refusal it has to catch is a worse contract than nothing to show.
+   */
+  app.get(
+    '/users/:id/person-candidates',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      return request.db(async (tx) => {
+        const user = await tx.user.findUnique({ where: { id } });
+        if (!user) throw new ProblemError(404, 'not-found', 'User not found');
+        if (user.personId) return { candidates: [] };
+
+        const match = await matchPersonForAccount(tx, {
+          email: user.email,
+          displayName: user.displayName,
+        });
+        // Flattened. The screen ranks by `rule` and does not need to know one
+        // of them was strong enough to have auto-linked, because by definition
+        // it did not — either nothing matched confidently, or the confident
+        // match already had an account and was demoted.
+        return {
+          candidates: match.confident
+            ? [match.confident, ...match.candidates]
+            : match.candidates,
+        };
+      });
+    },
+  );
+
+  /**
    * One account, for the screen that is about one account.
    *
    * Every field the account screen needs and cannot derive: the lock, the
