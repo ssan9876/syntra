@@ -84,6 +84,19 @@ export const patchUserDetailsRequest = z
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
 
+/**
+ * An administrator setting a password on somebody's behalf.
+ *
+ * The ceiling matches `validateNewPassword`'s: Argon2id's cost is proportional
+ * to its input, and an unbounded password field is a way to spend a server's
+ * memory on demand. The floor is 1 rather than the tenant's minimum, because
+ * the length policy belongs in one place — checking it here as well would
+ * state the rule twice and the two would eventually disagree.
+ */
+export const setUserPasswordRequest = z
+  .object({ password: z.string().min(1).max(1024) })
+  .strict();
+
 export const idParam = z.object({ id: z.string().uuid() });
 
 export const membershipParams = z.object({

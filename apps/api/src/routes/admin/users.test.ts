@@ -1037,3 +1037,109 @@ describe('duplicate guards on POST /api/admin/users', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+/**
+ * Setting a password on somebody's behalf, over HTTP.
+ *
+ * Guarded like `password-setup` beside it and with no step-up: the two are the
+ * same authority over the same account and must not disagree about what it
+ * takes to exercise it.
+ */
+describe('POST /api/admin/users/:id/password', () => {
+  async function targetAccount(cookie: string) {
+    const created = await post('/api/admin/users', cookie, {
+      login: 'target',
+      email: 'target@acme.test',
+      displayName: 'T',
+    });
+    return created.json().id as string;
+  }
+
+  it('sets a password and reports what it cost', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const id = await targetAccount(cookie);
+
+    const res = await post(`/api/admin/users/${id}/password`, cookie, {
+      password: 'a-long-enough-password',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ mustChange: true, sessionsRevoked: 0 });
+  });
+
+  it('refuses a weak password with a 422 rather than a 400', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const id = await targetAccount(cookie);
+
+    const res = await post(`/api/admin/users/${id}/password`, cookie, {
+      password: 'x',
+    });
+
+    // The body parsed and the value was understood and refused. A 400 reads as
+    // a malformed request and sends somebody looking at their JSON.
+    expect(res.statusCode).toBe(422);
+    expect(res.json().type).toMatch(/weak-password/);
+  });
+
+  it('sends an upstream account to its provider by name', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const id = await targetAccount(cookie);
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.user.update({
+        where: { id },
+        data: { passwordSource: 'upstream', passwordSourceHint: 'Entra ID' },
+      }),
+    );
+
+    const res = await post(`/api/admin/users/${id}/password`, cookie, {
+      password: 'a-long-enough-password',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/Entra ID/);
+  });
+
+  it('404s for an account that is not there', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const res = await post(
+      `/api/admin/users/${crypto.randomUUID()}/password`,
+      cookie,
+      { password: 'a-long-enough-password' },
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller without directory.write', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await post(
+      `/api/admin/users/${crypto.randomUUID()}/password`,
+      cookie,
+      { password: 'a-long-enough-password' },
+    );
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('never writes the password into the audit log', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const id = await targetAccount(cookie);
+    const secret = 'a-long-enough-password';
+
+    await post(`/api/admin/users/${id}/password`, cookie, { password: secret });
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'user.setPassword' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain(secret);
+  });
+});

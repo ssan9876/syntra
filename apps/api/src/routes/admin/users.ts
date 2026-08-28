@@ -6,6 +6,7 @@ import {
   deactivateUserRequest,
   idParam,
   patchUserDetailsRequest,
+  setUserPasswordRequest,
   patchUserRequest,
 } from '@syntra/contracts';
 import {
@@ -20,6 +21,7 @@ import {
   listUsers,
   localMasterKeyProvider,
   recordEvent,
+  setPasswordAsAdmin,
   removeRecoveryCodes,
   type Scheduler,
   removeTotp,
@@ -622,6 +624,74 @@ export async function registerAdminUserRoutes(
           orgUnitId: updated.orgUnitId,
         };
       });
+    },
+  );
+
+  /**
+   * Setting a password on somebody's behalf.
+   *
+   * Guarded by `directory.write` and NO step-up, matching `password-setup`
+   * above. The two are the same authority over the same account — one hands
+   * over a credential directly, the other hands over a link that mints one —
+   * and they must not disagree about what it takes to exercise it. If step-up
+   * is wanted it belongs on both, as one change to how credential operations
+   * are guarded, rather than as an inconsistency introduced here.
+   */
+  app.post(
+    '/users/:id/password',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { password } = setUserPasswordRequest.parse(request.body);
+
+      const outcome = await setPasswordAsAdmin(request.tenantId, {
+        userId: id,
+        actorUserId: request.session.userId,
+        newPassword: password,
+        sourceIp: request.ip,
+      });
+
+      if (outcome.ok) {
+        return { sessionsRevoked: outcome.sessionsRevoked, mustChange: true };
+      }
+
+      switch (outcome.reason) {
+        case 'not_found':
+          throw new ProblemError(404, 'not-found', 'User not found');
+        case 'upstream':
+          throw new ProblemError(
+            409,
+            'upstream-password',
+            'Password not held here',
+            `This account signs in through ${
+              outcome.hint ?? 'an upstream identity provider'
+            }, which holds the password. Change it there.`,
+          );
+        case 'directory_owned':
+          throw new ProblemError(
+            409,
+            'directory-owned-password',
+            'Password not held here',
+            'This account’s password lives in the directory that syncs it, and Syntra can only change a directory password when the current one is supplied. Change it in the directory, or send a password link instead.',
+          );
+        case 'weak_password':
+          // 422 rather than 400: the body parsed, and the value was understood
+          // and refused. A 400 reads as a malformed request and sends somebody
+          // looking at their JSON.
+          throw new ProblemError(
+            422,
+            'weak-password',
+            'That password was refused',
+            outcome.detail,
+          );
+        case 'reused':
+          throw new ProblemError(
+            422,
+            'reused-password',
+            'That password was refused',
+            `It is one of this account’s last ${outcome.depth} passwords.`,
+          );
+      }
     },
   );
 }
