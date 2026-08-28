@@ -344,3 +344,116 @@ describe('assigning a person to an org unit', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+/**
+ * Correcting a contract, rather than adding a second one that says something
+ * different about the person.
+ */
+describe('PATCH /api/admin/persons/:id/contracts/:sequence', () => {
+  /** A person holding one primary contract, returned as their id. */
+  async function personWithContract(cookie: string, contract: object = {}) {
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+    });
+    const id = person.json().id;
+    await post(`/api/admin/persons/${id}/contracts`, cookie, {
+      sequence: 1,
+      isPrimary: true,
+      startDate: '2026-01-01',
+      ...contract,
+    });
+    return id;
+  }
+
+  it('corrects a contract in place', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    const id = await personWithContract(cookie, { department: 'Slaes' });
+
+    const res = await patch(`/api/admin/persons/${id}/contracts/1`, cookie, {
+      department: 'Sales',
+      jobTitle: 'Account Executive',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().department).toBe('Sales');
+    expect(res.json().jobTitle).toBe('Account Executive');
+    // Untouched fields survive a partial patch.
+    expect(res.json().isPrimary).toBe(true);
+  });
+
+  it('clears a field with null', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    const id = await personWithContract(cookie, { jobTitle: 'Temp' });
+
+    const res = await patch(`/api/admin/persons/${id}/contracts/1`, cookie, {
+      jobTitle: null,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().jobTitle).toBeNull();
+  });
+
+  it('demotes the incumbent when a second contract is promoted to primary', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    const id = await personWithContract(cookie);
+    await post(`/api/admin/persons/${id}/contracts`, cookie, {
+      sequence: 2,
+      isPrimary: false,
+      startDate: '2026-02-01',
+    });
+
+    await patch(`/api/admin/persons/${id}/contracts/2`, cookie, {
+      isPrimary: true,
+    });
+
+    const detail = await get(`/api/admin/persons/${id}`, cookie);
+    const contracts = detail.json().contracts as {
+      sequence: number;
+      isPrimary: boolean;
+    }[];
+    // Two primary contracts would make `resolveContractForMapping` return
+    // whichever the planner reached first, which is a claim mapping that
+    // changes on its own.
+    expect(contracts.find((c) => c.sequence === 1)!.isPrimary).toBe(false);
+    expect(contracts.find((c) => c.sequence === 2)!.isPrimary).toBe(true);
+  });
+
+  it('refuses a patch with nothing in it', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    const id = await personWithContract(cookie);
+
+    const res = await patch(`/api/admin/persons/${id}/contracts/1`, cookie, {});
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('404s for a sequence this person does not hold', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    const id = await personWithContract(cookie);
+
+    const res = await patch(`/api/admin/persons/${id}/contracts/9`, cookie, {
+      jobTitle: 'Ghost',
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller without identity.write', async () => {
+    await seedAdmin([PERMISSIONS.IDENTITY_READ]);
+    const cookie = await adminCookie();
+
+    const res = await patch(
+      `/api/admin/persons/${crypto.randomUUID()}/contracts/1`,
+      cookie,
+      { jobTitle: 'Nope' },
+    );
+
+    expect(res.statusCode).toBe(403);
+  });
+});

@@ -51,6 +51,46 @@ export const createContractRequest = z.object({
   fte: z.number().min(0).max(2).optional(),
 });
 
+/**
+ * Correcting a contract.
+ *
+ * Same idiom as `patchPersonRequest`: every field optional, at least one
+ * required, unknown keys refused. Before this the only way to fix a mistyped
+ * department was a SECOND contract at a new sequence, which records a
+ * different fact about the person than the one anybody meant to record — it
+ * says they took another job, and the planner reads it that way.
+ *
+ * `startDate` is not nullable, for the reason the names on `patchPersonRequest`
+ * are not: a contract with no start is not a correction anybody meant to make.
+ * Everything else is, so it can be cleared.
+ */
+export const patchContractRequest = z
+  .object({
+    isPrimary: z.boolean().optional(),
+    startDate: z.coerce.date().optional(),
+    endDate: z.coerce.date().nullable().optional(),
+    jobTitle: z.string().max(256).nullable().optional(),
+    department: z.string().max(256).nullable().optional(),
+    costCentre: z.string().max(128).nullable().optional(),
+    employer: z.string().max(256).nullable().optional(),
+    location: z.string().max(256).nullable().optional(),
+    managerPersonId: z.string().uuid().nullable().optional(),
+    fte: z.number().min(0).max(2).nullable().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
+
+/**
+ * A contract is addressed by the sequence its person holds it at, rather than
+ * by its own id, because that is how the console reads them: `GET /persons/:id`
+ * returns contracts nested under the person, and a row on that screen knows its
+ * sequence and never sees a uuid.
+ */
+export const contractParams = z.object({
+  id: z.string().uuid(),
+  sequence: z.coerce.number().int().positive(),
+});
+
 export const linkUserRequest = z.object({ userId: z.string().uuid() });
 
 export const importRequest = z.object({
