@@ -394,6 +394,29 @@ export async function recordDecision(
         });
         return { status: 'blocked_no_approver' };
       }
+      // WRITTEN, not merely returned.
+      //
+      // On the ordinary path the row is already `pending_approval` and this is
+      // a no-op, which is exactly why the omission survived: every test of a
+      // multi-stage request walks that path. The ADMINISTRATIVE path arrives
+      // here on a row that says `blocked_no_approver`, and returning
+      // `pending_approval` without writing it left the request in a state that
+      // refuses every subsequent decision -- while the mail below went out to
+      // stage 2's approvers regardless. They were told it was with them and
+      // then met `not-open`, and no second override could rescue it either:
+      // the administrative branch looks for a step in `open` or `waiting`, and
+      // `openStage` has just moved this one to `open` under a request status
+      // that forbids deciding it.
+      //
+      // `statusReason` is cleared with it. The reason on the row is stage 1's
+      // "resolved to nobody who can decide it", which stops being true the
+      // moment an administrator decides stage 1 by hand, and a stale reason
+      // beside a live status is the console telling somebody something that is
+      // no longer so.
+      await tx.accessRequest.update({
+        where: { id: request.id },
+        data: { status: 'pending_approval', statusReason: null },
+      });
       const approvers = await tx.approvalStepApprover.findMany({
         where: { stepId: next.id },
         select: { personId: true },
