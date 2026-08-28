@@ -36,11 +36,19 @@ export interface ReconcileInput {
    * one a template invented, and is not -- the person stays
    * `container_missing` at scope `all`, exactly as before.
    *
-   * Keyed by DN rather than by org unit because that is the question asked
-   * here: the loop holds a container and needs to know whether anybody asked
-   * for it, not which unit it belongs to.
+   * Read two ways, which is why it carries both the row and its DN. The pass
+   * over the VALUES asks every materialisation whether the target holds it
+   * yet, and is what creates a unit nobody occupies. The lookup by KEY answers
+   * the person loop's narrower question -- this person's container is missing,
+   * did anybody materialise it? -- and decides whether they stay in the run.
+   *
+   * Keyed by DN rather than by org unit because that second question arrives
+   * holding a container, not a unit id.
    */
-  desiredContainerRows: ReadonlyMap<string, { id: string; state: string }>;
+  desiredContainerRows: ReadonlyMap<
+    string,
+    { id: string; state: string; dn: string }
+  >;
   enforcementMode: EnforcementMode;
 }
 
@@ -208,6 +216,35 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
   /** Confirmed rows already reported vanished, so two people share one finding. */
   const vanishedReported = new Set<string>();
 
+  /**
+   * The container question, asked of the MATERIALISATIONS rather than of the
+   * people.
+   *
+   * An administrator who materialises an org unit against a target has made
+   * the explicit decision Ruling P9 asks for, and that decision is complete on
+   * its own. Asking it here rather than from inside the per-person loop below
+   * is what lets a unit reach the directory before anybody is placed in it —
+   * a unit with no occupant used to sit at `desired` indefinitely, with no
+   * action, no finding, and nothing anywhere saying it was waiting on a member
+   * who could be provisioned.
+   *
+   * **The ruling is untouched.** A container is still only ever asked for from
+   * an `OrgUnitContainer` row in state `desired`; the template rungs of the
+   * placement ladder render strings, hold no row, and so cannot reach this
+   * loop any more than they could reach the old one. What changed is what
+   * makes us look at the rows, not what may become a container.
+   *
+   * `live` and `adopted` rows are skipped here exactly as before: a container
+   * Syntra recorded as confirmed and the target no longer returns is a
+   * `container_vanished` finding, never a re-create, and that judgement stays
+   * with the person loop which has the context to report it.
+   */
+  for (const row of input.desiredContainerRows.values()) {
+    if (row.state !== 'desired') continue;
+    if (input.existingContainers.has(row.dn.trim().toLowerCase())) continue;
+    containersToCreate.set(row.id, row.dn);
+  }
+
   const knownByPerson = new Map(input.known.map((a) => [a.personId, a]));
   const objectByAnchor = new Map(input.objects.map((o) => [o.anchor, o]));
 
@@ -311,17 +348,14 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
 
         if (row !== undefined && row.state === 'desired') {
           // Ruling P9 (revised). An administrator explicitly materialised this
-          // unit against this target, so the container is created and the
-          // person stays in the run rather than dropping out of it.
+          // unit against this target, so the container is coming — the pass
+          // over the materialisations above has already asked for it — and
+          // this person stays in the run rather than dropping out of it.
           //
-          // This is the ONLY branch that can ask for a container, and it can
-          // only be reached through a row. A template that rendered this same
-          // DN carries no row and falls to the else below -- which is what
-          // makes the narrowing structural rather than a matter of remembering
-          // to check.
-          if (!containersToCreate.has(row.id)) {
-            containersToCreate.set(row.id, container);
-          }
+          // Nothing is added here. A person is not what makes a container get
+          // created; the row is. A template that rendered this same DN carries
+          // no row and falls to the else below, which is what makes the
+          // narrowing structural rather than a matter of remembering to check.
         } else {
           if (row !== undefined && !vanishedReported.has(row.id)) {
             // The row says the target confirmed this container and the target

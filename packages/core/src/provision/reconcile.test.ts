@@ -1098,12 +1098,36 @@ describe('Ruling P9, narrowed', () => {
     const result = run({
       desiredContainers: new Map([['person-1', dn]]),
       desiredContainerRows: new Map([
-        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired' }],
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired', dn }],
       ]),
     });
     expect([...result.containersToCreate]).toEqual([['ouc-1', dn]]);
     // And the person is NOT taken out of the run: the container is coming.
     expect(result.extraUnprocessable.get('person-1')).toBeUndefined();
+  });
+
+  it('asks for a materialised container nobody occupies', () => {
+    /**
+     * The container question is asked of the MATERIALISATIONS, not of the
+     * people. An administrator who creates an org unit and assigns nobody to
+     * it yet has still made the explicit decision the ruling asks for, and
+     * the container is what they get.
+     *
+     * Before this, `containersToCreate` was only ever filled from inside the
+     * per-person loop, so a unit with no occupant sat at `desired` for ever:
+     * no action, no drift finding, and nothing anywhere saying it was waiting
+     * on a member who could be provisioned.
+     */
+    const result = run({
+      // person-1 goes to OU=Finance, which already exists. Nobody is anywhere
+      // near `dn`, which is the whole point.
+      desiredContainerRows: new Map([
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired', dn }],
+      ]),
+    });
+    expect([...result.containersToCreate]).toEqual([['ouc-1', dn]]);
+    // Nobody was made unprocessable by a container nobody asked to be in.
+    expect(result.extraUnprocessable.size).toBe(0);
   });
 
   it('leaves an unbacked missing container unprocessable, exactly as before', () => {
@@ -1126,7 +1150,7 @@ describe('Ruling P9, narrowed', () => {
     // indefinitely and invisibly. It is a finding, not an action.
     const result = run({
       desiredContainers: new Map([['person-1', dn]]),
-      desiredContainerRows: new Map([[dn.toLowerCase(), { id: 'ouc-1', state: 'live' }]]),
+      desiredContainerRows: new Map([[dn.toLowerCase(), { id: 'ouc-1', state: 'live', dn }]]),
     });
     expect([...result.containersToCreate]).toEqual([]);
     expect(result.extraUnprocessable.get('person-1')?.kind).toBe('container_missing');
@@ -1136,7 +1160,7 @@ describe('Ruling P9, narrowed', () => {
     const result = run({
       desiredContainers: new Map([['person-1', dn]]),
       desiredContainerRows: new Map([
-        [dn.toLowerCase(), { id: 'ouc-1', state: 'adopted' }],
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'adopted', dn }],
       ]),
     });
     expect([...result.containersToCreate]).toEqual([]);
@@ -1145,7 +1169,7 @@ describe('Ruling P9, narrowed', () => {
   it('raises a finding for a confirmed container the target no longer returns', () => {
     const result = run({
       desiredContainers: new Map([['person-1', dn]]),
-      desiredContainerRows: new Map([[dn.toLowerCase(), { id: 'ouc-1', state: 'live' }]]),
+      desiredContainerRows: new Map([[dn.toLowerCase(), { id: 'ouc-1', state: 'live', dn }]]),
     });
     const finding = result.findings.find((f) => f.kind === 'container_vanished');
     expect(finding).toBeDefined();
@@ -1160,7 +1184,7 @@ describe('Ruling P9, narrowed', () => {
     const result = run({
       desiredContainers: new Map([['person-1', dn]]),
       desiredContainerRows: new Map([
-        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired' }],
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired', dn }],
       ]),
     });
     expect(result.findings.some((f) => f.kind === 'container_vanished')).toBe(false);
@@ -1176,7 +1200,7 @@ describe('Ruling P9, narrowed', () => {
         ['person-2', dn],
       ]),
       desiredContainerRows: new Map([
-        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired' }],
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired', dn }],
       ]),
     });
     // A department of forty people is one container, not forty creates -- and
@@ -1188,7 +1212,7 @@ describe('Ruling P9, narrowed', () => {
     const result = run({
       desiredContainers: new Map([['person-1', 'ou=NOWHERE,OU=Users,DC=acme,DC=test']]),
       desiredContainerRows: new Map([
-        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired' }],
+        [dn.toLowerCase(), { id: 'ouc-1', state: 'desired', dn }],
       ]),
     });
     expect([...result.containersToCreate]).toHaveLength(1);

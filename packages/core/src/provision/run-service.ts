@@ -838,7 +838,10 @@ export async function previewProvisionRun(
     const containerRowsByDn = new Map(
       snapshot.orgUnitContainers.map((c) => [
         c.dn.trim().toLowerCase(),
-        { id: c.id, state: c.state },
+        // The DN in the case the administrator wrote it, not the lowercased
+        // key: it is what a `create_container` action carries and what the
+        // directory is asked for.
+        { id: c.id, state: c.state, dn: c.dn },
       ]),
     );
 
