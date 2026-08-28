@@ -5,6 +5,24 @@ export const createUserRequest = z.object({
   email: z.string().email(),
   displayName: z.string().min(1).max(256),
   orgUnitId: z.string().uuid().optional(),
+  /**
+   * Who this account is for. Three states, and they are three different
+   * requests rather than three spellings of one.
+   *
+   * A uuid links to that person. `null` says "service account" explicitly and
+   * suppresses matching. OMITTED runs the matcher and links on a confident
+   * result — which is why this is `.optional()` as well as `.nullable()`, and
+   * why the route must tell `undefined` from `null` rather than collapsing
+   * them the way most of these schemas do.
+   */
+  personId: z.string().uuid().nullable().optional(),
+  /**
+   * Confirms a second account for somebody who already has one.
+   *
+   * A warning rather than a refusal: a contractor with two simultaneous
+   * contracts is the case the person/contract/user split was built for.
+   */
+  allowSecondAccount: z.boolean().optional(),
 });
 export type CreateUserRequest = z.infer<typeof createUserRequest>;
 

@@ -20,6 +20,9 @@ import {
   issuePasswordSetup,
   listUsers,
   localMasterKeyProvider,
+  hasPermission,
+  linkUserToPerson,
+  matchPersonForAccount,
   recordEvent,
   setPasswordAsAdmin,
   removeRecoveryCodes,
@@ -185,9 +188,73 @@ export async function registerAdminUserRoutes(
       // One transaction: if the audit write fails, the user is not created
       // either. A change without its audit entry is worse than no change.
       const user = await request.db(async (tx) => {
+        // Linking writes to a Person, which is `identity.write`. A caller who
+        // may create accounts but not touch people is refused an explicit
+        // person outright, and has the matcher skipped entirely below — an
+        // auto-link is still a write to a person, and a convenience feature
+        // does not get to step over a permission boundary.
+        const mayLink = await hasPermission(
+          tx,
+          request.session.userId,
+          PERMISSIONS.IDENTITY_WRITE,
+        );
+        if (body.personId && !mayLink) {
+          throw new ProblemError(
+            403,
+            'forbidden',
+            'Forbidden',
+            'Linking an account to a person requires identity.write.',
+          );
+        }
+
+        let personId: string | null = body.personId ?? null;
+
+        if (body.personId) {
+          const person = await tx.person.findUnique({ where: { id: body.personId } });
+          if (!person) throw new ProblemError(404, 'not-found', 'Person not found');
+
+          if (!body.allowSecondAccount) {
+            // Active only. Replacing a leaver's account is not a duplicate,
+            // and warning about one would be the kind of false alarm that
+            // teaches people to click through without reading.
+            const existing = await tx.user.findFirst({
+              where: { personId: body.personId, status: 'active' },
+              select: { id: true, login: true },
+            });
+            if (existing) {
+              throw new ProblemError(
+                409,
+                'second-account',
+                'They already have an account',
+                `${person.givenName} ${person.familyName} already signs in as ${existing.login}. A contractor with two contracts legitimately has two accounts, so confirm to create this one as well.`,
+                { existingAccount: existing },
+              );
+            }
+          }
+        } else if (body.personId === undefined && mayLink) {
+          // Omitted, not null. `null` is somebody saying "service account",
+          // and matching one would be answering a question they answered.
+          const match = await matchPersonForAccount(tx, {
+            email: body.email,
+            displayName: body.displayName,
+          });
+          // A confident match who already signs in somewhere is demoted HERE
+          // rather than in the matcher: auto-linking would produce the second
+          // account the warning above exists for, without the warning. It
+          // still surfaces as a suggestion on the account's own screen.
+          if (match.confident && !match.confident.hasActiveAccount) {
+            personId = match.confident.personId;
+          }
+        }
+
         let created;
         try {
-          created = await createUser(tx, body);
+          created = await createUser(tx, {
+            login: body.login,
+            email: body.email,
+            displayName: body.displayName,
+            ...(body.orgUnitId ? { orgUnitId: body.orgUnitId } : {}),
+          });
         } catch (error) {
           // Both pre-checks in `createUser` raise a plain Error so the domain
           // stays free of HTTP, and both are the same answer to the caller:
@@ -202,6 +269,45 @@ export async function registerAdminUserRoutes(
           throw error;
         }
 
+        if (personId) {
+          await linkUserToPerson(tx, created.id, personId);
+          if (!body.personId) {
+            // Named, and never silent: an administrator who wonders why an
+            // account has a person can read which rule decided it.
+            await recordEvent(tx, {
+              actorUserId: request.session.userId,
+              action: 'user.autolinked',
+              targetType: 'User',
+              targetId: created.id,
+              outcome: 'success',
+              sourceIp: request.ip,
+              payload: { personId, rule: 'businessEmail' },
+            });
+          }
+
+          // The unit reaches the PERSON too, but only when theirs is null.
+          //
+          // `User.orgUnitId` feeds access resolution; `Person.orgUnitId` is
+          // what the placement ladder reads, so without this an account
+          // created here has a unit for access and still lands in the
+          // fallback container on every target. Overwriting a unit the person
+          // already has would undo a decision made about the person — and any
+          // AccountPlacement protecting a manual move — from a form whose
+          // subject is the account.
+          if (body.orgUnitId) {
+            const person = await tx.person.findUnique({
+              where: { id: personId },
+              select: { orgUnitId: true },
+            });
+            if (person && person.orgUnitId === null) {
+              await tx.person.update({
+                where: { id: personId },
+                data: { orgUnitId: body.orgUnitId },
+              });
+            }
+          }
+        }
+
         await recordEvent(tx, {
           actorUserId: request.session.userId,
           action: 'user.create',
@@ -209,7 +315,7 @@ export async function registerAdminUserRoutes(
           targetId: created.id,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { login: created.login, email: created.email },
+          payload: { login: created.login, email: created.email, personId },
         });
         return created;
       });
