@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { RecordPanel } from './RecordPanel.js';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
 import { GroupDetailPage } from './GroupDetailPage.js';
@@ -243,5 +244,156 @@ describe('editing a record that already exists', () => {
     expect(
       await screen.findByText('group already exists: Payroll'),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * Turning a refusal into a question.
+ *
+ * Rendered directly rather than through a page, unlike the tests above: this
+ * is the contract of a shared primitive with eight consumers, and testing it
+ * through one of them would tie the contract to that page's shape.
+ */
+describe('RecordPanel confirmable refusals', () => {
+  const problemResponse = (body: Record<string, unknown>) =>
+    new Response(JSON.stringify(body), {
+      status: 409,
+      headers: { 'content-type': 'application/problem+json' },
+    });
+
+  const SECOND_ACCOUNT = {
+    type: 'https://syntra.dev/problems/second-account',
+    title: 'They already have an account',
+    status: 409,
+    detail: 'Maya Okafor already signs in as mokafor.',
+    existingAccount: { id: 'u9', login: 'mokafor' },
+  };
+
+  function renderPanel(
+    confirmable: NonNullable<Parameters<typeof RecordPanel>[0]['confirmable']>,
+    onCreated = vi.fn(),
+  ) {
+    render(
+      <MemoryRouter>
+        <RecordPanel
+          title="New user"
+          submitLabel="New user"
+          path="/api/admin/users"
+          onCreated={onCreated}
+          build={(v) => ({ login: v.login ?? 'typed' })}
+          confirmable={confirmable}
+          fields={(v, set) => (
+            <input
+              aria-label="Login"
+              value={v.login ?? ''}
+              onChange={(e) => set('login', e.target.value)}
+            />
+          )}
+        />
+      </MemoryRouter>,
+    );
+    return onCreated;
+  }
+
+  const asksToConfirm = (problem: { type: string }) =>
+    problem.type.endsWith('second-account')
+      ? { message: 'They already have an account.', retryWith: { allowSecondAccount: true } }
+      : null;
+
+  it('offers Continue instead of an error, and re-posts with the flag', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(problemResponse(SECOND_ACCOUNT))
+      .mockResolvedValueOnce(json({ id: 'u10' }, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    const onCreated = renderPanel(asksToConfirm);
+
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    expect(
+      await screen.findByText('They already have an account.'),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1].body))).toEqual({
+      login: 'typed',
+      allowSecondAccount: true,
+    });
+  });
+
+  it('does not resubmit until somebody confirms', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(problemResponse(SECOND_ACCOUNT));
+    vi.stubGlobal('fetch', fetchMock);
+    renderPanel(asksToConfirm);
+
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+    await screen.findByText('They already have an account.');
+
+    // The whole point is that somebody reads the warning and decides. A
+    // confirmation that resubmits what it just refused is a 409 spelled
+    // slowly.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps what was typed while the question is on screen', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(problemResponse(SECOND_ACCOUNT)),
+    );
+    renderPanel(asksToConfirm);
+
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+    await userEvent.clear(screen.getByLabelText('Login'));
+    await userEvent.type(screen.getByLabelText('Login'), 'ktyre');
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    await screen.findByText('They already have an account.');
+    expect(screen.getByLabelText('Login')).toHaveValue('ktyre');
+  });
+
+  it('falls through to the ordinary banner for a problem it does not claim', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        problemResponse({
+          type: 'https://syntra.dev/problems/conflict',
+          title: 'Conflict',
+          status: 409,
+          detail: 'login already exists: mokafor',
+        }),
+      ),
+    );
+    renderPanel(asksToConfirm);
+
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    // A form may claim one problem type and leave every other refusal alone.
+    expect(await screen.findByText(/login already exists/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Continue' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('drops the question when the form is cancelled', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(problemResponse(SECOND_ACCOUNT)),
+    );
+    renderPanel(asksToConfirm);
+
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+    await screen.findByText('They already have an account.');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(
+      screen.queryByText('They already have an account.'),
+    ).not.toBeInTheDocument();
   });
 });
