@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Alert, Button, Panel } from '@syntra/ui';
-import { ApiError, api } from '../../session/api.js';
+import { ApiError, api, type Problem } from '../../session/api.js';
 import { fieldErrors } from './hooks.js';
 
 /**
@@ -38,6 +38,7 @@ export function RecordPanel({
   onCreated,
   disabled,
   disabledReason,
+  confirmable,
 }: {
   /** The panel's heading when open, e.g. "New group". */
   title: string;
@@ -77,6 +78,26 @@ export function RecordPanel({
   /** Set when the thing cannot be created yet, e.g. no org unit exists. */
   disabled?: boolean;
   disabledReason?: string;
+  /**
+   * Turns a rejected submit into a question rather than an error.
+   *
+   * Two refusals in this console are warnings and not verdicts: a second
+   * account for one person, and a person who looks like somebody already here.
+   * Both are legitimate often enough that refusing outright would be wrong,
+   * and mistakes often enough that creating silently would be worse.
+   *
+   * It lives here rather than in the two forms because the alternative is two
+   * implementations of "show the refusal, keep what they typed, re-post with a
+   * flag" — and every bug this file has had was two copies of one behaviour
+   * drifting apart.
+   *
+   * Return null to fall through to the ordinary error banner, so a form can
+   * claim one problem type and leave every other refusal alone.
+   */
+  confirmable?: (problem: Problem) => {
+    message: ReactNode;
+    retryWith: Record<string, unknown>;
+  } | null;
 }) {
   const controlled = onCancel !== undefined;
   const [open, setOpen] = useState(false);
@@ -84,6 +105,11 @@ export function RecordPanel({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The refusal waiting on somebody's decision, and how to get past it. */
+  const [pending, setPending] = useState<{
+    message: ReactNode;
+    retryWith: Record<string, unknown>;
+  } | null>(null);
 
   const set = (key: string, value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -93,21 +119,36 @@ export function RecordPanel({
     setValues(initial ?? {});
     setErrors({});
     setProblem(null);
+    setPending(null);
     onCancel?.();
   };
 
-  async function submit() {
+  async function submit(extra: Record<string, unknown> = {}) {
     setBusy(true);
     setProblem(null);
     setErrors({});
+    setPending(null);
     try {
-      await api(path, { method, body: JSON.stringify(build(values)) });
+      await api(path, {
+        method,
+        body: JSON.stringify({ ...(build(values) as object), ...extra }),
+      });
       close();
       // The list reloads rather than optimistically appending. What the server
       // stored is the truth — a name it trimmed, a default it filled in — and
       // showing a guess of it teaches people to distrust the screen.
       onCreated();
     } catch (cause) {
+      if (cause instanceof ApiError) {
+        const ask = confirmable?.(cause.problem) ?? null;
+        if (ask) {
+          // Deliberately NOT auto-retrying, and deliberately keeping the typed
+          // values: the point is that somebody reads the warning and decides.
+          setPending(ask);
+          setBusy(false);
+          return;
+        }
+      }
       const marked = fieldErrors(cause);
       setErrors(marked);
       // A field-level message is shown against its field. The banner is for
@@ -155,6 +196,23 @@ export function RecordPanel({
     <Panel title={title}>
       <div className="space-y-4 p-4">
         {problem && <Alert tone="danger">{problem}</Alert>}
+
+        {pending && (
+          <Alert tone="warning" title="Check this first">
+            <div className="space-y-3">
+              <div>{pending.message}</div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  loading={busy}
+                  onClick={() => void submit(pending.retryWith)}
+                >
+                  Continue
+                </Button>
+              </div>
+            </div>
+          </Alert>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2">{fields(values, set, errors)}</div>
 

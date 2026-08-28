@@ -20,6 +20,7 @@ export * from './keys/signing-key-service.js';
 export * from './keys/key-change.js';
 export * from './keys/jobs.js';
 export * from './identity/person-service.js';
+export * from './identity/person-match.js';
 export * from './identity/population-drop.js';
 export * from './identity/contract-service.js';
 export * from './identity/csv-import.js';
@@ -36,7 +37,7 @@ export * from './auth/session-service.js';
 // evaluation, second factors and the audit event. authorize() is the door.
 export type { AuthFailure, AuthResult } from './auth/login-service.js';
 export { clearLockout, isLocked, readLockout } from './auth/login-lockout.js';
-export { passwordExpired, passwordWasUsedBefore } from './auth/password-ageing.js';
+export { mustRenewPassword, passwordWasUsedBefore } from './auth/password-ageing.js';
 export type { AgeingPolicy } from './auth/password-ageing.js';
 export { renewExpiredPassword } from './auth/password-renewal.js';
 export type { RenewOutcome } from './auth/password-renewal.js';

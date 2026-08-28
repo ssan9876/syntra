@@ -348,3 +348,271 @@ describe('AccountDetailPage', () => {
     expect(back).toHaveAttribute('href', '/admin/users?tab=accounts');
   });
 });
+
+/**
+ * Setting a password from the account's own screen.
+ *
+ * The setup link beside it is right for a joiner and wrong for the support
+ * call where somebody is reading a password down the phone.
+ */
+describe('AccountDetailPage set password', () => {
+  it('warns what it will cost before anything is typed', async () => {
+    mockApi();
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+
+    // The consequence is stated UP FRONT, because it is irreversible and the
+    // page knows it for certain. The length rule is not, because the page does
+    // not know the tenant's minimum and a wrong number is worse than none.
+    expect(await screen.findByText(/every session is revoked/i)).toBeInTheDocument();
+    expect(screen.getByText(/choose their own/i)).toBeInTheDocument();
+  });
+
+  it('sets a password and says what happened, in order', async () => {
+    let sent: unknown;
+    mockApi(ACCOUNT, {
+      '/password': (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return json({ sessionsRevoked: 2, mustChange: true });
+      },
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+    await userEvent.type(
+      await screen.findByLabelText('New password'),
+      'a-long-enough-password',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
+
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent).toEqual({ password: 'a-long-enough-password' });
+    expect(
+      await screen.findByText(/2 sessions were revoked/i),
+    ).toBeInTheDocument();
+  });
+
+  it('counts one revoked session as a session', async () => {
+    mockApi(ACCOUNT, {
+      '/password': () => json({ sessionsRevoked: 1, mustChange: true }),
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+    await userEvent.type(
+      await screen.findByLabelText('New password'),
+      'a-long-enough-password',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
+
+    expect(await screen.findByText(/1 session was revoked/i)).toBeInTheDocument();
+  });
+
+  it('shows the server’s reason when the password is refused', async () => {
+    mockApi(ACCOUNT, {
+      '/password': () =>
+        json(
+          {
+            type: 'https://syntra.dev/problems/weak-password',
+            title: 'That password was refused',
+            status: 422,
+            detail: 'too_short',
+          },
+          422,
+        ),
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+    await userEvent.type(await screen.findByLabelText('New password'), 'x');
+    await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
+
+    // The server owns the rule, so the server's words are what the reader
+    // gets — the same decision the portal's own change form made.
+    expect(await screen.findByText(/too_short/)).toBeInTheDocument();
+  });
+
+  it('is not offered for an account whose password lives upstream', async () => {
+    mockApi({ ...ACCOUNT, passwordSource: 'upstream' });
+    renderPage();
+
+    await screen.findByText('jdoe');
+    expect(
+      screen.queryByRole('button', { name: 'Set password' }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The org unit on the account's own edit form.
+ *
+ * `PATCH /users/:id/details` has accepted and validated `orgUnitId` since it
+ * was written; only the form never sent one, so an account's unit could be set
+ * at creation and never corrected.
+ */
+describe('AccountDetailPage org unit', () => {
+  const UNITS = { orgUnits: [{ id: 'ou1', name: 'Sales' }, { id: 'ou2', name: 'Care' }] };
+
+  it('offers the unit on the edit form and sends what was chosen', async () => {
+    let sent: Record<string, unknown> | undefined;
+    mockApi(ACCOUNT, {
+      '/org-units': () => json(UNITS),
+      '/details': (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return json({ ...ACCOUNT, orgUnitId: 'ou2' });
+      },
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Org unit'), 'ou2');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent!.orgUnitId).toBe('ou2');
+  });
+
+  it('sends null when the unit is cleared', async () => {
+    let sent: Record<string, unknown> | undefined;
+    mockApi(
+      { ...ACCOUNT, orgUnitId: 'ou1' },
+      {
+        '/org-units': () => json(UNITS),
+        '/details': (_url, init) => {
+          sent = JSON.parse(String(init?.body));
+          return json({ ...ACCOUNT, orgUnitId: null });
+        },
+      },
+    );
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Org unit'), '');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // Null takes the account out of the hierarchy, which the schema
+    // distinguishes from an omitted field. Sending '' would be a 400 on a uuid.
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent!.orgUnitId).toBeNull();
+  });
+
+  it('opens the picker on the unit the account already has', async () => {
+    mockApi(
+      { ...ACCOUNT, orgUnitId: 'ou1' },
+      { '/org-units': () => json(UNITS) },
+    );
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    expect(await screen.findByLabelText('Org unit')).toHaveValue('ou1');
+  });
+});
+
+/**
+ * Offering a person for an account that has none.
+ *
+ * The suggestion carries its REASON. One without is a claim an administrator
+ * has to verify from scratch, which is the work the suggestion was meant to
+ * save.
+ */
+describe('AccountDetailPage person suggestions', () => {
+  const ORPHAN = { ...ACCOUNT, personId: null, person: null };
+
+  const withCandidates = (candidates: Record<string, unknown>[]) =>
+    mockApi(ORPHAN, { '/person-candidates': () => json({ candidates }) });
+
+  it('offers a candidate, naming both the person and the reason', async () => {
+    withCandidates([
+      {
+        personId: 'p1',
+        givenName: 'Maya',
+        familyName: 'Okafor',
+        rule: 'personalEmail',
+        hasActiveAccount: false,
+      },
+    ]);
+    renderPage();
+
+    expect(
+      await screen.findByRole('button', { name: /link Maya Okafor/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/same personal email/i)).toBeInTheDocument();
+  });
+
+  it('says when a candidate already signs in somewhere', async () => {
+    withCandidates([
+      {
+        personId: 'p1',
+        givenName: 'Maya',
+        familyName: 'Okafor',
+        rule: 'businessEmail',
+        hasActiveAccount: true,
+      },
+    ]);
+    renderPage();
+
+    // The contractor-with-two-accounts case is legitimate, so it is offered
+    // and labelled rather than hidden.
+    expect(await screen.findByText(/already has an account/i)).toBeInTheDocument();
+  });
+
+  it('links the account when the button is pressed', async () => {
+    let linked: { url: string; body: unknown } | undefined;
+    mockApi(ORPHAN, {
+      '/person-candidates': () => json({ candidates: [
+        {
+          personId: 'p1',
+          givenName: 'Maya',
+          familyName: 'Okafor',
+          rule: 'businessEmail',
+          hasActiveAccount: false,
+        },
+      ] }),
+      '/link-user': (url, init) => {
+        linked = { url, body: JSON.parse(String(init?.body)) };
+        return json({ ok: true });
+      },
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: /link Maya Okafor/i }),
+    );
+
+    await waitFor(() => expect(linked).toBeDefined());
+    expect(linked!.url).toContain('/api/admin/persons/p1/link-user');
+    expect(linked!.body).toEqual({ userId: 'u1' });
+  });
+
+  it('says only "Not linked" when nothing matches', async () => {
+    withCandidates([]);
+    renderPage();
+
+    // A service account is the ordinary case here, not a fault. It is stated
+    // flatly and given no call to action for that reason.
+    expect(await screen.findByText('Not linked')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^link /i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers nothing for an account that already has a person', async () => {
+    mockApi(ACCOUNT, { '/person-candidates': () => json({ candidates: [] }) });
+    renderPage();
+
+    expect(await screen.findByRole('link', { name: 'Jo Doe' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^link /i }),
+    ).not.toBeInTheDocument();
+  });
+});

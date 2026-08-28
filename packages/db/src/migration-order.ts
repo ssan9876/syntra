@@ -100,6 +100,9 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260919000000_wsfed_enabled',
   '20260920000000_parked_request_protocol',
   '20260921000000_org_unit_container',
+  '20260922000000_user_duplicate_guards',
+  '20260923000000_password_must_change',
+  '20260924000000_email_guard_active_only',
 ];
 
 /**

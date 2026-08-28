@@ -167,20 +167,21 @@ beforeEach(async () => {
 
 /** A real user: confirming a run records who confirmed it, and both halves are required. */
 const confirmingUser = () =>
-  withTenant(
-    tenantId,
-    async (tx) =>
-      (
-        await tx.user.create({
-          data: {
-            tenantId,
-            login: `loop-reviewer-${Date.now()}`,
-            email: 'loop-reviewer@syntra.test',
-            displayName: 'Loop Reviewer',
-          },
-        })
-      ).id,
-  );
+  withTenant(tenantId, async (tx) => {
+    // The login was already made unique per call; the ADDRESS has to be too.
+    // Two active locally-managed accounts may not share one, so a fixed
+    // address made the second reviewer in this file collide with the first.
+    const token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const created = await tx.user.create({
+      data: {
+        tenantId,
+        login: `loop-reviewer-${token}`,
+        email: `loop-reviewer-${token}@syntra.test`,
+        displayName: 'Loop Reviewer',
+      },
+    });
+    return created.id;
+  });
 
 const cycle = async (now: Date) => {
   const run = await previewProvisionRun(tenantId, provider, targetId, { now });

@@ -195,3 +195,79 @@ describe('password reuse', () => {
     expect(credential.changedAt.getTime()).toBeGreaterThan(CHOSEN.getTime());
   });
 });
+
+/**
+ * The other half of "must choose a new password", set by an administrator
+ * rather than derived from the clock.
+ *
+ * Driven through `authorize` like the expiry tests above, and for the same
+ * reason: the flag is worth nothing unless the one gate every sign-in path
+ * shares actually consults it.
+ */
+describe('must-change', () => {
+  it('sends a flagged credential to renewal even with expiry switched off', async () => {
+    // No `passwordMaxAgeDays`, which is the default and the recommended
+    // setting. A flag that only fired where scheduled expiry was on would be
+    // a control that silently did nothing almost everywhere.
+    await seed();
+    await withTenant(tenantId, (tx) =>
+      tx.passwordCredential.update({
+        where: { userId },
+        data: { mustChange: true },
+      }),
+    );
+
+    const result = await signIn(new Date(CHOSEN.getTime() + DAY));
+
+    expect(result).toMatchObject({ status: 'renew' });
+  });
+
+  it('is cleared by the password the user then chooses', async () => {
+    await seed();
+    await withTenant(tenantId, (tx) =>
+      tx.passwordCredential.update({
+        where: { userId },
+        data: { mustChange: true },
+      }),
+    );
+
+    // `setPasswordHash` defaults the option to false, so every caller that
+    // represents the user choosing for themselves clears the flag by
+    // construction rather than by remembering to.
+    const chosen = await hashPassword('a-password-they-picked-themselves');
+    await withTenant(tenantId, (tx) => setPasswordHash(tx, userId, chosen));
+
+    const credential = await withTenant(tenantId, (tx) =>
+      tx.passwordCredential.findUnique({ where: { userId } }),
+    );
+    expect(credential!.mustChange).toBe(false);
+  });
+
+  it('leaves an account whose password lives upstream alone', async () => {
+    await seed();
+    await withTenant(tenantId, async (tx) => {
+      await tx.passwordCredential.update({
+        where: { userId },
+        data: { mustChange: true },
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: { passwordSource: 'upstream', passwordSourceHint: 'Contoso' },
+      });
+    });
+
+    // Same reason expiry leaves them alone: a renewal form here changes
+    // nothing at their provider, so demanding one strands them.
+    const result = await signIn(new Date(CHOSEN.getTime() + DAY));
+
+    expect(result.status).toBe('allow');
+  });
+
+  it('does not demand a renewal from an unflagged credential', async () => {
+    await seed();
+
+    const result = await signIn(new Date(CHOSEN.getTime() + DAY));
+
+    expect(result.status).toBe('allow');
+  });
+});

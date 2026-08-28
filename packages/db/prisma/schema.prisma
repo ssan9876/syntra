@@ -193,6 +193,12 @@ model User {
   memberships GroupMembership[]
   attributes  UserAttribute[]
 
+  /// Case-SENSITIVE. The case-insensitive login rule, and the local-only email
+  /// rule, are functional indexes in migration
+  /// `20260922000000_user_duplicate_guards` — Prisma has no syntax for a
+  /// functional or a partial index, so neither can be declared here.
+  /// `createUser` pre-checks both so the caller gets a domain error rather
+  /// than a driver one.
   @@unique([tenantId, login])
   @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
@@ -394,6 +400,20 @@ model PasswordCredential {
   /// this table and backfills it, every password in the tenant silently
   /// becomes new again. Expiry has to read a field that means one thing.
   changedAt DateTime @default(now())
+  /// Whether this user must choose a new password before they get a session.
+  ///
+  /// Set only by an administrator setting a password on somebody's behalf —
+  /// which makes it a handover credential, known to two people, and not yet
+  /// the user's password. Cleared by any write of a password the user chose
+  /// themselves, which `setPasswordHash` does by defaulting the option to
+  /// false: one entry point that cannot do the wrong thing, the same reason
+  /// the reuse check lives in there rather than in its callers.
+  ///
+  /// Honoured independently of `passwordMaxAgeDays`. Scheduled expiry is off
+  /// by default and should usually stay off — see `password-ageing.ts` — and
+  /// that recommendation must not switch off a change somebody demanded this
+  /// morning.
+  mustChange Boolean @default(false)
   updatedAt DateTime @updatedAt
 
   @@index([tenantId])

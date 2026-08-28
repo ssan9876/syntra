@@ -414,3 +414,133 @@ describe('OnboardPersonPage', () => {
     expect(screen.queryByText(/was created/i)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Creating somebody who looks like somebody already here.
+ *
+ * This page and not `PeopleTab`: the people list has no create form, it links
+ * here, and this is a hand-rolled sequence rather than a `RecordPanel` — the
+ * person has to be written before their contract can be.
+ */
+describe('OnboardPersonPage duplicate warning', () => {
+  const DUPLICATE = {
+    type: 'https://syntra.dev/problems/possible-duplicate',
+    title: 'Somebody here already looks like this',
+    status: 409,
+    detail:
+      'Check whether this is the same person before creating a second record — two people cannot be merged afterwards.',
+    candidates: [
+      {
+        id: 'p1',
+        givenName: 'Maya',
+        familyName: 'Okafor',
+        businessEmail: 'maya@acme.test',
+      },
+    ],
+  };
+
+  /** Answers the person write with `first`, then with `then`. */
+  function mockOnboard(first: () => Response, then?: () => Response) {
+    const writes: { url: string; body: Record<string, unknown> }[] = [];
+    let personWrites = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(((
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if ((init?.method ?? 'GET') !== 'GET') {
+        const body = JSON.parse(String(init!.body));
+        writes.push({ url, body });
+        if (url.endsWith('/api/admin/persons')) {
+          personWrites += 1;
+          return Promise.resolve(
+            personWrites === 1 ? first() : (then?.() ?? json({ id: 'p9' }, 201)),
+          );
+        }
+        return Promise.resolve(json({ id: 'x' }, 201));
+      }
+      if (url.includes('/org-units')) return Promise.resolve(json({ orgUnits: [] }));
+      if (url.includes('/targets')) return Promise.resolve(json({ targets: [] }));
+      return Promise.resolve(json({}));
+    }) as typeof fetch);
+    return writes;
+  }
+
+  const fillAndSubmit = async () => {
+    render(
+      <MemoryRouter initialEntries={['/admin/people/new']}>
+        <OnboardPersonPage />
+      </MemoryRouter>,
+    );
+    await userEvent.type(await screen.findByLabelText('Given name'), 'Maya');
+    await userEvent.type(screen.getByLabelText('Family name'), 'Okafor');
+    await userEvent.click(screen.getByRole('button', { name: /add someone/i }));
+  };
+
+  it('shows who it means, as a link', async () => {
+    mockOnboard(() => json(DUPLICATE, 409));
+    await fillAndSubmit();
+
+    // A LINK, not just a name. A warning that says somebody similar exists and
+    // will not let you go and look at them leaves the reader to search for a
+    // name they have already typed once.
+    const link = await screen.findByRole('link', { name: /Maya Okafor/ });
+    expect(link).toHaveAttribute('href', '/admin/people/p1');
+  });
+
+  it('creates nothing until it is confirmed', async () => {
+    const writes = mockOnboard(() => json(DUPLICATE, 409));
+    await fillAndSubmit();
+
+    await screen.findByRole('link', { name: /Maya Okafor/ });
+    // One attempt, and no contract written off the back of a person that does
+    // not exist.
+    expect(writes).toHaveLength(1);
+  });
+
+  it('re-posts with the confirmation and carries on', async () => {
+    const writes = mockOnboard(
+      () => json(DUPLICATE, 409),
+      () => json({ id: 'p9' }, 201),
+    );
+    await fillAndSubmit();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: /create anyway/i }),
+    );
+
+    await waitFor(() =>
+      expect(
+        writes.filter((w) => w.url.endsWith('/api/admin/persons')),
+      ).toHaveLength(2),
+    );
+    expect(writes[1]!.body).toMatchObject({
+      givenName: 'Maya',
+      allowDuplicate: true,
+    });
+    // The contract follows, so the sequence resumes rather than restarting.
+    await waitFor(() =>
+      expect(writes.some((w) => w.url.includes('/contracts'))).toBe(true),
+    );
+  });
+
+  it('leaves an ordinary refusal as an error', async () => {
+    mockOnboard(() =>
+      json(
+        {
+          type: 'https://syntra.dev/problems/conflict',
+          title: 'Conflict',
+          status: 409,
+          detail: 'external id already exists: E1',
+        },
+        409,
+      ),
+    );
+    await fillAndSubmit();
+
+    expect(await screen.findByText(/external id already exists/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /create anyway/i }),
+    ).not.toBeInTheDocument();
+  });
+});

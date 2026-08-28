@@ -5,6 +5,7 @@ import {
   Button,
   Field,
   Panel,
+  Select,
   SkeletonRows,
   Status,
 } from '@syntra/ui';
@@ -35,6 +36,15 @@ interface AccountDetail {
   passwordSource?: string;
   /** Too many failed sign-ins. Orthogonal to `status`. */
   locked: boolean;
+  /**
+   * The unit this ACCOUNT sits in, which feeds access resolution.
+   *
+   * Not the same column as `Person.orgUnitId`, which is what drives where a
+   * provisioned account is placed on each target. An account can be in a unit
+   * for access while the person behind it is placed from another, and the two
+   * are edited on their own screens.
+   */
+  orgUnitId: string | null;
   person: { id: string; givenName: string; familyName: string } | null;
 }
 
@@ -44,6 +54,27 @@ interface SourceRow {
   writebackEnabled: boolean;
   writebackDisable: boolean;
 }
+
+/** Somebody this account might belong to, and why the matcher thinks so. */
+interface Candidate {
+  personId: string;
+  givenName: string;
+  familyName: string;
+  rule: 'businessEmail' | 'personalEmail' | 'displayName';
+  hasActiveAccount: boolean;
+}
+
+/**
+ * WHY it is being suggested, in the reader's words rather than the matcher's.
+ *
+ * A suggestion with no reason is a claim an administrator has to verify from
+ * scratch, which is the work the suggestion exists to save.
+ */
+const REASON: Record<Candidate['rule'], string> = {
+  businessEmail: 'same work email',
+  personalEmail: 'same personal email',
+  displayName: 'same name',
+};
 
 /**
  * One sign-in account: what it is, what can be done to it, and its history.
@@ -78,6 +109,19 @@ export function AccountDetailPage() {
   const { data: sourcesData } = useApiResource<{ sources: SourceRow[] }>(
     '/api/admin/sources',
   );
+  // For the org-unit picker on the edit form. Its error state is tolerated the
+  // same way: a caller who may write the directory but not read its units gets
+  // an empty picker and a form that still saves the other two fields.
+  const { data: unitsData } = useApiResource<{
+    orgUnits: { id: string; name: string }[];
+  }>('/api/admin/org-units');
+  // Asked unconditionally and answered with an empty list for an account that
+  // already has a person, rather than called only when one is missing: a hook
+  // that runs on some renders and not others breaks the moment somebody adds
+  // a branch above it.
+  const { data: candidatesData } = useApiResource<{ candidates: Candidate[] }>(
+    `/api/admin/users/${id}/person-candidates`,
+  );
 
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -95,6 +139,19 @@ export function AccountDetailPage() {
     expiresAt: string;
   } | null>(null);
   const [factorNotice, setFactorNotice] = useState<string | null>(null);
+  /**
+   * The set-password form, and what it did.
+   *
+   * Held here for the same reason `setupLink` is: it can only ever be about
+   * the account on screen, which is what lets the result sentence name what
+   * happened to THIS account's sessions rather than say something general.
+   *
+   * The typed password is cleared the moment it is spent, and on cancel. It is
+   * a credential and has no business sitting in a React tree.
+   */
+  const [settingPassword, setSettingPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [passwordDone, setPasswordDone] = useState<string | null>(null);
 
   const failed = (cause: unknown, fallback: string) =>
     setProblem(
@@ -142,6 +199,19 @@ export function AccountDetailPage() {
         // sends the administrator back to the support call with the same
         // problem.
         failed(cause, 'That account could not be unlocked. Try again.');
+      }
+    });
+
+  const linkTo = (candidate: Candidate) =>
+    run(async () => {
+      try {
+        await api(`/api/admin/persons/${candidate.personId}/link-user`, {
+          method: 'POST',
+          body: JSON.stringify({ userId: data!.id }),
+        });
+        reload();
+      } catch (cause) {
+        failed(cause, 'That account could not be linked.');
       }
     });
 
@@ -242,10 +312,38 @@ export function AccountDetailPage() {
               >
                 {data.person.givenName} {data.person.familyName}
               </Link>
-            ) : (
+            ) : (candidatesData?.candidates ?? []).length === 0 ? (
               // A service account is the ordinary case here, not a fault. It
-              // is stated flatly and given no call to action for that reason.
+              // is stated flatly and given no call to action for that reason,
+              // and that stays true whenever nothing matched.
               <span className="font-normal text-muted">Not linked</span>
+            ) : (
+              <span className="flex flex-col gap-2">
+                <span className="font-normal text-muted">Not linked</span>
+                {(candidatesData?.candidates ?? []).map((candidate) => (
+                  <span
+                    key={candidate.personId}
+                    className="flex flex-wrap items-center gap-2"
+                  >
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={busy}
+                      onClick={() => void linkTo(candidate)}
+                    >
+                      {/* Names the person, so a column of suggestions is not
+                          a column of identical "Link" buttons. */}
+                      Link {candidate.givenName} {candidate.familyName}
+                    </Button>
+                    <span className="text-sm font-normal text-muted">
+                      {REASON[candidate.rule]}
+                      {/* The contractor-with-two-accounts case is legitimate,
+                          so it is offered and labelled rather than hidden. */}
+                      {candidate.hasActiveAccount && ' — already has an account'}
+                    </span>
+                  </span>
+                ))}
+              </span>
             ),
           },
         ]}
@@ -260,7 +358,11 @@ export function AccountDetailPage() {
             submitLabel="Save"
             method="PATCH"
             path={`/api/admin/users/${data.id}/details`}
-            initial={{ displayName: data.displayName, email: data.email }}
+            initial={{
+              displayName: data.displayName,
+              email: data.email,
+              orgUnitId: data.orgUnitId ?? '',
+            }}
             onCancel={() => setEditing(false)}
             onCreated={() => {
               setEditing(false);
@@ -269,6 +371,9 @@ export function AccountDetailPage() {
             build={(v) => ({
               displayName: v.displayName ?? '',
               email: v.email ?? '',
+              // Null, not ''. The schema takes a uuid or null — null takes the
+              // account out of the hierarchy — and '' satisfies neither.
+              orgUnitId: v.orgUnitId ? v.orgUnitId : null,
             })}
             fields={(v, set, errs) => (
               <>
@@ -284,6 +389,19 @@ export function AccountDetailPage() {
                   value={v.email ?? ''}
                   onChange={(x) => set('email', x)}
                   error={errs.email}
+                />
+                <Select
+                  label="Org unit"
+                  value={v.orgUnitId ?? ''}
+                  onChange={(x) => set('orgUnitId', x)}
+                  error={errs.orgUnitId}
+                  options={[
+                    { value: '', label: 'None' },
+                    ...(unitsData?.orgUnits ?? []).map((u) => ({
+                      value: u.id,
+                      label: u.name,
+                    })),
+                  ]}
                 />
               </>
             )}
@@ -315,6 +433,23 @@ export function AccountDetailPage() {
                   onClick={() => void issueSetupLink()}
                 >
                   Password link
+                </Button>
+              )}
+              {/*
+                Beside the link and under the same condition, because they
+                answer the same question by different routes: the link is for
+                a joiner who can reach their mail, and this is for the support
+                call where they cannot.
+              */}
+              {data.passwordSource !== 'upstream' && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setPasswordDone(null);
+                    setSettingPassword(true);
+                  }}
+                >
+                  Set password
                 </Button>
               )}
               <Button
@@ -374,6 +509,80 @@ export function AccountDetailPage() {
                 </div>
               </div>
             )}
+
+            {settingPassword && (
+              <div className="rounded border border-border-subtle p-4">
+                <h3 className="font-medium text-ink">Set a password</h3>
+                <p className="mt-1 text-sm text-muted">
+                  {/*
+                    The CONSEQUENCE up front, and not the length rule. The
+                    consequence is irreversible and this page knows it for
+                    certain; the tenant's minimum length is not carried in any
+                    response this screen reads, and a number stated here would
+                    be wrong for the first tenant that changes theirs. The
+                    server owns the rule and says so on refusal — the same
+                    decision the portal's own change form made.
+                  */}
+                  Every session is revoked immediately, and they must choose
+                  their own password the next time they sign in.
+                </p>
+                <div className="mt-3">
+                  <Field
+                    label="New password"
+                    type="password"
+                    value={newPassword}
+                    onChange={setNewPassword}
+                  />
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    size="sm"
+                    loading={busy}
+                    disabled={newPassword.length === 0}
+                    onClick={() =>
+                      void run(async () => {
+                        try {
+                          const result = await api<{ sessionsRevoked: number }>(
+                            `/api/admin/users/${data.id}/password`,
+                            {
+                              method: 'POST',
+                              body: JSON.stringify({ password: newPassword }),
+                            },
+                          );
+                          setPasswordDone(
+                            `Password set. ${result.sessionsRevoked} session${
+                              result.sessionsRevoked === 1 ? ' was' : 's were'
+                            } revoked, and they must choose their own the next time they sign in.`,
+                          );
+                          setSettingPassword(false);
+                          setNewPassword('');
+                        } catch (cause) {
+                          // Kept on screen with what was typed still there: a
+                          // refusal names what was wrong with the password,
+                          // and clearing the box would make them retype a
+                          // password they are about to adjust.
+                          failed(cause, 'That password could not be set.');
+                        }
+                      })
+                    }
+                  >
+                    Set it
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setSettingPassword(false);
+                      setNewPassword('');
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {passwordDone && <Alert tone="warning">{passwordDone}</Alert>}
           </div>
         </Panel>
 

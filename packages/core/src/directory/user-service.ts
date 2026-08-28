@@ -13,11 +13,38 @@ export interface CreateUserInput {
 }
 
 export async function createUser(tx: TenantClient, input: CreateUserInput) {
-  // Checked explicitly rather than relying on the unique constraint, so the
+  // Checked explicitly rather than relying on the unique constraints, so the
   // caller gets a domain error it can map to 409 instead of a driver error.
-  const existing = await tx.user.findFirst({ where: { login: input.login } });
+  // Case-insensitive because the index behind it is: a login that differs only
+  // in case is the same login to everyone except Postgres, and two accounts
+  // that read identically on screen could both sign in.
+  const existing = await tx.user.findFirst({
+    where: { login: { equals: input.login, mode: 'insensitive' } },
+  });
   if (existing) {
     throw new Error(`login already exists: ${input.login}`);
+  }
+
+  // Active, locally managed accounts only, matching the partial index.
+  //
+  // A directory owns the addresses on the accounts it syncs, and Syntra
+  // refusing one of them would fail a sync run mid-apply over a shared mailbox
+  // somebody set up years ago — stopping a typo is not worth breaking a run.
+  //
+  // Active, because this directory deactivates rather than deletes: a leaver's
+  // account would otherwise reserve their address for ever, and the person
+  // hired into their post could not be created with the mailbox they have been
+  // given. The rule is "no second USABLE account on one address"; an inactive
+  // account is a record, not a login.
+  const sharing = await tx.user.findFirst({
+    where: {
+      email: { equals: input.email, mode: 'insensitive' },
+      sourceId: null,
+      status: 'active',
+    },
+  });
+  if (sharing) {
+    throw new Error(`email already in use: ${input.email}`);
   }
 
   const tenantId = await currentTenant(tx);

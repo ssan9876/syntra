@@ -5,6 +5,24 @@ export const createUserRequest = z.object({
   email: z.string().email(),
   displayName: z.string().min(1).max(256),
   orgUnitId: z.string().uuid().optional(),
+  /**
+   * Who this account is for. Three states, and they are three different
+   * requests rather than three spellings of one.
+   *
+   * A uuid links to that person. `null` says "service account" explicitly and
+   * suppresses matching. OMITTED runs the matcher and links on a confident
+   * result — which is why this is `.optional()` as well as `.nullable()`, and
+   * why the route must tell `undefined` from `null` rather than collapsing
+   * them the way most of these schemas do.
+   */
+  personId: z.string().uuid().nullable().optional(),
+  /**
+   * Confirms a second account for somebody who already has one.
+   *
+   * A warning rather than a refusal: a contractor with two simultaneous
+   * contracts is the case the person/contract/user split was built for.
+   */
+  allowSecondAccount: z.boolean().optional(),
 });
 export type CreateUserRequest = z.infer<typeof createUserRequest>;
 
@@ -83,6 +101,19 @@ export const patchUserDetailsRequest = z
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
+
+/**
+ * An administrator setting a password on somebody's behalf.
+ *
+ * The ceiling matches `validateNewPassword`'s: Argon2id's cost is proportional
+ * to its input, and an unbounded password field is a way to spend a server's
+ * memory on demand. The floor is 1 rather than the tenant's minimum, because
+ * the length policy belongs in one place — checking it here as well would
+ * state the rule twice and the two would eventually disagree.
+ */
+export const setUserPasswordRequest = z
+  .object({ password: z.string().min(1).max(1024) })
+  .strict();
 
 export const idParam = z.object({ id: z.string().uuid() });
 

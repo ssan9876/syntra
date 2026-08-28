@@ -6,6 +6,7 @@ import {
   deactivateUserRequest,
   idParam,
   patchUserDetailsRequest,
+  setUserPasswordRequest,
   patchUserRequest,
 } from '@syntra/contracts';
 import {
@@ -19,7 +20,11 @@ import {
   issuePasswordSetup,
   listUsers,
   localMasterKeyProvider,
+  hasPermission,
+  linkUserToPerson,
+  matchPersonForAccount,
   recordEvent,
+  setPasswordAsAdmin,
   removeRecoveryCodes,
   type Scheduler,
   removeTotp,
@@ -131,6 +136,84 @@ export async function registerAdminUserRoutes(
   );
 
   /**
+   * Every account with nobody behind it, and who it might be.
+   *
+   * Declared BEFORE `/users/:id` so a reader meets the static path first.
+   * Fastify's radix router prefers a static segment over a parametric one, so
+   * the ordering is not load-bearing — but a file that depends on that being
+   * remembered is a file that breaks the day somebody reorders it.
+   *
+   * `identity.read` rather than `directory.read`: the answer is a list of
+   * people, and reading people is what that permission is for.
+   */
+  app.get(
+    '/users/unlinked',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_READ) },
+    async (request) => {
+      return request.db(async (tx) => {
+        const users = await tx.user.findMany({
+          where: { personId: null, status: 'active' },
+          orderBy: { login: 'asc' },
+          select: { id: true, login: true, displayName: true, email: true },
+        });
+
+        const accounts = [];
+        for (const user of users) {
+          // Reads the person table once per account. That is the honest cost
+          // of the matcher's shape and is accepted here: this serves one
+          // screen, run rarely, over a backlog somebody is actively clearing.
+          // If it ever matters the fix is to hoist the person read out of the
+          // matcher, not to cache it here.
+          const match = await matchPersonForAccount(tx, {
+            email: user.email,
+            displayName: user.displayName,
+          });
+          accounts.push({
+            ...user,
+            topCandidate: match.confident ?? match.candidates[0] ?? null,
+          });
+        }
+        return { accounts };
+      });
+    },
+  );
+
+  /**
+   * Who this account might belong to.
+   *
+   * An account that already has a person answers with an empty list rather
+   * than a 409: the caller is a screen deciding whether to render a control,
+   * and a refusal it has to catch is a worse contract than nothing to show.
+   */
+  app.get(
+    '/users/:id/person-candidates',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      return request.db(async (tx) => {
+        const user = await tx.user.findUnique({ where: { id } });
+        if (!user) throw new ProblemError(404, 'not-found', 'User not found');
+        if (user.personId) return { candidates: [] };
+
+        const match = await matchPersonForAccount(tx, {
+          email: user.email,
+          displayName: user.displayName,
+        });
+        // Flattened. The screen ranks by `rule` and does not need to know one
+        // of them was strong enough to have auto-linked, because by definition
+        // it did not — either nothing matched confidently, or the confident
+        // match already had an account and was demoted.
+        return {
+          candidates: match.confident
+            ? [match.confident, ...match.candidates]
+            : match.candidates,
+        };
+      });
+    },
+  );
+
+  /**
    * One account, for the screen that is about one account.
    *
    * Every field the account screen needs and cannot derive: the lock, the
@@ -183,14 +266,124 @@ export async function registerAdminUserRoutes(
       // One transaction: if the audit write fails, the user is not created
       // either. A change without its audit entry is worse than no change.
       const user = await request.db(async (tx) => {
+        // Linking writes to a Person, which is `identity.write`. A caller who
+        // may create accounts but not touch people is refused an explicit
+        // person outright, and has the matcher skipped entirely below — an
+        // auto-link is still a write to a person, and a convenience feature
+        // does not get to step over a permission boundary.
+        const mayLink = await hasPermission(
+          tx,
+          request.session.userId,
+          PERMISSIONS.IDENTITY_WRITE,
+        );
+        if (body.personId && !mayLink) {
+          throw new ProblemError(
+            403,
+            'forbidden',
+            'Forbidden',
+            'Linking an account to a person requires identity.write.',
+          );
+        }
+
+        let personId: string | null = body.personId ?? null;
+
+        if (body.personId) {
+          const person = await tx.person.findUnique({ where: { id: body.personId } });
+          if (!person) throw new ProblemError(404, 'not-found', 'Person not found');
+
+          if (!body.allowSecondAccount) {
+            // Active only. Replacing a leaver's account is not a duplicate,
+            // and warning about one would be the kind of false alarm that
+            // teaches people to click through without reading.
+            const existing = await tx.user.findFirst({
+              where: { personId: body.personId, status: 'active' },
+              select: { id: true, login: true },
+            });
+            if (existing) {
+              throw new ProblemError(
+                409,
+                'second-account',
+                'They already have an account',
+                `${person.givenName} ${person.familyName} already signs in as ${existing.login}. A contractor with two contracts legitimately has two accounts, so confirm to create this one as well.`,
+                { existingAccount: existing },
+              );
+            }
+          }
+        } else if (body.personId === undefined && mayLink) {
+          // Omitted, not null. `null` is somebody saying "service account",
+          // and matching one would be answering a question they answered.
+          const match = await matchPersonForAccount(tx, {
+            email: body.email,
+            displayName: body.displayName,
+          });
+          // A confident match who already signs in somewhere is demoted HERE
+          // rather than in the matcher: auto-linking would produce the second
+          // account the warning above exists for, without the warning. It
+          // still surfaces as a suggestion on the account's own screen.
+          if (match.confident && !match.confident.hasActiveAccount) {
+            personId = match.confident.personId;
+          }
+        }
+
         let created;
         try {
-          created = await createUser(tx, body);
+          created = await createUser(tx, {
+            login: body.login,
+            email: body.email,
+            displayName: body.displayName,
+            ...(body.orgUnitId ? { orgUnitId: body.orgUnitId } : {}),
+          });
         } catch (error) {
-          if (error instanceof Error && /login already exists/i.test(error.message)) {
+          // Both pre-checks in `createUser` raise a plain Error so the domain
+          // stays free of HTTP, and both are the same answer to the caller:
+          // something already here has this, and it is not a request that can
+          // be confirmed past.
+          if (
+            error instanceof Error &&
+            /(login already exists|email already in use)/i.test(error.message)
+          ) {
             throw new ProblemError(409, 'conflict', 'Conflict', error.message);
           }
           throw error;
+        }
+
+        if (personId) {
+          await linkUserToPerson(tx, created.id, personId);
+          if (!body.personId) {
+            // Named, and never silent: an administrator who wonders why an
+            // account has a person can read which rule decided it.
+            await recordEvent(tx, {
+              actorUserId: request.session.userId,
+              action: 'user.autolinked',
+              targetType: 'User',
+              targetId: created.id,
+              outcome: 'success',
+              sourceIp: request.ip,
+              payload: { personId, rule: 'businessEmail' },
+            });
+          }
+
+          // The unit reaches the PERSON too, but only when theirs is null.
+          //
+          // `User.orgUnitId` feeds access resolution; `Person.orgUnitId` is
+          // what the placement ladder reads, so without this an account
+          // created here has a unit for access and still lands in the
+          // fallback container on every target. Overwriting a unit the person
+          // already has would undo a decision made about the person — and any
+          // AccountPlacement protecting a manual move — from a form whose
+          // subject is the account.
+          if (body.orgUnitId) {
+            const person = await tx.person.findUnique({
+              where: { id: personId },
+              select: { orgUnitId: true },
+            });
+            if (person && person.orgUnitId === null) {
+              await tx.person.update({
+                where: { id: personId },
+                data: { orgUnitId: body.orgUnitId },
+              });
+            }
+          }
         }
 
         await recordEvent(tx, {
@@ -200,7 +393,7 @@ export async function registerAdminUserRoutes(
           targetId: created.id,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { login: created.login, email: created.email },
+          payload: { login: created.login, email: created.email, personId },
         });
         return created;
       });
@@ -552,6 +745,29 @@ export async function registerAdminUserRoutes(
           );
         }
 
+        if (body.email !== undefined) {
+          // Same rule as the create path and the partial index behind it:
+          // active, locally managed accounts only, case-insensitively.
+          // Excluding this account is what lets a rename leave the address
+          // alone without colliding with itself.
+          const sharing = await tx.user.findFirst({
+            where: {
+              email: { equals: body.email, mode: 'insensitive' },
+              sourceId: null,
+              status: 'active',
+              id: { not: id },
+            },
+          });
+          if (sharing) {
+            throw new ProblemError(
+              409,
+              'conflict',
+              'Conflict',
+              `email already in use: ${body.email}`,
+            );
+          }
+        }
+
         if (body.orgUnitId !== undefined && body.orgUnitId !== null) {
           const unit = await tx.orgUnit.findUnique({ where: { id: body.orgUnitId } });
           if (!unit) throw new ProblemError(404, 'not-found', 'Org unit not found');
@@ -593,6 +809,74 @@ export async function registerAdminUserRoutes(
           orgUnitId: updated.orgUnitId,
         };
       });
+    },
+  );
+
+  /**
+   * Setting a password on somebody's behalf.
+   *
+   * Guarded by `directory.write` and NO step-up, matching `password-setup`
+   * above. The two are the same authority over the same account — one hands
+   * over a credential directly, the other hands over a link that mints one —
+   * and they must not disagree about what it takes to exercise it. If step-up
+   * is wanted it belongs on both, as one change to how credential operations
+   * are guarded, rather than as an inconsistency introduced here.
+   */
+  app.post(
+    '/users/:id/password',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { password } = setUserPasswordRequest.parse(request.body);
+
+      const outcome = await setPasswordAsAdmin(request.tenantId, {
+        userId: id,
+        actorUserId: request.session.userId,
+        newPassword: password,
+        sourceIp: request.ip,
+      });
+
+      if (outcome.ok) {
+        return { sessionsRevoked: outcome.sessionsRevoked, mustChange: true };
+      }
+
+      switch (outcome.reason) {
+        case 'not_found':
+          throw new ProblemError(404, 'not-found', 'User not found');
+        case 'upstream':
+          throw new ProblemError(
+            409,
+            'upstream-password',
+            'Password not held here',
+            `This account signs in through ${
+              outcome.hint ?? 'an upstream identity provider'
+            }, which holds the password. Change it there.`,
+          );
+        case 'directory_owned':
+          throw new ProblemError(
+            409,
+            'directory-owned-password',
+            'Password not held here',
+            'This account’s password lives in the directory that syncs it, and Syntra can only change a directory password when the current one is supplied. Change it in the directory, or send a password link instead.',
+          );
+        case 'weak_password':
+          // 422 rather than 400: the body parsed, and the value was understood
+          // and refused. A 400 reads as a malformed request and sends somebody
+          // looking at their JSON.
+          throw new ProblemError(
+            422,
+            'weak-password',
+            'That password was refused',
+            outcome.detail,
+          );
+        case 'reused':
+          throw new ProblemError(
+            422,
+            'reused-password',
+            'That password was refused',
+            `It is one of this account’s last ${outcome.depth} passwords.`,
+          );
+      }
     },
   );
 }

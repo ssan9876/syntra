@@ -22,6 +22,7 @@ import { TargetsPage } from './TargetsPage.js';
 import { TargetDetailPage } from './TargetDetailPage.js';
 import { AccountProfilePage } from './AccountProfilePage.js';
 import { AccountDetailPage } from './AccountDetailPage.js';
+import { UnlinkedAccountsPage } from './UnlinkedAccountsPage.js';
 import { BusinessRulesPage } from './BusinessRulesPage.js';
 import { ProvisionRunsPage } from './ProvisionRunsPage.js';
 import { ProvisionRunDetailPage } from './ProvisionRunDetailPage.js';
@@ -46,6 +47,11 @@ export function AdminApp() {
       <div className="w-full">
           <Routes>
             <Route path="users" element={<UsersPage />} />
+            {/* Declared before `users/:id` so a reader meets the static path
+                first. React Router ranks static segments above dynamic ones on
+                its own, but a file that relies on that being remembered is one
+                that breaks the day somebody reorders it. */}
+            <Route path="users/unlinked" element={<UnlinkedAccountsPage />} />
             {/* One account, on its own screen. Every control that used to sit
                 on a row of the accounts table lives here now, along with that
                 account's own slice of the audit log. */}

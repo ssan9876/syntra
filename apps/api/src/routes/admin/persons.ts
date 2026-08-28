@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import {
+  contractParams,
   createContractRequest,
   createPersonRequest,
   deactivatePersonRequest,
   idParam,
   importRequest,
   linkUserRequest,
+  patchContractRequest,
   patchPersonRequest,
 } from '@syntra/contracts';
 import {
@@ -21,6 +23,7 @@ import {
   parsePersonCsv,
   reactivatePerson,
   recordEvent,
+  updateContract,
   usersForPerson,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -154,6 +157,53 @@ export async function registerAdminPersonRoutes(
       const body = createPersonRequest.parse(request.body);
 
       const person = await request.db(async (tx) => {
+        if (!body.allowDuplicate) {
+          // Active people only, and both rules at once. A leaver's record is
+          // not a reason to refuse their replacement, and a namesake who left
+          // last year is exactly the kind of false alarm that teaches people
+          // to click through a warning without reading it.
+          const candidates = await tx.person.findMany({
+            where: {
+              status: 'active',
+              OR: [
+                {
+                  givenName: { equals: body.givenName.trim(), mode: 'insensitive' },
+                  familyName: { equals: body.familyName.trim(), mode: 'insensitive' },
+                },
+                ...(body.businessEmail
+                  ? [
+                      {
+                        businessEmail: {
+                          equals: body.businessEmail,
+                          mode: 'insensitive' as const,
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            },
+            select: {
+              id: true,
+              givenName: true,
+              familyName: true,
+              businessEmail: true,
+            },
+            // Bounded because the form LISTS them. An unbounded list on a
+            // common name is a page of links nobody reads, which is the same
+            // as no warning at all.
+            take: 5,
+          });
+          if (candidates.length > 0) {
+            throw new ProblemError(
+              409,
+              'possible-duplicate',
+              'Somebody here already looks like this',
+              'Check whether this is the same person before creating a second record — two people cannot be merged afterwards.',
+              { candidates },
+            );
+          }
+        }
+
         if (body.externalId) {
           const clash = await tx.person.findFirst({
             where: { externalId: body.externalId },
@@ -378,6 +428,63 @@ export async function registerAdminPersonRoutes(
           payload: {
             from: { givenName: existing.givenName, familyName: existing.familyName },
             to: { givenName: updated.givenName, familyName: updated.familyName },
+          },
+        });
+        return updated;
+      });
+    },
+  );
+
+  /**
+   * Correcting a contract, addressed by the sequence its person holds it at.
+   *
+   * By sequence rather than by contract id because that is how the console
+   * reads them: `GET /persons/:id` returns contracts nested under the person,
+   * and a row on that screen knows its sequence and never sees a uuid.
+   *
+   * Promoting to primary DEMOTES the incumbent here, where the create path
+   * refuses instead. The two are not inconsistent: adding a contract and
+   * declaring it primary while another already is is a caller who has not
+   * looked, whereas promoting an existing contract can only mean demoting the
+   * one it replaces — refusing would make promotion take two calls and leave
+   * the person with no primary contract in between.
+   */
+  app.patch(
+    '/persons/:id/contracts/:sequence',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_WRITE) },
+    async (request) => {
+      const { id, sequence } = contractParams.parse(request.params);
+      const body = patchContractRequest.parse(request.body);
+
+      return request.db(async (tx) => {
+        const person = await tx.person.findUnique({ where: { id } });
+        if (!person) throw new ProblemError(404, 'not-found', 'Person not found');
+
+        const before = await tx.contract.findFirst({
+          where: { personId: id, sequence },
+        });
+        const updated = await updateContract(tx, id, sequence, body);
+        if (!updated) throw new ProblemError(404, 'not-found', 'Contract not found');
+
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'person.updateContract',
+          targetType: 'Person',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: {
+            sequence,
+            from: {
+              jobTitle: before?.jobTitle ?? null,
+              department: before?.department ?? null,
+              isPrimary: before?.isPrimary ?? null,
+            },
+            to: {
+              jobTitle: updated.jobTitle,
+              department: updated.department,
+              isPrimary: updated.isPrimary,
+            },
           },
         });
         return updated;

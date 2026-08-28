@@ -17,7 +17,7 @@ import {
   type ResolvedAttempt,
 } from './attempt-service.js';
 import { authenticate } from './login-service.js';
-import { passwordExpired } from './password-ageing.js';
+import { mustRenewPassword } from './password-ageing.js';
 import { readSession, type SessionScope } from './session-service.js';
 import {
   enrolledFactorTypes,
@@ -490,7 +490,7 @@ async function decide(
       // The last gate before a session exists, and the only one every path
       // shares — password sign-in, a completed factor, a completed enrolment
       // and an application launch all arrive here.
-      if (await passwordExpired(tx, input.userId, tenant, input.now)) {
+      if (await mustRenewPassword(tx, input.userId, tenant, input.now)) {
         const attempt = await issueAttempt(tx, {
           userId: input.userId,
           applicationId: input.applicationId,

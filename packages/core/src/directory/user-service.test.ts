@@ -40,6 +40,80 @@ describe('createUser', () => {
     ).rejects.toThrow(/login already exists/i);
   });
 
+  it('rejects a login that differs only in case', async () => {
+    await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'jdoe', email: 'a@acme.test', displayName: 'A' }),
+    );
+    await expect(
+      withTenant(tenantId, (tx) =>
+        createUser(tx, { login: 'JDoe', email: 'b@acme.test', displayName: 'B' }),
+      ),
+    ).rejects.toThrow(/login already exists/i);
+  });
+
+  it('rejects an email already used by a locally managed account', async () => {
+    await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'a', email: 'shared@acme.test', displayName: 'A' }),
+    );
+    await expect(
+      withTenant(tenantId, (tx) =>
+        createUser(tx, { login: 'b', email: 'SHARED@acme.test', displayName: 'B' }),
+      ),
+    ).rejects.toThrow(/email already in use/i);
+  });
+
+  it('allows a source-owned account to share an email with a local one', async () => {
+    const source = await withTenant(tenantId, (tx) =>
+      tx.directorySource.create({
+        data: {
+          tenantId,
+          name: 'Corporate LDAP',
+          type: 'ldap',
+          config: {},
+          secretName: 'corporate-ldap',
+        },
+      }),
+    );
+    await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'local', email: 'shared@acme.test', displayName: 'L' }),
+    );
+    // Written directly rather than through createUser: a synced account is
+    // created by the sync apply path, which is exempt from this guard by
+    // design — a directory owns the addresses on the accounts it syncs.
+    const synced = await withTenant(tenantId, (tx) =>
+      tx.user.create({
+        data: {
+          tenantId,
+          login: 'synced',
+          email: 'shared@acme.test',
+          displayName: 'S',
+          sourceId: source.id,
+          sourceAnchor: 'anchor-1',
+        },
+      }),
+    );
+    expect(synced.email).toBe('shared@acme.test');
+  });
+
+  it('lets a replacement take a leaver’s email address', async () => {
+    const leaver = await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'leaver', email: 'post@acme.test', displayName: 'L' }),
+    );
+    await withTenant(tenantId, (tx) =>
+      deactivateUser(tx, leaver.id, 'left the company'),
+    );
+
+    // This directory deactivates rather than deletes, so without a status
+    // clause on the guard a leaver would reserve their address for ever and
+    // the person hired into their post could not be given the mailbox they
+    // have already been handed.
+    const replacement = await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'joiner', email: 'post@acme.test', displayName: 'J' }),
+    );
+
+    expect(replacement.email).toBe('post@acme.test');
+  });
+
   it('allows the same login in a different tenant', async () => {
     const other = await prisma.tenant.create({
       data: { name: 'Other', slug: 'other' },

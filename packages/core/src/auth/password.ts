@@ -45,7 +45,7 @@ export async function setPasswordHash(
   tx: TenantClient,
   userId: string,
   hash: string,
-  opts: { now?: Date } = {},
+  opts: { now?: Date; mustChange?: boolean } = {},
 ): Promise<void> {
   const tenantId = await currentTenant(tx);
   const now = opts.now ?? new Date();
@@ -83,10 +83,18 @@ export async function setPasswordHash(
     }
   }
 
+  // Defaulted to false rather than left to the caller, so self-service change,
+  // renewal and reset completion all CLEAR the flag by construction. Each of
+  // those is the user choosing a password for themselves, which is exactly the
+  // condition the flag exists to wait for. A caller that had to remember is a
+  // caller that eventually will not, and the failure mode is a user asked to
+  // change their password again immediately after changing it.
+  const mustChange = opts.mustChange ?? false;
+
   await tx.passwordCredential.upsert({
     where: { userId },
-    create: { tenantId, userId, hash, changedAt: now },
-    update: { hash, changedAt: now },
+    create: { tenantId, userId, hash, changedAt: now, mustChange },
+    update: { hash, changedAt: now, mustChange },
   });
 }
 

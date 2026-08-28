@@ -436,3 +436,88 @@ describe('PersonDetailPage org unit assignment', () => {
     expect(within(select).queryByRole('option', { name: 'Closed' })).toBeNull();
   });
 });
+
+/**
+ * Correcting a contract, from the screen that shows it.
+ *
+ * The fields were rendered read-only and the only way to change one was to add
+ * a SECOND contract, which records a different fact about the person.
+ */
+describe('PersonDetailPage contract editing', () => {
+  it('opens an edit form on a contract row, prefilled from that row', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(person));
+    renderPage();
+
+    await screen.findByText('Nurse');
+    await userEvent.click(
+      screen.getByRole('button', { name: /edit contract 1/i }),
+    );
+
+    expect(await screen.findByLabelText('Department')).toHaveValue('Care');
+    expect(screen.getByLabelText('Job title')).toHaveValue('Nurse');
+  });
+
+  it('names each edit button by its sequence rather than repeating "Edit"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(person));
+    renderPage();
+
+    await screen.findByText('Nurse');
+    // A table of identical "Edit" buttons is announced one after another with
+    // no way to tell which row the reader is on.
+    expect(
+      screen.getByRole('button', { name: /edit contract 1/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /edit contract 2/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('patches the sequence it was opened on', async () => {
+    let body: unknown;
+    mockRoutes({
+      '/api/admin/persons/p1': () => json(person),
+      '/api/admin/persons/p1/contracts/2': (init) => {
+        body = JSON.parse(String(init?.body));
+        return json({ ...person.contracts[1], department: 'Training' });
+      },
+    });
+    renderPage();
+
+    await screen.findByText('Trainer');
+    await userEvent.click(
+      screen.getByRole('button', { name: /edit contract 2/i }),
+    );
+    const department = await screen.findByLabelText('Department');
+    await userEvent.clear(department);
+    await userEvent.type(department, 'Training');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).toMatchObject({ department: 'Training' });
+  });
+
+  it('clears a field that was emptied rather than dropping it', async () => {
+    let body: Record<string, unknown> | undefined;
+    mockRoutes({
+      '/api/admin/persons/p1': () => json(person),
+      '/api/admin/persons/p1/contracts/1': (init) => {
+        body = JSON.parse(String(init?.body));
+        return json({ ...person.contracts[0], jobTitle: null });
+      },
+    });
+    renderPage();
+
+    await screen.findByText('Nurse');
+    await userEvent.click(
+      screen.getByRole('button', { name: /edit contract 1/i }),
+    );
+    await userEvent.clear(await screen.findByLabelText('Job title'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // An emptied box means "there is no job title", not "leave it alone".
+    // Dropping it would make a field uncorrectable in the direction of
+    // removing it.
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body!.jobTitle).toBeNull();
+  });
+});

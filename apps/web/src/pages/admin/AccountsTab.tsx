@@ -34,6 +34,22 @@ interface SourceRow {
   name: string;
 }
 
+interface PersonRow {
+  id: string;
+  givenName: string;
+  familyName: string;
+  status: string;
+  /**
+   * Their own placement unit, which outranks anything picked on this form.
+   *
+   * Carried so the form can say so. A unit chosen here reaches the person only
+   * when theirs is null — overwriting it would undo a decision made about the
+   * person from a form whose subject is the account — and somebody who is not
+   * told that reads the picker as having applied.
+   */
+  orgUnitId: string | null;
+}
+
 /**
  * The accounts, as a list and nothing else.
  *
@@ -69,6 +85,13 @@ export function AccountsTab() {
   const { data: sourcesData } = useApiResource<{ sources: SourceRow[] }>(
     '/api/admin/sources',
   );
+  // For the person picker. Its error state is tolerated like the sources read
+  // above: a caller who may create accounts but not read people gets a picker
+  // holding only "service account", and a form that still works.
+  const { data: personsData } = useApiResource<{ persons: PersonRow[] }>(
+    '/api/admin/persons',
+  );
+  const people = (personsData?.persons ?? []).filter((p) => p.status === 'active');
   const sourceNames = new Map(
     (sourcesData?.sources ?? []).map((source) => [source.id, source.name]),
   );
@@ -94,7 +117,24 @@ export function AccountsTab() {
           // an obvious answer when nobody typed one.
           displayName: v.displayName?.trim() ? v.displayName : (v.login ?? ''),
           ...(v.orgUnitId ? { orgUnitId: v.orgUnitId } : {}),
+          // Three states, sent as three different bodies. `'none'` becomes a
+          // literal null, which is what says "service account" to the API; the
+          // empty string is OMITTED, which is what asks it to match. Collapsing
+          // them would turn "work it out" into "there is nobody".
+          ...(v.personId === 'none'
+            ? { personId: null }
+            : v.personId
+              ? { personId: v.personId }
+              : {}),
         })}
+        confirmable={(problem) =>
+          problem.type.endsWith('second-account')
+            ? {
+                message: problem.detail ?? problem.title,
+                retryWith: { allowSecondAccount: true },
+              }
+            : null
+        }
         fields={(v, set, errs) => (
           <>
             <Field
@@ -120,6 +160,24 @@ export function AccountsTab() {
               placeholder="Maya Okafor"
             />
             <Select
+              label="Person"
+              value={v.personId ?? ''}
+              onChange={(x) => set('personId', x)}
+              error={errs.personId}
+              options={[
+                // The blank is "work it out", not "nobody". An account whose
+                // address matches exactly one person's work email is linked;
+                // anything less certain is left alone and offered on the
+                // account's own screen afterwards.
+                { value: '', label: 'Match by email' },
+                { value: 'none', label: 'No person — service account' },
+                ...people.map((p) => ({
+                  value: p.id,
+                  label: `${p.givenName} ${p.familyName}`,
+                })),
+              ]}
+            />
+            <Select
               label="Org unit"
               value={v.orgUnitId ?? ''}
               onChange={(x) => set('orgUnitId', x)}
@@ -129,6 +187,28 @@ export function AccountsTab() {
                 ...(unitsData?.orgUnits ?? []).map((u) => ({ value: u.id, label: u.name })),
               ]}
             />
+            {/*
+              Said only when it changes the answer. The account always takes
+              the unit picked here — that is access resolution — but PLACEMENT
+              follows the person's own unit, and this form does not overwrite
+              one they already have. Without this line the picker looks like it
+              decided where their account will be created, and it did not.
+            */}
+            {(() => {
+              const chosen = people.find((p) => p.id === v.personId);
+              if (!chosen?.orgUnitId) return null;
+              const unit = (unitsData?.orgUnits ?? []).find(
+                (u) => u.id === chosen.orgUnitId,
+              );
+              return (
+                <p className="text-sm text-muted sm:col-span-2">
+                  {chosen.givenName} {chosen.familyName} is already placed in{' '}
+                  {unit?.name ?? 'another unit'}, and their account will be
+                  created there. The unit above applies to this login's access
+                  only.
+                </p>
+              );
+            })()}
           </>
         )}
       />

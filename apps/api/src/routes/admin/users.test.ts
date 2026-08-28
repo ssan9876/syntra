@@ -939,3 +939,701 @@ describe('deleting a user', () => {
     );
   });
 });
+
+/**
+ * The two duplicates that are always a mistake, and are therefore refused
+ * outright rather than confirmed past. See migration
+ * `20260922000000_user_duplicate_guards` for the indexes behind them.
+ */
+describe('duplicate guards on POST /api/admin/users', () => {
+  const patch = (url: string, cookie: string, payload: unknown) =>
+    ctx.app.inject({
+      method: 'PATCH',
+      url,
+      headers: { host: ctx.host, cookie },
+      payload: payload as object,
+    });
+
+  it('refuses a login that differs only in case', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    await post('/api/admin/users', cookie, {
+      login: 'jdoe',
+      email: 'a@acme.test',
+      displayName: 'A',
+    });
+    const res = await post('/api/admin/users', cookie, {
+      login: 'JDoe',
+      email: 'b@acme.test',
+      displayName: 'B',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/login already exists/i);
+  });
+
+  it('refuses a second local account on one email', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    await post('/api/admin/users', cookie, {
+      login: 'a',
+      email: 'shared@acme.test',
+      displayName: 'A',
+    });
+    const res = await post('/api/admin/users', cookie, {
+      login: 'b',
+      email: 'shared@acme.test',
+      displayName: 'B',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/email already in use/i);
+  });
+
+  it('refuses an edit that collides with another local account email', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    await post('/api/admin/users', cookie, {
+      login: 'a',
+      email: 'taken@acme.test',
+      displayName: 'A',
+    });
+    const other = await post('/api/admin/users', cookie, {
+      login: 'b',
+      email: 'free@acme.test',
+      displayName: 'B',
+    });
+
+    const res = await patch(
+      `/api/admin/users/${other.json().id}/details`,
+      cookie,
+      { email: 'TAKEN@acme.test' },
+    );
+
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('lets an account keep its own email through an edit', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const user = await post('/api/admin/users', cookie, {
+      login: 'a',
+      email: 'mine@acme.test',
+      displayName: 'A',
+    });
+
+    // The `id: { not: id }` in the guard is what this covers: without it,
+    // renaming an account while leaving its address alone would collide with
+    // itself and be refused.
+    const res = await patch(`/api/admin/users/${user.json().id}/details`, cookie, {
+      displayName: 'A Renamed',
+      email: 'mine@acme.test',
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+/**
+ * Setting a password on somebody's behalf, over HTTP.
+ *
+ * Guarded like `password-setup` beside it and with no step-up: the two are the
+ * same authority over the same account and must not disagree about what it
+ * takes to exercise it.
+ */
+describe('POST /api/admin/users/:id/password', () => {
+  async function targetAccount(cookie: string) {
+    const created = await post('/api/admin/users', cookie, {
+      login: 'target',
+      email: 'target@acme.test',
+      displayName: 'T',
+    });
+    return created.json().id as string;
+  }
+
+  it('sets a password and reports what it cost', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const id = await targetAccount(cookie);
+
+    const res = await post(`/api/admin/users/${id}/password`, cookie, {
+      password: 'a-long-enough-password',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ mustChange: true, sessionsRevoked: 0 });
+  });
+
+  it('refuses a weak password with a 422 rather than a 400', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const id = await targetAccount(cookie);
+
+    const res = await post(`/api/admin/users/${id}/password`, cookie, {
+      password: 'x',
+    });
+
+    // The body parsed and the value was understood and refused. A 400 reads as
+    // a malformed request and sends somebody looking at their JSON.
+    expect(res.statusCode).toBe(422);
+    expect(res.json().type).toMatch(/weak-password/);
+  });
+
+  it('sends an upstream account to its provider by name', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const id = await targetAccount(cookie);
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.user.update({
+        where: { id },
+        data: { passwordSource: 'upstream', passwordSourceHint: 'Entra ID' },
+      }),
+    );
+
+    const res = await post(`/api/admin/users/${id}/password`, cookie, {
+      password: 'a-long-enough-password',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/Entra ID/);
+  });
+
+  it('404s for an account that is not there', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const res = await post(
+      `/api/admin/users/${crypto.randomUUID()}/password`,
+      cookie,
+      { password: 'a-long-enough-password' },
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller without directory.write', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await post(
+      `/api/admin/users/${crypto.randomUUID()}/password`,
+      cookie,
+      { password: 'a-long-enough-password' },
+    );
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('never writes the password into the audit log', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const id = await targetAccount(cookie);
+    const secret = 'a-long-enough-password';
+
+    await post(`/api/admin/users/${id}/password`, cookie, { password: secret });
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'user.setPassword' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain(secret);
+  });
+});
+
+/**
+ * Who a new account is for.
+ *
+ * Every account created from the Accounts tab used to orphan itself: the form
+ * posted here and this route had no `personId` at all.
+ */
+describe('linking a new account to a person', () => {
+  const BOTH: Permission[] = [
+    PERMISSIONS.DIRECTORY_READ,
+    PERMISSIONS.DIRECTORY_WRITE,
+    PERMISSIONS.IDENTITY_READ,
+    PERMISSIONS.IDENTITY_WRITE,
+  ];
+
+  const newPerson = async (cookie: string, body: Record<string, unknown> = {}) => {
+    const res = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      ...body,
+    });
+    return res.json().id as string;
+  };
+
+  const personOf = async (cookie: string, userId: string) => {
+    const res = await get(`/api/admin/users/${userId}`, cookie);
+    return res.json().person;
+  };
+
+  it('links to the person it was given', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const personId = await newPerson(cookie);
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'm@acme.test',
+      displayName: 'Maya Okafor',
+      personId,
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(await personOf(cookie, res.json().id)).toMatchObject({ id: personId });
+  });
+
+  it('auto-links on a unique work email when no person was named', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const personId = await newPerson(cookie, { businessEmail: 'maya@acme.test' });
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'maya@acme.test',
+      displayName: 'Maya Okafor',
+    });
+
+    expect(await personOf(cookie, res.json().id)).toMatchObject({ id: personId });
+  });
+
+  it('records which rule decided an auto-link', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    await newPerson(cookie, { businessEmail: 'maya@acme.test' });
+
+    await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'maya@acme.test',
+      displayName: 'Maya Okafor',
+    });
+
+    // Never silent. Somebody wondering why an account has a person can read
+    // why.
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirst({ where: { action: 'user.autolinked' } }),
+    );
+    expect(event).not.toBeNull();
+  });
+
+  it('does not match when the caller said service account', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    await newPerson(cookie, { businessEmail: 'maya@acme.test' });
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'svc',
+      email: 'maya@acme.test',
+      displayName: 'Service',
+      personId: null,
+    });
+
+    // They answered the question. Matching anyway would be answering it again.
+    expect(await personOf(cookie, res.json().id)).toBeNull();
+  });
+
+  it('does not auto-link to somebody who already has an account', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const personId = await newPerson(cookie, { businessEmail: 'maya@acme.test' });
+    await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'first@acme.test',
+      displayName: 'M',
+      personId,
+    });
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'mokafor2',
+      email: 'maya@acme.test',
+      displayName: 'M',
+    });
+
+    // Auto-linking would silently create the second account the warning below
+    // exists for, without the warning.
+    expect(res.statusCode).toBe(201);
+    expect(await personOf(cookie, res.json().id)).toBeNull();
+  });
+
+  it('warns before giving one person a second account, and is confirmable', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const personId = await newPerson(cookie, {
+      givenName: 'Kaycen',
+      familyName: 'Tyre',
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'ktyre',
+      email: 'k@acme.test',
+      displayName: 'K',
+      personId,
+    });
+
+    const warned = await post('/api/admin/users', cookie, {
+      login: 'ktyre-admin',
+      email: 'k2@acme.test',
+      displayName: 'K admin',
+      personId,
+    });
+
+    expect(warned.statusCode).toBe(409);
+    expect(warned.json().type).toMatch(/second-account/);
+    expect(warned.json().existingAccount).toMatchObject({ login: 'ktyre' });
+
+    const confirmed = await post('/api/admin/users', cookie, {
+      login: 'ktyre-admin',
+      email: 'k2@acme.test',
+      displayName: 'K admin',
+      personId,
+      allowSecondAccount: true,
+    });
+
+    expect(confirmed.statusCode).toBe(201);
+  });
+
+  it('does not warn when the existing account is inactive', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const personId = await newPerson(cookie);
+    const first = await post('/api/admin/users', cookie, {
+      login: 'leaver',
+      email: 'l@acme.test',
+      displayName: 'L',
+      personId,
+    });
+    await post(`/api/admin/users/${first.json().id}/deactivate`, cookie, {
+      reason: 'left the company',
+    });
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'replacement',
+      email: 'r@acme.test',
+      displayName: 'R',
+      personId,
+    });
+
+    // Replacing a leaver's account is not a duplicate.
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('404s for a person who is not there', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'x',
+      email: 'x@acme.test',
+      displayName: 'X',
+      personId: crypto.randomUUID(),
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('403s an explicit person without identity.write', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'x',
+      email: 'x@acme.test',
+      displayName: 'X',
+      personId: crypto.randomUUID(),
+    });
+
+    // Linking writes to a Person. A permission boundary is not something a
+    // convenience feature gets to step over.
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('skips the matcher entirely without identity.write', async () => {
+    // Seeded directly: creating the person over HTTP would need the very
+    // permission this test withholds.
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.person.create({
+        data: {
+          tenantId: ctx.tenantId,
+          givenName: 'Maya',
+          familyName: 'Okafor',
+          businessEmail: 'maya@acme.test',
+        },
+      }),
+    );
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'maya@acme.test',
+      displayName: 'Maya Okafor',
+    });
+
+    // Created, and NOT linked. An auto-link is a write to a person.
+    expect(res.statusCode).toBe(201);
+    expect(await personOf(cookie, res.json().id)).toBeNull();
+  });
+
+  it('gives the person the account’s org unit when they have none', async () => {
+    await seedAdmin([...BOTH, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const personId = await newPerson(cookie);
+    const unit = await post('/api/admin/org-units', cookie, { name: 'Sales' });
+
+    await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'm@acme.test',
+      displayName: 'M',
+      personId,
+      orgUnitId: unit.json().id,
+    });
+
+    // Person.orgUnitId is what the placement ladder reads. Without this the
+    // account has a unit for access and still lands in the fallback container.
+    const person = await withTenant(ctx.tenantId, (tx) =>
+      tx.person.findUnique({ where: { id: personId } }),
+    );
+    expect(person!.orgUnitId).toBe(unit.json().id);
+  });
+
+  it('leaves a person’s own org unit alone when they already have one', async () => {
+    await seedAdmin([...BOTH, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const chosen = await post('/api/admin/org-units', cookie, { name: 'Care' });
+    const other = await post('/api/admin/org-units', cookie, { name: 'Sales' });
+    const personId = await newPerson(cookie);
+    await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/admin/persons/${personId}`,
+      headers: { host: ctx.host, cookie },
+      payload: { orgUnitId: chosen.json().id },
+    });
+
+    await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'm@acme.test',
+      displayName: 'M',
+      personId,
+      orgUnitId: other.json().id,
+    });
+
+    // Overwriting it from a form whose subject is the ACCOUNT would undo a
+    // decision made about the PERSON, and any AccountPlacement protecting a
+    // manual move with it.
+    const person = await withTenant(ctx.tenantId, (tx) =>
+      tx.person.findUnique({ where: { id: personId } }),
+    );
+    expect(person!.orgUnitId).toBe(chosen.json().id);
+  });
+});
+
+/**
+ * Who an orphaned account might belong to.
+ *
+ * Offered rather than applied: everything the matcher is not confident about
+ * ends up here, which is where a human decides.
+ */
+describe('GET /api/admin/users/:id/person-candidates', () => {
+  const BOTH: Permission[] = [
+    PERMISSIONS.DIRECTORY_READ,
+    PERMISSIONS.DIRECTORY_WRITE,
+    PERMISSIONS.IDENTITY_READ,
+    PERMISSIONS.IDENTITY_WRITE,
+  ];
+
+  it('suggests a person for an unlinked account, with the reason', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      personalEmail: 'maya@gmail.test',
+    });
+    const user = await post('/api/admin/users', cookie, {
+      login: 'm',
+      email: 'maya@gmail.test',
+      displayName: 'M',
+      personId: null,
+    });
+
+    const res = await get(
+      `/api/admin/users/${user.json().id}/person-candidates`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().candidates[0]).toMatchObject({ rule: 'personalEmail' });
+  });
+
+  it('suggests nothing for an account that already has a person', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      personalEmail: 'maya@gmail.test',
+    });
+    const user = await post('/api/admin/users', cookie, {
+      login: 'm',
+      email: 'maya@gmail.test',
+      displayName: 'M',
+      personId: person.json().id,
+    });
+
+    const res = await get(
+      `/api/admin/users/${user.json().id}/person-candidates`,
+      cookie,
+    );
+
+    // An empty list rather than a 409: the caller is a screen deciding whether
+    // to render a control, and a refusal it has to catch is a worse contract
+    // than nothing to show.
+    expect(res.statusCode).toBe(200);
+    expect(res.json().candidates).toEqual([]);
+  });
+
+  it('offers a confident match that was not auto-linked', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      businessEmail: 'maya@acme.test',
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'first',
+      email: 'first@acme.test',
+      displayName: 'M',
+      personId: person.json().id,
+    });
+    // Same work address, so confident by rule — but she already signs in, so
+    // the create path demoted it rather than making a second account silently.
+    const second = await post('/api/admin/users', cookie, {
+      login: 'second',
+      email: 'maya@acme.test',
+      displayName: 'M',
+    });
+
+    const res = await get(
+      `/api/admin/users/${second.json().id}/person-candidates`,
+      cookie,
+    );
+
+    expect(res.json().candidates[0]).toMatchObject({
+      rule: 'businessEmail',
+      hasActiveAccount: true,
+    });
+  });
+
+  it('404s for an account that is not there', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+
+    const res = await get(
+      `/api/admin/users/${crypto.randomUUID()}/person-candidates`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller who may not read people', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const res = await get(
+      `/api/admin/users/${crypto.randomUUID()}/person-candidates`,
+      cookie,
+    );
+
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+/**
+ * The backlog of accounts with nobody behind them, which the console created
+ * itself: the Accounts form had no person field, so every account made there
+ * orphaned itself and the only fix was one person's screen at a time.
+ */
+describe('GET /api/admin/users/unlinked', () => {
+  const BOTH: Permission[] = [
+    PERMISSIONS.DIRECTORY_READ,
+    PERMISSIONS.DIRECTORY_WRITE,
+    PERMISSIONS.IDENTITY_READ,
+    PERMISSIONS.IDENTITY_WRITE,
+  ];
+
+  it('lists unlinked accounts with their best candidate', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      businessEmail: 'maya@acme.test',
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'm',
+      email: 'maya@acme.test',
+      displayName: 'M',
+      personId: null,
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'svc-backup',
+      email: 'svc@acme.test',
+      displayName: 'Backup',
+      personId: null,
+    });
+
+    const res = await get('/api/admin/users/unlinked', cookie);
+
+    const accounts = res.json().accounts as {
+      login: string;
+      topCandidate: unknown;
+    }[];
+    // The seeded admin is unlinked too, so filter to what this test made.
+    expect(accounts.find((a) => a.login === 'm')!.topCandidate).toMatchObject({
+      rule: 'businessEmail',
+    });
+    // A service account with nothing matching is LISTED with no suggestion
+    // rather than hidden: the point of the screen is the whole backlog, and a
+    // count that cannot be reconciled against the accounts table is worse
+    // than a row somebody reads once.
+    expect(
+      accounts.find((a) => a.login === 'svc-backup')!.topCandidate,
+    ).toBeNull();
+  });
+
+  it('does not list an account that already has a person', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+    });
+    await post('/api/admin/users', cookie, {
+      login: 'linked',
+      email: 'l@acme.test',
+      displayName: 'L',
+      personId: person.json().id,
+    });
+
+    const res = await get('/api/admin/users/unlinked', cookie);
+
+    const logins = (res.json().accounts as { login: string }[]).map((a) => a.login);
+    expect(logins).not.toContain('linked');
+  });
+
+  it('is not read as an account id', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+
+    const res = await get('/api/admin/users/unlinked', cookie);
+
+    // `/users/:id` would parse `unlinked` as a uuid and 400 on it.
+    expect(res.statusCode).toBe(200);
+  });
+});

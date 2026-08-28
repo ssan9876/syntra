@@ -7,7 +7,7 @@ import { createSource } from '../sync/source-service.js';
 import { createSession, resolveSession } from './session-service.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import * as passwordModule from './password.js';
-import { changeOwnPassword } from './password-change.js';
+import { changeOwnPassword, setPasswordAsAdmin } from './password-change.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 13));
@@ -433,5 +433,202 @@ describe('changeOwnPassword writing through to a directory', () => {
     expect(serialised).not.toContain(PASSWORD);
     expect(serialised).not.toContain(NEW_PASSWORD);
     expect(serialised).not.toContain('bind-secret');
+  });
+});
+
+/**
+ * An administrator setting somebody else's password.
+ *
+ * `password-setup` mints a one-time link, which is right for a joiner and
+ * wrong for the support call where somebody is reading a password down the
+ * phone to a person who cannot reach their mailbox.
+ */
+describe('setPasswordAsAdmin', () => {
+  const ADMIN_SET = 'a password an administrator typed';
+
+  /** The administrator doing the setting. Never the subject. */
+  async function seedActor() {
+    return withTenant(tenantId, async (tx) => {
+      const actor = await createUser(tx, {
+        login: 'admin',
+        email: 'admin@acme.test',
+        displayName: 'Admin',
+      });
+      return actor.id;
+    });
+  }
+
+  const setIt = async (actorUserId: string, newPassword = ADMIN_SET) =>
+    setPasswordAsAdmin(tenantId, {
+      userId,
+      actorUserId,
+      newPassword,
+      sourceIp: null,
+    });
+
+  it('sets the password, flags it must-change, and revokes every session', async () => {
+    const actor = await seedActor();
+    await signIn();
+    await signIn();
+
+    const outcome = await setIt(actor);
+
+    expect(outcome).toMatchObject({ ok: true });
+    const credential = await withTenant(tenantId, (tx) =>
+      tx.passwordCredential.findUnique({ where: { userId } }),
+    );
+    // A password two people know is a handover credential, not yet theirs.
+    expect(credential!.mustChange).toBe(true);
+    expect(await verifyPassword(credential!.hash, ADMIN_SET)).toBe(true);
+
+    // EVERY session, not all-but-one. An administrator setting a password
+    // because an account is compromised is the case this exists for, and a
+    // credential change whose sessions outlive it reads as done and is not.
+    const live = await withTenant(tenantId, (tx) =>
+      tx.session.count({ where: { userId, revokedAt: null } }),
+    );
+    expect(live).toBe(0);
+    expect(outcome).toMatchObject({ sessionsRevoked: 2 });
+  });
+
+  it('revokes the refresh tokens with them', async () => {
+    const actor = await seedActor();
+    await withTenant(tenantId, (tx) =>
+      tx.refreshToken.create({
+        data: {
+          tenantId,
+          userId,
+          tokenHash: 'a-hash',
+          absoluteExpiresAt: new Date(Date.now() + 86_400_000),
+        },
+      }),
+    );
+
+    await setIt(actor);
+
+    // One outliving the change would hand back exactly the access the change
+    // existed to end.
+    const live = await withTenant(tenantId, (tx) =>
+      tx.refreshToken.count({ where: { userId, revokedAt: null } }),
+    );
+    expect(live).toBe(0);
+  });
+
+  it('refuses an account whose password lives upstream', async () => {
+    const actor = await seedActor();
+    await withTenant(tenantId, (tx) =>
+      tx.user.update({
+        where: { id: userId },
+        data: { passwordSource: 'upstream', passwordSourceHint: 'Okta' },
+      }),
+    );
+
+    const outcome = await setIt(actor);
+
+    expect(outcome).toEqual({ ok: false, reason: 'upstream', hint: 'Okta' });
+  });
+
+  it('refuses an account whose directory owns the password', async () => {
+    const actor = await seedActor();
+    const sourceId = await withTenant(tenantId, async (tx) => {
+      const source = await createSource(tx, provider, {
+        name: 'Head office AD',
+        config: {
+          url: 'ldaps://ad.acme.test',
+          bindDn: 'cn=svc,dc=acme,dc=test',
+          userSearchBase: 'ou=People,dc=acme,dc=test',
+          groupSearchBase: 'ou=Groups,dc=acme,dc=test',
+          anchorAttribute: 'objectGUID',
+        },
+        bindPassword: 'bind-secret',
+        writebackEnabled: true,
+        writebackPassword: true,
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: { sourceId: source.id, sourceAnchor: 'anchor-guid' },
+      });
+      return source.id;
+    });
+
+    const outcome = await setIt(actor);
+
+    // The connector's only password call takes a currentPassword, which an
+    // administrator does not have. Writing a local hash alone is the exact
+    // divergence changeOwnPassword refuses to create.
+    expect(outcome).toEqual({ ok: false, reason: 'directory_owned', sourceId });
+  });
+
+  it('allows a source-owned account whose directory does not write passwords', async () => {
+    const actor = await seedActor();
+    await withTenant(tenantId, async (tx) => {
+      const source = await createSource(tx, provider, {
+        name: 'Read-only LDAP',
+        config: {
+          url: 'ldaps://ad.acme.test',
+          bindDn: 'cn=svc,dc=acme,dc=test',
+          userSearchBase: 'ou=People,dc=acme,dc=test',
+          groupSearchBase: 'ou=Groups,dc=acme,dc=test',
+          anchorAttribute: 'objectGUID',
+        },
+        bindPassword: 'bind-secret',
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: { sourceId: source.id, sourceAnchor: 'anchor-guid' },
+      });
+    });
+
+    // Syntra holds this account's hash even though a directory owns its name
+    // and email — the same account the password-setup link is already offered
+    // for.
+    expect(await setIt(actor)).toMatchObject({ ok: true });
+  });
+
+  it('refuses a password the policy rejects', async () => {
+    const actor = await seedActor();
+
+    const outcome = await setIt(actor, 'x');
+
+    expect(outcome).toMatchObject({ ok: false, reason: 'weak_password' });
+  });
+
+  it('refuses a password this account has already retired', async () => {
+    const actor = await seedActor();
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { passwordHistoryDepth: 3 },
+    });
+
+    await setIt(actor, ADMIN_SET);
+    await setIt(actor, 'a second password entirely');
+    const outcome = await setIt(actor, ADMIN_SET);
+
+    expect(outcome).toMatchObject({ ok: false, reason: 'reused', depth: 3 });
+  });
+
+  it('records who set it, and never what was set', async () => {
+    const actor = await seedActor();
+
+    await setIt(actor);
+
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirst({ where: { action: 'user.setPassword' } }),
+    );
+    expect(event).toMatchObject({ actorUserId: actor, targetId: userId });
+    expect(JSON.stringify(event!.payload)).not.toContain(ADMIN_SET);
+  });
+
+  it('answers not_found for an account that is not there', async () => {
+    const actor = await seedActor();
+
+    const outcome = await setPasswordAsAdmin(tenantId, {
+      userId: crypto.randomUUID(),
+      actorUserId: actor,
+      newPassword: ADMIN_SET,
+      sourceIp: null,
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: 'not_found' });
   });
 });
