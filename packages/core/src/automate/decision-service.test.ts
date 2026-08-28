@@ -537,7 +537,11 @@ describe('an administrator deciding a blocked request', () => {
       const role = await tx.role.create({
         data: { tenantId, name: 'Automate admin', permissions: [PERMISSIONS.AUTOMATE_MANAGE] },
       });
-      await tx.roleAssignment.create({ data: { tenantId, roleId: role.id, userId: boUserId } });
+      // JAN, who decides below. Bo is stage 2's approver and the party this
+      // case is about NOT being mailed prematurely; granting the override to
+      // Bo left Jan without it, and the case died on `not-permitted` at the
+      // gate rather than reaching the behaviour it was written for.
+      await tx.roleAssignment.create({ data: { tenantId, roleId: role.id, userId: janUserId } });
     });
 
     const result = await recordDecision(
