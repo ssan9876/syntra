@@ -57,9 +57,20 @@ export function RolesPage() {
   // Narrowed once, and shared by the summary cards and the table below.
   const roles = data?.roles ?? [];
 
-  const [editing, setEditing] = useState<RoleRow | null>(null);
+  /**
+   * The open form, or nothing. `id === null` is a role that does not exist
+   * yet.
+   *
+   * One form for both, rather than a create panel beside an edit panel. The
+   * two differ in the verb on the button and the endpoint the body goes to;
+   * everything a reader looks at -- the name, the description, the fieldset of
+   * permissions -- is the same question asked about the same object, and two
+   * copies of it would drift the first time somebody added a field to one.
+   */
+  const [form, setForm] = useState<{ id: string | null; builtIn: boolean } | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** Which role's grant picker is open, and who is selected in it. */
@@ -69,19 +80,51 @@ export function RolesPage() {
   /**
    * The accounts a role can be granted to.
    *
-   * Its error state is deliberately ignored. `rbac.manage` and
-   * `directory.read` are separate permissions and a caller may hold the first
-   * without the second; they get an empty picker saying so, rather than a page
-   * that will not render. The server refuses the assignment either way.
+   * `rbac.manage` and `directory.read` are separate permissions and a caller
+   * may hold the first without the second, so this read can fail on a page
+   * that must still render. It does not take the page down — but its failure
+   * is READ rather than ignored, which it was not.
+   *
+   * Ignoring it made the two opposite causes of an empty list
+   * indistinguishable: everybody already holds the role, or the caller cannot
+   * see who exists. The screen reported the second as the first, so it stated
+   * something false about the tenant and withheld the only control on the row.
    */
-  const { data: usersData } = useApiResource<{
+  const {
+    data: usersData,
+    error: usersError,
+    loading: usersLoading,
+  } = useApiResource<{
     users: { id: string; login: string; displayName: string; status: string }[];
   }>('/api/admin/users');
 
   const open = (role: RoleRow) => {
-    setEditing(role);
+    setForm({ id: role.id, builtIn: role.builtIn });
     setChosen(new Set(role.permissions));
     setName(role.name);
+    setDescription(role.description ?? '');
+    setProblem(null);
+  };
+
+  /**
+   * A role that does not exist yet, which is what the screen was missing.
+   *
+   * `POST /api/admin/roles` was built, guarded by `rbac.manage` and audited in
+   * the same transaction as the write, and then called by nothing: the console
+   * only ever PATCHed an id it already had. So an installation had the roles
+   * its seed wrote and no others, and "the help desk may read the directory
+   * and nothing else" was a database client -- the same state the role API
+   * exists to end, one door further along.
+   *
+   * Nothing is preselected. A new role starting from Owner's permissions
+   * would be a narrower role only if somebody remembered to narrow it, and the
+   * failure is silent and total.
+   */
+  const create = () => {
+    setForm({ id: null, builtIn: false });
+    setChosen(new Set());
+    setName('');
+    setDescription('');
     setProblem(null);
   };
 
@@ -93,18 +136,26 @@ export function RolesPage() {
   };
 
   const save = async () => {
-    if (!editing) return;
+    if (!form) return;
     setBusy(true);
     setProblem(null);
     try {
-      await api(`/api/admin/roles/${editing.id}`, {
-        method: 'PATCH',
+      const body = JSON.stringify({
+        name,
+        // Empty means absent, not an empty description. `roleBody` takes null
+        // for the first and the list renders nothing for it; a stored '' would
+        // be a description that exists and says nothing.
+        description: description.trim() === '' ? null : description,
         // The permission set is REPLACED whole, so the whole set is sent. An
         // add/remove vocabulary would need a merge rule nobody looking at a
         // page of checkboxes could predict.
-        body: JSON.stringify({ name, permissions: [...chosen] }),
+        permissions: [...chosen],
       });
-      setEditing(null);
+      await (form.id === null
+        ? // The COLLECTION. Posting to a role's own path would edit it.
+          api('/api/admin/roles', { method: 'POST', body })
+        : api(`/api/admin/roles/${form.id}`, { method: 'PATCH', body }));
+      setForm(null);
       reload();
     } catch (cause) {
       // The server's own sentence, always. The refusal that matters most here
@@ -120,6 +171,29 @@ export function RolesPage() {
       setBusy(false);
     }
   };
+
+  /**
+   * The catalogue, in groups taken from the part before the dot.
+   *
+   * DERIVED rather than mapped. The catalogue travels from the server on every
+   * load precisely so that no second copy of it lives in this bundle, and a
+   * hand-written heading per permission would be exactly that copy -- wrong
+   * the first time somebody adds one and does not think of this file. A split
+   * on '.' cannot go out of step: a new permission lands in its module's
+   * group, or makes a new group, with nobody editing anything here.
+   *
+   * Insertion order, so the groups arrive in the order `permissions.ts`
+   * declares them. Alphabetising would put `access` above `directory` and
+   * scatter the reading order the catalogue was written in.
+   */
+  const groups = (() => {
+    const byModule = new Map<string, string[]>();
+    for (const permission of data?.catalog ?? []) {
+      const module = permission.split('.')[0] ?? permission;
+      byModule.set(module, [...(byModule.get(module) ?? []), permission]);
+    }
+    return [...byModule];
+  })();
 
   /** Accounts not already holding this role. */
   const grantable = (role: RoleRow) => {
@@ -191,6 +265,11 @@ export function RolesPage() {
     <>
       <PageHeader
         title="Roles"
+        actions={
+          <Button variant="primary" onClick={create}>
+            New role
+          </Button>
+        }
       />
 
       {/* A role nobody holds is the one worth seeing: it is either a
@@ -210,11 +289,11 @@ export function RolesPage() {
       {error && <Alert tone="danger">{error}</Alert>}
       {problem && <Alert tone="warning">{problem}</Alert>}
 
-      {editing && (
+      {form && (
         <div className="mb-6">
           <Panel
-            title={`Edit ${editing.name}`}
-            {...(editing.builtIn
+            title={form.id === null ? 'New role' : `Edit ${name}`}
+            {...(form.builtIn
               ? {
                   description:
                     'A built-in role. Its permissions are editable — that is how a permission added by an upgrade reaches the person who needs it — but it cannot be deleted.',
@@ -223,22 +302,56 @@ export function RolesPage() {
           >
             <div className="space-y-4 p-4">
               <Field label="Name" value={name} onChange={setName} />
-              <fieldset aria-label="Permissions" className="space-y-2">
+              {/* The API has stored one since the role table existed and
+                  nothing ever set it. Survivable while there was one built-in
+                  role whose name said everything; not once there are four
+                  narrow ones whose names do not. */}
+              <Field
+                label="Description"
+                value={description}
+                onChange={setDescription}
+                maxLength={1000}
+              />
+              <fieldset aria-label="Permissions" className="space-y-4">
                 <legend className="mb-1.5 font-medium text-ink">Permissions</legend>
-                {(data?.catalog ?? []).map((permission) => (
-                  <Check
-                    key={permission}
-                    checked={chosen.has(permission)}
-                    onChange={(on) => toggle(permission, on)}
-                    label={permission}
-                  />
+                {/* Grouped by module, because twenty-four dotted keys in one
+                    flat list is a list you can read but not choose from:
+                    picking a narrow set means knowing from memory that
+                    `directory.delete` is a right separate from
+                    `directory.write`. A module holding one permission still
+                    gets a heading — the alternative is a rule about when
+                    grouping applies that the reader has to work out. */}
+                {groups.map(([module, permissions]) => (
+                  <fieldset key={module} aria-label={module} className="space-y-2">
+                    <legend className="mb-1.5 text-sm font-medium text-muted">
+                      {module}
+                    </legend>
+                    {permissions.map((permission) => (
+                      <Check
+                        key={permission}
+                        checked={chosen.has(permission)}
+                        onChange={(on) => toggle(permission, on)}
+                        label={permission}
+                      />
+                    ))}
+                  </fieldset>
                 ))}
               </fieldset>
               <div className="flex gap-2">
-                <Button variant="primary" loading={busy} onClick={save}>
-                  Save
+                <Button
+                  variant="primary"
+                  loading={busy}
+                  // `roleBody` requires at least one: a role granting nothing
+                  // is indistinguishable from a mistake, and deleting it is
+                  // how you say that. Refused here rather than by a round
+                  // trip, because the empty fieldset that caused it is on
+                  // screen.
+                  disabled={chosen.size === 0 || name.trim() === ''}
+                  onClick={save}
+                >
+                  {form.id === null ? 'Create' : 'Save'}
                 </Button>
-                <Button variant="secondary" onClick={() => setEditing(null)}>
+                <Button variant="secondary" onClick={() => setForm(null)}>
                   Cancel
                 </Button>
               </div>
@@ -251,7 +364,14 @@ export function RolesPage() {
         {loading && <SkeletonRows rows={3} cols={3} />}
         {!loading && (data?.roles ?? []).length === 0 && (
           <div className="p-6">
-            <Empty title="No roles yet">
+            <Empty
+              title="No roles yet"
+              action={
+                <Button variant="primary" onClick={create}>
+                  New role
+                </Button>
+              }
+            >
               A role is a named set of permissions. Nobody can reach the console without
               one.
             </Empty>
@@ -293,6 +413,13 @@ export function RolesPage() {
                   )}
                 </span>
                 </div>
+
+                {/* What the name does not say. A narrow role is named for the
+                    job and not for the rights, so "Help desk" is only legible
+                    beside the sentence its author wrote about it. */}
+                {role.description && (
+                  <p className="mt-1 text-sm text-muted">{role.description}</p>
+                )}
 
                 {/* WHO holds it, not just how many. The count above was the
                     whole of what this screen said, and a count is not
@@ -363,7 +490,17 @@ export function RolesPage() {
                         Cancel
                       </Button>
                     </div>
-                  ) : grantable(role).length === 0 ? (
+                  ) : usersError ? (
+                    // Named, not merely refused. The reader cannot grant
+                    // themselves `directory.read`, but they cannot ask
+                    // somebody for a right they cannot name either — and on
+                    // this screen it is a literal row in the fieldset above,
+                    // not jargon. Revoking is untouched: the holders travel
+                    // with the role and need no directory read at all.
+                    <p className="mt-2 text-sm text-muted">
+                      Granting needs directory.read, which this account does not hold.
+                    </p>
+                  ) : usersLoading ? null : grantable(role).length === 0 ? (
                     <p className="mt-2 text-sm text-muted">
                       Everybody who can sign in already holds it.
                     </p>

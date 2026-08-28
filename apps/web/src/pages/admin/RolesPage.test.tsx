@@ -205,3 +205,231 @@ describe('the roles screen', () => {
     expect(user).toBeTruthy();
   });
 });
+
+/**
+ * Creating one, which is the whole reason the screen exists for anybody who is
+ * not repairing an upgraded Owner.
+ *
+ * `POST /api/admin/roles` was built, guarded, audited and tested on the server
+ * and then never called: the console only ever PATCHed an id it already had,
+ * so an installation had exactly the roles its seed wrote -- one -- and
+ * "give the help desk read access and nothing else" was a database client.
+ */
+describe('creating a role', () => {
+  const CREATE_CATALOG = [
+    'directory.read',
+    'directory.write',
+    'directory.delete',
+    'deployment.manage',
+    'rbac.manage',
+  ];
+
+  function mockCreate() {
+    const sent: { url: string; method: string; body: unknown }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (method !== 'GET') {
+        sent.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
+        // The create route answers 201 with the row, unlike every other
+        // mutation on this screen.
+        if (method === 'POST' && !url.includes('/assignments')) {
+          return Promise.resolve(json({ id: 'r2' }, 201) as never);
+        }
+        return Promise.resolve(json({}, 204) as never);
+      }
+      if (url.includes('/api/admin/users')) {
+        return Promise.resolve(json({ users: USERS }) as never);
+      }
+      return Promise.resolve(json({ catalog: CREATE_CATALOG, roles }) as never);
+    });
+    return sent;
+  }
+
+  it('posts a new role carrying only the permissions that were chosen', async () => {
+    const user = userEvent.setup();
+    const sent = mockCreate();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'New role' }));
+    await user.type(screen.getByLabelText('Name'), 'Help desk');
+    await user.type(
+      screen.getByLabelText('Description'),
+      'Reads the directory. Changes nothing.',
+    );
+
+    const editor = screen.getByRole('group', { name: 'Permissions' });
+    await user.click(within(editor).getByRole('checkbox', { name: /directory\.read/ }));
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.method).toBe('POST');
+    // The collection, not a role's id: posting to `/roles/r1` would edit Owner.
+    expect(sent[0]!.url).toMatch(/\/api\/admin\/roles$/);
+    expect(sent[0]!.body).toEqual({
+      name: 'Help desk',
+      description: 'Reads the directory. Changes nothing.',
+      permissions: ['directory.read'],
+    });
+  });
+
+  /**
+   * `roleBody` requires `.min(1)`: a role granting nothing is indistinguishable
+   * from a mistake. Refused here rather than by a round trip, because the
+   * reader can see the empty fieldset that caused it.
+   */
+  it('will not submit a role that grants nothing', async () => {
+    const user = userEvent.setup();
+    const sent = mockCreate();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'New role' }));
+    await user.type(screen.getByLabelText('Name'), 'Empty');
+
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    expect(sent).toHaveLength(0);
+  });
+
+  /**
+   * Twenty-four permissions as one flat list of dotted keys is a list you can
+   * read but not choose from: building a narrow role means knowing from memory
+   * that `directory.delete` is a separate right from `directory.write`. The
+   * grouping is DERIVED from the prefix rather than mapped in this bundle --
+   * the catalogue arrives from the server on every load precisely so no second
+   * copy of it lives here, and a split on '.' cannot drift out of step.
+   */
+  it('groups the catalogue by module so a narrow set can be picked', async () => {
+    const user = userEvent.setup();
+    mockCreate();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'New role' }));
+
+    const directory = screen.getByRole('group', { name: 'directory' });
+    expect(within(directory).getAllByRole('checkbox')).toHaveLength(3);
+    expect(
+      within(directory).getByRole('checkbox', { name: /directory\.delete/ }),
+    ).toBeInTheDocument();
+
+    // A module holding one permission still gets its heading; the alternative
+    // is a rule about when grouping applies that the reader has to infer.
+    const deployment = screen.getByRole('group', { name: 'deployment' });
+    expect(within(deployment).getAllByRole('checkbox')).toHaveLength(1);
+  });
+
+  it('offers the create control from the empty state, which otherwise dead-ends', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/users')) {
+        return Promise.resolve(json({ users: USERS }) as never);
+      }
+      return Promise.resolve(json({ catalog: CREATE_CATALOG, roles: [] }) as never);
+    });
+    renderPage();
+
+    expect(await screen.findByText('No roles yet')).toBeInTheDocument();
+    // Two: the header's and the empty state's. Neither is the odd one out.
+    expect(screen.getAllByRole('button', { name: 'New role' })).toHaveLength(2);
+  });
+});
+
+/**
+ * `description` is accepted by `roleBody`, stored by the API and returned by
+ * the list query, and until now was set by nothing and shown nowhere. That is
+ * survivable for one built-in role whose name says everything, and is not once
+ * there are four narrow ones whose names do not.
+ */
+describe('a role description', () => {
+  it('shows the description against the role it belongs to', async () => {
+    mockApi();
+    renderPage();
+    expect(
+      await screen.findByText('Full administrative access to this tenant.'),
+    ).toBeInTheDocument();
+  });
+
+  it('carries the description through an edit', async () => {
+    const user = userEvent.setup();
+    const sent = mockApi();
+    renderPage();
+    await screen.findByText('Owner');
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const description = screen.getByLabelText('Description');
+    expect(description).toHaveValue('Full administrative access to this tenant.');
+
+    await user.clear(description);
+    await user.type(description, 'Everything.');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toMatchObject({ description: 'Everything.' });
+  });
+});
+
+/**
+ * The account picker is fed by `/api/admin/users`, which is gated on
+ * `directory.read` — a permission distinct from the `rbac.manage` that reaches
+ * this screen at all. Holding one without the other is not hypothetical now
+ * that narrow roles can be built here; an rbac-only role is among the first
+ * things anybody would make.
+ *
+ * The empty list has TWO causes and they are opposites: everybody already
+ * holds the role, or the caller cannot see who exists. Reporting the second as
+ * the first states something false about the tenant and hides the only control
+ * on the row.
+ */
+describe('when the caller cannot read the directory', () => {
+  const forbid = () =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/api/admin/users')) {
+        return Promise.resolve(
+          json(
+            {
+              type: 'https://syntra.dev/problems/forbidden',
+              title: 'Forbidden',
+              status: 403,
+            },
+            403,
+          ) as never,
+        );
+      }
+      return Promise.resolve(json({ catalog: CATALOG, roles }) as never);
+    });
+
+  it('does not claim everybody already holds the role', async () => {
+    forbid();
+    renderPage();
+    await screen.findByText('Owner');
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/everybody who can sign in already holds it/i),
+      ).toBeNull(),
+    );
+  });
+
+  it('names the permission the picker needs, so it can be asked for', async () => {
+    forbid();
+    renderPage();
+    await screen.findByText('Owner');
+
+    // Named, not merely refused. The reader cannot grant `directory.read` to
+    // themselves, but they cannot ask for a thing they cannot name either —
+    // and it is a literal row on this very screen, not jargon, to this reader.
+    expect(await screen.findByText(/directory\.read/)).toBeInTheDocument();
+  });
+
+  it('still lets the role be revoked from somebody who holds it', async () => {
+    const user = userEvent.setup();
+    forbid();
+    renderPage();
+
+    // Revoking reads nothing from the directory: the holders travel with the
+    // role. Losing that control along with the picker would make an
+    // rbac-only role unable to undo its own grants.
+    await user.click(await screen.findByRole('button', { name: 'Revoke ssander' }));
+    expect(screen.getByText('ssander')).toBeInTheDocument();
+  });
+});
