@@ -221,11 +221,17 @@ export async function revokeSession(
 export async function revokeAllForUser(
   tx: TenantClient,
   userId: string,
-): Promise<void> {
-  await tx.session.updateMany({
+): Promise<number> {
+  // Returns the count, as `revokeAllForUserExcept` below does. The two do the
+  // same job to a different set and had no reason to disagree about what they
+  // report; a caller that wants to say "three sessions were revoked" should
+  // not have to count them itself and race the update while doing it. Existing
+  // callers ignore it.
+  const { count } = await tx.session.updateMany({
     where: { userId, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+  return count;
 }
 
 /**

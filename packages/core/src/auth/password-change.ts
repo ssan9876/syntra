@@ -6,7 +6,7 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
 import { validateNewPassword } from './password-policy.js';
 import { passwordWasUsedBefore } from './password-ageing.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
-import { revokeAllForUserExcept } from './session-service.js';
+import { revokeAllForUser, revokeAllForUserExcept } from './session-service.js';
 import { revokeAllRefreshTokensForUser } from './refresh-token.js';
 
 export interface ChangeOwnPasswordInput {
@@ -313,4 +313,146 @@ export async function changeOwnPassword(
   }
 
   return { ok: true, otherSessionsRevoked: await commit() };
+}
+
+/**
+ * `upstream` and `directory_owned` both mean "Syntra is not the authority on
+ * this password", and they are kept apart because the administrator's next
+ * action differs: one sends them to an identity provider, the other to a
+ * directory they may well be able to reach from the same console.
+ */
+export type SetPasswordAsAdminOutcome =
+  | { ok: true; sessionsRevoked: number }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'upstream'; hint: string | null }
+  /** A directory owns this password. Carries the source so the caller names it. */
+  | { ok: false; reason: 'directory_owned'; sourceId: string }
+  | { ok: false; reason: 'weak_password'; detail: string }
+  | { ok: false; reason: 'reused'; depth: number };
+
+export interface SetPasswordAsAdminInput {
+  userId: string;
+  /** Who is doing it. Never the subject, and recorded on the audit event. */
+  actorUserId: string;
+  newPassword: string;
+  sourceIp: string | null;
+  now?: Date | undefined;
+}
+
+/**
+ * An administrator setting somebody else's password.
+ *
+ * The gap this fills: `issuePasswordSetup` mints a one-time link, which is the
+ * right primitive for a joiner and the wrong one for the support call where
+ * somebody is reading a password down the phone to a person who cannot reach
+ * the mailbox the link would go to.
+ *
+ * Distinct from `changeOwnPassword` in what it can prove, and therefore in
+ * what it costs. There is no current password to re-type here — the
+ * administrator does not know it, and that is the entire point — so the
+ * authority comes from the permission and from the audit record naming who
+ * spent it. Because the request proves nothing about the account's owner,
+ * EVERY session goes, where a self-service change keeps the caller's own: a
+ * change is somebody already holding the account, and this is somebody else.
+ *
+ * The new password is flagged must-change. Two people know it the moment it is
+ * spoken, so it is a handover credential and not the user's password until the
+ * user has chosen one.
+ */
+export async function setPasswordAsAdmin(
+  tenantId: string,
+  input: SetPasswordAsAdminInput,
+): Promise<SetPasswordAsAdminOutcome> {
+  const now = input.now ?? new Date();
+
+  const context = await withTenant(tenantId, async (tx) => {
+    const user = await tx.user.findUnique({ where: { id: input.userId } });
+    if (!user) return null;
+    const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+    const source =
+      user.sourceId === null
+        ? null
+        : await tx.directorySource.findUnique({
+            where: { id: user.sourceId },
+            select: { id: true, writebackEnabled: true, writebackPassword: true },
+          });
+    return {
+      user,
+      minLength: tenant.passwordMinLength,
+      historyDepth: tenant.passwordHistoryDepth,
+      writesPassword: Boolean(source?.writebackEnabled && source.writebackPassword),
+      sourceId: source?.id ?? null,
+    };
+  });
+
+  if (!context) return { ok: false, reason: 'not_found' };
+
+  // The schema is explicit that an upstream account's password lives with the
+  // provider. Writing a local hash for one would produce a second, divergent
+  // password that authenticates nowhere the user expects.
+  if (context.user.passwordSource !== 'local') {
+    return { ok: false, reason: 'upstream', hint: context.user.passwordSourceHint };
+  }
+
+  // The directory owns this password, and there is no admin-set writeback to
+  // reach it with: `SourceWriteback.changePassword` takes a `currentPassword`
+  // that an administrator does not have. `changeOwnPassword` writes the
+  // directory FIRST for the reason its own docstring gives at length — a
+  // local-only write leaves Syntra accepting a password the domain refuses,
+  // and the support call that follows has no visible cause. Refusing here and
+  // naming the source is the honest version of that; adding an admin-set
+  // writeback to the connector is its own change.
+  if (context.writesPassword) {
+    return { ok: false, reason: 'directory_owned', sourceId: context.sourceId! };
+  }
+
+  const policy = validateNewPassword(input.newPassword, {
+    minLength: context.minLength,
+    login: context.user.login,
+    email: context.user.email,
+  });
+  if (!policy.ok) {
+    return { ok: false, reason: 'weak_password', detail: policy.reason };
+  }
+
+  // Checked before the hash is computed: a refusal should not cost an Argon2id
+  // pass it is going to throw away.
+  const reused = await withTenant(tenantId, (tx) =>
+    passwordWasUsedBefore(tx, input.userId, input.newPassword, {
+      passwordMaxAgeDays: 0,
+      passwordHistoryDepth: context.historyDepth,
+    }),
+  );
+  if (reused) {
+    return { ok: false, reason: 'reused', depth: context.historyDepth };
+  }
+
+  // Outside the transaction. Argon2id is deliberately expensive and has no
+  // business inside Prisma's 5000 ms budget.
+  const hash = await hashPassword(input.newPassword);
+
+  const sessionsRevoked = await withTenant(tenantId, async (tx) => {
+    await setPasswordHash(tx, input.userId, hash, { now, mustChange: true });
+    const revoked = await revokeAllForUser(tx, input.userId);
+    // Refresh tokens are not sessions and do not survive: one outliving this
+    // would hand back exactly the access it existed to end.
+    await revokeAllRefreshTokensForUser(tx, input.userId);
+    await recordEvent(tx, {
+      actorUserId: input.actorUserId,
+      action: 'user.setPassword',
+      targetType: 'User',
+      targetId: input.userId,
+      outcome: 'success',
+      sourceIp: input.sourceIp,
+      // The plaintext appears nowhere, and neither does the hash.
+      payload: {
+        at: now.toISOString(),
+        sessionsRevoked: revoked,
+        mustChange: true,
+      },
+    });
+    return revoked;
+  });
+
+  return { ok: true, sessionsRevoked };
 }
