@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
+import { GroupDetailPage } from './GroupDetailPage.js';
 
 const json = (body: unknown, status = 200) =>
   new Response(status === 204 ? null : JSON.stringify(body), {
@@ -36,6 +37,14 @@ function mockApi(overrides: { post?: () => Response } = {}) {
       );
       return Promise.resolve(json(groups[0]!));
     }
+    // The record screen's own reads. Editing moved off the list, so the form
+    // under test is now opened on a screen that first fetches ONE group.
+    if (url.includes('/members')) return Promise.resolve(json({ users: [] }));
+    if (url.includes('/audit')) {
+      return Promise.resolve(json({ events: [], chainValid: true }));
+    }
+    if (url.includes('/sources')) return Promise.resolve(json({ sources: [] }));
+    if (/\/groups\/[^/]+$/.test(url)) return Promise.resolve(json(groups[0]!));
     if (url.includes('/org-units')) {
       return Promise.resolve(
         json({
@@ -153,18 +162,34 @@ describe('creating from a directory listing page', () => {
   });
 });
 
+/**
+ * Editing, on the record screen it moved to.
+ *
+ * The form is the same `RecordPanel` in its controlled mode and these
+ * assertions are unchanged; what moved is the screen they are made against. A
+ * form opened from a table cell could never have room to say what it was about
+ * to do, which is why the edit went to the record with everything else.
+ *
+ * The source-owned case is not repeated here — `GroupDetailPage.test.tsx`
+ * makes it against the screen that decides it.
+ */
+const renderGroupRecord = () =>
+  render(
+    <MemoryRouter initialEntries={['/admin/groups/g1']}>
+      <Routes>
+        <Route path="/admin/groups/:id" element={<GroupDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
 describe('editing a record that already exists', () => {
   it('opens with the current values and PATCHes the change', async () => {
     // Editing was missing for longer than creating was. A group named wrongly
     // had to be deactivated and replaced, which loses its memberships and its
     // assignments and leaves a permanent inactive row created by a typo.
     const writes = mockApi();
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
-    await screen.findByText('Existing');
+    renderGroupRecord();
+    await screen.findByRole('heading', { name: 'Existing' });
 
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
@@ -188,12 +213,8 @@ describe('editing a record that already exists', () => {
     // description would silently keep the old one — the save would report
     // success and change nothing.
     const writes = mockApi();
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
-    await screen.findByText('Existing');
+    renderGroupRecord();
+    await screen.findByRole('heading', { name: 'Existing' });
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -214,48 +235,13 @@ describe('editing a record that already exists', () => {
           409,
         ),
     });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
-    await screen.findByText('Existing');
+    renderGroupRecord();
+    await screen.findByRole('heading', { name: 'Existing' });
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(
       await screen.findByText('group already exists: Payroll'),
     ).toBeInTheDocument();
-  });
-
-  it('offers no Edit for a source-owned group', async () => {
-    // The API refuses it — the next sync run reads the name out of the
-    // directory and would overwrite the change — so the control is absent
-    // rather than present and rejected.
-    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
-      const url = String(input);
-      if (url.includes('/org-units')) return Promise.resolve(json({ orgUnits: [] }));
-      return Promise.resolve(
-        json({
-          groups: [
-            {
-              id: 'g1',
-              name: 'AD Nurses',
-              description: null,
-              status: 'active',
-              statusReason: null,
-              sourceId: 'src-1',
-            },
-          ],
-        }),
-      );
-    });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
-    await screen.findByText('AD Nurses');
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
   });
 });

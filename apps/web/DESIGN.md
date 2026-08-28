@@ -297,6 +297,21 @@ subject, different view"; People editing inline while Accounts sent you to a
 screen would be two conventions presented as one, and a reader would learn
 which was which by clicking the wrong one.
 
+**A node in a tree is a row.** Org units draws a tree because the hierarchy is
+the point, and that bought it no exemption: the node is a link and the controls
+sit on the record. The tree kept the one thing a tree is for — a child is still
+drawn nested under its parent — and lost the six controls that made each node a
+line of buttons with a name in front of it.
+
+The record is also where a list can say what a list cannot. A unit's record
+shows the users in it and the units beneath it, which are exactly the two
+collections the delete refuses to act over: the emptiness rule used to arrive
+as a 409 after the reader had typed the unit's name to confirm, and now it is
+visible before they reach for the control. Groups is the same move for
+membership — the one thing a group is FOR lived in a panel opened from a cell,
+on a page that fetched every account in the tenant to fill a picker whether or
+not anybody opened it.
+
 ### A record shows its own history
 
 The audit log answers "everything, in order" — complete, and therefore useless

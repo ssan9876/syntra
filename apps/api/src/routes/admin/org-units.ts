@@ -47,6 +47,67 @@ export async function registerAdminOrgUnitRoutes(
     }),
   );
 
+  /**
+   * One unit, with what is inside it.
+   *
+   * The record screen asks two things the list cannot answer: who is sitting
+   * in this unit, and what is beneath it. Both are the emptiness rule that
+   * refuses a delete, and answering them from `GET /org-units` plus
+   * `GET /users` means fetching the whole directory to draw one record -- a
+   * screen that gets slower for reasons that have nothing to do with the unit
+   * being looked at.
+   *
+   * The parent is NAMED rather than referenced. An id is not something a
+   * reader can follow, and the alternative is the tree the list already had to
+   * fetch to render one line of a header.
+   *
+   * `users` is not paginated, deliberately. `GET /users` returns the whole
+   * tenant already, so a unit's members are strictly fewer than what the
+   * console fetches today; if unit size ever becomes the problem it is the
+   * same problem in both places and gets solved once, in both.
+   */
+  app.get(
+    '/org-units/:id',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+
+      return request.db(async (tx) => {
+        const unit = await tx.orgUnit.findUnique({ where: { id } });
+        // 404 rather than an empty body: a unit that was deleted and a unit
+        // the caller mistyped are the same URL, and both have to read as "no
+        // such unit" rather than as a unit with nothing in it.
+        if (!unit) throw new ProblemError(404, 'not-found', 'Org unit not found');
+
+        const parent = unit.parentId
+          ? await tx.orgUnit.findUnique({
+              where: { id: unit.parentId },
+              select: { id: true, name: true },
+            })
+          : null;
+
+        const [users, children] = await Promise.all([
+          // EVERY user, active or not. A deactivated user still occupies the
+          // unit and still blocks the delete, so listing only active ones
+          // would leave an administrator reading an empty unit and a 409 that
+          // disagrees with it.
+          tx.user.findMany({
+            where: { orgUnitId: id },
+            select: { id: true, login: true, displayName: true, status: true },
+            orderBy: { login: 'asc' },
+          }),
+          tx.orgUnit.findMany({
+            where: { parentId: id },
+            select: { id: true, name: true, status: true },
+            orderBy: { name: 'asc' },
+          }),
+        ]);
+
+        return { ...unit, parent, users, children };
+      });
+    },
+  );
+
   app.post(
     '/org-units',
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },

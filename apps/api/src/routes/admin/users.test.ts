@@ -4,6 +4,8 @@ import {
   ALL_PERMISSIONS,
   PERMISSIONS,
   assignRole,
+  createGroup,
+  createOrgUnit,
   createPerson,
   createRole,
   createUser,
@@ -517,6 +519,197 @@ describe('GET /api/admin/users/:id', () => {
     const cookie = await authCookie('admin');
 
     const res = await get(`/api/admin/users/${admin.id}`, cookie);
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+/**
+ * One group, read on its own.
+ *
+ * The record screen needs the group's own row -- its name, description, status
+ * and the source that may own it -- and the only way to get any of it was
+ * `GET /groups`, which returns every group in the tenant. Membership keeps its
+ * own endpoint: it reloads on its own after an add or a remove, and folding it
+ * in here would mean refetching the group to answer a question about somebody
+ * else.
+ */
+describe('GET /api/admin/groups/:id', () => {
+  it('returns the group with its description and status', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const created = await post('/api/admin/groups', cookie, {
+      name: 'Ward Nurses',
+      description: 'Everyone rostered on a ward',
+    });
+
+    const res = await get(`/api/admin/groups/${created.json().id}`, cookie);
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.id).toBe(created.json().id);
+    expect(body.name).toBe('Ward Nurses');
+    expect(body.description).toBe('Everyone rostered on a ward');
+    expect(body.status).toBe('active');
+    // Answered rather than omitted, for the same reason the account record
+    // answers it: the screen decides from this whether to offer Edit at all.
+    expect(body.sourceId).toBeNull();
+  });
+
+  it('keeps the reason a deactivated group was deactivated', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    const created = await post('/api/admin/groups', cookie, { name: 'Nurses' });
+    await post(`/api/admin/groups/${created.json().id}/deactivate`, cookie, {
+      reason: 'ward closed',
+    });
+
+    const res = await get(`/api/admin/groups/${created.json().id}`, cookie);
+    expect(res.json().status).toBe('inactive');
+    expect(res.json().statusReason).toBe('ward closed');
+  });
+
+  it('answers 404 for a group that does not exist', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await get(
+      '/api/admin/groups/00000000-0000-4000-8000-000000000000',
+      cookie,
+    );
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller without directory.read', async () => {
+    await seedAdmin([PERMISSIONS.IDENTITY_READ]);
+    const cookie = await authCookie('admin');
+    const group = await withTenant(ctx.tenantId, (tx) =>
+      createGroup(tx, 'Nurses'),
+    );
+
+    const res = await get(`/api/admin/groups/${group.id}`, cookie);
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+/**
+ * One org unit, read on its own.
+ *
+ * A unit's record has to answer two questions the list cannot: who is sitting
+ * in it, and what is beneath it. Both are the emptiness rule that refuses a
+ * delete, and before this the only way to see either was to fetch the whole
+ * directory and filter it in the browser -- which is a screen that gets slower
+ * for reasons unrelated to the unit being looked at, and which cannot show a
+ * parent's name without the tree it came from.
+ */
+describe('GET /api/admin/org-units/:id', () => {
+  it('returns the unit with its parent named, the users in it, and its children', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const { head, finance, payroll, member } = await withTenant(
+      ctx.tenantId,
+      async (tx) => {
+        const head = await createOrgUnit(tx, 'Head Office');
+        const finance = await createOrgUnit(tx, 'Finance', head.id);
+        const payroll = await createOrgUnit(tx, 'Payroll', finance.id);
+        const member = await createUser(tx, {
+          login: 'mokafor',
+          email: 'maya@acme.test',
+          displayName: 'Maya Okafor',
+          orgUnitId: finance.id,
+        });
+        return { head, finance, payroll, member };
+      },
+    );
+
+    const res = await get(`/api/admin/org-units/${finance.id}`, cookie);
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.id).toBe(finance.id);
+    expect(body.name).toBe('Finance');
+    expect(body.status).toBe('active');
+    expect(body.sourceId).toBeNull();
+    // NAMED, not just referenced. The record links up to its parent and cannot
+    // render "Head Office" from an id alone.
+    expect(body.parent).toEqual({ id: head.id, name: 'Head Office' });
+    expect(body.users).toEqual([
+      {
+        id: member.id,
+        login: 'mokafor',
+        displayName: 'Maya Okafor',
+        status: 'active',
+      },
+    ]);
+    expect(body.children).toEqual([
+      { id: payroll.id, name: 'Payroll', status: 'active' },
+    ]);
+  });
+
+  it('reports an empty top-level unit as empty rather than omitting it', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const unit = await withTenant(ctx.tenantId, (tx) =>
+      createOrgUnit(tx, 'Head Office'),
+    );
+
+    const res = await get(`/api/admin/org-units/${unit.id}`, cookie);
+    // Answered, not absent. The record decides from these whether to say the
+    // unit is empty, and a missing field reads the same as one nobody looked up.
+    expect(res.json().parent).toBeNull();
+    expect(res.json().users).toEqual([]);
+    expect(res.json().children).toEqual([]);
+  });
+
+  it('counts a deactivated user as still occupying the unit', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const unit = await withTenant(ctx.tenantId, async (tx) => {
+      const unit = await createOrgUnit(tx, 'Finance');
+      const leaver = await createUser(tx, {
+        login: 'leaver',
+        email: 'leaver@acme.test',
+        displayName: 'A Leaver',
+        orgUnitId: unit.id,
+      });
+      await tx.user.update({
+        where: { id: leaver.id },
+        data: { status: 'inactive' },
+      });
+      return unit;
+    });
+
+    const res = await get(`/api/admin/org-units/${unit.id}`, cookie);
+    // The delete refuses while they are there, so the record has to show them.
+    // Listing only active users would leave an administrator reading an empty
+    // unit and a 409 that disagrees with it.
+    expect(res.json().users).toHaveLength(1);
+    expect(res.json().users[0].status).toBe('inactive');
+  });
+
+  it('answers 404 for a unit that does not exist', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await get(
+      '/api/admin/org-units/00000000-0000-4000-8000-000000000000',
+      cookie,
+    );
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller without directory.read', async () => {
+    await seedAdmin([PERMISSIONS.IDENTITY_READ]);
+    const cookie = await authCookie('admin');
+    const unit = await withTenant(ctx.tenantId, (tx) =>
+      createOrgUnit(tx, 'Finance'),
+    );
+
+    const res = await get(`/api/admin/org-units/${unit.id}`, cookie);
     expect(res.statusCode).toBe(403);
   });
 });

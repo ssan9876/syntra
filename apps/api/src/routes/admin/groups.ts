@@ -88,6 +88,29 @@ export async function registerAdminGroupRoutes(
     async (request) => ({ groups: await request.db((tx) => listGroups(tx)) }),
   );
 
+  /**
+   * One group, read on its own.
+   *
+   * Its own row only. Membership keeps `/groups/:id/members`, which the record
+   * screen reloads by itself after an add or a remove -- folding the members
+   * in here would mean refetching the group every time the answer to a
+   * question about somebody else changed.
+   */
+  app.get(
+    '/groups/:id',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      return request.db(async (tx) => {
+        const group = await tx.group.findUnique({ where: { id } });
+        // 404, not an empty body, for the reason the unit record gives: a
+        // deleted group and a mistyped id are the same URL.
+        if (!group) throw new ProblemError(404, 'not-found', 'Group not found');
+        return group;
+      });
+    },
+  );
+
   app.post(
     '/groups',
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },

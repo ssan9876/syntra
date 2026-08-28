@@ -4,6 +4,8 @@ import { AdminNav } from './AdminNav.js';
 import { UsersPage } from './UsersPage.js';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
+import { OrgUnitDetailPage } from './OrgUnitDetailPage.js';
+import { GroupDetailPage } from './GroupDetailPage.js';
 import { OnboardPersonPage } from './OnboardPersonPage.js';
 import { PersonDetailPage } from './PersonDetailPage.js';
 import { ActivityPage } from './ActivityPage.js';
@@ -49,7 +51,12 @@ export function AdminApp() {
                 account's own slice of the audit log. */}
             <Route path="users/:id" element={<AccountDetailPage />} />
             <Route path="groups" element={<GroupsPage />} />
+            {/* One group, with its membership. The list is a list again. */}
+            <Route path="groups/:id" element={<GroupDetailPage />} />
             <Route path="org-units" element={<OrgUnitsPage />} />
+            {/* A node in a tree is a row, and a row opens a record: the unit,
+                who is sitting in it, and what is beneath it. */}
+            <Route path="org-units/:id" element={<OrgUnitDetailPage />} />
             {/* People, accounts and import are tabs of Users now. The old
                 paths are kept as redirects rather than deleted: they are in
                 bookmarks, in tickets, and in the `to=` of links on pages that

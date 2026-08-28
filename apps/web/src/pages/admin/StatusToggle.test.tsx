@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { GroupsPage } from './GroupsPage.js';
-import { OrgUnitsPage } from './OrgUnitsPage.js';
+import { GroupDetailPage } from './GroupDetailPage.js';
+import { OrgUnitDetailPage } from './OrgUnitDetailPage.js';
 import { AccountDetailPage } from './AccountDetailPage.js';
 
 const json = (body: unknown) =>
@@ -18,6 +18,7 @@ const group = (over: Record<string, unknown> = {}) => ({
   description: null,
   status: 'active',
   statusReason: null,
+  sourceId: null,
   ...over,
 });
 
@@ -39,6 +40,11 @@ const orgUnit = (over: Record<string, unknown> = {}) => ({
   status: 'active',
   statusReason: null,
   sourceId: null,
+  // The record answers what is inside the unit; a unit with neither is the
+  // ordinary case for these tests and has to read as empty rather than absent.
+  parent: null,
+  users: [],
+  children: [],
   ...over,
 });
 
@@ -62,6 +68,15 @@ function mockApi(rows: {
     // collection would give the account screen a body with no login in it.
     if (/\/users\/[^/]+$/.test(url)) {
       return Promise.resolve(json(rows.users?.[0] ?? {}));
+    }
+    // The same rule for the other two records, and for the same reason: a
+    // single-record URL answered with its collection gives the screen a body
+    // with no name in it.
+    if (/\/groups\/[^/]+$/.test(url)) {
+      return Promise.resolve(json(rows.groups?.[0] ?? {}));
+    }
+    if (/\/org-units\/[^/]+$/.test(url)) {
+      return Promise.resolve(json(rows.orgUnits?.[0] ?? {}));
     }
     if (url.includes('/audit')) {
       return Promise.resolve(json({ events: [], chainValid: true }));
@@ -95,6 +110,31 @@ const renderAccount = () =>
     </MemoryRouter>,
   );
 
+/**
+ * The group's and the unit's own screens, for the same reason as the account's.
+ *
+ * These assertions used to be made against `GroupsPage` and `OrgUnitsPage`,
+ * because a row was the only place either could be acted on. What moved is the
+ * screen they are made against; what they assert is unchanged.
+ */
+const renderGroup = () =>
+  render(
+    <MemoryRouter initialEntries={['/admin/groups/g1']}>
+      <Routes>
+        <Route path="/admin/groups/:id" element={<GroupDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+const renderUnit = () =>
+  render(
+    <MemoryRouter initialEntries={['/admin/org-units/o1']}>
+      <Routes>
+        <Route path="/admin/org-units/:id" element={<OrgUnitDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
 beforeEach(() => {
   vi.restoreAllMocks();
 });
@@ -109,11 +149,7 @@ describe('deactivate, never delete', () => {
     // the absence of a Delete control is what makes that true in the product
     // rather than only in the document.
     const posts = mockApi({ groups: [group()] });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
+    renderGroup();
     await screen.findByText('Ward Nurses');
 
     expect(screen.queryByRole('button', { name: /delete/i })).toBeNull();
@@ -134,11 +170,7 @@ describe('deactivate, never delete', () => {
     // A blank reason must not be postable. Sending one and letting the server
     // refuse it reads as a broken button.
     const posts = mockApi({ groups: [group()] });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
+    renderGroup();
     await screen.findByText('Ward Nurses');
 
     await userEvent.click(screen.getByRole('button', { name: 'Deactivate' }));
@@ -152,11 +184,7 @@ describe('deactivate, never delete', () => {
 
   it('sends nothing at all when the reason is cancelled', async () => {
     const posts = mockApi({ groups: [group()] });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
+    renderGroup();
     await screen.findByText('Ward Nurses');
 
     await userEvent.click(screen.getByRole('button', { name: 'Deactivate' }));
@@ -167,28 +195,23 @@ describe('deactivate, never delete', () => {
     expect(posts).toHaveLength(0);
   });
 
-  it('shows an inactive group WITH its reason, still listed', async () => {
+  it('shows an inactive group WITH its reason, and the way back', async () => {
     mockApi({ groups: [group({ status: 'inactive', statusReason: 'team disbanded' })] });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
+    renderGroup();
 
-    // Still on the page — hiding it would make the directory unauditable.
-    expect(await screen.findByText('Ward Nurses')).toBeInTheDocument();
-    expect(screen.getByText(/inactive — team disbanded/)).toBeInTheDocument();
+    // Still readable — hiding a deactivated group would make the directory
+    // unauditable. The record states the status and the reason as two facts
+    // rather than one run-together label, which is the list's job.
+    expect(await screen.findByRole('heading', { name: 'Ward Nurses' })).toBeInTheDocument();
+    expect(screen.getByText('Inactive')).toBeInTheDocument();
+    expect(screen.getByText('team disbanded')).toBeInTheDocument();
     // And the way back is offered.
     expect(screen.getByRole('button', { name: 'Reactivate' })).toBeInTheDocument();
   });
 
   it('reactivates without asking for a reason', async () => {
     const posts = mockApi({ groups: [group({ status: 'inactive' })] });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
+    renderGroup();
     await screen.findByText('Ward Nurses');
 
     await userEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
@@ -229,11 +252,7 @@ describe('org units, the last part of the directory to get this', () => {
     // scoped to it. There was no way to retire one at all until now — the
     // column did not exist.
     const posts = mockApi({ orgUnits: [orgUnit()] });
-    render(
-      <MemoryRouter>
-        <OrgUnitsPage />
-      </MemoryRouter>,
-    );
+    renderUnit();
     await screen.findByText('Care');
 
     expect(screen.queryByRole('button', { name: /delete/i })).toBeNull();
@@ -246,48 +265,55 @@ describe('org units, the last part of the directory to get this', () => {
     expect(posts[0]!.body).toEqual({ reason: 'department closed' });
   });
 
-  it('shows an inactive unit WITH its reason, still in the tree', async () => {
+  it('shows an inactive unit WITH its reason, and the way back', async () => {
     mockApi({ orgUnits: [orgUnit({ status: 'inactive', statusReason: 'restructure' })] });
-    render(
-      <MemoryRouter>
-        <OrgUnitsPage />
-      </MemoryRouter>,
-    );
+    renderUnit();
 
-    // Still in the tree — hiding it would lose the shape of the organization
-    // and leave the users inside it apparently nowhere.
-    expect(await screen.findByText('Care')).toBeInTheDocument();
-    expect(screen.getByText(/inactive — restructure/)).toBeInTheDocument();
+    // A deactivated unit keeps its name, its place in the tree and the users
+    // sitting in it; hiding it would lose the shape of the organization and
+    // leave the users inside it apparently nowhere.
+    expect(await screen.findByRole('heading', { name: 'Care' })).toBeInTheDocument();
+    expect(screen.getByText('Inactive')).toBeInTheDocument();
+    expect(screen.getByText('restructure')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reactivate' })).toBeInTheDocument();
   });
 
-  it('offers the control on a CHILD unit too', async () => {
-    // The two tree levels were written out twice, and the first version of
-    // this change put the control on the parent only.
+  it('offers the control on a unit that has a parent, too', async () => {
+    // The two tree levels were written out twice, and the first version of the
+    // change that added this control put it on the parent only. One record
+    // screen for both depths is what retires that class of bug -- this asserts
+    // the depth makes no difference to what is offered.
     mockApi({
-      orgUnits: [orgUnit(), orgUnit({ id: 'o2', name: 'Ward B', parentId: 'o1' })],
+      orgUnits: [
+        orgUnit({
+          id: 'o2',
+          name: 'Ward B',
+          parentId: 'o1',
+          parent: { id: 'o1', name: 'Care' },
+        }),
+      ],
     });
     render(
-      <MemoryRouter>
-        <OrgUnitsPage />
+      <MemoryRouter initialEntries={['/admin/org-units/o2']}>
+        <Routes>
+          <Route path="/admin/org-units/:id" element={<OrgUnitDetailPage />} />
+        </Routes>
       </MemoryRouter>,
     );
-    await screen.findByText('Ward B');
-    expect(screen.getAllByRole('button', { name: 'Deactivate' })).toHaveLength(2);
+    await screen.findByRole('heading', { name: 'Ward B' });
+    expect(screen.getByRole('button', { name: 'Deactivate' })).toBeInTheDocument();
   });
 
   it('refuses to offer it for a source-owned unit', async () => {
     // The next sync run reads the unit as present in the directory and puts it
     // back, so the button would appear to work and then quietly undo itself.
     mockApi({ orgUnits: [orgUnit({ sourceId: 'src-1' })] });
-    render(
-      <MemoryRouter>
-        <OrgUnitsPage />
-      </MemoryRouter>,
-    );
+    renderUnit();
     await screen.findByText('Care');
     expect(screen.queryByRole('button', { name: 'Deactivate' })).toBeNull();
-    expect(screen.getByText('managed by a directory source')).toBeInTheDocument();
+    expect(
+      screen.getByText(/owns this unit, and the next sync run would put it back/),
+    ).toBeInTheDocument();
   });
 });
 
@@ -299,15 +325,10 @@ describe('group membership', () => {
    */
   it('lists members and adds one', async () => {
     const posts = mockApi({ groups: [group()], users: [user()], members: [] });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
+    renderGroup();
     await screen.findByText('Ward Nurses');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Members' }));
-    expect(await screen.findByText(/Nobody is in this group yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/Nobody is in this group/)).toBeInTheDocument();
 
     await userEvent.selectOptions(screen.getByLabelText('Add a member'), 'u1');
     await userEvent.click(screen.getByRole('button', { name: 'Add' }));
@@ -318,15 +339,10 @@ describe('group membership', () => {
 
   it('removes one', async () => {
     const posts = mockApi({ groups: [group()], users: [user()], members: [user()] });
-    render(
-      <MemoryRouter>
-        <GroupsPage />
-      </MemoryRouter>,
-    );
+    renderGroup();
     await screen.findByText('Ward Nurses');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Members' }));
-    // 'mokafor' is both the member row and an option in the add picker.
+    // Membership is the record's own panel now, not one opened from a cell.
     await screen.findAllByText('mokafor');
     await userEvent.click(screen.getByRole('button', { name: 'Remove from group' }));
 
