@@ -193,6 +193,12 @@ model User {
   memberships GroupMembership[]
   attributes  UserAttribute[]
 
+  /// Case-SENSITIVE. The case-insensitive login rule, and the local-only email
+  /// rule, are functional indexes in migration
+  /// `20260922000000_user_duplicate_guards` — Prisma has no syntax for a
+  /// functional or a partial index, so neither can be declared here.
+  /// `createUser` pre-checks both so the caller gets a domain error rather
+  /// than a driver one.
   @@unique([tenantId, login])
   @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
