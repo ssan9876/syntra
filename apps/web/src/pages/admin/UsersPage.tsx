@@ -47,6 +47,13 @@ export function UsersPage() {
   const can = useCan();
   const persons = useApiResource<{ persons: PersonRow[] }>('/api/admin/persons');
   const users = useApiResource<{ users: UserRow[] }>('/api/admin/users');
+  // The orphan backlog. Its error is deliberately NOT folded into the banner
+  // below: a caller who may read the directory but not people gets a card
+  // reading zero rather than a broken front door, the same tolerance the
+  // sources read already gets on the accounts tab.
+  const unlinked = useApiResource<{ accounts: unknown[] }>(
+    '/api/admin/users/unlinked',
+  );
 
   // Optional all the way down, not just past `data`. The summary is the
   // first thing painted on the console's front door, and a response that
@@ -92,6 +99,17 @@ export function UsersPage() {
           tone="danger"
           quietWhenZero
           to="/admin/users?tab=accounts"
+        />
+        {/* A card and not a fourth tab, for the reason the two above are
+            cards: the backlog is transient, `quietWhenZero` makes the control
+            disappear once it is cleared, and a tab would be a permanently
+            visible destination that is usually empty. */}
+        <StatCard
+          label="Accounts with no person"
+          value={(unlinked.data?.accounts ?? []).length}
+          tone="warning"
+          quietWhenZero
+          to="/admin/users/unlinked"
         />
       </StatGrid>
 
