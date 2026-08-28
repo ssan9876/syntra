@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AccountsTab } from './AccountsTab.js';
 
@@ -248,5 +249,199 @@ describe('AccountsTab is a list and nothing else', () => {
     expect(
       await screen.findByRole('button', { name: /new user/i }),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * Who a new account is for.
+ *
+ * Every account created here used to orphan itself: the form had no person
+ * field at all, and the route it posts to had no `personId`.
+ */
+describe('AccountsTab person picker', () => {
+  const PERSONS = [
+    {
+      id: 'p1',
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      status: 'active',
+      orgUnitId: null,
+    },
+    {
+      id: 'p2',
+      givenName: 'Kaycen',
+      familyName: 'Tyre',
+      status: 'active',
+      orgUnitId: 'ou1',
+    },
+    {
+      id: 'p3',
+      givenName: 'Gone',
+      familyName: 'Away',
+      status: 'inactive',
+      orgUnitId: null,
+    },
+  ];
+
+  /** Serves every read this form makes, and records or answers the write. */
+  function mockForm(write?: () => Response) {
+    const writes: { url: string; body: unknown }[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(((
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if ((init?.method ?? 'GET') !== 'GET') {
+        writes.push({ url, body: JSON.parse(String(init!.body)) });
+        return Promise.resolve(write?.() ?? json({ id: 'u9' }, 201));
+      }
+      if (url.includes('/persons')) return Promise.resolve(json({ persons: PERSONS }));
+      if (url.includes('/org-units')) {
+        return Promise.resolve(
+          json({ orgUnits: [{ id: 'ou1', name: 'Care' }, { id: 'ou2', name: 'Sales' }] }),
+        );
+      }
+      if (url.includes('/sources')) return Promise.resolve(json({ sources: [] }));
+      return Promise.resolve(json({ users: [] }));
+    }) as typeof fetch);
+    return writes;
+  }
+
+  const openForm = async () => {
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'New user' }));
+  };
+
+  it('offers service account as an explicit choice, not a blank default', async () => {
+    mockForm();
+    await openForm();
+
+    const picker = await screen.findByLabelText('Person');
+    expect(
+      within(picker).getByRole('option', { name: /service account/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(picker).getByRole('option', { name: /Maya Okafor/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('does not offer somebody who has left', async () => {
+    mockForm();
+    await openForm();
+
+    const picker = await screen.findByLabelText('Person');
+    expect(
+      within(picker).queryByRole('option', { name: /Gone Away/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('sends the person that was chosen', async () => {
+    const writes = mockForm();
+    await openForm();
+
+    await userEvent.type(screen.getByLabelText('Login'), 'mokafor');
+    await userEvent.type(screen.getByLabelText('Email'), 'm@acme.test');
+    await userEvent.selectOptions(await screen.findByLabelText('Person'), 'p1');
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]!.body).toMatchObject({ personId: 'p1' });
+  });
+
+  it('sends a literal null for a service account', async () => {
+    const writes = mockForm();
+    await openForm();
+
+    await userEvent.type(screen.getByLabelText('Login'), 'svc');
+    await userEvent.type(screen.getByLabelText('Email'), 's@acme.test');
+    await userEvent.selectOptions(await screen.findByLabelText('Person'), 'none');
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    // Null is what says "service account" to the API and suppresses matching.
+    expect((writes[0]!.body as Record<string, unknown>).personId).toBeNull();
+  });
+
+  it('omits the field entirely when asked to match by email', async () => {
+    const writes = mockForm();
+    await openForm();
+
+    await userEvent.type(screen.getByLabelText('Login'), 'mokafor');
+    await userEvent.type(screen.getByLabelText('Email'), 'm@acme.test');
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    await waitFor(() => expect(writes).toHaveLength(1));
+    // Omitted is what asks the server to match. Sending null would say
+    // "service account", which is the opposite request.
+    expect(writes[0]!.body).not.toHaveProperty('personId');
+  });
+
+  it('says when the chosen person is already placed somewhere', async () => {
+    mockForm();
+    await openForm();
+
+    await userEvent.selectOptions(await screen.findByLabelText('Person'), 'p2');
+
+    // Their own unit outranks this one and is not overwritten from here, so a
+    // unit picked on this form would silently not apply to placement.
+    expect(await screen.findByText(/already placed in Care/i)).toBeInTheDocument();
+  });
+
+  it('confirms a second account, naming the one they have', async () => {
+    let refused = false;
+    const writes = mockForm(() => {
+      if (refused) return json({ id: 'u10' }, 201);
+      refused = true;
+      return json(
+        {
+          type: 'https://syntra.dev/problems/second-account',
+          title: 'They already have an account',
+          status: 409,
+          detail: 'Kaycen Tyre already signs in as ktyre.',
+          existingAccount: { id: 'u9', login: 'ktyre' },
+        },
+        409,
+      );
+    });
+    await openForm();
+
+    await userEvent.type(screen.getByLabelText('Login'), 'ktyre-admin');
+    await userEvent.type(screen.getByLabelText('Email'), 'k2@acme.test');
+    await userEvent.selectOptions(await screen.findByLabelText('Person'), 'p2');
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    expect(await screen.findByText(/already signs in as ktyre/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() => expect(writes).toHaveLength(2));
+    expect(writes[1]!.body).toMatchObject({
+      personId: 'p2',
+      allowSecondAccount: true,
+    });
+  });
+
+  it('leaves an ordinary conflict as an error, not a question', async () => {
+    mockForm(() =>
+      json(
+        {
+          type: 'https://syntra.dev/problems/conflict',
+          title: 'Conflict',
+          status: 409,
+          detail: 'login already exists: mokafor',
+        },
+        409,
+      ),
+    );
+    await openForm();
+
+    await userEvent.type(screen.getByLabelText('Login'), 'mokafor');
+    await userEvent.type(screen.getByLabelText('Email'), 'm@acme.test');
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    expect(await screen.findByText(/login already exists/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Continue' }),
+    ).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Alert, Button, Check, Field, Panel, Select } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
@@ -27,6 +27,14 @@ import { PageHeader } from './PageHeader.js';
  */
 
 /** What has actually been written, so a failure halfway can say so precisely. */
+/** Somebody the server thinks this person might already be. */
+interface DuplicateCandidate {
+  id: string;
+  givenName: string;
+  familyName: string;
+  businessEmail: string | null;
+}
+
 interface Progress {
   personId: string | null;
   personName: string;
@@ -46,6 +54,8 @@ export function OnboardPersonPage() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [busy, setBusy] = useState(false);
   const [wantsLogin, setWantsLogin] = useState(false);
+  /** People who look like the one being created. Null until asked about. */
+  const [duplicates, setDuplicates] = useState<DuplicateCandidate[] | null>(null);
   // Tolerated failure: a caller who may write people but not read the
   // directory gets an empty picker and a form that still works.
   const { data: unitsData } = useApiResource<{
@@ -93,11 +103,18 @@ export function OnboardPersonPage() {
       ? (cause.problem.detail ?? cause.problem.title)
       : 'That could not be saved.';
 
-  async function submit() {
+  /**
+   * @param allowDuplicate confirms a person who looks like somebody already
+   * here. Threaded through rather than held in state so the retry is the same
+   * call with one more field, and the sequence that follows -- contract, then
+   * login, then provisioning -- is not duplicated for the confirmed path.
+   */
+  async function submit(allowDuplicate = false) {
     setBusy(true);
     setProblem(null);
     setErrors({});
     setProgress(null);
+    setDuplicates(null);
 
     const personName = `${v.givenName ?? ''} ${v.familyName ?? ''}`.trim();
     const done: Progress = {
@@ -118,6 +135,7 @@ export function OnboardPersonPage() {
           ...(v.businessEmail ? { businessEmail: v.businessEmail } : {}),
           ...(v.personalEmail ? { personalEmail: v.personalEmail } : {}),
           ...(v.externalId ? { externalId: v.externalId } : {}),
+          ...(allowDuplicate ? { allowDuplicate: true } : {}),
           // The same unit the login gets, and for a different reason: on the
           // PERSON it decides where the provisioned account lands, through
           // the placement ladder. One selection, because being in Sales and
@@ -128,6 +146,18 @@ export function OnboardPersonPage() {
       });
       done.personId = person.id;
     } catch (cause) {
+      // A possible duplicate is a QUESTION, not a verdict: two real people do
+      // share a name, and two people cannot be merged afterwards -- which is
+      // exactly why it is asked before rather than after. Nothing else has
+      // been written yet, so answering it costs only this request.
+      if (cause instanceof ApiError && cause.kind === 'possible-duplicate') {
+        setDuplicates(
+          (cause.problem.candidates as DuplicateCandidate[] | undefined) ?? [],
+        );
+        setProblem(cause.problem.detail ?? cause.problem.title);
+        setBusy(false);
+        return;
+      }
       setErrors(fieldErrors(cause));
       setProblem(describe(cause));
       setBusy(false);
@@ -234,7 +264,54 @@ export function OnboardPersonPage() {
         </div>
       )}
 
-      {problem && (
+      {duplicates && (
+        <div className="mb-4">
+          <Alert tone="warning" title="Somebody here already looks like this">
+            <div className="space-y-3">
+              <p>{problem}</p>
+              {/* Named and LINKED. A warning that says somebody similar exists
+                  and will not let you go and look at them leaves the reader to
+                  search for a name they have already typed once. */}
+              <ul className="space-y-1">
+                {duplicates.map((candidate) => (
+                  <li key={candidate.id}>
+                    <Link
+                      to={`/admin/people/${candidate.id}`}
+                      className="text-ink underline-offset-2 hover:text-primary hover:underline"
+                    >
+                      {candidate.givenName} {candidate.familyName}
+                    </Link>
+                    {candidate.businessEmail && (
+                      <span className="text-muted"> — {candidate.businessEmail}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  loading={busy}
+                  onClick={() => void submit(true)}
+                >
+                  Create anyway
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setDuplicates(null);
+                    setProblem(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </Alert>
+        </div>
+      )}
+
+      {problem && !duplicates && (
         <div className="mb-4">
           <Alert tone="danger">{problem}</Alert>
         </div>
