@@ -157,6 +157,53 @@ export async function registerAdminPersonRoutes(
       const body = createPersonRequest.parse(request.body);
 
       const person = await request.db(async (tx) => {
+        if (!body.allowDuplicate) {
+          // Active people only, and both rules at once. A leaver's record is
+          // not a reason to refuse their replacement, and a namesake who left
+          // last year is exactly the kind of false alarm that teaches people
+          // to click through a warning without reading it.
+          const candidates = await tx.person.findMany({
+            where: {
+              status: 'active',
+              OR: [
+                {
+                  givenName: { equals: body.givenName.trim(), mode: 'insensitive' },
+                  familyName: { equals: body.familyName.trim(), mode: 'insensitive' },
+                },
+                ...(body.businessEmail
+                  ? [
+                      {
+                        businessEmail: {
+                          equals: body.businessEmail,
+                          mode: 'insensitive' as const,
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            },
+            select: {
+              id: true,
+              givenName: true,
+              familyName: true,
+              businessEmail: true,
+            },
+            // Bounded because the form LISTS them. An unbounded list on a
+            // common name is a page of links nobody reads, which is the same
+            // as no warning at all.
+            take: 5,
+          });
+          if (candidates.length > 0) {
+            throw new ProblemError(
+              409,
+              'possible-duplicate',
+              'Somebody here already looks like this',
+              'Check whether this is the same person before creating a second record — two people cannot be merged afterwards.',
+              { candidates },
+            );
+          }
+        }
+
         if (body.externalId) {
           const clash = await tx.person.findFirst({
             where: { externalId: body.externalId },

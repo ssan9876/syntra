@@ -457,3 +457,142 @@ describe('PATCH /api/admin/persons/:id/contracts/:sequence', () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+/**
+ * The unit chosen while onboarding somebody actually reaches them.
+ *
+ * The form has sent `orgUnitId` since it was written; the schema never
+ * accepted it, so Zod stripped it on every request and `createPerson` never
+ * saw one. The field asked which unit somebody belonged to, said in as many
+ * words that it decided where their account would land, and dropped the
+ * answer — so everybody onboarded through it fell to the fallback container.
+ */
+describe('placing a person while creating them', () => {
+  it('records the org unit the request carried', async () => {
+    await seedAdmin([...BOTH, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await adminCookie();
+    const unit = await post('/api/admin/org-units', cookie, { name: 'Sales' });
+
+    const res = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      orgUnitId: unit.json().id,
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().orgUnitId).toBe(unit.json().id);
+  });
+
+  it('leaves the unit null when none was chosen', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+
+    const res = await post('/api/admin/persons', cookie, {
+      givenName: 'Sam',
+      familyName: 'Roe',
+    });
+
+    // Null sends them to the template rather than to a unit nobody picked.
+    expect(res.json().orgUnitId).toBeNull();
+  });
+});
+
+/**
+ * Creating somebody who looks like somebody already here.
+ *
+ * A warning and not a refusal: two real people share a name, and two people
+ * cannot be merged afterwards — which is why the question is asked before.
+ */
+describe('duplicate people', () => {
+  it('warns about a namesake, case-insensitively', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+    });
+
+    const res = await post('/api/admin/persons', cookie, {
+      givenName: 'maya',
+      familyName: 'OKAFOR',
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toMatch(/possible-duplicate/);
+    expect(res.json().candidates).toHaveLength(1);
+    expect(res.json().candidates[0]).toMatchObject({ givenName: 'Maya' });
+  });
+
+  it('warns on a shared work email under a different name', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      businessEmail: 'm@acme.test',
+    });
+
+    const res = await post('/api/admin/persons', cookie, {
+      givenName: 'Different',
+      familyName: 'Name',
+      businessEmail: 'M@acme.test',
+    });
+
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('creates anyway when confirmed', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+    });
+
+    const res = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      allowDuplicate: true,
+    });
+
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('does not warn about an inactive namesake', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    const first = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+    });
+    await post(`/api/admin/persons/${first.json().id}/deactivate`, cookie, {
+      reason: 'left the company',
+    });
+
+    const res = await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+    });
+
+    // Their replacement is not a duplicate of them.
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('does not warn on a different person entirely', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      businessEmail: 'm@acme.test',
+    });
+
+    const res = await post('/api/admin/persons', cookie, {
+      givenName: 'Sam',
+      familyName: 'Roe',
+      businessEmail: 's@acme.test',
+    });
+
+    expect(res.statusCode).toBe(201);
+  });
+});

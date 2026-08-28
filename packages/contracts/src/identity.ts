@@ -6,6 +6,26 @@ export const createPersonRequest = z.object({
   businessEmail: z.string().email().optional(),
   personalEmail: z.string().email().optional(),
   externalId: z.string().max(128).optional(),
+  /**
+   * The unit this person belongs to, which places their provisioned account
+   * in the container that unit is materialised at on each target.
+   *
+   * The onboarding form has been sending this since it was written and the
+   * schema never accepted it, so Zod stripped it on every request and
+   * `createPerson` never saw one: the form asked which unit somebody belonged
+   * to, said it decided where their account would land, and dropped the
+   * answer. Everybody onboarded through it fell to the fallback container.
+   */
+  orgUnitId: z.string().uuid().optional(),
+  /**
+   * Confirms somebody who looks like a person already here.
+   *
+   * A warning rather than a refusal, because two real people do share a name
+   * and the alternative to creating the second one is not creating them at
+   * all. There is no way to merge two people afterwards, which is exactly why
+   * the question is asked before rather than after.
+   */
+  allowDuplicate: z.boolean().optional(),
 });
 
 /**
