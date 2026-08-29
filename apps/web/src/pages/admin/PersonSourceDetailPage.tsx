@@ -35,27 +35,57 @@ interface PersonSource {
   config: Record<string, unknown>;
 }
 
-/** The person fields worth offering a column for, in the order they read. */
-const PERSON_TARGETS = [
-  { field: 'externalId', label: 'Employee id', correlation: true },
-  { field: 'givenName', label: 'Given name', correlation: false },
-  { field: 'familyName', label: 'Family name', correlation: false },
-  { field: 'businessEmail', label: 'Business email', correlation: false },
-  { field: 'personalEmail', label: 'Personal email', correlation: false },
-] as const;
+/**
+ * Readable names for the fields the server says a mapping may write.
+ *
+ * The LIST comes from `/person-sources/mapping-defaults`, never from here.
+ * That endpoint exists so there is exactly one definition of what is
+ * writable: a field this screen offered but `setPersonMappings` rejects is a
+ * 400 an administrator cannot act on, and a field the server allows but this
+ * screen omits is one they simply cannot map. Both had already happened --
+ * `nameConvention`, `sequence` and `isPrimary` were missing here.
+ *
+ * A field with no entry falls back to its own name, so a new one added
+ * server-side appears immediately rather than silently not appearing.
+ */
+const FIELD_LABELS: Record<string, string> = {
+  givenName: 'given name',
+  familyName: 'family name',
+  nameConvention: 'name convention',
+  businessEmail: 'business email',
+  personalEmail: 'personal email',
+  sequence: 'contract sequence',
+  isPrimary: 'primary contract flag',
+  startDate: 'start date',
+  endDate: 'end date',
+  jobTitle: 'job title',
+  department: 'department',
+  costCentre: 'cost centre',
+  employer: 'employer',
+  location: 'location',
+  managerExternalId: 'manager employee id',
+  fte: 'FTE',
+};
 
-const CONTRACT_TARGETS = [
-  { field: 'externalId', label: 'Contract id' },
-  { field: 'startDate', label: 'Start date' },
-  { field: 'endDate', label: 'End date' },
-  { field: 'jobTitle', label: 'Job title' },
-  { field: 'department', label: 'Department' },
-  { field: 'costCentre', label: 'Cost centre' },
-  { field: 'employer', label: 'Employer' },
-  { field: 'location', label: 'Location' },
-  { field: 'managerExternalId', label: 'Manager employee id' },
-  { field: 'fte', label: 'FTE' },
-] as const;
+/**
+ * `externalId` means different things on the two record types, so it is
+ * resolved per type rather than globally: on a person it is the employee id
+ * that anchors the row, on a contract it is the employment id the diff
+ * matches on. One label for both read as "employee id" twice, which is a
+ * screen that cannot be filled in correctly.
+ */
+const PER_TYPE_LABELS: Record<'person' | 'contract', Record<string, string>> = {
+  person: { externalId: 'employee id' },
+  contract: { externalId: 'contract id' },
+};
+
+const labelFor = (recordType: 'person' | 'contract', field: string) =>
+  PER_TYPE_LABELS[recordType][field] ?? FIELD_LABELS[field] ?? field;
+
+interface AssignableFields {
+  person: string[];
+  contract: string[];
+}
 
 export function PersonSourceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -88,8 +118,26 @@ export function PersonSourceDetailPage() {
   const [hostKey, setHostKey] = useState<HostKey | null>(null);
   const [testMessage, setTestMessage] = useState<string | null>(null);
   const [mappings, setMappings] = useState<Record<string, string>>({});
+  /** What the server says a mapping may write. Never hardcoded here. */
+  const [assignable, setAssignable] = useState<AssignableFields>({
+    person: [],
+    contract: [],
+  });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const defaults = await api<{ assignableFields: AssignableFields }>(
+          '/api/admin/person-sources/mapping-defaults',
+        );
+        setAssignable(defaults.assignableFields);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (isNew || !id) return;
@@ -419,24 +467,37 @@ export function PersonSourceDetailPage() {
             * typing names that might exist.
             */}
           <div className="grid gap-3">
-            {PERSON_TARGETS.map((target) => (
+            {/*
+              * `externalId` first, and separately: it is not in the person
+              * allow-list because it is not an ordinary field. It is the
+              * anchor -- the correlation rule the server requires exactly one
+              * of, and the reason `setPersonMappings` exempts correlation
+              * rules from that list.
+              */}
+            <Select
+              label={`Column for ${labelFor('person', 'externalId')}`}
+              value={mappings['person.externalId'] ?? ''}
+              onChange={(value) =>
+                setMappings({ ...mappings, 'person.externalId': value })
+              }
+              options={columnOptions}
+            />
+            {assignable.person.map((field) => (
               <Select
-                key={`person.${target.field}`}
-                label={`Column for ${target.label.toLowerCase()}`}
-                value={mappings[`person.${target.field}`] ?? ''}
-                onChange={(value) =>
-                  setMappings({ ...mappings, [`person.${target.field}`]: value })
-                }
+                key={`person.${field}`}
+                label={`Column for ${labelFor('person', field)}`}
+                value={mappings[`person.${field}`] ?? ''}
+                onChange={(value) => setMappings({ ...mappings, [`person.${field}`]: value })}
                 options={columnOptions}
               />
             ))}
-            {CONTRACT_TARGETS.map((target) => (
+            {assignable.contract.map((field) => (
               <Select
-                key={`contract.${target.field}`}
-                label={`Column for ${target.label.toLowerCase()}`}
-                value={mappings[`contract.${target.field}`] ?? ''}
+                key={`contract.${field}`}
+                label={`Column for ${labelFor('contract', field)}`}
+                value={mappings[`contract.${field}`] ?? ''}
                 onChange={(value) =>
-                  setMappings({ ...mappings, [`contract.${target.field}`]: value })
+                  setMappings({ ...mappings, [`contract.${field}`]: value })
                 }
                 options={columnOptions}
               />

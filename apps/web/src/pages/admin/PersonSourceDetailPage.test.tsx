@@ -49,6 +49,16 @@ function mockFetch(routes: Routes = {}) {
     if (request.method === 'PATCH') return Promise.resolve(json(savedSource()));
     if (request.method === 'PUT') return Promise.resolve(json({ rules: [] }));
 
+    if (url.includes('/mapping-defaults')) {
+      return Promise.resolve(
+        json({
+          assignableFields: {
+            person: ['givenName', 'familyName', 'nameConvention'],
+            contract: ['externalId', 'startDate', 'department'],
+          },
+        }),
+      );
+    }
     if (url.includes('/mappings')) {
       return Promise.resolve(json({ rules: routes.rules ?? [] }));
     }
@@ -275,6 +285,31 @@ describe('mapping', () => {
       'employeeId',
       'firstName',
     ]);
+  });
+
+  /**
+   * The field list comes from the server, not from this file. A field the
+   * server allows but the screen omits is one nobody can map -- which had
+   * already happened to `nameConvention`, `sequence` and `isPrimary`.
+   */
+  it('offers every field the server says is writable', async () => {
+    mockFetch({
+      test: {
+        ok: true,
+        message: 'read 2 rows',
+        columns: ['employeeId'],
+        hostKey: { fingerprint: 'SHA256:abc', status: 'matched' },
+      },
+    });
+    renderEdit();
+    await screen.findByDisplayValue('HR nightly');
+    await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
+
+    // Person fields the stub allow-list names, including the one the old
+    // hardcoded list forgot.
+    expect(await screen.findByLabelText(/column for name convention/i)).toBeVisible();
+    // And the anchor, which is deliberately not in that list.
+    expect(screen.getByLabelText(/column for employee id/i)).toBeVisible();
   });
 
   /**
