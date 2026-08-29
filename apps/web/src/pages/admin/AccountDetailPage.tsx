@@ -14,6 +14,7 @@ import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { DeleteButton } from './DeleteButton.js';
+import { AccountSessions } from './AccountSessions.js';
 import { StatusToggle } from './StatusToggle.js';
 import { SubjectLog } from './SubjectLog.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
@@ -634,6 +635,8 @@ export function AccountDetailPage() {
             )}
           </div>
         </Panel>
+
+        <AccountSessions userId={data.id} />
 
         <SubjectLog subjects={[data.id]} />
 
