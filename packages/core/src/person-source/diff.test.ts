@@ -61,6 +61,8 @@ function input(over: Partial<PersonDiffInput> = {}): PersonDiffInput {
     existing: [],
     feedMode: 'snapshot',
     managerIdByExternalId: new Map(),
+    excludedExternalIds: new Set<string>(),
+    absenceReliable: true,
     ...over,
   };
 }
@@ -306,6 +308,48 @@ describe('diffPersons', () => {
     ];
     const changes = diffPersons(input({ mapped: [mapped('1')], existing: [stored] }));
     expect(changes).toEqual([]);
+  });
+
+  /**
+   * Returned is returned. A row that failed to map is still a row the source
+   * gave us, so the person it names is excluded from the diff -- never absent.
+   */
+  it('does not depart a person whose row was returned but could not be mapped', () => {
+    const changes = diffPersons(
+      input({
+        mapped: [],
+        existing: [existing('1')],
+        excludedExternalIds: new Set(['1']),
+      }),
+    );
+    expect(changes).toEqual([]);
+  });
+
+  /**
+   * The renamed-column case. Every row fails, no failure names anybody, and
+   * every person looks absent -- so the absence half is withheld entirely
+   * rather than departing the whole workforce.
+   */
+  it('departs nobody when a failure could not be attributed to a person', () => {
+    const changes = diffPersons(
+      input({
+        mapped: [],
+        existing: [existing('1'), existing('2'), existing('3')],
+        absenceReliable: false,
+      }),
+    );
+    expect(changes).toEqual([]);
+  });
+
+  it('still departs the others when one failure is attributable', () => {
+    const changes = diffPersons(
+      input({
+        mapped: [],
+        existing: [existing('1'), existing('2')],
+        excludedExternalIds: new Set(['1']),
+      }),
+    );
+    expect(changes.map((c) => c.externalId)).toEqual(['2']);
   });
 
   it('carries the person external id on a create so apply can find them', () => {

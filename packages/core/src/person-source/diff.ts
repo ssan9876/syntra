@@ -51,6 +51,29 @@ export interface PersonDiffInput {
   existing: ExistingPerson[];
   feedMode: FeedMode;
   managerIdByExternalId: Map<string, string>;
+  /**
+   * Persons the source RETURNED but which could not be mapped.
+   *
+   * They are not in `mapped`, and without this they would look absent -- so a
+   * bad date in one row would depart the person that row is about. Returned is
+   * returned: excluded from the diff, never treated as absent.
+   */
+  excludedExternalIds: Set<string>;
+  /**
+   * Whether absence can be trusted at all this run.
+   *
+   * False when a mapping failure could not be attributed to a person -- which
+   * is what a renamed correlation column looks like: every row fails, every
+   * failure's anchor is a row number rather than an employee id, and every
+   * person in the register appears to have vanished. `excludedExternalIds`
+   * cannot save that case because nothing identifies who the failed rows were
+   * about, so the whole absence half of the diff is withheld instead.
+   *
+   * The narrow case still works: one unparseable date among a thousand good
+   * rows is attributable, so that person is excluded and everybody else's
+   * departure is still proposed.
+   */
+  absenceReliable: boolean;
 }
 
 const CONTRACT_SCALARS = [
@@ -295,9 +318,10 @@ export function diffPersons(input: PersonDiffInput): PersonProposedChange[] {
   // about who it omits, and a `depart_person` that is produced and then
   // filtered is a safety property one refactor of the filter away from
   // vanishing.
-  if (input.feedMode === 'snapshot') {
+  if (input.feedMode === 'snapshot' && input.absenceReliable) {
     for (const stored of input.existing) {
       if (seen.has(stored.externalId)) continue;
+      if (input.excludedExternalIds.has(stored.externalId)) continue;
       if (stored.status !== 'active') continue;
       changes.push({
         changeType: 'depart_person',
