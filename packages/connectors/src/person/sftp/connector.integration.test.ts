@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { rmSync, statSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { sftpDelimitedConfigSchema } from './config.js';
 import { sftpDelimitedConnector } from './connector.js';
 import { HostKeyMismatchError, fetchFile } from './transport.js';
@@ -112,5 +114,65 @@ describe.skipIf(!enabled)('sftpDelimited against a real server', () => {
     expect(rows).toEqual(['1', '2']);
 
     process.env.OUTBOUND_ALLOW_PRIVATE = previous ?? 'true';
+  });
+});
+
+/**
+ * The case the unit tests can only assert indirectly, and the one that was
+ * broken: `test` against an export larger than the sample.
+ *
+ * It used to pass its sample size as the refusing ceiling, so a connection
+ * test reported failure for every real export. The committed fixture is 143
+ * bytes, which is why nothing caught it -- so this writes a genuinely large
+ * one into the mounted directory and takes it away again.
+ */
+describe.skipIf(!enabled)('sampling a file larger than the sample', () => {
+  const big = resolve(process.cwd(), 'infra/sftp/big.csv');
+
+  beforeAll(() => {
+    const rows = Array.from(
+      { length: 4000 },
+      (_, i) => `${i},Ada,Lovelace,2026-01-05,Research`,
+    );
+    writeFileSync(big, `employeeId,firstName,lastName,hireDate,dept\n${rows.join('\n')}\n`);
+    // Comfortably past the 64 KB sample.
+    expect(statSync(big).size).toBeGreaterThan(64 * 1024);
+  });
+
+  afterAll(() => {
+    rmSync(big, { force: true });
+  });
+
+  it('reports the columns rather than refusing the file', async () => {
+    const seen = await sftpDelimitedConnector.test(config({ remotePath: '/export/big.csv' }));
+    expect(seen.hostKey?.status).toBe('unknown');
+    expect(seen.columns).toEqual([
+      'employeeId',
+      'firstName',
+      'lastName',
+      'hireDate',
+      'dept',
+    ]);
+    // Sampled, not read whole: 4000 rows do not fit in 64 KB.
+    expect(seen.recordsSampled).toBeGreaterThan(0);
+    expect(seen.recordsSampled).toBeLessThan(4000);
+  });
+
+  /**
+   * `read` still refuses to truncate. Sampling is for `test` alone; a short
+   * read the diff could mistake for a complete one is what departs a
+   * workforce.
+   */
+  it('still refuses to truncate a read that exceeds the ceiling', async () => {
+    const seen = await sftpDelimitedConnector.test(config({ remotePath: '/export/big.csv' }));
+    const pinned = config({
+      remotePath: '/export/big.csv',
+      hostKeyFingerprint: seen.hostKey?.fingerprint,
+      maxBytes: 1024,
+    });
+
+    await expect(async () => {
+      for await (const _ of sftpDelimitedConnector.read(pinned)) void _;
+    }).rejects.toThrow(/larger than 1024 bytes/);
   });
 });

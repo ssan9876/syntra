@@ -137,10 +137,24 @@ function splitPath(path: string): { dir: string; base: string } {
  */
 export async function fetchFile(
   config: SftpDelimitedConfig & SftpDelimitedCredential,
-  opts: { allowPrivate: boolean; requirePinned: boolean; maxBytes?: number },
+  opts: {
+    allowPrivate: boolean;
+    requirePinned: boolean;
+    /**
+     * Stop cleanly after this many bytes and return what arrived.
+     *
+     * For `test` only, which wants the first rows to report the columns from.
+     * DISTINCT from the ceiling: sampling is a deliberate partial read that
+     * the caller asked for and does not diff against anything, whereas the
+     * ceiling is a refusal, because a partial read a caller could mistake for
+     * a complete one is what departs a workforce. `read` never passes this.
+     */
+    sampleBytes?: number;
+  },
 ): Promise<FetchResult> {
   const address = await assertAddressAllowed(config.host, opts.allowPrivate);
-  const maxBytes = opts.maxBytes ?? config.maxBytes;
+  const maxBytes = config.maxBytes;
+  const sampleBytes = opts.sampleBytes;
 
   return new Promise<FetchResult>((resolve, reject) => {
     const client = new Client();
@@ -214,6 +228,20 @@ export async function fetchFile(
 
           stream.on('data', (chunk: Buffer) => {
             bytes += chunk.length;
+            chunks.push(chunk);
+
+            // Sampling: enough is enough, and what arrived is the answer.
+            if (sampleBytes !== undefined && bytes >= sampleBytes) {
+              stream.destroy();
+              finish(() =>
+                resolve({
+                  text: Buffer.concat(chunks).toString(config.encoding),
+                  hostKey: hostKey ?? { fingerprint: '', status: 'unknown' },
+                }),
+              );
+              return;
+            }
+
             if (bytes > maxBytes) {
               // Destroy and reject. Never resolve with what arrived: a short
               // read that looked successful is the input that departs a
@@ -222,7 +250,6 @@ export async function fetchFile(
               finish(() => reject(new ByteCeilingExceededError(maxBytes)));
               return;
             }
-            chunks.push(chunk);
           });
           stream.on('error', fail);
           stream.on('close', () => {

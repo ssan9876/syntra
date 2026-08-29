@@ -52,6 +52,12 @@ export function redactCredential(message: string, config: Config): string {
  */
 const SAMPLE_BYTES = 64 * 1024;
 
+/** Everything up to the last complete line. See `test`. */
+function dropPartialLastLine(text: string): string {
+  const cut = text.lastIndexOf('\n');
+  return cut < 0 ? text : text.slice(0, cut + 1);
+}
+
 /**
  * One row, keyed by column name, with every cell available to a mapping.
  *
@@ -87,9 +93,16 @@ export const sftpDelimitedConnector: SourceConnector<Config> = {
       const { text, hostKey } = await fetchFile(config, {
         allowPrivate: allowPrivate(),
         requirePinned: false,
-        maxBytes: SAMPLE_BYTES,
+        // Sample, not a ceiling. Passing this as `maxBytes` made `test`
+        // REFUSE every export bigger than the sample -- which is every real
+        // one -- and report it as a failed connection.
+        sampleBytes: SAMPLE_BYTES,
       });
-      const table = parse(config, text);
+      // A sample almost always stops mid-row, so the last line is a fragment.
+      // Dropping it keeps `test` from reporting a truncated final record as a
+      // real one -- and the columns, which is what `test` is for, come from
+      // the header either way.
+      const table = parse(config, dropPartialLastLine(text));
       return {
         ok: hostKey.status === 'matched',
         message:

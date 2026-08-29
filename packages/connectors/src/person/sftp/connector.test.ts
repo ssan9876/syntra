@@ -179,3 +179,50 @@ describe('redactCredential', () => {
     }).rejects.toThrow('auth failed for [redacted]');
   });
 });
+
+describe('sampling versus the ceiling', () => {
+  /**
+   * The bug this exists for: `test` used to pass its sample size as
+   * `maxBytes`, which REFUSES rather than samples -- so testing a connection
+   * against any export bigger than 64 KB reported a failed connection. Every
+   * real export is bigger than 64 KB. The e2e fixture is 143 bytes, so
+   * nothing caught it.
+   */
+  it('asks the transport to sample, never to cap', async () => {
+    fetchFile.mockResolvedValue({
+      text: 'employeeId,firstName\n1,Ada',
+      hostKey: matched,
+    });
+    await sftpDelimitedConnector.test(config);
+
+    const options = fetchFile.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(options.sampleBytes).toBeGreaterThan(0);
+    expect(options.maxBytes).toBeUndefined();
+  });
+
+  /** `read` samples nothing: it yields every record or throws. */
+  it('never samples on a read', async () => {
+    fetchFile.mockResolvedValue({ text: 'employeeId\n1', hostKey: matched });
+    for await (const _ of sftpDelimitedConnector.read(config)) void _;
+
+    const options = fetchFile.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(options.sampleBytes).toBeUndefined();
+  });
+
+  /**
+   * A sample stops mid-row, so the last line is a fragment. Reporting it as a
+   * real record would tell the operator the file has a short row it does not
+   * have.
+   */
+  it('drops the fragment a sample ends on', async () => {
+    fetchFile.mockResolvedValue({
+      text: 'employeeId,firstName,dept\n1,Ada,Research\n2,Gra',
+      hostKey: matched,
+    });
+    const result = await sftpDelimitedConnector.test(config);
+
+    expect(result.ok).toBe(true);
+    expect(result.columns).toEqual(['employeeId', 'firstName', 'dept']);
+    expect(result.recordsSampled).toBe(1);
+  });
+});
