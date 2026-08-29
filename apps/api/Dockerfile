@@ -10,6 +10,8 @@ COPY apps/api/package.json apps/api/
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
 COPY packages/contracts/package.json packages/contracts/
+COPY packages/connectors/package.json packages/connectors/
+COPY packages/protocols/package.json packages/protocols/
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build

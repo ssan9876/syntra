@@ -24,6 +24,12 @@ describe('loadConfig', () => {
     );
   });
 
+  it('rejects the session secret placeholder from .env.example', () => {
+    expect(() =>
+      loadConfig({ ...valid, SESSION_SECRET: 'change-me-at-least-32-characters-long' }),
+    ).toThrow(/placeholder/);
+  });
+
   it('rejects a master key that is not 32 bytes', () => {
     expect(() =>
       loadConfig({ ...valid, MASTER_KEY: Buffer.alloc(16).toString('base64') }),

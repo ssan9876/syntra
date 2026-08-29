@@ -9,6 +9,7 @@
     "migrate": "prisma migrate deploy",
     "migrate:dev": "prisma migrate dev",
     "seed": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/seed.ts",
+    "bootstrap": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/bootstrap.ts",
     "reset": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/reset.ts"
   },
   "dependencies": {

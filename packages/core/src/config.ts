@@ -7,7 +7,16 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   PORT: z.coerce.number().int().positive().default(3000),
   PUBLIC_URL: z.string().url(),
-  SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be >= 32 characters'),
+  SESSION_SECRET: z
+    .string()
+    .min(32, 'SESSION_SECRET must be >= 32 characters')
+    // The example file's value is long enough to pass the length check, and a
+    // copied .env that nobody edited would otherwise start with a secret that
+    // is in the repository.
+    .refine(
+      (v) => !/^change-me/i.test(v),
+      'SESSION_SECRET is the placeholder from .env.example; generate one with 32 random bytes, base64 encoded (see .env.example)',
+    ),
   MASTER_KEY: z
     .string()
     .refine(

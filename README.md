@@ -88,8 +88,13 @@ pnpm db:up                                  # PostgreSQL 16 (+ a tmpfs postgres-
 # working directory, and pnpm runs `migrate` with the cwd set to packages/db,
 # so the root file is not in scope for it: a checkout carrying only that one
 # fails with "Environment variable not found: DATABASE_URL".
-cp .env.example .env                        # then fill in the secrets
+cp .env.example .env
 cp packages/db/.env.example packages/db/.env
+
+# Two values in .env are placeholders the server refuses: replace both with
+# the output of this, run twice. MASTER_KEY encrypts stored credentials and
+# signs SAML, so losing it later means re-entering every secret.
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 # `db:generate` BEFORE anything imports the client, and `db:migrate` is not
 # enough on its own: that runs Prisma's CLI, which needs no generated client,
@@ -194,6 +199,31 @@ the service units the lab itself runs under — `syntra.service`, which still
 runs the API from source with `tsx` rather than either image, and
 `syntra-infra.service`, which brings up `infra/docker-compose.yml` for the
 database and directory fixtures the lab depends on.
+
+To run the container path on a fresh host:
+
+```bash
+git clone https://github.com/ssan9876/syntra.git && cd syntra
+export POSTGRES_PASSWORD=...  SYNTRA_APP_PASSWORD=...          # any two strong values
+export SESSION_SECRET=...     MASTER_KEY=...                   # 32 random bytes each, base64 (see .env.example)
+export PUBLIC_URL=https://idm.example.com SMTP_URL=smtp://mail.example.com:25
+docker compose up --build -d                                   # migrates, then serves on :8080
+
+# Once, to create your tenant and its first administrator. The dev `pnpm seed`
+# is demo data and is not this.
+docker compose exec \
+  -e BOOTSTRAP_TENANT_NAME='Example Ltd' -e BOOTSTRAP_TENANT_SLUG=example \
+  -e BOOTSTRAP_TENANT_DOMAIN=idm.example.com \
+  -e BOOTSTRAP_ADMIN_EMAIL=you@example.com -e BOOTSTRAP_ADMIN_PASSWORD='...' \
+  api pnpm --filter @syntra/db bootstrap
+```
+
+Put TLS in front of :8080 yourself (Caddy, Traefik, a load balancer); the image
+speaks plain HTTP and `TRUST_PROXY` is already set so it believes the proxy's
+`X-Forwarded-*`. `PUBLIC_URL` must be the origin users type, because the
+session cookie and the WebAuthn relying party are derived from it. Keep
+`MASTER_KEY` and the `syntra-data` volume in your backups: the first encrypts
+every stored credential, the second is the database.
 
 ### Continuous integration
 

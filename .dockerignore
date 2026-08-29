@@ -1,0 +1,21 @@
+# Anything the image must install or build for itself. Host node_modules are
+# the wrong platform's binaries and make pnpm prompt to reinstall, which a
+# non-interactive build answers by doing nothing -- vite is then "not found".
+node_modules
+**/node_modules
+**/dist
+.git
+.env
+.env.*
+!.env.example
+test-results
+playwright-report
+coverage
+*.tsbuildinfo
+.superpowers
+.claude
+tools
+docs
+e2e
+infra
+ops
