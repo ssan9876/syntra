@@ -166,6 +166,7 @@ export type {
 // NEITHER side silently. Nothing in these two modules collides today.
 export * from './provision/target-service.js';
 export * from './provision/placement-service.js';
+export * from './provision/adoption-service.js';
 export * from './provision/entitlement-service.js';
 // Grepped as well: `previewProvisionRun`, `ProvisionRunInFlightError`,
 // `PreviewProvisionRunOptions` and `ProvisionRunSummary` appear nowhere else in
