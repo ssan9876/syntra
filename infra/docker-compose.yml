@@ -85,6 +85,22 @@ services:
       timeout: 3s
       retries: 20
 
+  # An SFTP server for the person-source integration test.
+  #
+  # It exists for the one property a fake cannot demonstrate: that a pinned
+  # host key which does not match REFUSES the connection. Every other property
+  # of that connector is covered by unit tests against a string.
+  #
+  # Not started by `db:up`. Bring it up with `pnpm sftp:up` and set
+  # SFTP_INTEGRATION=1; the suite skips without it, so `pnpm test` stays
+  # hermetic.
+  sftp:
+    image: atmoz/sftp:alpine
+    command: syntra:Syntra!Passw0rd:::export
+    ports: ['2222:22']
+    volumes:
+      - ./sftp/people.csv:/home/syntra/export/people.csv:ro
+
   maildev:
     image: maildev/maildev:2.1.0
     ports: ['1080:1080', '1025:1025']
