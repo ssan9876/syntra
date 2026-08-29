@@ -11,6 +11,8 @@ import { PersonDetailPage } from './PersonDetailPage.js';
 import { ActivityPage } from './ActivityPage.js';
 import { UpdatesPage } from './UpdatesPage.js';
 import { SourcesPage } from './SourcesPage.js';
+import { PersonSourceDetailPage } from './PersonSourceDetailPage.js';
+import { PersonImportRunDetailPage } from './PersonImportRunDetailPage.js';
 import { SourceDetailPage } from './SourceDetailPage.js';
 import { SyncRunDetailPage } from './SyncRunDetailPage.js';
 import { ApplicationsPage } from './ApplicationsPage.js';
@@ -82,6 +84,12 @@ export function AdminApp() {
             {/* Before the parametric route, so "new" is a page rather than an
                 id that will 404 on its way to the editor. */}
             <Route path="sources/new" element={<SourceDetailPage />} />
+            <Route path="person-sources/new" element={<PersonSourceDetailPage />} />
+            <Route path="person-sources/:id" element={<PersonSourceDetailPage />} />
+            <Route
+              path="person-import-runs/:id"
+              element={<PersonImportRunDetailPage />}
+            />
             <Route path="sources/:id" element={<SourceDetailPage />} />
             {/* Runs are a tab of Sources now — a run is a source's history,
                 not a peer of it. Redirected rather than dropped: the path is

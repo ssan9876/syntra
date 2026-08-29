@@ -64,7 +64,13 @@ const GROUPS: NavGroup[] = [
     label: 'Connected systems',
     items: [
       // Runs are a tab of Sources: a run is a source's history, not its peer.
-      { to: '/admin/sources', label: 'Directory sources', permission: 'sync.read' },
+      //
+      // "Sources", not "Directory sources", because there are two families
+      // behind it now -- directories and HR exports. "Directory sources"
+      // beside "People sources" would be two labels existing only to
+      // distinguish themselves from each other, which is the failure this
+      // file's header records sixteen links being removed for.
+      { to: '/admin/sources', label: 'Sources', permission: 'sync.read' },
       { to: '/admin/targets', label: 'Target systems', permission: 'provision.read' },
     ],
   },
