@@ -6,7 +6,7 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
 import { validateNewPassword } from './password-policy.js';
 import { passwordWasUsedBefore } from './password-ageing.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
-import { revokeAllForUser, revokeAllForUserExcept } from './session-service.js';
+import { endSessions } from './end-sessions.js';
 import { revokeAllRefreshTokensForUser } from './refresh-token.js';
 
 export interface ChangeOwnPasswordInput {
@@ -138,14 +138,15 @@ export async function changeOwnPassword(
     const hash = await hashPassword(input.newPassword);
     return withTenant(tenantId, async (tx) => {
       await setPasswordHash(tx, context.user.id, hash);
-      const revoked = await revokeAllForUserExcept(
-        tx,
-        context.user.id,
-        input.sessionId,
-      );
-      // Refresh tokens are not sessions and do not survive: one outliving a
-      // change would hand back exactly the access the change existed to end.
-      await revokeAllRefreshTokensForUser(tx, context.user.id);
+      // Refresh tokens and back-channel logouts go with the sessions, because
+      // `endSessions` is the only way to end sessions at all. One refresh
+      // token outliving a change would hand back exactly the access the change
+      // existed to end.
+      const { sessionsRevoked: revoked } = await endSessions(tx, context.user.id, {
+        trigger: 'password_change',
+        actorUserId: context.user.id,
+        exceptSessionId: input.sessionId,
+      });
       await recordEvent(tx, {
         actorUserId: context.user.id,
         action: 'auth.password_changed',
@@ -433,10 +434,13 @@ export async function setPasswordAsAdmin(
 
   const sessionsRevoked = await withTenant(tenantId, async (tx) => {
     await setPasswordHash(tx, input.userId, hash, { now, mustChange: true });
-    const revoked = await revokeAllForUser(tx, input.userId);
-    // Refresh tokens are not sessions and do not survive: one outliving this
-    // would hand back exactly the access it existed to end.
-    await revokeAllRefreshTokensForUser(tx, input.userId);
+    // An administrator setting somebody's password spares nothing: this is a
+    // reset in everything but name.
+    const { sessionsRevoked: revoked } = await endSessions(tx, input.userId, {
+      trigger: 'password_reset',
+      actorUserId: input.actorUserId ?? null,
+      sourceIp: input.sourceIp ?? null,
+    });
     await recordEvent(tx, {
       actorUserId: input.actorUserId,
       action: 'user.setPassword',

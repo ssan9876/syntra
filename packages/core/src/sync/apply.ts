@@ -2,7 +2,7 @@ import type { TenantClient } from '@syntra/db';
 import type { ObjectType } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
-import { revokeAllForUser } from '../auth/session-service.js';
+import { endSessions } from '../auth/end-sessions.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { unassignableFields } from './mapping.js';
 import { DISABLED_IN_SOURCE } from './diff.js';
@@ -235,8 +235,7 @@ async function performChange(
       // at their next session expiry. Same transaction as the status change,
       // for the same reason `deactivateUser` does it: a deactivation with the
       // sessions left behind reads as done and is not.
-      await revokeAllForUser(tx, change.targetId!);
-      await revokeAllRefreshTokensForUser(tx, change.targetId!);
+      await endSessions(tx, change.targetId!, { trigger: 'deactivation' });
       await tx.syncChange.update({
         where: { id: change.id },
         data: { status: 'applied' },

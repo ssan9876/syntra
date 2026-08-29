@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify';
+import { protocolBase } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 
 /**
@@ -40,10 +41,13 @@ export function tenantProtocolIdentity(
   tenant: { primaryDomain: string | null },
   publicUrl: string,
 ): ProtocolIdentity {
-  const fallback = new URL(publicUrl);
-  const host = tenant.primaryDomain ?? fallback.hostname;
-  const port = fallback.port ? `:${fallback.port}` : '';
-  const base = `${fallback.protocol}//${host}${port}`;
+  // `protocolBase` lives in core because the back-channel logout sender mints
+  // `iss` from it too, and a second copy of this formula that drifted by a
+  // port or a scheme would produce logout tokens every correctly-configured
+  // relying party rejects -- silently, since the only symptom is a session
+  // that failed to end somewhere else.
+  const base = protocolBase(tenant, publicUrl);
+  const host = tenant.primaryDomain ?? new URL(publicUrl).hostname;
 
   return {
     base,

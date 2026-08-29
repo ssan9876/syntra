@@ -1,4 +1,5 @@
 import type { Scheduler } from '../jobs/scheduler.js';
+import type { MasterKeyProvider } from '../vault/master-key.js';
 import { runLogoutDeliveryJob } from './logout-delivery.js';
 
 export const LOGOUT_DELIVER_JOB = 'access.logout_deliver';
@@ -20,11 +21,13 @@ export function logoutScheduleKey(tenantId: string): string {
 
 export function registerLogoutJobs(
   scheduler: Scheduler,
-  options: { allowPrivateAddresses?: boolean } = {},
+  provider: MasterKeyProvider,
+  options: { allowPrivateAddresses?: boolean; publicUrl?: string } = {},
 ): void {
   scheduler.register<LogoutJobPayload>(LOGOUT_DELIVER_JOB, async (payload) => {
-    await runLogoutDeliveryJob(payload.tenantId, {
+    await runLogoutDeliveryJob(payload.tenantId, provider, {
       allowPrivateAddresses: options.allowPrivateAddresses ?? true,
+      ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
     });
   });
 }

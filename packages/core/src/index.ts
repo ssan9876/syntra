@@ -32,7 +32,24 @@ export * from './auth/password-policy.js';
 export * from './auth/refresh-token.js';
 export * from './auth/password-change.js';
 export * from './auth/password-reset.js';
-export * from './auth/session-service.js';
+// Everything except the two user-wide revokes: `endSessions` is the only way
+// to end a user's sessions, because ending them without revoking the refresh
+// tokens and telling the relying parties is the defect this whole slice
+// exists to make unwritable.
+export {
+  createSession,
+  listSessionsForUser,
+  readSession,
+  resolveSession,
+  revokeSession,
+  revokeSessionById,
+  type ResolvedSession,
+  type SessionAllowance,
+  type SessionOrigin,
+  type SessionScope,
+  type SessionSummary,
+} from './auth/session-service.js';
+export * from './auth/end-sessions.js';
 // authenticate() is deliberately NOT exported. It is the password half of
 // authorize(), and a caller that reached it directly would skip policy
 // evaluation, second factors and the audit event. authorize() is the door.
@@ -128,6 +145,7 @@ export * from './access/browser-binding.js';
 export * from './access/saml-request-service.js';
 export * from './access/saml-session-service.js';
 export * from './access/oidc-store.js';
+export * from './access/protocol-base.js';
 export * from './access/logout-token.js';
 export * from './access/logout-delivery.js';
 export * from './access/logout-jobs.js';

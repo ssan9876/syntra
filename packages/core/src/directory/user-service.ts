@@ -1,5 +1,5 @@
 import type { TenantClient } from '@syntra/db';
-import { revokeAllForUser } from '../auth/session-service.js';
+import { endSessions } from '../auth/end-sessions.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { currentTenant } from '../tenant-context.js';
 
@@ -99,11 +99,11 @@ export async function deactivateUser(
     where: { id },
     data: { status: 'inactive', statusReason: reason },
   });
-  await revokeAllForUser(tx, id);
-  // Access I issues none, but a leaver's refresh token outliving their
-  // sessions is exactly the gap `revokeAllRefreshTokensForUser` was written
-  // ahead of time to close.
-  await revokeAllRefreshTokensForUser(tx, id);
+  // Sessions, refresh tokens, and every relying party that asked to be told.
+  // A leaver's refresh token outliving their sessions is the gap this
+  // originally closed by hand; a relying party's session outliving both is the
+  // one it could not reach.
+  await endSessions(tx, id, { trigger: 'deactivation' });
   return user;
 }
 

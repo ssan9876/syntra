@@ -11,6 +11,9 @@ import { localMasterKeyProvider } from '../vault/master-key.js';
 import { WEBHOOK_MAX_ATTEMPTS } from '../notify/webhook-retry.js';
 import { enqueueLogoutDeliveries, runLogoutDeliveryJob } from './logout-delivery.js';
 
+const PUBLIC_URL = 'https://acme.test';
+/** A real uuid: `LogoutDelivery.sessionId` is a uuid column, as sessions are. */
+const SESSION_ID = '11111111-2222-4333-8444-555555555555';
 const ISSUER = 'https://acme.test/oidc';
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 
@@ -106,7 +109,7 @@ async function seedGrant(clientId: string) {
 
 const enqueue = (sessionId: string | null = null) =>
   withTenant(tenantId, (tx) =>
-    enqueueLogoutDeliveries(tx, provider, tenantId, { userId, sessionId, issuer: ISSUER }),
+    enqueueLogoutDeliveries(tx, tenantId, { userId, sessionId }),
   );
 
 beforeEach(async () => {
@@ -148,37 +151,29 @@ describe('enqueueLogoutDeliveries', () => {
     expect(await enqueue()).toBe(0);
   });
 
-  it('mints a token the client can verify against the published JWKS', async () => {
+  it('records who signed out, not a token saying so', async () => {
+    // Minting is the sender's job: it needs the issuer and the signing key,
+    // and the callers that end sessions have neither. A row is a subject and
+    // a destination.
     await seedClient('https://a.test/logout', { clientId: 'a' });
     await seedGrant('a');
-    await enqueue();
+
+    await enqueue(SESSION_ID);
 
     const row = await withTenant(tenantId, (tx) => tx.logoutDelivery.findFirstOrThrow());
-    const keys = await publishedKeys(tenantId, 'oidc');
-    const jwks = createLocalJWKSet({ keys: keys.map((k) => k.publicJwk) as never });
-
-    const { payload } = await jwtVerify(row.token, jwks, {
-      issuer: ISSUER,
-      audience: 'a',
-    });
-    expect(payload.sub).toBe(userId);
+    expect(row.userId).toBe(userId);
+    expect(row.sessionId).toBe(SESSION_ID);
+    expect(row).not.toHaveProperty('token');
   });
 
-  it('carries sid only for a client that registered for it', async () => {
-    await seedClient('https://a.test/logout', { clientId: 'a', sessionRequired: true });
+  it('records no session when every session ended at once', async () => {
+    await seedClient('https://a.test/logout', { clientId: 'a' });
     await seedGrant('a');
-    await seedClient('https://b.test/logout', { clientId: 'b' });
-    await seedGrant('b');
 
-    await enqueue('sess-42');
+    await enqueue(null);
 
-    const rows = await withTenant(tenantId, (tx) =>
-      tx.logoutDelivery.findMany({ include: { client: true } }),
-    );
-    const asked = rows.find((r) => r.client.clientId === 'a')!;
-    const didNot = rows.find((r) => r.client.clientId === 'b')!;
-    expect(decodeJwt(asked.token).sid).toBe('sess-42');
-    expect(decodeJwt(didNot.token)).not.toHaveProperty('sid');
+    const row = await withTenant(tenantId, (tx) => tx.logoutDelivery.findFirstOrThrow());
+    expect(row.sessionId).toBeNull();
   });
 });
 
@@ -189,7 +184,7 @@ describe('runLogoutDeliveryJob', () => {
     await seedGrant('a');
     await enqueue();
 
-    const result = await runLogoutDeliveryJob(tenantId, { allowPrivateAddresses: true });
+    const result = await runLogoutDeliveryJob(tenantId, provider, { publicUrl: PUBLIC_URL, allowPrivateAddresses: true });
 
     expect(result).toEqual({ delivered: 1, failed: 0 });
     expect(rp.bodies).toHaveLength(1);
@@ -209,6 +204,34 @@ describe('runLogoutDeliveryJob', () => {
     expect(row.lastStatus).toBe(200);
   });
 
+  it('carries sid on the wire only for a client that registered for it', async () => {
+    rp = await listenAs(() => 200);
+    await seedClient(rp.url, { clientId: 'a', sessionRequired: true });
+    await seedGrant('a');
+    await enqueue(SESSION_ID);
+    await runLogoutDeliveryJob(tenantId, provider, {
+      publicUrl: PUBLIC_URL,
+      allowPrivateAddresses: true,
+    });
+
+    const token = new URLSearchParams(rp.bodies[0]!).get('logout_token')!;
+    expect(decodeJwt(token).sid).toBe(SESSION_ID);
+  });
+
+  it('omits sid for a client that did not register for it', async () => {
+    rp = await listenAs(() => 200);
+    await seedClient(rp.url, { clientId: 'b' });
+    await seedGrant('b');
+    await enqueue(SESSION_ID);
+    await runLogoutDeliveryJob(tenantId, provider, {
+      publicUrl: PUBLIC_URL,
+      allowPrivateAddresses: true,
+    });
+
+    const token = new URLSearchParams(rp.bodies[0]!).get('logout_token')!;
+    expect(decodeJwt(token)).not.toHaveProperty('sid');
+  });
+
   it('retries a 500 on the ladder', async () => {
     rp = await listenAs(() => 500);
     await seedClient(rp.url, { clientId: 'a' });
@@ -216,7 +239,7 @@ describe('runLogoutDeliveryJob', () => {
     await enqueue();
 
     const now = new Date();
-    const result = await runLogoutDeliveryJob(tenantId, {
+    const result = await runLogoutDeliveryJob(tenantId, provider, { publicUrl: PUBLIC_URL,
       allowPrivateAddresses: true,
       now,
     });
@@ -236,7 +259,7 @@ describe('runLogoutDeliveryJob', () => {
     await seedGrant('a');
     await enqueue();
 
-    await runLogoutDeliveryJob(tenantId, { allowPrivateAddresses: true });
+    await runLogoutDeliveryJob(tenantId, provider, { publicUrl: PUBLIC_URL, allowPrivateAddresses: true });
 
     const row = await withTenant(tenantId, (tx) => tx.logoutDelivery.findFirstOrThrow());
     expect(row.attempts).toBe(WEBHOOK_MAX_ATTEMPTS);
@@ -250,10 +273,10 @@ describe('runLogoutDeliveryJob', () => {
     await seedClient(rp.url, { clientId: 'a' });
     await seedGrant('a');
     await enqueue();
-    await runLogoutDeliveryJob(tenantId, { allowPrivateAddresses: true });
+    await runLogoutDeliveryJob(tenantId, provider, { publicUrl: PUBLIC_URL, allowPrivateAddresses: true });
 
     // A second run must not pick it up again.
-    const second = await runLogoutDeliveryJob(tenantId, { allowPrivateAddresses: true });
+    const second = await runLogoutDeliveryJob(tenantId, provider, { publicUrl: PUBLIC_URL, allowPrivateAddresses: true });
 
     expect(second).toEqual({ delivered: 0, failed: 0 });
     expect(await withTenant(tenantId, (tx) => tx.logoutDelivery.count())).toBe(1);
@@ -265,7 +288,7 @@ describe('runLogoutDeliveryJob', () => {
     await seedGrant('a');
     await enqueue();
 
-    const result = await runLogoutDeliveryJob(tenantId, { allowPrivateAddresses: false });
+    const result = await runLogoutDeliveryJob(tenantId, provider, { publicUrl: PUBLIC_URL, allowPrivateAddresses: false });
 
     expect(result).toEqual({ delivered: 0, failed: 1 });
     expect(rp.bodies).toHaveLength(0);
@@ -280,7 +303,7 @@ describe('runLogoutDeliveryJob', () => {
     await enqueue();
 
     const other = await prisma.tenant.create({ data: { name: 'Other', slug: 'other' } });
-    const result = await runLogoutDeliveryJob(other.id, { allowPrivateAddresses: true });
+    const result = await runLogoutDeliveryJob(other.id, provider, { publicUrl: PUBLIC_URL, allowPrivateAddresses: true });
 
     expect(result).toEqual({ delivered: 0, failed: 0 });
     expect(rp.bodies).toHaveLength(0);

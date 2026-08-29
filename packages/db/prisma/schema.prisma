@@ -1427,9 +1427,15 @@ model LogoutDelivery {
   tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   clientId      String     @db.Uuid
   client        OidcClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  /// The signed token, frozen at enqueue. A retry an hour later sends what the
-  /// logout said then, not what the rows say now.
-  token         String
+  /// WHO signed out, not the token saying so. The token is minted at send
+  /// time from these, because minting needs the tenant's issuer and its
+  /// signing key -- and the callers that end sessions (a sync-driven leaver,
+  /// a deactivation, a password reset) have neither and should not have to
+  /// acquire them to revoke access. It also means a queued logout is not
+  /// invalidated by a key rotation between enqueue and delivery.
+  userId        String     @db.Uuid
+  /// The session that ended, when one ended rather than all of them.
+  sessionId     String?    @db.Uuid
   attempts      Int        @default(0)
   /// When the next attempt becomes due. Set on creation, so the sender's read
   /// is one indexed range scan and a first attempt needs no special case.

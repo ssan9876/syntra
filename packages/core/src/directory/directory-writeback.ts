@@ -4,7 +4,7 @@ import type { TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { sourceWithPassword } from '../sync/source-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
-import { revokeAllForUser } from '../auth/session-service.js';
+import { endSessions } from '../auth/end-sessions.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { deactivateUser, reactivateUser } from './user-service.js';
 import { PROVISION_JOB, provisionJobPayload } from '../provision/jobs.js';
@@ -374,8 +374,10 @@ export async function deleteDirectoryUser(
     // Revoked first, then removed. The revocation is what `deactivateUser`
     // does and it also reaches the OIDC artifacts hanging off the refresh
     // tokens, which a bare delete of these two tables would strand.
-    await revokeAllForUser(tx, input.userId);
-    await revokeAllRefreshTokensForUser(tx, input.userId);
+    await endSessions(tx, input.userId, {
+      trigger: 'deactivation',
+      actorUserId: input.actorUserId ?? null,
+    });
 
     // REMOVED, not merely revoked, and this is where delete parts company
     // with deactivate. Both tables carry `userId` as a bare column with no

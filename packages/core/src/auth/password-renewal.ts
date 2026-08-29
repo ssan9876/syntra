@@ -4,7 +4,7 @@ import { validateNewPassword } from './password-policy.js';
 import { passwordWasUsedBefore } from './password-ageing.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import { findAttempt } from './attempt-service.js';
-import { revokeAllForUser } from './session-service.js';
+import { endSessions } from './end-sessions.js';
 import { revokeAllRefreshTokensForUser } from './refresh-token.js';
 
 export interface RenewExpiredPasswordInput {
@@ -96,8 +96,10 @@ export async function renewExpiredPassword(
     // Every other session goes, exactly as a reset does. A password that had
     // to be changed is one whose old value should stop being useful anywhere,
     // and the sign-in in progress has no session yet to preserve.
-    await revokeAllForUser(tx, context.user.id);
-    await revokeAllRefreshTokensForUser(tx, context.user.id);
+    await endSessions(tx, context.user.id, {
+      trigger: 'password_change',
+      actorUserId: context.user.id,
+    });
     await recordEvent(tx, {
       actorUserId: context.user.id,
       action: 'auth.password_renewed',

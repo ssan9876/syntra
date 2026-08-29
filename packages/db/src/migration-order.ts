@@ -109,6 +109,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260928000000_tenant_foreign_keys',
   '20260929000000_session_origin',
   '20260930000000_backchannel_logout',
+  '20261001000000_logout_delivery_subject',
 ];
 
 /**

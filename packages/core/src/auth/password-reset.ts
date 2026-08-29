@@ -9,7 +9,7 @@ import { currentTenant } from '../tenant-context.js';
 import { hashPassword, setPasswordHash } from './password.js';
 import { passwordWasUsedBefore } from './password-ageing.js';
 import { validateNewPassword } from './password-policy.js';
-import { revokeAllForUser } from './session-service.js';
+import { endSessions } from './end-sessions.js';
 import { revokeAllRefreshTokensForUser } from './refresh-token.js';
 import { enrolledFactorTypes, hasRecoveryCodes, verifyFactor } from './mfa/registry.js';
 import type { RelyingParty } from './mfa/relying-party.js';
@@ -524,8 +524,10 @@ export async function completePasswordReset(
     if (consumed.count !== 1) return false;
 
     await setPasswordHash(tx, context.user.id, hash, { now });
-    await revokeAllForUser(tx, context.user.id);
-    await revokeAllRefreshTokensForUser(tx, context.user.id);
+    await endSessions(tx, context.user.id, {
+      trigger: 'password_reset',
+      actorUserId: context.user.id,
+    });
     await recordEvent(tx, {
       actorUserId: context.user.id,
       action: 'auth.password_reset_completed',

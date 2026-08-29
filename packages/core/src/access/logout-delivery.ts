@@ -8,6 +8,7 @@ import {
 } from '../notify/webhook-retry.js';
 import { httpPoster, WEBHOOK_TIMEOUT_MS, type WebhookPoster } from '../notify/webhook-jobs.js';
 import { mintLogoutToken } from './logout-token.js';
+import { oidcIssuerFor } from './protocol-base.js';
 
 /**
  * The retry policy is IMPORTED, not restated.
@@ -25,40 +26,39 @@ export interface EnqueueLogoutInput {
   userId: string;
   /** The session that ended, when one session ended rather than all of them. */
   sessionId: string | null;
-  /** The OP issuer, exactly as discovery publishes it. */
-  issuer: string;
 }
 
 /**
- * Queues a logout token for every relying party that asked to hear about this.
+ * Queues a logout for every relying party that asked to hear about this.
  *
  * "Asked to hear" is `backchannelLogoutUri` being set; "this" is a live grant
  * for the user whose session ended. A client with no URI is not told, which is
- * the default, and a client the person never signed into is not told either —
+ * the default, and a client the person never signed into is not told either --
  * there is nothing at the other end to end.
+ *
+ * NO TOKEN IS MINTED HERE, and that is the point. Minting needs the tenant's
+ * issuer and its active signing key, and the callers that end sessions -- a
+ * sync-driven leaver, a deactivation, a password reset, somebody signing out
+ * -- have neither. Requiring them to acquire both in order to revoke access is
+ * exactly how propagation becomes something only some callers remember to do,
+ * which is the failure `refresh-token.ts` already documents happening here
+ * once.
  *
  * Takes a transaction because its caller holds one. A revocation that ended
  * the sessions and then failed to queue the notifications is the same defect
- * as a password reset that changed the password and failed to revoke, and
- * `refresh-token.ts` is the docstring of that having happened here before.
+ * as a password reset that changed the password and failed to revoke.
  *
  * Returns how many were queued, so a caller can say so and a test can tell
  * "told nobody because nobody asked" from "told nobody because it is broken".
  */
 export async function enqueueLogoutDeliveries(
   tx: TenantClient,
-  provider: MasterKeyProvider,
   tenantId: string,
   input: EnqueueLogoutInput,
 ): Promise<number> {
   const clients = await tx.oidcClient.findMany({
     where: { backchannelLogoutUri: { not: null } },
-    select: {
-      id: true,
-      clientId: true,
-      backchannelLogoutUri: true,
-      backchannelLogoutSessionRequired: true,
-    },
+    select: { id: true, clientId: true },
   });
   if (clients.length === 0) return 0;
 
@@ -81,32 +81,14 @@ export async function enqueueLogoutDeliveries(
   }
 
   const targets = clients.filter((c) => held.has(c.clientId));
-  if (targets.length === 0) return 0;
-
-  const key = await loadActiveKey(tenantId, provider, 'oidc');
-  if (key === null) {
-    // No signing key means no verifiable token. Queuing an unsigned one would
-    // send something every relying party correctly rejects, five times.
-    throw new Error('no active OIDC signing key: cannot mint a logout token');
-  }
-
   const now = new Date();
   for (const target of targets) {
-    const token = await mintLogoutToken(
-      {
-        issuer: input.issuer,
-        audience: target.clientId,
-        subject: input.userId,
-        sessionId: input.sessionId,
-        includeSid: target.backchannelLogoutSessionRequired,
-      },
-      key,
-    );
     await tx.logoutDelivery.create({
       data: {
         tenantId,
         clientId: target.id,
-        token,
+        userId: input.userId,
+        sessionId: input.sessionId,
         // Due immediately, so the first attempt needs no special case in the
         // sender's read. The same choice `WebhookDelivery` documents.
         nextAttemptAt: now,
@@ -119,6 +101,8 @@ export async function enqueueLogoutDeliveries(
 
 export interface LogoutJobOptions {
   now?: Date;
+  /** Where this deployment is reached, for deriving the tenant's issuer. */
+  publicUrl?: string;
   poster?: WebhookPoster;
   batchSize?: number;
   allowPrivateAddresses?: boolean;
@@ -141,15 +125,18 @@ export interface LogoutJobOptions {
  */
 export async function runLogoutDeliveryJob(
   tenantId: string,
+  provider: MasterKeyProvider,
   options: LogoutJobOptions = {},
 ): Promise<{ delivered: number; failed: number }> {
   const now = options.now ?? new Date();
   const batchSize = options.batchSize ?? 100;
   const post = options.poster ?? httpPoster(options.allowPrivateAddresses ?? true);
 
+  // `primaryDomain`, because the issuer is the tenant's published identity and
+  // never the request's Host -- see `protocolBase`.
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { id: true },
+    select: { id: true, primaryDomain: true },
   });
   if (tenant === null) return { delivered: 0, failed: 0 };
 
@@ -163,15 +150,40 @@ export async function runLogoutDeliveryJob(
       },
       orderBy: { nextAttemptAt: 'asc' },
       take: batchSize,
-      include: { client: { select: { backchannelLogoutUri: true } } },
+      include: {
+        client: {
+          select: {
+            clientId: true,
+            backchannelLogoutUri: true,
+            backchannelLogoutSessionRequired: true,
+          },
+        },
+      },
     }),
   );
   if (rows.length === 0) return { delivered: 0, failed: 0 };
+
+  // Minted here rather than at enqueue: this is where the issuer and the
+  // signing key are available, and a token minted now cannot have been
+  // stranded by a key rotation since the session ended.
+  const issuer = oidcIssuerFor(tenant, options.publicUrl ?? '');
+  const key = await loadActiveKey(tenantId, provider, 'oidc');
 
   // Phase 2: the network. No transaction is held.
   const results: { id: string; attempt: Awaited<ReturnType<WebhookPoster>> }[] = [];
   for (const row of rows) {
     const url = row.client.backchannelLogoutUri;
+    if (key === null) {
+      // No signing key means no verifiable token. Sending an unsigned one
+      // would deliver something every relying party correctly rejects, five
+      // times over. Retried, because a tenant with no active key is a state an
+      // administrator can fix.
+      results.push({
+        id: row.id,
+        attempt: { error: 'no active OIDC signing key: cannot mint a logout token' },
+      });
+      continue;
+    }
     if (url === null) {
       // The URI was cleared while the delivery was queued. There is nowhere to
       // send it and never will be, so it is spent rather than retried.
@@ -183,9 +195,20 @@ export async function runLogoutDeliveryJob(
     // checks the address it is about to connect to and then pins the socket to
     // it — strictly stronger than anything checkable from here, where the
     // answer could be stale by the time the socket opens.
+    const token = await mintLogoutToken(
+      {
+        issuer,
+        audience: row.client.clientId,
+        subject: row.userId,
+        sessionId: row.sessionId,
+        includeSid: row.client.backchannelLogoutSessionRequired,
+      },
+      key,
+    );
+
     const attempt = await post(
       url,
-      new URLSearchParams({ logout_token: row.token }).toString(),
+      new URLSearchParams({ logout_token: token }).toString(),
       {
         'content-type': 'application/x-www-form-urlencoded',
         'user-agent': 'Syntra',

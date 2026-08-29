@@ -4,10 +4,10 @@ import {
   authorize,
   findApplication,
   isApplicationAssigned,
+  endSessions,
   listSessionsForUser,
   recordEvent,
   resolveApplicationsForUser,
-  revokeSessionById,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
@@ -259,15 +259,11 @@ export async function registerPortalRoutes(
       // signed-in user in the tenant.
       if (!owned) throw new ProblemError(404, 'not-found', 'Session not found');
 
-      await revokeSessionById(tx, id);
-      await recordEvent(tx, {
+      await endSessions(tx, request.session.userId, {
+        trigger: 'self',
         actorUserId: request.session.userId,
-        action: 'session.revoked',
-        targetType: 'User',
-        targetId: request.session.userId,
-        outcome: 'success',
         sourceIp: request.ip,
-        payload: { trigger: 'self', count: 1, sessionId: id, current: isCurrent },
+        onlySessionId: id,
       });
     });
 

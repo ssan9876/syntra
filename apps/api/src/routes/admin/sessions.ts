@@ -1,13 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { idParam } from '@syntra/contracts';
-import {
-  PERMISSIONS,
-  listSessionsForUser,
-  recordEvent,
-  revokeAllForUser,
-  revokeSessionById,
-} from '@syntra/core';
+import { PERMISSIONS, endSessions, listSessionsForUser } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -61,15 +55,11 @@ export async function registerAdminSessionRoutes(app: FastifyInstance): Promise<
         });
         if (!owned) throw new ProblemError(404, 'not-found', 'Session not found');
 
-        await revokeSessionById(tx, sessionId);
-        await recordEvent(tx, {
+        await endSessions(tx, id, {
+          trigger: 'admin',
           actorUserId: request.session.userId,
-          action: 'session.revoked',
-          targetType: 'User',
-          targetId: id,
-          outcome: 'success',
           sourceIp: request.ip,
-          payload: { trigger: 'admin', count: 1, sessionId },
+          onlySessionId: sessionId,
         });
       });
 
@@ -84,17 +74,12 @@ export async function registerAdminSessionRoutes(app: FastifyInstance): Promise<
       const { id } = idParam.parse(request.params);
 
       return request.db(async (tx) => {
-        const count = await revokeAllForUser(tx, id);
-        await recordEvent(tx, {
+        const { sessionsRevoked } = await endSessions(tx, id, {
+          trigger: 'admin',
           actorUserId: request.session.userId,
-          action: 'session.revoked',
-          targetType: 'User',
-          targetId: id,
-          outcome: 'success',
           sourceIp: request.ip,
-          payload: { trigger: 'admin', count },
         });
-        return { sessionsRevoked: count };
+        return { sessionsRevoked };
       });
     },
   );

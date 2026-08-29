@@ -336,6 +336,13 @@ export async function revokeSession(
  * Used after a password reset or a deactivation: every existing session stops
  * working.
  */
+/**
+ * NOT EXPORTED FROM THE PACKAGE. `endSessions` is the only caller, and that is
+ * the mechanism rather than a convention: revoking sessions without revoking
+ * refresh tokens and without telling the relying parties is a defect this
+ * project has already shipped once, and the fix is that it can no longer be
+ * written. See `end-sessions.ts`.
+ */
 export async function revokeAllForUser(
   tx: TenantClient,
   userId: string,
@@ -366,6 +373,7 @@ export async function revokeAllForUser(
  * somebody else has learned it, and leaving them alive would make the change
  * cosmetic.
  */
+/** Not exported from the package either. See `revokeAllForUser` above. */
 export async function revokeAllForUserExcept(
   tx: TenantClient,
   userId: string,

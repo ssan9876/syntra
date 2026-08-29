@@ -393,8 +393,9 @@ export async function startSyncScheduler(
     // The same private-address policy: a back-channel logout URI is an
     // administrator-supplied address the SERVER dials, exactly as a webhook
     // endpoint is.
-    registerLogoutJobs(scheduler, {
+    registerLogoutJobs(scheduler, provider, {
       allowPrivateAddresses: config.outboundAllowPrivate,
+      publicUrl: config.publicUrl,
     });
     registerKeyRotationJob(scheduler, provider);
     registerProvisionJobs(scheduler, provider, transport);

@@ -12,6 +12,7 @@ import {
   isAdministrator,
   localMasterKeyProvider,
   recordEvent,
+  endSessions,
   revokeSession,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
@@ -464,8 +465,23 @@ export async function registerAuthRoutes(
     '/logout',
     { preHandler: requireSession('portal') },
     async (request, reply: FastifyReply) => {
-      const token = request.cookies[SESSION_COOKIE]!;
-      await request.db((tx) => revokeSession(tx, token));
+      // Through the funnel, so signing out reaches the relying parties this
+      // session signed into. This is a WIDENING: `revokeSession` ended the
+      // session here and told nobody, which is what
+      // `configure.md` describes when it says every other service provider
+      // keeps its own session until that session expires.
+      //
+      // A back-channel logout that does not fire on logout would barely fire
+      // at all -- administrative revocation is rare and signing out is
+      // constant -- so it would be single logout in name only.
+      await request.db((tx) =>
+        endSessions(tx, request.session.userId, {
+          trigger: 'logout',
+          actorUserId: request.session.userId,
+          sourceIp: request.ip,
+          onlySessionId: request.session.sessionId,
+        }),
+      );
       reply.clearCookie(SESSION_COOKIE, { path: '/' });
       return { ok: true };
     },
