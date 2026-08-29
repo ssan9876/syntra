@@ -380,7 +380,19 @@ test('configure a target, write a rule, review a run, apply part of it', async (
 
   // A first run is always blocked pending confirmation: every population has
   // a denominator of zero, so no threshold can say anything about it.
-  await expect(page.getByText('This run is blocked')).toBeVisible();
+  //
+  // Reloaded until it is, because the row above appears the moment the worker
+  // INSERTS the run, not when it finishes evaluating it -- and this page does
+  // not poll. On a loaded runner the click lands on a run still `running`,
+  // whose detail shows no verdict at all and never will without a reload.
+  // That is what failed the v1.9.0 release: a race, not a regression.
+  const blocked = page.getByText('This run is blocked');
+  await expect(async () => {
+    if ((await blocked.count()) === 0) {
+      await page.reload();
+    }
+    await expect(blocked).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 60_000 });
   await expect(page.getByText(/never had a run applied/)).toBeVisible();
 
   // Apply part of it: untick the grant, apply the create.
