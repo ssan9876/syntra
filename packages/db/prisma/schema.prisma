@@ -600,6 +600,15 @@ model Session {
   /// application re-enters authorize(), and without this the requirement it
   /// already satisfied would be demanded again on every launch, forever.
   satisfiedFactor   String?
+  /// The address the session was established from, as the trusted-proxy
+  /// resolution reports it. Descriptive, never authoritative: nothing reads
+  /// this to make a decision, and a session is not refused for having moved.
+  ip                String?
+  /// The User-Agent at establishment, truncated on write. Stored so a person
+  /// can recognise a session in a list — a list of scopes and timestamps is
+  /// not recognisable, and an unrecognisable list gets revoked wholesale
+  /// instead of precisely.
+  userAgent         String?
   createdAt         DateTime  @default(now())
   lastSeenAt        DateTime  @default(now())
   absoluteExpiresAt DateTime
@@ -607,6 +616,8 @@ model Session {
 
   @@index([tenantId])
   @@index([userId])
+  /// The inventory query: live sessions for one user.
+  @@index([userId, revokedAt])
 }
 
 model DirectorySource {
