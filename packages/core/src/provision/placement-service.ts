@@ -2,6 +2,7 @@ import { withTenant, type TenantClient } from '@syntra/db';
 import { targetConnectorFor } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
+import { storableCause } from '../storable-text.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { targetWithCredential } from './target-service.js';
 import { placeAt } from './apply.js';
@@ -327,7 +328,7 @@ export async function moveAccount(
     })
     .catch((cause: unknown) => ({
       ok: false as const,
-      message: cause instanceof Error ? cause.message : String(cause),
+      message: storableCause(cause),
     }));
 
   await withTenant(tenantId, (tx) =>

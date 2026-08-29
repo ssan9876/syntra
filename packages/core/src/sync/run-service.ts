@@ -6,6 +6,7 @@ import {
   type SourceRecord,
 } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
+import { storableCause } from '../storable-text.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { mappingsFor, sourceWithPassword } from './source-service.js';
 import {
@@ -187,7 +188,7 @@ export async function previewRun(
         where: { id: run.id },
         data: {
           status: 'failed',
-          error: cause instanceof Error ? cause.message : 'run failed',
+          error: storableCause(cause) || 'run failed',
           finishedAt: new Date(),
         },
       }),

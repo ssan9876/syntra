@@ -853,3 +853,54 @@ describe('correlation on a configured key', () => {
     ).toEqual([]);
   });
 });
+
+describe('a directory read that throws', () => {
+  /**
+   * Active Directory puts a NUL byte in its diagnostic messages -- `data 0` in
+   * a `NoSuchObjectError` is followed by one -- and PostgreSQL refuses U+0000
+   * in a text column.
+   *
+   * So the message explaining the failure is the thing that prevents the
+   * failure being recorded. The catch tries to write it, that write throws
+   * 22021, nothing catches THAT, and the run is left `running` for ever with
+   * an empty `error` column. Seen in the lab: two runs sat `running` for six
+   * and a half hours while the read behind them had failed in 34 ms.
+   *
+   * A sync that fails silently is worse than one that fails loudly: from the
+   * console it is indistinguishable from one still working.
+   */
+  const NUL = String.fromCharCode(0);
+
+  it('records the failure even when the message carries a NUL byte', async () => {
+    vi.spyOn(ldapConnector, 'read').mockImplementation(async function* () {
+      throw new Error(
+        'NoSuchObjectError: 0000208D: NameErr, problem 2001 (NO_OBJECT), data 0' +
+          NUL +
+          ', best match of: DC=acme,DC=test',
+      );
+      yield undefined as never;
+    });
+
+    const run = await previewRun(tenantId, provider, sourceId);
+
+    expect(run.status).toBe('failed');
+    expect(run.error).toContain('NO_OBJECT');
+    expect(run.error).not.toContain(NUL);
+  });
+
+  it('leaves no run stranded at running', async () => {
+    // The column the console reads. A row still `running` after the call has
+    // returned is the shape of the bug, whatever the message says.
+    vi.spyOn(ldapConnector, 'read').mockImplementation(async function* () {
+      throw new Error('plain failure with a NUL ' + NUL + ' in it');
+      yield undefined as never;
+    });
+
+    await previewRun(tenantId, provider, sourceId);
+
+    const stranded = await withTenant(tenantId, (tx) =>
+      tx.syncRun.count({ where: { status: 'running' } }),
+    );
+    expect(stranded).toBe(0);
+  });
+});

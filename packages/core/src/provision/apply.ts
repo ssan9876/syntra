@@ -11,6 +11,7 @@ import {
   type WriteResult,
 } from '@syntra/connectors';
 import { recordEvent } from '../audit/audit-service.js';
+import { storableMessage } from '../storable-text.js';
 import { queueMessage } from '../notify/delivery.js';
 import type { Transport } from '../notify/notification-service.js';
 import { putSecret } from '../vault/vault-service.js';
@@ -981,30 +982,6 @@ async function applyOneAction(
   } catch (cause) {
     return recordActionUnresolved(tenantId, action.id, options.actorUserId, cause);
   }
-}
-
-/**
- * A message from outside, made storable.
- *
- * PostgreSQL refuses U+0000 in a text column and in a jsonb string —
- * `22021, invalid byte sequence for encoding "UTF8": 0x00` — and every message
- * that reaches this module is foreign text: a directory's diagnostic, a
- * driver's exception, whatever a future connector chooses to put in a
- * `WriteResult`. None of it has been near a validator.
- *
- * Stripped where the string is derived rather than at each write, because one
- * message reaches three text columns and an audit payload, and a sanitiser
- * that has to be remembered at four call sites is one that will be forgotten
- * at the fifth.
- *
- * The byte is dropped and the message kept. The text is diagnostic and nothing
- * reads it programmatically, whereas refusing to record an outcome because its
- * explanation is unstorable is what turned a permanent rejection into
- * `in_flight` and sent a create that had already landed looking for the next
- * run to resolve it.
- */
-function storableMessage(raw: string): string {
-  return raw.replaceAll('\u0000', '');
 }
 
 /**
