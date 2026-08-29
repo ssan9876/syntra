@@ -35,6 +35,7 @@ import { registerAdminPersonRoutes } from './routes/admin/persons.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
+import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
 import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
 import { registerAdminApplicationRoutes } from './routes/admin/applications.js';
@@ -289,6 +290,11 @@ export async function buildApp(
     readyUrl: `http://127.0.0.1:${config.port}/health/ready`,
   });
   await app.register(registerAdminSourceRoutes, {
+    prefix: '/api/admin',
+    masterKey: config.masterKey,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+  await app.register(registerAdminPersonSourceRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),

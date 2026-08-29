@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createSourceRequest, updateSourceRequest } from './sync.js';
+import {
+  createPersonSourceRequest,
+  updatePersonSourceRequest,
+} from './person-source.js';
 import { tenantSettingsRequest } from './tenant.js';
 import { patchUserRequest } from './reset.js';
 
@@ -66,5 +70,50 @@ describe('the schemas that carry a security-relevant flag are strict', () => {
     ).toBe(true);
     expect(tenantSettingsRequest.safeParse({ adminMfaRequired: true }).success).toBe(true);
     expect(patchUserRequest.safeParse({ passwordSource: 'upstream' }).success).toBe(true);
+  });
+});
+
+/**
+ * `feedMode` is the most dangerous field in the product: a delta file read as
+ * a snapshot departs everyone who did not change yesterday. There is no
+ * default in the schema, the migration, the service or the form, and these
+ * assert there is none at the outermost edge either.
+ */
+describe('a person source request refuses what it does not know', () => {
+  it('refuses a misspelled feed mode key', () => {
+    const result = updatePersonSourceRequest.safeParse({ feedMod: 'delta' });
+    expect(result.success).toBe(false);
+  });
+
+  it('refuses a create with no feed mode at all', () => {
+    const result = createPersonSourceRequest.safeParse({
+      name: 'HR',
+      type: 'sftpDelimited',
+      config: {},
+      credential: 'x',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('refuses a feed mode that is neither snapshot nor delta', () => {
+    const result = createPersonSourceRequest.safeParse({
+      name: 'HR',
+      type: 'sftpDelimited',
+      feedMode: 'incremental',
+      config: {},
+      credential: 'x',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a create that names one', () => {
+    const result = createPersonSourceRequest.safeParse({
+      name: 'HR',
+      type: 'sftpDelimited',
+      feedMode: 'snapshot',
+      config: { host: 'hr.test' },
+      credential: 'x',
+    });
+    expect(result.success).toBe(true);
   });
 });
