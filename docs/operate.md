@@ -18,6 +18,10 @@ and can roll back. The environment variables that configure it —
 in [Configuration](configure.md#updating-from-the-console); all are optional,
 and an install that sets none of them simply has no update button.
 
+The scripts themselves are not tied to the lab: `SYNTRA_ROOT` moves the
+release layout away from `/opt/syntra`, and `SYNTRA_RELEASE_REPO` names the
+GitHub repository whose releases they download, for a fork that cuts its own.
+
 For the container path (`docker-compose.yml`), an upgrade is pulling a newer
 image: set `SYNTRA_VERSION` to the release you want and re-run
 `docker compose up -d` (see [Install](install.md#running-it-for-real-the-container-path)).
