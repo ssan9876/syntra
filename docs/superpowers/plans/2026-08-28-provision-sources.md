@@ -2057,10 +2057,10 @@ Create `packages/core/src/person-source/source-service.test.ts`:
 
 ```ts
 import { beforeEach, describe, expect, it } from 'vitest';
-import { withTenant } from '@syntra/db';
+import { prisma, withTenant } from '@syntra/db';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { getSecret } from '../vault/vault-service.js';
-import { newTenant } from '../sync/test-support.js';
+import { resetDatabase } from '@syntra/db/src/test-support.js';
 import {
   PersonSourceOwnsPersonsError,
   UnassignableFieldError,
@@ -2075,7 +2075,8 @@ const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 
 let tenantId: string;
 beforeEach(async () => {
-  tenantId = await newTenant();
+  await resetDatabase();
+  tenantId = (await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } })).id;
 });
 
 const config = {
@@ -2532,7 +2533,7 @@ export async function deletePersonSource(
 Run: `pnpm vitest run packages/core/src/person-source/source-service.test.ts`
 Expected: PASS, 8 tests.
 
-If `newTenant` is not exported from `packages/core/src/sync/test-support.ts`, use whichever helper that file exposes for creating a tenant and adjust the import — do not add a second helper.
+Tenant setup follows the pattern every core test uses: `resetDatabase()` from `@syntra/db/src/test-support.js`, then `prisma.tenant.create`. There is no shared `newTenant` helper in this repo and this plan does not add one.
 
 - [ ] **Step 5: Commit**
 
@@ -3408,10 +3409,10 @@ Create `packages/core/src/person-source/run-service.test.ts`:
 
 ```ts
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { withTenant } from '@syntra/db';
+import { prisma, withTenant } from '@syntra/db';
 import { FakePersonSource } from '@syntra/connectors/testing';
 import { localMasterKeyProvider } from '../vault/master-key.js';
-import { newTenant } from '../sync/test-support.js';
+import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createPersonSource, setPersonMappings } from './source-service.js';
 import { APPLY_ORDER, applyImportRun, previewImportRun } from './run-service.js';
 
@@ -3442,7 +3443,8 @@ function row(employeeId: string, over: Record<string, string> = {}) {
 }
 
 beforeEach(async () => {
-  tenantId = await newTenant();
+  await resetDatabase();
+  tenantId = (await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } })).id;
   const source = await withTenant(tenantId, async (tx) => {
     const created = await createPersonSource(tx, provider, {
       name: 'HR',
@@ -3927,10 +3929,18 @@ export async function applyImportRun(
           where: { id: change.id },
           data: { status: 'applied' },
         });
+        // The full AuditInput shape: this type has no optional fields and no
+        // `metadata`. An import has no acting user and no request, so
+        // `actorUserId` and `sourceIp` are null -- which is the honest value,
+        // not a placeholder.
         await recordEvent(tx, {
+          actorUserId: null,
           action: `person_import.${change.changeType}`,
           targetType: change.recordType,
           targetId: change.targetId ?? change.externalId ?? runId,
+          outcome: 'success',
+          sourceIp: null,
+          payload: { runId, externalId: change.externalId },
         });
       });
       applied += 1;
@@ -4133,9 +4143,9 @@ Create `packages/core/src/person-source/jobs.test.ts`:
 
 ```ts
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { withTenant } from '@syntra/db';
+import { prisma, withTenant } from '@syntra/db';
 import { localMasterKeyProvider } from '../vault/master-key.js';
-import { newTenant } from '../sync/test-support.js';
+import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createPersonSource } from './source-service.js';
 import { PersonSourceDisabledError } from './source-service.js';
 import {
@@ -4145,11 +4155,12 @@ import {
 } from './jobs.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
-const scheduler = { schedule: vi.fn(), unschedule: vi.fn(), send: vi.fn() };
+const scheduler = { schedule: vi.fn(), unschedule: vi.fn(), enqueue: vi.fn() };
 
 let tenantId: string;
 beforeEach(async () => {
-  tenantId = await newTenant();
+  await resetDatabase();
+  tenantId = (await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } })).id;
   scheduler.schedule.mockReset();
   scheduler.unschedule.mockReset();
   scheduler.send.mockReset();
@@ -4294,7 +4305,8 @@ export async function queueImportRun(
     });
   });
 
-  await scheduler.send(PERSON_IMPORT_JOB, {
+  // `enqueue`, not `send`: that is the name on the Scheduler interface.
+  await scheduler.enqueue(PERSON_IMPORT_JOB, {
     tenantId,
     sourceId,
     runId: run.id,
@@ -4627,10 +4639,13 @@ app.post(
     if (result.hostKey !== undefined) {
       await request.db((tx) =>
         recordEvent(tx, {
+          actorUserId: request.session.userId,
           action: 'person_source.host_key_seen',
           targetType: 'PersonSource',
           targetId: id,
-          metadata: {
+          outcome: 'success',
+          sourceIp: request.ip ?? null,
+          payload: {
             fingerprint: result.hostKey.fingerprint,
             status: result.hostKey.status,
           },
@@ -4669,10 +4684,13 @@ app.post(
         config: { ...config, hostKeyFingerprint: fingerprint },
       });
       await recordEvent(tx, {
+        actorUserId: request.session.userId,
         action: 'person_source.host_key_accepted',
         targetType: 'PersonSource',
         targetId: id,
-        metadata: { fingerprint },
+        outcome: 'success',
+        sourceIp: request.ip ?? null,
+        payload: { fingerprint },
       });
       return updated;
     });
@@ -4682,7 +4700,7 @@ app.post(
 
 The remaining routes are mechanical translations of `sources.ts`: map `PersonSourceOwnsPersonsError` to a 409 carrying `{ persons }`, `UnassignableFieldError` to a 400 with problem type `unassignable-field`, `PersonSourceDisabledError` to a 409 with `source-disabled`, and `UnknownPersonSourceTypeError` to a 400. Call `applyPersonSourceSchedule` after every create and update and `removePersonSourceSchedule` after a delete, exactly as `sources.ts` calls its equivalents — without which a source created with a cron expression is not scheduled until the process restarts.
 
-If `recordEvent`'s `AuditInput` has no `metadata` field, put the fingerprint in whichever field that type provides for detail rather than widening the type.
+`AuditInput` is `{ actorUserId, action, targetType, targetId, outcome, sourceIp, payload }` with no optional fields — pass all seven. Match how the surrounding routes obtain `actorUserId` and `sourceIp`; if they use different accessors than `request.session.userId` and `request.ip`, follow theirs.
 
 - [ ] **Step 7: Register the routes**
 
