@@ -45,6 +45,32 @@ container as part of every update (`PG_CONTAINER`, see
 safety net for the update itself, not a substitute for a real backup
 schedule of the volume above.
 
+## What a session records about a person
+
+A session row carries the address it was established from and the browser's
+`User-Agent`, so a person reading **Where you are signed in** on their security
+page — or an administrator reading **Sessions** on an account — can tell one
+session from another. A list nobody can read is a list that gets revoked
+wholesale instead of precisely, which is the outcome the columns exist to
+avoid.
+
+Three things are worth knowing about that data:
+
+- **Nothing reads it to make a decision.** A session is never refused for
+  having moved address or changed browser. Both fields are descriptive, which
+  is also why it is safe that both are attacker-influenced.
+- **It ages out with the session.** There is no separate retention schedule:
+  the columns live and die with the row they are on, and a session's row is
+  what expiry and revocation act on.
+- **Revoking marks the row revoked; it does not delete it.** That is the same
+  rule as everything below, applied to sessions — the record of a session
+  having existed and having been ended is the evidence an offboarding actually
+  happened.
+
+Sessions predating the upgrade that added these columns have neither, and show
+as unknown. They were not backfilled, because a backfill would have had to
+invent the values.
+
 ## Deactivate, never delete
 
 There is no Delete anywhere in the directory, and that is a design decision

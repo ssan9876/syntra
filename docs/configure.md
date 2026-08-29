@@ -485,7 +485,12 @@ session lasts twelve hours, or one idle hour; an administrative one lasts two
 hours, or fifteen idle minutes. That is a deliberate trade against re-evaluating
 policy on every request, and it is why an administrator who turns a rule on can
 still take it away again from the same session. If you need a rule to bite
-immediately, revoke the sessions as well.
+immediately, revoke the sessions as well: **Sessions** on the account in the
+console lists everything that account currently holds — where from, which
+browser, when it was established and when it was last used — with a revoke on
+each row and a **Sign out everywhere** above them. Over the API that is
+`GET`, `DELETE` and `POST /api/admin/users/:id/sessions[/revoke]`, and a person
+can end their own from **Where you are signed in** on their security page.
 
 **Deactivation is the exception, and it is immediate** — see
 [Operate](operate.md#deactivate-never-delete).
@@ -495,15 +500,31 @@ immediately, revoke the sessions as well.
 Each of these is a deliberate absence rather than an oversight, and each is
 worth reading before this is put in front of users.
 
-**Single logout does not propagate to other service providers.** Ending a
+**SAML single logout does not propagate to other service providers.** Ending a
 session through `/saml/slo` ends it *at Syntra* and answers the service
-provider that asked. Every other service provider the same person signed into
-still holds its own session until that session expires. Front-channel
-propagation needs the browser to visit each one in turn; back-channel needs an
-outbound HTTP client per service provider and a retry queue. Neither is here,
-so **single logout is a local logout with a protocol answer attached**, and an
-offboarding procedure must not rely on it. Deactivating the account does work
-immediately, because a user's status is re-read on every request.
+provider that asked. Every other SAML service provider the same person signed
+into still holds its own session until that session expires. Front-channel
+propagation needs the browser to visit each one in turn, and one dead service
+provider stalls the rest; back-channel needs the SOAP binding, whose support
+across service providers is patchy. Neither is here, so **SAML single logout is
+a local logout with a protocol answer attached, and an offboarding procedure
+must not rely on it.** Deactivating the account does work immediately, because
+a user's status is re-read on every request.
+
+**OIDC relying parties are told, if they asked to be.** Set a **Back-channel
+logout endpoint** on the application's SSO settings and Syntra POSTs a signed
+logout token there whenever that person's session ends — an administrator
+revoking it, the person signing out, a password reset or change, a
+deactivation, or a sync-driven leaver. The token is signed with the same key
+the id tokens are, so it verifies against the JWKS the relying party already
+fetches, and `backchannel_logout_supported` is advertised in discovery.
+
+A client with no endpoint configured is not told, which is the default. A
+delivery that fails is retried on the same ladder webhooks use — 30 seconds, 2
+minutes, 10 minutes, 1 hour, 6 hours — and a delivery that runs out of attempts
+stays in the table with the status and error it stopped on. **A failed logout
+is a row somebody can look at, not a silent gap**, which is the reason this is
+back-channel rather than a chain of browser redirects.
 
 **There is no single logout on the consuming side either.** Signing out of
 Syntra does not sign the person out of the upstream identity provider that
@@ -515,16 +536,28 @@ session Syntra had already ended is ended, and the request that asked for it
 was verified. A service provider that requires a signed LogoutResponse is not
 served today; `logoutRedirectUrl` and `logoutPostForm` are where that would go.
 
-**Token revocation and introspection are advertised and do not work.** The
-discovery document lists `<issuer>/token/revocation` and
-`<issuer>/token/introspection` because oidc-provider publishes them. Client
-authentication for the token endpoint is Syntra's own — constant-time, against
-the stored SHA-256 hash — and oidc-provider is handed a placeholder secret it
-never learns the real value of, which is what makes `/token` safe. The
-consequence is that every *other* client-authenticated endpoint answers
-`invalid_client` to a client presenting its real secret. Neither endpoint is
-required by spec section 7. `oidc-boundary.test.ts` states this in a test so it
-is not rediscovered.
+**Token revocation and introspection are Syntra's own routes.** Both are
+registered in the plugin that owns client authentication rather than falling
+through to `oidc-provider`, because `oidc-provider` is handed a *placeholder*
+client secret it never learns the real value of — that is what makes `/token`
+safe, and it is why every endpoint the library authenticates for itself would
+refuse a client presenting its correct one. Client authentication on these two
+is constant-time against the stored SHA-256 hash, exactly as `/token` does it.
+
+Two behaviours are worth knowing before you integrate:
+
+- **Revocation always answers `200`** — whether the token existed, had already
+  been revoked, or belongs to another client. RFC 7009 requires it, and it is
+  also the only answer that does not turn the endpoint into an oracle for
+  guessing other clients' tokens. Revoking a refresh token takes its whole
+  grant, so the access tokens issued under it die with it.
+- **A client may introspect only its own tokens.** Anything else — unknown,
+  expired, revoked, or issued to a different client — is `{"active": false}`,
+  with no way to tell those cases apart. A client holding one token must not be
+  able to learn the subject and scope of another.
+
+Everything else `oidc-provider` owns still cannot see a real client secret, and
+that is still correct.
 
 **A refused request signature is not in the audit log.** A service provider
 whose `AuthnRequest` fails signature verification gets a 400 or a 409 naming

@@ -32,7 +32,7 @@ uploads.
 |---|---|---|
 | **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications, web console. Users, groups, org units and people can be created, edited and deactivated from the console — never deleted |
 | **Directory Sync** | built | LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, and console screens for the lot: a source editor with a connection test, a mapping editor, and a run review with per-change skip and partial apply |
-| **Access** | built | Application catalog and assignments, authentication policy, TOTP and WebAuthn second factors, recovery codes, self-service password reset, step-up MFA for the console. **SAML 2.0 identity provider**: both bindings, SP-initiated and IdP-initiated, signed assertions, optional encryption, front-channel single logout, metadata by upload or URL. **OpenID Connect provider**: authorization code with PKCE, refresh-token rotation, discovery, JWKS with overlapping rotation, UserInfo, RP-initiated logout, and a bounded client-credentials grant. **Upstream federation**: Syntra as a SAML service provider and as an OIDC relying party, with just-in-time provisioning and policy-driven routing. Every path reaches the same `authorize()`. See [what it does not do](docs/configure.md#what-the-federation-half-does-not-do) |
+| **Access** | built | Application catalog and assignments, authentication policy, TOTP and WebAuthn second factors, recovery codes, self-service password reset, step-up MFA for the console, and a session inventory an administrator or the person themselves can revoke from. **SAML 2.0 identity provider**: both bindings, SP-initiated and IdP-initiated, signed assertions, optional encryption, front-channel single logout, metadata by upload or URL. **OpenID Connect provider**: authorization code with PKCE, refresh-token rotation, discovery, JWKS with overlapping rotation, UserInfo, RP-initiated logout, working token revocation and introspection, back-channel logout to relying parties that ask for it, and a bounded client-credentials grant. **Upstream federation**: Syntra as a SAML service provider and as an OIDC relying party, with just-in-time provisioning and policy-driven routing. Every path reaches the same `authorize()`. See [what it does not do](docs/configure.md#what-the-federation-half-does-not-do) |
 | **Provision** | built | Source systems, business rules, evaluation and enforcement, target systems and entitlements, previewed runs in the same idiom as Directory Sync. Org units drive placement: materialise a unit against a target and the accounts of everyone in it are created in that container, which Provision creates where an administrator asked for it by name and never to satisfy a template |
 | **Provision — Sources** | built | The HR feed. A delimited export read over SFTP on a schedule, with the server's host key pinned and no trust-on-first-use, mapped onto persons and contracts, and previewed as a reviewable diff with per-change skip and partial apply. Two guards stand between a bad export and the register: one measures what a run does against what its own source owns, the other whether the person register itself is collapsing. Absence means a leaver only for a source declared to carry a full snapshot — never for a delta, never for a row that was read but could not be mapped, and never at all on a run whose failures cannot be attributed to anybody, which is what a renamed column looks like |
 | **Automate** | built | Product catalog, self-service requests, approval workflows, resource delegation so a team lead manages a group without an administrative session, and an expiry sweep with a proportional guard |
@@ -130,11 +130,14 @@ Every sign-in, elevation and application launch goes through one
 auditing live in one place instead of being reimplemented per protocol.
 Syntra is a SAML 2.0 identity provider and an OpenID Connect provider, with
 TOTP and WebAuthn second factors, self-service password reset, and upstream
-federation to another SAML or OIDC provider. What each of those does, what
-they deliberately don't (single logout propagation, SAML key rotation,
-token revocation/introspection, a consent screen), the audit events they
-emit, and the one exemption to `authorize()` (the OAuth 2.0 client
-credentials grant) are all in
+federation to another SAML or OIDC provider. Taking access away goes through
+one function too: revoking a session — by an administrator, by the person, or
+by a password reset, a deactivation or a sync-driven leaver — revokes the
+refresh tokens with it and sends a signed logout token to every OIDC relying
+party that asked to hear about it. What each of those does, what they
+deliberately don't (SAML single logout propagation, SAML key rotation, a
+consent screen), the audit events they emit, and the one exemption to
+`authorize()` (the OAuth 2.0 client credentials grant) are all in
 [Configure](docs/configure.md#access-signing-in-second-factors-and-policy).
 
 ## Tests
