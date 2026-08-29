@@ -21,7 +21,7 @@ export interface PersonProposedChange {
   message?: string;
 }
 
-export interface ExistingContract {
+export interface ExistingSourceContract {
   id: string;
   externalId: string | null;
   sequence: number;
@@ -37,18 +37,18 @@ export interface ExistingContract {
   fte: string | null;
 }
 
-export interface ExistingPerson {
+export interface ExistingSourcePerson {
   id: string;
   externalId: string;
   status: string;
   fields: Record<string, string>;
-  contracts: ExistingContract[];
+  contracts: ExistingSourceContract[];
 }
 
 export interface PersonDiffInput {
   mapped: MappedPerson[];
   /** Only persons this source owns. A person it does not own is not its business. */
-  existing: ExistingPerson[];
+  existing: ExistingSourcePerson[];
   feedMode: FeedMode;
   managerIdByExternalId: Map<string, string>;
   /**
@@ -176,7 +176,7 @@ function contractCreate(
 
 function contractUpdate(
   externalId: string,
-  stored: ExistingContract,
+  stored: ExistingSourceContract,
   contract: MappedContract,
   primaryKey: string | null,
   input: PersonDiffInput,

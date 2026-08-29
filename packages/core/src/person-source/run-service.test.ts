@@ -4,7 +4,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { FakePersonSource } from '@syntra/connectors/testing';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createPersonSource, setPersonMappings } from './source-service.js';
-import { APPLY_ORDER, applyImportRun, previewImportRun } from './run-service.js';
+import { PERSON_IMPORT_APPLY_ORDER, applyImportRun, previewImportRun } from './run-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 
@@ -370,12 +370,12 @@ describe('applyImportRun', () => {
    * written.
    */
   it('orders departure after every other change type', () => {
-    expect(APPLY_ORDER[APPLY_ORDER.length - 1]).toBe('depart_person');
-    expect(APPLY_ORDER.indexOf('create_person')).toBeLessThan(
-      APPLY_ORDER.indexOf('create_contract'),
+    expect(PERSON_IMPORT_APPLY_ORDER[PERSON_IMPORT_APPLY_ORDER.length - 1]).toBe('depart_person');
+    expect(PERSON_IMPORT_APPLY_ORDER.indexOf('create_person')).toBeLessThan(
+      PERSON_IMPORT_APPLY_ORDER.indexOf('create_contract'),
     );
-    expect(APPLY_ORDER.indexOf('end_contract')).toBeLessThan(
-      APPLY_ORDER.indexOf('depart_person'),
+    expect(PERSON_IMPORT_APPLY_ORDER.indexOf('end_contract')).toBeLessThan(
+      PERSON_IMPORT_APPLY_ORDER.indexOf('depart_person'),
     );
   });
 });

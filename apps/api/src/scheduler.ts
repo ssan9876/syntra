@@ -3,6 +3,7 @@ import { prisma, withTenant } from '@syntra/db';
 import {
   applyAutomateSchedules,
   applyGovernSchedules,
+  applyPersonSourceSchedule,
   applySourceSchedule,
   applyWebhookSchedule,
   applyTargetSchedule,
@@ -16,6 +17,7 @@ import {
   registerAutomateJobs,
   registerGovernJobs,
   registerProvisionJobs,
+  registerPersonImportJobs,
   registerSyncJobs,
   registerWebhookJobs,
   scheduleKeyRotation,
@@ -307,6 +309,35 @@ export async function scheduleBackgroundWork(
     // does not come up.
     logger.error({ err: cause }, 'could not verify the registered schedules');
   }
+
+  for (const tenant of tenants) {
+    let personSources;
+    try {
+      // Every source, not only the eligible ones -- the same reasoning the
+      // directory-source loop above records. A source disabled or unscheduled
+      // while this process was down still has a schedule row waiting for it,
+      // and reading the whole list lets `applyPersonSourceSchedule` remove
+      // those as well as add the rest.
+      personSources = await withTenant(tenant.id, (tx) => tx.personSource.findMany());
+    } catch (cause) {
+      logger.error(
+        { err: cause, tenantId: tenant.id },
+        'failed to load person sources for scheduling',
+      );
+      continue;
+    }
+
+    for (const source of personSources) {
+      try {
+        await applyPersonSourceSchedule(scheduler, tenant.id, source);
+      } catch (cause) {
+        logger.error(
+          { err: cause, tenantId: tenant.id, sourceId: source.id },
+          'failed to schedule person source import',
+        );
+      }
+    }
+  }
 }
 
 /**
@@ -345,6 +376,7 @@ export async function startSyncScheduler(
     // watching.
     const transport = options.transport ?? smtpTransport(config.smtpUrl);
     registerSyncJobs(scheduler, provider);
+    registerPersonImportJobs(scheduler, provider);
     // The master key provider is NOT optional: the sender unseals each
     // endpoint's signing secret to sign the body, and one registered without
     // it would post every delivery unsigned, to receivers that would correctly

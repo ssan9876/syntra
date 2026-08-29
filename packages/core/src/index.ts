@@ -85,6 +85,35 @@ export * from './sync/source-service.js';
 export * from './sync/run-service.js';
 export * from './sync/apply.js';
 export * from './sync/jobs.js';
+
+// Provision -- Sources: the HR feed.
+//
+// Grepped workspace-wide before adding, as every block above was: none of
+// `mapPersonRecord`, `unassignablePersonFields`, `ASSIGNABLE_PERSON_FIELDS`,
+// `ASSIGNABLE_CONTRACT_FIELDS`, `createPersonSource`, `setPersonMappings`,
+// `personMappingsFor`, `deletePersonSource`, `diffPersons`,
+// `evaluatePersonGuard`, `previewImportRun`, `applyImportRun`,
+// `skipImportChange`, `listImportRuns`, `queueImportRun`,
+// `applyPersonSourceSchedule`, `runPersonImportJob`, `PERSON_IMPORT_JOB`,
+// `FEED_MODES` or `ABSENT_FROM_FILE` appears anywhere else in this package.
+//
+// `sync/` names the same CONCEPTS -- `previewRun`, `applyRun`, `skipChange`,
+// `listRuns`, `SYNC_JOB`, `ASSIGNABLE_FIELDS`, `unassignableFields` -- and
+// every one of them is deliberately spelled differently here. That is the
+// collision which has bitten this codebase four times: under TS2308 the barrel
+// exports NEITHER side, silently, so the import pipeline would compile, pass
+// its own tests, and be unreachable from `apps/api`.
+//
+// `APPLY_ORDER` and `ExistingPerson`/`ExistingContract` were renamed to
+// `PERSON_IMPORT_APPLY_ORDER` and `ExistingSourcePerson`/
+// `ExistingSourceContract` for the same reason: nothing collides with them
+// today, and both were general enough that something eventually would.
+export * from './person-source/mapping.js';
+export * from './person-source/source-service.js';
+export * from './person-source/diff.js';
+export * from './person-source/guard.js';
+export * from './person-source/run-service.js';
+export * from './person-source/jobs.js';
 export * from './access/application-service.js';
 export * from './access/catalog/index.js';
 export * from './access/assignment-service.js';

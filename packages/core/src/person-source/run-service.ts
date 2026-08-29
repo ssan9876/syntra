@@ -4,7 +4,7 @@ import { currentTenant } from '../tenant-context.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { isPersonMappingFailure, mapPersonRecord, type MappedPerson } from './mapping.js';
-import { diffPersons, type ExistingPerson, type PersonChangeType } from './diff.js';
+import { diffPersons, type ExistingSourcePerson, type PersonChangeType } from './diff.js';
 import { evaluatePersonGuard } from './guard.js';
 import { personMappingsFor, personSourceWithCredential } from './source-service.js';
 
@@ -15,7 +15,7 @@ import { personMappingsFor, personSourceWithCredential } from './source-service.
  * would have kept them active is still pending. Persons before contracts,
  * because a contract names a person this run may only just have created.
  */
-export const APPLY_ORDER: readonly PersonChangeType[] = [
+export const PERSON_IMPORT_APPLY_ORDER: readonly PersonChangeType[] = [
   'create_person',
   'create_contract',
   'update_contract',
@@ -31,7 +31,7 @@ export const ABSENT_FROM_FILE = 'this person is not in the file';
 async function loadExisting(
   tx: TenantClient,
   sourceId: string,
-): Promise<ExistingPerson[]> {
+): Promise<ExistingSourcePerson[]> {
   const rows = await tx.person.findMany({
     where: { sourceId },
     include: { contracts: true },
@@ -456,8 +456,8 @@ export async function applyImportRun(
 
   const ordered = [...changes].sort(
     (a, b) =>
-      APPLY_ORDER.indexOf(a.changeType as PersonChangeType) -
-      APPLY_ORDER.indexOf(b.changeType as PersonChangeType),
+      PERSON_IMPORT_APPLY_ORDER.indexOf(a.changeType as PersonChangeType) -
+      PERSON_IMPORT_APPLY_ORDER.indexOf(b.changeType as PersonChangeType),
   );
 
   let applied = 0;

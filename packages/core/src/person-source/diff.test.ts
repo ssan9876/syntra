@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diffPersons, type ExistingPerson, type PersonDiffInput } from './diff.js';
+import { diffPersons, type ExistingSourcePerson, type PersonDiffInput } from './diff.js';
 import type { MappedPerson } from './mapping.js';
 
 const start = new Date('2026-01-05T00:00:00Z');
@@ -28,7 +28,7 @@ function mapped(externalId: string, over: Partial<MappedPerson> = {}): MappedPer
   };
 }
 
-function existing(externalId: string, over: Partial<ExistingPerson> = {}): ExistingPerson {
+function existing(externalId: string, over: Partial<ExistingSourcePerson> = {}): ExistingSourcePerson {
   return {
     id: `p-${externalId}`,
     externalId,
