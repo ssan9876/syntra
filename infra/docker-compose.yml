@@ -99,7 +99,14 @@ services:
     command: syntra:Syntra!Passw0rd:::export
     ports: ['2222:22']
     volumes:
-      - ./sftp/people.csv:/home/syntra/export/people.csv:ro
+      # The DIRECTORY, not the file inside it.
+      #
+      # A single-file bind mount is resolved once, and a host process that
+      # rewrites the file can leave the container pointing at nothing -- which
+      # surfaces as a bare SFTP "Failure" on open, with a healthy connection
+      # and a successful login in the server's log. The end-to-end spec
+      # rewrites this export between its two runs, so it hit that every time.
+      - ./sftp:/home/syntra/export:ro
 
   maildev:
     image: maildev/maildev:2.1.0

@@ -197,6 +197,30 @@ export function PersonSourceDetailPage() {
     }
   }
 
+  /**
+   * Runs the source now and lands on the run it started.
+   *
+   * The endpoint answers 202 with the queued row rather than the result: the
+   * read is a background job, and holding the request open for an SFTP fetch
+   * is the shape that outlasts a proxy timeout.
+   */
+  async function runNow() {
+    if (sourceId === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const run = await api<{ id: string }>(
+        `/api/admin/person-sources/${sourceId}/run`,
+        { method: 'POST' },
+      );
+      navigate(`/admin/person-import-runs/${run.id}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveMappings() {
     if (sourceId === null) return;
     setBusy(true);
@@ -309,9 +333,14 @@ export function PersonSourceDetailPage() {
         <Panel
           title="Connection"
           actions={
-            <Button onClick={test} disabled={busy} variant="secondary">
-              Test connection
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={test} disabled={busy} variant="secondary">
+                Test connection
+              </Button>
+              <Button onClick={runNow} disabled={busy}>
+                Run now
+              </Button>
+            </div>
           }
         >
           {testMessage && <p className="text-muted">{testMessage}</p>}
