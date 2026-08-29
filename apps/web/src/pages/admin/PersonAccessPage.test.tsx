@@ -524,3 +524,133 @@ describe('the placement control', () => {
     expect(await screen.findByText(/on its next run/i)).toBeVisible();
   });
 });
+
+/**
+ * A fetch that answers per URL, for the adoption control.
+ *
+ * The candidate endpoint is the interesting one: it is what turns "confirm
+ * this name" into "confirm this object", so the tests below care a great deal
+ * whether it was called and what it answered.
+ */
+function mockAdoption(options: {
+  status?: string;
+  candidate?: { anchor: string; dn: string; attributes: Record<string, string[]> };
+  candidateProblem?: { type: string; title: string; status: number; detail: string };
+}) {
+  const sent: { url: string; method: string; body: unknown }[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    if (method !== 'GET') {
+      sent.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return Promise.resolve(json({ adopted: true, anchor: 'a1', dn: 'CN=x' }));
+    }
+    if (url.includes('/adoption-candidate')) {
+      return options.candidateProblem
+        ? Promise.resolve(json(options.candidateProblem, options.candidateProblem.status))
+        : Promise.resolve(
+            json(
+              options.candidate ?? {
+                anchor: 'a1',
+                dn: 'CN=Anna Novak,OU=Users,DC=acme,DC=test',
+                attributes: {},
+              },
+            ),
+          );
+    }
+    if (url.includes('/placements/')) return Promise.resolve(json({ placement: null }));
+    return Promise.resolve(
+      json({
+        personId: 'p1',
+        accounts: [account({ status: options.status ?? 'conflict' })],
+      }),
+    );
+  });
+  return sent;
+}
+
+describe('the adoption control', () => {
+  it('offers adoption only for an account in conflict', async () => {
+    mockAdoption({ status: 'active' });
+    renderPage();
+    await screen.findByText(/placed by the rule/i);
+    expect(screen.queryByRole('button', { name: /^adopt$/i })).toBeNull();
+  });
+
+  it('shows the object it would bind before binding it', async () => {
+    // The safeguard adoption replaces is a technical one. What stands in for
+    // it is a human having looked at a SPECIFIC object, so a dialog that
+    // showed only the name would be confirming a string.
+    mockAdoption({});
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: /^adopt$/i }));
+    expect(
+      await screen.findByText('CN=Anna Novak,OU=Users,DC=acme,DC=test'),
+    ).toBeVisible();
+  });
+
+  it('says what adopting commits them to', async () => {
+    // It is not obvious and it is not undone by the same button: the account
+    // joins the leaver ladder from here on.
+    mockAdoption({});
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: /^adopt$/i }));
+    expect(await screen.findByText(/Syntra manages this account/i)).toBeVisible();
+  });
+
+  it('will not submit without a reason', async () => {
+    mockAdoption({});
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: /^adopt$/i }));
+    await screen.findByText('CN=Anna Novak,OU=Users,DC=acme,DC=test');
+    expect(screen.getByRole('button', { name: /adopt this account/i })).toBeDisabled();
+  });
+
+  it('sends the reason with the adoption', async () => {
+    const sent = mockAdoption({});
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: /^adopt$/i }));
+    await screen.findByText('CN=Anna Novak,OU=Users,DC=acme,DC=test');
+    await userEvent.type(screen.getByLabelText(/why/i), 'hers, confirmed');
+    await userEvent.click(screen.getByRole('button', { name: /adopt this account/i }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.url).toContain('/adopt');
+    expect(sent[0]!.body).toEqual({ reason: 'hers, confirmed' });
+  });
+
+  it('offers creating it again only when the candidate is not visible', async () => {
+    // Secondary, never the default. The administrator is answering a question
+    // Syntra cannot, and the wrong answer recreates the same conflict for ever.
+    mockAdoption({
+      candidateProblem: {
+        type: 'https://syntra/problems/candidate-not-visible',
+        title: 'That account is not visible here',
+        status: 404,
+        detail: 'no object with that name is inside OU=Users,DC=acme,DC=test',
+      },
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: /^adopt$/i }));
+    expect(await screen.findByText(/OU=Users,DC=acme,DC=test/)).toBeVisible();
+    expect(screen.getByRole('button', { name: /create it again/i })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /adopt this account/i })).toBeNull();
+  });
+
+  it('sends ifNoCandidate only on the create-again path', async () => {
+    const sent = mockAdoption({
+      candidateProblem: {
+        type: 'https://syntra/problems/candidate-not-visible',
+        title: 'That account is not visible here',
+        status: 404,
+        detail: 'no object with that name is inside OU=Users,DC=acme,DC=test',
+      },
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: /^adopt$/i }));
+    await screen.findByRole('button', { name: /create it again/i });
+    await userEvent.type(screen.getByLabelText(/why/i), 'IT deleted it');
+    await userEvent.click(screen.getByRole('button', { name: /create it again/i }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({ reason: 'IT deleted it', ifNoCandidate: 'reset' });
+  });
+});
