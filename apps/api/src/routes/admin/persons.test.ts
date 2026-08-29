@@ -3,6 +3,9 @@ import { withTenant } from '@syntra/db';
 import {
   PERMISSIONS,
   assignRole,
+  createPersonSource,
+  localMasterKeyProvider,
+  setPersonMappings,
   createRole,
   createUser,
   hashPassword,
@@ -594,5 +597,136 @@ describe('duplicate people', () => {
     });
 
     expect(res.statusCode).toBe(201);
+  });
+});
+
+describe('a person a source owns', () => {
+  const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
+
+  /** A source that maps givenName, and a person it owns. */
+  async function sourceOwnedPerson() {
+    return withTenant(ctx.tenantId, async (tx) => {
+      const source = await createPersonSource(tx, provider, {
+        name: 'HR',
+        type: 'sftpDelimited',
+        feedMode: 'snapshot',
+        config: { host: 'hr.test', username: 'u', remotePath: '/f.csv' },
+        credential: 'x',
+      });
+      await setPersonMappings(tx, source.id, [
+        {
+          recordType: 'person',
+          sourceColumn: 'employeeId',
+          targetField: 'externalId',
+          transform: 'trim',
+          isCorrelation: true,
+        },
+        {
+          recordType: 'person',
+          sourceColumn: 'firstName',
+          targetField: 'givenName',
+          transform: 'trim',
+          isCorrelation: false,
+        },
+      ]);
+      const person = await tx.person.create({
+        data: {
+          tenantId: ctx.tenantId,
+          givenName: 'Ada',
+          familyName: 'Lovelace',
+          externalId: 'owned-1',
+          sourceId: source.id,
+        },
+      });
+      return { sourceId: source.id, personId: person.id, externalId: 'owned-1' };
+    });
+  }
+
+  /**
+   * A nightly run reverting a hand edit at 02:00 is a different thing from an
+   * upload doing it while somebody watches, which is what the old reasoning
+   * on this route relied on.
+   */
+  it('refuses an edit to a field its source maps', async () => {
+    await seedAdmin([...BOTH, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await adminCookie();
+    const { personId } = await sourceOwnedPerson();
+
+    const response = await patch(`/api/admin/persons/${personId}`, cookie, {
+      givenName: 'Augusta',
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().type).toMatch(/source-owned/);
+    expect(response.json().detail).toContain('HR');
+  });
+
+  /**
+   * Only the mapped fields. familyName is not mapped by this source, so it
+   * stays the administrator's to correct.
+   */
+  it('allows an edit to a field the source does not map', async () => {
+    await seedAdmin([...BOTH, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await adminCookie();
+    const { personId } = await sourceOwnedPerson();
+
+    const response = await patch(`/api/admin/persons/${personId}`, cookie, {
+      familyName: 'King',
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it('leaves a hand-made person fully editable', async () => {
+    await seedAdmin([...BOTH, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await adminCookie();
+    const person = await withTenant(ctx.tenantId, (tx) =>
+      tx.person.create({
+        data: {
+          tenantId: ctx.tenantId,
+          givenName: 'Hand',
+          familyName: 'Made',
+          externalId: 'hand-1',
+        },
+      }),
+    );
+
+    const response = await patch(`/api/admin/persons/${person.id}`, cookie, {
+      givenName: 'Changed',
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  /**
+   * Letting an upload overwrite fields a nightly feed reverts tomorrow is
+   * worse than refusing, and the refusal names the source.
+   */
+  it('refuses a CSV row whose externalId belongs to a source-owned person', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    const { externalId } = await sourceOwnedPerson();
+
+    const response = await post('/api/admin/persons/import', cookie, {
+      csv: `${HEADER}
+${externalId},Ada,Lovelace,ada@acme.test,1,true,2026-01-05,,Analyst,Research`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.created).toBe(0);
+    expect(body.updated).toBe(0);
+    expect(body.errors[0].message).toMatch(/owned by the person source "HR"/);
+  });
+
+  it('still imports rows that clash with nobody', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    await sourceOwnedPerson();
+
+    const response = await post('/api/admin/persons/import', cookie, {
+      csv: `${HEADER}
+new-1,Grace,Hopper,grace@acme.test,1,true,2026-01-05,,Engineer,Engineering`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().created).toBe(1);
   });
 });

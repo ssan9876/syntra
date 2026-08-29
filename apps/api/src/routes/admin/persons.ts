@@ -341,8 +341,50 @@ export async function registerAdminPersonRoutes(
         });
       }
 
+      /*
+       * A row naming somebody a person source owns is refused rather than
+       * applied.
+       *
+       * The reasoning on the PATCH below used to cover this: the import was
+       * the authority because it only ran when somebody uploaded a file. A
+       * scheduled import breaks that -- letting an upload overwrite fields a
+       * nightly feed reverts at 02:00 is worse than refusing, and the refusal
+       * names the source so the operator knows where the change belongs.
+       */
+      const claimed = await request.db((tx) =>
+        tx.person.findMany({
+          where: {
+            externalId: { in: rows.map((r) => r.externalId) },
+            sourceId: { not: null },
+          },
+          select: { externalId: true, source: { select: { name: true } } },
+        }),
+      );
+      const claimedBy = new Map(
+        claimed.flatMap((p) =>
+          p.externalId === null
+            ? []
+            : ([[p.externalId, p.source?.name ?? 'a person source']] as const),
+        ),
+      );
+
+      const importable = rows.filter((row) => !claimedBy.has(row.externalId));
+      for (const [index, row] of rows.entries()) {
+        const owner = claimedBy.get(row.externalId);
+        if (owner === undefined) continue;
+        // More entries in the same array the parser fills, so the existing
+        // "partial success is reported, never hidden" contract carries this
+        // unchanged.
+        errors.push({
+          line: index + 2,
+          message:
+            `${row.externalId} is owned by the person source "${owner}"; ` +
+            `change it there, or the next run will revert it`,
+        });
+      }
+
       const result = await request.db(async (tx) => {
-        const imported = await importPersons(tx, rows);
+        const imported = await importPersons(tx, importable);
         await recordEvent(tx, {
           actorUserId: request.session.userId,
           action: 'person.import',
@@ -364,11 +406,19 @@ export async function registerAdminPersonRoutes(
   /**
    * Correcting a person's record.
    *
-   * No source-owned check here, unlike users, groups and org units: a Person
-   * has no `sourceId`. People arrive by CSV import, which matches on
-   * `externalId` and updates in place, so a later import overwrites an edit
-   * to a field the file carries — the import is the authority, not a sync run,
-   * and it only runs when somebody uploads one.
+   * A source-owned person is source-owned in the same sense a synced user is:
+   * the fields the source MAPS are the source's, and an edit to one is
+   * reverted by the next run.
+   *
+   * This used to be safe to allow unconditionally, and the reasoning held
+   * while it was true: people arrived by CSV import, which only ran when
+   * somebody uploaded a file, so an overwrite happened while they watched. A
+   * scheduled import breaks that clause -- a nightly run reverting an edit at
+   * 02:00 tells nobody.
+   *
+   * Only the mapped fields are refused. Everything else stays editable,
+   * including the departure override, which is precisely the field that exists
+   * for a human who knows something the feed does not.
    */
   app.patch(
     '/persons/:id',
@@ -380,6 +430,35 @@ export async function registerAdminPersonRoutes(
       return request.db(async (tx) => {
         const existing = await tx.person.findUnique({ where: { id } });
         if (!existing) throw new ProblemError(404, 'not-found', 'Person not found');
+
+        if (existing.sourceId !== null) {
+          const owned = await tx.personFieldMapping.findMany({
+            where: { sourceId: existing.sourceId, recordType: 'person' },
+            select: { targetField: true },
+          });
+          const ownedFields = new Set(owned.map((m) => m.targetField));
+          const clashing = Object.keys(body).filter((field) => ownedFields.has(field));
+          if (clashing.length > 0) {
+            const source = await tx.personSource.findUnique({
+              where: { id: existing.sourceId },
+              select: { name: true },
+            });
+            throw new ProblemError(
+              409,
+              'source-owned',
+              'This person is maintained by a person source',
+              `${clashing.join(', ')} ${clashing.length === 1 ? 'is' : 'are'} ` +
+                `maintained by the person source "${source?.name ?? existing.sourceId}"; ` +
+                `an edit here is reverted by its next run`,
+              {
+                errors: clashing.map((path) => ({
+                  path,
+                  message: 'maintained by a source',
+                })),
+              },
+            );
+          }
+        }
 
         if (
           body.externalId !== undefined &&
