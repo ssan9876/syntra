@@ -57,6 +57,20 @@ export class AnchorAlreadyBoundError extends Error {
   }
 }
 
+export class CandidateNotVisibleError extends Error {
+  constructor(
+    readonly correlationKey: string,
+    readonly baseDn: string,
+  ) {
+    super(
+      `the account ${correlationKey} was refused as already existing, and no object with that name is inside ${baseDn}. ` +
+        'Either it is elsewhere in the domain where this target cannot see it — move it into the managed subtree, ' +
+        "or widen the target's base DN — or it has since been deleted, in which case the account can be created again.",
+    );
+    this.name = 'CandidateNotVisibleError';
+  }
+}
+
 export interface AdoptAccountInput {
   personId: string;
   targetSystemId: string;
@@ -69,6 +83,21 @@ export interface AdoptAccountInput {
    * connector the target's type names.
    */
   connector?: TargetConnector<never>;
+  /**
+   * What to do when no object with this name is visible under the base DN.
+   *
+   * The two causes are indistinguishable from a base-scoped read — the object
+   * is outside the base, or it has been deleted — and they need opposite
+   * treatments. The status cannot separate them either: `finish` sets
+   * `conflict` only on an already-exists refusal, so every row in this state
+   * carries identical evidence. The only other signal is `statusReason`, which
+   * holds the directory's own error text, and branching on strings a foreign
+   * system produced is the coupling that stranded actions until v1.6.3.
+   *
+   * So the administrator answers, because the administrator can look. The
+   * default is the one that changes nothing.
+   */
+  ifNoCandidate?: 'refuse' | 'reset';
 }
 
 export interface AdoptAccountResult {
@@ -156,7 +185,36 @@ export async function adoptAccount(
     input.connector,
   );
 
-  if (candidate === null) return { adopted: false, anchor: null, dn: null };
+  if (candidate === null) {
+    const baseDn =
+      (target.config as { baseDn?: string } | null)?.baseDn ?? '(no base DN configured)';
+    if ((input.ifNoCandidate ?? 'refuse') === 'refuse') {
+      throw new CandidateNotVisibleError(account.correlationKey, baseDn);
+    }
+    // The administrator has answered the question this service cannot: the
+    // object is gone, not merely out of sight. Back to `pending`, and the next
+    // run creates the account — which is what a reservation is for.
+    await withTenant(tenantId, async (tx) => {
+      await tx.targetAccount.update({
+        where: { id: account.id },
+        data: { status: 'pending', statusReason: null },
+      });
+      await recordEvent(tx, {
+        actorUserId: input.actorUserId,
+        action: 'provision.account.adopted',
+        targetType: 'TargetAccount',
+        targetId: account.id,
+        outcome: 'success',
+        sourceIp: input.sourceIp,
+        payload: {
+          adopted: false,
+          correlationKey: account.correlationKey,
+          reason: input.reason,
+        },
+      });
+    });
+    return { adopted: false, anchor: null, dn: null };
+  }
 
   await withTenant(tenantId, async (tx) => {
     const held = await tx.targetAccount.findFirst({

@@ -6,6 +6,7 @@ import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createTarget } from './target-service.js';
 import {
   AnchorAlreadyBoundError,
+  CandidateNotVisibleError,
   NoAccountToAdoptError,
   NotInConflictError,
   adoptAccount,
@@ -301,5 +302,105 @@ describe('adoptAccount — what it refuses', () => {
     expect(after.status).toBe('conflict');
     expect(after.anchor).toBeNull();
     expect(await adoptedEvents()).toHaveLength(0);
+  });
+});
+
+describe('adoptAccount — when no candidate is visible', () => {
+  /**
+   * The two causes are indistinguishable from a base-scoped read: the object
+   * is outside the base DN, or it has been deleted. They need OPPOSITE
+   * treatments — refuse for ever versus retry successfully — and the status
+   * separates nothing, because `finish` sets `conflict` only on an
+   * already-exists refusal, so every row in this state carries identical
+   * evidence. So the caller answers, and the default changes nothing.
+   */
+  it('refuses by default when no object with that name is visible', async () => {
+    // The case that motivated the feature: the colliding object was OUTSIDE
+    // the target's base DN, so the create was refused by something the read
+    // cannot see. Resetting here retries the create and is refused
+    // identically, for ever.
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'try it',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeInstanceOf(CandidateNotVisibleError);
+  });
+
+  it('names the base DN in the refusal', async () => {
+    // Without it the message is "not found", and the administrator has no way
+    // to tell an invisible object from a deleted one — which is the whole
+    // decision the refusal is asking them to make.
+    expect.assertions(1);
+    await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'try it',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      connector: target as never,
+    }).catch((cause: unknown) => {
+      expect((cause as Error).message).toContain('OU=Users,DC=acme,DC=test');
+    });
+  });
+
+  it('resets to pending only when the caller says the object is gone', async () => {
+    const result = await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'she left and IT deleted it',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      ifNoCandidate: 'reset',
+      connector: target as never,
+    });
+
+    expect(result).toEqual({ adopted: false, anchor: null, dn: null });
+    const after = await accountOf(personId);
+    expect(after.status).toBe('pending');
+    expect(after.statusReason).toBeNull();
+    expect(after.anchor).toBeNull();
+  });
+
+  it('audits a reset as an adoption that did not happen', async () => {
+    await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'deleted last week',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      ifNoCandidate: 'reset',
+      connector: target as never,
+    });
+
+    const events = await adoptedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toMatchObject({
+      adopted: false,
+      reason: 'deleted last week',
+    });
+  });
+
+  it('ignores ifNoCandidate when a candidate IS visible', async () => {
+    // `reset` answers a question that was not asked here. Honouring it anyway
+    // would throw away a working binding because of a flag about another case.
+    const anchor = target.seedForeignObject('anna.novak');
+
+    const result = await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'hers',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      ifNoCandidate: 'reset',
+      connector: target as never,
+    });
+
+    expect(result.adopted).toBe(true);
+    expect(result.anchor).toBe(anchor);
   });
 });
