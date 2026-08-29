@@ -4,12 +4,14 @@ import {
   authorize,
   findApplication,
   isApplicationAssigned,
+  listSessionsForUser,
   recordEvent,
   resolveApplicationsForUser,
+  revokeSessionById,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
-import { requireSession } from '../plugins/require-session.js';
+import { SESSION_COOKIE, requireSession } from '../plugins/require-session.js';
 import { tenantProtocolIdentity } from './protocol-identity.js';
 import { tenantRelyingParty } from './relying-party.js';
 import { clientFacts } from '../plugins/client-facts.js';
@@ -213,5 +215,68 @@ export async function registerPortalRoutes(
       );
     }
     return reply.redirect(application.launchUrl, 302);
+  });
+
+  /**
+   * Your own sessions, and ending them.
+   *
+   * The current one is flagged rather than hidden. Hiding it would leave a
+   * list that cannot account for the browser reading it, and somebody trying
+   * to work out which row is "here" is somebody about to end the wrong one.
+   */
+  app.get('/sessions', async (request) => {
+    const sessions = await request.db((tx) =>
+      listSessionsForUser(tx, request.session.userId),
+    );
+    return {
+      sessions: sessions.map((session) => ({
+        ...session,
+        current: session.id === request.session.sessionId,
+      })),
+    };
+  });
+
+  /**
+   * Ending one of your own, including the one you are holding.
+   *
+   * Signing yourself out of the tab you are looking at is ALLOWED, and it is
+   * not silent: the reply says so and clears the cookie in the same response.
+   * Refusing it would be worse -- the session somebody most wants to end from
+   * another device is the one in front of them, and a list with one row that
+   * cannot be acted on is a list that has to explain itself.
+   */
+  app.delete('/sessions/:id', async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const isCurrent = id === request.session.sessionId;
+
+    await request.db(async (tx) => {
+      const owned = await tx.session.findFirst({
+        where: { id, userId: request.session.userId, revokedAt: null },
+        select: { id: true },
+      });
+      // 404 rather than 403 for somebody else's. Answering "forbidden" would
+      // confirm the session exists, and this route is reachable by every
+      // signed-in user in the tenant.
+      if (!owned) throw new ProblemError(404, 'not-found', 'Session not found');
+
+      await revokeSessionById(tx, id);
+      await recordEvent(tx, {
+        actorUserId: request.session.userId,
+        action: 'session.revoked',
+        targetType: 'User',
+        targetId: request.session.userId,
+        outcome: 'success',
+        sourceIp: request.ip,
+        payload: { trigger: 'self', count: 1, sessionId: id, current: isCurrent },
+      });
+    });
+
+    if (isCurrent) {
+      // The same options the cookie was set with, or the browser keeps one the
+      // server has forgotten.
+      reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      return { signedOut: true };
+    }
+    return { signedOut: false };
   });
 }

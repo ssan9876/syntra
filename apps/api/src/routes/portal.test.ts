@@ -486,3 +486,94 @@ describe('launching a protocol application', () => {
     expect(res.statusCode).toBe(409);
   });
 });
+
+describe('your own sessions', () => {
+  it('flags the session making the request', async () => {
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/portal/sessions',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { sessions } = res.json();
+    const current = sessions.filter((s: { current: boolean }) => s.current);
+    expect(current).toHaveLength(1);
+  });
+
+  it('records what the browser looked like when it signed in', async () => {
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/portal/sessions',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+    });
+    const [session] = res.json().sessions;
+    // `buildTestApp` injects without a User-Agent, so null is the honest
+    // answer; the address is always known.
+    expect(session).toHaveProperty('userAgent');
+    expect(session).toHaveProperty('ip');
+  });
+
+  it('signs you out when you end the session you are holding, and says so', async () => {
+    // Refusing this would be worse: the session somebody most wants to end
+    // from another device is the one in front of them.
+    const list = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/portal/sessions',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+    });
+    const mine = list
+      .json()
+      .sessions.find((s: { current: boolean }) => s.current);
+
+    const res = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/portal/sessions/${mine.id}`,
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ signedOut: true });
+    expect(res.cookies.find((c) => c.name === 'syntra_session')?.value).toBe('');
+
+    const after = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/portal/sessions',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+    });
+    expect(after.statusCode).toBe(401);
+  });
+
+  it('cannot end somebody else\'s session, and does not admit it exists', async () => {
+    const otherSessionId = await withTenant(ctx.tenantId, async (tx) => {
+      const other = await createUser(tx, {
+        login: 'asmith',
+        email: 'a@acme.test',
+        displayName: 'A Smith',
+      });
+      const { id } = await tx.session.create({
+        data: {
+          tenantId: ctx.tenantId,
+          userId: other.id,
+          tokenHash: 'not-a-real-digest',
+          scope: 'portal',
+          absoluteExpiresAt: new Date(Date.now() + 3_600_000),
+        },
+      });
+      return id;
+    });
+
+    const res = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/portal/sessions/${otherSessionId}`,
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+    });
+
+    expect(res.statusCode).toBe(404);
+
+    const still = await withTenant(ctx.tenantId, (tx) =>
+      tx.session.findUniqueOrThrow({ where: { id: otherSessionId } }),
+    );
+    expect(still.revokedAt).toBeNull();
+  });
+});
