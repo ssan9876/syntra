@@ -103,6 +103,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260922000000_user_duplicate_guards',
   '20260923000000_password_must_change',
   '20260924000000_email_guard_active_only',
+  '20260925000000_person_sources',
 ];
 
 /**
