@@ -29,6 +29,7 @@ import { registerAdminRoleRoutes } from './routes/admin/roles.js';
 import { registerAdminTenantRoutes } from './routes/admin/tenant.js';
 import { registerAdminWebhookRoutes } from './routes/admin/webhooks.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
+import { registerAdminSessionRoutes } from './routes/admin/sessions.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
 import { registerAdminPersonRoutes } from './routes/admin/persons.js';
@@ -285,6 +286,7 @@ export async function buildApp(
     publicUrl: config.publicUrl,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
+  await app.register(registerAdminSessionRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
   // `masterKey`, because deleting a source-owned unit unseals that source's
   // bind credential to remove the container from the directory first.
