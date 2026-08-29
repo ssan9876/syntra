@@ -440,7 +440,7 @@ describe('authorize — the step-up round trip', () => {
     // The session records what established it...
     const allow = verified as Extract<typeof verified, { status: 'allow' }>;
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed(userId, allow.scope, allow.satisfiedFactor)),
+      createSession(tx, allowed(userId, allow.scope, allow.satisfiedFactor), { ip: null, userAgent: null }),
     );
     const session = await withTenant(tenantId, (tx) =>
       resolveSession(tx, token),
@@ -472,7 +472,7 @@ describe('authorize — the step-up round trip', () => {
     factor: SessionAllowance['satisfiedFactor'],
   ) => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed(userId, 'portal', factor)),
+      createSession(tx, allowed(userId, 'portal', factor), { ip: null, userAgent: null }),
     );
     const session = await withTenant(tenantId, (tx) => resolveSession(tx, token));
     return session!;
@@ -530,7 +530,7 @@ describe('authorize — the step-up round trip', () => {
         email: 'a@acme.test',
         displayName: 'A Smith',
       });
-      return createSession(tx, allowed(u.id, 'portal', 'totp'));
+      return createSession(tx, allowed(u.id, 'portal', 'totp'), { ip: null, userAgent: null });
     });
     const theirs = await withTenant(tenantId, (tx) =>
       resolveSession(tx, other.token),

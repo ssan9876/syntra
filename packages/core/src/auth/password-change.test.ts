@@ -47,7 +47,7 @@ async function signIn() {
       satisfiedFactor: null,
       mayElevate: false,
       applicationId: null,
-    });
+    }, { ip: null, userAgent: null });
     const resolved = await resolveSession(tx, created.token);
     return { token: created.token, sessionId: resolved!.sessionId };
   });

@@ -75,6 +75,38 @@ export interface ResolvedSession {
 export type SessionAllowance = Extract<AuthorizeResult, { status: 'allow' }>;
 
 /**
+ * Where a session was established from. Description, not authority.
+ *
+ * A separate parameter from `SessionAllowance` on purpose. Everything the
+ * decision carries is read off the decision, "never taken from ambient request
+ * state" — and an address and a user agent ARE ambient request state. Folding
+ * them into the allowance would make that sentence false, and that sentence is
+ * the thing that stops a route passing a user id its decision does not carry.
+ *
+ * Two parameters with two meanings: the decision says who may have a session,
+ * the origin says what the browser looked like when they got one. Nothing ever
+ * reads the origin back to make a decision — a session is not refused for
+ * having moved — so it is safe for it to be attacker-influenced, and it has to
+ * be, because it is.
+ *
+ * Required rather than optional. A caller with nothing to say passes nulls,
+ * which is one keystroke; a caller that FORGOT would otherwise get nulls
+ * silently, and the whole point of the inventory is that the columns are
+ * populated.
+ */
+export interface SessionOrigin {
+  ip: string | null;
+  userAgent: string | null;
+}
+
+/**
+ * Attacker-controlled text of unbounded length, kept only to be read by a
+ * human. Truncated rather than validated: there is no grammar to check it
+ * against, and a header nobody parses cannot be malformed.
+ */
+const USER_AGENT_MAX = 256;
+
+/**
  * Mints a session for a decision that has already been made.
  *
  * Everything the session records — who it belongs to, its scope, the factor
@@ -85,6 +117,7 @@ export type SessionAllowance = Extract<AuthorizeResult, { status: 'allow' }>;
 export async function createSession(
   tx: TenantClient,
   decision: SessionAllowance,
+  origin: SessionOrigin,
 ): Promise<{ token: string; expiresAt: Date }> {
   const tenantId = await currentTenant(tx);
   const token = randomBytes(32).toString('base64url');
@@ -99,6 +132,8 @@ export async function createSession(
       scope,
       satisfiedFactor,
       absoluteExpiresAt,
+      ip: origin.ip,
+      userAgent: origin.userAgent?.slice(0, USER_AGENT_MAX) ?? null,
     },
   });
 

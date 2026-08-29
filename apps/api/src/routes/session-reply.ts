@@ -120,7 +120,16 @@ export async function issueSession(
   reply: FastifyReply,
   decision: SessionAllowance,
 ): Promise<{ status: 'authenticated' } & SessionBody> {
-  const { token } = await request.db((tx) => createSession(tx, decision));
+  // `request.ip` is Fastify's, which honours the trusted-proxy configuration
+  // the per-IP rate limits already depend on. A second way of computing a
+  // client address would be a second thing to get wrong, and the two would
+  // disagree in exactly the deployment where it matters.
+  const { token } = await request.db((tx) =>
+    createSession(tx, decision, {
+      ip: request.ip,
+      userAgent: request.headers['user-agent'] ?? null,
+    }),
+  );
   reply.setCookie(SESSION_COOKIE, token, sessionCookieOptions(request.server.cookieSecure));
   return {
     status: 'authenticated',

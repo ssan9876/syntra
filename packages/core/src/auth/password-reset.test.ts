@@ -306,7 +306,7 @@ describe('completePasswordReset', () => {
         applicationId: null,
         scope: 'portal',
         satisfiedFactor: null,
-      }),
+      }, { ip: null, userAgent: null }),
     );
     await request('jdoe');
     await complete();

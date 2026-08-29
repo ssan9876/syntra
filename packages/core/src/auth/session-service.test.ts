@@ -44,7 +44,7 @@ beforeEach(async () => {
 describe('sessions', () => {
   it('resolves a freshly issued token', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     const resolved = await withTenant(tenantId, (tx) =>
       resolveSession(tx, token),
@@ -54,7 +54,7 @@ describe('sessions', () => {
 
   it('stores only a hash of the token', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     const rows = await withTenant(tenantId, (tx) => tx.session.findMany());
     expect(rows[0]!.tokenHash).not.toBe(token);
@@ -63,27 +63,27 @@ describe('sessions', () => {
 
   it('issues a different token each time', async () => {
     const a = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     const b = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     expect(a.token).not.toBe(b.token);
   });
 
   it('gives an admin session a shorter absolute lifetime than a portal session', async () => {
     const portal = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     const admin = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('admin')),
+      createSession(tx, allowed('admin'), { ip: null, userAgent: null }),
     );
     expect(admin.expiresAt.getTime()).toBeLessThan(portal.expiresAt.getTime());
   });
 
   it('returns null for a revoked token', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     await withTenant(tenantId, (tx) => revokeSession(tx, token));
     expect(
@@ -99,7 +99,7 @@ describe('sessions', () => {
 
   it('returns null once the absolute expiry has passed', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     await withTenant(tenantId, (tx) =>
       tx.session.updateMany({
@@ -113,7 +113,7 @@ describe('sessions', () => {
 
   it('returns null once the idle timeout has passed', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('admin')),
+      createSession(tx, allowed('admin'), { ip: null, userAgent: null }),
     );
     // Admin idle timeout is 15 minutes; place the last sighting an hour ago.
     await withTenant(tenantId, (tx) =>
@@ -128,7 +128,7 @@ describe('sessions', () => {
 
   it('refreshes the idle clock on each use', async () => {
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     const before = await withTenant(tenantId, (tx) => tx.session.findFirst());
 
@@ -143,10 +143,10 @@ describe('sessions', () => {
 
   it('revokes every session a user holds', async () => {
     const a = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     const b = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('admin')),
+      createSession(tx, allowed('admin'), { ip: null, userAgent: null }),
     );
     await withTenant(tenantId, (tx) => revokeAllForUser(tx, userId));
 
@@ -163,10 +163,46 @@ describe('sessions', () => {
       data: { name: 'Other', slug: 'other' },
     });
     const { token } = await withTenant(tenantId, (tx) =>
-      createSession(tx, allowed('portal')),
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
     );
     expect(
       await withTenant(other.id, (tx) => resolveSession(tx, token)),
     ).toBeNull();
+  });
+});
+
+describe('session origin', () => {
+  it('records the address and user agent the session was established from', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createSession(tx, allowed('portal'), {
+        ip: '203.0.113.7',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0) Firefox/141.0',
+      });
+      const row = await tx.session.findFirstOrThrow({ where: { userId } });
+      expect(row.ip).toBe('203.0.113.7');
+      expect(row.userAgent).toBe('Mozilla/5.0 (Windows NT 10.0) Firefox/141.0');
+    });
+  });
+
+  it('truncates a user agent that is trying to be a payload', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createSession(tx, allowed('portal'), {
+        ip: null,
+        userAgent: 'x'.repeat(5000),
+      });
+      const row = await tx.session.findFirstOrThrow({ where: { userId } });
+      expect(row.userAgent).toHaveLength(256);
+    });
+  });
+
+  it('accepts a session with no origin at all', async () => {
+    // Not every caller has a request behind it, and a null column is the
+    // honest answer rather than a fabricated one.
+    await withTenant(tenantId, async (tx) => {
+      await createSession(tx, allowed('portal'), { ip: null, userAgent: null });
+      const row = await tx.session.findFirstOrThrow({ where: { userId } });
+      expect(row.ip).toBeNull();
+      expect(row.userAgent).toBeNull();
+    });
   });
 });
