@@ -4,9 +4,11 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser } from '../directory/user-service.js';
 import {
   createSession,
+  listSessionsForUser,
   resolveSession,
   revokeAllForUser,
   revokeSession,
+  revokeSessionById,
   type SessionAllowance,
   type SessionScope,
 } from './session-service.js';
@@ -203,6 +205,101 @@ describe('session origin', () => {
       const row = await tx.session.findFirstOrThrow({ where: { userId } });
       expect(row.ip).toBeNull();
       expect(row.userAgent).toBeNull();
+    });
+  });
+});
+
+describe('listSessionsForUser', () => {
+  it('returns live sessions newest first, without the token hash', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createSession(tx, allowed('portal'), { ip: '198.51.100.1', userAgent: 'A' });
+      await createSession(tx, allowed('admin'), { ip: '198.51.100.2', userAgent: 'B' });
+
+      const sessions = await listSessionsForUser(tx, userId);
+      expect(sessions).toHaveLength(2);
+      expect(sessions[0]!.createdAt.getTime()).toBeGreaterThanOrEqual(
+        sessions[1]!.createdAt.getTime(),
+      );
+      expect(sessions[0]).not.toHaveProperty('tokenHash');
+    });
+  });
+
+  it('omits a revoked session', async () => {
+    await withTenant(tenantId, async (tx) => {
+      const { token } = await createSession(tx, allowed('portal'), {
+        ip: null,
+        userAgent: null,
+      });
+      await revokeSession(tx, token);
+      expect(await listSessionsForUser(tx, userId)).toEqual([]);
+    });
+  });
+
+  it('omits a session past its absolute expiry, which revokedAt alone would miss', async () => {
+    // The liveness rules are resolveSession's. A row with a null revokedAt and
+    // an expiry in the past is dead, and a list that shows it invites somebody
+    // to revoke a session that already ended and wonder why nothing changed.
+    await withTenant(tenantId, async (tx) => {
+      await createSession(tx, allowed('portal'), { ip: null, userAgent: null });
+      await tx.session.updateMany({
+        where: { userId },
+        data: { absoluteExpiresAt: new Date(Date.now() - 1000) },
+      });
+      expect(await listSessionsForUser(tx, userId)).toEqual([]);
+    });
+  });
+
+  it('omits an idle session past its scope timeout', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createSession(tx, allowed('admin'), { ip: null, userAgent: null });
+      // Admin idles out at fifteen minutes.
+      await tx.session.updateMany({
+        where: { userId },
+        data: { lastSeenAt: new Date(Date.now() - 16 * 60 * 1000) },
+      });
+      expect(await listSessionsForUser(tx, userId)).toEqual([]);
+    });
+  });
+
+  it('does not list a session belonging to another tenant', async () => {
+    const other = await prisma.tenant.create({ data: { name: 'Other2', slug: 'other2' } });
+    await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
+    );
+    // No `where` on tenant anywhere: row-level security is the thing being
+    // asserted, not an application filter.
+    expect(
+      await withTenant(other.id, (tx) => listSessionsForUser(tx, userId)),
+    ).toEqual([]);
+  });
+});
+
+describe('revokeSessionById', () => {
+  it('revokes one session and leaves the others', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createSession(tx, allowed('portal'), { ip: null, userAgent: null });
+      await createSession(tx, allowed('portal'), { ip: null, userAgent: null });
+      const [first] = await listSessionsForUser(tx, userId);
+
+      expect(await revokeSessionById(tx, first!.id)).toBe(true);
+      expect(await listSessionsForUser(tx, userId)).toHaveLength(1);
+    });
+  });
+
+  it('answers false for a session that is not there', async () => {
+    await withTenant(tenantId, async (tx) => {
+      expect(
+        await revokeSessionById(tx, '00000000-0000-0000-0000-000000000001'),
+      ).toBe(false);
+    });
+  });
+
+  it('answers false for a session already revoked', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createSession(tx, allowed('portal'), { ip: null, userAgent: null });
+      const [only] = await listSessionsForUser(tx, userId);
+      expect(await revokeSessionById(tx, only!.id)).toBe(true);
+      expect(await revokeSessionById(tx, only!.id)).toBe(false);
     });
   });
 });

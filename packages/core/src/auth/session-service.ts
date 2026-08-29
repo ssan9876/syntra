@@ -239,6 +239,89 @@ export async function readSession(
   return toResolved(row);
 }
 
+/**
+ * A session as somebody is shown it.
+ *
+ * Never the token hash. There is no screen on which a session's stored digest
+ * is a thing anybody needs, and a list is read by the person whose sessions
+ * they are — the one reader for whom leaking it would matter least and still
+ * matter.
+ */
+export interface SessionSummary {
+  id: string;
+  scope: SessionScope;
+  satisfiedFactor: string | null;
+  ip: string | null;
+  userAgent: string | null;
+  createdAt: Date;
+  lastSeenAt: Date;
+  absoluteExpiresAt: Date;
+}
+
+/**
+ * Every session of this user's that is still good, newest first.
+ *
+ * "Still good" is `isLive`'s answer and nobody else's — the same predicate
+ * `resolveSession` and `readSession` use, which covers revocation, the
+ * absolute lifetime, the per-scope idle timeout AND the account still being
+ * active. Filtering on `revokedAt: null` alone would list sessions that
+ * stopped working hours ago, and the first thing anybody would do is revoke
+ * one of them and wonder why nothing changed.
+ *
+ * The cost is one query per row, as every other reader here pays. A list is
+ * drawn by a person looking at one account, not on the request path.
+ */
+export async function listSessionsForUser(
+  tx: TenantClient,
+  userId: string,
+): Promise<SessionSummary[]> {
+  const now = Date.now();
+  const rows = await tx.session.findMany({
+    where: { userId, revokedAt: null },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const live: SessionSummary[] = [];
+  for (const row of rows) {
+    if (!(await isLive(tx, row, now))) continue;
+    live.push({
+      id: row.id,
+      scope: row.scope as SessionScope,
+      satisfiedFactor: row.satisfiedFactor,
+      ip: row.ip,
+      userAgent: row.userAgent,
+      createdAt: row.createdAt,
+      lastSeenAt: row.lastSeenAt,
+      absoluteExpiresAt: row.absoluteExpiresAt,
+    });
+  }
+  return live;
+}
+
+/**
+ * Revokes one session by its id rather than by its token.
+ *
+ * The token is what a holder presents; the id is what a list offers. An
+ * administrator ending somebody else's session has the second and must never
+ * need the first — a route that took a token would be a route that had to be
+ * given one.
+ *
+ * Returns whether anything changed, so a caller can answer 404 for a session
+ * that is not there instead of a cheerful 200 for a no-op. Already-revoked
+ * counts as no change: saying "revoked" twice about one act would let a
+ * caller believe it had ended two sessions.
+ */
+export async function revokeSessionById(
+  tx: TenantClient,
+  sessionId: string,
+): Promise<boolean> {
+  const { count } = await tx.session.updateMany({
+    where: { id: sessionId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  return count > 0;
+}
+
 export async function revokeSession(
   tx: TenantClient,
   token: string,
