@@ -66,7 +66,12 @@ async function adminCookie() {
   return `syntra_session=${up.cookies.find((c) => c.name === 'syntra_session')!.value}`;
 }
 
-const call = (method: 'GET' | 'PUT' | 'DELETE', url: string, cookie: string, payload?: unknown) =>
+const call = (
+  method: 'GET' | 'PUT' | 'DELETE' | 'POST',
+  url: string,
+  cookie: string,
+  payload?: unknown,
+) =>
   ctx.app.inject({
     method,
     url,
@@ -173,6 +178,121 @@ describe('the placement routes', () => {
       'GET',
       `/api/admin/targets/${targetId}/placements/not-a-uuid`,
       await adminCookie(),
+    );
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+/**
+ * The adoption routes.
+ *
+ * Same boundary as the placement tests above, for the same reason: both of
+ * these reach the TARGET, and a test that stood a directory up would be
+ * testing LDAP. `adoption-service.test.ts` covers the decisions against a
+ * fake.
+ *
+ * What is testable here is everything that happens BEFORE the read. Two of
+ * the four refusals are pure database — no account, and an account that is
+ * not in conflict — so they are exercised end to end; the other two need an
+ * object at a directory and are not.
+ */
+describe('the adoption routes', () => {
+  const adoptPath = () => `/api/admin/targets/${targetId}/accounts/${personId}/adopt`;
+  const candidatePath = () =>
+    `/api/admin/targets/${targetId}/accounts/${personId}/adoption-candidate`;
+
+  const seedConflicted = () =>
+    withTenant(ctx.tenantId, (tx) =>
+      tx.targetAccount.create({
+        data: {
+          tenantId: ctx.tenantId,
+          targetSystemId: targetId,
+          personId,
+          correlationKey: 'ada.lovelace',
+          status: 'conflict',
+          statusReason: 'AlreadyExistsError: 00000524 ENTRY_EXISTS',
+        },
+      }),
+    );
+
+  it('need an administrative session', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: adoptPath(),
+      headers: { host: ctx.host },
+      payload: { reason: 'hers' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('refuse a reader, on both routes', async () => {
+    // The GET opens a connection to the directory and names an object by DN.
+    // It is not read-shaped just because of its verb.
+    await seedAdmin([PERMISSIONS.PROVISION_READ]);
+    const cookie = await adminCookie();
+    expect((await call('GET', candidatePath(), cookie)).statusCode).toBe(403);
+    expect((await call('POST', adoptPath(), cookie, { reason: 'hers' })).statusCode).toBe(
+      403,
+    );
+  });
+
+  it('answer 409 when the person has no account here', async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    const res = await call('POST', adoptPath(), await adminCookie(), {
+      reason: 'nothing there',
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toContain('nothing-to-adopt');
+  });
+
+  it('answer 409 for an account that is not in conflict', async () => {
+    // Adoption is the exit from ONE state. Re-pointing a working account is
+    // the power the provenance rule withholds, and the route says so rather
+    // than reaching the directory to find out.
+    await seedAdmin([...ALL_PERMISSIONS]);
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.targetAccount.create({
+        data: {
+          tenantId: ctx.tenantId,
+          targetSystemId: targetId,
+          personId,
+          correlationKey: 'ada.lovelace',
+          status: 'active',
+          anchor: 'anchor-1',
+        },
+      }),
+    );
+    const res = await call('POST', adoptPath(), await adminCookie(), { reason: 'why not' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toContain('not-in-conflict');
+  });
+
+  it('refuse a body that does not say why', async () => {
+    // The audit event is what stands where the provenance check cannot. An
+    // adoption with no stated reason is the safeguard removed, not replaced.
+    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedConflicted();
+    const res = await call('POST', adoptPath(), await adminCookie(), { reason: '   ' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('refuse an ifNoCandidate the service does not offer', async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedConflicted();
+    const res = await call('POST', adoptPath(), await adminCookie(), {
+      reason: 'hers',
+      ifNoCandidate: 'delete',
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('refuse a malformed person id before reaching the target', async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    const res = await call(
+      'POST',
+      `/api/admin/targets/${targetId}/accounts/not-a-uuid/adopt`,
+      await adminCookie(),
+      { reason: 'hers' },
     );
     expect(res.statusCode).toBe(400);
   });

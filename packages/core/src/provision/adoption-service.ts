@@ -165,6 +165,38 @@ async function findCandidate(
   return null;
 }
 
+/**
+ * The object an adoption would bind, for the administrator to look at first.
+ *
+ * Separate from `adoptAccount` because the safeguard being replaced is a
+ * technical one, and the only thing that can stand in for it is a named human
+ * having looked at a SPECIFIC object. Confirming a name is not that.
+ */
+export async function adoptionCandidate(
+  tenantId: string,
+  provider: MasterKeyProvider,
+  personId: string,
+  targetSystemId: string,
+  connector?: TargetConnector<never>,
+): Promise<Candidate> {
+  const { account, target } = await conflictedAccount(tenantId, personId, targetSystemId);
+  const candidate = await findCandidate(
+    tenantId,
+    provider,
+    targetSystemId,
+    target.type,
+    account.correlationKey,
+    connector,
+  );
+  if (candidate === null) {
+    throw new CandidateNotVisibleError(
+      account.correlationKey,
+      (target.config as { baseDn?: string } | null)?.baseDn ?? '(no base DN configured)',
+    );
+  }
+  return candidate;
+}
+
 export async function adoptAccount(
   tenantId: string,
   provider: MasterKeyProvider,

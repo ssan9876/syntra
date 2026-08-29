@@ -383,6 +383,34 @@ export const movePlacementRequest = z
   })
   .strict();
 
+/**
+ * Adopting a conflicted account.
+ *
+ * `reason` is required for the same argument as a manual move: the record is
+ * the only thing standing where a technical safeguard used to. Provenance
+ * answers "did Syntra make this?"; nothing can answer that for an adopted
+ * object, so what replaces it is a named human and their stated reason.
+ *
+ * `ifNoCandidate` defaults to refusing. An object outside the base DN and one
+ * since deleted look identical from a base-scoped read and need opposite
+ * treatments, and only the administrator can tell them apart.
+ */
+export const adoptAccountRequest = z
+  .object({
+    reason: z.string().trim().min(1).max(512),
+    ifNoCandidate: z.enum(['refuse', 'reset']).default('refuse'),
+  })
+  .strict();
+
+export const adoptionCandidateResponse = z.object({
+  anchor: z.string(),
+  dn: z.string(),
+  attributes: z.record(z.array(z.string())),
+});
+
+export type AdoptAccountRequest = z.input<typeof adoptAccountRequest>;
+export type AdoptionCandidateResponse = z.infer<typeof adoptionCandidateResponse>;
+
 export const placementResponse = z.object({
   personId: z.string().uuid(),
   targetSystemId: z.string().uuid(),
