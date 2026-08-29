@@ -10,6 +10,7 @@
  * import line, which is the only place anybody reads it.
  */
 export * from './fake-target.js';
+export * from './fake-person-source.js';
 export * from './fake-scim-server.js';
 
 /**
