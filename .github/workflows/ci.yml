@@ -292,8 +292,15 @@ jobs:
       - name: Start the application
         # The rate limit is doing its job when it refuses: this suite signs in
         # far more often in a minute than a person ever would.
+        #
+        # `OUTBOUND_ALLOW_PRIVATE` for the person-source browser test. The
+        # SFTP fixture is a container on loopback, and the outbound guard
+        # refuses private addresses by default — correctly, since that default
+        # is what stops an administrator pointing a source at a metadata
+        # service. It is lifted here rather than in `.env.example`, which is
+        # what a real deployment copies.
         run: |
-          AUTH_RATE_LIMIT_MAX=200 pnpm dev > /tmp/dev.log 2>&1 &
+          AUTH_RATE_LIMIT_MAX=200 OUTBOUND_ALLOW_PRIVATE=true pnpm dev > /tmp/dev.log 2>&1 &
           for _ in $(seq 1 90); do
             if curl -sf -o /dev/null -H 'Host: acme.localhost' http://127.0.0.1:5173/login \
                && curl -s -o /dev/null http://127.0.0.1:3000/; then
