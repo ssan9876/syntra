@@ -1,0 +1,49 @@
+# TLS overlay. Adds a Caddy reverse proxy in front of `web` and gets Caddy an
+# automatic Let's Encrypt certificate for SYNTRA_DOMAIN.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
+# SYNTRA_DOMAIN must be a name that resolves to this host on 80 and 443 (see
+# infra/caddy/Caddyfile), and PUBLIC_URL must then be https://$SYNTRA_DOMAIN
+# rather than the http://localhost:3000 default in .env.example -- everything
+# that builds an absolute link (SAML, OIDC, mailed reset/enrolment links)
+# reads PUBLIC_URL, not SYNTRA_DOMAIN, and a plain-http PUBLIC_URL behind a
+# TLS-terminating proxy would hand those links out over the wrong scheme.
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      SYNTRA_DOMAIN: ${SYNTRA_DOMAIN:?set SYNTRA_DOMAIN}
+    depends_on:
+      web:
+        condition: service_started
+
+  web:
+    # Caddy is the only thing that should be reachable from outside this
+    # host once it is in front; `web`'s own 8080:80 mapping in the base file
+    # would otherwise still answer plain HTTP on that port beside it.
+    #
+    # `!override`, not a bare `ports: []` -- Compose merges sequences from
+    # multiple files by APPENDING them by default, so an empty list here
+    # would add nothing and leave the base file's 8080:80 mapping standing.
+    # `!override` replaces it outright. Requires a Compose Specification
+    # release with the merge-type YAML tags (Docker Compose v2.24+ /
+    # `docker compose version` reporting a Compose Spec that documents
+    # `!override`; this repo validated against Docker Compose v5.3.1). If
+    # your `docker compose config` rejects the tag, drop this block and
+    # instead bind the base file's port to loopback only -- change
+    # `ports: ['8080:80']` in docker-compose.yml to `['127.0.0.1:8080:80']`
+    # -- so the unproxied origin is reachable from this host but not beyond
+    # it.
+    ports: !override []
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -26,6 +26,10 @@ on:
 
 permissions:
   contents: write
+  # For the image job below, which logs in to GHCR with GITHUB_TOKEN rather
+  # than a separate secret -- a token scoped to this run, this repository,
+  # and nothing else.
+  packages: write
 
 jobs:
   # A dispatch from a branch would build something that is not a release.
@@ -216,3 +220,67 @@ jobs:
             --title "$TAG" \
             --notes-file /tmp/notes.md \
             "$NAME.tar.gz" "$NAME.tar.gz.sha256"
+
+  # ---------------------------------------------------------------------------
+  # Container images, for `docker compose up` adopters -- see docker-compose.yml.
+  # Depends on `build`, not just `verify`: `build` is the same job that just
+  # produced the tarball the in-console updater installs, and a tag that
+  # cannot pass that has no business becoming `:latest` either. Nothing here
+  # reuses `build`'s checkout; each build-push-action call does its own,
+  # pinned to the same tag by the same `ref: ${{ github.ref }}` guard.
+  # ---------------------------------------------------------------------------
+  image:
+    needs: [guard, verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Work out the version tag
+        # Same rule as the guard job above: github.ref_name goes through env,
+        # never straight into a script, because a tag name is reachable by
+        # anyone who can push one.
+        id: meta
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/ssan9876/syntra-api:${{ steps.meta.outputs.version }}
+            ghcr.io/ssan9876/syntra-api:latest
+          cache-from: type=gha,scope=syntra-api
+          cache-to: type=gha,mode=max,scope=syntra-api
+
+      - name: Build and push web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/ssan9876/syntra-web:${{ steps.meta.outputs.version }}
+            ghcr.io/ssan9876/syntra-web:latest
+          cache-from: type=gha,scope=syntra-web
+          cache-to: type=gha,mode=max,scope=syntra-web

@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { LogController, type FastifyInstance } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import {
@@ -104,6 +104,18 @@ export async function buildApp(
     // getting this wrong makes the first match everyone or nobody and
     // collapses the second into one global bucket.
     trustProxy: config.trustProxy,
+    // /health and /health/ready are polled every few seconds by a container
+    // orchestrator and, during an update, by the updater's own readiness
+    // poll (see the route below) -- logging each of those at info would
+    // drown one real request in a page of liveness noise. Everything else
+    // still logs; only these two paths are silenced.
+    //
+    // A `logController` instance, not the top-level `disableRequestLogging`
+    // option: that top-level option is deprecated (FSTDEP023) in this
+    // Fastify version in favour of exactly this.
+    logController: new LogController({
+      disableRequestLogging: (req) => req.url != null && req.url.startsWith('/health'),
+    }),
   });
 
   // Read once, from configuration, and available wherever a cookie is written.

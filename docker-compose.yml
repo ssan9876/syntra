@@ -19,6 +19,12 @@ services:
       retries: 20
 
   api:
+    # `image` lets `docker compose up` PULL a published release instead of
+    # building one; `build` stays alongside it so `docker compose up --build`
+    # still builds from source (Compose prefers a local build to a pull only
+    # when --build is passed or the image is missing). Pin an exact release
+    # with SYNTRA_VERSION=1.4.0; unset, it pulls :latest.
+    image: ghcr.io/ssan9876/syntra-api:${SYNTRA_VERSION:-latest}
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -56,6 +62,9 @@ services:
         condition: service_healthy
 
   web:
+    # See the api service's comment above: image for pull-and-run, build kept
+    # for --build. Same tag, same default.
+    image: ghcr.io/ssan9876/syntra-web:${SYNTRA_VERSION:-latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile

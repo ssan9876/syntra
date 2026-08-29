@@ -1,0 +1,14 @@
+# Bind-mounted read-only into the caddy service by docker-compose.tls.yml.
+#
+# `.dockerignore` excludes infra/ from `docker build`'s context, but that has
+# no bearing here: this file is never COPYed into an image, only bind-mounted
+# at container start, so Caddy always sees whatever is on disk right now.
+#
+# The site address is the domain itself, not `:443` -- that is what tells
+# Caddy this is a real, publicly-resolvable host it should get a certificate
+# for, and it then handles the ACME HTTP-01/TLS-ALPN challenge and renewal on
+# its own. SYNTRA_DOMAIN has to be a name the world can resolve to this host
+# on ports 80 and 443, or the challenge cannot complete.
+{$SYNTRA_DOMAIN} {
+	reverse_proxy web:80
+}
