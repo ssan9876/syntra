@@ -3,6 +3,7 @@ import { personSourceConnectorFor, type PersonSnapshotRecord } from '@syntra/con
 import { currentTenant } from '../tenant-context.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { recordEvent } from '../audit/audit-service.js';
+import { storableCause, storableMessage } from '../storable-text.js';
 import { isPersonMappingFailure, mapPersonRecord, type MappedPerson } from './mapping.js';
 import { diffPersons, type ExistingSourcePerson, type PersonChangeType } from './diff.js';
 import { evaluatePersonGuard } from './guard.js';
@@ -286,7 +287,7 @@ export async function previewImportRun(
             before: (change.before ?? undefined) as never,
             after: (change.after ?? undefined) as never,
             status: 'proposed',
-            message: change.message ?? null,
+            message: change.message === undefined ? null : storableMessage(change.message),
           })),
         });
       }
@@ -297,7 +298,9 @@ export async function previewImportRun(
           finishedAt: new Date(),
           recordsRead: records.length,
           mappingFailures,
-          mappingFailureReasons: [...failureReasons],
+          // These quote the file's own cells and the connector's
+          // readFailure, so they carry foreign text too.
+          mappingFailureReasons: [...failureReasons].map(storableMessage),
           personsAbsent: departures,
           requiresConfirmation: verdict.blocked ? verdict.requiresConfirmation : false,
           blockedReason: verdict.blocked ? verdict.reason : null,
@@ -305,11 +308,20 @@ export async function previewImportRun(
       });
     });
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
+    /*
+     * `storableCause`, not the raw message.
+     *
+     * This is the catch 016c32e is about: the text explaining a failure is
+     * written here, on an error path, with nothing above it to catch a second
+     * throw. PostgreSQL refuses U+0000, ssh2 and the servers behind it are
+     * under no obligation to keep one out of a diagnostic, and a run left
+     * `running` for ever with an empty error column is indistinguishable from
+     * one still working.
+     */
     return withTenant(tenantId, (tx) =>
       tx.personImportRun.update({
         where: { id: run.id },
-        data: { status: 'failed', finishedAt: new Date(), error: message },
+        data: { status: 'failed', finishedAt: new Date(), error: storableCause(cause) },
       }),
     );
   }
@@ -489,11 +501,11 @@ export async function applyImportRun(
       applied += 1;
     } catch (cause) {
       failed += 1;
-      const message = cause instanceof Error ? cause.message : String(cause);
+      // Prisma's and the driver's words, on an error path, into a column.
       await withTenant(tenantId, (tx) =>
         tx.personImportChange.update({
           where: { id: change.id },
-          data: { status: 'failed', message },
+          data: { status: 'failed', message: storableCause(cause) },
         }),
       );
     }

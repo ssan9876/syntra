@@ -437,3 +437,68 @@ describe('applyImportRun', () => {
     );
   });
 });
+
+describe('a read that throws a message PostgreSQL will not store', () => {
+  /**
+   * The same defect 016c32e hoisted `storableMessage` for, on this pipeline.
+   *
+   * PostgreSQL refuses U+0000 in a text column. The message explaining a
+   * failure is written in a `catch`, so if that write throws there is nothing
+   * above it to catch again -- and the run is left `running` for ever with an
+   * empty `error` column, which from the console is indistinguishable from a
+   * run still working.
+   *
+   * An SFTP server's diagnostics are as much foreign text as a directory's,
+   * and this connector holds them at exactly the same point in the same
+   * shape.
+   */
+  const NUL = String.fromCharCode(0);
+
+  it('records the failure even when the message carries a NUL byte', async () => {
+    connectorFor.mockReturnValue(
+      new FakePersonSource([], {
+        failWith: new Error(`Failure: permission denied, data 0${NUL}, path /export`),
+      }),
+    );
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.status).toBe('failed');
+    expect(run.error).toContain('permission denied');
+    expect(run.error).not.toContain(NUL);
+  });
+
+  it('leaves no run stranded at running', async () => {
+    connectorFor.mockReturnValue(
+      new FakePersonSource([], { failWith: new Error(`bad${NUL}news`) }),
+    );
+
+    await previewImportRun(tenantId, provider, sourceId);
+
+    const stranded = await withTenant(tenantId, (tx) =>
+      tx.personImportRun.count({ where: { status: 'running' } }),
+    );
+    expect(stranded).toBe(0);
+  });
+
+  /**
+   * A mapping failure quotes the file's own cells, so the same byte can
+   * arrive through the data rather than through the connector.
+   */
+  it('stores a mapping failure reason drawn from a cell carrying one', async () => {
+    connectorFor.mockReturnValue(
+      new FakePersonSource([
+        {
+          externalId: 'row-1',
+          fields: { employeeId: '1', hireDate: `2026${NUL}-13-45` },
+          contracts: [],
+        },
+      ]),
+    );
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.mappingFailures).toBe(1);
+    expect(run.mappingFailureReasons.join(' ')).not.toContain(NUL);
+  });
+});
