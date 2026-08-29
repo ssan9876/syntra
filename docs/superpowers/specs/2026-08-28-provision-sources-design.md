@@ -1,7 +1,27 @@
 # Provision — Sources: the HR feed
 
-Status: approved design, not yet implemented
+Status: implemented on `worktree-provision-sources`, 2026-08-29
 Based on `f091608`
+
+Built as specified, with four departures worth reading before the sections
+that describe them:
+
+- **`readFailure` and mapping failures needed a second rule.** Excluding those
+  records from the diff is not enough on its own: a failure that cannot be
+  attributed to a person -- which is every failure when the correlation column
+  is renamed -- leaves everybody looking absent. The diff therefore takes
+  `absenceReliable`, and withholds the whole absence half when any failure is
+  unattributable. See "Absence".
+- **The guard is given the population as it WOULD be, not as it is.**
+  `populationDropRefusal` refuses a zero count unconditionally, so passing the
+  current count blocked every first run of every source. See "The guard".
+- **A run can end `partially_applied`**, as Directory Sync's does. The spec
+  said `applied`; a run whose every change failed must not report success.
+- **`test` samples rather than caps.** The spec's byte ceiling is a refusal,
+  which is right for `read` and wrong for a connection test: applied to `test`
+  it failed every export larger than the sample.
+
+Phase 2 -- duplicate detection and merging -- remains unbuilt, as planned.
 
 ## Why
 

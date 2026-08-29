@@ -22,7 +22,11 @@ OpenID Connect provider, and can delegate authentication upstream to either.
 **Provision**, **Automate** and **Govern** are built too: business rules
 evaluated against target systems, a self-service catalog with approval
 workflows and delegated management, and reconciliation, segregation of duties
-and recertification campaigns over the lot.
+and recertification campaigns over the lot. Provision's other half is built as
+well — the **HR feed**, which reads a nightly export over SFTP and keeps the
+person register in step with it, so the joiner–mover–leaver lifecycle starts
+where the organization actually records it rather than at a CSV somebody
+uploads.
 
 | Module | Status | Contents |
 |---|---|---|
@@ -30,6 +34,7 @@ and recertification campaigns over the lot.
 | **Directory Sync** | built | LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, and console screens for the lot: a source editor with a connection test, a mapping editor, and a run review with per-change skip and partial apply |
 | **Access** | built | Application catalog and assignments, authentication policy, TOTP and WebAuthn second factors, recovery codes, self-service password reset, step-up MFA for the console. **SAML 2.0 identity provider**: both bindings, SP-initiated and IdP-initiated, signed assertions, optional encryption, front-channel single logout, metadata by upload or URL. **OpenID Connect provider**: authorization code with PKCE, refresh-token rotation, discovery, JWKS with overlapping rotation, UserInfo, RP-initiated logout, and a bounded client-credentials grant. **Upstream federation**: Syntra as a SAML service provider and as an OIDC relying party, with just-in-time provisioning and policy-driven routing. Every path reaches the same `authorize()`. See [what it does not do](#what-the-federation-half-does-not-do) |
 | **Provision** | built | Source systems, business rules, evaluation and enforcement, target systems and entitlements, previewed runs in the same idiom as Directory Sync. Org units drive placement: materialise a unit against a target and the accounts of everyone in it are created in that container, which Provision creates where an administrator asked for it by name and never to satisfy a template |
+| **Provision — Sources** | built | The HR feed. A delimited export read over SFTP on a schedule, with the server's host key pinned and no trust-on-first-use, mapped onto persons and contracts, and previewed as a reviewable diff with per-change skip and partial apply. Two guards stand between a bad export and the register: one measures what a run does against what its own source owns, the other whether the person register itself is collapsing. Absence means a leaver only for a source declared to carry a full snapshot — never for a delta, never for a row that was read but could not be mapped, and never at all on a run whose failures cannot be attributed to anybody, which is what a renamed column looks like |
 | **Automate** | built | Product catalog, self-service requests, approval workflows, resource delegation so a team lead manages a group without an administrative session, and an expiry sweep with a proportional guard |
 | **Govern** | built | Reconciliation, segregation of duties, recertification campaigns, a tamper-evident snapshot chain with optional signing and anchoring |
 

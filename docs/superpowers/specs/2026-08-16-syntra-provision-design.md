@@ -71,7 +71,7 @@ Done when a Syntra instance can:
 | **Directory Sync** | built | Provision inherits its connector interface and its evaluate-then-enforce shape. It is also the return path: see section 4. |
 | **Access** | planned | Independent. Access consumes contract attributes for claims and policy; Provision consumes them for entitlements. Neither needs the other. |
 | **Provision — Targets** | this document | Depends on Core and, for the Active Directory target, on the connector package Directory Sync built. |
-| **Provision — Sources** | planned, sibling document | Depends on Core only. See below. |
+| **Provision — Sources** | built 2026-08-29, sibling document | Depends on Core only. See below, and `2026-08-28-provision-sources-design.md`. |
 | **Automate** | planned | Requested access, approvals, scripted tasks. Provision is birthright access; Automate is asked-for access. |
 | **Govern** | planned | Consumes Provision's inventory and drift findings. See section 12. |
 
@@ -87,7 +87,8 @@ surfaces in a single cycle. That is not a cycle that ends.
 tested part of Core. Everything upstream of them is one slice; everything
 downstream is another.
 
-- **Provision — Sources** (sibling document): HR source systems, scheduled
+- **Provision — Sources** (sibling document, built 2026-08-29 — see
+  `2026-08-28-provision-sources-design.md`): HR source systems, scheduled
   imports of persons and contracts, snapshots, duplicate detection and merging,
   and the same evaluate-then-enforce discipline applied to writing `Person` and
   `Contract` rows.
