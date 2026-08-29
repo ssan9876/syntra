@@ -5,6 +5,7 @@ import {
   applyGovernSchedules,
   applyPersonSourceSchedule,
   applySourceSchedule,
+  applyLogoutSchedule,
   applyWebhookSchedule,
   applyTargetSchedule,
   automateSettings,
@@ -19,6 +20,7 @@ import {
   registerProvisionJobs,
   registerPersonImportJobs,
   registerSyncJobs,
+  registerLogoutJobs,
   registerWebhookJobs,
   scheduleKeyRotation,
   smtpTransport,
@@ -222,6 +224,8 @@ export async function scheduleBackgroundWork(
     try {
       attempt('webhook delivery');
       await applyWebhookSchedule(scheduler, tenant.id);
+      attempt('logout delivery');
+      await applyLogoutSchedule(scheduler, tenant.id);
     } catch (cause) {
       failure('webhook delivery');
       logger.error(
@@ -384,6 +388,12 @@ export async function startSyncScheduler(
     // reason it is passed to the routes -- the default is the on-prem one, and
     // a shared installation says otherwise in its configuration.
     registerWebhookJobs(scheduler, provider, {
+      allowPrivateAddresses: config.outboundAllowPrivate,
+    });
+    // The same private-address policy: a back-channel logout URI is an
+    // administrator-supplied address the SERVER dials, exactly as a webhook
+    // endpoint is.
+    registerLogoutJobs(scheduler, {
       allowPrivateAddresses: config.outboundAllowPrivate,
     });
     registerKeyRotationJob(scheduler, provider);

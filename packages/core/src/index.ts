@@ -129,6 +129,8 @@ export * from './access/saml-request-service.js';
 export * from './access/saml-session-service.js';
 export * from './access/oidc-store.js';
 export * from './access/logout-token.js';
+export * from './access/logout-delivery.js';
+export * from './access/logout-jobs.js';
 export * from './access/oidc-client-service.js';
 export * from './access/authorization-decision-service.js';
 export * from './federation/routing.js';
