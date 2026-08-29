@@ -6,7 +6,7 @@ vi.mock('./transport.js', async (importOriginal) => ({
   fetchFile,
 }));
 
-const { sftpDelimitedConnector } = await import('./connector.js');
+const { sftpDelimitedConnector, redactCredential } = await import('./connector.js');
 const { sftpDelimitedConfigSchema } = await import('./config.js');
 const { ByteCeilingExceededError, HostKeyMismatchError, HostKeyUnknownError } =
   await import('./transport.js');
@@ -116,5 +116,66 @@ describe('sftpDelimitedConnector.read', () => {
     const seen = [];
     for await (const record of sftpDelimitedConnector.read(config)) seen.push(record);
     expect(seen).toEqual([]);
+  });
+});
+
+describe('redactCredential', () => {
+  const KEY = [
+    '-----BEGIN OPENSSH PRIVATE KEY-----',
+    'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB',
+    '-----END OPENSSH PRIVATE KEY-----',
+  ].join('\n');
+
+  /**
+   * ssh2's diagnostics reach an operator and are stored on the run row, and
+   * this connector holds a credential while it calls it. `SourceWriteback`
+   * states the principle for the LDAP side; the same applies to a library
+   * whose error text this code does not control.
+   */
+  it('removes a password quoted back in a message', () => {
+    const text = redactCredential('authentication failed for Syntra!Passw0rd', {
+      ...config,
+      password: 'Syntra!Passw0rd',
+    });
+    expect(text).not.toContain('Syntra!Passw0rd');
+    expect(text).toContain('[redacted]');
+  });
+
+  it('removes a private key quoted in full', () => {
+    const withKey = { ...config, privateKey: KEY } as never;
+    const text = redactCredential(`cannot parse ${KEY}`, withKey);
+    expect(text).not.toContain('b3BlbnNzaC1rZXktdjE');
+  });
+
+  /** A message quoting one line of the key is caught too. */
+  it('removes a single line of key material', () => {
+    const withKey = { ...config, privateKey: KEY } as never;
+    const body = 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB';
+    const text = redactCredential(`malformed near ${body}`, withKey);
+    expect(text).not.toContain(body);
+  });
+
+  /**
+   * The banners are not secret, and are short enough that redacting them would
+   * scrub ordinary words out of unrelated messages.
+   */
+  it('leaves a message alone when it quotes nothing secret', () => {
+    const text = redactCredential('connect ETIMEDOUT 10.0.0.5:22', {
+      ...config,
+      password: 'Syntra!Passw0rd',
+    });
+    expect(text).toBe('connect ETIMEDOUT 10.0.0.5:22');
+  });
+
+  it('scrubs what a failed read throws, not only what test returns', async () => {
+    fetchFile.mockRejectedValue(new Error('auth failed for hunter2'));
+    await expect(async () => {
+      for await (const _ of sftpDelimitedConnector.read({
+        ...config,
+        password: 'hunter2',
+      })) {
+        void _;
+      }
+    }).rejects.toThrow('auth failed for [redacted]');
   });
 });

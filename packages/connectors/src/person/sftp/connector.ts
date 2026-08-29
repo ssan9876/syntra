@@ -12,6 +12,38 @@ type Config = SftpDelimitedConfig & SftpDelimitedCredential;
 const allowPrivate = (): boolean => process.env.OUTBOUND_ALLOW_PRIVATE === 'true';
 
 /**
+ * The credential, removed from anything a third party wrote.
+ *
+ * `ssh2`'s diagnostics are passed to an operator and stored on the run row,
+ * and this connector holds a password or a private key while it calls it.
+ * `SourceWriteback` states the principle for the LDAP side -- a directory's
+ * own text for a rejected password can quote detail, so it is classified
+ * before it goes anywhere -- and the same reasoning applies to a library whose
+ * error text this code does not control.
+ *
+ * A private key is also matched by its PEM body rather than only in full, so a
+ * message quoting one line of it is caught too.
+ */
+export function redactCredential(message: string, config: Config): string {
+  const secrets: string[] = [];
+  if ('password' in config && config.password) secrets.push(config.password);
+  if ('privateKey' in config && config.privateKey) {
+    secrets.push(config.privateKey);
+    for (const line of config.privateKey.split(/\r?\n/)) {
+      // Skip the banners and anything too short to be key material: matching
+      // on a short line would redact ordinary words out of the message.
+      if (line.length >= 16 && !line.startsWith('---')) secrets.push(line);
+    }
+  }
+  if ('passphrase' in config && config.passphrase) secrets.push(config.passphrase);
+
+  return secrets.reduce(
+    (text, secret) => text.split(secret).join('[redacted]'),
+    message,
+  );
+}
+
+/**
  * How many bytes `test` reads.
  *
  * Enough to report the columns and prove the file parses; never the whole
@@ -90,7 +122,10 @@ export const sftpDelimitedConnector: SourceConnector<Config> = {
       // the ordinary case.
       return {
         ok: false,
-        message: cause instanceof Error ? cause.message : String(cause),
+        message: redactCredential(
+          cause instanceof Error ? cause.message : String(cause),
+          config,
+        ),
       };
     }
   },
@@ -103,10 +138,17 @@ export const sftpDelimitedConnector: SourceConnector<Config> = {
    * pinned connection.
    */
   async *read(config): AsyncIterable<PersonSnapshotRecord> {
-    const { text } = await fetchFile(config, {
+    // The run stores this message on the row and shows it in the console, so
+    // it gets the same scrubbing `test` gives its own.
+    const fetched = await fetchFile(config, {
       allowPrivate: allowPrivate(),
       requirePinned: true,
+    }).catch((cause: unknown) => {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      error.message = redactCredential(error.message, config);
+      throw error;
     });
+    const { text } = fetched;
     const table = parse(config, text);
     for (const [index, row] of table.rows.entries()) {
       yield toRecord(row, index);
