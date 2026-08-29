@@ -44,6 +44,21 @@ function feed(source: PersonSourceRow): { label: string; tone: 'active' | 'neutr
  * without one, so a schedule would fire and fail every night. Saying so on the
  * list turns a recurring failed run into something somebody can fix.
  */
+/**
+ * Where the export is, as `host:path`.
+ *
+ * One string rather than two expressions side by side: a value split across
+ * text nodes is one a reader's find, and a screen reader, meet in pieces --
+ * and without the separator a path that does not begin with `/` ran straight
+ * into the hostname.
+ */
+function fileOf(source: PersonSourceRow): string {
+  const host = source.config?.host;
+  const path = source.config?.remotePath;
+  if (!host) return '—';
+  return path ? `${host}:${path}` : host;
+}
+
 function pinned(source: PersonSourceRow): boolean {
   const fingerprint = source.config?.hostKeyFingerprint;
   return typeof fingerprint === 'string' && fingerprint !== '';
@@ -111,10 +126,7 @@ export function PersonSourcesTab() {
                     <td>
                       <Link to={`/admin/person-sources/${source.id}`}>{source.name}</Link>
                     </td>
-                    <td className="max-sm:hidden">
-                      {source.config?.host ?? '—'}
-                      {source.config?.remotePath ?? ''}
-                    </td>
+                    <td className="max-sm:hidden">{fileOf(source)}</td>
                     <td>
                       <Status tone={feed(source).tone}>{feed(source).label}</Status>
                     </td>
