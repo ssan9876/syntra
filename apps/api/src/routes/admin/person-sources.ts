@@ -403,10 +403,17 @@ export async function registerAdminPersonSourceRoutes(
           confirmedBy: request.session.userId,
         });
       } catch (cause) {
+        if (!(cause instanceof Error)) throw cause;
         // The service refuses a blocked run by throwing. That is a conflict
         // the console can act on -- by confirming -- not a server error.
-        if (cause instanceof Error && cause.message.includes('blocked')) {
+        if (cause.message.includes('blocked')) {
           throw new ProblemError(409, 'run-blocked', 'This run is blocked', cause.message);
+        }
+        // And a run id that names nothing is the caller's mistake, not this
+        // server's. Left alone it answered 500, which tells an operator to go
+        // and look at the logs for a request that was simply wrong.
+        if (cause.message.startsWith('no such import run')) {
+          throw new ProblemError(404, 'not-found', 'Import run not found');
         }
         throw cause;
       }
@@ -418,7 +425,14 @@ export async function registerAdminPersonSourceRoutes(
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      return request.db((tx) => skipImportChange(tx, id));
+      return request.db(async (tx) => {
+        // Checked rather than left to Prisma's update, whose "record not
+        // found" surfaces as a 500 -- which sends an operator to the logs for
+        // a request that was simply wrong.
+        const change = await tx.personImportChange.findUnique({ where: { id } });
+        if (!change) throw new ProblemError(404, 'not-found', 'Change not found');
+        return skipImportChange(tx, id);
+      });
     },
   );
 }

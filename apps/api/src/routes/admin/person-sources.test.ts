@@ -417,3 +417,44 @@ describe('DELETE /person-sources/:id', () => {
     expect(confirmed.statusCode).toBe(200);
   });
 });
+
+describe('naming something that is not there', () => {
+  const MISSING = '00000000-0000-0000-0000-000000000000';
+
+  /**
+   * A caller's mistake, not this server's. Left to the service's own throw
+   * these answered 500, which sends an operator to the logs for a request
+   * that was simply wrong.
+   */
+  it('answers 404 for applying a run that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const response = await post(`/api/admin/person-import-runs/${MISSING}/apply`, cookie);
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('answers 404 for skipping a change that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const response = await post(
+      `/api/admin/person-import-runs/${MISSING}/changes/${MISSING}/skip`,
+      cookie,
+    );
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('answers 404 for a source that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    expect((await get(`/api/admin/person-sources/${MISSING}`, cookie)).statusCode).toBe(404);
+    expect(
+      (await get(`/api/admin/person-sources/${MISSING}/mappings`, cookie)).statusCode,
+    ).toBe(404);
+    expect(
+      (await del(`/api/admin/person-sources/${MISSING}`, cookie)).statusCode,
+    ).toBe(404);
+  });
+
+  it('answers 404 for a run that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
+    const response = await get(`/api/admin/person-import-runs/${MISSING}`, cookie);
+    expect(response.statusCode).toBe(404);
+  });
+});
