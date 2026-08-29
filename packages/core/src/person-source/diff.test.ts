@@ -199,17 +199,51 @@ describe('diffPersons', () => {
 
   /**
    * A manager not yet imported is ordinary on a first run and fixed by the
-   * next one. It is a note on the change, not a failure, and not a null write
-   * that would clear a manager somebody set.
+   * next one. It must never be a null write, which would clear a manager
+   * somebody set by hand.
+   *
+   * And it must not manufacture a change of its own. A note attached to an
+   * otherwise-empty diff is an `update_contract` that writes nothing, is
+   * proposed again on every subsequent run because nothing about it ever
+   * changes, and under `autoApply` applies a no-op write and an audit event
+   * every night for as long as that manager is missing. Nothing is lost by
+   * staying quiet: when the manager IS imported, `managerPersonId` genuinely
+   * differs from what is stored, and a real change appears then.
    */
-  it('notes an unresolvable manager rather than clearing the field', () => {
+  it('proposes nothing when the only news is an unresolvable manager', () => {
     const record = mapped('1');
     record.contracts[0]!.managerExternalId = '9';
+    const changes = diffPersons(input({ mapped: [record], existing: [existing('1')] }));
+    expect(changes).toEqual([]);
+  });
+
+  it('carries the note on a change that exists for another reason', () => {
+    const record = mapped('1');
+    record.contracts[0]!.managerExternalId = '9';
+    record.contracts[0]!.department = 'Engineering';
     const changes = diffPersons(input({ mapped: [record], existing: [existing('1')] }));
     expect(changes).toHaveLength(1);
     expect(changes[0]?.changeType).toBe('update_contract');
     expect(changes[0]?.message).toMatch(/manager "9" is not in the register yet/);
+    expect(changes[0]?.after).toEqual({ department: 'Engineering' });
     expect(changes[0]?.after).not.toHaveProperty('managerPersonId');
+  });
+
+  /**
+   * The whole point of staying quiet: the next run resolves it by itself.
+   */
+  it('proposes the manager once the person it names has been imported', () => {
+    const record = mapped('1');
+    record.contracts[0]!.managerExternalId = '9';
+    const changes = diffPersons(
+      input({
+        mapped: [record],
+        existing: [existing('1')],
+        managerIdByExternalId: new Map([['9', 'p-9']]),
+      }),
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.after).toEqual({ managerPersonId: 'p-9' });
   });
 
   it('derives isPrimary as the earliest active contract when the file is silent', () => {

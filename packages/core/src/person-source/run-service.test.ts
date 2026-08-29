@@ -327,6 +327,64 @@ describe('applyImportRun', () => {
     expect(run?.confirmedBy).toBe(confirmer);
   });
 
+  /**
+   * A run that applied half of itself must not read as complete, and one
+   * whose every change failed must not read as a success. `sync` calls that
+   * `partially_applied`; so does this.
+   */
+  it('reports a partial apply as partially applied', async () => {
+    connectorFor.mockReturnValue(new FakePersonSource([row('1'), row('2')]));
+    const run = await previewImportRun(tenantId, provider, sourceId);
+    const creates = (await changesOf(run.id)).filter(
+      (c) => c.changeType === 'create_person',
+    );
+    await applyImportRun(tenantId, run.id, { only: [creates[0]!.id] });
+
+    const after = await withTenant(tenantId, (tx) =>
+      tx.personImportRun.findUnique({ where: { id: run.id } }),
+    );
+    expect(after?.status).toBe('partially_applied');
+    expect(after?.finishedAt).not.toBeNull();
+  });
+
+  it('reports a fully applied run as applied', async () => {
+    connectorFor.mockReturnValue(new FakePersonSource([row('1')]));
+    const run = await previewImportRun(tenantId, provider, sourceId);
+    await applyImportRun(tenantId, run.id);
+
+    const after = await withTenant(tenantId, (tx) =>
+      tx.personImportRun.findUnique({ where: { id: run.id } }),
+    );
+    expect(after?.status).toBe('applied');
+  });
+
+  /**
+   * The knock-on the status change could have caused: `previewImportRun`
+   * looks for a previously applied run to decide whether the drop guard has a
+   * baseline. A source that applied half a run has still applied, and
+   * treating it as never-applied would skip that guard on the next run.
+   */
+  it('still guards the next run after a partial apply', async () => {
+    connectorFor.mockReturnValue(
+      new FakePersonSource([row('1'), row('2'), row('3'), row('4'), row('5')]),
+    );
+    const first = await previewImportRun(tenantId, provider, sourceId);
+    const creates = (await changesOf(first.id)).filter(
+      (c) => c.changeType === 'create_person',
+    );
+    // Everything but one, so the run is partially applied on purpose.
+    await applyImportRun(tenantId, first.id, {
+      only: creates.slice(0, 4).map((c) => c.id),
+    });
+
+    // Now everybody vanishes. The guard must still have a baseline to refuse
+    // against.
+    connectorFor.mockReturnValue(new FakePersonSource([row('9')]));
+    const second = await previewImportRun(tenantId, provider, sourceId);
+    expect(second.status).toBe('blocked');
+    expect(second.requiresConfirmation).toBe(true);
+  });
+
   it('applies only the changes it was given', async () => {
     connectorFor.mockReturnValue(new FakePersonSource([row('1'), row('2')]));
     const run = await previewImportRun(tenantId, provider, sourceId);

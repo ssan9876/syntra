@@ -221,7 +221,18 @@ function contractUpdate(
   // An end date being cleared is an ordinary update: the contract came back.
   if (!sameDay(contract.endDate, stored.endDate)) after.endDate = contract.endDate;
 
-  if (Object.keys(after).length === 0 && manager.note === undefined) return null;
+  // A note is not news on its own.
+  //
+  // Emitting a change that carries only the unresolvable-manager note gives an
+  // `update_contract` whose `after` is empty: it writes nothing, and because
+  // nothing about it ever changes it is proposed again on every subsequent
+  // run -- forever, if that manager is never imported. Under `autoApply` that
+  // is a no-op write and an audit event every night, per contract.
+  //
+  // Staying quiet costs nothing. When the manager IS imported,
+  // `managerPersonId` genuinely differs from what is stored and a real change
+  // appears then; until it is, the field is left exactly as it was.
+  if (Object.keys(after).length === 0) return null;
 
   return {
     changeType: 'update_contract',

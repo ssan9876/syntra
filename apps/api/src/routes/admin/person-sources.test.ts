@@ -346,6 +346,50 @@ describe('applying a run', () => {
   });
 });
 
+describe('skipping a change', () => {
+  /**
+   * A skip is "not now", not "never": the change is marked skipped so this
+   * apply passes it over, and the next run proposes it again because the file
+   * is still saying it.
+   */
+  it('marks the change skipped and leaves it out of the apply', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const source = (await createSource(cookie)).json();
+    await put(`/api/admin/person-sources/${source.id}/mappings`, cookie, {
+      mappings: [correlation, startDateRule],
+    });
+    connectorFor.mockReturnValue(new FakePersonSource([row('1'), row('2')]));
+    const run = await previewImportRun(ctx.tenantId, testProvider, source.id);
+
+    const creates = await withTenant(ctx.tenantId, (tx) =>
+      tx.personImportChange.findMany({
+        where: { runId: run.id, changeType: 'create_person' },
+        orderBy: { externalId: 'asc' },
+      }),
+    );
+
+    const skipped = await post(
+      `/api/admin/person-import-runs/${run.id}/changes/${creates[0]!.id}/skip`,
+      cookie,
+    );
+    expect(skipped.statusCode).toBe(200);
+    expect(skipped.json().status).toBe('skipped');
+
+    await post(`/api/admin/person-import-runs/${run.id}/apply`, cookie);
+    const persons = await withTenant(ctx.tenantId, (tx) => tx.person.findMany());
+    expect(persons.map((p) => p.externalId)).toEqual(['2']);
+  });
+
+  it('refuses a caller without sync.manage', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
+    const response = await post(
+      `/api/admin/person-import-runs/${'00000000-0000-0000-0000-000000000000'}/changes/${'00000000-0000-0000-0000-000000000001'}/skip`,
+      cookie,
+    );
+    expect(response.statusCode).toBe(403);
+  });
+});
+
 describe('DELETE /person-sources/:id', () => {
   it('refuses while it owns people, naming how many', async () => {
     const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);

@@ -106,7 +106,11 @@ export function PersonImportRunDetailPage() {
     byType.set(change.changeType, [...(byType.get(change.changeType) ?? []), change]);
   }
 
-  const appliable = run.status === 'previewed';
+  // `partially_applied` too: a run somebody applied half of still has the
+  // other half proposed, and a page that offered no action would strand it.
+  const appliable =
+    run.status === 'previewed' ||
+    (run.status === 'partially_applied' && changes.some((c) => c.status === 'proposed'));
   const confirmable = run.status === 'blocked' && run.requiresConfirmation;
 
   return (

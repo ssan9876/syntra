@@ -141,6 +141,60 @@ describe('choosing what the file contains', () => {
   });
 });
 
+describe('saving a source that already exists', () => {
+  /**
+   * `sftpDelimitedConfigSchema` is a whole object with defaults, so a save
+   * that sends only the fields this form shows resets every field it does
+   * not: delimiter, quote character, encoding, header row, and both ceilings.
+   * A tab-separated feed would silently become comma-separated and every row
+   * after that would fail to map.
+   */
+  it('keeps config the form never showed', async () => {
+    const calls = mockFetch({
+      source: savedSource({
+        config: {
+          host: 'hr.example.test',
+          port: 22,
+          username: 'syntra',
+          remotePath: '/export/people.tsv',
+          delimiter: '\t',
+          hasHeaderRow: false,
+          maxRows: 5000,
+        },
+      }),
+    });
+    renderEdit();
+    await screen.findByDisplayValue('HR nightly');
+
+    await userEvent.click(screen.getByRole('button', { name: /save source/i }));
+
+    await waitFor(() => {
+      const patch = calls.find((c) => c.init.method === 'PATCH');
+      expect(patch).toBeDefined();
+      const sent = bodyOf(patch!) as unknown as { config: Record<string, unknown> };
+      expect(sent.config.delimiter).toBe('\t');
+      expect(sent.config.hasHeaderRow).toBe(false);
+      expect(sent.config.maxRows).toBe(5000);
+    });
+  });
+
+  it('still sends the fields the form does show', async () => {
+    const calls = mockFetch();
+    renderEdit();
+    await screen.findByDisplayValue('HR nightly');
+
+    await userEvent.clear(screen.getByLabelText('Host'));
+    await userEvent.type(screen.getByLabelText('Host'), 'hr2.example.test');
+    await userEvent.click(screen.getByRole('button', { name: /save source/i }));
+
+    await waitFor(() => {
+      const patch = calls.find((c) => c.init.method === 'PATCH');
+      const sent = bodyOf(patch!) as unknown as { config: Record<string, unknown> };
+      expect(sent.config.host).toBe('hr2.example.test');
+    });
+  });
+});
+
 describe('the host key', () => {
   /**
    * There is no field to type a fingerprint into. Nobody has one to hand, and

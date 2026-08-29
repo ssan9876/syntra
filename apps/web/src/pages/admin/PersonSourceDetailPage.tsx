@@ -78,6 +78,11 @@ export function PersonSourceDetailPage() {
    */
   const [feedMode, setFeedMode] = useState<'snapshot' | 'delta' | null>(null);
 
+  /**
+   * The stored config, kept whole so a save cannot drop the parts this form
+   * does not show. See `save`.
+   */
+  const [loadedConfig, setLoadedConfig] = useState<Record<string, unknown>>({});
   const [sourceId, setSourceId] = useState<string | null>(isNew ? null : (id ?? null));
   const [columns, setColumns] = useState<string[]>([]);
   const [hostKey, setHostKey] = useState<HostKey | null>(null);
@@ -95,6 +100,8 @@ export function PersonSourceDetailPage() {
         setFeedMode(source.feedMode);
         setSchedule(source.schedule ?? '');
         const config = source.config as Record<string, string | number>;
+        // Kept whole, not just the parts this form edits. See `save`.
+        setLoadedConfig(source.config);
         setHost(String(config.host ?? ''));
         setPort(String(config.port ?? 22));
         setUsername(String(config.username ?? ''));
@@ -122,7 +129,19 @@ export function PersonSourceDetailPage() {
     setBusy(true);
     setError(null);
     try {
+      /*
+       * The config the source already had, with this form's fields over it.
+       *
+       * NOT just the fields shown. `sftpDelimitedConfigSchema` is a whole
+       * object with defaults, so sending only what this form edits resets
+       * everything it does not -- `delimiter`, `quoteChar`, `encoding`,
+       * `hasHeaderRow`, `maxBytes`, `maxRows`. A source reading a
+       * tab-separated export would silently become comma-separated on the
+       * next save from this screen, and every row after that would fail to
+       * map. Saving a form must not change settings the form never showed.
+       */
       const config = {
+        ...loadedConfig,
         host,
         port: Number(port),
         username,

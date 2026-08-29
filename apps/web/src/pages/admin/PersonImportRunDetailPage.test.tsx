@@ -152,6 +152,29 @@ describe('reviewing an import run', () => {
     expect(screen.getByText(/not treated as leavers/i)).toBeVisible();
   });
 
+  /**
+   * A run applied in part still has the rest proposed. Offering no action
+   * would strand it with no way to finish from the console.
+   */
+  it('still offers apply on a partially applied run with work left', async () => {
+    mockFetch({
+      run: run({ status: 'partially_applied' }),
+      changes: [change({ status: 'applied' }), change({ id: 'c2', status: 'proposed' })],
+    });
+    renderPage();
+    expect(await screen.findByRole('button', { name: /^Apply$/ })).toBeVisible();
+  });
+
+  it('offers no apply once nothing is left proposed', async () => {
+    mockFetch({
+      run: run({ status: 'partially_applied' }),
+      changes: [change({ status: 'applied' }), change({ id: 'c2', status: 'skipped' })],
+    });
+    renderPage();
+    await screen.findByText(/812 records read/);
+    expect(screen.queryByRole('button', { name: /^Apply$/ })).toBeNull();
+  });
+
   it('says so when a run proposes nothing', async () => {
     mockFetch({ changes: [] });
     renderPage();

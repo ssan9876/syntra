@@ -166,8 +166,13 @@ export async function previewImportRun(
           },
         }),
         personsNow: await personsWithActiveContract(tx),
+        // `partially_applied` counts. This decides whether the drop guard has
+        // a baseline to compare against, and a source that applied half a run
+        // has still applied: treating it as never-applied would pass `null`
+        // as the previous population and skip the guard entirely on the very
+        // next run.
         lastApplied: await tx.personImportRun.findFirst({
-          where: { sourceId, status: 'applied' },
+          where: { sourceId, status: { in: ['applied', 'partially_applied'] } },
           orderBy: { finishedAt: 'desc' },
           select: { id: true },
         }),
@@ -494,11 +499,23 @@ export async function applyImportRun(
     }
   }
 
+  // What is still proposed after this pass: the changes a partial apply left
+  // behind, and the ones somebody skipped.
+  const remaining = await withTenant(tenantId, (tx) =>
+    tx.personImportChange.count({ where: { runId, status: 'proposed' } }),
+  );
+
   await withTenant(tenantId, async (tx) => {
     await tx.personImportRun.update({
       where: { id: runId },
       data: {
-        status: 'applied',
+        // `partially_applied` where anything is left or anything failed, as
+        // `sync/run-service.ts` does. A run whose every change failed
+        // reporting itself as `applied` is a run that lies about the
+        // directory, and a partial apply that reads as complete hides the
+        // half nobody has looked at yet.
+        status: remaining > 0 || failed > 0 ? 'partially_applied' : 'applied',
+        finishedAt: new Date(),
         ...(opts.confirmedBy === undefined ? {} : { confirmedBy: opts.confirmedBy }),
       },
     });
