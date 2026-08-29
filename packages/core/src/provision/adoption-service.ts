@@ -30,6 +30,33 @@ import { valuesOf } from './apply.js';
  * the next run, through the guard, in a plan somebody reviews.
  */
 
+export class NoAccountToAdoptError extends Error {
+  constructor() {
+    super('this person has no account on this target, so there is nothing to adopt');
+    this.name = 'NoAccountToAdoptError';
+  }
+}
+
+export class NotInConflictError extends Error {
+  constructor(readonly status: string) {
+    super(
+      `this account is ${status}, not in conflict. Adoption is the exit from a conflict, ` +
+        'not a way to re-point an account that already works.',
+    );
+    this.name = 'NotInConflictError';
+  }
+}
+
+export class AnchorAlreadyBoundError extends Error {
+  constructor(readonly anchor: string) {
+    super(
+      `the object ${anchor} is already held by another account in this target, ` +
+        'so adopting it here would give two people one account',
+    );
+    this.name = 'AnchorAlreadyBoundError';
+  }
+}
+
 export interface AdoptAccountInput {
   personId: string;
   targetSystemId: string;
@@ -63,10 +90,12 @@ async function conflictedAccount(
   targetSystemId: string,
 ) {
   return withTenant(tenantId, async (tx) => {
-    const account = await tx.targetAccount.findFirstOrThrow({
+    const account = await tx.targetAccount.findFirst({
       where: { personId, targetSystemId },
       select: { id: true, status: true, correlationKey: true },
     });
+    if (account === null) throw new NoAccountToAdoptError();
+    if (account.status !== 'conflict') throw new NotInConflictError(account.status);
     const target = await tx.targetSystem.findUniqueOrThrow({
       where: { id: targetSystemId },
       select: { type: true, config: true },
@@ -130,6 +159,17 @@ export async function adoptAccount(
   if (candidate === null) return { adopted: false, anchor: null, dn: null };
 
   await withTenant(tenantId, async (tx) => {
+    const held = await tx.targetAccount.findFirst({
+      where: { targetSystemId: input.targetSystemId, anchor: candidate.anchor },
+      select: { id: true },
+    });
+    // The partial unique index on `(tenantId, targetSystemId, anchor)` refuses
+    // this anyway. Checked first so the administrator gets a sentence rather
+    // than a constraint violation — and inside the transaction, so a
+    // concurrent adoption cannot slip between the check and the write.
+    if (held !== null && held.id !== account.id) {
+      throw new AnchorAlreadyBoundError(candidate.anchor);
+    }
     await tx.targetAccount.update({
       where: { id: account.id },
       data: { anchor: candidate.anchor, status: 'active', statusReason: null },

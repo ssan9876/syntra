@@ -4,7 +4,12 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { FakeTarget } from '@syntra/connectors/testing';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createTarget } from './target-service.js';
-import { adoptAccount } from './adoption-service.js';
+import {
+  AnchorAlreadyBoundError,
+  NoAccountToAdoptError,
+  NotInConflictError,
+  adoptAccount,
+} from './adoption-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 
@@ -180,5 +185,121 @@ describe('adoptAccount', () => {
       correlationKey: 'anna.novak',
       reason: 'confirmed with her manager',
     });
+  });
+});
+
+describe('adoptAccount — what it refuses', () => {
+  it('refuses a person with no account on this target', async () => {
+    const stranger = await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Bea', familyName: 'Vos' },
+      });
+      return person.id;
+    });
+
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId: stranger,
+        targetSystemId: targetId,
+        reason: 'nothing there',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeInstanceOf(NoAccountToAdoptError);
+  });
+
+  it('refuses an account that is not in conflict', async () => {
+    // Adoption is the exit from ONE state. A general re-point would let an
+    // administrator attach a person to an account that already belongs to
+    // somebody else — precisely the power the provenance rule withholds.
+    target.seedForeignObject('anna.novak');
+    await withTenant(tenantId, (tx) =>
+      tx.targetAccount.updateMany({
+        where: { personId },
+        data: { status: 'active' },
+      }),
+    );
+
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'already fine',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeInstanceOf(NotInConflictError);
+  });
+
+  it('refuses an object another account already holds', async () => {
+    // Two people cannot share one directory object. The partial unique index
+    // on `anchor` refuses it anyway; this turns a constraint violation into a
+    // sentence naming what went wrong.
+    const anchor = target.seedForeignObject('anna.novak');
+    await withTenant(tenantId, async (tx) => {
+      const other = await tx.person.create({
+        data: { tenantId, givenName: 'Bea', familyName: 'Vos' },
+      });
+      await tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          personId: other.id,
+          correlationKey: 'bea.vos',
+          status: 'active',
+          anchor,
+        },
+      });
+    });
+
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'contested',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeInstanceOf(AnchorAlreadyBoundError);
+  });
+
+  it('leaves the row in conflict when it refuses', async () => {
+    // A refused adoption must not be a partial one. The administrator acts on
+    // the message; they cannot do that from a half-written state.
+    const anchor = target.seedForeignObject('anna.novak');
+    await withTenant(tenantId, async (tx) => {
+      const other = await tx.person.create({
+        data: { tenantId, givenName: 'Bea', familyName: 'Vos' },
+      });
+      await tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          personId: other.id,
+          correlationKey: 'bea.vos',
+          status: 'active',
+          anchor,
+        },
+      });
+    });
+
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'contested',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeTruthy();
+
+    const after = await accountOf(personId);
+    expect(after.status).toBe('conflict');
+    expect(after.anchor).toBeNull();
+    expect(await adoptedEvents()).toHaveLength(0);
   });
 });
