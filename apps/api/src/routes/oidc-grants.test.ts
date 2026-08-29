@@ -771,3 +771,168 @@ describe('RP-initiated logout', () => {
     expect(res.headers.location ?? '').not.toContain('attacker.test');
   });
 });
+
+/**
+ * Revocation and introspection, and the client authentication they lacked.
+ *
+ * These live here rather than in a file of their own because the harness above
+ * -- the fetch shim, the cookie jar, the walk -- is what it takes to hold a
+ * real token, and revoking one is a grant-lifecycle operation like every other
+ * case in this file.
+ *
+ * The defect they close: Syntra authenticates clients for `/token` itself,
+ * constant-time against the stored hash, and hands oidc-provider a placeholder
+ * secret it never learns the real value of. Every OTHER client-authenticated
+ * endpoint therefore answered `invalid_client` to a client presenting its
+ * correct secret, because the provider was comparing against a value nobody
+ * holds. `oidc-boundary.test.ts` pinned that as deliberate; this moves it.
+ */
+describe('revocation and introspection', () => {
+  const postForm = (path: string, body: Record<string, string>) =>
+    ctx.app.inject({
+      method: 'POST',
+      url: path,
+      headers: {
+        host: TEST_HOST,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: new URLSearchParams(body).toString(),
+    });
+
+  const tokensWithRefresh = async () => {
+    const config = await discover();
+    const verifier = client.randomPKCECodeVerifier();
+    const state = client.randomState();
+    const authUrl = client.buildAuthorizationUrl(config, {
+      redirect_uri: REDIRECT,
+      scope: 'openid email offline_access',
+      state,
+      code_challenge: await client.calculatePKCECodeChallenge(verifier),
+      code_challenge_method: 'S256',
+      prompt: 'consent',
+    });
+    const { url: landed } = await walk(authUrl);
+    const tokens = await client.authorizationCodeGrant(config, landed, {
+      pkceCodeVerifier: verifier,
+      expectedState: state,
+    });
+    return { config, tokens };
+  };
+
+  describe('revocation', () => {
+    it('authenticates a client presenting its real secret', async () => {
+      // THE defect. Before this, the correct secret got `invalid_client`.
+      const { tokens } = await tokensWithRefresh();
+
+      const res = await postForm('/oidc/token/revocation', {
+        token: tokens.refresh_token!,
+        client_id: 'crm',
+        client_secret: clientSecret,
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('kills the grant, so the refresh token stops working', async () => {
+      const { config, tokens } = await tokensWithRefresh();
+
+      await postForm('/oidc/token/revocation', {
+        token: tokens.refresh_token!,
+        client_id: 'crm',
+        client_secret: clientSecret,
+      });
+
+      await expect(
+        client.refreshTokenGrant(config, tokens.refresh_token!),
+      ).rejects.toThrow();
+    });
+
+    it('answers 200 for a token that never existed', async () => {
+      // RFC 7009 requires it, and it is also the only answer that does not
+      // turn this endpoint into an oracle for guessing tokens.
+      const res = await postForm('/oidc/token/revocation', {
+        token: 'not-a-token-anybody-issued',
+        client_id: 'crm',
+        client_secret: clientSecret,
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('refuses a wrong secret', async () => {
+      const res = await postForm('/oidc/token/revocation', {
+        token: 'anything',
+        client_id: 'crm',
+        client_secret: 'not-the-secret',
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error).toBe('invalid_client');
+    });
+
+    it('refuses a caller presenting no credential at all', async () => {
+      const res = await postForm('/oidc/token/revocation', { token: 'anything' });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error).toBe('invalid_client');
+    });
+  });
+
+  describe('introspection', () => {
+    it('describes the client\'s own live access token', async () => {
+      const { tokens } = await tokensWithRefresh();
+
+      const res = await postForm('/oidc/token/introspection', {
+        token: tokens.access_token,
+        client_id: 'crm',
+        client_secret: clientSecret,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.active).toBe(true);
+      expect(body.client_id).toBe('crm');
+      expect(body.sub).toBe(userId);
+      expect(body.token_type).toBe('Bearer');
+    });
+
+    it('answers active:false for a revoked token, and describes nothing', async () => {
+      const { tokens } = await tokensWithRefresh();
+      await postForm('/oidc/token/revocation', {
+        token: tokens.refresh_token!,
+        client_id: 'crm',
+        client_secret: clientSecret,
+      });
+
+      const res = await postForm('/oidc/token/introspection', {
+        token: tokens.refresh_token!,
+        client_id: 'crm',
+        client_secret: clientSecret,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ active: false });
+    });
+
+    it('answers active:false for nonsense', async () => {
+      const res = await postForm('/oidc/token/introspection', {
+        token: 'nonsense',
+        client_id: 'crm',
+        client_secret: clientSecret,
+      });
+
+      expect(res.json()).toEqual({ active: false });
+    });
+
+    it('refuses a wrong secret', async () => {
+      const res = await postForm('/oidc/token/introspection', {
+        token: 'nonsense',
+        client_id: 'crm',
+        client_secret: 'not-the-secret',
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error).toBe('invalid_client');
+    });
+  });
+});

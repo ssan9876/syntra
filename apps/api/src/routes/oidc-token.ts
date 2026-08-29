@@ -1,6 +1,7 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
+  artifactRevokeByGrantId,
   consumeAuthorizationDecision,
   findOidcClient,
   recordEvent,
@@ -291,6 +292,61 @@ async function guardClientCredentials(
  * stream. `oidc-boundary.test.ts` asserts that separation directly rather than
  * trusting the registration order to stay right.
  */
+/**
+ * A token OAuth's two token-facing endpoints have to look up.
+ *
+ * Resolved through oidc-provider's OWN model finders rather than by reading
+ * `OidcArtifact` directly. The opaque token's internal format is the library's
+ * business -- it is not simply the artifact id -- and a hand-rolled parse would
+ * work until the next upgrade and then fail silently, which is the worst shape
+ * a token lookup can fail in.
+ *
+ * Access tokens first because introspection is asked about them far more often
+ * than about refresh tokens, and a `token_type_hint` is optional and routinely
+ * absent or wrong. Both are tried either way: RFC 7009 section 2.1 says a hint
+ * that misses must not stop the server finding the token.
+ */
+async function findPresentedToken(
+  provider: Awaited<ReturnType<typeof oidcProviderFor>>,
+  token: string,
+) {
+  return (
+    (await provider.AccessToken.find(token)) ??
+    (await provider.RefreshToken.find(token)) ??
+    null
+  );
+}
+
+/**
+ * Syntra's own client authentication, for the endpoints oidc-provider cannot
+ * do it for.
+ *
+ * Constant-time against the stored SHA-256 hash, exactly as `/token` does it.
+ * oidc-provider holds `PROVIDER_CLIENT_SECRET` and never learns the real
+ * value, which is what makes `/token` safe and is also why every endpoint the
+ * provider authenticates for itself refuses a client presenting its correct
+ * secret. Revocation and introspection are Syntra's now, and this is the
+ * reason they can be.
+ *
+ * Returns the client id, or null. `'malformed'` is a refusal like any other:
+ * an attacker learns nothing about which half of the credential was rejected.
+ */
+async function authenticatedClientId(
+  request: FastifyRequest,
+  params: URLSearchParams,
+): Promise<string | null> {
+  const presented = presentedCredentials(request, params);
+  if (presented === null || presented === 'malformed') return null;
+  if (presented.clientId === '') return null;
+
+  const ok = await verifyClientSecret(
+    request.tenantId,
+    presented.clientId,
+    presented.secret,
+  );
+  return ok ? presented.clientId : null;
+}
+
 export async function registerOidcTokenRoutes(
   app: FastifyInstance,
   options: OidcRouteOptions,
@@ -369,4 +425,113 @@ export async function registerOidcTokenRoutes(
       );
     },
   );
+
+  /**
+   * Token revocation, RFC 7009.
+   *
+   * Registered HERE, in the plugin that owns real client authentication,
+   * rather than falling through to oidc-provider's catch-all where the
+   * placeholder secret guarantees `invalid_client` for every client that
+   * presents its true one.
+   *
+   * The answer is 200 whether the token existed, had already gone, or belonged
+   * to somebody else. The spec requires that, and it is also the only answer
+   * that does not turn this endpoint into an oracle: a 404 for "no such token"
+   * and a 200 for "revoked" would let an authenticated client test guesses
+   * against every other client's tokens.
+   */
+  const revocationConfig = {
+    config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+  };
+
+  app.post('/token/revocation', revocationConfig, async (request, reply) => {
+    const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+    const params = new URLSearchParams(body.toString('utf8'));
+
+    const clientId = await authenticatedClientId(request, params);
+    if (clientId === null) {
+      return reply.status(401).type('application/json').send({
+        error: 'invalid_client',
+        error_description: 'Client authentication failed',
+      });
+    }
+
+    const token = params.get('token');
+    if (token !== null && token !== '') {
+      const provider = await oidcProviderFor(request, options);
+      const found = await findPresentedToken(provider, token);
+      // Only the issuing client may revoke. A mismatch takes the same exit as
+      // a hit, above.
+      if (found && found.clientId === clientId && typeof found.grantId === 'string') {
+        await artifactRevokeByGrantId(request.tenantId, found.grantId);
+        // Targets the USER, not the client. `AuditEvent.targetId` is a uuid
+        // column and a `client_id` is a human-chosen string, so the client
+        // travels in the payload -- the same shape `oidc.decision_missing`
+        // above already uses for the same reason.
+        const accountId =
+          typeof found.accountId === 'string' ? found.accountId : null;
+        await request.db((tx) =>
+          recordEvent(tx, {
+            actorUserId: accountId,
+            action: 'oidc.token_revoked',
+            targetType: 'User',
+            targetId: accountId,
+            outcome: 'success',
+            sourceIp: request.ip,
+            payload: { clientId, grantId: found.grantId },
+          }),
+        );
+      }
+    }
+
+    return reply.status(200).type('application/json').send({});
+  });
+
+  /**
+   * Token introspection, RFC 7662, with one rule the spec leaves open: a
+   * client may introspect only its own tokens.
+   *
+   * That rule is the security property of this endpoint. Without it, a client
+   * holding one token can learn the subject, scope and expiry of any other
+   * token it can guess or intercept -- including tokens belonging to
+   * applications it has nothing to do with.
+   *
+   * Every "no" is the same "no". Distinguishing expired from revoked from
+   * somebody else's would answer questions the caller has no standing to ask.
+   */
+  app.post('/token/introspection', revocationConfig, async (request, reply) => {
+    const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+    const params = new URLSearchParams(body.toString('utf8'));
+
+    const clientId = await authenticatedClientId(request, params);
+    if (clientId === null) {
+      return reply.status(401).type('application/json').send({
+        error: 'invalid_client',
+        error_description: 'Client authentication failed',
+      });
+    }
+
+    const inactive = { active: false };
+    const token = params.get('token');
+    if (token === null || token === '') {
+      return reply.status(200).type('application/json').send(inactive);
+    }
+
+    const provider = await oidcProviderFor(request, options);
+    const found = await findPresentedToken(provider, token);
+    if (!found || found.clientId !== clientId) {
+      return reply.status(200).type('application/json').send(inactive);
+    }
+
+    return reply.status(200).type('application/json').send({
+      active: true,
+      sub: found.accountId,
+      scope: found.scope,
+      client_id: found.clientId,
+      token_type: 'Bearer',
+      exp: found.exp,
+      iat: found.iat,
+    });
+  });
 }
