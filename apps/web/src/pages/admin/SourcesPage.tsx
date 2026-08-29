@@ -5,7 +5,7 @@ import { StatCard, StatGrid } from '../../components/StatCards.js';
 import { PageHeader } from './PageHeader.js';
 import { SourcesTab } from './SourcesTab.js';
 import { PersonSourcesTab } from './PersonSourcesTab.js';
-import { SyncRunsTab } from './SyncRunsTab.js';
+import { RunsTab } from './RunsTab.js';
 
 interface SourceRow {
   id: string;
@@ -105,7 +105,7 @@ export function SourcesPage() {
             id: 'runs',
             label: 'Runs',
             badge: runRows.length || undefined,
-            content: <SyncRunsTab />,
+            content: <RunsTab />,
           },
         ]}
       />
