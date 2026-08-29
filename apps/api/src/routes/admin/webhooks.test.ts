@@ -366,6 +366,38 @@ describe('DELETE /api/admin/webhooks/:id', () => {
   });
 });
 
+describe('subscribing to one action', () => {
+  it('accepts a security group, an exact audit action and a prefix', async () => {
+    // The contract's own docstring promises an exact name works. The pattern
+    // forbade dots and every audit action has one, so finer control than the
+    // groups offer was unreachable for exactly the events that most want it --
+    // a SIEM wanting lockouts and nothing else.
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+
+    const res = await call('POST', '/api/admin/webhooks', cookie, {
+      ...anEndpoint,
+      name: 'SIEM',
+      events: ['sign-in-security', 'auth.lockout', 'policy.'.concat('*')],
+    });
+
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('still refuses something that is not a name', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+
+    const res = await call('POST', '/api/admin/webhooks', cookie, {
+      ...anEndpoint,
+      name: 'Bad',
+      events: ['Auth Lockout'],
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe('an endpoint hears about configuration changes, including its own', () => {
   it('delivers webhook configuration changes to a configuration subscriber', async () => {
     // Deliberate, and the reason it is deliberate: somebody quietly

@@ -41,8 +41,18 @@ const eventSelector = z
   .min(1)
   .max(64)
   .regex(
-    /^[a-z][a-z0-9-]*\*?$/,
-    "An event group, a template name, or a name ending in *",
+    // Dots are allowed because every AUDIT ACTION carries one --
+    // `auth.lockout`, `policy.rule_added` -- and the docstring above already
+    // promises an exact name is accepted. Before the security groups landed
+    // every subscribable name was a template (`automate-approved`), so the
+    // pattern had no reason to admit a dot, and "finer control than the groups
+    // offer" was unreachable for precisely the events most likely to want it.
+    //
+    // What still matters is unchanged: no spaces, no uppercase, no leading
+    // punctuation, so a typo is a 400 rather than a subscription that matches
+    // nothing and looks like a delivery failure for the rest of its life.
+    /^[a-z][a-z0-9.-]*\*?$/,
+    "An event group, an event name, or a name ending in *",
   );
 
 const endpointName = z.string().trim().min(1).max(80);

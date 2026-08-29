@@ -59,6 +59,20 @@ const GROUPS = [
     key: 'findings',
     label: 'Governance findings',
   },
+  // Labels only, like the six above. The docstring records that captions were
+  // removed because every one restated its label in longer form.
+  {
+    key: 'sign-in-security',
+    label: 'Sign-in security',
+  },
+  {
+    key: 'credentials',
+    label: 'Credentials',
+  },
+  {
+    key: 'configuration',
+    label: 'Configuration changes',
+  },
 ] as const;
 
 const LABELS = new Map(GROUPS.map((g) => [g.key as string, g.label]));
