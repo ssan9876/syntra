@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { ProvisionRunsPage } from './ProvisionRunsPage.js';
 
 const json = (body: unknown, status = 200) =>
@@ -151,5 +151,57 @@ describe('ProvisionRunsPage', () => {
         'the run could not be enqueued; the API is up but the job scheduler is not',
       ),
     ).toBeVisible();
+  });
+
+  it('does not let a stale response for a previous target overwrite a rapid id change', async () => {
+    // The runs request for t1 is left pending; the one for t2 answers first,
+    // as it would if t1's happened to be the slower of the two round trips.
+    // Resolving t1's afterwards must not clobber what t2 already rendered.
+    let resolveStale: () => void = () => {};
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/targets/t1/runs')) {
+        return new Promise((resolve) => {
+          resolveStale = () =>
+            resolve(json({ runs: [run({ id: 'stale', personsEvaluated: 999 })] }));
+        });
+      }
+      if (url.includes('/targets/t2/runs')) {
+        return Promise.resolve(
+          json({ runs: [run({ id: 'fresh', personsEvaluated: 5 })] }),
+        );
+      }
+      return Promise.resolve(json({ runs: [] }));
+    });
+
+    function Nav() {
+      const navigate = useNavigate();
+      return (
+        <button onClick={() => navigate('/admin/targets/t2/runs')}>
+          switch
+        </button>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/admin/targets/t1/runs']}>
+        <Nav />
+        <Routes>
+          <Route
+            path="/admin/targets/:id/runs"
+            element={<ProvisionRunsPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'switch' }));
+    expect(await screen.findByText('5')).toBeVisible();
+
+    resolveStale();
+    // Give the stale promise a turn to settle before asserting it changed
+    // nothing.
+    await screen.findByText('5');
+    expect(screen.queryByText('999')).toBeNull();
   });
 });

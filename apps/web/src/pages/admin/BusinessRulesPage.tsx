@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Alert,
@@ -296,24 +296,42 @@ export function BusinessRulesPage() {
    * administrator did not need — three assertions about the server made before
    * the server had said anything.
    */
+  // Bumped on every `reload()`, so a response for an id this screen has since
+  // moved away from cannot land after the rules for the new one already have -
+  // a rapid id change otherwise reads as "these rules belong to this target"
+  // when they belong to the last one.
+  const requestSeq = useRef(0);
+
   const reload = () => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     void Promise.allSettled([
       api<{ rules: StoredRule[] }>(`/api/admin/targets/${id}/rules`)
-        .then((body) => setRules(body.rules))
-        .catch(() =>
-          setProblem('The rules for this target could not be loaded.'),
-        ),
+        .then((body) => {
+          if (seq !== requestSeq.current) return;
+          setRules(body.rules);
+        })
+        .catch(() => {
+          if (seq !== requestSeq.current) return;
+          setProblem('The rules for this target could not be loaded.');
+        }),
       api<{ entitlements: Entitlement[] }>(
         `/api/admin/targets/${id}/entitlements`,
       )
-        .then((body) => setEntitlements(body.entitlements))
-        .catch(() =>
+        .then((body) => {
+          if (seq !== requestSeq.current) return;
+          setEntitlements(body.entitlements);
+        })
+        .catch(() => {
+          if (seq !== requestSeq.current) return;
           setProblem(
             'The entitlement catalog for this target could not be read.',
-          ),
-        ),
-    ]).then(() => setLoading(false));
+          );
+        }),
+    ]).then(() => {
+      if (seq !== requestSeq.current) return;
+      setLoading(false);
+    });
   };
   useEffect(reload, [id]);
 

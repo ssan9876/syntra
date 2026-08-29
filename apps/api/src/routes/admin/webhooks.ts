@@ -73,28 +73,37 @@ export async function registerAdminWebhookRoutes(
    * One grouped query for every endpoint rather than one per endpoint: the
    * page renders a health chip per row, and a query per row is how a settings
    * page becomes slow the moment somebody has ten integrations.
+   *
+   * A single `GROUP BY "endpointId"`, with Postgres's aggregate `FILTER`
+   * doing the pending/failing split and the "most recent failure" max in the
+   * same pass, rather than pulling every undelivered row and doing that
+   * filtering and sorting per endpoint in JS.
    */
   const withHealth = async (request: FastifyRequest, endpoints: EndpointView[]) => {
     if (endpoints.length === 0) return [];
-    const rows = await request.db((tx) =>
-      tx.webhookDelivery.findMany({
-        where: { deliveredAt: null },
-        select: { endpointId: true, attempts: true, createdAt: true, lastError: true },
-      }),
+    const rows = await request.db(
+      (tx) => tx.$queryRaw<
+        { endpointId: string; pending: number; failing: number; lastFailureAt: Date | null }[]
+      >`
+        SELECT "endpointId",
+          COUNT(*) FILTER (WHERE "attempts" < ${WEBHOOK_MAX_ATTEMPTS})::int AS "pending",
+          COUNT(*) FILTER (WHERE "attempts" >= ${WEBHOOK_MAX_ATTEMPTS})::int AS "failing",
+          MAX("createdAt") FILTER (WHERE "lastError" IS NOT NULL) AS "lastFailureAt"
+        FROM "WebhookDelivery"
+        WHERE "deliveredAt" IS NULL
+        GROUP BY "endpointId"
+      `,
     );
+    const byEndpoint = new Map(rows.map((row) => [row.endpointId, row]));
     return endpoints.map((endpoint) => {
-      const mine = rows.filter((row) => row.endpointId === endpoint.id);
-      const failed = mine.filter((row) => row.attempts >= WEBHOOK_MAX_ATTEMPTS);
-      const lastFailure = mine
-        .filter((row) => row.lastError !== null)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+      const health = byEndpoint.get(endpoint.id);
       return {
         ...endpoint,
         createdAt: endpoint.createdAt.toISOString(),
         updatedAt: endpoint.updatedAt.toISOString(),
-        pending: mine.length - failed.length,
-        failing: failed.length,
-        lastFailureAt: lastFailure?.createdAt.toISOString() ?? null,
+        pending: health?.pending ?? 0,
+        failing: health?.failing ?? 0,
+        lastFailureAt: health?.lastFailureAt?.toISOString() ?? null,
       };
     });
   };

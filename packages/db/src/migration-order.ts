@@ -2,11 +2,11 @@
  * A new migration must not sort before the migrations production already
  * applied.
  *
- * Six migrations in this tree are hand-named with dates ahead of the real
- * clock -- `20260825000000` through `20260830000000` -- and the lab has
- * applied all of them. `prisma migrate dev` names what it generates with the
- * REAL timestamp, so a migration written today is called `20260824..` and
- * sorts before those six.
+ * The tree now holds many migrations hand-named with dates ahead of the real
+ * clock, from `20260825000000` through the newest in `KNOWN_MIGRATIONS`, and
+ * the lab has applied all of them. `prisma migrate dev` names what it
+ * generates with the REAL timestamp, so a migration written today sorts
+ * before those.
  *
  * That matters because the two orders are not the same order:
  *
@@ -41,7 +41,7 @@
  * Migrations named at or below this must not be added. It is the highest
  * hand-dated name in the tree.
  */
-export const MIGRATION_NAME_FLOOR = '20260830000000';
+export const MIGRATION_NAME_FLOOR = '20260928000000';
 
 /**
  * The tree as it stands. Everything here predates the rule and is exempt; the
@@ -104,6 +104,9 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260923000000_password_must_change',
   '20260924000000_email_guard_active_only',
   '20260925000000_person_sources',
+  '20260926000000_builtin_role_permissions_repair',
+  '20260927000000_missing_fk_indexes',
+  '20260928000000_tenant_foreign_keys',
 ];
 
 /**

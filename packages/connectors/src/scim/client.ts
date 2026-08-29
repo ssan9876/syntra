@@ -7,6 +7,29 @@ export interface ScimResponse {
 }
 
 /**
+ * Thrown by `scimRequest` when the body was not JSON — an HTML error page
+ * from a proxy or load balancer in front of the real endpoint is the usual
+ * source, and it arrives with a 2xx as often as with an error status.
+ *
+ * Carries `status` so a caller can classify it exactly the way it classifies
+ * any other SCIM failure: `connector.ts`'s `classifyFailure(status)` is the
+ * same function a 4xx/5xx JSON error response goes through, matching the
+ * split the AD connector makes in `classifyLdapError` between "what
+ * happened" and "what to do about it".
+ */
+export class ScimMalformedBodyError extends Error {
+  readonly status: number;
+
+  constructor(status: number, rawBody: string) {
+    super(
+      `the server's response body was not JSON (HTTP ${status}): ${rawBody.slice(0, 200)}`,
+    );
+    this.name = 'ScimMalformedBodyError';
+    this.status = status;
+  }
+}
+
+/**
  * One authenticated SCIM request. Wire format only — no knowledge here of
  * what a User or a Group means to Provision, matching the split
  * `ldap/connection.ts` makes between "talk to the wire protocol" and
@@ -33,5 +56,10 @@ export async function scimRequest(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const text = await response.text();
-  return { status: response.status, json: text === '' ? null : JSON.parse(text) };
+  if (text === '') return { status: response.status, json: null };
+  try {
+    return { status: response.status, json: JSON.parse(text) };
+  } catch {
+    throw new ScimMalformedBodyError(response.status, text);
+  }
 }

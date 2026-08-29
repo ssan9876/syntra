@@ -11,24 +11,24 @@ datasource db {
 }
 
 model Tenant {
-  id                   String   @id @default(uuid()) @db.Uuid
-  name                 String
-  slug                 String   @unique
-  primaryDomain        String?  @unique
+  id                     String   @id @default(uuid()) @db.Uuid
+  name                   String
+  slug                   String   @unique
+  primaryDomain          String?  @unique
   /// Extra hostnames this tenant also answers on. The primary domain is the
   /// WebAuthn relying party and there can only be one of those; these are for
   /// reaching the same tenant by another name — an IP address, a DNS record
   /// somebody added later, a hostname during a migration. Security keys work
   /// only on the primary domain, because that is what they were bound to.
-  additionalDomains    String[] @default([])
-  status               String   @default("active")
+  additionalDomains      String[] @default([])
+  status                 String   @default("active")
   /// When true, elevating to an administrative session requires a second
   /// factor on top of the password. Default false so an existing tenant's
   /// bootstrap owner is not locked out of the console by this migration.
-  adminMfaRequired     Boolean  @default(false)
+  adminMfaRequired       Boolean  @default(false)
   /// The tenant's password policy. One number today; a policy object when
   /// there is a second rule worth having.
-  passwordMinLength    Int      @default(12)
+  passwordMinLength      Int      @default(12)
   /// Whether a user who is required to hold a second factor may enrol one
   /// themselves, mid-sign-in, after their password has been accepted.
   ///
@@ -36,7 +36,7 @@ model Tenant {
   /// require_mfa rule locks out everyone who has not enrolled and there is no
   /// self-service way back. A tenant that issues hardware keys by hand turns
   /// this off, and then a missing factor really is a refusal.
-  selfEnrolmentEnabled Boolean  @default(true)
+  selfEnrolmentEnabled   Boolean  @default(true)
   /// Failed password attempts before an account stops accepting even its own
   /// password. Zero disables lockout and is the default, because switching it
   /// on for a tenant that never asked for it is how the first administrator
@@ -45,15 +45,15 @@ model Tenant {
   /// This is not the API rate limit and does not replace it. A rate limit
   /// keyed on the caller's address is spent by one attacker and refills; a
   /// password guessed on the thousandth try is guessed for good.
-  lockoutThreshold     Int      @default(0)
+  lockoutThreshold       Int      @default(0)
   /// How long failures accumulate toward the threshold, measured from the
   /// first failure of the current run rather than the most recent one — so a
   /// slow drip cannot hold a window open indefinitely, and one typo a month
   /// for five months never locks anybody out.
-  lockoutWindowMinutes Int      @default(15)
+  lockoutWindowMinutes   Int      @default(15)
   /// How long a lock holds before it lifts itself. Zero means it does not:
   /// the account stays locked until an administrator lifts it by hand.
-  lockoutDurationMinutes Int    @default(15)
+  lockoutDurationMinutes Int      @default(15)
   /// How many days a password stays good for. Zero never expires it, and is
   /// the default.
   ///
@@ -63,14 +63,14 @@ model Tenant {
   /// change one every ninety days pick one they can iterate. It is here
   /// because organizations are held to policies that still demand it, not
   /// because turning it on makes a tenant safer.
-  passwordMaxAgeDays   Int      @default(0)
+  passwordMaxAgeDays     Int      @default(0)
   /// How many previous passwords may not be chosen again. Zero disables the
   /// check.
   ///
   /// This one IS worth turning on, and is the half of "password ageing"
   /// that survives current guidance: it costs the user nothing at all until
   /// they try to reuse a password they have already retired.
-  passwordHistoryDepth Int      @default(0)
+  passwordHistoryDepth   Int      @default(0)
   /// Whether a user may enrol a one-time code sent to their email address.
   ///
   /// **Off by default, and that default is a judgement rather than caution.**
@@ -80,11 +80,11 @@ model Tenant {
   /// answer for people with no phone and no security key, in organizations
   /// where mail is itself behind strong authentication, and it is those
   /// organizations that should be the ones turning it on.
-  emailOtpEnabled      Boolean  @default(false)
+  emailOtpEnabled        Boolean  @default(false)
   /// What this tenant calls the sign-in surfaces their staff see. Null means
   /// Syntra's own name, which is the right default for a tenant that has not
   /// thought about it — an empty header is worse than somebody else's brand.
-  brandName            String?
+  brandName              String?
   /// The logo, as a `data:` URI.
   ///
   /// A URI and not a file path, because this product is installed on premises
@@ -92,18 +92,130 @@ model Tenant {
   /// stops loading the day that somewhere moves, and the sign-in page is the
   /// one page that must render when everything else is unreachable. Capped in
   /// the service, not here — a column limit would truncate rather than refuse.
-  brandLogo            String?
+  brandLogo              String?
   /// The tenant's primary colour, `#rrggbb`.
   ///
   /// Refused unless it carries enough contrast against the page to be read;
   /// see `brand-service.ts`. A tenant that can paint their own console
   /// unreadable will, and the support call arrives weeks later described as a
   /// bug.
-  brandPrimary         String?
-  brandAccent          String?
-  createdAt            DateTime @default(now())
+  brandPrimary           String?
+  brandAccent            String?
+  createdAt              DateTime @default(now())
 
-  orgUnits OrgUnit[]
+  orgUnits                  OrgUnit[]
+  loginLockouts             LoginLockout[]
+  users                     User[]
+  groups                    Group[]
+  groupMemberships          GroupMembership[]
+  userAttributes            UserAttribute[]
+  persons                   Person[]
+  contracts                 Contract[]
+  auditEvents               AuditEvent[]
+  secrets                   Secret[]
+  roles                     Role[]
+  roleAssignments           RoleAssignment[]
+  passwordCredentials       PasswordCredential[]
+  passwordHistories         PasswordHistory[]
+  sessions                  Session[]
+  directorySources          DirectorySource[]
+  attributeMappings         AttributeMapping[]
+  syncRuns                  SyncRun[]
+  syncChanges               SyncChange[]
+  personSources             PersonSource[]
+  personFieldMappings       PersonFieldMapping[]
+  personImportRuns          PersonImportRun[]
+  personImportChanges       PersonImportChange[]
+  authPolicies              AuthPolicy[]
+  authPolicyRules           AuthPolicyRule[]
+  applications              Application[]
+  accountPlacements         AccountPlacement[]
+  orgUnitContainers         OrgUnitContainer[]
+  appAssignments            AppAssignment[]
+  emailOtpCredentials       EmailOtpCredential[]
+  totpCredentials           TotpCredential[]
+  webAuthnCredentials       WebAuthnCredential[]
+  webAuthnChallenges        WebAuthnChallenge[]
+  recoveryCodes             RecoveryCode[]
+  passwordResetTokens       PasswordResetToken[]
+  authAttempts              AuthAttempt[]
+  refreshTokens             RefreshToken[]
+  samlConfigs               SamlConfig[]
+  oidcClients               OidcClient[]
+  claimMappingSets          ClaimMappingSet[]
+  claimMappings             ClaimMapping[]
+  upstreamIdps              UpstreamIdp[]
+  upstreamLinks             UpstreamLink[]
+  federationRequests        FederationRequest[]
+  signingKeys               SigningKey[]
+  oidcArtifacts             OidcArtifact[]
+  samlSsoSessions           SamlSsoSession[]
+  authorizationDecisions    AuthorizationDecision[]
+  samlAuthnRequests         SamlAuthnRequest[]
+  targetSystems             TargetSystem[]
+  accountProfiles           AccountProfile[]
+  businessRules             BusinessRule[]
+  ruleEntitlements          RuleEntitlement[]
+  entitlements              Entitlement[]
+  targetAccounts            TargetAccount[]
+  accountEntitlements       AccountEntitlement[]
+  provisionRuns             ProvisionRun[]
+  provisionActions          ProvisionAction[]
+  provisionExceptions       ProvisionException[]
+  driftFindings             DriftFinding[]
+  automateSettingses        AutomateSettings[]
+  delegatedTasks            DelegatedTask[]
+  delegatedTaskRuns         DelegatedTaskRun[]
+  products                  Product[]
+  productGrants             ProductGrant[]
+  approvalWorkflows         ApprovalWorkflow[]
+  approvalStages            ApprovalStage[]
+  accessRequests            AccessRequest[]
+  requestItems              RequestItem[]
+  approvalSteps             ApprovalStep[]
+  approvalStepApprovers     ApprovalStepApprover[]
+  approvalDecisions         ApprovalDecision[]
+  approvalDelegations       ApprovalDelegation[]
+  accessGrants              AccessGrant[]
+  resourceOwners            ResourceOwner[]
+  resourceDelegations       ResourceDelegation[]
+  expirySweeps              ExpirySweep[]
+  sweepActions              SweepAction[]
+  sweepExceptions           SweepException[]
+  notificationOutboxes      NotificationOutbox[]
+  webhookEndpoints          WebhookEndpoint[]
+  webhookDeliveries         WebhookDelivery[]
+  notificationPreferences   NotificationPreference[]
+  governSettingses          GovernSettings[]
+  governSourcePolicies      GovernSourcePolicy[]
+  resourceClassifications   ResourceClassification[]
+  accessSnapshots           AccessSnapshot[]
+  snapshotSources           SnapshotSource[]
+  holdings                  Holding[]
+  holdingAttributions       HoldingAttribution[]
+  coverageGaps              CoverageGap[]
+  holdingEvents             HoldingEvent[]
+  holdingCertifications     HoldingCertification[]
+  accountAttributions       AccountAttribution[]
+  governFindings            GovernFinding[]
+  remediationItems          RemediationItem[]
+  evidencePacks             EvidencePack[]
+  auditCheckpoints          AuditCheckpoint[]
+  auditChainChecks          AuditChainCheck[]
+  auditAnchors              AuditAnchor[]
+  campaigns                 Campaign[]
+  campaignItems             CampaignItem[]
+  campaignItemReviewers     CampaignItemReviewer[]
+  campaignDecisions         CampaignDecision[]
+  reviewQualitySignals      ReviewQualitySignal[]
+  revocationBatches         RevocationBatch[]
+  revocationDispatches      RevocationDispatch[]
+  revocationOrders          RevocationOrder[]
+  businessFunctions         BusinessFunction[]
+  businessFunctionResources BusinessFunctionResource[]
+  sodRules                  SodRule[]
+  sodViolations             SodViolation[]
+  sodExceptions             SodException[]
 }
 
 /// One row per user with a recent failed sign-in. Absent is the ordinary
@@ -117,6 +229,7 @@ model Tenant {
 model LoginLockout {
   id            String    @id @default(uuid()) @db.Uuid
   tenantId      String    @db.Uuid
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId        String    @unique @db.Uuid
   failedCount   Int       @default(0)
   /// When the current run of failures began. The window is measured from
@@ -169,6 +282,7 @@ model OrgUnit {
 model User {
   id                 String           @id @default(uuid()) @db.Uuid
   tenantId           String           @db.Uuid
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   login              String
   email              String
   displayName        String
@@ -202,11 +316,13 @@ model User {
   @@unique([tenantId, login])
   @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
+  @@index([orgUnitId])
 }
 
 model Group {
   id           String           @id @default(uuid()) @db.Uuid
   tenantId     String           @db.Uuid
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name         String
   description  String?
   sourceId     String?          @db.Uuid
@@ -225,6 +341,7 @@ model Group {
 model GroupMembership {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   groupId  String @db.Uuid
   userId   String @db.Uuid
   group    Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
@@ -240,6 +357,7 @@ model GroupMembership {
 model UserAttribute {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId   String @db.Uuid
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   key      String
@@ -256,6 +374,7 @@ model UserAttribute {
 model Person {
   id             String   @id @default(uuid()) @db.Uuid
   tenantId       String   @db.Uuid
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   givenName      String
   familyName     String
   nameConvention String   @default("familyName")
@@ -281,13 +400,8 @@ model Person {
   /// satisfied by an account Provision just wrote -- so hanging placement off
   /// User would mean the feature silently did not apply to most of the
   /// population it exists for.
-  orgUnitId String?  @db.Uuid
-  orgUnit   OrgUnit? @relation("PersonOrgUnit", fields: [orgUnitId], references: [id])
-
-  @@index([orgUnitId])
-
-  @@unique([tenantId, externalId])
-  @@index([tenantId])
+  orgUnitId             String?   @db.Uuid
+  orgUnit               OrgUnit?  @relation("PersonOrgUnit", fields: [orgUnitId], references: [id])
   /// An administrative departure: a human deactivated this person's account,
   /// as distinct from a departure derived from contract end dates.
   /// `departureDate()` prefers this when set, because somebody who clicked
@@ -316,6 +430,9 @@ model Person {
   /// let a truncated export outrank the contract table permanently.
   statusReason String?
 
+  @@unique([tenantId, externalId])
+  @@index([orgUnitId])
+  @@index([tenantId])
   @@index([sourceId])
 }
 
@@ -325,6 +442,7 @@ model Person {
 model Contract {
   id              String    @id @default(uuid()) @db.Uuid
   tenantId        String    @db.Uuid
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   personId        String    @db.Uuid
   person          Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
   sequence        Int       @default(1)
@@ -354,6 +472,7 @@ model Contract {
 model AuditEvent {
   id          String   @id @default(uuid()) @db.Uuid
   tenantId    String   @db.Uuid
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sequence    Int
   occurredAt  DateTime @default(now())
   actorUserId String?  @db.Uuid
@@ -375,6 +494,7 @@ model AuditEvent {
 model Secret {
   id         String   @id @default(uuid()) @db.Uuid
   tenantId   String   @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name       String
   ciphertext Bytes
   iv         Bytes
@@ -391,6 +511,7 @@ model Secret {
 model Role {
   id          String   @id @default(uuid()) @db.Uuid
   tenantId    String   @db.Uuid
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
   description String?
   permissions String[]
@@ -405,6 +526,7 @@ model Role {
 model RoleAssignment {
   id             String  @id @default(uuid()) @db.Uuid
   tenantId       String  @db.Uuid
+  tenant         Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   roleId         String  @db.Uuid
   role           Role    @relation(fields: [roleId], references: [id], onDelete: Cascade)
   userId         String  @db.Uuid
@@ -416,17 +538,18 @@ model RoleAssignment {
 }
 
 model PasswordCredential {
-  id        String   @id @default(uuid()) @db.Uuid
-  tenantId  String   @db.Uuid
-  userId    String   @unique @db.Uuid
-  hash      String
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId     String   @unique @db.Uuid
+  hash       String
   /// When this password was chosen, which is what expiry is measured from.
   ///
   /// Separate from `updatedAt` deliberately. `@updatedAt` moves whenever the
   /// row is written for any reason, and the day somebody adds a column to
   /// this table and backfills it, every password in the tenant silently
   /// becomes new again. Expiry has to read a field that means one thing.
-  changedAt DateTime @default(now())
+  changedAt  DateTime @default(now())
   /// Whether this user must choose a new password before they get a session.
   ///
   /// Set only by an administrator setting a password on somebody's behalf —
@@ -440,8 +563,8 @@ model PasswordCredential {
   /// by default and should usually stay off — see `password-ageing.ts` — and
   /// that recommendation must not switch off a change somebody demanded this
   /// morning.
-  mustChange Boolean @default(false)
-  updatedAt DateTime @updatedAt
+  mustChange Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
 
   @@index([tenantId])
 }
@@ -456,6 +579,7 @@ model PasswordCredential {
 model PasswordHistory {
   id        String   @id @default(uuid()) @db.Uuid
   tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId    String   @db.Uuid
   hash      String
   createdAt DateTime @default(now())
@@ -467,6 +591,7 @@ model PasswordHistory {
 model Session {
   id                String    @id @default(uuid()) @db.Uuid
   tenantId          String    @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId            String    @db.Uuid
   tokenHash         String    @unique
   scope             String
@@ -485,16 +610,17 @@ model Session {
 }
 
 model DirectorySource {
-  id                           String    @id @default(uuid()) @db.Uuid
-  tenantId                     String    @db.Uuid
+  id                           String  @id @default(uuid()) @db.Uuid
+  tenantId                     String  @db.Uuid
+  tenant                       Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name                         String
-  type                         String    @default("ldap")
+  type                         String  @default("ldap")
   config                       Json
   secretName                   String
   schedule                     String?
-  autoApply                    Boolean   @default(false)
-  deactivationThresholdPercent Int       @default(10)
-  enabled                      Boolean   @default(true)
+  autoApply                    Boolean @default(false)
+  deactivationThresholdPercent Int     @default(10)
+  enabled                      Boolean @default(true)
 
   /// Whether Syntra may write back to this source at all, and which writes it
   /// may make. All three default to false: a source configured before
@@ -507,18 +633,18 @@ model DirectorySource {
   /// decisions: a tenant may want the console to disable a leaver without
   /// handing the self-service portal a path into domain passwords, or the
   /// reverse.
-  writebackEnabled             Boolean   @default(false)
-  writebackPassword            Boolean   @default(false)
-  writebackDisable             Boolean   @default(false)
+  writebackEnabled  Boolean   @default(false)
+  writebackPassword Boolean   @default(false)
+  writebackDisable  Boolean   @default(false)
   /// Whether Syntra may DELETE an object in this source.
   ///
   /// Default false for the same reason the others are, and one more: it is
   /// the only write here that writing the opposite value back does not undo.
   /// Deactivation is a state; deletion is not.
-  writebackDelete              Boolean   @default(false)
-  lastRunAt                    DateTime?
-  createdAt                    DateTime  @default(now())
-  updatedAt                    DateTime  @updatedAt
+  writebackDelete   Boolean   @default(false)
+  lastRunAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   mappings AttributeMapping[]
   runs     SyncRun[]
@@ -549,6 +675,7 @@ model DirectorySource {
 model AttributeMapping {
   id              String          @id @default(uuid()) @db.Uuid
   tenantId        String          @db.Uuid
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sourceId        String          @db.Uuid
   source          DirectorySource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   objectType      String
@@ -564,6 +691,7 @@ model AttributeMapping {
 model SyncRun {
   id                    String          @id @default(uuid()) @db.Uuid
   tenantId              String          @db.Uuid
+  tenant                Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sourceId              String          @db.Uuid
   source                DirectorySource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   status                String          @default("running")
@@ -592,6 +720,7 @@ model SyncRun {
 model SyncChange {
   id           String  @id @default(uuid()) @db.Uuid
   tenantId     String  @db.Uuid
+  tenant       Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   runId        String  @db.Uuid
   run          SyncRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   changeType   String
@@ -620,6 +749,7 @@ model SyncChange {
 model PersonSource {
   id                           String    @id @default(uuid()) @db.Uuid
   tenantId                     String    @db.Uuid
+  tenant                       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name                         String
   type                         String
   config                       Json
@@ -651,6 +781,7 @@ model PersonSource {
 model PersonFieldMapping {
   id            String       @id @default(uuid()) @db.Uuid
   tenantId      String       @db.Uuid
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sourceId      String       @db.Uuid
   source        PersonSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   /// 'person' or 'contract'.
@@ -667,6 +798,7 @@ model PersonFieldMapping {
 model PersonImportRun {
   id                    String       @id @default(uuid()) @db.Uuid
   tenantId              String       @db.Uuid
+  tenant                Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sourceId              String       @db.Uuid
   source                PersonSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   status                String       @default("running")
@@ -697,6 +829,7 @@ model PersonImportRun {
 model PersonImportChange {
   id         String          @id @default(uuid()) @db.Uuid
   tenantId   String          @db.Uuid
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   runId      String          @db.Uuid
   run        PersonImportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   changeType String
@@ -722,6 +855,7 @@ model PersonImportChange {
 model AuthPolicy {
   id                String   @id @default(uuid()) @db.Uuid
   tenantId          String   @unique @db.Uuid
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   defaultOutcome    String   @default("allow")
   defaultFactorType String?
   updatedAt         DateTime @updatedAt
@@ -732,31 +866,32 @@ model AuthPolicy {
 /// One rule. Every condition column that is empty or null is unconstrained;
 /// the conditions that are set must all hold for the rule to match.
 model AuthPolicyRule {
-  id             String     @id @default(uuid()) @db.Uuid
-  tenantId       String     @db.Uuid
-  policyId       String     @db.Uuid
-  policy         AuthPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
-  position       Int
-  name           String
-  enabled        Boolean    @default(true)
+  id              String     @id @default(uuid()) @db.Uuid
+  tenantId        String     @db.Uuid
+  tenant          Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policyId        String     @db.Uuid
+  policy          AuthPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  position        Int
+  name            String
+  enabled         Boolean    @default(true)
   /// 'allow' | 'require_mfa' | 'require_factor' | 'deny'
-  outcome        String
+  outcome         String
   /// 'totp' | 'webauthn'. Required when outcome is 'require_factor'.
-  factorType     String?
-  applicationIds String[]   @default([])
-  groupIds       String[]   @default([])
+  factorType      String?
+  applicationIds  String[]   @default([])
+  groupIds        String[]   @default([])
   /// 'department' | 'jobTitle' | 'employer' | 'location'
-  contractField  String?
-  contractValues String[]   @default([])
+  contractField   String?
+  contractValues  String[]   @default([])
   /// CIDR ranges or bare addresses, IPv4 or IPv6.
-  ipRanges       String[]   @default([])
+  ipRanges        String[]   @default([])
   /// Device kinds this rule applies to. Empty is unconstrained.
   ///
   /// Derived from the user agent, which the client chooses — a speed bump
   /// rather than a control. Reasonable for asking a second factor of phones;
   /// a `deny` resting on it is a `deny` anybody can walk past by editing a
   /// header, and the console says so.
-  devicePlatforms String[]  @default([])
+  devicePlatforms String[]   @default([])
   /// ISO 3166-1 alpha-2 codes this rule applies to. Empty is unconstrained.
   ///
   /// Read from a header the deployment names (`POLICY_COUNTRY_HEADER`), never
@@ -764,21 +899,21 @@ model AuthPolicyRule {
   /// runs air-gapped. Where no header is configured every country condition is
   /// unevaluable, which refuses on a `deny` rule and does not match on the
   /// others.
-  countries       String[]  @default([])
+  countries       String[]   @default([])
   /// 0 = Sunday .. 6 = Saturday. Empty means every day.
-  daysOfWeek     Int[]      @default([])
+  daysOfWeek      Int[]      @default([])
   /// Minutes from local midnight. A window may wrap past midnight.
-  startMinute    Int?
-  endMinute      Int?
+  startMinute     Int?
+  endMinute       Int?
   /// IANA zone the window is expressed in. Treated as UTC when null.
-  timezone       String?
+  timezone        String?
   /// Set only on rules whose outcome is 'federate'. See Task 14.
-  upstreamIdpId  String?    @db.Uuid
+  upstreamIdpId   String?    @db.Uuid
   /// The login identifier's domain part, for a 'federate' rule. Its own
   /// column rather than a reuse of `contractValues`: the two match on
   /// different things, and overloading one array is how a later reader
   /// concludes a routing rule can carry a contract condition.
-  loginDomains   String[]   @default([])
+  loginDomains    String[]   @default([])
 
   @@unique([policyId, position])
   @@index([tenantId])
@@ -790,6 +925,7 @@ model AuthPolicyRule {
 model Application {
   id          String   @id @default(uuid()) @db.Uuid
   tenantId    String   @db.Uuid
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
   slug        String
   description String?
@@ -855,6 +991,7 @@ model Application {
 model AccountPlacement {
   id             String       @id @default(uuid()) @db.Uuid
   tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   personId       String       @db.Uuid
   person         Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
   targetSystemId String       @db.Uuid
@@ -893,6 +1030,7 @@ model AccountPlacement {
 model OrgUnitContainer {
   id             String       @id @default(uuid()) @db.Uuid
   tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   orgUnitId      String       @db.Uuid
   orgUnit        OrgUnit      @relation(fields: [orgUnitId], references: [id], onDelete: Cascade)
   targetSystemId String       @db.Uuid
@@ -933,6 +1071,7 @@ model OrgUnitContainer {
 model AppAssignment {
   id            String      @id @default(uuid()) @db.Uuid
   tenantId      String      @db.Uuid
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   applicationId String      @db.Uuid
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   /// 'user' | 'group' | 'orgUnit'
@@ -959,6 +1098,7 @@ model AppAssignment {
 model EmailOtpCredential {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId   String @unique @db.Uuid
 
   /// Set when the user first entered a code correctly. Null means enrolment
@@ -992,6 +1132,7 @@ model EmailOtpCredential {
 model TotpCredential {
   id          String    @id @default(uuid()) @db.Uuid
   tenantId    String    @db.Uuid
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId      String    @unique @db.Uuid
   secretName  String
   algorithm   String    @default("SHA1")
@@ -1011,6 +1152,7 @@ model TotpCredential {
 model WebAuthnCredential {
   id              String    @id @default(uuid()) @db.Uuid
   tenantId        String    @db.Uuid
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId          String    @db.Uuid
   /// base64url, as returned by @simplewebauthn/server.
   credentialId    String    @unique
@@ -1038,6 +1180,7 @@ model WebAuthnCredential {
 model WebAuthnChallenge {
   id         String    @id @default(uuid()) @db.Uuid
   tenantId   String    @db.Uuid
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId     String    @db.Uuid
   /// 'register' | 'authenticate'
   purpose    String
@@ -1053,6 +1196,7 @@ model WebAuthnChallenge {
 model RecoveryCode {
   id        String    @id @default(uuid()) @db.Uuid
   tenantId  String    @db.Uuid
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId    String    @db.Uuid
   codeHash  String
   usedAt    DateTime?
@@ -1066,6 +1210,7 @@ model RecoveryCode {
 model PasswordResetToken {
   id         String    @id @default(uuid()) @db.Uuid
   tenantId   String    @db.Uuid
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId     String    @db.Uuid
   tokenHash  String    @unique
   expiresAt  DateTime
@@ -1086,6 +1231,7 @@ model PasswordResetToken {
 model AuthAttempt {
   id              String    @id @default(uuid()) @db.Uuid
   tenantId        String    @db.Uuid
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId          String    @db.Uuid
   tokenHash       String    @unique
   applicationId   String?   @db.Uuid
@@ -1122,6 +1268,7 @@ model AuthAttempt {
 model RefreshToken {
   id                String    @id @default(uuid()) @db.Uuid
   tenantId          String    @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId            String    @db.Uuid
   tokenHash         String    @unique
   clientId          String?
@@ -1139,6 +1286,7 @@ model RefreshToken {
 model SamlConfig {
   id                      String      @id @default(uuid()) @db.Uuid
   tenantId                String      @db.Uuid
+  tenant                  Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   applicationId           String      @unique @db.Uuid
   application             Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   /// The SP's entity ID. Goes into saml:Audience verbatim.
@@ -1209,6 +1357,7 @@ model SamlConfig {
 model OidcClient {
   id                       String      @id @default(uuid()) @db.Uuid
   tenantId                 String      @db.Uuid
+  tenant                   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   applicationId            String      @unique @db.Uuid
   application              Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   clientId                 String
@@ -1261,6 +1410,7 @@ model OidcClient {
 model ClaimMappingSet {
   id          String  @id @default(uuid()) @db.Uuid
   tenantId    String  @db.Uuid
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
   description String?
   /// 'saml' | 'oidc'. A set is per protocol: the same claim means a different
@@ -1282,6 +1432,7 @@ model ClaimMappingSet {
 model ClaimMapping {
   id               String      @id @default(uuid()) @db.Uuid
   tenantId         String      @db.Uuid
+  tenant           Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   applicationId    String      @db.Uuid
   application      Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   /// 'saml' | 'oidc'
@@ -1312,6 +1463,7 @@ model ClaimMapping {
 model UpstreamIdp {
   id                   String   @id @default(uuid()) @db.Uuid
   tenantId             String   @db.Uuid
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   slug                 String
   name                 String
   /// 'saml' | 'oidc'
@@ -1355,6 +1507,7 @@ model UpstreamIdp {
 model UpstreamLink {
   id            String      @id @default(uuid()) @db.Uuid
   tenantId      String      @db.Uuid
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   upstreamIdpId String      @db.Uuid
   upstream      UpstreamIdp @relation(fields: [upstreamIdpId], references: [id], onDelete: Cascade)
   userId        String      @db.Uuid
@@ -1373,6 +1526,7 @@ model UpstreamLink {
 model FederationRequest {
   id                 String    @id @default(uuid()) @db.Uuid
   tenantId           String    @db.Uuid
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   upstreamIdpId      String    @db.Uuid
   /// What the browser carries and this row is looked up by: the OIDC `state`,
   /// or the SAML `RelayState`.
@@ -1415,6 +1569,7 @@ model FederationRequest {
 model SigningKey {
   id          String    @id @default(uuid()) @db.Uuid
   tenantId    String    @db.Uuid
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// 'oidc' | 'saml'
   kind        String
   /// RFC 7638 thumbprint. The JWKS `kid`, and the SAML KeyDescriptor id.
@@ -1442,6 +1597,7 @@ model SigningKey {
 model OidcArtifact {
   id         String    @id @default(uuid()) @db.Uuid
   tenantId   String    @db.Uuid
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// The oidc-provider model name: 'AccessToken', 'Grant', 'Session', ...
   model      String
   artifactId String
@@ -1467,6 +1623,7 @@ model OidcArtifact {
 model SamlSsoSession {
   id            String    @id @default(uuid()) @db.Uuid
   tenantId      String    @db.Uuid
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sessionId     String    @db.Uuid
   applicationId String    @db.Uuid
   nameId        String
@@ -1489,6 +1646,7 @@ model SamlSsoSession {
 model AuthorizationDecision {
   id              String    @id @default(uuid()) @db.Uuid
   tenantId        String    @db.Uuid
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId          String    @db.Uuid
   /// The OIDC client this decision was made for. A decision for one
   /// application never satisfies another.
@@ -1514,6 +1672,7 @@ model AuthorizationDecision {
 model SamlAuthnRequest {
   id             String    @id @default(uuid()) @db.Uuid
   tenantId       String    @db.Uuid
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   applicationId  String    @db.Uuid
   /// Syntra's own opaque handle. This is what travels in the URL.
   handle         String
@@ -1562,6 +1721,7 @@ model SamlAuthnRequest {
 model TargetSystem {
   id                      String           @id @default(uuid()) @db.Uuid
   tenantId                String           @db.Uuid
+  tenant                  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name                    String
   /// 'activeDirectory'. A string rather than an enum so a second connector
   /// family needs no migration.
@@ -1693,6 +1853,7 @@ model TargetSystem {
 model AccountProfile {
   id             String       @id @default(uuid()) @db.Uuid
   tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// @unique, not a hand-written `account_profile_one_per_target` index in the
   /// migration as the brief had it: Prisma refuses a one-to-one relation whose
   /// defining side is not unique (P1012, "A one-to-one relation must use unique
@@ -1733,6 +1894,7 @@ model AccountProfile {
 model BusinessRule {
   id             String       @id @default(uuid()) @db.Uuid
   tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   targetSystemId String       @db.Uuid
   target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
   name           String
@@ -1758,6 +1920,7 @@ model BusinessRule {
 model RuleEntitlement {
   id            String       @id @default(uuid()) @db.Uuid
   tenantId      String       @db.Uuid
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ruleId        String       @db.Uuid
   rule          BusinessRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
   entitlementId String       @db.Uuid
@@ -1774,6 +1937,7 @@ model RuleEntitlement {
 model Entitlement {
   id             String       @id @default(uuid()) @db.Uuid
   tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   targetSystemId String       @db.Uuid
   target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
   externalId     String
@@ -1813,6 +1977,7 @@ model Entitlement {
 model TargetAccount {
   id                    String       @id @default(uuid()) @db.Uuid
   tenantId              String       @db.Uuid
+  tenant                Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   targetSystemId        String       @db.Uuid
   target                TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
   personId              String       @db.Uuid
@@ -1851,6 +2016,7 @@ model TargetAccount {
 model AccountEntitlement {
   id                 String        @id @default(uuid()) @db.Uuid
   tenantId           String        @db.Uuid
+  tenant             Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   accountId          String        @db.Uuid
   account            TargetAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   entitlementId      String        @db.Uuid
@@ -1888,6 +2054,7 @@ model AccountEntitlement {
 model ProvisionRun {
   id             String       @id @default(uuid()) @db.Uuid
   tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   targetSystemId String       @db.Uuid
   target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
   status         String       @default("running")
@@ -1943,6 +2110,7 @@ model ProvisionRun {
 model ProvisionAction {
   id                   String       @id @default(uuid()) @db.Uuid
   tenantId             String       @db.Uuid
+  tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   runId                String       @db.Uuid
   run                  ProvisionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   /// create_account | update_account | enable_account | disable_account
@@ -2014,6 +2182,7 @@ model ProvisionAction {
 model ProvisionException {
   id             String       @id @default(uuid()) @db.Uuid
   tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   runId          String       @db.Uuid
   run            ProvisionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   personId       String       @db.Uuid
@@ -2043,6 +2212,7 @@ model ProvisionException {
 model DriftFinding {
   id             String        @id @default(uuid()) @db.Uuid
   tenantId       String        @db.Uuid
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   targetSystemId String        @db.Uuid
   /// The run that most recently observed it. Nullable: `claimSyntraUsers`
   /// (Task 15) records a finding and can be called when no run has ever
@@ -2077,6 +2247,7 @@ model DriftFinding {
   @@unique([tenantId, targetSystemId, fingerprint])
   @@index([tenantId])
   @@index([targetSystemId, status])
+  @@index([runId])
 }
 
 /// One row per tenant, holding every number the Automate design names, so
@@ -2094,6 +2265,7 @@ model DriftFinding {
 model AutomateSettings {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @unique @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   sweepSchedule                   String? @default("0 2 * * *")
   sweepThresholdPercent           Int     @default(10)
@@ -2140,18 +2312,19 @@ model AutomateSettings {
 /// catalog uses — a tenant learns one expression language, not two. NULL
 /// admits nobody, which is `audienceAdmits`'s security default.
 model DelegatedTask {
-  id          String  @id @default(uuid()) @db.Uuid
-  tenantId    String  @db.Uuid
-  name        String
-  description String?
+  id                String  @id @default(uuid()) @db.Uuid
+  tenantId          String  @db.Uuid
+  tenant            Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name              String
+  description       String?
   /// One key from `ACTION_KEYS`. Validated on write against the library.
-  actionKey   String
+  actionKey         String
   /// The fields shown, in order, validated against `formSchemaSchema` and
   /// against the action's declared inputs.
-  formSchema  Json    @default("[]")
+  formSchema        Json    @default("[]")
   /// Who may run it. NULL admits nobody.
   audienceCondition Json?
-  enabled     Boolean @default(true)
+  enabled           Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2170,18 +2343,19 @@ model DelegatedTask {
 /// convenience — it is the evidence that makes delegating safe to agree to.
 /// The audit chain records it too; this table is what the console reads.
 model DelegatedTaskRun {
-  id        String        @id @default(uuid()) @db.Uuid
-  tenantId  String        @db.Uuid
-  taskId    String        @db.Uuid
-  task      DelegatedTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  runByUserId String      @db.Uuid
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @db.Uuid
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  taskId        String        @db.Uuid
+  task          DelegatedTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  runByUserId   String        @db.Uuid
   /// The account acted on, where the action names one.
-  subjectUserId String?   @db.Uuid
+  subjectUserId String?       @db.Uuid
   /// What was submitted, after validation. Never raw input.
-  values    Json          @default("{}")
-  outcome   String
-  message   String
-  createdAt DateTime      @default(now())
+  values        Json          @default("{}")
+  outcome       String
+  message       String
+  createdAt     DateTime      @default(now())
 
   @@index([tenantId])
   @@index([taskId, createdAt])
@@ -2193,6 +2367,7 @@ model DelegatedTaskRun {
 model Product {
   id                  String           @id @default(uuid()) @db.Uuid
   tenantId            String           @db.Uuid
+  tenant              Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name                String
   slug                String
   description         String?
@@ -2229,6 +2404,7 @@ model Product {
   @@unique([tenantId, slug])
   @@index([tenantId])
   @@index([tenantId, status])
+  @@index([workflowId])
 }
 
 /// One resource a product grants. A product granting several is a bundle,
@@ -2237,6 +2413,7 @@ model Product {
 model ProductGrant {
   id             String  @id @default(uuid()) @db.Uuid
   tenantId       String  @db.Uuid
+  tenant         Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   productId      String  @db.Uuid
   product        Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   /// 'entitlement' | 'application' | 'group'
@@ -2259,6 +2436,7 @@ model ProductGrant {
 model ApprovalWorkflow {
   id          String  @id @default(uuid()) @db.Uuid
   tenantId    String  @db.Uuid
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
   description String?
   enabled     Boolean @default(true)
@@ -2276,6 +2454,7 @@ model ApprovalWorkflow {
 model ApprovalStage {
   id                 String           @id @default(uuid()) @db.Uuid
   tenantId           String           @db.Uuid
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   workflowId         String           @db.Uuid
   workflow           ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   sequence           Int
@@ -2312,6 +2491,7 @@ model ApprovalStage {
 model AccessRequest {
   id                    String    @id @default(uuid()) @db.Uuid
   tenantId              String    @db.Uuid
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// Null for a delegated administrative act, which has no catalog entry.
   productId             String?   @db.Uuid
   product               Product?  @relation(fields: [productId], references: [id], onDelete: Restrict)
@@ -2353,6 +2533,7 @@ model AccessRequest {
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, subjectPersonId])
+  @@index([productId])
 }
 
 /// The snapshot of what was asked for, written at submission. Editing the
@@ -2362,6 +2543,7 @@ model AccessRequest {
 model RequestItem {
   id                String        @id @default(uuid()) @db.Uuid
   tenantId          String        @db.Uuid
+  tenant            Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   requestId         String        @db.Uuid
   request           AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   resourceType      String
@@ -2387,6 +2569,7 @@ model RequestItem {
 model ApprovalStep {
   id             String        @id @default(uuid()) @db.Uuid
   tenantId       String        @db.Uuid
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   requestId      String        @db.Uuid
   request        AccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   sequence       Int
@@ -2415,6 +2598,7 @@ model ApprovalStep {
 model ApprovalStepApprover {
   id                 String       @id @default(uuid()) @db.Uuid
   tenantId           String       @db.Uuid
+  tenant             Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stepId             String       @db.Uuid
   step               ApprovalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
   personId           String       @db.Uuid
@@ -2438,6 +2622,7 @@ model ApprovalStepApprover {
 model ApprovalDecision {
   id                 String       @id @default(uuid()) @db.Uuid
   tenantId           String       @db.Uuid
+  tenant             Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stepId             String       @db.Uuid
   step               ApprovalStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
   personId           String       @db.Uuid
@@ -2467,6 +2652,7 @@ model ApprovalDecision {
 model ApprovalDelegation {
   id                String    @id @default(uuid()) @db.Uuid
   tenantId          String    @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   delegatorPersonId String    @db.Uuid
   delegatePersonId  String    @db.Uuid
   /// Optional restriction to one product category.
@@ -2498,6 +2684,7 @@ model ApprovalDelegation {
 model AccessGrant {
   id                  String    @id @default(uuid()) @db.Uuid
   tenantId            String    @db.Uuid
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subjectPersonId     String    @db.Uuid
   resourceType        String
   resourceId          String    @db.Uuid
@@ -2556,6 +2743,7 @@ model AccessGrant {
 model ResourceOwner {
   id            String  @id @default(uuid()) @db.Uuid
   tenantId      String  @db.Uuid
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   resourceType  String
   resourceId    String  @db.Uuid
   ownerPersonId String? @db.Uuid
@@ -2575,6 +2763,7 @@ model ResourceOwner {
 model ResourceDelegation {
   id                String    @id @default(uuid()) @db.Uuid
   tenantId          String    @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   resourceType      String
   resourceId        String    @db.Uuid
   delegatePersonId  String?   @db.Uuid
@@ -2600,6 +2789,7 @@ model ResourceDelegation {
 model ExpirySweep {
   id         String    @id @default(uuid()) @db.Uuid
   tenantId   String    @db.Uuid
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// 'running' | 'previewed' | 'blocked' | 'applying' | 'applied'
   /// | 'partially_applied' | 'failed' | 'superseded'
   ///
@@ -2641,6 +2831,7 @@ model ExpirySweep {
 model SweepAction {
   id                String      @id @default(uuid()) @db.Uuid
   tenantId          String      @db.Uuid
+  tenant            Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sweepId           String      @db.Uuid
   sweep             ExpirySweep @relation(fields: [sweepId], references: [id], onDelete: Cascade)
   grantId           String      @db.Uuid
@@ -2667,6 +2858,7 @@ model SweepAction {
 model SweepException {
   id       String      @id @default(uuid()) @db.Uuid
   tenantId String      @db.Uuid
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sweepId  String      @db.Uuid
   sweep    ExpirySweep @relation(fields: [sweepId], references: [id], onDelete: Cascade)
   personId String      @db.Uuid
@@ -2689,6 +2881,7 @@ model SweepException {
 model NotificationOutbox {
   id        String    @id @default(uuid()) @db.Uuid
   tenantId  String    @db.Uuid
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   template  String
   to        String
   vars      Json      @default("{}")
@@ -2713,7 +2906,6 @@ model NotificationOutbox {
 
 /**
  * Somewhere outside Syntra that wants to be told when something happens here.
- *
  * The URL is a plain column and the SIGNING SECRET is not: it lives in
  * `Secret`, sealed, and is shown to the administrator exactly once when it is
  * generated. A shared secret sitting in a settings table is one `SELECT` away
@@ -2721,11 +2913,12 @@ model NotificationOutbox {
  * only thing the signature is protecting against.
  */
 model WebhookEndpoint {
-  id       String  @id @default(uuid()) @db.Uuid
-  tenantId String  @db.Uuid
+  id       String   @id @default(uuid()) @db.Uuid
+  tenantId String   @db.Uuid
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name     String
   url      String
-  enabled  Boolean @default(true)
+  enabled  Boolean  @default(true)
   /// Template names, or a prefix ending in `*` (`automate-*`). EMPTY MEANS
   /// EVERY enqueueable event, which is the useful default for a receiver that
   /// filters at its own end -- and is why the column is a list rather than a
@@ -2746,18 +2939,17 @@ model WebhookEndpoint {
 
 /**
  * One event, addressed to one endpoint, with its own attempt count.
- *
  * Per endpoint rather than per event, deliberately. Two endpoints subscribed
  * to the same event fail independently -- one receiver being down for a day
  * must not hold up or exhaust the other's deliveries -- and there is no way to
  * express that on a single row shared between them.
- *
  * Rows are never deleted by the sender. One that exhausts its attempts is the
  * only evidence there is when somebody says the integration missed something.
  */
 model WebhookDelivery {
   id         String @id @default(uuid()) @db.Uuid
   tenantId   String @db.Uuid
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   endpointId String @db.Uuid
   /// The template name the event was enqueued under.
   event      String
@@ -2788,6 +2980,7 @@ model WebhookDelivery {
 model NotificationPreference {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId   String @db.Uuid
   /// 'immediate' | 'daily'
   mode     String @default("immediate")
@@ -2823,6 +3016,7 @@ model NotificationPreference {
 model GovernSettings {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @unique @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// Nightly at 01:00, ahead of Automate's 02:00 sweep, so the sweep runs
   /// against a picture assembled tonight rather than last night.
@@ -2874,6 +3068,7 @@ model GovernSettings {
 model GovernSourcePolicy {
   id                String  @id @default(uuid()) @db.Uuid
   tenantId          String  @db.Uuid
+  tenant            Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// 'directorySource' | 'targetSystem' | 'syntraInternal'
   sourceKind        String
   /// Text, not @db.Uuid: `syntraInternal`'s id is the literal 'syntra'.
@@ -2899,6 +3094,7 @@ model GovernSourcePolicy {
 model ResourceClassification {
   id           String   @id @default(uuid()) @db.Uuid
   tenantId     String   @db.Uuid
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   systemId     String
   resourceKind String
   resourceId   String
@@ -2925,6 +3121,7 @@ model ResourceClassification {
 model AccessSnapshot {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// 'scheduled' | 'manual' | 'campaign'
   kind     String
   /// 'building' | 'complete' | 'failed'
@@ -2964,6 +3161,7 @@ model AccessSnapshot {
 model SnapshotSource {
   id         String         @id @default(uuid()) @db.Uuid
   tenantId   String         @db.Uuid
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   snapshotId String         @db.Uuid
   snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
 
@@ -3002,6 +3200,7 @@ model SnapshotSource {
 model Holding {
   id         String         @id @default(uuid()) @db.Uuid
   tenantId   String         @db.Uuid
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   snapshotId String         @db.Uuid
   snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
 
@@ -3056,6 +3255,7 @@ model Holding {
 model HoldingAttribution {
   id        String  @id @default(uuid()) @db.Uuid
   tenantId  String  @db.Uuid
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   holdingId String  @db.Uuid
   holding   Holding @relation(fields: [holdingId], references: [id], onDelete: Cascade)
 
@@ -3082,6 +3282,7 @@ model HoldingAttribution {
 model CoverageGap {
   id         String         @id @default(uuid()) @db.Uuid
   tenantId   String         @db.Uuid
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   snapshotId String         @db.Uuid
   snapshot   AccessSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
 
@@ -3109,6 +3310,7 @@ model CoverageGap {
 model HoldingEvent {
   id             String @id @default(uuid()) @db.Uuid
   tenantId       String @db.Uuid
+  tenant         Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fromSnapshotId String @db.Uuid
   toSnapshotId   String @db.Uuid
 
@@ -3142,6 +3344,7 @@ model HoldingEvent {
 model HoldingCertification {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// 'person' | 'account'
   subjectRefType String
@@ -3167,6 +3370,7 @@ model HoldingCertification {
 model AccountAttribution {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   systemId         String
   accountRef       String
@@ -3198,6 +3402,7 @@ model AccountAttribution {
 model GovernFinding {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// The closed set of section 16.
   kind     String
@@ -3250,6 +3455,7 @@ model GovernFinding {
 model RemediationItem {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// 'rule_change_required' | 'directory_source_change_required'
   /// | 'direct_assignment_change_required' | 'role_assignment_change_required'
@@ -3282,6 +3488,7 @@ model RemediationItem {
   @@index([tenantId])
   @@index([tenantId, status, dueAt])
   @@index([tenantId, ownerPersonId, status])
+  @@index([findingId])
 }
 
 /// A deterministic JSON document with a stable digest. Creating one is a
@@ -3290,6 +3497,7 @@ model RemediationItem {
 model EvidencePack {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// 'campaign' | 'report' | 'period'
   kind  String
@@ -3325,6 +3533,7 @@ model EvidencePack {
 model AuditCheckpoint {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   sequence   Int
   hash       String
@@ -3345,6 +3554,7 @@ model AuditCheckpoint {
 model AuditChainCheck {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   fromSequence     Int
   toSequence       Int
@@ -3370,6 +3580,7 @@ model AuditChainCheck {
 model AuditAnchor {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   sequence   Int
   hash       String
@@ -3390,6 +3601,7 @@ model AuditAnchor {
 model Campaign {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   name        String
   description String?
@@ -3473,6 +3685,7 @@ model Campaign {
 model CampaignItem {
   id         String   @id @default(uuid()) @db.Uuid
   tenantId   String   @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   campaignId String   @db.Uuid
   campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
@@ -3523,6 +3736,7 @@ model CampaignItem {
 model CampaignItemReviewer {
   id       String       @id @default(uuid()) @db.Uuid
   tenantId String       @db.Uuid
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   itemId   String       @db.Uuid
   item     CampaignItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
@@ -3562,6 +3776,7 @@ model CampaignItemReviewer {
 model CampaignDecision {
   id       String       @id @default(uuid()) @db.Uuid
   tenantId String       @db.Uuid
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   itemId   String       @db.Uuid
   item     CampaignItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
@@ -3609,6 +3824,7 @@ model CampaignDecision {
 model ReviewQualitySignal {
   id         String   @id @default(uuid()) @db.Uuid
   tenantId   String   @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   campaignId String   @db.Uuid
   campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   personId   String   @db.Uuid
@@ -3640,6 +3856,7 @@ model ReviewQualitySignal {
 model RevocationBatch {
   id         String   @id @default(uuid()) @db.Uuid
   tenantId   String   @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// NOT NULL. Every revocation batch belongs to a campaign.
   ///
   /// An earlier draft made this nullable "for an SoD remediation batch, which
@@ -3685,11 +3902,13 @@ model RevocationBatch {
 
   @@index([tenantId])
   @@index([tenantId, status])
+  @@index([campaignId])
 }
 
 model RevocationDispatch {
   id       String          @id @default(uuid()) @db.Uuid
   tenantId String          @db.Uuid
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   batchId  String          @db.Uuid
   batch    RevocationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
@@ -3732,6 +3951,7 @@ model RevocationDispatch {
 model RevocationOrder {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   targetSystemId String @db.Uuid
   accountId      String @db.Uuid
@@ -3766,6 +3986,7 @@ model RevocationOrder {
 model BusinessFunction {
   id            String  @id @default(uuid()) @db.Uuid
   tenantId      String  @db.Uuid
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name          String
   description   String?
   ownerPersonId String  @db.Uuid
@@ -3786,6 +4007,7 @@ model BusinessFunction {
 model BusinessFunctionResource {
   id         String           @id @default(uuid()) @db.Uuid
   tenantId   String           @db.Uuid
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   functionId String           @db.Uuid
   function   BusinessFunction @relation(fields: [functionId], references: [id], onDelete: Cascade)
 
@@ -3800,6 +4022,7 @@ model BusinessFunctionResource {
 model SodRule {
   id       String @id @default(uuid()) @db.Uuid
   tenantId String @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name     String
 
   functionAId String           @db.Uuid
@@ -3834,6 +4057,7 @@ model SodRule {
 model SodViolation {
   id       String  @id @default(uuid()) @db.Uuid
   tenantId String  @db.Uuid
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ruleId   String  @db.Uuid
   rule     SodRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
   personId String  @db.Uuid
@@ -3869,6 +4093,7 @@ model SodViolation {
 model SodException {
   id          String       @id @default(uuid()) @db.Uuid
   tenantId    String       @db.Uuid
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ruleId      String       @db.Uuid
   rule        SodRule      @relation(fields: [ruleId], references: [id], onDelete: Cascade)
   personId    String       @db.Uuid
@@ -3903,4 +4128,6 @@ model SodException {
 
   @@index([tenantId])
   @@index([tenantId, status, endsAt])
+  @@index([ruleId])
+  @@index([violationId])
 }

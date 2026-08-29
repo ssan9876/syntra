@@ -48,6 +48,15 @@ export function objectSidRid(raw: unknown): number | undefined {
   // UTF-8, so a SID can arrive here as a string of the raw octets rather than
   // as a Buffer. Reading it back through latin1 would corrupt it; the bytes
   // are recovered the way they were decoded.
+  //
+  // "happen to be valid" is the operative phrase: raw SID bytes are not text,
+  // and a lossy UTF-8 decode replaces whatever byte sequence did not decode
+  // with U+FFFD. Re-encoding that string does not recover the original
+  // bytes -- it recovers three bytes (EF BF BD) standing in for however many
+  // were consumed -- so the buffer below is no longer a SID at all past that
+  // point, and reading a RID out of it would be a wrong number reported with
+  // the same confidence as a right one. `undefined` is reported instead.
+  if (text.includes('�')) return undefined;
   return ridFromBytes(Buffer.from(text, 'utf8'));
 }
 

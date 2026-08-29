@@ -27,6 +27,10 @@ services:
       POSTGRES_USER: syntra
       POSTGRES_PASSWORD: syntra
       POSTGRES_DB: syntra
+      # Read by ./initdb/01-app-role.sh. Defaulted here, unlike the root
+      # docker-compose.yml's required ${SYNTRA_APP_PASSWORD:?...}, because
+      # this is a throwaway development/test database, not a deployment.
+      SYNTRA_APP_PASSWORD: ${SYNTRA_APP_PASSWORD:-syntra_app}
     ports: ['5432:5432']
     volumes:
       # Creates the non-superuser role the application connects as. Runs once,
@@ -71,6 +75,8 @@ services:
       POSTGRES_USER: syntra
       POSTGRES_PASSWORD: syntra
       POSTGRES_DB: syntra
+      # Same role, same script, same default -- see the postgres service above.
+      SYNTRA_APP_PASSWORD: ${SYNTRA_APP_PASSWORD:-syntra_app}
     ports: ['5433:5432']
     volumes:
       - ./initdb:/docker-entrypoint-initdb.d:ro

@@ -240,13 +240,13 @@ importers:
       '@syntra/core':
         specifier: workspace:*
         version: link:../core
+      pg:
+        specifier: ^8.23.0
+        version: 8.23.0
     devDependencies:
       '@types/pg':
         specifier: ^8.21.0
         version: 8.21.0
-      pg:
-        specifier: ^8.23.0
-        version: 8.23.0
       prisma:
         specifier: ^6.2.0
         version: 6.19.3(typescript@5.9.3)

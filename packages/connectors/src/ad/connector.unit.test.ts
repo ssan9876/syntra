@@ -341,6 +341,22 @@ describe('objectSidRid', () => {
       objectSidRid(Buffer.from([0x01, 0x09, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0])),
     ).toBeUndefined();
   });
+
+  it('answers undefined for a SID that arrived as a lossily-decoded UTF-8 string', () => {
+    // ldapts hands back a string, not a Buffer, when the raw bytes happen to
+    // decode as UTF-8 -- and raw SID bytes are not text, so a decode this
+    // catches is lossy: the byte 0xF4 here is not followed by a valid
+    // continuation byte, so Node's UTF-8 decoder replaces it with U+FFFD.
+    // Recovering "bytes" from that string back through `Buffer.from(text,
+    // 'utf8')` does not reconstruct the original SID -- it reconstructs
+    // something else, twelve bytes turning into fourteen -- and reading a RID
+    // out of that would be a wrong number reported as confidently as a right
+    // one.
+    const original = Buffer.from([0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0xf4, 0x01, 0x00, 0x00]);
+    const asDecodedByLdapts = original.toString('utf8');
+
+    expect(objectSidRid(asDecodedByLdapts)).toBeUndefined();
+  });
 });
 
 describe('primaryGroupVerdict', () => {

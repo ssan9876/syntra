@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Check, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
@@ -186,10 +186,16 @@ export function ProvisionRunDetailPage() {
   const [problem, setProblem] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Bumped on every `reload()`, so a run or drift response for an id/runId
+  // pair this screen has since moved away from - a rapid navigation between
+  // runs - cannot land after the newer pair's response and overwrite it.
+  const requestSeq = useRef(0);
 
   const reload = () => {
+    const seq = ++requestSeq.current;
     void api<Run>(`/api/admin/targets/${id}/runs/${runId}`)
       .then((loaded) => {
+        if (seq !== requestSeq.current) return;
         setRun(loaded);
         // Everything still open, ticked. A reviewer removes what they do not
         // want rather than assembling a plan the run already assembled.
@@ -199,8 +205,14 @@ export function ProvisionRunDetailPage() {
           ),
         );
       })
-      .catch(() => setProblem('That run could not be loaded.'))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (seq !== requestSeq.current) return;
+        setProblem('That run could not be loaded.');
+      })
+      .finally(() => {
+        if (seq !== requestSeq.current) return;
+        setLoading(false);
+      });
     /**
      * Open findings only, and its failure is not swallowed.
      *
@@ -222,8 +234,12 @@ export function ProvisionRunDetailPage() {
     void api<{ findings: Drift[] }>(
       `/api/admin/targets/${id}/drift?status=open`,
     )
-      .then((body) => setDrift(body.findings))
+      .then((body) => {
+        if (seq !== requestSeq.current) return;
+        setDrift(body.findings);
+      })
       .catch(() => {
+        if (seq !== requestSeq.current) return;
         setDrift(null);
         setDriftProblem(
           'The drift for this target could not be read, so this screen cannot ' +

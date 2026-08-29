@@ -5,6 +5,11 @@ services:
       POSTGRES_USER: syntra
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: syntra
+      # Read by infra/initdb/01-app-role.sh, which creates the syntra_app role
+      # this deployment's DATABASE_URL connects as. Required here for the same
+      # reason POSTGRES_PASSWORD is: an unset application password has no safe
+      # default in production.
+      SYNTRA_APP_PASSWORD: ${SYNTRA_APP_PASSWORD:?set SYNTRA_APP_PASSWORD}
     volumes:
       - ./infra/initdb:/docker-entrypoint-initdb.d:ro
       - syntra-data:/var/lib/postgresql/data
@@ -18,13 +23,34 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     environment:
-      DATABASE_URL: postgresql://syntra_app:syntra_app@postgres:5432/syntra
+      DATABASE_URL: postgresql://syntra_app:${SYNTRA_APP_PASSWORD:?set SYNTRA_APP_PASSWORD}@postgres:5432/syntra
       PORT: '3000'
       PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
       MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY}
       SMTP_URL: ${SMTP_URL:?set SMTP_URL}
       NODE_ENV: production
+      # This deployment IS the proxy: nginx (the `web` service) is the only
+      # thing a client ever reaches, and it terminates every connection to
+      # `api` from inside the same compose network. One hop, always from that
+      # proxy, so trusting exactly one is correct here -- never a bare `true`,
+      # which would believe X-Forwarded-For from any client. See TRUST_PROXY's
+      # own documentation in packages/core/src/config.ts and .env.example.
+      TRUST_PROXY: '1'
+    healthcheck:
+      # READINESS, not /health: a liveness check that only proves the process
+      # is listening would report the api "healthy" while it cannot reach
+      # Postgres, and `web`'s `condition: service_healthy` below exists
+      # precisely to stop that from serving traffic. No curl/wget in the
+      # node:24-alpine runtime image, so this uses Node's own fetch rather
+      # than adding a package to the runtime stage just for a healthcheck.
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,7 +60,9 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     ports: ['8080:80']
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   syntra-data:

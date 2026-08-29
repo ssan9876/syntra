@@ -11,25 +11,25 @@ const MIGRATION = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '../prisma/migrations/20260903000000_builtin_role_permissions/migration.sql',
 );
+const REPAIR_MIGRATION = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../prisma/migrations/20260926000000_builtin_role_permissions_repair/migration.sql',
+);
 
 const sql = readFileSync(MIGRATION, 'utf8');
+const repairSql = readFileSync(REPAIR_MIGRATION, 'utf8');
 
 /**
- * Runs the migration's SQL somewhere it can actually see rows.
- *
- * `prisma.$executeRawUnsafe` on the bare client runs as the application role
- * with no `app.current_tenant` set, and every table here is under row-level
- * security -- so the UPDATE matches nothing, reports success, and a test built
- * on it passes while proving nothing at all. The real migration runs as the
- * migration role, which is not subject to RLS; binding a tenant is how a test
- * reaches the same rows.
+ * Runs SQL exactly the way `prisma migrate deploy` does: as the application
+ * role (`syntra_app`, NOSUPERUSER NOBYPASSRLS -- migrations do not run as a
+ * different, RLS-exempt role), with no `app.current_tenant` bound. This is
+ * what production actually does when it applies a migration.
  */
-const applyMigration = (tenantId: string) =>
-  withTenant(tenantId, (tx) => tx.$executeRawUnsafe(sql));
+const applyUnbound = (statement: string) => prisma.$executeRawUnsafe(statement);
 
 /** The quoted strings inside the migration's ARRAY[...] literal. */
-const backfilled = (): string[] =>
-  [...(sql.match(/ARRAY\[([\s\S]*?)\]::text\[\]/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map(
+const backfilled = (migrationSql: string): string[] =>
+  [...(migrationSql.match(/ARRAY\[([\s\S]*?)\]::text\[\]/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map(
     (m) => m[1]!,
   );
 
@@ -49,7 +49,7 @@ describe('the built-in role backfill', () => {
    */
   it('names only permissions the catalogue has', () => {
     const catalog = new Set<string>(ALL_PERMISSIONS);
-    expect(backfilled().filter((p) => !catalog.has(p))).toEqual([]);
+    expect(backfilled(sql).filter((p) => !catalog.has(p))).toEqual([]);
   });
 
   /**
@@ -59,12 +59,12 @@ describe('the built-in role backfill', () => {
    * repairing a deployment.
    */
   it('includes deployment.manage', () => {
-    expect(backfilled()).toContain('deployment.manage');
+    expect(backfilled(sql)).toContain('deployment.manage');
   });
 
   /** Whatever the catalogue held when this was written, all of it. */
   it('is the full catalogue as of the migration', () => {
-    expect(backfilled().length).toBeGreaterThanOrEqual(20);
+    expect(backfilled(sql).length).toBeGreaterThanOrEqual(20);
   });
 
   /**
@@ -80,17 +80,24 @@ describe('the built-in role backfill', () => {
 });
 
 /**
- * The migration doing its job, against a database.
+ * What actually happened in production, and what fixes it.
  *
- * The plan rehearsed this by hand: reset the development database, seed it,
- * narrow the Owner role with `prisma db execute`, re-apply the migration and
- * look. That is the right check and the wrong place to run it -- the
- * development database is shared, and a reset takes whatever else is using it
- * down with it. The same proof runs here against the per-worker test database,
- * where it also runs again on every future change rather than once, by hand,
- * on the day it was written.
+ * `20260903000000_builtin_role_permissions` joins "Role" against itself with
+ * no tenant bound. "Role" carries FORCE ROW LEVEL SECURITY, and migrations
+ * run as `syntra_app`, which is NOSUPERUSER NOBYPASSRLS -- the migration role
+ * is subject to RLS exactly like the application is. With no
+ * `app.current_tenant` set, the policy predicate
+ * `"tenantId" = NULLIF(current_setting('app.current_tenant', true), '')::uuid`
+ * compares every row's tenantId against NULL, which is never true, so the
+ * UPDATE matched zero rows, committed, and reported success.
+ *
+ * An earlier version of this file ran the migration through `withTenant`
+ * before checking anything, which binds a tenant the real migration never
+ * did -- so RLS let the UPDATE reach real rows, the test passed, and it
+ * proved nothing about what production actually got. The tests below run the
+ * SQL the way `prisma migrate deploy` really runs it.
  */
-describe('what the backfill does to rows', () => {
+describe('what the backfill actually did in production', () => {
   let tenantId: string;
 
   beforeEach(async () => {
@@ -99,60 +106,88 @@ describe('what the backfill does to rows', () => {
     tenantId = tenant.id;
   });
 
-  it('restores a built-in role frozen at an older catalogue, and leaves a custom one alone', async () => {
-    await withTenant(tenantId, async (tx) => {
-      // An installation seeded before `deployment.manage` existed.
-      await tx.role.create({
-        data: {
-          tenantId,
-          name: 'Owner',
-          builtIn: true,
-          permissions: ['directory.read', 'directory.write'],
-        },
-      });
-      // And a role an administrator deliberately narrowed. This one must not
-      // move: the migration repairs an omission, it does not impose a policy.
-      await tx.role.create({
-        data: {
-          tenantId,
-          name: 'Read only',
-          builtIn: false,
-          permissions: ['directory.read'],
-        },
-      });
-    });
+  it('changed zero rows: the original migration never bound a tenant', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.role.create({
+        data: { tenantId, name: 'Owner', builtIn: true, permissions: ['directory.read'] },
+      }),
+    );
 
-    await applyMigration(tenantId);
+    const before = await withTenant(tenantId, (tx) =>
+      tx.role.findFirstOrThrow({ where: { name: 'Owner' } }),
+    );
 
-    const { builtIn, custom } = await withTenant(tenantId, async (tx) => ({
-      builtIn: await tx.role.findFirstOrThrow({ where: { name: 'Owner' } }),
-      custom: await tx.role.findFirstOrThrow({ where: { name: 'Read only' } }),
-    }));
+    // The real migration path: no withTenant, no app.current_tenant, exactly
+    // what `prisma migrate deploy` did.
+    await applyUnbound(sql);
 
-    // U3 itself: the permission the Updates page is gated on.
-    expect(builtIn.permissions).toContain('deployment.manage');
-    // Everything THE MIGRATION names, and nothing lost -- not everything the
-    // catalogue currently has.
-    //
-    // This asserted equality with ALL_PERMISSIONS, which contradicted the
-    // reasoning at the top of this file: the literal list is a snapshot of the
-    // catalogue when the migration was written, the subset test above is
-    // deliberately a subset "because the catalogue is meant to grow without a
-    // migration behind it", and equality here demanded the opposite. It only
-    // held while nothing had been added since.
-    //
-    // `directory.delete` was the first, and it went red on a merge -- neither
-    // side wrong alone, and neither able to see it: one branch added a
-    // permission, the other added a test that froze the catalogue.
-    for (const permission of backfilled()) {
-      expect(builtIn.permissions).toContain(permission);
+    const after = await withTenant(tenantId, (tx) =>
+      tx.role.findFirstOrThrow({ where: { name: 'Owner' } }),
+    );
+
+    // Documents the bug: the frozen role is still frozen. deployment.manage
+    // and everything else the migration named never arrived.
+    expect(after.permissions).toEqual(before.permissions);
+    expect(after.permissions).not.toContain('deployment.manage');
+  });
+});
+
+/**
+ * The repair migration doing its job, against a database.
+ *
+ * It loops over every tenant and binds `app.current_tenant` before touching
+ * "Role", the pattern `20260905000000_deployment_manage_backfill` and
+ * `20260909000000_password_ageing` already established. Run the same way
+ * production runs it -- no tenant bound from the test, because the migration
+ * binds its own.
+ */
+describe('the repair migration', () => {
+  let tenantIds: string[];
+
+  beforeEach(async () => {
+    await resetDatabase();
+    const tenants = await Promise.all(
+      ['Acme', 'Globex', 'Initech'].map((name, i) =>
+        prisma.tenant.create({ data: { name, slug: `${name.toLowerCase()}-${i}` } }),
+      ),
+    );
+    tenantIds = tenants.map((t) => t.id);
+
+    // Every tenant gets a built-in role frozen at an old catalogue, and a
+    // custom role an administrator deliberately narrowed -- which must not
+    // move.
+    for (const id of tenantIds) {
+      await withTenant(id, (tx) =>
+        tx.role.create({
+          data: { tenantId: id, name: 'Owner', builtIn: true, permissions: ['directory.read'] },
+        }),
+      );
+      await withTenant(id, (tx) =>
+        tx.role.create({
+          data: { tenantId: id, name: 'Read only', builtIn: false, permissions: ['directory.read'] },
+        }),
+      );
     }
-    // Nothing the role already held was dropped, which is the other half of
-    // "restores" and the half equality was really covering.
-    expect(builtIn.permissions).toContain('directory.read');
-    expect(builtIn.permissions).toContain('directory.write');
+  });
 
-    expect(custom.permissions).toEqual(['directory.read']);
+  it('grants every listed permission to the built-in role in every seeded tenant', async () => {
+    await applyUnbound(repairSql);
+
+    for (const id of tenantIds) {
+      const { builtIn, custom } = await withTenant(id, async (tx) => ({
+        builtIn: await tx.role.findFirstOrThrow({ where: { name: 'Owner' } }),
+        custom: await tx.role.findFirstOrThrow({ where: { name: 'Read only' } }),
+      }));
+
+      for (const permission of backfilled(repairSql)) {
+        expect(builtIn.permissions).toContain(permission);
+      }
+      expect(builtIn.permissions).toContain('deployment.manage');
+      // Nothing already held was dropped.
+      expect(builtIn.permissions).toContain('directory.read');
+      // The custom role stays exactly as an administrator left it.
+      expect(custom.permissions).toEqual(['directory.read']);
+    }
   });
 
   /**
@@ -161,21 +196,20 @@ describe('what the backfill does to rows', () => {
    * nobody can safely re-run by hand when it matters.
    */
   it('is idempotent', async () => {
-    await withTenant(tenantId, (tx) =>
-      tx.role.create({
-        data: { tenantId, name: 'Owner', builtIn: true, permissions: ['audit.read'] },
-      }),
+    await applyUnbound(repairSql);
+    const once = await Promise.all(
+      tenantIds.map((id) =>
+        withTenant(id, (tx) => tx.role.findFirstOrThrow({ where: { name: 'Owner' } })),
+      ),
     );
 
-    await applyMigration(tenantId);
-    const once = await withTenant(tenantId, (tx) =>
-      tx.role.findFirstOrThrow({ where: { name: 'Owner' } }),
-    );
-    await applyMigration(tenantId);
-    const twice = await withTenant(tenantId, (tx) =>
-      tx.role.findFirstOrThrow({ where: { name: 'Owner' } }),
+    await applyUnbound(repairSql);
+    const twice = await Promise.all(
+      tenantIds.map((id) =>
+        withTenant(id, (tx) => tx.role.findFirstOrThrow({ where: { name: 'Owner' } })),
+      ),
     );
 
-    expect(twice.permissions).toEqual(once.permissions);
+    expect(twice.map((r) => r.permissions)).toEqual(once.map((r) => r.permissions));
   });
 });

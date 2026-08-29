@@ -17,5 +17,19 @@ ExecStart=/usr/bin/docker compose -f infra/docker-compose.yml up -d
 ExecStop=/usr/bin/docker compose -f infra/docker-compose.yml stop
 TimeoutStartSec=300
 
+# HARDENING, same idea as syntra.service, narrowed to what the docker CLI
+# actually needs.
+#
+# NOT ProtectHome or PrivateTmp here: `docker compose` running as root reads
+# and writes $HOME/.docker (config.json, the CLI's context and credential
+# store) and can shell out through /tmp for build contexts, and this unit's
+# whole job is calling it -- unlike syntra.service, there is no fixed, small
+# set of paths to allowlist instead. NoNewPrivileges and ProtectSystem=strict
+# cost the docker CLI nothing (it talks to the daemon over its socket, not by
+# writing into the base system) and are kept.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/run/docker.sock
+
 [Install]
 WantedBy=multi-user.target

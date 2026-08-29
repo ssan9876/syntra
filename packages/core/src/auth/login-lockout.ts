@@ -89,6 +89,15 @@ export async function recordFailure(
   const { policy, now, userId } = input;
   if (policy.threshold <= 0) return;
 
+  // `tx` is always inside its own transaction (`withTenant` / `request.db`
+  // open one per call), so this advisory lock is released automatically on
+  // commit or rollback. It serialises every recordFailure for this one user
+  // — a second, concurrent call blocks here until the first has committed —
+  // which is what turns the read-then-upsert below from a lost-update race
+  // into an atomic increment, without hand-rolling the window/threshold
+  // branching a second time as one large CASE-laden raw upsert.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
+
   const existing = await readLockout(tx, userId);
 
   // A run of failures is measured from its first, not its most recent: a

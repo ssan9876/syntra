@@ -13,7 +13,7 @@ import {
 } from '../mfa/challenge-store.js';
 import { leaveTo } from '../mfa/leave.js';
 import { enrolWebAuthnForAttempt } from '../mfa/webauthn.js';
-import { ApiError, api } from '../session/api.js';
+import { ApiError, api, isRateLimited } from '../session/api.js';
 import { useSession, type AuthOutcome } from '../session/SessionProvider.js';
 
 interface Enrolment {
@@ -148,8 +148,8 @@ export function EnrolFactor() {
       if (handedBack(outcome)) return;
       done();
     } catch (cause) {
-      if (cause instanceof ApiError && cause.problem.status === 429) {
-        setError('Too many attempts. Wait a minute and try again.');
+      if (isRateLimited(cause)) {
+        setError(t('common.rate_limited'));
       } else if (cause instanceof ApiError && cause.problem.status === 401) {
         setError('This step expired. Sign in again to start over.');
       } else {

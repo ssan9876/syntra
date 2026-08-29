@@ -56,9 +56,15 @@ def assets(version):
     ):
         out.append(
             # `url` before `name`: real GitHub release-asset objects list
-            # `url` first, and syntra-update's asset_url() finds a name's
-            # url by grepping one line *before* the matching "name" line
-            # after a comma-split -- reversing this order breaks that.
+            # `url` first, and syntra-update's parse_asset_url() walks the
+            # stream remembering the most recent line that looks like an
+            # ASSET's own url (ending `/assets/<digits>`) and prints it once
+            # the matching "name" line is reached -- so `url` still has to
+            # come before `name` for a given asset, but the two no longer
+            # have to be adjacent. (They used to: the old implementation
+            # grepped one line before a comma-split "name" match, which is
+            # what this stub's ordering was originally written to satisfy;
+            # kept in this order still, since it's what the real API does.)
             {
                 'url': f'http://127.0.0.1:{PORT}/assets/{asset_id(version, index)}',
                 'name': name,

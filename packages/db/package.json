@@ -13,11 +13,11 @@
   },
   "dependencies": {
     "@prisma/client": "^6.2.0",
-    "@syntra/core": "workspace:*"
+    "@syntra/core": "workspace:*",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/pg": "^8.21.0",
-    "pg": "^8.23.0",
     "prisma": "^6.2.0"
   }
 }

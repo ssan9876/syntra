@@ -44,8 +44,56 @@ function parseIsoDate(value: string): Date | null {
   return date;
 }
 
-function splitLine(line: string): string[] {
-  return line.split(',').map((c) => c.trim());
+type SplitResult = { cells: string[] } | { error: string };
+
+/**
+ * An RFC 4180 tokenizer for one physical line: a double-quoted field may
+ * contain commas and a `""`-escaped quote, and only an unquoted cell is
+ * trimmed. Lines are split on `\r?\n` before this runs (see `parsePersonCsv`
+ * below), so a quoted field that legitimately spans multiple lines is not
+ * reassembled — it is simpler, and safer for an operator to see, to report an
+ * unterminated quote on that line than to silently re-join input across line
+ * boundaries.
+ */
+function splitLine(line: string): SplitResult {
+  const cells: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  let quotedField = false;
+  const n = line.length;
+
+  for (let i = 0; i < n; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+          continue;
+        }
+        inQuotes = false;
+        continue;
+      }
+      cur += ch;
+      continue;
+    }
+    if (ch === '"' && cur === '') {
+      inQuotes = true;
+      quotedField = true;
+      continue;
+    }
+    if (ch === ',') {
+      cells.push(quotedField ? cur : cur.trim());
+      cur = '';
+      quotedField = false;
+      continue;
+    }
+    cur += ch;
+  }
+
+  if (inQuotes) return { error: 'unterminated quoted field' };
+  cells.push(quotedField ? cur : cur.trim());
+  return { cells };
 }
 
 /**
@@ -66,7 +114,11 @@ export function parsePersonCsv(text: string): {
   }
 
   const lines = trimmed.split(/\r?\n/);
-  const header = splitLine(lines[0]!);
+  const headerSplit = splitLine(lines[0]!);
+  if ('error' in headerSplit) {
+    return { rows, errors: [{ line: 1, message: headerSplit.error }] };
+  }
+  const header = headerSplit.cells;
 
   for (const column of REQUIRED) {
     if (!header.includes(column)) {
@@ -87,7 +139,12 @@ export function parsePersonCsv(text: string): {
     const raw = lines[i]!;
     if (raw.trim() === '') continue;
 
-    const cells = splitLine(raw);
+    const rowSplit = splitLine(raw);
+    if ('error' in rowSplit) {
+      errors.push({ line: lineNumber, message: rowSplit.error });
+      continue;
+    }
+    const cells = rowSplit.cells;
 
     const startRaw = at(cells, 'startDate');
     const startDate = startRaw ? parseIsoDate(startRaw) : null;

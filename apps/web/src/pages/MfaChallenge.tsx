@@ -13,7 +13,7 @@ import {
 } from '../mfa/challenge-store.js';
 import { leaveTo } from '../mfa/leave.js';
 import { assertWebAuthn } from '../mfa/webauthn.js';
-import { ApiError, api } from '../session/api.js';
+import { ApiError, api, isRateLimited } from '../session/api.js';
 import { useSession, type AuthOutcome } from '../session/SessionProvider.js';
 
 type Mode = 'totp' | 'webauthn' | 'email_otp' | 'recovery_code';
@@ -181,8 +181,8 @@ export function MfaChallenge() {
           cause.problem.detail ??
             'That code completed your setup. Wait for your app to show the next one.',
         );
-      } else if (cause instanceof ApiError && cause.problem.status === 429) {
-        setError('Too many attempts. Wait a minute and try again.');
+      } else if (isRateLimited(cause)) {
+        setError(t('common.rate_limited'));
       } else if (cause instanceof DOMException) {
         setError('Your security key was not used. Try again, or use a code.');
       } else {

@@ -27,6 +27,18 @@ export class ApiError extends Error {
 }
 
 /**
+ * Whether a failure was the rate limiter, not the credential itself.
+ *
+ * Five pre-authentication screens catch this the same way and used to say so
+ * with five copies of the same English sentence, hardcoded rather than
+ * catalogued. One check here, one catalog key (`common.rate_limited`) at each
+ * call site.
+ */
+export function isRateLimited(cause: unknown): boolean {
+  return cause instanceof ApiError && cause.problem.status === 429;
+}
+
+/**
  * The paths where a 401 means "that credential was wrong", not "your session
  * is gone".
  *

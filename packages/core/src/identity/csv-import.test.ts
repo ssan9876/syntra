@@ -69,6 +69,30 @@ describe('parsePersonCsv', () => {
     ]);
   });
 
+  it('keeps a comma inside a quoted field as part of the value', () => {
+    const { rows, errors } = parsePersonCsv(
+      `${HEADER}\nE1,Jo,Doe,jo@acme.test,1,true,2026-01-01,,Nurse,"Care, Emergency"`,
+    );
+    expect(errors).toEqual([]);
+    expect(rows[0]!.contract.department).toBe('Care, Emergency');
+  });
+
+  it('unescapes a doubled quote inside a quoted field', () => {
+    const { rows, errors } = parsePersonCsv(
+      `${HEADER}\nE1,Jo,"O""Doe",jo@acme.test,1,true,2026-01-01,,Nurse,Care`,
+    );
+    expect(errors).toEqual([]);
+    expect(rows[0]!.familyName).toBe('O"Doe');
+  });
+
+  it('reports an unterminated quote against its line rather than throwing', () => {
+    const { rows, errors } = parsePersonCsv(
+      `${HEADER}\nE1,Jo,"Doe,jo@acme.test,1,true,2026-01-01,,Nurse,Care`,
+    );
+    expect(rows).toEqual([]);
+    expect(errors).toEqual([{ line: 2, message: 'unterminated quoted field' }]);
+  });
+
   it('reports an empty file rather than returning nothing silently', () => {
     const { errors } = parsePersonCsv('   ');
     expect(errors[0]!.message).toMatch(/empty/i);

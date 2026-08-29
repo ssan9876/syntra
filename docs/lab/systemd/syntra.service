@@ -9,12 +9,18 @@ Requires=docker.service
 
 [Service]
 Type=exec
-WorkingDirectory=/root/syntra/apps/api
+# The release layout ops/syntra-install writes: systemd follows the
+# `current` symlink at every start, so a swap under it (syntra-update) needs
+# no unit change to take effect. See ops/syntra-install:136-138, which
+# rewrites exactly these two lines on conversion -- kept in sync with them by
+# hand, since the installer edits a live host's copy of this file, not this
+# one.
+WorkingDirectory=/opt/syntra/current/apps/api
 # Run from TypeScript source through tsx. The API has no compiled bundle yet —
 # README says so — and tsx is transpile-only, so the cost is startup, not
 # steady state. WEB_ROOT in .env is what makes this one process serve the
 # console and the portal as well as the API.
-ExecStart=/usr/bin/env node --env-file-if-exists=/root/syntra/.env --import tsx src/server.ts
+ExecStart=/usr/bin/env node --env-file-if-exists=/opt/syntra/shared/.env --import tsx src/server.ts
 Restart=always
 RestartSec=5
 # The API installs its own SIGTERM handler: drain HTTP, stop the scheduler,
@@ -23,6 +29,28 @@ KillSignal=SIGTERM
 TimeoutStopSec=45
 StandardOutput=journal
 StandardError=journal
+
+# HARDENING.
+#
+# No User=/Group=: ops/syntra-install provisions no dedicated account, runs
+# as root itself (it writes into /etc/systemd/system and /opt/syntra), and
+# the release tree it creates is owned by whoever ran it -- so pinning this
+# unit to an unprivileged user without also changing the installer to chown
+# that tree would just fail to start. That is a real gap, not a decision;
+# what follows narrows what root can still do FROM this process without
+# requiring the ownership change.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# The one place this process writes on its own: update-service.ts's
+# spawn('systemd-run', ...) error handler falls back to writing
+# var/update.status directly when the updater could not even be started.
+# Everything else under /opt/syntra -- releases/, shared/.env,
+# bin/syntra-update -- is written by ops/syntra-update or ops/syntra-install,
+# separate processes (and, for the updater, a separate transient unit) that
+# this one's ProtectSystem does not constrain.
+ReadWritePaths=/opt/syntra/var
 
 [Install]
 WantedBy=multi-user.target

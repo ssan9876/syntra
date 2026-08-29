@@ -4,6 +4,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser } from '../directory/user-service.js';
 import { hashPassword, setPasswordHash } from './password.js';
 import { authenticate } from './login-service.js';
+import { recordFailure } from './login-lockout.js';
 
 /**
  * Lockout is the control that protects the *account*; the API's rate limit
@@ -174,6 +175,35 @@ describe('account lockout', () => {
       tx.auditEvent.findFirst({ where: { action: 'auth.lockout' } }),
     );
     expect(locked).toMatchObject({ outcome: 'failure', targetId: userId });
+  });
+
+  it('counts every one of N concurrent failures exactly once', async () => {
+    // A read-then-upsert done without any synchronisation loses updates:
+    // two concurrent calls can both read failedCount 0 and both write 1.
+    // This drives enough concurrent callers at the same user that a
+    // non-atomic increment would reliably drop at least one.
+    await seedTenant({ lockoutThreshold: 1000 });
+    const N = 20;
+
+    await Promise.all(
+      Array.from({ length: N }, () =>
+        withTenant(tenantId, (tx) =>
+          recordFailure(tx, {
+            tenantId,
+            userId,
+            login: 'jdoe',
+            sourceIp: null,
+            policy: { threshold: 1000, windowMinutes: 15, durationMinutes: 15 },
+            now: new Date('2026-08-26T09:00:00Z'),
+          }),
+        ),
+      ),
+    );
+
+    const state = await withTenant(tenantId, (tx) => tx.loginLockout.findUnique({
+      where: { userId },
+    }));
+    expect(state!.failedCount).toBe(N);
   });
 
   it('keeps one tenant’s lockout out of another’s', async () => {

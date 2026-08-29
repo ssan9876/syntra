@@ -43,7 +43,7 @@ describe('migration naming order', () => {
 
   it('accepts one named above the floor', () => {
     expect(
-      migrationsBelowFloor([...directories(), '20260831000000_add_a_column'], MIGRATION_NAME_FLOOR),
+      migrationsBelowFloor([...directories(), '20260929000000_add_a_column'], MIGRATION_NAME_FLOOR),
     ).toEqual([]);
   });
 

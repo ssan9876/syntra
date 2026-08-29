@@ -10,9 +10,10 @@
 # working directory, immediately before packing. That is how the rehearsal
 # stages a release that fails -- which is the whole point of having one.
 #
-# The exclusions and the three tar assertions are the same as release.yml's,
-# because a rehearsal against a differently-shaped artefact rehearses a
-# different feature.
+# The exclusions come from ops/release-excludes.txt, shared with
+# release.yml's own assembly step, and the three tar assertions below are the
+# same as release.yml's -- because a rehearsal against a differently-shaped
+# artefact rehearses a different feature.
 set -euo pipefail
 
 VERSION="$1"
@@ -27,17 +28,45 @@ NAME="syntra-$VERSION"
 TREE="$STAGE/$NAME"
 mkdir -p "$TREE"
 
-git ls-files -- . \
-  ':(exclude)docs/**' \
-  ':(exclude)e2e/**' \
-  ':(exclude).github/**' \
-  ':(exclude)*.md' \
-  > "$STAGE/manifest.txt"
+mapfile -t EXCLUDES < ops/release-excludes.txt
+git ls-files -- . "${EXCLUDES[@]}" > "$STAGE/manifest.txt"
 tar -cf - -T "$STAGE/manifest.txt" | tar -xf - -C "$TREE"
 
 [ -f apps/web/dist/index.html ] || pnpm --filter @syntra/web build
 mkdir -p "$TREE/apps/web"
 cp -a apps/web/dist "$TREE/apps/web/dist"
+
+# Turns a newline-separated list into a JSON array of strings, without a jq
+# dependency this script otherwise has no reason to need. Escapes backslash
+# and `"` only -- a migration directory name is a filesystem path component,
+# not arbitrary text, but the escaping costs nothing and being wrong about
+# that assumption once is enough reason to have it.
+json_string_array() {
+  local first=1 line esc
+  printf '['
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$first" -eq 1 ] && first=0 || printf ','
+    esc=$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '"%s"' "$esc"
+  done
+  printf ']'
+}
+
+# Which migrations this release adds over the previous tag reachable from
+# HEAD, computed the same way release.yml's "Work out what this release is"
+# step does -- a rehearsal that always shipped "migrations": [] never
+# exercised the one fact that decides whether an operator updates during the
+# working day.
+PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+if [ -n "$PREV" ]; then
+  ADDED=$(git diff --name-only --diff-filter=A "$PREV" HEAD \
+    -- packages/db/prisma/migrations \
+    | awk -F/ '/migration.sql$/ {print $(NF-1)}' | sort -u)
+else
+  ADDED=$(ls packages/db/prisma/migrations | grep -v migration_lock || true)
+fi
+MIGRATIONS=$(printf '%s\n' "$ADDED" | json_string_array)
 
 printf '%s\n' "$VERSION" > "$TREE/VERSION"
 cat > "$TREE/RELEASE.json" <<JSON
@@ -45,7 +74,7 @@ cat > "$TREE/RELEASE.json" <<JSON
   "version": "$VERSION",
   "released": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "commit": "$(git rev-parse HEAD)",
-  "migrations": []
+  "migrations": $MIGRATIONS
 }
 JSON
 

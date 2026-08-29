@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Field, Panel, Status } from '@syntra/ui';
 import { AppShell } from '../components/AppShell.js';
-import { ApiError, api } from '../session/api.js';
+import { ApiError, api, isRateLimited } from '../session/api.js';
 import { startWebAuthnRegistration } from '../mfa/webauthn.js';
+import { useT } from '../i18n/LocaleProvider.js';
 // The CONTRACT, not a local restatement. The API builds this response by hand
 // and this file described it independently, so the two could drift with
 // nothing anywhere to notice -- which is the whole reason the schema exists.
@@ -19,6 +20,7 @@ interface Enrolment {
 }
 
 export function Security() {
+  const t = useT();
   const [status, setStatus] = useState<MfaStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [enrolment, setEnrolment] = useState<Enrolment | null>(null);
@@ -66,8 +68,8 @@ export function Security() {
       await load();
     } catch (cause) {
       setCodeError(
-        cause instanceof ApiError && cause.problem.status === 429
-          ? 'Too many attempts. Wait a minute and try again.'
+        isRateLimited(cause)
+          ? t('common.rate_limited')
           : 'That code did not match. Check your app and try the next one.',
       );
     } finally {

@@ -1102,8 +1102,7 @@ without touching the box.
 ### One-time: cut a release
 
 Nothing is updatable until something has been released — until then the page
-says so and points at `deploy.sh`, because a working tree has no version to
-update from.
+says so, because a working tree has no version to update from.
 
 ```bash
 git tag -a v1.0.0 -m "First release."
@@ -1138,13 +1137,11 @@ cat /opt/syntra/var/update.status            # what it is doing right now
 
 ### Things worth knowing before you need them
 
-- **`deploy.sh` still works** and is still the right tool for iterating. It
-  writes into `current`, which leaves the tree no longer matching its release.
-  The updater only checks whether `RELEASE.json` is present — it refuses a
-  working tree that has none, but a `deploy.sh` push made on top of an
-  existing release still has one, so the updater does **not** notice that push
-  and would overwrite it silently. Detecting that would take hashing the
-  release manifest, which is not implemented.
+- **Anything written into `current` by hand is invisible to the updater.** It
+  only checks whether `RELEASE.json` is present — a manual edit on top of an
+  existing release still has one, so the next update overwrites it silently.
+  Detecting that would take hashing the release manifest, which is not
+  implemented. Cut a release instead of editing `current`.
 - **A rollback does not undo what happened during the update.** The dump is
   from just before the migration; a login or a sync run in the minute since is
   not in it.

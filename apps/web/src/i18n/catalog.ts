@@ -26,6 +26,7 @@ export const en = {
   'common.cancel': 'Cancel',
   'common.continue': 'Continue',
   'common.language': 'Language',
+  'common.rate_limited': 'Too many attempts. Wait a minute and try again.',
 
   'login.title': 'Sign in',
   'login.login': 'Login',
@@ -115,6 +116,15 @@ export const en = {
   'portal.other_group': 'Everything else',
   'shell.administration': 'Administration',
   'shell.security': 'Security',
+
+  'nav.applications': 'Applications',
+  'nav.catalog': 'Request access',
+  'nav.requests': 'My requests',
+  'nav.access': 'My access',
+  'nav.approvals': 'Approvals',
+  'nav.managed': 'Managed by me',
+  'nav.tasks': 'Tasks',
+  'nav.reviews': 'Reviews',
 } as const;
 
 /** Every key the application may ask for. English is the source of truth. */
@@ -142,6 +152,7 @@ export const nl: Catalog = {
   'common.cancel': 'Annuleren',
   'common.continue': 'Doorgaan',
   'common.language': 'Taal',
+  'common.rate_limited': 'Te veel pogingen. Wacht een minuut en probeer het opnieuw.',
 
   'login.title': 'Aanmelden',
   'login.login': 'Gebruikersnaam',
@@ -228,6 +239,15 @@ export const nl: Catalog = {
   'portal.other_group': 'Al het overige',
   'shell.administration': 'Beheer',
   'shell.security': 'Beveiliging',
+
+  'nav.applications': 'Applicaties',
+  'nav.catalog': 'Toegang aanvragen',
+  'nav.requests': 'Mijn aanvragen',
+  'nav.access': 'Mijn toegang',
+  'nav.approvals': 'Goedkeuringen',
+  'nav.managed': 'Door mij beheerd',
+  'nav.tasks': 'Taken',
+  'nav.reviews': 'Reviews',
 };
 
 /**
@@ -243,6 +263,7 @@ export const de: Catalog = {
   'common.cancel': 'Abbrechen',
   'common.continue': 'Weiter',
   'common.language': 'Sprache',
+  'common.rate_limited': 'Zu viele Versuche. Warten Sie eine Minute und versuchen Sie es erneut.',
 
   'login.title': 'Anmelden',
   'login.login': 'Benutzername',
@@ -330,6 +351,15 @@ export const de: Catalog = {
   'portal.other_group': 'Alles Übrige',
   'shell.administration': 'Verwaltung',
   'shell.security': 'Sicherheit',
+
+  'nav.applications': 'Anwendungen',
+  'nav.catalog': 'Zugriff anfordern',
+  'nav.requests': 'Meine Anfragen',
+  'nav.access': 'Mein Zugriff',
+  'nav.approvals': 'Genehmigungen',
+  'nav.managed': 'Von mir verwaltet',
+  'nav.tasks': 'Aufgaben',
+  'nav.reviews': 'Überprüfungen',
 };
 
 export const CATALOGS = { en, nl, de } as const;

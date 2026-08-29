@@ -359,10 +359,27 @@ previous_release() {
   previous_release_of "$now" $(ls -1 "$RELEASES" 2>/dev/null) || true
 }
 
+# Runs curl with the release token in a header file rather than on its
+# command line. `curl -H "Authorization: Bearer $TOKEN"` puts the token in
+# this process's argv, which `ps` shows to every other user on the box --
+# a config file read with --config does not.
+#
+# The file is created with mode 600 before anything is written to it (not
+# chmod'd afterward, which leaves a window where the token is readable) and
+# removed via a RETURN trap, so it is gone whether curl succeeds or dies
+# under `set -e`.
+auth_curl() {
+  local cfg
+  cfg=$(mktemp)
+  chmod 600 "$cfg"
+  trap 'rm -f "$cfg"' RETURN
+  printf 'header = "Authorization: Bearer %s"\n' "$SYNTRA_RELEASE_TOKEN" > "$cfg"
+  curl -fsSL --config "$cfg" "$@"
+}
+
 api() {
   [ -n "${SYNTRA_RELEASE_TOKEN:-}" ] || die "no release token was provided"
-  curl -fsSL -H "Authorization: Bearer $SYNTRA_RELEASE_TOKEN" \
-    -H 'Accept: application/vnd.github+json' "$@"
+  auth_curl -H 'Accept: application/vnd.github+json' "$@"
 }
 
 latest_version() {
@@ -385,8 +402,7 @@ download_asset() {
   local version="$1" name="$2" dest="$3" url
   url=$(asset_url "$version" "$name") || true
   [ -n "$url" ] || die "release v$version has no asset named $name"
-  curl -fsSL -H "Authorization: Bearer $SYNTRA_RELEASE_TOKEN" \
-    -H 'Accept: application/octet-stream' -o "$dest" "$url"
+  auth_curl -H 'Accept: application/octet-stream' -o "$dest" "$url"
 }
 
 ready() {
@@ -410,6 +426,13 @@ wait_ready() {
 dump_database() {
   local dest="$1"
   mkdir -p "$BACKUPS"
+  # Created with mode 0600 before anything is written to it, not chmod'd
+  # afterward. A dump is a full, unfiltered (BYPASSRLS) copy of every
+  # tenant's data, and `>` alone would create it at the shell's default
+  # umask -- world- or group-readable on plenty of hosts -- for however long
+  # it takes pg_dump to finish writing it.
+  install -m 0600 /dev/null "$dest" \
+    || die "the pre-migration dump file could not be created; nothing was changed"
   # Through the container: there is no pg_dump on the host, and the version
   # inside always matches the server.
   #
@@ -418,7 +441,7 @@ dump_database() {
   # deliberately NOSUPERUSER NOBYPASSRLS -- so a dump taken as the application
   # role either errors out or, with row security enabled, quietly captures the
   # rows visible to a session that has set no tenant, which is none of them.
-  docker exec "$PG_CONTAINER" pg_dump -U "$PG_ROLE" -d "$PG_DB" -Fc > "$dest" 2>/dev/null \
+  docker exec "$PG_CONTAINER" pg_dump -U "$PG_ROLE" -d "$PG_DB" -Fc >> "$dest" 2>/dev/null \
     || die "the pre-migration database dump failed; nothing was changed"
   # A dump that exists and is empty is worse than none, because it looks like
   # a backup. pg_dump's custom format starts with the magic "PGDMP".
@@ -593,7 +616,7 @@ do_update() {
 
   adoption_allowed "$from" "$adopt" \
     || if [ "$from" = "dev" ]; then
-         die "this install is a working tree, not a release; push to it with deploy.sh, or adopt a release once with: syntra-update --adopt <version>"
+         die "this install is a working tree, not a release; take it to its first release once with: syntra-update --adopt <version>"
        else
          die "--adopt is for a working tree taking its first release; this install is already v$from"
        fi
@@ -786,7 +809,7 @@ do_check() {
   echo "current: $from"
   echo "latest:  ${latest:-unknown}"
   if [ "$from" = "dev" ]; then
-    echo "state:   working tree -- update with deploy.sh, not from the console; or take its first release with: syntra-update --adopt <version>"
+    echo "state:   working tree -- not updatable from the console; take its first release with: syntra-update --adopt <version>"
   elif [ -n "$latest" ] && version_newer "$latest" "$from"; then
     echo "state:   an update is available"
   else

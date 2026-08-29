@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
-import { ApiError } from '../session/api.js';
+import { isRateLimited } from '../session/api.js';
 import { useSession } from '../session/SessionProvider.js';
 import { Wordmark } from '../components/Wordmark.js';
 import {
@@ -80,10 +80,10 @@ export function Login() {
     } catch (cause) {
       // The API answers a wrong password, an unknown login and a disabled
       // account identically. Inventing a distinction here would undo that.
-      if (cause instanceof ApiError && cause.problem.status === 429) {
-        setError('Too many attempts. Wait a minute and try again.');
+      if (isRateLimited(cause)) {
+        setError(t('common.rate_limited'));
       } else {
-        setError('That login or password is incorrect.');
+        setError(t('login.failed'));
       }
     } finally {
       setBusy(false);

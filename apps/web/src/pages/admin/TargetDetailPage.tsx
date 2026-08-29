@@ -13,444 +13,22 @@ import {
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
-
-type TlsMode = 'ldaps' | 'starttls';
-type EnforcementMode = 'additive' | 'authoritative';
-
-interface ConnectorRight {
-  right: 'createUser' | 'modifyUser' | 'moveUser' | 'modifyMembership';
-  status: 'granted' | 'denied' | 'unverified';
-  detail: string;
-}
-
-interface TestResult {
-  ok: boolean;
-  message: string;
-  rights?: ConnectorRight[];
-}
-
-type TargetType = 'activeDirectory' | 'scim2' | 'httpJson';
-
-interface Target {
-  id: string;
-  name: string;
-  type: string;
-  config: Record<string, unknown>;
-  enabled: boolean;
-  autoApply: boolean;
-  schedule: string | null;
-  enforcementMode: EnforcementMode;
-  preHireDays: number;
-  entitlementRevocationDelayDays: number;
-  disableGraceDays: number;
-  archiveAfterDays: number | null;
-  reenableWithoutConfirmationDays: number;
-  renameEnabled: boolean;
-  createAccountThresholdPercent: number;
-  disableAccountThresholdPercent: number;
-  archiveAccountThresholdPercent: number;
-  revokeEntitlementThresholdPercent: number;
-  deactivateSyntraUserThresholdPercent: number;
-  perEntitlementThresholdPercent: number;
-  personPopulationDropPercent: number;
-  consecutiveSkippedRuns: number;
-  lastSkipReason: string | null;
-}
-
-const RIGHT_LABELS: Record<ConnectorRight['right'], string> = {
-  createUser: 'Create accounts',
-  modifyUser: 'Modify accounts',
-  moveUser: 'Move accounts between containers',
-  modifyMembership: 'Change group membership',
-};
-
-/**
- * `unverified` renders as its own tone, never as a quiet `granted`.
- *
- * A directory that does not publish effective rights cannot be read as having
- * granted them. Collapsing the two turns "we could not tell" into "yes", which
- * is the one reading an administrator must not be given by a screen whose
- * whole job is to answer whether this bind account can do the work — a bind
- * that can read the directory but cannot create users passes an `ok: true`
- * connection test, and this list is the only thing that says so before a run
- * fails against a live directory.
- *
- * `warning` rather than a neutral grey, which is where the plan's `muted`
- * would have landed: a quiet badge beside two green ones reads as agreement.
- * Amber is the only tone in the system that says "look at this" without
- * claiming a refusal happened.
- */
-function rightTone(
-  status: ConnectorRight['status'],
-): 'active' | 'danger' | 'warning' {
-  if (status === 'granted') return 'active';
-  if (status === 'denied') return 'danger';
-  return 'warning';
-}
-
-function RightsReport({ rights }: { rights: ConnectorRight[] }) {
-  return (
-    <ul className="space-y-2">
-      {rights.map((r) => (
-        <li key={r.right} className="flex flex-wrap items-center gap-2">
-          <Status tone={rightTone(r.status)}>
-            {r.status === 'unverified' ? 'Could not check' : r.status}
-          </Status>
-          <span className="text-ink">{RIGHT_LABELS[r.right]}</span>
-          <span className="text-muted">{r.detail}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function TestReport({ result }: { result: TestResult }) {
-  if (!result.ok) {
-    return (
-      <Alert tone="danger" title="Could not connect">
-        {result.message}
-      </Alert>
-    );
-  }
-
-  return (
-    <Panel title="Connection test">
-      <div className="space-y-4 p-4">
-        <p className="flex flex-wrap items-center gap-2">
-          <Status tone="active">Connected</Status>
-          <span className="text-muted">{result.message}</span>
-        </p>
-        {result.rights && result.rights.length > 0 && (
-          <>
-            <p className="text-muted">
-              What this bind account is allowed to do. A right it could not
-              confirm is not a right it has.
-            </p>
-            <RightsReport rights={result.rights} />
-          </>
-        )}
-      </div>
-    </Panel>
-  );
-}
-
-interface Form {
-  name: string;
-  type: TargetType;
-  url: string;
-  tlsMode: TlsMode;
-  rejectUnauthorized: boolean;
-  bindDn: string;
-  // Shared by both connector types: the Active Directory bind password and
-  // the SCIM bearer token are both, structurally, "the one credential this
-  // target holds" -- `CreateTargetInput.bindPassword` names it that
-  // generically for exactly this reason, so the form does too rather than
-  // inventing a second field that means the same thing.
-  bindPassword: string;
-  baseDn: string;
-  entitlementSearchBase: string;
-  archiveContainer: string;
-  // SCIM 2.0 only.
-  baseUrl: string;
-  // Declarative HTTP only. `documentKey` is which shipped document was
-  // started from -- kept so the picker can show it, never sent: the document
-  // itself is what is stored, so editing a shipped one later cannot change a
-  // target that was built from it.
-  documentKey: string;
-  documentJson: string;
-  schedule: string;
-  enabled: boolean;
-  autoApply: boolean;
-  enforcementMode: EnforcementMode;
-  preHireDays: string;
-  entitlementRevocationDelayDays: string;
-  disableGraceDays: string;
-  archiveAfterDays: string;
-  reenableWithoutConfirmationDays: string;
-  renameEnabled: boolean;
-  createAccountThresholdPercent: string;
-  disableAccountThresholdPercent: string;
-  archiveAccountThresholdPercent: string;
-  revokeEntitlementThresholdPercent: string;
-  deactivateSyntraUserThresholdPercent: string;
-  perEntitlementThresholdPercent: string;
-  personPopulationDropPercent: string;
-}
-
-const BLANK: Form = {
-  name: '',
-  type: 'activeDirectory',
-  url: 'ldaps://',
-  // No `plain`. `targetConfigSchema` does not offer it, and a target that
-  // could be configured to write in the clear is a target that eventually
-  // does.
-  tlsMode: 'ldaps',
-  rejectUnauthorized: true,
-  bindDn: '',
-  bindPassword: '',
-  baseDn: '',
-  entitlementSearchBase: '',
-  archiveContainer: '',
-  baseUrl: 'https://',
-  documentKey: '',
-  documentJson: '',
-  schedule: '',
-  enabled: true,
-  autoApply: false,
-  enforcementMode: 'additive',
-  preHireDays: '0',
-  entitlementRevocationDelayDays: '0',
-  disableGraceDays: '0',
-  archiveAfterDays: '',
-  reenableWithoutConfirmationDays: '7',
-  renameEnabled: false,
-  createAccountThresholdPercent: '20',
-  disableAccountThresholdPercent: '10',
-  archiveAccountThresholdPercent: '2',
-  revokeEntitlementThresholdPercent: '10',
-  deactivateSyntraUserThresholdPercent: '10',
-  perEntitlementThresholdPercent: '50',
-  personPopulationDropPercent: '20',
-};
-
-/** Config keys this form owns. Anything else on a saved target is carried through. */
-const OWNED_CONFIG_KEYS = [
-  'url',
-  'tlsMode',
-  'rejectUnauthorized',
-  'bindDn',
-  'baseDn',
-  'entitlementSearchBase',
-  'archiveContainer',
-  'baseUrl',
-];
-
-const THRESHOLDS = [
-  ['createAccountThresholdPercent', 'Accounts created'],
-  ['disableAccountThresholdPercent', 'Accounts disabled'],
-  ['archiveAccountThresholdPercent', 'Accounts archived'],
-  ['revokeEntitlementThresholdPercent', 'Entitlements revoked'],
-  ['deactivateSyntraUserThresholdPercent', 'Syntra logins deactivated'],
-  ['perEntitlementThresholdPercent', 'Holders of any one entitlement'],
-  ['personPopulationDropPercent', 'Drop in the person population'],
-] as const;
-
-const text = (value: unknown, fallback = '') =>
-  typeof value === 'string' ? value : fallback;
-
-/**
- * What to do about a skipped schedule, per the reason that was actually
- * recorded.
- *
- * `jobs.ts` writes three distinct reasons and they call for three different
- * things, so one sentence covering all of them is wrong for at least two:
- *
- * - `…is awaiting review (previewed|blocked)…` — there is a plan somebody has
- *   been asked to decide about. Reviewing it is what clears this.
- * - `…is still in progress (running|applying)…` — there is nothing to review.
- *   It clears when the run finishes, or after `STALE_RUN_MS`, at which point
- *   `previewProvisionRun` treats the row as the wreckage of a dead process and
- *   adopts it.
- * - `another run for target … is already in progress; this one did not start`
- *   — `recordSkip` on `ProvisionRunInFlightError`: two runs raced between the
- *   skip check and the create, and the partial unique index refused the second.
- *
- * Matched on the phrases `jobs.ts` and `run-service.ts` compose, not on the
- * status in the brackets, because the reason string is what the API returns and
- * the status is embedded in it.
- */
-function skipAdvice(reason: string | null): string {
-  if (reason !== null && reason.includes('is awaiting review')) {
-    return (
-      'A scheduled run does not start while a run is awaiting review, so that ' +
-      'the plan somebody was asked to approve is not superseded every night. ' +
-      'Review the outstanding run and this clears on the next schedule.'
-    );
-  }
-  if (reason !== null && reason.includes('already in progress')) {
-    return (
-      'Two runs raced for this target and the second did not start. There is ' +
-      'nothing to review and nothing to do: the next schedule runs normally.'
-    );
-  }
-  if (reason !== null && reason.includes('is still in progress')) {
-    return (
-      'There is nothing to review here: a run was still going when this ' +
-      'schedule fired. It clears when that run finishes — or six hours after ' +
-      'that run last showed any sign of progress, when a later run treats it ' +
-      'as the wreckage of a process that died and adopts it.'
-    );
-  }
-  return (
-    'A scheduled run did not start. The reason was not recorded, so the runs ' +
-    'for this target are the place to look.'
-  );
-}
-
-/**
- * Parses a connector document, or null.
- *
- * Used both to show a message under the box and to build the config, so the
- * form and the request can never disagree about whether the document is
- * readable.
- */
-function parseDocument(json: string): Record<string, unknown> | null {
-  if (json.trim() === '') return null;
-  try {
-    const parsed: unknown = JSON.parse(json);
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Configuring a REST API target.
- *
- * The shape of this form is the whole design decision. A connector document
- * is a hundred lines of JSON, and a screen that opened with an empty textarea
- * and a link to the documentation would be a screen that needs a manual to
- * use — which means it is the wrong screen. So the first control is a PICKER:
- * an administrator connecting Entra ID chooses Entra ID, and the document is
- * filled in for them, already correct.
- *
- * The textarea is still there, below, because a declarative connector whose
- * documents cannot be edited is a fixed integration wearing a general-purpose
- * name. It is just not the thing you meet first.
- */
-function HttpConnectorFields({
-  isNew,
-  documentKey,
-  documentJson,
-  credential,
-  onPick,
-  onDocumentChange,
-  onCredentialChange,
-}: {
-  isNew: boolean;
-  documentKey: string;
-  documentJson: string;
-  credential: string;
-  onPick(key: string, document: Record<string, unknown>): void;
-  onDocumentChange(value: string): void;
-  onCredentialChange(value: string): void;
-}) {
-  const { data } = useApiResource<{
-    documents: { key: string; name: string; document: Record<string, unknown> }[];
-  }>('/api/admin/targets/connector-documents');
-  const [showJson, setShowJson] = useState(false);
-
-  const documents = data?.documents ?? [];
-  const parsed = parseDocument(documentJson);
-  const unreadable = documentJson.trim() !== '' && parsed === null;
-
-  return (
-    <div className="sm:col-span-2 space-y-4">
-      <div>
-        <span className="font-medium text-ink">System</span>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {documents.map((entry) => (
-            <Button
-              key={entry.key}
-              type="button"
-              variant={documentKey === entry.key ? 'primary' : 'secondary'}
-              onClick={() => onPick(entry.key, entry.document)}
-            >
-              {entry.name}
-            </Button>
-          ))}
-        </div>
-      </div>
-
-      <Field
-        label="Client secret"
-        type="password"
-        autoComplete="new-password"
-        value={credential}
-        onChange={onCredentialChange}
-      />
-
-      <div>
-        <Button type="button" variant="ghost" onClick={() => setShowJson(!showJson)}>
-          {showJson ? 'Hide the connector document' : 'Edit the connector document'}
-        </Button>
-        {showJson && (
-          <>
-            <textarea
-              aria-label="Connector document"
-              value={documentJson}
-              onChange={(event) => onDocumentChange(event.target.value)}
-              spellCheck={false}
-              rows={20}
-              className="mt-2 w-full rounded-control border border-border-control bg-bg p-3 font-mono text-sm text-ink"
-            />
-            {unreadable && <Alert tone="danger">That is not valid JSON.</Alert>}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function formFrom(target: Target): Form {
-  const config = target.config ?? {};
-  const url = text(config.url, BLANK.url);
-  return {
-    name: target.name,
-    type:
-      target.type === 'scim2'
-        ? 'scim2'
-        : target.type === 'httpJson'
-          ? 'httpJson'
-          : 'activeDirectory',
-    documentKey: '',
-    documentJson:
-      config.document === undefined ? '' : JSON.stringify(config.document, null, 2),
-    baseUrl: text(config.baseUrl, BLANK.baseUrl),
-    url,
-    tlsMode:
-      config.tlsMode === 'starttls' || config.tlsMode === 'ldaps'
-        ? config.tlsMode
-        : url.trim().toLowerCase().startsWith('ldaps:')
-          ? 'ldaps'
-          : 'starttls',
-    rejectUnauthorized: config.rejectUnauthorized !== false,
-    bindDn: text(config.bindDn),
-    // Never populated. The vault holds it, the API never returns it, and an
-    // empty box on an edit form means "leave it alone".
-    bindPassword: '',
-    baseDn: text(config.baseDn),
-    entitlementSearchBase: text(config.entitlementSearchBase),
-    archiveContainer: text(config.archiveContainer),
-    schedule: target.schedule ?? '',
-    enabled: target.enabled,
-    autoApply: target.autoApply,
-    enforcementMode: target.enforcementMode,
-    preHireDays: String(target.preHireDays),
-    entitlementRevocationDelayDays: String(target.entitlementRevocationDelayDays),
-    disableGraceDays: String(target.disableGraceDays),
-    // Null means never, and an empty box is how "never" is typed.
-    archiveAfterDays:
-      target.archiveAfterDays === null ? '' : String(target.archiveAfterDays),
-    reenableWithoutConfirmationDays: String(
-      target.reenableWithoutConfirmationDays,
-    ),
-    renameEnabled: target.renameEnabled,
-    createAccountThresholdPercent: String(target.createAccountThresholdPercent),
-    disableAccountThresholdPercent: String(target.disableAccountThresholdPercent),
-    archiveAccountThresholdPercent: String(target.archiveAccountThresholdPercent),
-    revokeEntitlementThresholdPercent: String(
-      target.revokeEntitlementThresholdPercent,
-    ),
-    deactivateSyntraUserThresholdPercent: String(
-      target.deactivateSyntraUserThresholdPercent,
-    ),
-    perEntitlementThresholdPercent: String(target.perEntitlementThresholdPercent),
-    personPopulationDropPercent: String(target.personPopulationDropPercent),
-  };
-}
+import { HttpConnectorFields } from './TargetConnectorFields.js';
+import { TestReport, type TestResult } from './TargetTestReport.js';
+import {
+  BLANK,
+  OWNED_CONFIG_KEYS,
+  THRESHOLDS,
+  configFromForm,
+  formFrom,
+  skipAdvice,
+  validateNumbers,
+  type EnforcementMode,
+  type Form,
+  type Target,
+  type TargetType,
+  type TlsMode,
+} from './target-form.js';
 
 export function TargetDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -519,82 +97,6 @@ export function TargetDetailPage() {
     }
   }
 
-  function configFromForm(): Record<string, unknown> {
-    if (form.type === 'httpJson') {
-      // Parsed here so a malformed document is a message under the box rather
-      // than a 400 from a field the reader cannot see. `submit` checks the
-      // same thing first and stops; this is the shape the server gets.
-      return { document: parseDocument(form.documentJson) ?? {} };
-    }
-    if (form.type === 'scim2') {
-      return { ...extraConfig, baseUrl: form.baseUrl.trim() };
-    }
-    return {
-      ...extraConfig,
-      url: form.url.trim(),
-      tlsMode: form.tlsMode,
-      rejectUnauthorized: form.rejectUnauthorized,
-      bindDn: form.bindDn.trim(),
-      baseDn: form.baseDn.trim(),
-      entitlementSearchBase: form.entitlementSearchBase.trim(),
-      archiveContainer: form.archiveContainer.trim(),
-    };
-  }
-
-  /**
-   * The numbers, or the field that is not one.
-   *
-   * Checked here rather than left to the server because a `PATCH` carrying
-   * `NaN` serialises to `null` and comes back as a type error against a field
-   * nobody typed in. Every one of these is a percentage or a day count that
-   * the guard or the ladder reads.
-   */
-  function numbers(): { values: Record<string, number | null> } | { bad: string } {
-    const values: Record<string, number | null> = {};
-    const whole = (key: keyof Form, max: number) => {
-      const raw = String(form[key]).trim();
-      const value = Number(raw);
-      if (raw === '' || !Number.isInteger(value) || value < 0 || value > max) {
-        return `a whole number between 0 and ${max}`;
-      }
-      values[key] = value;
-      return null;
-    };
-
-    for (const [key] of THRESHOLDS) {
-      const bad = whole(key, 100);
-      if (bad) {
-        setInvalid({ [key]: bad });
-        return { bad: key };
-      }
-    }
-    for (const key of [
-      'preHireDays',
-      'entitlementRevocationDelayDays',
-      'disableGraceDays',
-      'reenableWithoutConfirmationDays',
-    ] as const) {
-      const bad = whole(key, key === 'preHireDays' ? 365 : 3650);
-      if (bad) {
-        setInvalid({ [key]: bad });
-        return { bad: key };
-      }
-    }
-    // Blank is `null`, which is what "never archive" is stored as.
-    const archive = form.archiveAfterDays.trim();
-    if (archive === '') {
-      values.archiveAfterDays = null;
-    } else {
-      const value = Number(archive);
-      if (!Number.isInteger(value) || value < 0 || value > 3650) {
-        setInvalid({ archiveAfterDays: 'a whole number of days, or blank for never' });
-        return { bad: 'archiveAfterDays' };
-      }
-      values.archiveAfterDays = value;
-    }
-    return { values };
-  }
-
   async function onTest() {
     setBusy('test');
     setInvalid({});
@@ -606,7 +108,7 @@ export function TargetDetailPage() {
           method: 'POST',
           body: JSON.stringify({
             type: form.type,
-            config: configFromForm(),
+            config: configFromForm(form, extraConfig),
             // Sent only when it was typed. Otherwise the saved target is
             // named and the server reads its own vault entry: the browser is
             // never handed the stored password to send back.
@@ -628,8 +130,12 @@ export function TargetDetailPage() {
     setProblem(null);
     setNotice(null);
 
-    const parsed = numbers();
+    const parsed = validateNumbers(form);
     if ('bad' in parsed) {
+      // Every bad field found in one pass, merged rather than replacing
+      // `invalid` - a form with three malformed thresholds shows three
+      // errors, not one at a time as each is fixed in turn.
+      setInvalid((prev) => ({ ...prev, ...parsed.bad }));
       setBusy(null);
       return;
     }
@@ -642,7 +148,7 @@ export function TargetDetailPage() {
           body: JSON.stringify({
             name: form.name.trim(),
             type: form.type,
-            config: configFromForm(),
+            config: configFromForm(form, extraConfig),
             bindPassword: form.bindPassword,
             schedule: form.schedule.trim() === '' ? null : form.schedule.trim(),
             autoApply: form.autoApply,
@@ -691,7 +197,7 @@ export function TargetDetailPage() {
         method: 'PATCH',
         body: JSON.stringify({
           name: form.name.trim(),
-          config: configFromForm(),
+          config: configFromForm(form, extraConfig),
           // Absent means unchanged. This is the only way to edit a target
           // without the stored credential making a round trip to a browser.
           ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
@@ -1050,6 +556,14 @@ export function TargetDetailPage() {
 
         <Panel
           title="Safety thresholds"
+          // A percent to confirm past, not the guard's other refusal.
+          // `guard.ts` also withholds confirmation when it cannot compute a
+          // number at all — no persons on an active contract, a collapsed
+          // population, a target with no accounts, a missing denominator —
+          // and that kind is never a number typed here, so it is never a
+          // field on this panel. The badge names which kind these seven are;
+          // the run's own screen is where the other kind, and why, is shown.
+          actions={<Status tone="neutral">Confirmable by number</Status>}
           bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
         >
           {THRESHOLDS.map(([key, label]) => (
@@ -1062,24 +576,6 @@ export function TargetDetailPage() {
               {...mark(key)}
             />
           ))}
-          {/*
-            No count and no list. `guard.ts` returns
-            `requiresConfirmation: false` from three places covering five
-            distinct classes — a threshold or a count that is not a number, no
-            persons on an active contract at all, a collapsed person
-            population, a target that returned no accounts, and any axis whose
-            denominator is missing — so "two of the guard's refusals" was wrong
-            about three of them, and any list written here goes on being wrong
-            as the guard grows. The distinction is what is stable.
-          */}
-          <p className="text-muted sm:col-span-2">
-            A run held only for being over one of these thresholds can be
-            applied by somebody who has read the numbers. A run the guard
-            refused because it could not compute the number at all cannot be
-            confirmed away by anybody: there is no number for a tick to mean
-            &ldquo;I have read&rdquo; about. Which of the two a run is, and
-            why, is on the run&apos;s own screen.
-          </p>
         </Panel>
       </div>
     </>

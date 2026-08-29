@@ -46,18 +46,31 @@ export function ProvisionRunsPage() {
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(0);
   const seen = useRef(0);
+  // Bumped on every `reload()`, so a response that lands after a newer one was
+  // already started - a rapid id change, or the poll timer firing on top of a
+  // manual Refresh - is dropped rather than overwriting the runs the later
+  // request already applied.
+  const requestSeq = useRef(0);
 
   const reload = () => {
+    const seq = ++requestSeq.current;
     void api<{ runs: Run[] }>(`/api/admin/targets/${id}/runs`)
       .then((body) => {
+        if (seq !== requestSeq.current) return;
         setRuns(body.runs);
         if (body.runs.length > seen.current) {
           seen.current = body.runs.length;
           setWaiting(0);
         }
       })
-      .catch(() => setProblem('The runs for this target could not be loaded.'))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (seq !== requestSeq.current) return;
+        setProblem('The runs for this target could not be loaded.');
+      })
+      .finally(() => {
+        if (seq !== requestSeq.current) return;
+        setLoading(false);
+      });
   };
   useEffect(reload, [id]);
 

@@ -8,7 +8,6 @@ import {
   Panel,
   Select,
   SkeletonRows,
-  Status,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
@@ -18,171 +17,19 @@ import {
   type AssignableFields,
   type MappingRule,
 } from './MappingEditor.js';
-
-type TlsMode = 'plain' | 'starttls' | 'ldaps';
-
-interface OwnedCounts {
-  users: number;
-  groups: number;
-  orgUnits: number;
-}
-
-interface SourceDetail {
-  id: string;
-  name: string;
-  type: string;
-  config: Record<string, unknown>;
-  schedule: string | null;
-  autoApply: boolean;
-  writebackEnabled: boolean;
-  writebackPassword: boolean;
-  writebackDisable: boolean;
-  writebackDelete: boolean;
-  enabled: boolean;
-  deactivationThresholdPercent: number;
-  lastRunAt: string | null;
-  owned: OwnedCounts;
-}
-
-interface TestResult {
-  ok: boolean;
-  message: string;
-  sampleCounts?: Record<'user' | 'group' | 'orgUnit', number>;
-  schema: { objectClasses: string[]; attributes: string[] } | null;
-}
-
-interface Form {
-  name: string;
-  url: string;
-  tlsMode: TlsMode;
-  rejectUnauthorized: boolean;
-  bindDn: string;
-  bindPassword: string;
-  userSearchBase: string;
-  groupSearchBase: string;
-  orgUnitSearchBase: string;
-  userFilter: string;
-  groupFilter: string;
-  orgUnitFilter: string;
-  anchorAttribute: string;
-  schedule: string;
-  enabled: boolean;
-  autoApply: boolean;
-  writebackEnabled: boolean;
-  writebackPassword: boolean;
-  writebackDisable: boolean;
-  writebackDelete: boolean;
-  deactivationThresholdPercent: string;
-}
-
-const BLANK: Form = {
-  name: '',
-  url: 'ldap://',
-  tlsMode: 'starttls',
-  rejectUnauthorized: true,
-  bindDn: '',
-  bindPassword: '',
-  userSearchBase: '',
-  groupSearchBase: '',
-  orgUnitSearchBase: '',
-  userFilter: '(objectClass=person)',
-  groupFilter: '(objectClass=group)',
-  orgUnitFilter: '(objectClass=organizationalUnit)',
-  anchorAttribute: 'objectGUID',
-  schedule: '',
-  enabled: true,
-  autoApply: false,
-  // Off for a new source too. Write-back is something somebody turns on
-  // having decided to, never something a source arrives holding.
-  writebackEnabled: false,
-  writebackPassword: false,
-  writebackDisable: false,
-  writebackDelete: false,
-  deactivationThresholdPercent: '10',
-};
-
-/**
- * What each directory flavour usually wants, so the common case needs no
- * typing. The mappings come from the server (one definition, shared with the
- * validator); the connection settings are here because they are the console's
- * own suggestion and nothing on the server defaults per flavour.
- *
- * The user filter is the reason this exists. The stored default,
- * `(objectClass=person)`, is right for OpenLDAP and wrong for Active
- * Directory, where `computer` derives from `person` and that filter matches
- * every machine account in the domain — one Syntra user per workstation. The
- * conventional Active Directory filter is offered instead, without changing
- * the server-side default that OpenLDAP relies on.
- */
-const FLAVOURS = {
-  activeDirectory: {
-    label: 'Active Directory',
-    anchorAttribute: 'objectGUID',
-    userFilter: '(&(objectCategory=person)(objectClass=user))',
-    groupFilter: '(objectClass=group)',
-  },
-  openLdap: {
-    label: 'OpenLDAP',
-    anchorAttribute: 'entryUUID',
-    userFilter: '(objectClass=inetOrgPerson)',
-    groupFilter: '(objectClass=groupOfNames)',
-  },
-} as const;
-
-type Flavour = keyof typeof FLAVOURS;
-
-/** Config keys the form owns. Anything else on a saved source is carried through. */
-const OWNED_CONFIG_KEYS = [
-  'url',
-  'tlsMode',
-  'rejectUnauthorized',
-  'bindDn',
-  'userSearchBase',
-  'groupSearchBase',
-  'orgUnitSearchBase',
-  'userFilter',
-  'groupFilter',
-  'orgUnitFilter',
-  'anchorAttribute',
-];
-
-const text = (value: unknown, fallback = '') =>
-  typeof value === 'string' ? value : fallback;
-
-function formFrom(source: SourceDetail): Form {
-  const config = source.config ?? {};
-  const url = text(config.url, BLANK.url);
-  return {
-    name: source.name,
-    url,
-    // The same fallback the connector applies to a source saved before the
-    // mode existed, so the form shows the transport actually in use rather
-    // than a default that would change it on the next save.
-    tlsMode:
-      (config.tlsMode as TlsMode | undefined) ??
-      (url.trim().toLowerCase().startsWith('ldaps:') ? 'ldaps' : 'plain'),
-    rejectUnauthorized: config.rejectUnauthorized !== false,
-    bindDn: text(config.bindDn),
-    // Never populated. The vault holds it, the API never returns it, and an
-    // empty box on an edit form means "leave it alone".
-    bindPassword: '',
-    userSearchBase: text(config.userSearchBase),
-    groupSearchBase: text(config.groupSearchBase),
-    orgUnitSearchBase: text(config.orgUnitSearchBase),
-    userFilter: text(config.userFilter, BLANK.userFilter),
-    groupFilter: text(config.groupFilter, BLANK.groupFilter),
-    orgUnitFilter: text(config.orgUnitFilter, BLANK.orgUnitFilter),
-    anchorAttribute: text(config.anchorAttribute, BLANK.anchorAttribute),
-    schedule: source.schedule ?? '',
-    enabled: source.enabled,
-    autoApply: source.autoApply,
-    writebackEnabled: source.writebackEnabled,
-    writebackPassword: source.writebackPassword,
-    writebackDisable: source.writebackDisable,
-    writebackDelete: source.writebackDelete,
-    deactivationThresholdPercent: String(source.deactivationThresholdPercent),
-  };
-}
+import { TestReport, type TestResult } from './SourceTestReport.js';
+import {
+  BLANK,
+  FLAVOURS,
+  OWNED_CONFIG_KEYS,
+  configFromForm,
+  formFrom,
+  type Flavour,
+  type Form,
+  type OwnedCounts,
+  type SourceDetail,
+  type TlsMode,
+} from './source-form.js';
 
 export function SourceDetailPage() {
   const { id } = useParams();
@@ -292,25 +139,6 @@ export function SourceDetailPage() {
     }));
   }
 
-  function configFromForm(): Record<string, unknown> {
-    return {
-      ...extraConfig,
-      url: form.url.trim(),
-      tlsMode: form.tlsMode,
-      rejectUnauthorized: form.rejectUnauthorized,
-      bindDn: form.bindDn.trim(),
-      userSearchBase: form.userSearchBase.trim(),
-      groupSearchBase: form.groupSearchBase.trim(),
-      ...(form.orgUnitSearchBase.trim()
-        ? { orgUnitSearchBase: form.orgUnitSearchBase.trim() }
-        : {}),
-      userFilter: form.userFilter.trim(),
-      groupFilter: form.groupFilter.trim(),
-      orgUnitFilter: form.orgUnitFilter.trim(),
-      anchorAttribute: form.anchorAttribute.trim(),
-    };
-  }
-
   function fail(cause: unknown, fallback: string) {
     const marked = fieldErrors(cause);
     setInvalid(marked);
@@ -333,7 +161,7 @@ export function SourceDetailPage() {
         await api<TestResult>('/api/admin/sources/test', {
           method: 'POST',
           body: JSON.stringify({
-            config: configFromForm(),
+            config: configFromForm(form, extraConfig),
             // Sent only when it was typed. Otherwise the saved source is
             // named and the server reads its own vault entry: the browser is
             // never handed the stored password to send back.
@@ -370,7 +198,7 @@ export function SourceDetailPage() {
           method: 'POST',
           body: JSON.stringify({
             name: form.name.trim(),
-            config: configFromForm(),
+            config: configFromForm(form, extraConfig),
             bindPassword: form.bindPassword,
             ...(form.schedule.trim() ? { schedule: form.schedule.trim() } : {}),
             autoApply: form.autoApply,
@@ -418,7 +246,7 @@ export function SourceDetailPage() {
         method: 'PATCH',
         body: JSON.stringify({
           name: form.name.trim(),
-          config: configFromForm(),
+          config: configFromForm(form, extraConfig),
           // Absent means unchanged. This is the only way to edit a source
           // without the stored credential making a round trip to a browser.
           ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
@@ -828,74 +656,5 @@ export function SourceDetailPage() {
         </Link>
       </div>
     </>
-  );
-}
-
-/**
- * What the directory answered, before anything is saved.
- *
- * The counts say the connection works and the search bases are pointed
- * somewhere real; the object classes and attributes are what the spec's first
- * success criterion asks for, and are what an administrator needs in front of
- * them while filling in the mapping table below.
- */
-function TestReport({ result }: { result: TestResult }) {
-  if (!result.ok) {
-    return (
-      <Alert tone="danger" title="Could not connect">
-        {result.message}
-      </Alert>
-    );
-  }
-
-  const counts = result.sampleCounts;
-  return (
-    <Panel title="Connection test">
-      <div className="space-y-4 p-4">
-        <p className="flex flex-wrap items-center gap-2">
-          <Status tone="active">Connected</Status>
-          <span className="text-muted">{result.message}</span>
-        </p>
-
-        {counts && (
-          <p className="text-ink">
-            Found{' '}
-            <strong className="font-semibold tabular-nums">{counts.user}</strong>{' '}
-            users,{' '}
-            <strong className="font-semibold tabular-nums">
-              {counts.group}
-            </strong>{' '}
-            groups and{' '}
-            <strong className="font-semibold tabular-nums">
-              {counts.orgUnit}
-            </strong>{' '}
-            organizational units in the configured search bases.
-          </p>
-        )}
-
-        {result.schema && (
-          <>
-            <Discovered
-              title="Object classes it returned"
-              values={result.schema.objectClasses}
-            />
-            <Discovered
-              title="Attributes it returned"
-              values={result.schema.attributes}
-            />
-          </>
-        )}
-      </div>
-    </Panel>
-  );
-}
-
-function Discovered({ title, values }: { title: string; values: string[] }) {
-  if (values.length === 0) return null;
-  return (
-    <div>
-      <h3 className="font-medium text-ink">{title}</h3>
-      <p className="mt-1 text-muted">{values.join(', ')}</p>
-    </div>
   );
 }

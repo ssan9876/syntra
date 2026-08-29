@@ -3,6 +3,7 @@ import { withTenant } from '@syntra/db';
 import {
   PERMISSIONS,
   WEBHOOK_EVENT_GROUP_KEYS,
+  WEBHOOK_MAX_ATTEMPTS,
   assignRole,
   createRole,
   createUser,
@@ -151,6 +152,78 @@ describe('POST /api/admin/webhooks', () => {
     );
     expect(event).not.toBeNull();
     expect(event!.payload).toMatchObject({ url: anEndpoint.url });
+  });
+});
+
+describe('GET /api/admin/webhooks — health', () => {
+  it('reports pending and failing counts per endpoint, and the latest failure', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    const mine = (await call('POST', '/api/admin/webhooks', cookie, { ...anEndpoint, events: [] }))
+      .json().endpoint;
+    const other = (
+      await call('POST', '/api/admin/webhooks', cookie, {
+        ...anEndpoint,
+        name: 'Other',
+        // Not subscribed to `automate-stage-opened` (that is the `approvals`
+        // group; this endpoint asks only for `fulfilment`), so this endpoint
+        // stays untouched — the control that proves the health query is
+        // grouped per endpoint rather than summed across all of them.
+        events: ['fulfilment'],
+      })
+    ).json().endpoint;
+
+    // One `enqueueOutbox` call per event: drafts in the same call collapse
+    // into a single webhook delivery (one event addressed to several
+    // people), so three distinct deliveries need three separate calls.
+    for (const to of ['a@example.com', 'b@example.com', 'c@example.com']) {
+      await withTenant(ctx.tenantId, (tx) =>
+        enqueueOutbox(tx, [
+          { template: 'automate-stage-opened', to, vars: {}, requestId: null, userId: null },
+        ]),
+      );
+    }
+
+    const rows = await withTenant(ctx.tenantId, (tx) =>
+      tx.webhookDelivery.findMany({ where: { endpointId: mine.id }, orderBy: { createdAt: 'asc' } }),
+    );
+    // One still pending, one that has exhausted its retries with a recorded
+    // error, one delivered (and so excluded from both counts).
+    const older = new Date('2026-08-20T00:00:00Z');
+    const newer = new Date('2026-08-21T00:00:00Z');
+    await withTenant(ctx.tenantId, (tx) =>
+      Promise.all([
+        tx.webhookDelivery.update({
+          where: { id: rows[0]!.id },
+          data: { attempts: WEBHOOK_MAX_ATTEMPTS, lastError: 'connection refused', createdAt: older },
+        }),
+        tx.webhookDelivery.update({
+          where: { id: rows[1]!.id },
+          data: { attempts: WEBHOOK_MAX_ATTEMPTS, lastError: 'timed out', createdAt: newer },
+        }),
+        tx.webhookDelivery.update({
+          where: { id: rows[2]!.id },
+          data: { deliveredAt: new Date() },
+        }),
+      ]),
+    );
+
+    const listed = await call('GET', '/api/admin/webhooks', cookie);
+    const endpoints = listed.json().endpoints as {
+      id: string;
+      pending: number;
+      failing: number;
+      lastFailureAt: string | null;
+    }[];
+    const mineHealth = endpoints.find((e) => e.id === mine.id)!;
+    const otherHealth = endpoints.find((e) => e.id === other.id)!;
+
+    expect(mineHealth.pending).toBe(0);
+    expect(mineHealth.failing).toBe(2);
+    expect(mineHealth.lastFailureAt).toBe(newer.toISOString());
+    expect(otherHealth.pending).toBe(0);
+    expect(otherHealth.failing).toBe(0);
+    expect(otherHealth.lastFailureAt).toBeNull();
   });
 });
 

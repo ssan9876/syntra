@@ -1,4 +1,6 @@
 import { NavLink } from 'react-router-dom';
+import { useT } from '../i18n/LocaleProvider.js';
+import type { MessageKey } from '../i18n/catalog.js';
 
 /**
  * How somebody reaches the rest of the portal.
@@ -22,18 +24,19 @@ import { NavLink } from 'react-router-dom';
  * approval means they never learn the portal can do it, and each of these
  * screens already explains itself when empty.
  */
-const ITEMS = [
-  { to: '/', label: 'Applications', end: true },
-  { to: '/catalog', label: 'Request access', end: false },
-  { to: '/requests', label: 'My requests', end: false },
-  { to: '/access', label: 'My access', end: false },
-  { to: '/approvals', label: 'Approvals', end: false },
-  { to: '/managed', label: 'Managed by me', end: false },
-  { to: '/tasks', label: 'Tasks', end: false },
-  { to: '/govern/reviews', label: 'Reviews', end: false },
+const ITEMS: { to: string; key: MessageKey; end: boolean }[] = [
+  { to: '/', key: 'nav.applications', end: true },
+  { to: '/catalog', key: 'nav.catalog', end: false },
+  { to: '/requests', key: 'nav.requests', end: false },
+  { to: '/access', key: 'nav.access', end: false },
+  { to: '/approvals', key: 'nav.approvals', end: false },
+  { to: '/managed', key: 'nav.managed', end: false },
+  { to: '/tasks', key: 'nav.tasks', end: false },
+  { to: '/govern/reviews', key: 'nav.reviews', end: false },
 ];
 
 export function PortalNav() {
+  const t = useT();
   return (
     <nav
       aria-label="Portal"
@@ -59,7 +62,7 @@ export function PortalNav() {
                 ].join(' ')
               }
             >
-              {item.label}
+              {t(item.key)}
             </NavLink>
           </li>
         ))}

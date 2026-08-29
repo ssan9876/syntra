@@ -71,7 +71,7 @@ with nobody behind it are all representable.
 caller is, so policy and auditing live in one place instead of being
 reimplemented per protocol. Sign-in, elevation to the console and every
 application launch all go through it, and in Access II every protocol adapter
-will too.
+does too.
 
 ## Running it
 
@@ -82,7 +82,7 @@ install looks clean until nothing can reach the database.
 
 ```bash
 pnpm install
-pnpm db:up                                  # PostgreSQL 16, MailDev, OpenLDAP
+pnpm db:up                                  # PostgreSQL 16 (+ a tmpfs postgres-test on :5433), MailDev, OpenLDAP, SFTP and the privileged Samba domain controller
 
 # BEFORE db:migrate, both of them. Prisma's CLI reads `.env` from its own
 # working directory, and pnpm runs `migrate` with the cwd set to packages/db,
@@ -107,6 +107,12 @@ pnpm dev                                    # api on :3000, web on :5173
 ```
 
 Then open **http://acme.localhost:5173** and sign in as `admin`.
+
+`pnpm db:reset` empties whichever database `DATABASE_URL` names. It refuses
+anything that is not a scratch `syntra_test_*` database unless you name the
+one you mean with `SYNTRA_ALLOW_RESET`, because the development database and
+the lab's are both called `syntra` and nothing about the connection string
+tells them apart: `SYNTRA_ALLOW_RESET=syntra pnpm db:reset && pnpm seed`.
 
 ### Reaching an instance by more than one name
 
@@ -172,9 +178,22 @@ refuses to start and says which of the two problems it is — a wrong path
 otherwise produces a server that looks healthy and 404s every page, which reads
 as a routing bug for as long as it takes somebody to check.
 
-Still to do here: the API runs from TypeScript source through `tsx` rather than
-a compiled bundle, and there is no container image or service unit in this
-repository.
+The API still runs from TypeScript source through `tsx` rather than a compiled
+bundle — in development and inside `apps/api/Dockerfile`, whose runtime stage
+runs `pnpm --filter @syntra/db migrate` and then `tsx src/server.ts` rather
+than building JavaScript ahead of time.
+
+A container path does exist, at the repository root and separate from
+`infra/docker-compose.yml`. `docker-compose.yml` builds `apps/api/Dockerfile`
+and `apps/web/Dockerfile`: a `postgres` container, the API with a health check
+and `TRUST_PROXY`, `POSTGRES_PASSWORD`, `PUBLIC_URL`, `SESSION_SECRET`,
+`MASTER_KEY`, `SMTP_URL` and `SYNTRA_APP_PASSWORD` all required and unset by
+default, and an nginx-fronted web image whose `apps/web/nginx.conf` proxies
+`/api/`, `/saml/`, `/oidc/` and `/federation/` to it. `docs/lab/systemd/` holds
+the service units the lab itself runs under — `syntra.service`, which still
+runs the API from source with `tsx` rather than either image, and
+`syntra-infra.service`, which brings up `infra/docker-compose.yml` for the
+database and directory fixtures the lab depends on.
 
 ### Continuous integration
 
@@ -188,20 +207,27 @@ settings and the Samba container needs a domain provisioned; both are already
 expressed in that file, and a second, drifting copy of it in YAML is how CI
 starts testing something the developers do not run.
 
-**One known flake, deliberately not retried.** Under load a handful of
-`resetDatabase()` hooks time out at 30 seconds and take their files with them.
-The failing set moves between runs and every one of them passes in isolation —
-seen roughly one run in two on an 8-worker machine. A `Hook timed out in
-30000ms` in the test job is that, not your change. It is written up, with the
-arithmetic and three candidate fixes, in
-`docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md`.
+**A known flake, fixed by capping the worker count.** Too many vitest workers
+against one PostgreSQL server made a handful of `resetDatabase()` hooks time
+out at 30 seconds and take their files with them — `testWorkerCount()`'s old
+`cores - 1` default put seven workers on an eight-core box, and that
+oversubscribed the server badly enough to crash a backend roughly one run in
+two. The fix is fewer workers, forced through `SYNTRA_TEST_WORKERS`: four on
+an eight-core machine (0 crashes, 0 hook timeouts across three measured runs),
+two in this job specifically, because GitHub's standard runner is two vCPUs
+and four workers there trips a separate, hardcoded 60-second vitest RPC
+heartbeat timeout, unrelated to `hookTimeout`. The arithmetic, the RPC timeout,
+and why the number differs between a workstation and this runner are written
+up in `docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md`.
 
 ### Tests
 
 ```bash
 pnpm test                       # domain, API and database integration tests
+pnpm test:watch                 # the same suite, watching
 pnpm --filter @syntra/web test  # web component tests
 pnpm e2e                        # browser tests against a running stack
+pnpm typecheck                  # tsc -b, no emit
 ```
 
 The integration tests run against a real PostgreSQL in Docker. They are not
@@ -300,6 +326,23 @@ the split a reader previewing twice around one of that file's mutations saw an
 object appear or vanish and proposed a `create_user` or a `deactivate_user` for
 it. A test that needs to mutate the directory gets a subtree of its own and
 scopes its source to it.
+
+### SFTP source integration test
+
+The HR feed connector is unit-tested against a string for everything except
+one property a fake cannot demonstrate: that a pinned host key which does not
+match refuses the connection. That one property is checked against a real
+server, skipped unless asked for:
+
+```bash
+pnpm sftp:up && pnpm sftp:wait
+SFTP_INTEGRATION=1 pnpm vitest run packages/connectors/src/person/sftp
+```
+
+`pnpm db:up` already starts this container along with everything else in
+`infra/docker-compose.yml`; `sftp:up` exists to bring up only this one, and
+`sftp:wait` polls the port so the test does not race the container's start.
+`SFTP_PORT` overrides the port the test connects to if 2222 is taken.
 
 ### Connecting a directory source
 
@@ -456,8 +499,9 @@ about either job.
 **Second factors are TOTP and WebAuthn, with single-use recovery codes as the
 fallback.** A user enrols their own at `/security`. An administrator can clear
 somebody's factor when they lose a phone, over
-`DELETE /api/admin/users/:id/factors/:type` — this slice ships the endpoint and
-its tests, but no console screen for it yet.
+`DELETE /api/admin/users/:id/factors/:type`, and the account detail page has a
+button for each enrolled factor that calls it
+(`apps/web/src/pages/admin/AccountDetailPage.tsx`).
 
 **A policy that requires a factor the user does not hold offers enrolment
 rather than refusing.** The password has already been accepted at that point;
@@ -734,14 +778,15 @@ the setting and the application, and the server logs it — but there is no
 console's audit screen. A service provider that has stopped signing correctly
 is visible in the API logs and nowhere else.
 
-**The console has screens for none of this.** Protocol configuration, metadata
-import, OIDC client registration, claim mappings, upstream identity providers
-and routing (`federate`) rules are all API-only —
-`/api/admin/applications/:id/saml`, `/applications/:id/oidc`,
-`/applications/:id/claims`, `/api/admin/upstreams` and
+**The console has screens for protocol configuration and claims, not for
+upstreams or routing.** `ApplicationSso.tsx` covers SAML and OIDC configuration
+and metadata import, and `ApplicationClaims.tsx` covers claim mappings —
+against `/api/admin/applications/:id/saml`, `/applications/:id/oidc` and
+`/applications/:id/claims`. Upstream identity providers and routing
+(`federate`) rules are still API-only, at `/api/admin/upstreams` and
 `/api/admin/policy/rules`. The policy screen writes tenant-wide rules and does
-not offer the application scope, the upstream, or the login domains. Everything
-is reachable and tested; none of it has a form yet.
+not offer the application scope, the upstream, or the login domains. Both are
+reachable and tested; neither has a form yet.
 
 **Signed metadata, back-channel logout, a consent screen and a scheduled sweep
 of expired artifacts are all out.** The identity-provider metadata document is

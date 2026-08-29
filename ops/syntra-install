@@ -29,9 +29,6 @@
 set -euo pipefail
 
 SRC="${SYNTRA_SRC:-/root/syntra}"
-ROOT="${SYNTRA_ROOT:-/opt/syntra}"
-SERVICE="${SYNTRA_SERVICE:-syntra}"
-UNIT="/etc/systemd/system/$SERVICE.service"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
@@ -44,16 +41,34 @@ DRY=0
 #
 # It must come BEFORE this script's own say/run/die, because syntra-update
 # defines a `die` that writes an update status file -- which is exactly wrong
-# for a conversion that has not started an update. It does NOT need to come
-# before SRC/ROOT/SERVICE/UNIT/DRY above -- sourcing also evaluates
-# syntra-update's OWN top-level config vars (ROOT, SERVICE, ...) into this
-# script's scope, and those are what get assigned here a few lines down.
+# for a conversion that has not started an update.
+#
+# It also means ROOT and SERVICE below come FROM the sourced file rather than
+# being assigned here a second time. syntra-update reads them from
+# SYNTRA_ROOT/SYNTRA_SERVICE with the same defaults this script used to
+# duplicate -- and a second assignment here was not redundant by accident,
+# it was two definitions of "where does this install live" that a future edit
+# to either file could silently make disagree.
 SYNTRA_UPDATE_SOURCE_ONLY=1 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/syntra-update"
 unset SYNTRA_UPDATE_SOURCE_ONLY
 
+UNIT="/etc/systemd/system/$SERVICE.service"
+
 say()  { echo "==> $*"; }
-run()  { if [ "$DRY" -eq 1 ]; then echo "    would: $*"; else eval "$@"; fi; }
+# "$@", not `eval "$@"`. Every caller below passes real, separate arguments --
+# eval re-parsed them through the shell a second time, which is exactly the
+# hazard the sed fix below exists to avoid: a path containing a shell
+# metacharacter (a space is enough) would be re-split or re-interpreted
+# instead of reaching the command as the single argument it was given.
+run()  { if [ "$DRY" -eq 1 ]; then echo "    would: $*"; else "$@"; fi; }
 die()  { echo "error: $*" >&2; exit 1; }
+
+# Escapes a string for safe use on the REPLACEMENT side of `sed 's#...#...#'`,
+# where `#` is the delimiter. `\` and `&` are sed metacharacters there (`&`
+# re-inserts the whole match, `\N` a backreference) and an unescaped `#` would
+# end the substitution early -- and every value this is used on is a
+# filesystem path, not something free of any of them by assumption.
+sed_escape_replacement() { printf '%s' "$1" | sed 's/[\&#]/\\&/g'; }
 
 # --- checks before anything moves -------------------------------------------
 
@@ -67,10 +82,9 @@ if [ -e "$ROOT/current" ]; then
 fi
 
 # The version being converted. An in-place tree has no RELEASE.json, so it is
-# `dev` -- and that is correct and important: the console will refuse to update
-# it and point at deploy.sh until a real release is installed over it. Naming
-# it 0.0.0 here would let the updater compare against a number that stands for
-# nothing.
+# `dev` -- and that is correct and important: the console will refuse to
+# update it until a real release is installed over it. Naming it 0.0.0 here
+# would let the updater compare against a number that stands for nothing.
 VERSION="dev"
 if [ -f "$SRC/RELEASE.json" ]; then
   VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SRC/RELEASE.json" | head -1)
@@ -85,22 +99,22 @@ FREE=$(df -k "$(dirname "$ROOT")" | tail -1 | awk '{print $4}')
 # --- do it ------------------------------------------------------------------
 
 say "creating the layout"
-run "mkdir -p '$ROOT/releases' '$ROOT/shared/backups' '$ROOT/bin' '$ROOT/var'"
+run mkdir -p "$ROOT/releases" "$ROOT/shared/backups" "$ROOT/bin" "$ROOT/var"
 
 say "copying the tree to releases/$VERSION"
 # COPY, not move. The old tree stays put so that recovery from a bad
 # conversion is pointing systemd back at it, which is a one-line change
 # somebody can make over a serial console.
-run "cp -a '$SRC' '$ROOT/releases/$VERSION'"
+run cp -a "$SRC" "$ROOT/releases/$VERSION"
 
 say "moving .env into shared/"
 # The configuration is the one thing that must NOT be versioned: an update
 # would replace it and a rollback would revert it, and either is how a
 # deployment loses its master key. Moved once, then symlinked into every
 # release.
-run "cp -a '$SRC/.env' '$ROOT/shared/.env'"
-run "rm -f '$ROOT/releases/$VERSION/.env'"
-run "ln -sfn '$ROOT/shared/.env' '$ROOT/releases/$VERSION/.env'"
+run cp -a "$SRC/.env" "$ROOT/shared/.env"
+run rm -f "$ROOT/releases/$VERSION/.env"
+run ln -sfn "$ROOT/shared/.env" "$ROOT/releases/$VERSION/.env"
 
 # WEB_ROOT follows the install; nothing else in .env does.
 #
@@ -112,7 +126,12 @@ run "ln -sfn '$ROOT/shared/.env' '$ROOT/releases/$VERSION/.env'"
 OLD_WEB_ROOT=$(env_value WEB_ROOT "$SRC/.env")
 if NEW_WEB_ROOT=$(rewritten_web_root "$OLD_WEB_ROOT" "$SRC" "$ROOT"); then
   say "rewriting WEB_ROOT: $OLD_WEB_ROOT -> $NEW_WEB_ROOT"
-  run "sed -i 's#^\([[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}WEB_ROOT[[:space:]]*=\).*#\1$NEW_WEB_ROOT#' '$ROOT/shared/.env'"
+  # NEW_WEB_ROOT is a filesystem path built from $ROOT above, not a literal
+  # this script controls end to end -- escaped before it goes into the
+  # replacement side of the sed substitution, so a `#`, `&` or `\` in it (an
+  # unusual but legal path character) cannot end the substitution early or
+  # be read as a sed backreference.
+  run sed -i "s#^\([[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}WEB_ROOT[[:space:]]*=\).*#\1$(sed_escape_replacement "$NEW_WEB_ROOT")#" "$ROOT/shared/.env"
 elif [ -n "$OLD_WEB_ROOT" ]; then
   say "leaving WEB_ROOT as it is ($OLD_WEB_ROOT) -- it is not inside $SRC"
 else
@@ -120,25 +139,27 @@ else
 fi
 
 say "pointing current at releases/$VERSION"
-run "ln -sfn '$ROOT/releases/$VERSION' '$ROOT/current'"
+run ln -sfn "$ROOT/releases/$VERSION" "$ROOT/current"
 
 say "installing the updater"
 if [ -f "$ROOT/releases/$VERSION/ops/syntra-update" ]; then
-  run "install -m 0755 '$ROOT/releases/$VERSION/ops/syntra-update' '$ROOT/bin/syntra-update'"
+  run install -m 0755 "$ROOT/releases/$VERSION/ops/syntra-update" "$ROOT/bin/syntra-update"
 else
   say "  (no ops/syntra-update in this tree -- deploy a release that has one)"
 fi
 
 say "rewriting $UNIT"
-run "cp -a '$UNIT' '$UNIT.pre-release-layout'"
+run cp -a "$UNIT" "$UNIT.pre-release-layout"
 # WorkingDirectory follows the symlink, and systemd resolves it at start --
 # so a restart after a swap picks up the new release with no unit change.
-run "sed -i 's#^WorkingDirectory=.*#WorkingDirectory=$ROOT/current/apps/api#' '$UNIT'"
-run "sed -i 's#--env-file-if-exists=[^ ]*#--env-file-if-exists=$ROOT/shared/.env#' '$UNIT'"
+# $ROOT is configuration (SYNTRA_ROOT), not a literal this script controls,
+# so it goes through the same replacement-side escaping as WEB_ROOT above.
+run sed -i "s#^WorkingDirectory=.*#WorkingDirectory=$(sed_escape_replacement "$ROOT/current/apps/api")#" "$UNIT"
+run sed -i "s#--env-file-if-exists=[^ ]*#--env-file-if-exists=$(sed_escape_replacement "$ROOT/shared/.env")#" "$UNIT"
 
 say "restarting $SERVICE"
-run "systemctl daemon-reload"
-run "systemctl restart '$SERVICE'"
+run systemctl daemon-reload
+run systemctl restart "$SERVICE"
 
 if [ "$DRY" -eq 1 ]; then
   say "dry run: nothing was changed"
@@ -151,33 +172,32 @@ say "waiting for it to come back"
 # in "it did not become ready" on an install that was ready the whole time.
 PORT_VALUE=$(env_value PORT "$ROOT/shared/.env")
 [ -n "$PORT_VALUE" ] || PORT_VALUE=3000
-for _ in $(seq 1 30); do
-  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
-    "http://127.0.0.1:$PORT_VALUE/health/ready" || echo 000)
-  if [ "$code" = "200" ]; then
-    say "ready. Running from $ROOT/current"
+# ready()/wait_ready() and READY_TIMEOUT came in with the source of
+# syntra-update above -- reused rather than re-written, so this and the
+# updater's own post-switch check are one poll loop, not two that could drift.
+READY_URL="http://127.0.0.1:$PORT_VALUE/health/ready"
+if wait_ready; then
+  say "ready. Running from $ROOT/current"
+  echo
+  echo "The old tree is untouched at $SRC."
+  echo "If anything is wrong: restore $UNIT.pre-release-layout, daemon-reload, restart."
+  echo
+  if [ "$VERSION" = dev ]; then
+    # This install is `dev` and the console will say so and refuse to
+    # update it, which is correct -- but it means the Updates page cannot
+    # take it to its first release either. This is the one-time command
+    # that can, run by the person who knows what is in the tree it
+    # replaces. Printed only for a `dev` conversion: an install that
+    # already reports a real version has already had its first release,
+    # and `adoption_allowed` refuses `--adopt` there anyway.
+    echo "This install reports itself as \"$VERSION\". A working tree cannot be updated"
+    echo "from the console -- it would overwrite uncommitted work. To take it to its"
+    echo "first release, once, by hand:"
     echo
-    echo "The old tree is untouched at $SRC."
-    echo "If anything is wrong: restore $UNIT.pre-release-layout, daemon-reload, restart."
-    echo
-    if [ "$VERSION" = dev ]; then
-      # This install is `dev` and the console will say so and refuse to
-      # update it, which is correct -- but it means the Updates page cannot
-      # take it to its first release either. This is the one-time command
-      # that can, run by the person who knows what is in the tree it
-      # replaces. Printed only for a `dev` conversion: an install that
-      # already reports a real version has already had its first release,
-      # and `adoption_allowed` refuses `--adopt` there anyway.
-      echo "This install reports itself as \"$VERSION\". A working tree cannot be updated"
-      echo "from the console -- it would overwrite uncommitted work. To take it to its"
-      echo "first release, once, by hand:"
-      echo
-      echo "    SYNTRA_RELEASE_TOKEN=… $ROOT/bin/syntra-update --adopt <version>"
-    fi
-    exit 0
+    echo "    SYNTRA_RELEASE_TOKEN=… $ROOT/bin/syntra-update --adopt <version>"
   fi
-  sleep 2
-done
+  exit 0
+fi
 
 # Deliberately NOT rolled back automatically. This is a person at a keyboard
 # running a one-time conversion, not an unattended update at 2am, and the

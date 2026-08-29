@@ -1,16 +1,18 @@
 import { useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Alert, Button, Field } from '@syntra/ui';
-import { ApiError } from '../session/api.js';
+import { ApiError, isRateLimited } from '../session/api.js';
 import { useSession } from '../session/SessionProvider.js';
 import { AppShell } from '../components/AppShell.js';
 import { routeFor, storeChallenge } from '../mfa/challenge-store.js';
+import { useT } from '../i18n/LocaleProvider.js';
 
 /**
  * Elevation is a fresh authentication, not a mode switch, so the screen asks
  * for the password again and says plainly why.
  */
 export function Elevate() {
+  const t = useT();
   const { elevate } = useSession();
   const navigate = useNavigate();
   const location = useLocation();
@@ -78,8 +80,8 @@ export function Elevate() {
         setError(
           'This account holds no administrative roles. Ask an administrator to grant you one.',
         );
-      } else if (cause instanceof ApiError && cause.problem.status === 429) {
-        setError('Too many attempts. Wait a minute and try again.');
+      } else if (isRateLimited(cause)) {
+        setError(t('common.rate_limited'));
       } else {
         setError('That password is incorrect.');
       }

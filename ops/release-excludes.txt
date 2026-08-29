@@ -1,0 +1,4 @@
+:(exclude)docs/**
+:(exclude)e2e/**
+:(exclude).github/**
+:(exclude)*.md

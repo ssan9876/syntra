@@ -9,7 +9,7 @@ import type {
 } from '../types.js';
 import { withProvenanceMarker } from '../ad/provenance.js';
 import { scim2TargetConfigSchema, type ResolvedScim2TargetConfig, type Scim2TargetConfig } from './config.js';
-import { scimRequest } from './client.js';
+import { scimRequest, ScimMalformedBodyError } from './client.js';
 
 type Config = Scim2TargetConfig & { bearerToken: string };
 type Resolved = ResolvedScim2TargetConfig & { bearerToken: string };
@@ -285,6 +285,9 @@ export const scimTargetConnector: TargetConnector<Config> = {
           throw new Error(`unsupported operation for the SCIM connector: ${(op as { op: string }).op}`);
       }
     } catch (cause) {
+      if (cause instanceof ScimMalformedBodyError) {
+        return { ok: false, message: cause.message, failure: classifyFailure(cause.status) };
+      }
       return {
         ok: false,
         message: cause instanceof Error ? cause.message : String(cause),

@@ -55,10 +55,10 @@ take the rule off again.
 
 **`SYNTRA_ALLOW_RESET=syntra pnpm db:reset && pnpm seed` is required before every run of the MFA spec,
 not merely advisable.** The factors enrolled during the run are not cleaned up
-— this slice ships no console screen for clearing somebody's factor, only the
-`DELETE /api/admin/users/:id/factors/:type` endpoint — so a second run finds
-`jdoe` already holding one and the forced-enrolment test fails at its first
-assertion.
+— the account detail page can remove one, over the same
+`DELETE /api/admin/users/:id/factors/:type` endpoint, but nothing in the spec
+calls it — so a second run finds `jdoe` already holding one and the
+forced-enrolment test fails at its first assertion.
 
 **One test waits up to 31 seconds.** Confirming a TOTP enrolment sets the
 replay watermark to the step it happened in, so the next code is refused until
