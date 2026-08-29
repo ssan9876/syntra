@@ -1,5 +1,6 @@
 export * from './config.js';
 export * from './cookie-security.js';
+export * from './storable-text.js';
 export * from './net/outbound.js';
 export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
@@ -195,6 +196,7 @@ export type {
 // NEITHER side silently. Nothing in these two modules collides today.
 export * from './provision/target-service.js';
 export * from './provision/placement-service.js';
+export * from './provision/adoption-service.js';
 export * from './provision/entitlement-service.js';
 // Grepped as well: `previewProvisionRun`, `ProvisionRunInFlightError`,
 // `PreviewProvisionRunOptions` and `ProvisionRunSummary` appear nowhere else in

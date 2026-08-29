@@ -1,0 +1,406 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { prisma, withTenant } from '@syntra/db';
+import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { FakeTarget } from '@syntra/connectors/testing';
+import { localMasterKeyProvider } from '../vault/master-key.js';
+import { createTarget } from './target-service.js';
+import {
+  AnchorAlreadyBoundError,
+  CandidateNotVisibleError,
+  NoAccountToAdoptError,
+  NotInConflictError,
+  adoptAccount,
+} from './adoption-service.js';
+
+const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
+
+const config = {
+  url: 'ldaps://dc.acme.test:636',
+  tlsMode: 'ldaps',
+  rejectUnauthorized: false,
+  bindDn: 'CN=svc,DC=acme,DC=test',
+  baseDn: 'OU=Users,DC=acme,DC=test',
+  entitlementSearchBase: 'OU=Groups,DC=acme,DC=test',
+  archiveContainer: 'OU=Archive,DC=acme,DC=test',
+};
+
+let tenantId: string;
+let targetId: string;
+let personId: string;
+let adminUserId: string;
+let target: FakeTarget;
+
+/** A person with a conflicted account: the target refused the create. */
+const seedConflicted = async (
+  givenName: string,
+  familyName: string,
+  correlationKey: string,
+) =>
+  withTenant(tenantId, async (tx) => {
+    const person = await tx.person.create({
+      data: { tenantId, givenName, familyName },
+    });
+    await tx.targetAccount.create({
+      data: {
+        tenantId,
+        targetSystemId: targetId,
+        personId: person.id,
+        correlationKey,
+        status: 'conflict',
+        statusReason: 'AlreadyExistsError: 00000524 … ENTRY_EXISTS',
+      },
+    });
+    return person.id;
+  });
+
+const accountOf = (id: string) =>
+  withTenant(tenantId, (tx) =>
+    tx.targetAccount.findFirstOrThrow({ where: { personId: id } }),
+  );
+
+const adoptedEvents = () =>
+  withTenant(tenantId, (tx) =>
+    tx.auditEvent.findMany({ where: { action: 'provision.account.adopted' } }),
+  );
+
+beforeEach(async () => {
+  await resetDatabase();
+  const tenant = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
+  tenantId = tenant.id;
+
+  const created = await createTarget(tenantId, provider, null, {
+    type: 'activeDirectory',
+    name: 'Acme AD',
+    config,
+    bindPassword: 'secret',
+  });
+  targetId = created.id;
+
+  target = new FakeTarget();
+  target.containers.push(config.baseDn);
+
+  personId = await seedConflicted('Anna', 'Novak', 'anna.novak');
+  adminUserId = await withTenant(tenantId, async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        tenantId,
+        login: 'reviewer',
+        email: 'reviewer@acme.test',
+        displayName: 'Reviewer',
+      },
+    });
+    return user.id;
+  });
+});
+
+describe('adoptAccount', () => {
+  it('binds the conflicted row to the object that caused the collision', async () => {
+    const anchor = target.seedForeignObject('anna.novak');
+
+    const result = await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'this is her existing account',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      connector: target as never,
+    });
+
+    expect(result).toEqual({
+      adopted: true,
+      anchor,
+      dn: `CN=anna.novak,${config.baseDn}`,
+    });
+    const after = await accountOf(personId);
+    expect(after.anchor).toBe(anchor);
+    expect(after.status).toBe('active');
+    expect(after.statusReason).toBeNull();
+  });
+
+  it('matches the correlation key case-insensitively', async () => {
+    // sAMAccountName is case-insensitive in Active Directory. A case-sensitive
+    // compare refuses to adopt an account that is plainly there, and tells the
+    // administrator to move an object that has not moved.
+    const anchor = target.seedForeignObject('Anna.Novak');
+
+    const result = await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'same account, different casing',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      connector: target as never,
+    });
+
+    expect(result.adopted).toBe(true);
+    expect(result.anchor).toBe(anchor);
+  });
+
+  it('writes nothing to the directory', async () => {
+    // The property the whole design rests on. Adoption records a decision; the
+    // next run converges the object through the guard. A later change that
+    // "helpfully" stamped provenance here would overwrite an `info` field
+    // Syntra does not own, in a request that can then half-fail.
+    target.seedForeignObject('anna.novak');
+    let wrote = 0;
+    const original = target.write.bind(target);
+    target.write = async (cfg, op) => {
+      wrote += 1;
+      return original(cfg, op);
+    };
+
+    await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'hers',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      connector: target as never,
+    });
+
+    expect(wrote).toBe(0);
+  });
+
+  it('records who adopted it and why', async () => {
+    // The audit event is what stands where the provenance check used to. An
+    // adoption nobody can attribute is the thing the refusal was protecting
+    // against, arrived at by a different route.
+    const anchor = target.seedForeignObject('anna.novak');
+
+    await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'confirmed with her manager',
+      actorUserId: adminUserId,
+      sourceIp: '203.0.113.7',
+      connector: target as never,
+    });
+
+    const events = await adoptedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.actorUserId).toBe(adminUserId);
+    expect(events[0]!.sourceIp).toBe('203.0.113.7');
+    expect(events[0]!.payload).toMatchObject({
+      adopted: true,
+      anchor,
+      correlationKey: 'anna.novak',
+      reason: 'confirmed with her manager',
+    });
+  });
+});
+
+describe('adoptAccount — what it refuses', () => {
+  it('refuses a person with no account on this target', async () => {
+    const stranger = await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Bea', familyName: 'Vos' },
+      });
+      return person.id;
+    });
+
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId: stranger,
+        targetSystemId: targetId,
+        reason: 'nothing there',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeInstanceOf(NoAccountToAdoptError);
+  });
+
+  it('refuses an account that is not in conflict', async () => {
+    // Adoption is the exit from ONE state. A general re-point would let an
+    // administrator attach a person to an account that already belongs to
+    // somebody else — precisely the power the provenance rule withholds.
+    target.seedForeignObject('anna.novak');
+    await withTenant(tenantId, (tx) =>
+      tx.targetAccount.updateMany({
+        where: { personId },
+        data: { status: 'active' },
+      }),
+    );
+
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'already fine',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeInstanceOf(NotInConflictError);
+  });
+
+  it('refuses an object another account already holds', async () => {
+    // Two people cannot share one directory object. The partial unique index
+    // on `anchor` refuses it anyway; this turns a constraint violation into a
+    // sentence naming what went wrong.
+    const anchor = target.seedForeignObject('anna.novak');
+    await withTenant(tenantId, async (tx) => {
+      const other = await tx.person.create({
+        data: { tenantId, givenName: 'Bea', familyName: 'Vos' },
+      });
+      await tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          personId: other.id,
+          correlationKey: 'bea.vos',
+          status: 'active',
+          anchor,
+        },
+      });
+    });
+
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'contested',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeInstanceOf(AnchorAlreadyBoundError);
+  });
+
+  it('leaves the row in conflict when it refuses', async () => {
+    // A refused adoption must not be a partial one. The administrator acts on
+    // the message; they cannot do that from a half-written state.
+    const anchor = target.seedForeignObject('anna.novak');
+    await withTenant(tenantId, async (tx) => {
+      const other = await tx.person.create({
+        data: { tenantId, givenName: 'Bea', familyName: 'Vos' },
+      });
+      await tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          personId: other.id,
+          correlationKey: 'bea.vos',
+          status: 'active',
+          anchor,
+        },
+      });
+    });
+
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'contested',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeTruthy();
+
+    const after = await accountOf(personId);
+    expect(after.status).toBe('conflict');
+    expect(after.anchor).toBeNull();
+    expect(await adoptedEvents()).toHaveLength(0);
+  });
+});
+
+describe('adoptAccount — when no candidate is visible', () => {
+  /**
+   * The two causes are indistinguishable from a base-scoped read: the object
+   * is outside the base DN, or it has been deleted. They need OPPOSITE
+   * treatments — refuse for ever versus retry successfully — and the status
+   * separates nothing, because `finish` sets `conflict` only on an
+   * already-exists refusal, so every row in this state carries identical
+   * evidence. So the caller answers, and the default changes nothing.
+   */
+  it('refuses by default when no object with that name is visible', async () => {
+    // The case that motivated the feature: the colliding object was OUTSIDE
+    // the target's base DN, so the create was refused by something the read
+    // cannot see. Resetting here retries the create and is refused
+    // identically, for ever.
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'try it',
+        actorUserId: adminUserId,
+        sourceIp: null,
+        connector: target as never,
+      }),
+    ).rejects.toBeInstanceOf(CandidateNotVisibleError);
+  });
+
+  it('names the base DN in the refusal', async () => {
+    // Without it the message is "not found", and the administrator has no way
+    // to tell an invisible object from a deleted one — which is the whole
+    // decision the refusal is asking them to make.
+    expect.assertions(1);
+    await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'try it',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      connector: target as never,
+    }).catch((cause: unknown) => {
+      expect((cause as Error).message).toContain('OU=Users,DC=acme,DC=test');
+    });
+  });
+
+  it('resets to pending only when the caller says the object is gone', async () => {
+    const result = await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'she left and IT deleted it',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      ifNoCandidate: 'reset',
+      connector: target as never,
+    });
+
+    expect(result).toEqual({ adopted: false, anchor: null, dn: null });
+    const after = await accountOf(personId);
+    expect(after.status).toBe('pending');
+    expect(after.statusReason).toBeNull();
+    expect(after.anchor).toBeNull();
+  });
+
+  it('audits a reset as an adoption that did not happen', async () => {
+    await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'deleted last week',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      ifNoCandidate: 'reset',
+      connector: target as never,
+    });
+
+    const events = await adoptedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toMatchObject({
+      adopted: false,
+      reason: 'deleted last week',
+    });
+  });
+
+  it('ignores ifNoCandidate when a candidate IS visible', async () => {
+    // `reset` answers a question that was not asked here. Honouring it anyway
+    // would throw away a working binding because of a flag about another case.
+    const anchor = target.seedForeignObject('anna.novak');
+
+    const result = await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'hers',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      ifNoCandidate: 'reset',
+      connector: target as never,
+    });
+
+    expect(result.adopted).toBe(true);
+    expect(result.anchor).toBe(anchor);
+  });
+});

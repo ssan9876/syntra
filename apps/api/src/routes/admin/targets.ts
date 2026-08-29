@@ -8,6 +8,7 @@ import {
   placementResponse,
   testTargetRequestSchema,
   updateTargetRequestSchema,
+  adoptAccountRequest,
 } from '@syntra/contracts';
 import { BUILTIN_CONNECTOR_DOCUMENTS, targetConnectorFor } from '@syntra/connectors';
 import {
@@ -17,7 +18,13 @@ import {
   NoAccountToMoveError,
   NoCorrelationKeyError,
   PairedDirectorySourceNotFoundError,
+  AnchorAlreadyBoundError,
+  CandidateNotVisibleError,
+  NoAccountToAdoptError,
+  NotInConflictError,
   TargetNotFoundError,
+  adoptAccount,
+  adoptionCandidate,
   clearPlacement,
   createTarget,
   deleteTarget,
@@ -115,6 +122,50 @@ const placementParams = z.object({
   id: z.string().uuid(),
   personId: z.string().uuid(),
 });
+
+/**
+ * The adoption service's refusals, as problem responses.
+ *
+ * Shared by both routes so the GET and the POST cannot describe the same
+ * refusal two different ways — the dialog reads the GET's message and then
+ * submits to the POST, and an administrator told two stories about one state
+ * stops believing either.
+ */
+function adoptionProblem(cause: unknown): unknown {
+  if (cause instanceof NoAccountToAdoptError) {
+    return new ProblemError(
+      409,
+      'nothing-to-adopt',
+      'There is no account to adopt',
+      cause.message,
+    );
+  }
+  if (cause instanceof NotInConflictError) {
+    return new ProblemError(
+      409,
+      'not-in-conflict',
+      'This account is not in conflict',
+      cause.message,
+    );
+  }
+  if (cause instanceof AnchorAlreadyBoundError) {
+    return new ProblemError(
+      409,
+      'anchor-already-bound',
+      'That object is already taken',
+      cause.message,
+    );
+  }
+  if (cause instanceof CandidateNotVisibleError) {
+    return new ProblemError(
+      404,
+      'candidate-not-visible',
+      'That account is not visible here',
+      cause.message,
+    );
+  }
+  return cause;
+}
 
 export async function registerAdminTargetRoutes(
   app: FastifyInstance,
@@ -247,6 +298,53 @@ export async function registerAdminTargetRoutes(
       // the move, and answering 500 would tell the administrator their
       // decision was lost when it was not.
       return result;
+    },
+  );
+
+  /**
+   * The object an adoption would bind, read from the target on demand.
+   *
+   * `PROVISION_MANAGE` despite being a GET. It opens a connection to the
+   * directory and names an object by DN; it is not read-shaped just because
+   * of its verb. Called when the dialog opens, never on page load.
+   */
+  app.get(
+    '/targets/:id/accounts/:personId/adoption-candidate',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id, personId } = placementParams.parse(request.params);
+      return adoptionCandidate(request.tenantId, provider, personId, id).catch(
+        (cause: unknown) => {
+          throw adoptionProblem(cause);
+        },
+      );
+    },
+  );
+
+  /**
+   * Binding a conflicted account to the object that caused the collision.
+   *
+   * The exit from a state nothing else clears. `conflict` is set when the
+   * target refuses a create because the name is taken, and no run writes it
+   * back — reconcile makes the person unprocessable and returns.
+   */
+  app.post(
+    '/targets/:id/accounts/:personId/adopt',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id, personId } = placementParams.parse(request.params);
+      const body = adoptAccountRequest.parse(request.body);
+
+      return adoptAccount(request.tenantId, provider, {
+        personId,
+        targetSystemId: id,
+        reason: body.reason,
+        ifNoCandidate: body.ifNoCandidate,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
+      }).catch((cause: unknown) => {
+        throw adoptionProblem(cause);
+      });
     },
   );
 

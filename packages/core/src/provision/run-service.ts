@@ -8,6 +8,7 @@ import {
 } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
+import { storableCause } from '../storable-text.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { resolveInFlightActions, valuesOf } from './apply.js';
 import { desiredState } from './desired.js';
@@ -1469,7 +1470,7 @@ export async function previewProvisionRun(
         data: {
           status: 'failed',
           finishedAt: new Date(),
-          error: cause instanceof Error ? cause.message : String(cause),
+          error: storableCause(cause),
         },
       }),
     ).catch(() => undefined);
