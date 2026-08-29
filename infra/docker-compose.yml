@@ -38,6 +38,53 @@ services:
       timeout: 3s
       retries: 20
 
+  # The suite's own server, with its data directory in RAM.
+  #
+  # The bottleneck this exists for is not commit latency, which
+  # `synchronous_commit=off` above already addresses. It is `TRUNCATE`:
+  # `resetDatabase()` truncates every table before every test, and each
+  # truncation fsyncs the relation files it recreates. That wait shows up as
+  # `IO/DataFileImmediateSync` in `pg_stat_activity`, `synchronous_commit` does
+  # not affect it, and on a slow volume it costs seconds per test -- with
+  # checkpoints syncing over a million files.
+  #
+  # `fsync=off` would remove it, and is deliberately still not used, for the
+  # reason the comment above gives: it trades crash CORRUPTION for speed, and
+  # a server holding a database somebody cares about must not make that trade.
+  #
+  # A tmpfs data directory removes the same wait WITHOUT making that trade,
+  # because it changes what is true rather than what is promised: there is no
+  # disk, so there is nothing to corrupt and nothing to lose. The data
+  # directory is empty on every start, which is what a suite that truncates
+  # every table before every test wants anyway -- `initdb` runs each time and
+  # the global setup migrates the scratch databases it provisions.
+  #
+  # Point the suite at it by giving `.env` port 5433. The development database
+  # on 5432 keeps full durability and is not touched.
+  postgres-test:
+    image: postgres:16
+    command:
+      - postgres
+      - -c
+      - synchronous_commit=off
+    environment:
+      POSTGRES_USER: syntra
+      POSTGRES_PASSWORD: syntra
+      POSTGRES_DB: syntra
+    ports: ['5433:5432']
+    volumes:
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      # Sized so the suite's scratch databases (about 15 MB each, one per
+      # worker) fit with room to spare. Unbounded would default to half the
+      # machine's RAM.
+      - /var/lib/postgresql/data:size=3g
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U syntra']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
   maildev:
     image: maildev/maildev:2.1.0
     ports: ['1080:1080', '1025:1025']
