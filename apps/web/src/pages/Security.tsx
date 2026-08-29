@@ -11,6 +11,7 @@ import { useT } from '../i18n/LocaleProvider.js';
 // legitimately started sending.
 import type { MfaStatusResponse } from '@syntra/contracts';
 import { PasswordPanel } from './security/PasswordPanel.js';
+import { DevicesPanel } from './security/DevicesPanel.js';
 
 
 interface Enrolment {
@@ -205,6 +206,8 @@ export function Security() {
         {notice && <Alert tone="warning">{notice}</Alert>}
 
         <PasswordPanel />
+
+        <DevicesPanel />
 
         <Panel
           title="Authenticator app"

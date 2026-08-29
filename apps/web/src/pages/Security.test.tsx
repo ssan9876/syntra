@@ -32,6 +32,9 @@ function mockApi(over: { totpDelete?: Response } = {}) {
       return Promise.resolve(over.totpDelete ?? json({ recoveryCodesRevoked: 0 }));
     }
     if (url.endsWith('/api/auth/mfa')) return Promise.resolve(json(status()));
+    if (url.endsWith('/api/portal/sessions')) {
+      return Promise.resolve(json({ sessions: [] }));
+    }
     if (url.endsWith('/api/auth/session')) return Promise.resolve(json({}, 401));
     return Promise.resolve(json({}));
   });
@@ -120,7 +123,10 @@ describe('removing a security key says what it cost', () => {
         return Promise.resolve(deleteResponse);
       }
       if (url.endsWith('/api/auth/mfa')) return Promise.resolve(json(withKey()));
-      if (url.endsWith('/api/auth/session')) return Promise.resolve(json({}, 401));
+      if (url.endsWith('/api/portal/sessions')) {
+      return Promise.resolve(json({ sessions: [] }));
+    }
+    if (url.endsWith('/api/auth/session')) return Promise.resolve(json({}, 401));
       return Promise.resolve(json({}));
     });
   }
