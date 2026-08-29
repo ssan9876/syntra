@@ -15,6 +15,7 @@
 export const WEBHOOK_EVENT_GROUPS = {
   'access-requests': {
     label: 'Access requests',
+    source: 'template',
     description: 'Somebody asked for access, or their request was decided.',
     templates: [
       'automate-request-submitted-for-you',
@@ -27,6 +28,7 @@ export const WEBHOOK_EVENT_GROUPS = {
   },
   approvals: {
     label: 'Approvals waiting',
+    source: 'template',
     description: 'A request needs somebody to decide, or has been waiting too long.',
     templates: [
       'automate-stage-opened',
@@ -40,6 +42,7 @@ export const WEBHOOK_EVENT_GROUPS = {
   },
   fulfilment: {
     label: 'Fulfilment',
+    source: 'template',
     description: 'Approved access being granted in the target system, or failing to be.',
     templates: [
       'automate-fulfilled',
@@ -50,6 +53,7 @@ export const WEBHOOK_EVENT_GROUPS = {
   },
   'grant-lifecycle': {
     label: 'Access ending',
+    source: 'template',
     description: 'Access that is about to expire, has expired, or was swept away.',
     templates: [
       'automate-expiry-warning',
@@ -61,6 +65,7 @@ export const WEBHOOK_EVENT_GROUPS = {
   },
   'access-reviews': {
     label: 'Access reviews',
+    source: 'template',
     description: 'Certification campaigns and the reviewers assigned to them.',
     templates: [
       'govern-review-assigned',
@@ -72,8 +77,100 @@ export const WEBHOOK_EVENT_GROUPS = {
   },
   findings: {
     label: 'Governance findings',
+    source: 'template',
     description: 'Separation-of-duties breaches and expiring exceptions.',
     templates: ['govern-finding-critical', 'govern-exception-expiring'],
+  },
+  /**
+   * The three below carry AUDIT ACTION names, not notification templates.
+   *
+   * `eventMatches` does not care -- it is string matching either way -- and the
+   * `event` on a delivery is therefore the audit action, `auth.lockout` rather
+   * than `automate-approved`. `source` says which kind a group holds, so the
+   * invariant "every entry names a real template" can keep its teeth for the
+   * six groups it applies to instead of being weakened to accommodate these.
+   *
+   * They exist because configure.md tells operators to "wire these into your
+   * alerting" and, until now, offered no wire: all six groups above are
+   * Automate and Govern, so not one security event could reach an endpoint.
+   *
+   * `auth.login` is deliberately in none of them. It fires on success as well
+   * as failure, so a group holding it would deliver a webhook per sign-in --
+   * a thousand on a Monday morning for a thousand-user tenant, each with its
+   * own retry ladder. `auth.lockout` is the aggregated signal worth waking
+   * somebody for, and a receiver that wants every attempt should read the
+   * audit log, which is indexed for it.
+   */
+  'sign-in-security': {
+    label: 'Sign-in security',
+    source: 'audit',
+    description:
+      'Somebody is being refused, or has just taken an administrative session.',
+    templates: [
+      'auth.lockout',
+      'auth.lockout_cleared',
+      'auth.mfa_failed',
+      'auth.mfa_unavailable',
+      'auth.policy_denied',
+      'auth.elevate',
+      'auth.password_reset_requested',
+      'auth.password_reset_factor_failed',
+      'auth.password_reset_completed',
+      'saml.signature_refused',
+      'saml.acs_refused',
+      'federation.assertion_refused',
+      'federation.exchange_refused',
+      'federation.provision_refused',
+      'oidc.decision_missing',
+    ],
+  },
+  credentials: {
+    label: 'Credentials',
+    source: 'audit',
+    description: 'What somebody signs in with has changed.',
+    templates: [
+      'mfa.enrolled',
+      'mfa.removed',
+      'mfa.enrol_failed',
+      'mfa.recovery_codes_issued',
+      'auth.password_changed',
+      'auth.password_renewed',
+      'auth.password_setup_issued',
+      'auth.forced_enrolment_completed',
+      'session.revoked',
+      'oidc.token_revoked',
+    ],
+  },
+  configuration: {
+    label: 'Configuration changes',
+    source: 'audit',
+    description: 'Who may do what, or who this deployment trusts, has changed.',
+    templates: [
+      'policy.rule_added',
+      'policy.rule_updated',
+      'policy.rule_deleted',
+      'policy.rules_reordered',
+      'policy.default_set',
+      'tenant.settings_updated',
+      'rbac.role_created',
+      'rbac.role_updated',
+      'rbac.role_deleted',
+      'rbac.role_assigned',
+      'rbac.role_revoked',
+      'access.saml_configured',
+      'access.oidc_configured',
+      'access.upstream_configured',
+      'access.claim_mapping_changed',
+      // An endpoint subscribed to configuration changes is told when webhook
+      // endpoints change, including its own. Somebody quietly repointing an
+      // integration is exactly the change an integration should announce.
+      'notify.webhook_created',
+      'notify.webhook_updated',
+      'notify.webhook_deleted',
+      'notify.webhook_secret_rotated',
+      'deployment.update_requested',
+      'deployment.rollback_requested',
+    ],
   },
 } as const;
 

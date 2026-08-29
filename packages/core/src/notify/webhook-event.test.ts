@@ -48,10 +48,24 @@ describe('eventMatches', () => {
 
 describe('the event groups', () => {
   it('name only templates that exist', () => {
+    // Narrowed to the template-backed groups when the security groups landed.
+    // Those carry AUDIT ACTION names, which are not templates and never will
+    // be -- `source` is what says which kind a group holds, so this invariant
+    // keeps its teeth for the six it applies to instead of being deleted.
     for (const key of WEBHOOK_EVENT_GROUP_KEYS) {
-      for (const template of WEBHOOK_EVENT_GROUPS[key].templates) {
+      const group = WEBHOOK_EVENT_GROUPS[key];
+      if (group.source !== 'template') continue;
+      for (const template of group.templates) {
         expect(TEMPLATES).toHaveProperty(template);
       }
+    }
+  });
+
+  it('says which kind of name every group holds', () => {
+    // Without this, a group added with no `source` would silently fall out of
+    // the check above rather than failing it.
+    for (const key of WEBHOOK_EVENT_GROUP_KEYS) {
+      expect(['template', 'audit']).toContain(WEBHOOK_EVENT_GROUPS[key].source);
     }
   });
 
@@ -111,5 +125,51 @@ describe('webhookBody', () => {
 
   it('orders its keys the same way every time', () => {
     expect(built()).toBe(webhookBody(JSON.parse(built()) as never));
+  });
+});
+
+describe('the security groups', () => {
+  it('matches a lockout for a sign-in-security subscriber', () => {
+    expect(eventMatches(['sign-in-security'], 'auth.lockout')).toBe(true);
+    expect(eventMatches(['credentials'], 'mfa.removed')).toBe(true);
+    expect(eventMatches(['configuration'], 'policy.rule_added')).toBe(true);
+  });
+
+  it('keeps the security and Automate audiences apart', () => {
+    // The groups are how somebody says what they want. A ticketing system
+    // subscribed to access requests must not start receiving lockouts, and a
+    // SIEM subscribed to sign-in security must not receive approvals.
+    expect(eventMatches(['access-requests'], 'auth.lockout')).toBe(false);
+    expect(eventMatches(['sign-in-security'], 'automate-approved')).toBe(false);
+  });
+
+  it('puts no event in two groups', () => {
+    // An event in two groups delivers twice to an endpoint subscribed to
+    // both, and a receiver cannot tell that from a genuine duplicate.
+    const seen = new Set<string>();
+    for (const group of Object.values(WEBHOOK_EVENT_GROUPS)) {
+      for (const template of group.templates as readonly string[]) {
+        expect(seen.has(template), template).toBe(false);
+        seen.add(template);
+      }
+    }
+  });
+
+  it('carries auth.login in no group at all', () => {
+    // Deliberate. It fires on success as well as failure, so a group holding
+    // it would deliver a webhook per sign-in -- a thousand on a Monday morning
+    // for a thousand-user tenant, each with its own retry ladder.
+    // `auth.lockout` is the aggregated signal, and a receiver that genuinely
+    // wants every attempt should read the audit log.
+    for (const group of Object.values(WEBHOOK_EVENT_GROUPS)) {
+      expect(group.templates as readonly string[]).not.toContain('auth.login');
+    }
+  });
+
+  it('names every security group with a label somebody could choose from', () => {
+    for (const key of ['sign-in-security', 'credentials', 'configuration'] as const) {
+      expect(WEBHOOK_EVENT_GROUPS[key].label).toMatch(/\S/);
+      expect(WEBHOOK_EVENT_GROUPS[key].templates.length).toBeGreaterThan(0);
+    }
   });
 });
