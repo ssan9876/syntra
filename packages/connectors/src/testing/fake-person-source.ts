@@ -29,7 +29,7 @@ export class FakePersonSource implements SourceConnector<FakePersonSourceConfig>
     private readonly opts: { failWith?: Error; columns?: string[] } = {},
   ) {}
 
-  async test(): Promise<SourceConnectionResult> {
+  async test(_config?: FakePersonSourceConfig): Promise<SourceConnectionResult> {
     return {
       ok: true,
       message: `read ${this.records.length} records`,
@@ -38,7 +38,7 @@ export class FakePersonSource implements SourceConnector<FakePersonSourceConfig>
     };
   }
 
-  async *read(): AsyncIterable<PersonSnapshotRecord> {
+  async *read(_config?: FakePersonSourceConfig): AsyncIterable<PersonSnapshotRecord> {
     this.reads += 1;
     for (const record of this.records) yield record;
     if (this.opts.failWith) throw this.opts.failWith;
