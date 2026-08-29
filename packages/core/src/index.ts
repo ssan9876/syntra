@@ -128,6 +128,7 @@ export * from './access/browser-binding.js';
 export * from './access/saml-request-service.js';
 export * from './access/saml-session-service.js';
 export * from './access/oidc-store.js';
+export * from './access/logout-token.js';
 export * from './access/oidc-client-service.js';
 export * from './access/authorization-decision-service.js';
 export * from './federation/routing.js';
