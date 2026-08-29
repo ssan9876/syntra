@@ -284,6 +284,8 @@ model Person {
   orgUnitId String?  @db.Uuid
   orgUnit   OrgUnit? @relation("PersonOrgUnit", fields: [orgUnitId], references: [id])
 
+  @@index([orgUnitId])
+
   @@unique([tenantId, externalId])
   @@index([tenantId])
   /// An administrative departure: a human deactivated this person's account,
@@ -295,6 +297,26 @@ model Person {
   departureOverride     DateTime?
   departureOverrideBy   String?   @db.Uuid
   departureOverrideNote String?
+
+  /// The person source that owns this row, if any. Null for people created by
+  /// hand or by CSV import, who stay fully editable.
+  /// Restrict, not the SetNull Prisma would default an optional relation to.
+  /// A person whose source has gone is not a hand-managed person, they are a
+  /// person nothing feeds; deletePersonSource deactivates and detaches them
+  /// explicitly instead, in the same transaction as the delete.
+  sourceId String?       @db.Uuid
+  source   PersonSource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+  /// Why this person is inactive. Mirrors User.statusReason.
+  ///
+  /// An absence-derived departure writes THIS and never departureOverride:
+  /// that field means a human knew something the contract table did not, and
+  /// departureDate() prefers it over contract dates for that reason. An
+  /// import knows only that a row was missing, and writing the override would
+  /// let a truncated export outrank the contract table permanently.
+  statusReason String?
+
+  @@index([sourceId])
 }
 
 /// One employment or engagement relationship held by a Person. A person may
@@ -316,8 +338,13 @@ model Contract {
   location        String?
   managerPersonId String?   @db.Uuid
   fte             Decimal?  @db.Decimal(4, 3)
+  /// The HR system's own employment id. The stable key an import diffs on;
+  /// `sequence` is a Syntra-side display ordinal, and matching on it means two
+  /// contracts arriving in a different order are rewritten into each other.
+  externalId      String?
 
   @@unique([personId, sequence])
+  @@unique([personId, externalId])
   @@index([tenantId])
   @@index([personId])
 }
@@ -581,6 +608,111 @@ model SyncChange {
   // counts them by status, three times per apply. Two different questions, two
   // indexes — the second one was missing and every apply sequential-scanned
   // the run's changes.
+  @@index([runId, changeType])
+  @@index([runId, status])
+}
+
+/// A system Syntra reads persons and contracts from.
+///
+/// Distinct from DirectorySource, which reads users, groups and org units: a
+/// person is none of those three, and the write-back flags a directory source
+/// carries are meaningless here because SourceConnector has no write path.
+model PersonSource {
+  id                           String    @id @default(uuid()) @db.Uuid
+  tenantId                     String    @db.Uuid
+  name                         String
+  type                         String
+  config                       Json
+  secretName                   String
+  /// 'snapshot' or 'delta'. NO DEFAULT, deliberately: a delta file read as a
+  /// snapshot departs everyone absent from it, which is everyone who did not
+  /// change yesterday. The choice is made once, explicitly, by a human who
+  /// was shown both consequences.
+  feedMode                     String
+  schedule                     String?
+  autoApply                    Boolean   @default(false)
+  deactivationThresholdPercent Int       @default(10)
+  enabled                      Boolean   @default(true)
+  lastRunAt                    DateTime?
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
+
+  mappings PersonFieldMapping[]
+  runs     PersonImportRun[]
+  /// Restrict, for the reason DirectorySource.users records: without the key,
+  /// deleting a source strands its persons permanently unfed, and SetNull
+  /// turns them into hand-managed rows that nothing keeps current.
+  persons  Person[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model PersonFieldMapping {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @db.Uuid
+  sourceId      String       @db.Uuid
+  source        PersonSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  /// 'person' or 'contract'.
+  recordType    String
+  sourceColumn  String
+  targetField   String
+  transform     String       @default("none")
+  isCorrelation Boolean      @default(false)
+
+  @@unique([sourceId, recordType, targetField])
+  @@index([tenantId])
+}
+
+model PersonImportRun {
+  id                    String       @id @default(uuid()) @db.Uuid
+  tenantId              String       @db.Uuid
+  sourceId              String       @db.Uuid
+  source                PersonSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status                String       @default("running")
+  startedAt             DateTime     @default(now())
+  finishedAt            DateTime?
+  recordsRead           Int          @default(0)
+  requiresConfirmation  Boolean      @default(false)
+  blockedReason         String?
+  error                 String?
+  /// Records read but excluded from the diff: a readFailure from the
+  /// connector, or a record no mapping could turn into a person. Counted as
+  /// read and never counted as absent, so a schema change at the source
+  /// cannot propose departing real people.
+  mappingFailures       Int          @default(0)
+  mappingFailureReasons String[]     @default([])
+  /// Persons this source owns that a complete snapshot did not return.
+  personsAbsent         Int          @default(0)
+  /// Who confirmed a guarded run. An override nobody can find later is not a
+  /// control.
+  confirmedBy           String?      @db.Uuid
+
+  changes PersonImportChange[]
+
+  @@index([tenantId, startedAt])
+  @@index([sourceId])
+}
+
+model PersonImportChange {
+  id         String          @id @default(uuid()) @db.Uuid
+  tenantId   String          @db.Uuid
+  runId      String          @db.Uuid
+  run        PersonImportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  changeType String
+  /// 'person' or 'contract'.
+  recordType String
+  targetId   String?         @db.Uuid
+  externalId String?
+  before     Json?
+  after      Json?
+  status     String          @default("proposed")
+  message    String?
+
+  @@index([tenantId])
+  /// Both of the next two. The console reads a run's changes by type; apply
+  /// reads and counts them by status. SyncChange records that the second was
+  /// missing and every apply sequential-scanned the run's changes.
   @@index([runId, changeType])
   @@index([runId, status])
 }
