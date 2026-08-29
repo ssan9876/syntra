@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
+import { isSecurityEvent, securityProjection } from '../notify/security-events.js';
+import { enqueueWebhooks } from '../notify/webhook-service.js';
 
 export const GENESIS_HASH = '0'.repeat(64);
 
@@ -141,7 +143,7 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
     prevHash,
   });
 
-  return tx.auditEvent.create({
+  const event = await tx.auditEvent.create({
     data: {
       tenantId,
       sequence,
@@ -157,6 +159,48 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
       hash,
     },
   });
+
+  // The fan-out to any endpoint that subscribed to this kind of event.
+  //
+  // HERE rather than at the twenty-odd security `recordEvent` call sites,
+  // because a fan-out a caller has to remember is a fan-out a caller will
+  // forget -- `refresh-token.ts` is the docstring of the last time that lesson
+  // was paid for here, and `end-sessions.ts` is what it cost to unlearn.
+  //
+  // AFTER the row, because the projection carries the sequence number and the
+  // sequence does not exist until the row is written. INSIDE the transaction,
+  // because an event that was audited and not announced -- or announced and
+  // not audited -- is two records disagreeing about one thing that happened.
+  //
+  // An action that is not a security event pays one set membership test and
+  // goes no further, and a tenant with no endpoints costs `enqueueWebhooks`
+  // one indexed read.
+  if (isSecurityEvent(input.action)) {
+    await enqueueWebhooks(
+      tx,
+      [
+        {
+          event: input.action,
+          requestId: null,
+          // Nobody was mailed. The Automate events carry recipients because a
+          // person was; a lockout is addressed to no one.
+          recipients: [],
+          data: securityProjection({
+            action: input.action,
+            outcome: input.outcome,
+            occurredAt,
+            sequence,
+            actorUserId: input.actorUserId,
+            targetType: input.targetType,
+            targetId: input.targetId,
+          }) as unknown as Record<string, unknown>,
+        },
+      ],
+      occurredAt,
+    );
+  }
+
+  return event;
 }
 
 export type ChainResult =

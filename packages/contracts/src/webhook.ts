@@ -1,12 +1,17 @@
 import { z } from "zod";
 
 /**
- * The six named groups an endpoint subscribes to.
+ * The named groups an endpoint subscribes to.
  *
  * Duplicated from `@syntra/core`'s `WEBHOOK_EVENT_GROUPS` rather than imported,
  * because contracts is the boundary package and depends on nothing. A test in
  * `apps/api` asserts the two lists are the same, so the duplication cannot
- * drift silently.
+ * drift silently -- and it did its job when the three security groups were
+ * added, failing before anything shipped.
+ *
+ * The first six carry notification templates; the last three carry audit
+ * action names. `source` on the core map is what records the difference; here
+ * they are simply the values the console may write.
  */
 export const webhookEventGroups = [
   "access-requests",
@@ -15,6 +20,9 @@ export const webhookEventGroups = [
   "grant-lifecycle",
   "access-reviews",
   "findings",
+  "sign-in-security",
+  "credentials",
+  "configuration",
 ] as const;
 
 /**

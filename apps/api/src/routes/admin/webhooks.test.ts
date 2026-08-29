@@ -159,8 +159,18 @@ describe('GET /api/admin/webhooks — health', () => {
   it('reports pending and failing counts per endpoint, and the latest failure', async () => {
     await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
     const cookie = await adminCookie();
-    const mine = (await call('POST', '/api/admin/webhooks', cookie, { ...anEndpoint, events: [] }))
-      .json().endpoint;
+    // `approvals`, not `[]`. An empty list means EVERY event, and since the
+    // security groups landed that includes `configuration` -- so an
+    // all-events endpoint also hears about webhook endpoints being created,
+    // including its own. That behaviour has its own test below; this one is
+    // about health counts being grouped per endpoint and should not depend on
+    // how many other kinds of event happen to exist.
+    const mine = (
+      await call('POST', '/api/admin/webhooks', cookie, {
+        ...anEndpoint,
+        events: ['approvals'],
+      })
+    ).json().endpoint;
     const other = (
       await call('POST', '/api/admin/webhooks', cookie, {
         ...anEndpoint,
@@ -265,7 +275,13 @@ describe('GET /api/admin/webhooks/:id/deliveries', () => {
     await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
     const cookie = await adminCookie();
     const { id } = (
-      await call('POST', '/api/admin/webhooks', cookie, { ...anEndpoint, events: [] })
+      await call('POST', '/api/admin/webhooks', cookie, {
+        ...anEndpoint,
+        // `approvals` rather than every event: this asserts the shape of ONE
+        // delivery, and an all-events endpoint now also hears about its own
+        // creation.
+        events: ['approvals'],
+      })
     ).json().endpoint;
 
     await withTenant(ctx.tenantId, (tx) =>
@@ -347,5 +363,67 @@ describe('DELETE /api/admin/webhooks/:id', () => {
 
     expect((await call('DELETE', `/api/admin/webhooks/${id}`, cookie)).statusCode).toBe(204);
     expect(await withTenant(ctx.tenantId, (tx) => tx.webhookDelivery.count())).toBe(0);
+  });
+});
+
+describe('an endpoint hears about configuration changes, including its own', () => {
+  it('delivers webhook configuration changes to a configuration subscriber', async () => {
+    // Deliberate, and the reason it is deliberate: somebody quietly
+    // repointing an integration is exactly the change that integration should
+    // announce. An endpoint subscribed to `configuration` -- or to everything,
+    // which is what an empty list means -- therefore hears about webhook
+    // endpoints being created, edited, deleted and re-secreted.
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+
+    const watcher = (
+      await call('POST', '/api/admin/webhooks', cookie, {
+        ...anEndpoint,
+        name: 'Watcher',
+        events: ['configuration'],
+      })
+    ).json().endpoint;
+
+    await call('POST', '/api/admin/webhooks', cookie, {
+      ...anEndpoint,
+      name: 'Somebody else',
+      url: 'https://other.example.test/in',
+      events: ['fulfilment'],
+    });
+
+    const rows = await withTenant(ctx.tenantId, (tx) =>
+      tx.webhookDelivery.findMany({ where: { endpointId: watcher.id } }),
+    );
+    const events = rows.map((r) => r.event);
+    expect(events).toContain('notify.webhook_created');
+  });
+
+  it('carries no endpoint URL or secret in the body', async () => {
+    // The projection is seven fields and none of them is the payload, so the
+    // URL an administrator typed does not travel to a third party -- not even
+    // to a third party that is allowed to know an endpoint changed.
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+
+    const watcher = (
+      await call('POST', '/api/admin/webhooks', cookie, {
+        ...anEndpoint,
+        name: 'Watcher',
+        events: ['configuration'],
+      })
+    ).json().endpoint;
+
+    await call('POST', '/api/admin/webhooks', cookie, {
+      ...anEndpoint,
+      name: 'Somebody else',
+      url: 'https://secret-internal.example.test/in',
+      events: ['fulfilment'],
+    });
+
+    const rows = await withTenant(ctx.tenantId, (tx) =>
+      tx.webhookDelivery.findMany({ where: { endpointId: watcher.id } }),
+    );
+    const body = JSON.stringify(rows.map((r) => r.payload));
+    expect(body).not.toContain('secret-internal.example.test');
   });
 });

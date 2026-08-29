@@ -229,3 +229,111 @@ describe('listEvents', () => {
     expect(events.map((e) => e.action)).toEqual(['first']);
   });
 });
+
+describe('the security fan-out', () => {
+  /** An endpoint subscribed to the given groups or actions. */
+  const seedEndpoint = async (events: string[]) =>
+    withTenant(tenantId, (tx) =>
+      tx.webhookEndpoint.create({
+        data: {
+          tenantId,
+          name: 'SIEM',
+          url: 'https://siem.example.test/in',
+          enabled: true,
+          events,
+        },
+      }),
+    );
+
+  const lockout = {
+    actorUserId: null,
+    action: 'auth.lockout',
+    targetType: 'User',
+    targetId: '11111111-2222-4333-8444-555555555555',
+    outcome: 'failure' as const,
+    sourceIp: '198.51.100.9',
+    payload: { secretish: 'do-not-forward-me', failedCount: 5 },
+  };
+
+  it('writes a delivery for an endpoint that asked for it', async () => {
+    await seedEndpoint(['sign-in-security']);
+
+    await withTenant(tenantId, (tx) => recordEvent(tx, lockout));
+
+    const rows = await withTenant(tenantId, (tx) => tx.webhookDelivery.findMany());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.event).toBe('auth.lockout');
+  });
+
+  it('never puts the audit payload or the address on the wire', async () => {
+    // THE security property, asserted over the delivery body rather than over
+    // the projection -- what matters is what actually leaves the building.
+    await seedEndpoint(['sign-in-security']);
+
+    await withTenant(tenantId, (tx) => recordEvent(tx, lockout));
+
+    const row = await withTenant(tenantId, (tx) =>
+      tx.webhookDelivery.findFirstOrThrow(),
+    );
+    const body = JSON.stringify(row.payload);
+    expect(body).not.toContain('do-not-forward-me');
+    expect(body).not.toContain('failedCount');
+    expect(body).not.toContain('198.51.100.9');
+    // And it does carry what a receiver needs to go and read the row.
+    expect(body).toContain('auth.lockout');
+    expect(body).toContain('"sequence"');
+  });
+
+  it('carries the sequence the audit row actually got', async () => {
+    await seedEndpoint(['sign-in-security']);
+
+    const audit = await withTenant(tenantId, (tx) => recordEvent(tx, lockout));
+
+    const row = await withTenant(tenantId, (tx) =>
+      tx.webhookDelivery.findFirstOrThrow(),
+    );
+    expect(JSON.stringify(row.payload)).toContain(`"sequence":${audit.sequence}`);
+  });
+
+  it('does not fan out ordinary traffic', async () => {
+    await seedEndpoint(['sign-in-security']);
+
+    await withTenant(tenantId, (tx) => recordEvent(tx, event('application.launch')));
+
+    expect(await withTenant(tenantId, (tx) => tx.webhookDelivery.count())).toBe(0);
+  });
+
+  it('does not deliver a security event to an Automate subscriber', async () => {
+    await seedEndpoint(['access-requests']);
+
+    await withTenant(tenantId, (tx) => recordEvent(tx, lockout));
+
+    expect(await withTenant(tenantId, (tx) => tx.webhookDelivery.count())).toBe(0);
+  });
+
+  it('delivers to an endpoint that named the one action', async () => {
+    await seedEndpoint(['auth.lockout']);
+
+    await withTenant(tenantId, (tx) => recordEvent(tx, lockout));
+
+    expect(await withTenant(tenantId, (tx) => tx.webhookDelivery.count())).toBe(1);
+  });
+
+  it('writes nothing for a tenant with no endpoints', async () => {
+    await withTenant(tenantId, (tx) => recordEvent(tx, lockout));
+
+    expect(await withTenant(tenantId, (tx) => tx.webhookDelivery.count())).toBe(0);
+  });
+
+  it('leaves the chain intact', async () => {
+    // The fan-out runs inside the same transaction as the append. If it could
+    // disturb the sequence or the hash, this is where that shows.
+    await seedEndpoint(['sign-in-security']);
+
+    await withTenant(tenantId, (tx) => recordEvent(tx, lockout));
+    await withTenant(tenantId, (tx) => recordEvent(tx, event('user.create')));
+    await withTenant(tenantId, (tx) => recordEvent(tx, lockout));
+
+    expect(await withTenant(tenantId, (tx) => verifyChain(tx))).toEqual({ valid: true });
+  });
+});
