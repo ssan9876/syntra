@@ -142,6 +142,7 @@ model Tenant {
   refreshTokens             RefreshToken[]
   samlConfigs               SamlConfig[]
   oidcClients               OidcClient[]
+  logoutDeliveries          LogoutDelivery[]
   claimMappingSets          ClaimMappingSet[]
   claimMappings             ClaimMapping[]
   upstreamIdps              UpstreamIdp[]
@@ -1378,6 +1379,15 @@ model OidcClient {
   /// Exact-match allowlist. Never prefix-matched, never wildcarded.
   redirectUris             String[]    @default([])
   postLogoutRedirectUris   String[]    @default([])
+  /// Where a logout token is POSTed when a session this client's user holds
+  /// ends. Null means this client is not told, which is the default and shows
+  /// as such in the console. Validated on write by the same address check the
+  /// webhook endpoints get: it is an outbound request Syntra makes on
+  /// somebody else's say-so.
+  backchannelLogoutUri     String?
+  /// Whether the logout token must carry `sid`. A client that asks for it and
+  /// does not get it is required by spec to reject the token.
+  backchannelLogoutSessionRequired Boolean @default(false)
   grantTypes               String[]    @default(["authorization_code", "refresh_token"])
   /// Whether this client may use the client credentials grant.
   ///
@@ -1398,8 +1408,39 @@ model OidcClient {
   createdAt                DateTime    @default(now())
   updatedAt                DateTime    @updatedAt
 
+  logoutDeliveries LogoutDelivery[]
+
   @@unique([tenantId, clientId])
   @@index([tenantId])
+}
+
+/// A logout token waiting to reach one relying party.
+///
+/// Its own table rather than a row in WebhookDelivery. An administrator filters
+/// webhook deliveries by event group and configures endpoints per integration;
+/// a logout token has neither, and sharing the table would put rows on a screen
+/// whose every control is wrong for them. What IS shared is the retry POLICY,
+/// imported from notify/webhook-retry.ts so the two cannot drift.
+model LogoutDelivery {
+  id            String     @id @default(uuid()) @db.Uuid
+  tenantId      String     @db.Uuid
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId      String     @db.Uuid
+  client        OidcClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  /// The signed token, frozen at enqueue. A retry an hour later sends what the
+  /// logout said then, not what the rows say now.
+  token         String
+  attempts      Int        @default(0)
+  /// When the next attempt becomes due. Set on creation, so the sender's read
+  /// is one indexed range scan and a first attempt needs no special case.
+  nextAttemptAt DateTime
+  deliveredAt   DateTime?
+  lastStatus    Int?
+  lastError     String?
+  createdAt     DateTime   @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, deliveredAt, nextAttemptAt])
 }
 
 /// A named set of claim mappings, applied to many applications at once.
