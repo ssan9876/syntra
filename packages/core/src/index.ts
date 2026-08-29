@@ -89,6 +89,7 @@ export * from './notify/notification-service.js';
 export * from './notify/delivery.js';
 export * from './notify/templates/index.js';
 export * from './notify/webhook-event.js';
+export * from './notify/security-events.js';
 export * from './notify/webhook-jobs.js';
 export * from './notify/webhook-retry.js';
 export * from './notify/webhook-service.js';
