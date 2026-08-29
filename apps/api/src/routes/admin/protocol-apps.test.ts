@@ -392,6 +392,51 @@ describe('admin protocol configuration', () => {
     expect(rotated.json().clientSecret).not.toBe(first.json().clientSecret);
   });
 
+  it('stores and reads back a back-channel logout endpoint', async () => {
+    const applicationId = await oidcApplication('rp');
+
+    const created = await put(`/api/admin/applications/${applicationId}/oidc`, {
+      clientId: 'rp',
+      redirectUris: ['https://rp.example.test/cb'],
+      backchannelLogoutUri: 'https://rp.example.test/backchannel-logout',
+      backchannelLogoutSessionRequired: true,
+    });
+
+    expect(created.statusCode).toBe(200);
+    const read = await get(`/api/admin/applications/${applicationId}/oidc`);
+    expect(read.json().backchannelLogoutUri).toBe(
+      'https://rp.example.test/backchannel-logout',
+    );
+    expect(read.json().backchannelLogoutSessionRequired).toBe(true);
+  });
+
+  it('defaults a client to not being told', async () => {
+    // The default has to be null. A client that starts receiving logout tokens
+    // because somebody registered it is a client whose operator never agreed
+    // to receive them.
+    const applicationId = await oidcApplication('quiet');
+
+    await put(`/api/admin/applications/${applicationId}/oidc`, {
+      clientId: 'quiet',
+      redirectUris: ['https://quiet.example.test/cb'],
+    });
+
+    const read = await get(`/api/admin/applications/${applicationId}/oidc`);
+    expect(read.json().backchannelLogoutUri).toBeNull();
+  });
+
+  it('refuses a back-channel logout endpoint that is not a URL', async () => {
+    const applicationId = await oidcApplication('bad');
+
+    const res = await put(`/api/admin/applications/${applicationId}/oidc`, {
+      clientId: 'bad',
+      redirectUris: ['https://bad.example.test/cb'],
+      backchannelLogoutUri: 'not a url at all',
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
   it('refuses client_credentials as a grant type, and takes it only as its own flag', async () => {
     const applicationId = await oidcApplication('machine');
 

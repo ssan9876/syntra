@@ -43,6 +43,8 @@ interface OidcClient {
   clientId: string;
   redirectUris: string[];
   postLogoutRedirectUris: string[];
+  backchannelLogoutUri: string | null;
+  backchannelLogoutSessionRequired: boolean;
   grantTypes: string[];
   clientCredentialsEnabled: boolean;
   scopes: string[];
@@ -417,6 +419,7 @@ function OidcPanel({
   const [form, setForm] = useState({
     redirectUris: linesOf(client.redirectUris),
     postLogoutRedirectUris: linesOf(client.postLogoutRedirectUris),
+    backchannelLogoutUri: client.backchannelLogoutUri ?? '',
     scopes: client.scopes.join(' '),
     clientCredentialsEnabled: client.clientCredentialsEnabled,
     rotateSecret: false,
@@ -452,6 +455,16 @@ function OidcPanel({
             clientId: client.clientId,
             redirectUris: toLines(form.redirectUris),
             postLogoutRedirectUris: toLines(form.postLogoutRedirectUris),
+            // Sent even when empty, for the reason named above: the contract
+            // defaults an absent field, so omitting this would clear a
+            // configured logout endpoint every time somebody saved a redirect
+            // URI. Empty string means "not configured", which is null.
+            backchannelLogoutUri:
+              form.backchannelLogoutUri.trim() === ''
+                ? null
+                : form.backchannelLogoutUri.trim(),
+            backchannelLogoutSessionRequired:
+              client.backchannelLogoutSessionRequired ?? false,
             // Machine clients take no grants and no redirect URIs; the
             // contract refuses `authorization_code` without one, so a client
             // switched to machine-only sends an empty list.
@@ -531,6 +544,20 @@ function OidcPanel({
           value={form.scopes}
           onChange={(v) => set('scopes', v)}
         />
+
+        {!form.clientCredentialsEnabled && (
+          <Field
+            label="Back-channel logout endpoint"
+            value={form.backchannelLogoutUri}
+            onChange={(v) => set('backchannelLogoutUri', v)}
+            // No hint. `Field` dropped the prop on purpose -- eighty-nine of
+            // them turned these forms into prose about themselves -- so what
+            // the field IS lives in its label, and the placeholder shows the
+            // shape. An empty box is a client that is not told, which is what
+            // an empty box already looks like.
+            placeholder="https://app.example/backchannel-logout"
+          />
+        )}
 
         <Check
           checked={form.rotateSecret}

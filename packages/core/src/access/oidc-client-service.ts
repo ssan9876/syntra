@@ -18,6 +18,10 @@ export interface OidcClientRecord {
   idTokenSignedResponseAlg: string;
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
+  /** Where a logout token goes, or null for a client that is not told. */
+  backchannelLogoutUri?: string | null;
+  /** Whether that token must carry `sid`. */
+  backchannelLogoutSessionRequired?: boolean;
 }
 
 /**
@@ -53,6 +57,8 @@ const toRecord = (row: Record<string, unknown>): OidcClientRecord => ({
   idTokenSignedResponseAlg: row.idTokenSignedResponseAlg as string,
   accessTokenTtlSeconds: row.accessTokenTtlSeconds as number,
   refreshTokenTtlSeconds: row.refreshTokenTtlSeconds as number,
+  backchannelLogoutUri: (row.backchannelLogoutUri as string | null) ?? null,
+  backchannelLogoutSessionRequired: row.backchannelLogoutSessionRequired as boolean,
 });
 
 /**

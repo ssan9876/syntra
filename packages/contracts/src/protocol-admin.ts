@@ -107,6 +107,26 @@ export const oidcClientRequest = z
       .regex(/^[A-Za-z0-9._~-]+$/),
     redirectUris: z.array(endpoint).max(16).default([]),
     postLogoutRedirectUris: z.array(endpoint).max(16).default([]),
+    /**
+     * Where a logout token is POSTed when a session this client's user holds
+     * ends. Null, and defaulted to null, so a client is told only when
+     * somebody says to tell it.
+     *
+     * The same `endpoint` check every other administrator-supplied protocol
+     * URL gets, and no more: the address itself is checked at DIAL time by
+     * `guardedFetch`, which resolves the name, classifies what it answers with
+     * and pins the socket to that address. Refusing a private address here
+     * instead would be both weaker -- a name can resolve differently by the
+     * time the socket opens -- and wrong for the on-prem installations where a
+     * relying party legitimately lives on a private network.
+     */
+    backchannelLogoutUri: endpoint.nullable().default(null),
+    /**
+     * Whether the logout token must carry `sid`. Per the specification, a
+     * client that registers for it and receives a token without one must
+     * reject that token.
+     */
+    backchannelLogoutSessionRequired: z.boolean().default(false),
     // `client_credentials` is deliberately absent from this enum. It is the one
     // grant that issues a token with no `authorize()` decision behind it, so it
     // is turned on by its own field below rather than by adding a string to an

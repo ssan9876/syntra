@@ -200,3 +200,22 @@ describe('the body-parsing boundary', () => {
     expect(res.statusCode).not.toBe(415);
   });
 });
+
+describe('back-channel logout is advertised', () => {
+  it('says so in the discovery document', async () => {
+    // A relying party decides whether to register a `backchannel_logout_uri`
+    // by reading this. Delivering logout tokens while advertising nothing
+    // would mean no correctly-written client ever asks for one.
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/oidc/.well-known/openid-configuration',
+      headers: { host: TEST_HOST },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      backchannel_logout_supported: true,
+      backchannel_logout_session_supported: true,
+    });
+  });
+});

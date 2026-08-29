@@ -178,6 +178,23 @@ export async function providerFor(
         },
         clientCredentials: { enabled: true },
         resourceIndicators: { enabled: false },
+        /**
+         * Back-channel logout, so a relying party is TOLD when a session ends
+         * rather than holding its own until it expires.
+         *
+         * `ack` is oidc-provider's acknowledgement that this draft's shape may
+         * change between its releases; the version is pinned in package.json,
+         * so the acknowledgement is a statement about upgrades rather than
+         * about this deployment.
+         *
+         * Enabling it here is what puts `backchannel_logout_supported` in
+         * discovery and lets a client register a `backchannel_logout_uri`.
+         * DELIVERY is Syntra's own, in `access/logout-delivery.ts`: the
+         * library sends on its own session lifecycle, and Syntra's revocations
+         * -- an administrator ending a session, a password reset, a
+         * deactivation -- are not its session lifecycle.
+         */
+        backchannelLogout: { enabled: true },
       },
 
       // Consent is administrative here: an application a user is assigned is

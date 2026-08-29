@@ -190,6 +190,19 @@ export async function oidcProviderFor(
         scope: c.scopes.join(' '),
         token_endpoint_auth_method: c.tokenEndpointAuthMethod,
         id_token_signed_response_alg: c.idTokenSignedResponseAlg,
+        // Registered so oidc-provider accepts the client and advertises the
+        // capability. The tokens Syntra sends on its OWN revocations are
+        // minted and delivered by `access/logout-delivery.ts` -- a
+        // deactivation is not a session lifecycle event the library knows
+        // about, so leaving delivery to it would cover logout and miss every
+        // case an administrator actually reaches for.
+        ...(c.backchannelLogoutUri
+          ? {
+              backchannel_logout_uri: c.backchannelLogoutUri,
+              backchannel_logout_session_required:
+                c.backchannelLogoutSessionRequired ?? false,
+            }
+          : {}),
         // Lifted off by `providerFor` before oidc-provider sees the metadata.
         // Stored, validated and returned by the admin API since Task 13, and
         // read by nothing until now.
