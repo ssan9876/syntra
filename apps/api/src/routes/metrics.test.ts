@@ -1,0 +1,138 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { buildTestApp, TEST_HOST } from '../test-support.js';
+
+const TOKEN = 'a-long-enough-metrics-token';
+
+let ctx: Awaited<ReturnType<typeof buildTestApp>>;
+
+/** An app with metrics turned on. */
+const withMetrics = async () => {
+  ctx = await buildTestApp({ env: { METRICS_TOKEN: TOKEN } });
+  await ctx.app.ready();
+  return ctx;
+};
+
+/** An app with no token, which is the default and means no route. */
+const withoutMetrics = async () => {
+  ctx = await buildTestApp();
+  await ctx.app.ready();
+  return ctx;
+};
+
+const scrape = (token: string | null = TOKEN) =>
+  ctx.app.inject({
+    method: 'GET',
+    url: '/metrics',
+    headers: {
+      host: TEST_HOST,
+      ...(token === null ? {} : { authorization: `Bearer ${token}` }),
+    },
+  });
+
+describe('when no token is configured', () => {
+  beforeEach(withoutMetrics);
+
+  it('does not have the route at all', async () => {
+    // 404 rather than 403, deliberately. A route that answered 403 would
+    // confirm its own existence, and the existence of a metrics endpoint tells
+    // somebody probing what this deployment is and how it is operated.
+    expect((await scrape()).statusCode).toBe(404);
+  });
+
+  it('does not have it for an unauthenticated caller either', async () => {
+    expect((await scrape(null)).statusCode).toBe(404);
+  });
+});
+
+describe('when a token is configured', () => {
+  beforeEach(withMetrics);
+
+  it('refuses a caller with no credential', async () => {
+    expect((await scrape(null)).statusCode).toBe(401);
+  });
+
+  it('refuses a wrong token', async () => {
+    expect((await scrape('not-the-metrics-token')).statusCode).toBe(401);
+  });
+
+  it('refuses a token of a different length without throwing', async () => {
+    // `timingSafeEqual` throws on a length mismatch, which would be a 500 and
+    // a timing signal at once.
+    expect((await scrape('short')).statusCode).toBe(401);
+  });
+
+  it('serves Prometheus text exposition to the right token', async () => {
+    const res = await scrape();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/plain');
+    expect(res.body).toMatch(/^# HELP /m);
+    expect(res.body).toMatch(/^# TYPE /m);
+  });
+
+  it('reports the running version', async () => {
+    expect((await scrape()).body).toContain('syntra_build_info');
+  });
+
+  it('reports process and runtime metrics', async () => {
+    // The metrics somebody actually wants when the API is slow.
+    const body = (await scrape()).body;
+    expect(body).toContain('syntra_process_cpu_seconds_total');
+    expect(body).toMatch(/syntra_nodejs_eventloop_lag/);
+  });
+});
+
+describe('request timings', () => {
+  beforeEach(withMetrics);
+
+  it('labels by route pattern, never by URL', async () => {
+    // THE property of this feature. `request.url` would put user ids and
+    // tenant hostnames into label values -- unbounded cardinality and a
+    // disclosure in one move.
+    const id = '11111111-2222-4333-8444-555555555555';
+    await ctx.app.inject({
+      method: 'GET',
+      url: `/api/admin/users/${id}/sessions`,
+      headers: { host: TEST_HOST },
+    });
+
+    const body = (await scrape()).body;
+    expect(body).toContain('syntra_http_request_duration_seconds');
+    expect(body).not.toContain(id);
+    expect(body).toContain('/api/admin/users/:id/sessions');
+  });
+
+  it('puts no tenant hostname in any label', async () => {
+    await ctx.app.inject({
+      method: 'GET',
+      url: '/api/portal/applications',
+      headers: { host: TEST_HOST },
+    });
+
+    expect((await scrape()).body).not.toContain(TEST_HOST);
+  });
+
+  it('does not mint a series per scanned path', async () => {
+    // A 404 has no route pattern. Falling back to `request.url` there would
+    // let anybody grow the series set by probing.
+    await ctx.app.inject({
+      method: 'GET',
+      url: '/wp-admin/setup-config.php',
+      headers: { host: TEST_HOST },
+    });
+
+    const body = (await scrape()).body;
+    expect(body).not.toContain('wp-admin');
+    expect(body).toContain('unrouted');
+  });
+
+  it('records the status it answered with', async () => {
+    await ctx.app.inject({
+      method: 'GET',
+      url: '/api/portal/applications',
+      headers: { host: TEST_HOST },
+    });
+
+    expect((await scrape()).body).toMatch(/status="401"/);
+  });
+});

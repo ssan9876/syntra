@@ -135,6 +135,20 @@ const schema = z.object({
   RELEASE_TOKEN: z.string().trim().min(1).optional(),
   /** Where the release layout lives. Only meaningful once syntra-install has run. */
   RELEASE_ROOT: z.string().trim().min(1).default('/opt/syntra'),
+  /**
+   * The bearer token a scraper presents at `/metrics`.
+   *
+   * Optional, and its absence is the OFF SWITCH: with no token the route is
+   * never registered, so an installation that never opted in answers 404 like
+   * any other path that does not exist. A route that answered 403 would be a
+   * route whose existence is discoverable, and the existence of a metrics
+   * endpoint tells somebody probing what this deployment is and how it is run.
+   *
+   * Sixteen characters minimum. A token short enough to guess is worse than no
+   * metrics at all, because it reads as a control while granting a read of the
+   * installation's shape.
+   */
+  METRICS_TOKEN: z.string().trim().min(16).optional(),
   OUTBOUND_ALLOW_PRIVATE: z
     .enum(['true', 'false'])
     .default('false')
@@ -202,6 +216,8 @@ export interface Config {
   /** Null disables the update button entirely rather than offering a broken one. */
   releaseRepo: string | null;
   releaseToken: string | null;
+  /** Null means `/metrics` is not registered at all. */
+  metricsToken: string | null;
   releaseRoot: string;
 }
 
@@ -259,6 +275,7 @@ export function loadConfig(
     webRoot: v.WEB_ROOT === undefined ? null : resolve(v.WEB_ROOT),
     releaseRepo: v.RELEASE_REPO ?? null,
     releaseToken: v.RELEASE_TOKEN ?? null,
+    metricsToken: v.METRICS_TOKEN ?? null,
     releaseRoot: v.RELEASE_ROOT,
   };
 }

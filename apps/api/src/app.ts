@@ -30,6 +30,7 @@ import { registerAdminTenantRoutes } from './routes/admin/tenant.js';
 import { registerAdminWebhookRoutes } from './routes/admin/webhooks.js';
 import { registerAdminUserRoutes } from './routes/admin/users.js';
 import { registerAdminSessionRoutes } from './routes/admin/sessions.js';
+import { registerMetricsRoutes } from './routes/metrics.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
 import { registerAdminPersonRoutes } from './routes/admin/persons.js';
@@ -115,7 +116,11 @@ export async function buildApp(
     // option: that top-level option is deprecated (FSTDEP023) in this
     // Fastify version in favour of exactly this.
     logController: new LogController({
-      disableRequestLogging: (req) => req.url != null && req.url.startsWith('/health'),
+      // `/metrics` joins them: a scrape every fifteen seconds is the same
+      // kind of noise, and it is polled by a machine that never reads the log.
+      disableRequestLogging: (req) =>
+        req.url != null &&
+        (req.url.startsWith('/health') || req.url.startsWith('/metrics')),
     }),
   });
 
@@ -151,6 +156,11 @@ export async function buildApp(
   // ask. It is not, and must not become, a check that touches the database --
   // a liveness probe that fails when Postgres blips restarts a healthy API.
   app.get('/health', async () => ({ status: 'ok' }));
+
+  // Registers nothing at all when METRICS_TOKEN is unset, so an installation
+  // that never opted in answers 404 rather than a 403 that confirms the route
+  // exists. See the plugin's own docstring.
+  await registerMetricsRoutes(app, { token: config.metricsToken });
 
   // READINESS. A different question -- "can this process do its job" -- and
   // the only one of the two that can answer no.
