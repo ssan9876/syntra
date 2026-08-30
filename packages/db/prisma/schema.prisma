@@ -142,6 +142,7 @@ model Tenant {
   refreshTokens             RefreshToken[]
   samlConfigs               SamlConfig[]
   oidcClients               OidcClient[]
+  apiTokens                 ApiToken[]
   logoutDeliveries          LogoutDelivery[]
   claimMappingSets          ClaimMappingSet[]
   claimMappings             ClaimMapping[]
@@ -318,6 +319,7 @@ model User {
   @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
   @@index([orgUnitId])
+  apiTokens          ApiToken[]
 }
 
 model Group {
@@ -619,6 +621,54 @@ model Session {
   @@index([userId])
   /// The inventory query: live sessions for one user.
   @@index([userId, revokedAt])
+}
+
+/// A credential a program holds.
+///
+/// Issued against a SERVICE ACCOUNT -- a User with a null personId, which the
+/// product already treats as representable -- so RBAC, the audit log's
+/// actorUserId, deactivation and Govern's recertification all apply to a
+/// machine without a second code path that could forget it.
+///
+/// Only a digest is stored. The value is shown once, at issue, and never
+/// again, exactly as a client secret is.
+model ApiToken {
+  id        String @id @default(uuid()) @db.Uuid
+  tenantId  String @db.Uuid
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// The service account this token acts as.
+  ///
+  /// Cascade, not restrict: an account that is deleted must not leave a live
+  /// credential behind that authenticates as a user who no longer exists.
+  userId    String @db.Uuid
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// What it is for, in the words of whoever issued it. "SCIM from Workday".
+  name      String
+  /// SHA-256, deliberately not Argon2id -- see `hashApiToken` for the same
+  /// argument `hashClientSecret` makes about client secrets.
+  tokenHash String @unique
+  /// The permissions this token may exercise, INTERSECTED with the account's
+  /// roles and never unioned with them. A scope the account does not hold
+  /// grants nothing. Empty means the account's full authority, which the
+  /// console never writes -- an integrator has to ask for it.
+  scopes    String[] @default([])
+  /// Null is allowed and discouraged. An integration nobody is staffed to
+  /// rotate is worse broken than long-lived, so the choice exists -- but it is
+  /// a choice, and `list` marks it as one.
+  expiresAt DateTime?
+  /// Written at most once a minute, not on every request: a busy integration
+  /// would otherwise turn every read into a write, and "used within the last
+  /// minute" is as useful as the second.
+  ///
+  /// This is what makes an unused token findable, and a credential nobody can
+  /// tell is unused is a credential nobody ever revokes.
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+  createdBy  String?  @db.Uuid
+
+  @@index([tenantId])
+  @@index([userId])
 }
 
 model DirectorySource {
