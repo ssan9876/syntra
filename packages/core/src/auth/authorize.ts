@@ -16,6 +16,7 @@ import {
   type AttemptPurpose,
   type ResolvedAttempt,
 } from './attempt-service.js';
+import { resolveApiToken } from './api-token-service.js';
 import { authenticate } from './login-service.js';
 import { mustRenewPassword } from './password-ageing.js';
 import { readSession, type SessionScope } from './session-service.js';
@@ -90,6 +91,26 @@ export type AuthorizeRequest =
       now?: Date | undefined;
     }
   | {
+      /**
+       * A machine token, presented as a bearer credential.
+       *
+       * A request kind rather than an exemption. The OAuth client-credentials
+       * grant is this product's one exemption from `authorize()`, it was
+       * granted conditionally, and a review later found a client could reach
+       * it holding no credential at all -- which is an argument against a
+       * second exemption rather than a precedent for one.
+       *
+       * Coming through here means a deactivated account's tokens stop at the
+       * next request, IP policy applies to machines, and the refusal is
+       * audited where every other refusal is.
+       */
+      kind: 'token';
+      token: string;
+      sourceIp: string | null;
+      client?: ClientFacts | undefined;
+      now?: Date | undefined;
+    }
+  | {
       kind: 'continue';
       attemptToken: string;
       factor: FactorPresentation;
@@ -131,6 +152,18 @@ export type AuthorizeRequest =
 export type DenyReason =
   | 'invalid_credentials'
   | 'user_inactive'
+  /**
+   * A machine token was presented and policy asked for something a machine
+   * cannot give.
+   *
+   * Distinct from `policy_denied` because the rule did not say no -- it said
+   * "prove it with a second factor", and a bearer token has no way to. The
+   * distinction matters to the operator reading the audit log: one means their
+   * rule refused this caller, the other means their rule cannot be satisfied
+   * by this KIND of caller and their integration will never work while it
+   * matches.
+   */
+  | 'factor_impossible_for_token'
   /**
    * The password was right and the account is locked out after too many
    * failures. Distinct from `invalid_credentials` for the same reason
@@ -292,6 +325,7 @@ export async function authorize(
 ): Promise<AuthorizeResult> {
   const now = request.now ?? new Date();
   if (request.kind === 'primary') return primary(tenantId, request, now);
+  if (request.kind === 'token') return fromToken(tenantId, request, now);
   if (request.kind === 'continue') {
     return continueAttempt(tenantId, request, now);
   }
@@ -299,6 +333,87 @@ export async function authorize(
     return completeRenewal(tenantId, request, now);
   }
   return completeEnrolment(tenantId, request, now);
+}
+
+/**
+ * A machine token, resolved and then decided on like anybody else.
+ *
+ * Phase 1 is the token lookup; phase 2 is the same `decide()` every other
+ * caller reaches. Nothing token-specific knows about deactivation, lockout or
+ * policy -- that is the entire reason this is a request kind and not a
+ * separate path.
+ */
+async function fromToken(
+  tenantId: string,
+  request: Extract<AuthorizeRequest, { kind: 'token' }>,
+  now: Date,
+): Promise<AuthorizeResult> {
+  const resolved = await withTenant(tenantId, (tx) =>
+    resolveApiToken(tx, request.token, now),
+  );
+
+  if (!resolved) {
+    // Unknown, revoked, expired and malformed are one answer here for the same
+    // reason `resolveApiToken` gives them one answer: the caller learns the
+    // credential did not work, not which of the four it was. There is no
+    // userId to attribute the event to, which is itself why the audit row is
+    // written without one rather than guessed at.
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null,
+        action: 'auth.token_denied',
+        targetType: 'ApiToken',
+        targetId: null,
+        outcome: 'failure',
+        sourceIp: request.sourceIp,
+        payload: { reason: 'invalid_credentials' },
+      }),
+    );
+    return { status: 'deny', reason: 'invalid_credentials' };
+  }
+
+  // THE ACCOUNT MUST STILL BE ACTIVE, and this check has to be here.
+  //
+  // `decide()` evaluates policy and nothing else -- the status check for every
+  // other caller lives in `identify()`, which this path does not go through.
+  // The first version of this function assumed the chokepoint covered it, and
+  // a deactivated service account's token kept working; the test named
+  // "stops the moment the account is deactivated" is what found that.
+  //
+  // It is checked on EVERY presentation rather than at issue, which is what
+  // makes offboarding an integration take effect at the next request instead
+  // of at the token's expiry.
+  const active = await withTenant(tenantId, async (tx) => {
+    const user = await tx.user.findUnique({ where: { id: resolved.userId } });
+    if (user && user.status === 'active') return true;
+    await recordEvent(tx, {
+      actorUserId: resolved.userId,
+      action: 'auth.token_denied',
+      targetType: 'ApiToken',
+      targetId: resolved.id,
+      outcome: 'failure',
+      sourceIp: request.sourceIp,
+      payload: { reason: 'user_inactive' },
+    });
+    return false;
+  });
+  if (!active) return { status: 'deny', reason: 'user_inactive' };
+
+  return decide(tenantId, {
+    userId: resolved.userId,
+    // A token is not launching an application; it is calling the API.
+    applicationId: null,
+    sourceIp: request.sourceIp,
+    client: request.client,
+    // The routes a token reaches are the administrative ones.
+    scope: 'admin',
+    floor: undefined,
+    // No factor was presented and none can be. Stated rather than left to a
+    // default, because `satisfied` is what `satisfiesRequirement` reads.
+    satisfied: null,
+    machine: true,
+    now,
+  });
 }
 
 async function primary(
@@ -443,6 +558,16 @@ interface DecideInput {
    * established the caller's existing session.
    */
   satisfied: FactorPresentationType | null;
+  /**
+   * The caller is a machine holding a bearer token.
+   *
+   * It changes exactly one thing: a policy outcome this caller cannot satisfy
+   * becomes a DENY rather than a challenge. It is passed in rather than
+   * inferred so that `decide` never opens an attempt row a machine will never
+   * complete -- an orphan in a security-relevant table, expiring quietly, for
+   * every refused request an integration makes.
+   */
+  machine?: boolean;
   now: Date;
 }
 
@@ -531,6 +656,30 @@ async function decide(
     };
 
     if (decision.outcome === 'allow') return allow();
+
+    // A MACHINE CANNOT ANSWER A CHALLENGE, so it is refused here -- before an
+    // attempt row is opened that nothing will ever complete.
+    //
+    // Allowing instead would be worse than refusing: an operator whose
+    // `require_mfa` rule matches their integration would believe a second
+    // factor was being enforced on it, and it would not be. Returning a
+    // `challenge` would be a shape the caller cannot act on. So the rule is
+    // honoured the only way it can be, and the audit says which rule did it.
+    if (input.machine) {
+      await audit(tx, {
+        userId: input.userId,
+        action: 'auth.token_denied',
+        outcome: 'failure',
+        sourceIp: input.sourceIp,
+        payload: {
+          reason: 'factor_impossible_for_token',
+          outcome: decision.outcome,
+          ruleId: decision.ruleId,
+          ruleName: decision.ruleName ?? 'tenant default',
+        },
+      });
+      return { status: 'deny', reason: 'factor_impossible_for_token' };
+    }
 
     // A factor presented or enrolled earlier in this flow settles the
     // requirement without a second round trip. Re-evaluating rather than

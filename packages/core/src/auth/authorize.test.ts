@@ -9,6 +9,7 @@ import {
   updateRule,
 } from '../policy/policy-service.js';
 import type { FactorType } from '../policy/types.js';
+import { issueApiToken, revokeApiToken } from './api-token-service.js';
 import { hashPassword, setPasswordHash } from './password.js';
 import {
   createSession,
@@ -1600,5 +1601,130 @@ describe('authorize — WebAuthn step-up, with a key that really signs', () => {
       action: 'auth.mfa_failed',
       payload: { reason: 'webauthn_wrong_rp' },
     });
+  });
+});
+
+describe('authorize — a machine token', () => {
+  const mint = async (over: Record<string, unknown> = {}) =>
+    withTenant(tenantId, (tx) =>
+      issueApiToken(tx, {
+        userId,
+        name: 'SCIM',
+        scopes: [],
+        expiresAt: null,
+        createdBy: null,
+        ...over,
+      }),
+    );
+
+  const present = (token: string, sourceIp: string | null = null) =>
+    authorize(tenantId, { kind: 'token', token, sourceIp });
+
+  it('allows a live token and names the account it acts as', async () => {
+    const { token } = await mint();
+
+    expect(await present(token)).toMatchObject({
+      status: 'allow',
+      userId,
+      scope: 'admin',
+      satisfiedFactor: null,
+      applicationId: null,
+    });
+  });
+
+  it('stops the moment the account is deactivated', async () => {
+    // The whole reason this is a request kind and not a separate path:
+    // nothing token-specific had to know deactivation exists.
+    const { token } = await mint();
+    await withTenant(tenantId, (tx) => deactivateUser(tx, userId, 'left'));
+
+    expect(await present(token)).toMatchObject({ status: 'deny' });
+  });
+
+  it('refuses a revoked, an expired and an unknown token identically', async () => {
+    const revoked = await mint();
+    await withTenant(tenantId, (tx) => revokeApiToken(tx, revoked.id));
+    const expired = await mint({ expiresAt: new Date(Date.now() - 1000) });
+
+    const answers = [
+      await present(revoked.token),
+      await present(expired.token),
+      await present('syntra_pat_nothing'),
+    ];
+
+    expect(answers).toEqual([
+      { status: 'deny', reason: 'invalid_credentials' },
+      { status: 'deny', reason: 'invalid_credentials' },
+      { status: 'deny', reason: 'invalid_credentials' },
+    ]);
+  });
+
+  it('is denied by a policy rule that says deny', async () => {
+    await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'No machines', outcome: 'deny' }),
+    );
+    const { token } = await mint();
+
+    expect(await present(token)).toEqual({ status: 'deny', reason: 'policy_denied' });
+  });
+
+  it('is DENIED, not challenged, when policy asks for a second factor', async () => {
+    // A bearer token cannot answer. Allowing would leave an operator believing
+    // their require_mfa rule was enforced on this caller when it was not, and
+    // a `challenge` is a shape no machine can act on.
+    await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'Second factor', outcome: 'require_mfa' }),
+    );
+    const { token } = await mint();
+
+    expect(await present(token)).toEqual({
+      status: 'deny',
+      reason: 'factor_impossible_for_token',
+    });
+  });
+
+  it('names the rule that refused it in the audit log', async () => {
+    // So an operator can find the rule their integration will never satisfy.
+    await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'Second factor', outcome: 'require_mfa' }),
+    );
+    const { token } = await mint();
+    await present(token);
+
+    const events = await auditActions();
+    const denial = events.find((e) => e.action === 'auth.token_denied');
+    expect(denial).toBeDefined();
+    expect(denial!.payload).toMatchObject({
+      reason: 'factor_impossible_for_token',
+      ruleName: 'Second factor',
+    });
+  });
+
+  it('opens no attempt row for a refusal a machine cannot complete', async () => {
+    // An attempt nothing will ever finish is an orphan in a security-relevant
+    // table, one per refused request an integration makes.
+    await withTenant(tenantId, (tx) =>
+      addRule(tx, { name: 'Second factor', outcome: 'require_mfa' }),
+    );
+    const { token } = await mint();
+    await present(token);
+
+    const attempts = await withTenant(tenantId, (tx) => tx.authAttempt.count());
+    expect(attempts).toBe(0);
+  });
+
+  it('never lets a token elevate', async () => {
+    const { token } = await mint();
+
+    expect(await present(token)).toMatchObject({ mayElevate: false });
+  });
+
+  it('writes an audit event that does not contain the token', async () => {
+    const { token } = await mint();
+    await present('syntra_pat_wrong');
+
+    const events = await auditActions();
+    expect(JSON.stringify(events)).not.toContain(token);
+    expect(JSON.stringify(events)).not.toContain('syntra_pat_wrong');
   });
 });
