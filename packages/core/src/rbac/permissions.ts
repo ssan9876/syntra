@@ -24,6 +24,20 @@ export const PERMISSIONS = {
   RBAC_MANAGE: 'rbac.manage',
   TENANT_MANAGE: 'tenant.manage',
   /**
+   * Issuing and revoking machine tokens.
+   *
+   * Separate from `directory.write` because issuing a credential that ACTS AS
+   * an account is a different authority from editing that account's display
+   * name -- the same distinction `directory.delete` already draws, and for the
+   * same reason: somebody trusted to fix a misspelt name has not thereby been
+   * trusted to hand out a credential that speaks as that account.
+   *
+   * A token holding this permission still cannot reach the token routes: see
+   * `TOKEN_DENIED_ROUTES`. A credential that can mint credentials is a
+   * credential whose revocation does not end its authority.
+   */
+  TOKEN_MANAGE: 'token.manage',
+  /**
    * Updating the deployment itself: the version every tenant runs.
    *
    * Deliberately separate from `tenant.manage`, which is authority over ONE

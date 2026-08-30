@@ -22,12 +22,18 @@ import type { RequestPrincipal } from './require-session.js';
  *   credential is a different authority from managing the directory, and it is
  *   not one this slice grants. `directory.write` gets you a display name, not
  *   somebody's password.
+ * - The TOKEN routes — a credential that can mint credentials is a credential
+ *   whose revocation does not end its authority. A stolen token holding
+ *   `token.manage` would issue a second token, and revoking the first would
+ *   leave the second working with nobody having any reason to look for it.
+ *   Minting a machine credential is a thing a person does.
  */
 export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/auth',
   '/api/portal',
   '/api/admin/users/:id/password',
   '/api/admin/users/:id/password-setup',
+  '/api/admin/users/:id/tokens',
 ];
 
 export function routeRefusesTokens(routePattern: string | undefined): boolean {

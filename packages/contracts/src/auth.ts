@@ -48,3 +48,35 @@ export const sessionResponse = z.object({
   permissions: z.array(z.string()),
 });
 export type SessionResponse = z.infer<typeof sessionResponse>;
+
+/**
+ * Issuing a machine token.
+ *
+ * `scopes` is validated against the real permission list rather than accepted
+ * as free text: an unknown scope would be a token that silently grants
+ * nothing, discovered as a 403 nobody can explain. A typo is a 400 here
+ * instead.
+ */
+export const issueApiTokenRequest = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    /** Empty means the account's own authority. */
+    scopes: z.array(z.string().min(1).max(64)).max(64).default([]),
+    /**
+     * Null is allowed and means it never expires. The API does not invent a
+     * default: a lifetime is a policy the operator states, and the console is
+     * where the ninety-day suggestion lives.
+     */
+    expiresAt: z.string().datetime().nullable().default(null),
+  })
+  .strict();
+
+export const apiTokenView = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  scopes: z.array(z.string()),
+  expiresAt: z.string().nullable(),
+  lastUsedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type ApiTokenViewDto = z.infer<typeof apiTokenView>;
