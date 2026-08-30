@@ -325,6 +325,14 @@ latest_backup() {
   ls -1 "$BACKUPS" 2>/dev/null | grep -v '\.partial$' | sort -r | head -1
 }
 
+SCRATCH_DB=''
+
+drop_scratch() {
+  [ -n "$SCRATCH_DB" ] || return 0
+  docker exec "$PG_CONTAINER" dropdb -U "$PG_ROLE" --if-exists "$SCRATCH_DB" >/dev/null 2>&1 || true
+  SCRATCH_DB=''
+}
+
 cmd_verify() {
   resolve_environment
   local name="${1:-latest}"
@@ -335,31 +343,36 @@ cmd_verify() {
   [ -d "$dir" ] || die "no such backup: $name"
   case "$name" in *.partial) die "$name is an interrupted backup, not a backup" ;; esac
 
-  local scratch="syntra_verify_$$"
+  # A GLOBAL, for the same reason PARTIAL_DIR is one: an EXIT trap runs after
+  # the function has returned, where a `local` no longer exists. The first
+  # version of this used one and left the scratch database behind while
+  # reporting success -- which is the exact failure the trap was added to
+  # prevent.
+  SCRATCH_DB="syntra_verify_$$"
   # Registered BEFORE the database is created, so an interrupted verify cannot
   # leave one behind for somebody to find months later.
-  trap 'docker exec "$PG_CONTAINER" dropdb -U "$PG_ROLE" --if-exists "$scratch" >/dev/null 2>&1 || true' EXIT
+  trap drop_scratch EXIT
 
-  log "restoring $name into $scratch"
-  docker exec "$PG_CONTAINER" createdb -U "$PG_ROLE" "$scratch" >/dev/null 2>&1 \
-    || die "could not create the scratch database $scratch"
+  log "restoring $name into $SCRATCH_DB"
+  docker exec "$PG_CONTAINER" createdb -U "$PG_ROLE" "$SCRATCH_DB" >/dev/null 2>&1 \
+    || die "could not create the scratch database $SCRATCH_DB"
 
   # pg_restore's exit status is not trusted here. A restore into a database
   # other than the one dumped always emits ownership and role notices, and it
   # reports those as errors; the question that matters is what arrived, which
   # is asked below.
-  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$scratch" --no-owner --no-acl \
+  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$SCRATCH_DB" --no-owner --no-acl \
     < "$dir/database.dump" >/dev/null 2>&1 || true
 
   # ANALYZE first: pg_stat_user_tables is an estimate, and a verify reporting
   # "0 rows" because statistics were never gathered is a false alarm that
   # teaches operators to ignore this command.
-  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$scratch" -c 'ANALYZE' >/dev/null 2>&1 || true
+  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$SCRATCH_DB" -c 'ANALYZE' >/dev/null 2>&1 || true
 
   local tables rows
-  tables=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$scratch" -tAc \
+  tables=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$SCRATCH_DB" -tAc \
     "SELECT count(*) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
-  rows=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$scratch" -tAc \
+  rows=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$SCRATCH_DB" -tAc \
     "SELECT COALESCE(SUM(n_live_tup), 0) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
 
   [ "${tables:-0}" -gt 0 ] || die "$name restored no tables; it is not restorable"
