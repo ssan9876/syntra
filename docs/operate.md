@@ -213,6 +213,31 @@ Sessions predating the upgrade that added these columns have neither, and show
 as unknown. They were not backfilled, because a backfill would have had to
 invent the values.
 
+## Finding machine credentials nobody uses
+
+Every API token records when it was last used. `Sessions → the account → API
+tokens` shows it, and a token that has never been used says so.
+
+That column exists because a credential nobody can tell is unused is a
+credential nobody ever revokes. The integration that was decommissioned two
+years ago still has a working token, and the only way anybody finds it is by
+being able to see that nothing has presented it since.
+
+Two things to know when clearing them out:
+
+- **Revoking the service account's role revokes every token it issued**, at
+  once. Offboarding an integration is one act, not a hunt through its
+  credentials.
+- **A token that never expires is a choice somebody made**, not a default. The
+  console suggests ninety days. Long-lived tokens are legitimate — an
+  integration nobody is staffed to rotate is worse broken than long-lived — but
+  they should be deliberate, and the list marks them so they can be reviewed as
+  a set.
+
+`api_token.issued`, `api_token.revoked` and `auth.token_denied` are in the
+**Credentials** webhook group, so an endpoint subscribed to it learns when a
+machine credential is minted without anybody wiring that up separately.
+
 ## Deactivate, never delete
 
 There is no Delete anywhere in the directory, and that is a design decision

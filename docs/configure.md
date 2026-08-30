@@ -635,6 +635,100 @@ no per-launch consent screen. `sweepExpiredArtifacts` exists and expiry is
 enforced on read, but nothing runs it on a schedule; the table grows until
 somebody does.
 
+## Machine access
+
+A program that needs to call Syntra's API holds an **API token**, issued
+against a service account.
+
+A service account is an ordinary user with nobody behind it — no linked person.
+Everything that applies to an account applies to it: roles, the audit log,
+deactivation, and Govern's recertification campaigns. That is deliberate.
+Machine access is the access most worth reviewing and least often reviewed, and
+giving it its own concept would have put it outside every control that already
+exists.
+
+### Issuing one
+
+**Sessions → the account → API tokens**, in the console, or
+`POST /api/admin/users/:id/tokens`. It needs `token.manage`, which is separate
+from `directory.write` on purpose: issuing a credential that *acts as* an
+account is a different authority from editing that account's display name.
+
+The token is shown **once**. There is no route that reads it back and no column
+it could be read back from — a lost token is replaced, not recovered.
+
+It looks like this:
+
+```
+syntra_pat_4f3c9a1e…
+```
+
+and is presented as `Authorization: Bearer syntra_pat_…`. The prefix is there
+so a leaked token is recognisable — in a log, in a paste, to a secret scanner
+watching a repository — as a Syntra credential rather than an opaque blob
+nobody investigates.
+
+### What it can do
+
+**The intersection of the account's roles and the token's own scopes, and
+never the union.**
+
+- Scopes narrow. A token scoped `directory.read` on an account that also holds
+  `directory.write` cannot write.
+- Scopes cannot widen. A token scoped `directory.write` on an account that
+  holds only `directory.read` cannot write either.
+- An empty scope list means the account's own authority. The console always
+  writes an explicit list.
+
+Two consequences worth planning around. **Revoking the service account's role
+revokes every token it ever issued**, at once — which is what makes offboarding
+an integration a single act. And a token minted for one job cannot quietly do
+everything the account can, so one over-broad account does not become many
+over-broad credentials.
+
+### What it cannot do, whatever it holds
+
+- **Authenticate or elevate** (`/api/auth/…`). A token is already
+  authenticated, and one that could elevate would be one that could mint a
+  session.
+- **Set a person's password.** Handing a program the ability to set a human's
+  credential is a different authority from managing the directory.
+- **Reach the portal.** A machine has no applications to launch.
+- **Issue or revoke tokens.** A credential that can mint credentials is a
+  credential whose revocation does not end its authority: revoke the first, the
+  second keeps working, and nobody has a reason to look for it.
+
+All four answer `403`, never `401`. The credential was fine; the route is not
+one a machine may use, and a `401` would send an integrator to check a token
+that is perfectly good.
+
+### Policy applies to machines
+
+A token goes through the same `authorize()` as everybody else, so an IP rule
+confines it to the host that should be presenting it — which is the one control
+that limits the damage of a stolen token.
+
+**A rule that requires a second factor REFUSES a token.** This is the surprise
+worth knowing before you meet it. A bearer token cannot answer a challenge, so
+the rule is honoured the only way it can be: the request is denied, the audit
+log records `auth.token_denied` with the rule's name, and the integration will
+keep failing for as long as that rule matches it. Allowing it instead would
+mean an operator believing a second factor was enforced on a caller that never
+presented one.
+
+A deactivated service account's tokens stop at the next request, not at their
+expiry.
+
+### Expiry, and finding the ones nobody uses
+
+The console suggests ninety days. A token that never expires is allowed —
+an integration nobody is staffed to rotate is worse broken than long-lived —
+but it is a choice somebody makes, and the list marks it.
+
+Every token records when it was **last used**, written at most once a minute.
+That column is what makes a dormant integration findable, and a credential
+nobody can tell is unused is a credential nobody ever revokes.
+
 ## Further reading
 
 - [Install](install.md) — development and container installs, TLS.
