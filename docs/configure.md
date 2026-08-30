@@ -729,6 +729,79 @@ Every token records when it was **last used**, written at most once a minute.
 That column is what makes a dormant integration findable, and a credential
 nobody can tell is unused is a credential nobody ever revokes.
 
+## Provisioning into Syntra with SCIM
+
+Syntra is a SCIM 2.0 target at `/scim/v2`. An identity provider — Entra, Okta,
+Workday — pushes users and groups into it, rather than Syntra polling them.
+
+This is the **push** counterpart to the pull connectors above, not a
+replacement for them. LDAP sync and the HR feed still read on a schedule; SCIM
+lets a system that already knows the moment something changed tell you.
+
+### Setting it up
+
+1. **Create a SCIM source.** It is a directory source like any other, and it is
+   what will own everything the IdP pushes.
+2. **Create a service account** — a user with nobody behind it — and give it a
+   role holding `directory.write`.
+3. **Issue an API token** for it (see [Machine access](#machine-access)).
+4. In the IdP, set the base URL to `https://<your-host>/scim/v2` and the secret
+   token to the value from step 3.
+
+**Test with a read-only token first.** A token scoped to `directory.read` can
+list and read and nothing else, which proves the connection, the URL and the
+credential before anything can be changed by a rule you have not finished
+writing.
+
+### What to expect
+
+**`DELETE` deactivates.** SCIM says remove; this directory has no Delete
+anywhere, because deactivation revokes real access, grants nothing, and keeps
+the trail of who had what and why it changed. The client gets its `204`, the
+account stops working immediately, and the record survives. `active: false` on
+a `PUT` or `PATCH` does the same thing, and is what Entra and Okta actually
+send when they deprovision.
+
+`ServiceProviderConfig` says this, so a client's administrator can read it
+before an audit rather than during one.
+
+**Passwords are ignored.** SCIM allows a `password` attribute; Syntra accepts
+it and drops it. Password rules — the tenant floor, ageing, renewal, upstream
+write-back — live in one place, and a provisioning protocol is not the place to
+route around them. `changePassword` is advertised as unsupported.
+
+**What SCIM creates, SCIM owns.** A pushed account carries the SCIM source's
+id, so editing it by hand in the console is refused with the same message any
+source-owned account gives. It also cuts the other way: a `POST` whose
+`userName` already belongs to an LDAP-anchored account is a `409 uniqueness`,
+not a takeover. The account belongs to the system that anchored it.
+
+**A Person is created only when the payload has both names.** An IdP that knows
+a login and an address makes an account and nothing else — filling the person
+register with half-records that no HR feed will ever reconcile against would be
+worse than leaving the account standing alone, which is what a service account
+does anyway.
+
+### Filters and paging
+
+`userName eq "…"` and `externalId eq "…"` on `/Users`; `displayName eq "…"` and
+`externalId eq "…"` on `/Groups`. Anything else is a `400 invalidFilter`
+naming what is supported.
+
+That is what Entra and Okta send to correlate before deciding whether to POST
+or PATCH. The rest of the filter grammar is a parser with its own surface, and
+a filter half-understood and applied wrongly returns the wrong users while the
+client believes the answer.
+
+`startIndex` is **1-based**, as the RFC specifies. `startIndex=0` is refused
+rather than read as 1, because a client that is off by one is a client whose
+next page skips somebody.
+
+### What is deliberately absent
+
+`/Me`, bulk operations, and ETags. `ServiceProviderConfig` reports each as
+unsupported so a client learns it by reading rather than by failing.
+
 ## Further reading
 
 - [Install](install.md) — development and container installs, TLS.
