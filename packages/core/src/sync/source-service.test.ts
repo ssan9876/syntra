@@ -4,6 +4,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { DEFAULT_MAPPINGS } from './defaults.js';
 import {
+  createScimSource,
   SourceOwnsObjectsError,
   createSource,
   deleteSource,
@@ -422,5 +423,47 @@ describe('a mapping may not aim at the hierarchy', () => {
         ]);
       }),
     ).rejects.toThrow(/parentAnchor/);
+  });
+});
+
+describe('a SCIM source', () => {
+  const create = () =>
+    withTenant(tenantId, (tx) => createScimSource(tx, { name: 'Entra' }));
+
+  it('is a directory source, so what it pushes is owned', async () => {
+    // Ownership is the entire reason this is a DirectorySource: every rule in
+    // the product that refuses an edit to a source-held record reads
+    // `sourceId`, and this is what puts a value there.
+    const source = await create();
+
+    expect(source.type).toBe('scim');
+  });
+
+  it('has no schedule, because nothing polls a push', async () => {
+    expect((await create()).schedule).toBeNull();
+  });
+
+  it('stores no credential name', async () => {
+    // A dangling secret name is a rotation somebody eventually tries to
+    // perform, on a secret this source never had. The client authenticates to
+    // US with a machine token; there is no outbound bind.
+    expect((await create()).secretName).toBe('');
+  });
+
+  it('cannot write back, and cannot be upgraded into being able to', async () => {
+    const source = await create();
+
+    expect(source.writebackEnabled).toBe(false);
+    expect(source.writebackPassword).toBe(false);
+    expect(source.writebackDisable).toBe(false);
+    expect(source.writebackDelete).toBe(false);
+  });
+
+  it('does not auto-apply, because there is no run to apply', async () => {
+    expect((await create()).autoApply).toBe(false);
+  });
+
+  it('is enabled, because a source nobody can push to is not a source', async () => {
+    expect((await create()).enabled).toBe(true);
   });
 });

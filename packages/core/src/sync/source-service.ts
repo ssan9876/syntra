@@ -73,6 +73,64 @@ export async function createSource(
   });
 }
 
+/**
+ * A source that is PUSHED TO rather than polled.
+ *
+ * An inbound SCIM client is a writer to the directory, exactly as an LDAP sync
+ * is, and everything it creates has to be OWNED so the existing rules apply:
+ * `PATCH /api/admin/users/:id` already answers 409 `source-owned` for an
+ * account a source holds, an LDAP-owned account cannot be taken over by SCIM,
+ * and the console already shows which source owns what. All of that reads
+ * `User.sourceId`, so a SCIM source being a `DirectorySource` gets every one
+ * of them for free.
+ *
+ * THE WART, stated rather than hidden. A `DirectorySource` carries a schedule,
+ * an outbound `config`, a `secretName` for a bind credential and four
+ * write-back flags. A SCIM source has no use for any of them: nothing polls a
+ * push, there is nothing to connect out to, the client authenticates to US
+ * with a machine token, and Syntra has nowhere to write back to. They are set
+ * to inert values here and the console hides them for this type.
+ *
+ * That is a real cost. It is smaller than the cost of a second ownership
+ * model, which would mean a second case in every rule above -- and every one
+ * of those is a place SCIM could be forgotten, which is how a source-owned
+ * record gets quietly overwritten by the writer nobody checked for.
+ */
+export async function createScimSource(
+  tx: TenantClient,
+  input: { name: string },
+) {
+  const tenantId = await currentTenant(tx);
+
+  return tx.directorySource.create({
+    data: {
+      tenantId,
+      name: input.name,
+      type: 'scim',
+      config: {} as never,
+      // Empty, not a name pointing at a vault entry that does not exist: a
+      // dangling secret name is a rotation somebody eventually tries to
+      // perform, on a secret this source never had.
+      secretName: '',
+      // Nothing polls a push.
+      schedule: null,
+      autoApply: false,
+      // Every write arrives one resource at a time and is applied on arrival;
+      // there is no run to compare against a population, so the mass-change
+      // guard has nothing to measure.
+      deactivationThresholdPercent: 0,
+      enabled: true,
+      // Inbound only. Syntra has nowhere to write back to, and these staying
+      // false is what keeps a later upgrade from granting this source a
+      // capability nobody chose.
+      writebackEnabled: false,
+      writebackPassword: false,
+      writebackDisable: false,
+      writebackDelete: false,
+    },
+  });
+}
+
 export interface UpdateSourceInput {
   name?: string | undefined;
   config?: unknown;
