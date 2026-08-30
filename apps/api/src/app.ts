@@ -160,7 +160,19 @@ export async function buildApp(
   // Registers nothing at all when METRICS_TOKEN is unset, so an installation
   // that never opted in answers 404 rather than a 403 that confirms the route
   // exists. See the plugin's own docstring.
-  await registerMetricsRoutes(app, { token: config.metricsToken });
+  await registerMetricsRoutes(app, {
+    token: config.metricsToken,
+    // The same call `/health/ready` makes below, so there is one readiness
+    // definition rather than two that can disagree.
+    isReady: async () =>
+      (
+        await readiness({
+          provider: localMasterKeyProvider(config.masterKey),
+          webRoot: config.webRoot ?? undefined,
+          version: buildInfo().version,
+        })
+      ).ready,
+  });
 
   // READINESS. A different question -- "can this process do its job" -- and
   // the only one of the two that can answer no.

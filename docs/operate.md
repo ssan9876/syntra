@@ -45,6 +45,76 @@ container as part of every update (`PG_CONTAINER`, see
 safety net for the update itself, not a substitute for a real backup
 schedule of the volume above.
 
+## Metrics
+
+`GET /metrics`, in Prometheus text exposition, authenticated by a bearer token.
+
+**Set `METRICS_TOKEN` to turn it on.** With no token the route is not
+registered at all and the path answers 404 — not 403. That is deliberate: a
+route answering 403 confirms its own existence, and the existence of a metrics
+endpoint tells somebody probing what this deployment is and how it is operated.
+Sixteen characters minimum, and it should be random.
+
+```yaml
+scrape_configs:
+  - job_name: syntra
+    bearer_token: <METRICS_TOKEN>
+    static_configs:
+      - targets: ['syntra.example:3000']
+```
+
+### What it reports
+
+Process and runtime metrics — heap, CPU, event-loop lag — plus:
+
+| Metric | Answers |
+|---|---|
+| `syntra_http_request_duration_seconds` | Request latency, by route pattern and status |
+| `syntra_build_info` | Which release is running |
+| `syntra_webhook_deliveries_pending` | Is the webhook sender keeping up? |
+| `syntra_webhook_deliveries_abandoned` | Has any integration stopped being fed? |
+| `syntra_logout_deliveries_pending` | Back-channel logouts still in flight |
+| `syntra_logout_deliveries_abandoned` | **Offboardings a relying party was never told about** |
+| `syntra_jobs_pending` | Is the scheduler running at all? |
+| `syntra_sessions_active` | |
+| `syntra_users_total{status}` | Accounts, active and inactive |
+| `syntra_accounts_locked` | A lockout spike, before the tickets arrive |
+| `syntra_signing_key_expires_in_seconds` | The nearest signing key's expiry |
+| `syntra_audit_events_total{action,outcome}` | Security events, by kind |
+| `syntra_readiness` | The same probe `/health/ready` runs |
+
+**Four are worth alerting on before the rest.**
+`syntra_logout_deliveries_abandoned` and `syntra_webhook_deliveries_abandoned`
+above zero each mean something that was supposed to leave the building did not.
+`syntra_signing_key_expires_in_seconds` earns its place because key rotation is
+scheduled monthly and its failure is completely silent until every token stops
+verifying at once. `syntra_readiness` at 0 is the process telling you it cannot
+do its job.
+
+Two metrics are **absent rather than zero** when the answer is unknown:
+`syntra_jobs_pending` where the scheduler has never run, and
+`syntra_signing_key_expires_in_seconds` where no key exists. Zero would read as
+"the queue is empty" and "expires now" respectively, and both would be wrong in
+the direction that wakes somebody up.
+
+### There are no per-tenant labels
+
+Every series is installation-wide, and that is a decision rather than a gap. A
+per-tenant label would let anybody who can scrape enumerate your customers,
+count them and read their slugs, and the series count would grow with the
+customer list — which is the ordinary way a Prometheus instance is brought down
+by its own success.
+
+An operator debugging one tenant has the audit log and the console. Both are
+authenticated, and both are better at it than a time series.
+
+The counts are assembled with one short transaction per tenant, because every
+table involved is under row-level security and the application role has no
+`BYPASSRLS` — see [the isolation note](../README.md#how-it-is-put-together).
+They are cached for ten seconds, so a scrape every fifteen seconds pays for
+them once and a misconfigured scraper cannot multiply the load on the database
+it is trying to observe.
+
 ## What a session records about a person
 
 A session row carries the address it was established from and the browser's

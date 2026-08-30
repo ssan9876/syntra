@@ -182,6 +182,14 @@ describe('the installation gauges', () => {
     expect(Number(match![1])).toBeGreaterThan(0);
   });
 
+  it('publishes readiness as 1 or 0', async () => {
+    // The same probe /health/ready runs, so a dashboard and a load balancer
+    // cannot disagree about whether the service is up.
+    const body = (await scrape()).body;
+
+    expect(body).toMatch(/^syntra_readiness [01]$/m);
+  });
+
   it('carries no tenant id or slug anywhere in the body', async () => {
     // Asserted over the WHOLE rendered body rather than per metric, because
     // that is the property that matters and it is easy to reintroduce with one

@@ -99,6 +99,17 @@ front is cheaper than discovering it later as a `409 saml-no-key`.
 the in-console updater. See [Operating Syntra](operate.md#upgrades) for what
 they do and how upgrades work.
 
+### Metrics
+
+`METRICS_TOKEN` is the bearer token a Prometheus scraper presents at
+`/metrics`. Sixteen characters minimum, and it should be random.
+
+**Unset is the off switch, not a default.** With no token the route is never
+registered and the path answers 404 rather than 403 — a route that answered 403
+would confirm its own existence. See
+[Operating Syntra](operate.md#metrics) for what is exposed, and why there are
+no per-tenant labels.
+
 ## Tenants and hostnames
 
 Syntra picks the tenant from the `Host` header, and a tenant answers on three
@@ -471,10 +482,60 @@ list. This slice adds:
 | `tenant.settings_updated` | Admin MFA, self-enrolment or the password floor changed |
 | `auth.password_reset_requested` / `auth.password_reset_factor_failed` / `auth.password_reset_completed` | A self-service reset was asked for, refused at the factor, or applied |
 
-Nothing watches these by default — they are written to the tamper-evident log
-and nothing reads them. The forced-enrolment trade above is defensible
-*because* the enrolment is visible after the fact, so **wire these into your
-alerting.** An audit row nobody reads does not discharge the obligation.
+The forced-enrolment trade above is defensible *because* the enrolment is
+visible after the fact, so **wire these into your alerting.** An audit row
+nobody reads does not discharge the obligation.
+
+### Getting them out
+
+A webhook endpoint can subscribe to three security groups, alongside the six
+Automate and Govern ones:
+
+| Group | What arrives |
+|---|---|
+| **Sign-in security** | Lockouts, failed second factors, policy denials, refused protocol signatures, and administrative elevation |
+| **Credentials** | Second factors enrolled or removed, recovery codes issued, passwords changed or renewed, sessions and tokens revoked |
+| **Configuration changes** | Policy rules, roles, tenant settings, protocol and upstream configuration, webhook endpoints, and deployment updates |
+
+An endpoint subscribed to **Configuration changes** is told when webhook
+endpoints change, **including its own** — somebody quietly repointing an
+integration is exactly the change an integration should announce.
+
+For finer control, an endpoint may name a single action (`auth.lockout`) or a
+prefix (`policy.*`) instead of a group.
+
+**The body is a projection, not the audit row.** It carries seven fields and
+no others:
+
+```json
+{
+  "action": "auth.lockout",
+  "outcome": "failure",
+  "occurredAt": "2026-08-29T02:11:04.512Z",
+  "sequence": 4412,
+  "actorUserId": null,
+  "targetType": "User",
+  "targetId": "…"
+}
+```
+
+There is **no `payload` and no `sourceIp`**. An audit payload is written for an
+authenticated reader inside the console — before-and-after values, statuses,
+reasons — and a webhook goes to a URL an administrator typed, over the
+internet, to a receiver Syntra cannot vouch for. Forwarding it would make every
+future audit call a disclosure decision taken months earlier by somebody with
+no idea their field would leave the building.
+
+A receiver that needs the detail has `sequence` and can read the audit log
+through the API, authenticated, which is where that decision belongs.
+
+**`auth.login` is in no group, deliberately.** It fires on every successful
+sign-in as well as every failed one, so a subscription containing it would
+deliver a webhook per sign-in — a thousand on a Monday morning for a
+thousand-user tenant, each with its own retry ladder. `auth.lockout` is the
+aggregated signal, and it is the one worth waking somebody for. A receiver
+that genuinely wants every attempt should poll the audit log, which is indexed
+for it.
 
 ### What this slice does not do
 

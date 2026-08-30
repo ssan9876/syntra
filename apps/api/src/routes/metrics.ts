@@ -17,6 +17,15 @@ import {
 export interface MetricsRouteOptions {
   /** Null means the route is never registered. */
   token: string | null;
+  /**
+   * Whether this process can do its job, as `/health/ready` computes it.
+   *
+   * Passed in rather than computed here so there is ONE readiness definition:
+   * a second one that drifted would have a dashboard and a load balancer
+   * disagreeing about whether the service is up, which is the worst possible
+   * pair of answers.
+   */
+  isReady: () => Promise<boolean>;
 }
 
 /**
@@ -44,6 +53,7 @@ export interface MetricsHandles {
   registry: Registry;
   httpDuration: Histogram<'method' | 'route' | 'status'>;
   setGauges: (snapshot: MetricsSnapshot) => void;
+  setReadiness: (ready: boolean) => void;
   copyAuditCounts: () => void;
 }
 
@@ -97,6 +107,10 @@ function buildRegistry(): MetricsHandles {
     'Back-channel logouts that were never delivered. A failed offboarding.',
   );
   const sessionsActive = gauge('syntra_sessions_active', 'Live sessions.');
+  const readiness = gauge(
+    'syntra_readiness',
+    '1 when this process can do its job, 0 when it cannot. The /health/ready probe.',
+  );
   const accountsLocked = gauge(
     'syntra_accounts_locked',
     'Accounts currently locked out by failed sign-ins.',
@@ -182,7 +196,9 @@ function buildRegistry(): MetricsHandles {
     }
   };
 
-  return { registry, httpDuration, setGauges, copyAuditCounts };
+  const setReadiness = (ready: boolean) => readiness.set(ready ? 1 : 0);
+
+  return { registry, httpDuration, setGauges, setReadiness, copyAuditCounts };
 }
 
 /**
@@ -208,7 +224,8 @@ export async function registerMetricsRoutes(
   const token = options.token;
   if (token === null) return;
 
-  const { registry, httpDuration, setGauges, copyAuditCounts } = buildRegistry();
+  const { registry, httpDuration, setGauges, setReadiness, copyAuditCounts } =
+    buildRegistry();
 
   // Ten seconds, so a normal fifteen-second scrape pays for the queries once
   // and a misconfigured one polling every second cannot multiply the load on
@@ -251,6 +268,9 @@ export async function registerMetricsRoutes(
       }
 
       setGauges(await readSnapshot());
+      // Never allowed to fail the scrape: a readiness probe that throws would
+      // take the metrics down at exactly the moment they are being consulted.
+      setReadiness(await options.isReady().catch(() => false));
       copyAuditCounts();
 
       return reply
