@@ -32,6 +32,7 @@ import { registerAdminUserRoutes } from './routes/admin/users.js';
 import { registerAdminSessionRoutes } from './routes/admin/sessions.js';
 import { registerMetricsRoutes } from './routes/metrics.js';
 import { registerAdminTokenRoutes } from './routes/admin/tokens.js';
+import { registerScimRoutes } from './routes/scim/index.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
 import { registerAdminPersonRoutes } from './routes/admin/persons.js';
@@ -311,6 +312,10 @@ export async function buildApp(
   });
   await app.register(registerAdminSessionRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminTokenRoutes, { prefix: '/api/admin' });
+  // Not under /api: SCIM clients are configured with a base URL and expect
+  // /scim/v2 to be it, and putting it elsewhere is a support conversation on
+  // every single setup.
+  await app.register(registerScimRoutes, { prefix: '/scim/v2' });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
   // `masterKey`, because deleting a source-owned unit unseals that source's
   // bind credential to remove the container from the directory first.

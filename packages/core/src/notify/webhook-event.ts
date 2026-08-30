@@ -176,6 +176,16 @@ export const WEBHOOK_EVENT_GROUPS = {
       'notify.webhook_secret_rotated',
       'deployment.update_requested',
       'deployment.rollback_requested',
+      // An identity provider that starts creating accounts is a configuration
+      // change somebody should be able to watch, and the first sign of a
+      // misconfigured provisioning rule is a burst of these.
+      'scim.user_created',
+      'scim.user_updated',
+      'scim.user_deactivated',
+      'scim.group_created',
+      'scim.group_updated',
+      'scim.member_added',
+      'scim.member_removed',
     ],
   },
 } as const;
