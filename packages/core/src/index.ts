@@ -51,6 +51,7 @@ export {
   type SessionSummary,
 } from './auth/session-service.js';
 export * from './auth/end-sessions.js';
+export * from './auth/api-token-service.js';
 // authenticate() is deliberately NOT exported. It is the password half of
 // authorize(), and a caller that reached it directly would skip policy
 // evaluation, second factors and the audit event. authorize() is the door.
