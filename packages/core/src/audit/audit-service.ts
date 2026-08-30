@@ -3,6 +3,7 @@ import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
 import { isSecurityEvent, securityProjection } from '../notify/security-events.js';
 import { enqueueWebhooks } from '../notify/webhook-service.js';
+import { countSecurityEvent } from '../health/metrics.js';
 
 export const GENESIS_HASH = '0'.repeat(64);
 
@@ -176,6 +177,10 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
   // goes no further, and a tenant with no endpoints costs `enqueueWebhooks`
   // one indexed read.
   if (isSecurityEvent(input.action)) {
+    // One condition, two consumers. The counter and the deliveries cannot
+    // disagree about what happened because there is one place that decides.
+    countSecurityEvent(input.action, input.outcome);
+
     await enqueueWebhooks(
       tx,
       [

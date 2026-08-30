@@ -198,3 +198,44 @@ export function cachedMetrics(
     return inFlight;
   };
 }
+
+/**
+ * How many security events this process has recorded, by action and outcome.
+ *
+ * A plain map rather than a Prometheus Counter, because core must not depend
+ * on the metrics library: `recordEvent` lives here and the registry lives in
+ * `apps/api`. The route reads this and copies it onto a Counter at scrape
+ * time.
+ *
+ * PROCESS-LOCAL, and honestly so. It resets when the process restarts and a
+ * two-process deployment reports two series — that is what a counter is, and
+ * Prometheus knows how to handle both.
+ *
+ * The label set is bounded by the security allowlist, which is the only reason
+ * it is bounded at all. Counting every audited action would grow the series
+ * set with the audit vocabulary, and the vocabulary grows with the product.
+ */
+const auditCounts = new Map<string, number>();
+
+export function countSecurityEvent(action: string, outcome: string): void {
+  const key = `${action} ${outcome}`;
+  auditCounts.set(key, (auditCounts.get(key) ?? 0) + 1);
+}
+
+export interface AuditCount {
+  action: string;
+  outcome: string;
+  count: number;
+}
+
+export function securityEventCounts(): AuditCount[] {
+  return [...auditCounts].map(([key, count]) => {
+    const [action, outcome] = key.split(' ');
+    return { action: action!, outcome: outcome!, count };
+  });
+}
+
+/** Testing only: the counter is process-local and a suite shares the process. */
+export function resetSecurityEventCounts(): void {
+  auditCounts.clear();
+}

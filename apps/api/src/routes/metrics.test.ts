@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ensureActiveKey, localMasterKeyProvider } from '@syntra/core';
+import {
+  ensureActiveKey,
+  localMasterKeyProvider,
+  recordEvent,
+  resetSecurityEventCounts,
+} from '@syntra/core';
+import { withTenant } from '@syntra/db';
 import { buildTestApp, TEST_HOST } from '../test-support.js';
 
 const TOKEN = 'a-long-enough-metrics-token';
@@ -184,5 +190,74 @@ describe('the installation gauges', () => {
 
     expect(body).not.toContain(ctx.tenantId);
     expect(body).not.toContain('acme');
+  });
+});
+
+describe('security event counts', () => {
+  beforeEach(async () => {
+    await withMetrics();
+    // Process-local, and a suite shares the process.
+    resetSecurityEventCounts();
+  });
+
+  it('counts a security event by action and outcome', async () => {
+    await withTenant(ctx.tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null,
+        action: 'auth.lockout',
+        targetType: 'User',
+        targetId: null,
+        outcome: 'failure',
+        sourceIp: null,
+        payload: {},
+      }),
+    );
+
+    const body = (await scrape()).body;
+
+    expect(body).toContain('syntra_audit_events_total');
+    expect(body).toMatch(/action="auth\.lockout"/);
+    expect(body).toMatch(/outcome="failure"/);
+  });
+
+  it('does not count ordinary traffic, so the label set stays bounded', async () => {
+    // Counting every audited action would grow the series set with the audit
+    // vocabulary, and the vocabulary grows with the product.
+    await withTenant(ctx.tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null,
+        action: 'application.launch',
+        targetType: 'Application',
+        targetId: null,
+        outcome: 'success',
+        sourceIp: null,
+        payload: {},
+      }),
+    );
+
+    expect((await scrape()).body).not.toContain('application.launch');
+  });
+
+  it('does not double-count across two scrapes', async () => {
+    // The counter is copied from a map, and a copy that re-added the whole
+    // total each time would climb without anything happening.
+    await withTenant(ctx.tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null,
+        action: 'auth.lockout',
+        targetType: 'User',
+        targetId: null,
+        outcome: 'failure',
+        sourceIp: null,
+        payload: {},
+      }),
+    );
+
+    await scrape();
+    const body = (await scrape()).body;
+
+    const match = /syntra_audit_events_total\{[^}]*\} ([0-9.e+]+)/.exec(body);
+    expect(match).not.toBeNull();
+    expect(Number(match![1])).toBe(1);
   });
 });

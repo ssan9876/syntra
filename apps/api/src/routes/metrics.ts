@@ -1,7 +1,18 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { Registry, collectDefaultMetrics, Gauge, Histogram } from '@prometheus-io/client';
-import { buildInfo, cachedMetrics, type MetricsSnapshot } from '@syntra/core';
+import {
+  Registry,
+  collectDefaultMetrics,
+  Counter,
+  Gauge,
+  Histogram,
+} from '@prometheus-io/client';
+import {
+  buildInfo,
+  cachedMetrics,
+  securityEventCounts,
+  type MetricsSnapshot,
+} from '@syntra/core';
 
 export interface MetricsRouteOptions {
   /** Null means the route is never registered. */
@@ -33,6 +44,7 @@ export interface MetricsHandles {
   registry: Registry;
   httpDuration: Histogram<'method' | 'route' | 'status'>;
   setGauges: (snapshot: MetricsSnapshot) => void;
+  copyAuditCounts: () => void;
 }
 
 /** Named, because `publish` needs the name and the metric does not carry it. */
@@ -147,7 +159,30 @@ function buildRegistry(): MetricsHandles {
     publish(KEY_EXPIRY, keyExpiry, snapshot.signingKeyExpiresInSeconds);
   };
 
-  return { registry, httpDuration, setGauges };
+  // Core counts security events in a plain map, because core must not depend
+  // on the metrics library. This copies that map onto a Counter at scrape
+  // time. `inc` by the delta rather than `set`, because a Counter has no
+  // setter -- so the last copied value is tracked per series.
+  const auditEvents = new Counter({
+    name: 'syntra_audit_events_total',
+    help: 'Security-relevant audit events recorded by this process.',
+    labelNames: ['action', 'outcome'] as const,
+    registers: [registry],
+  });
+  const copied = new Map<string, number>();
+
+  const copyAuditCounts = () => {
+    for (const { action, outcome, count } of securityEventCounts()) {
+      const key = `${action} ${outcome}`;
+      const delta = count - (copied.get(key) ?? 0);
+      if (delta > 0) {
+        auditEvents.inc({ action, outcome }, delta);
+        copied.set(key, count);
+      }
+    }
+  };
+
+  return { registry, httpDuration, setGauges, copyAuditCounts };
 }
 
 /**
@@ -173,7 +208,7 @@ export async function registerMetricsRoutes(
   const token = options.token;
   if (token === null) return;
 
-  const { registry, httpDuration, setGauges } = buildRegistry();
+  const { registry, httpDuration, setGauges, copyAuditCounts } = buildRegistry();
 
   // Ten seconds, so a normal fifteen-second scrape pays for the queries once
   // and a misconfigured one polling every second cannot multiply the load on
@@ -216,6 +251,7 @@ export async function registerMetricsRoutes(
       }
 
       setGauges(await readSnapshot());
+      copyAuditCounts();
 
       return reply
         .header('content-type', registry.contentType)
