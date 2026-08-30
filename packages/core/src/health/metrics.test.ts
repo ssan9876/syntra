@@ -6,8 +6,16 @@ import { ensureActiveKey } from '../keys/signing-key-service.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { WEBHOOK_MAX_ATTEMPTS } from '../notify/webhook-retry.js';
 import { cachedMetrics, collectMetrics, type MetricsSnapshot } from './metrics.js';
+import { createScheduler } from '../jobs/scheduler.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
+
+// The same default scheduler.test.ts uses, for the same reason: the worker's
+// own database, so starting pg-boss here creates its schema where this file's
+// queries look for it.
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  'postgresql://syntra_app:syntra_app@localhost:5432/syntra';
 
 let tenantId: string;
 
@@ -122,8 +130,12 @@ describe('collectMetrics', () => {
 
   it('reports job depth as a number where pg-boss has a schema', async () => {
     // pg-boss creates and migrates its own tables, which is why they are not
-    // in schema.prisma. This database has had a scheduler against it, so the
-    // count is real.
+    // in schema.prisma -- and why a database no scheduler has ever started
+    // against has no `pgboss.job` at all. Starting one here makes that this
+    // file's own precondition. Inheriting it from whichever other test file
+    // happened to share this worker's database is what made this case fail on
+    // file ordering alone: the gauge read null, which is the branch below the
+    // assertion, not the one it is testing.
     //
     // The null branch is the OTHER case -- a database pg-boss has never
     // touched -- and it is not exercised here because it cannot be produced
@@ -131,10 +143,16 @@ describe('collectMetrics', () => {
     // is the distinction between "the queue is empty" and "nothing is
     // processing the queue", which are different facts and must not both
     // render as 0 on a dashboard.
-    const jobsPending = (await collectMetrics()).jobsPending;
-    expect(jobsPending === null || jobsPending >= 0).toBe(true);
-    expect(typeof jobsPending === 'number').toBe(true);
-  });
+    const scheduler = createScheduler(DATABASE_URL);
+    await scheduler.start();
+    try {
+      const jobsPending = (await collectMetrics()).jobsPending;
+      expect(typeof jobsPending).toBe('number');
+      expect(jobsPending).toBeGreaterThanOrEqual(0);
+    } finally {
+      await scheduler.stop();
+    }
+  }, 60_000);
 
   it('counts across tenants, because the series is installation-wide', async () => {
     const other = await prisma.tenant.create({ data: { name: 'Other', slug: 'other' } });
