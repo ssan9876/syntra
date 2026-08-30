@@ -97,7 +97,12 @@ export function SourcesPage() {
           },
           {
             id: 'people',
-            label: 'People',
+            // Labelled for the system it comes FROM, not the rows it makes.
+            // "People" read as a directory of humans -- Users has a tab by that
+            // name -- so an administrator looking for where to plug in an HR
+            // export found nothing here saying so. The id stays `people`:
+            // links carry it, and nobody reads a query string.
+            label: 'HR feeds',
             badge: personSourceRows.length || undefined,
             content: <PersonSourcesTab />,
           },

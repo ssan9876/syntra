@@ -73,12 +73,17 @@ export function PersonSourcesTab() {
   return (
     <>
       {/* The action sits with the table it acts on, as the directory tab's
-          does. */}
-      <div className="mb-4 flex justify-end">
-        <Link to="/admin/person-sources/new" className={buttonClasses('primary')}>
-          New person source
-        </Link>
-      </div>
+          does -- but only once there is a table. With no feeds yet the empty
+          state below carries the same action, and two primary buttons a few
+          lines apart, both reading "New HR feed" and both going to the same
+          page, is one decision presented twice. */}
+      {sources.length > 0 && (
+        <div className="mb-4 flex justify-end">
+          <Link to="/admin/person-sources/new" className={buttonClasses('primary')}>
+            New HR feed
+          </Link>
+        </div>
+      )}
 
       {error && <Alert tone="danger">{error}</Alert>}
 
@@ -89,17 +94,20 @@ export function PersonSourcesTab() {
           {!loading && sources.length === 0 && (
             <div className="p-6">
               <Empty
-                title="No people sources yet"
+                title="No HR feeds yet"
                 action={
                   <Link
                     to="/admin/person-sources/new"
                     className={buttonClasses('primary')}
                   >
-                    Connect an HR export
+                    New HR feed
                   </Link>
                 }
               >
-                Read a nightly export and keep the person register in step with it.
+                A delimited file your HR system drops on SFTP — joiners, movers
+                and leavers. Syntra reads it on a schedule, shows what would
+                change before anything does, and keeps the person register in
+                step with it.
               </Empty>
             </div>
           )}

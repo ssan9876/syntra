@@ -106,8 +106,8 @@ describe('PersonSourcesTab', () => {
   it('shows an empty state naming the next action', async () => {
     mockFetch([]);
     renderTab();
-    expect(await screen.findByText('No people sources yet')).toBeVisible();
-    expect(screen.getByRole('link', { name: /connect an HR export/i })).toBeVisible();
+    expect(await screen.findByText('No HR feeds yet')).toBeVisible();
+    expect(screen.getByRole('link', { name: /new HR feed/i })).toBeVisible();
   });
 
   it('falls back to a dash when a source names no host', async () => {

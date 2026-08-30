@@ -80,8 +80,8 @@ test.describe.serial('an HR source, end to end', () => {
     await elevateTo(page, '/admin/sources', ADMIN!);
     await expect(page.getByRole('heading', { name: 'Sources' })).toBeVisible();
 
-    await page.getByRole('tab', { name: 'People' }).click();
-    await page.getByRole('link', { name: 'New person source' }).click();
+    await page.getByRole('tab', { name: 'HR feeds' }).click();
+    await page.getByRole('link', { name: 'New HR feed' }).click();
 
     // Exact: "Name" is a substring of "Username".
     await page.getByLabel('Name', { exact: true }).fill(SOURCE_NAME);
@@ -151,7 +151,7 @@ test.describe.serial('an HR source, end to end', () => {
 
     await signInAndLand(page, 'admin', ADMIN!);
     await elevateTo(page, '/admin/sources', ADMIN!);
-    await page.getByRole('tab', { name: 'People' }).click();
+    await page.getByRole('tab', { name: 'HR feeds' }).click();
     await page.getByRole('link', { name: SOURCE_NAME }).click();
 
     await page.getByRole('button', { name: 'Run now' }).click();

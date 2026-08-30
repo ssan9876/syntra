@@ -324,7 +324,7 @@ export function PersonSourceDetailPage() {
 
   return (
     <>
-      <PageHeader title={isNew ? 'New person source' : name || 'Person source'} />
+      <PageHeader title={isNew ? 'New HR feed' : name || 'HR feed'} />
 
       {error && <Alert tone="danger">{error}</Alert>}
 

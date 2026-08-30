@@ -246,8 +246,8 @@ test('a directory source is created, tested, mapped, run, partly applied and ski
 }) => {
   await signInAndLand(page, 'admin', ADMIN!);
   await elevateTo(page, '/admin/sources', ADMIN!);
-  // "Sources" since the page grew a People tab: two families of source, one
-  // destination.
+  // "Sources" since the page grew an HR feeds tab: two families of source,
+  // one destination.
   await expect(page.getByRole('heading', { name: 'Sources' })).toBeVisible();
 
   await page.getByRole('link', { name: 'New source' }).click();
