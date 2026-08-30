@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { Registry, collectDefaultMetrics, Gauge, Histogram } from '@prometheus-io/client';
-import { buildInfo } from '@syntra/core';
+import { buildInfo, cachedMetrics, type MetricsSnapshot } from '@syntra/core';
 
 export interface MetricsRouteOptions {
   /** Null means the route is never registered. */
@@ -32,7 +32,12 @@ function tokenMatches(presented: string, expected: string): boolean {
 export interface MetricsHandles {
   registry: Registry;
   httpDuration: Histogram<'method' | 'route' | 'status'>;
+  setGauges: (snapshot: MetricsSnapshot) => void;
 }
+
+/** Named, because `publish` needs the name and the metric does not carry it. */
+const JOBS_PENDING = 'syntra_jobs_pending';
+const KEY_EXPIRY = 'syntra_signing_key_expires_in_seconds';
 
 function buildRegistry(): MetricsHandles {
   const registry = new Registry();
@@ -57,7 +62,92 @@ function buildRegistry(): MetricsHandles {
     registers: [registry],
   });
 
-  return { registry, httpDuration };
+  // One gauge per field of the snapshot. Declared once here rather than built
+  // from the object's keys, so the metric names and their help text are
+  // readable in this file instead of being derived from a type at runtime.
+  const gauge = (name: string, help: string) =>
+    new Gauge({ name, help, registers: [registry] });
+
+  const webhookPending = gauge(
+    'syntra_webhook_deliveries_pending',
+    'Webhook deliveries waiting, across the installation.',
+  );
+  const webhookAbandoned = gauge(
+    'syntra_webhook_deliveries_abandoned',
+    'Webhook deliveries that have exhausted their retries.',
+  );
+  const logoutPending = gauge(
+    'syntra_logout_deliveries_pending',
+    'Back-channel logout tokens waiting to reach a relying party.',
+  );
+  const logoutAbandoned = gauge(
+    'syntra_logout_deliveries_abandoned',
+    'Back-channel logouts that were never delivered. A failed offboarding.',
+  );
+  const sessionsActive = gauge('syntra_sessions_active', 'Live sessions.');
+  const accountsLocked = gauge(
+    'syntra_accounts_locked',
+    'Accounts currently locked out by failed sign-ins.',
+  );
+  const jobsPending = gauge(
+    JOBS_PENDING,
+    'Scheduler jobs waiting. Absent where the scheduler has never run.',
+  );
+  const keyExpiry = gauge(
+    KEY_EXPIRY,
+    'Seconds until the nearest signing key expires. Absent where none exists.',
+  );
+  const usersTotal = new Gauge({
+    name: 'syntra_users_total',
+    help: 'Accounts by status.',
+    labelNames: ['status'] as const,
+    registers: [registry],
+  });
+
+  /**
+   * Sets a gauge, or removes it from the registry when the answer is unknown.
+   *
+   * Registration is idempotent here rather than conditional on a lookup: a
+   * gauge already registered is registered again harmlessly, and the
+   * alternative -- checking first -- is a second way to be wrong about the
+   * registry's contents.
+   */
+  const publish = (name: string, metric: Gauge, value: number | null) => {
+    if (value === null) {
+      registry.removeSingleMetric(name);
+      return;
+    }
+    if (registry.getSingleMetric(name) === undefined) {
+      registry.registerMetric(metric);
+    }
+    metric.set(value);
+  };
+
+  const setGauges = (snapshot: MetricsSnapshot) => {
+    webhookPending.set(snapshot.webhookDeliveriesPending);
+    webhookAbandoned.set(snapshot.webhookDeliveriesAbandoned);
+    logoutPending.set(snapshot.logoutDeliveriesPending);
+    logoutAbandoned.set(snapshot.logoutDeliveriesAbandoned);
+    sessionsActive.set(snapshot.sessionsActive);
+    accountsLocked.set(snapshot.accountsLocked);
+    usersTotal.set({ status: 'active' }, snapshot.usersActive);
+    usersTotal.set({ status: 'inactive' }, snapshot.usersInactive);
+
+    // Null is not zero, and an unknown answer is not published AT ALL.
+    //
+    // `gauge.reset()` is not the way to do that: it sets the value to 0, which
+    // is precisely the lie being avoided. `jobsPending: 0` reads as "the queue
+    // is empty" when the truth is "nothing is processing it", and a key expiry
+    // of 0 reads as "expires now" and pages somebody at three in the morning
+    // for a deployment that has issued no tokens. So the metric is taken OUT
+    // of the registry while the answer is unknown, and put back when it is
+    // known -- an absent series, which is what Prometheus understands as "no
+    // data" and what an alert rule can be written against.
+    publish(JOBS_PENDING, jobsPending, snapshot.jobsPending);
+    publish(KEY_EXPIRY, keyExpiry, snapshot.signingKeyExpiresInSeconds);
+  };
+
+  return { registry, httpDuration, setGauges };
 }
 
 /**
@@ -83,7 +173,13 @@ export async function registerMetricsRoutes(
   const token = options.token;
   if (token === null) return;
 
-  const { registry, httpDuration } = buildRegistry();
+  const { registry, httpDuration, setGauges } = buildRegistry();
+
+  // Ten seconds, so a normal fifteen-second scrape pays for the queries once
+  // and a misconfigured one polling every second cannot multiply the load on
+  // the database it is trying to observe. `collectMetrics` runs one short
+  // transaction per tenant -- see its docstring for why it cannot do better.
+  const readSnapshot = cachedMetrics();
 
   app.addHook('onResponse', async (request, reply) => {
     // `routeOptions.url` is Fastify's REGISTERED PATTERN --
@@ -118,6 +214,8 @@ export async function registerMetricsRoutes(
       if (presented === null || !tokenMatches(presented, token)) {
         return reply.code(401).send();
       }
+
+      setGauges(await readSnapshot());
 
       return reply
         .header('content-type', registry.contentType)

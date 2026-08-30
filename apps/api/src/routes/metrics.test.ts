@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { ensureActiveKey, localMasterKeyProvider } from '@syntra/core';
 import { buildTestApp, TEST_HOST } from '../test-support.js';
 
 const TOKEN = 'a-long-enough-metrics-token';
@@ -134,5 +135,54 @@ describe('request timings', () => {
     });
 
     expect((await scrape()).body).toMatch(/status="401"/);
+  });
+});
+
+describe('the installation gauges', () => {
+  beforeEach(withMetrics);
+
+  it('publishes the queue backlogs and the account counts', async () => {
+    const body = (await scrape()).body;
+
+    expect(body).toContain('syntra_webhook_deliveries_pending');
+    expect(body).toContain('syntra_logout_deliveries_abandoned');
+    expect(body).toContain('syntra_sessions_active');
+    expect(body).toContain('syntra_accounts_locked');
+    expect(body).toMatch(/syntra_users_total\{status="active"\}/);
+  });
+
+  it('publishes no key expiry at all when there is no key', async () => {
+    // NOT zero. `gauge.reset()` sets a gauge to 0, and 0 here reads as
+    // "expires now" -- it would page somebody at three in the morning for a
+    // deployment that has issued no tokens. The metric is taken out of the
+    // registry instead, and an absent series is what Prometheus understands as
+    // "no data".
+    const body = (await scrape()).body;
+
+    expect(body).not.toContain('syntra_signing_key_expires_in_seconds');
+  });
+
+  it('publishes the key expiry once a key exists', async () => {
+    // The metric earns its place: key rotation is scheduled monthly and its
+    // failure is silent until every token stops verifying at once.
+    await ensureActiveKey(ctx.tenantId, localMasterKeyProvider(Buffer.alloc(32, 7)), 'oidc');
+
+    // Before the first scrape, so the ten-second cache is populated with the
+    // key already in place.
+    const body = (await scrape()).body;
+
+    const match = /syntra_signing_key_expires_in_seconds ([0-9.e+]+)/.exec(body);
+    expect(match).not.toBeNull();
+    expect(Number(match![1])).toBeGreaterThan(0);
+  });
+
+  it('carries no tenant id or slug anywhere in the body', async () => {
+    // Asserted over the WHOLE rendered body rather than per metric, because
+    // that is the property that matters and it is easy to reintroduce with one
+    // careless label.
+    const body = (await scrape()).body;
+
+    expect(body).not.toContain(ctx.tenantId);
+    expect(body).not.toContain('acme');
   });
 });

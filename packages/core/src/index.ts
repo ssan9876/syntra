@@ -10,6 +10,7 @@ export * from './health/readiness.js';
 export * from './health/incidents.js';
 export * from './update/update-service.js';
 export * from './health/version.js';
+export * from './health/metrics.js';
 export * from './directory/user-service.js';
 export * from './directory/directory-writeback.js';
 export * from './directory/group-service.js';
