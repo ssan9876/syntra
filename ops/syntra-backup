@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+#
+# Backups that can be told apart from things shaped like backups.
+#
+#   syntra-backup create              take one
+#   syntra-backup verify [name]       prove one restores, into a scratch database
+#   syntra-backup restore <name>      put one back
+#   syntra-backup list                what is here, and whether it can be restored
+#
+# Three things about this tool are not obvious and are the whole point.
+#
+# BACKUPS DO NOT LIVE IN $SHARED/backups. `syntra-update` keeps the last three
+# dumps in there and deletes the rest on every upgrade -- so a backup history
+# kept beside them would be silently truncated by an unrelated update, and the
+# operator would find out during a recovery. They live in $ROOT/backups, which
+# the updater does not touch.
+#
+# A HALF-WRITTEN BACKUP IS NEVER A BACKUP. Each one is a directory written as
+# `<name>.partial` and renamed into place only once every check has passed.
+# Rename within a filesystem is atomic, so a full disk, a killed process or a
+# reboot leaves something `list` calls incomplete and `restore` refuses --
+# rather than something that looks fine.
+#
+# THE DUMP IS CHECKED FOR ROWS, not merely for being a well-formed archive.
+# Every tenant-scoped table is FORCE ROW LEVEL SECURITY and the application
+# role is deliberately NOSUPERUSER NOBYPASSRLS, so a dump taken as the wrong
+# role is a structurally perfect archive of nothing. `syntra-update` learned
+# this first; the check is reused here rather than rediscovered.
+
+set -euo pipefail
+
+ROOT="${SYNTRA_ROOT:-/opt/syntra}"
+SHARED="$ROOT/shared"
+BACKUPS="${SYNTRA_BACKUP_DIR:-$ROOT/backups}"
+KEEP="${SYNTRA_BACKUP_KEEP:-7}"
+SERVICE="${SYNTRA_SERVICE:-syntra}"
+
+# Resolved in resolve_environment() from shared/.env, or overridden by the
+# environment. Empty here deliberately, as in syntra-update: a default assigned
+# at the top of a file is a default nobody sees until it is wrong.
+PG_CONTAINER="${SYNTRA_PG_CONTAINER:-}"
+PG_ROLE="${SYNTRA_PG_ROLE:-}"
+PG_DB="${SYNTRA_PG_DB:-}"
+MASTER_KEY="${SYNTRA_MASTER_KEY:-}"
+
+# A fixed, non-secret salt. It exists so a fingerprint cannot be matched
+# against a precomputed table of common or leaked keys. It is not itself a
+# secret, there is nothing to gain by rotating it, and changing it would make
+# every existing manifest unreadable to this comparison.
+FINGERPRINT_SALT='syntra-backup-fingerprint-v1'
+
+log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+die() { printf 'syntra-backup: %s\n' "$*" >&2; exit 1; }
+
+# --- reading configuration --------------------------------------------------
+
+# The value of KEY in an env file, WITHOUT sourcing it.
+#
+# Copied from `syntra-update` rather than sourced from it, comments and all.
+# These are two standalone operator tools, and one must not fail to run
+# because the other is absent or half-installed -- which is exactly the state
+# a host is in when somebody reaches for a restore.
+#
+# `. "$SHARED/.env"` would EXECUTE that file, and it holds MASTER_KEY and
+# RELEASE_TOKEN -- values produced by base64 and by GitHub, not by anybody
+# thinking about shell quoting. Sourcing it to learn a port number is a way to
+# run whatever a stray backtick happens to spell, as root.
+#
+# Always exits 0, including for a file that does not exist. An absent key and
+# an empty key are the same answer here, and the CALLER decides what that
+# means.
+env_value() {
+  local key="$1" file="$2"
+  [ -f "$file" ] || return 0
+  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}${key}[[:space:]]*=[[:space:]]*\(.*\)\$/\2/p" "$file" \
+    | tail -1 \
+    | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+# One field out of a PostgreSQL connection URL. Also from `syntra-update`.
+#
+# Refuses rather than defaults. `pg_dump -d syntra` when the URL named
+# something else is a backup of the wrong database, and it looks like a
+# successful backup.
+pg_url_field() {
+  local field="$1" url="$2" rest
+  rest="${url#*://}"
+  case "$field" in
+    user) rest="${rest%%@*}"; printf '%s' "${rest%%:*}" ;;
+    db)   rest="${rest##*/}"; printf '%s' "${rest%%\?*}" ;;
+    *)    return 1 ;;
+  esac
+}
+
+# --- the pure decisions -----------------------------------------------------
+
+# A stable, sortable, filesystem-safe name for an instant.
+#
+# UTC always. A backup directory named in local time sorts wrongly twice a year
+# and is ambiguous for an hour of it.
+backup_name_for() {
+  date -u -d "@$1" +syntra-%Y%m%dT%H%M%SZ 2>/dev/null \
+    || date -u -r "$1" +syntra-%Y%m%dT%H%M%SZ
+}
+
+# The backups to delete, newest kept.
+#
+# A `.partial` is not a backup, so it is neither deleted as one -- that would
+# remove the evidence of an interrupted run while it is still being
+# investigated -- nor counted toward the retention the operator asked for,
+# which would silently keep one fewer real backup than they configured.
+backups_to_prune() {
+  local keep="$1"
+  shift || true
+  [ "$#" -gt 0 ] || return 0
+  printf '%s\n' "$@" \
+    | grep -v '\.partial$' \
+    | sort -r \
+    | tail -n +$(( keep + 1 ))
+}
+
+# Salted SHA-256 of the master key. The key itself never leaves this function.
+fingerprint_of() {
+  printf '%s%s' "$FINGERPRINT_SALT" "$1" \
+    | sha256sum \
+    | cut -d' ' -f1 \
+    | sed 's/^/sha256:/'
+}
+
+# Whether two fingerprints agree.
+#
+# UNKNOWN NEVER MATCHES, and that is the whole contract. An absent, empty or
+# damaged fingerprint must not read as agreement, because agreement is what
+# skips the refusal -- and a manifest that cannot be read is exactly when the
+# refusal is most wanted. `null` is a literal here too: it is what the manifest
+# carries when no key could be read, and it is not a value that agrees with
+# anything, including itself.
+fingerprints_match() {
+  [ -n "$1" ] && [ -n "$2" ] \
+    && [ "$1" != null ] && [ "$2" != null ] \
+    && [ "$1" = "$2" ]
+}
+
+# One field out of a manifest, without a JSON parser -- the host has no jq.
+#
+# The manifest is written by this script and its shape is known, so a line
+# match is honest here in a way it would not be for arbitrary JSON. Handles a
+# quoted string, an unquoted number, and an unquoted `null`, with or without a
+# trailing comma.
+manifest_field() {
+  local key="$1" file="$2"
+  [ -f "$file" ] || return 0
+  sed -n "s/^[[:space:]]*\"${key}\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}[[:space:]]*\$/\1/p" "$file" \
+    | head -1
+}
+
+# ---------------------------------------------------------------------------
+# Everything below this line talks to Docker, PostgreSQL or systemd, and is
+# exercised by ops/syntra-backup.test.sh only through the functions above.
+# ---------------------------------------------------------------------------
+
+resolve_environment() {
+  local url
+  url="${SYNTRA_DATABASE_URL:-$(env_value DATABASE_URL "$SHARED/.env")}"
+
+  [ -n "$PG_DB" ] || {
+    [ -n "$url" ] || die "no DATABASE_URL in $SHARED/.env, so there is nothing to back up"
+    PG_DB=$(pg_url_field db "$url") \
+      || die "could not read the database name out of DATABASE_URL"
+  }
+
+  # The role must BYPASS row-level security. See the header: a dump taken as
+  # the application role is a valid archive of no rows at all. The superuser
+  # URL is preferred for exactly that reason, and the fallback matches
+  # syntra-update's.
+  [ -n "$PG_ROLE" ] || {
+    local super
+    super="${SYNTRA_SUPERUSER_DATABASE_URL:-$(env_value SUPERUSER_DATABASE_URL "$SHARED/.env")}"
+    if [ -n "$super" ]; then
+      PG_ROLE=$(pg_url_field user "$super") || PG_ROLE=""
+    fi
+    [ -n "$PG_ROLE" ] || PG_ROLE="$PG_DB"
+  }
+
+  [ -n "$PG_CONTAINER" ] || PG_CONTAINER=$(env_value PG_CONTAINER "$SHARED/.env")
+  [ -n "$PG_CONTAINER" ] \
+    || die "no PG_CONTAINER set and none in $SHARED/.env; there is no pg_dump on the host"
+
+  # Absent is not fatal. It makes the fingerprint null, and restore then says
+  # it cannot check rather than implying it did.
+  [ -n "$MASTER_KEY" ] || MASTER_KEY=$(env_value MASTER_KEY "$SHARED/.env")
+}
+
+running_fingerprint() {
+  if [ -n "$MASTER_KEY" ]; then fingerprint_of "$MASTER_KEY"; else printf 'null'; fi
+}
+
+# The version this deployment is running, or "unknown".
+running_version() {
+  local pkg="$ROOT/current/package.json"
+  [ -f "$pkg" ] || { printf 'unknown'; return 0; }
+  sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pkg" \
+    | head -1 \
+    | grep . || printf 'unknown'
+}
+
+# Dumps, and refuses anything that is not a backup.
+#
+# Every check here is from `syntra-update`'s dump_database, and the last one is
+# the reason the others are not enough.
+dump_database() {
+  local dest="$1"
+
+  # Created 0600 BEFORE anything is written to it, not chmod'd afterward. A
+  # dump is a full, unfiltered copy of every tenant's data, and `>` alone would
+  # create it at the shell's default umask -- world- or group-readable on
+  # plenty of hosts -- for however long pg_dump takes to finish writing it.
+  install -m 0600 /dev/null "$dest" || die "could not create $dest"
+
+  # A role without BYPASSRLS usually fails outright here, which is the loud
+  # version of the problem. The checks below are the quiet version: a
+  # configuration where the dump SUCCEEDS and contains nothing at all.
+  docker exec "$PG_CONTAINER" pg_dump -U "$PG_ROLE" -d "$PG_DB" -Fc > "$dest" 2>/dev/null \
+    || die "pg_dump failed -- does $PG_ROLE exist, and can it read every table?"
+
+  # A dump that exists and is empty is worse than none, because it looks like a
+  # backup. pg_dump's custom format starts with the magic "PGDMP".
+  [ -s "$dest" ] || die "the dump is empty"
+  head -c 5 "$dest" | grep -q PGDMP || die "the dump is not a PostgreSQL archive"
+
+  # AND IT CONTAINS ROWS. The two checks above pass on a structurally perfect
+  # archive of nothing, which is exactly what an RLS-filtered dump is. This is
+  # the check that can tell a backup from something shaped like one.
+  local sections
+  sections=$(docker exec -i "$PG_CONTAINER" pg_restore -l < "$dest" 2>/dev/null \
+    | grep -c 'TABLE DATA' || true)
+  [ "${sections:-0}" -gt 0 ] \
+    || die "the dump contains no table data, so it is not a backup -- was it taken as a role that bypasses row-level security?"
+
+  printf '%s' "$sections"
+}
+
+write_manifest() {
+  local dest="$1" sections="$2" bytes="$3" fingerprint="$4" quoted
+
+  # `null` unquoted, so a reader can tell "there was no key to fingerprint"
+  # from "the fingerprint of an empty key".
+  if [ "$fingerprint" = null ]; then quoted='null'; else quoted="\"$fingerprint\""; fi
+
+  install -m 0600 /dev/null "$dest" || die "could not create $dest"
+  cat > "$dest" <<JSON
+{
+  "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "version": "$(running_version)",
+  "database": "$PG_DB",
+  "tableDataSections": $sections,
+  "bytes": $bytes,
+  "masterKeyFingerprint": $quoted
+}
+JSON
+}
+
+prune_backups() {
+  local doomed
+  doomed=$(backups_to_prune "$KEEP" $(ls -1 "$BACKUPS" 2>/dev/null) || true)
+  [ -n "$doomed" ] || return 0
+  printf '%s\n' "$doomed" | while read -r old; do
+    [ -n "$old" ] || continue
+    # ${BACKUPS:?} so an unset variable cannot expand into `rm -rf /$old`.
+    rm -rf "${BACKUPS:?}/$old"
+    log "pruned $old"
+  done
+}
+
+# Set by cmd_create while a backup is being written. A GLOBAL, not the
+# function's own variable: an EXIT trap runs after the function has returned,
+# where a `local` no longer exists -- which is how the first version of this
+# cleaned up nothing and said "parameter null or not set" instead.
+PARTIAL_DIR=''
+
+discard_partial() {
+  [ -n "$PARTIAL_DIR" ] || return 0
+  rm -rf "${PARTIAL_DIR:?}"
+  PARTIAL_DIR=''
+}
+
+cmd_create() {
+  resolve_environment
+  mkdir -p "$BACKUPS"
+
+  local name dir sections bytes
+  name=$(backup_name_for "$(date -u +%s)")
+  dir="$BACKUPS/$name.partial"
+  [ -e "$dir" ] && die "$dir already exists; is another backup running?"
+  mkdir -p "$dir"
+
+  # A failure we DIAGNOSED leaves a message, not litter: every `die` below has
+  # already said what went wrong, and leaving a directory behind as well would
+  # just accumulate -- a nightly timer failing for a month leaves thirty of
+  # them, and `backups_to_prune` deliberately never removes one.
+  #
+  # A failure we did NOT diagnose still leaves evidence: a kill, a reboot or a
+  # disk that fills without this trap running leaves the `.partial` directory
+  # exactly where it was, which `list` reports as INCOMPLETE and `restore`
+  # refuses outright.
+  PARTIAL_DIR="$dir"
+  trap discard_partial EXIT
+
+  log "dumping $PG_DB from $PG_CONTAINER as $PG_ROLE"
+  sections=$(dump_database "$dir/database.dump")
+  bytes=$(wc -c < "$dir/database.dump" | tr -d ' ')
+  write_manifest "$dir/manifest.json" "$sections" "$bytes" "$(running_fingerprint)"
+
+  # Nothing is a backup until this line. Everything above wrote into a
+  # directory whose name says it is incomplete.
+  mv "$dir" "$BACKUPS/$name"
+  PARTIAL_DIR=''
+  trap - EXIT
+  log "wrote $BACKUPS/$name -- $bytes bytes, $sections table(s) of data"
+
+  prune_backups
+}
+
+latest_backup() {
+  ls -1 "$BACKUPS" 2>/dev/null | grep -v '\.partial$' | sort -r | head -1
+}
+
+cmd_verify() {
+  resolve_environment
+  local name="${1:-latest}"
+  [ "$name" = latest ] && name=$(latest_backup)
+  [ -n "$name" ] || die "there are no backups in $BACKUPS"
+
+  local dir="$BACKUPS/$name"
+  [ -d "$dir" ] || die "no such backup: $name"
+  case "$name" in *.partial) die "$name is an interrupted backup, not a backup" ;; esac
+
+  local scratch="syntra_verify_$$"
+  # Registered BEFORE the database is created, so an interrupted verify cannot
+  # leave one behind for somebody to find months later.
+  trap 'docker exec "$PG_CONTAINER" dropdb -U "$PG_ROLE" --if-exists "$scratch" >/dev/null 2>&1 || true' EXIT
+
+  log "restoring $name into $scratch"
+  docker exec "$PG_CONTAINER" createdb -U "$PG_ROLE" "$scratch" >/dev/null 2>&1 \
+    || die "could not create the scratch database $scratch"
+
+  # pg_restore's exit status is not trusted here. A restore into a database
+  # other than the one dumped always emits ownership and role notices, and it
+  # reports those as errors; the question that matters is what arrived, which
+  # is asked below.
+  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$scratch" --no-owner --no-acl \
+    < "$dir/database.dump" >/dev/null 2>&1 || true
+
+  # ANALYZE first: pg_stat_user_tables is an estimate, and a verify reporting
+  # "0 rows" because statistics were never gathered is a false alarm that
+  # teaches operators to ignore this command.
+  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$scratch" -c 'ANALYZE' >/dev/null 2>&1 || true
+
+  local tables rows
+  tables=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$scratch" -tAc \
+    "SELECT count(*) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
+  rows=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$scratch" -tAc \
+    "SELECT COALESCE(SUM(n_live_tup), 0) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
+
+  [ "${tables:-0}" -gt 0 ] || die "$name restored no tables; it is not restorable"
+  # Zero rows is a failure for the same reason an empty dump is: it is the
+  # shape a backup of nothing takes.
+  [ "${rows:-0}" -gt 0 ] || die "$name restored $tables table(s) and no rows at all"
+
+  log "verified $name -- $tables tables, ~$rows rows, restored and dropped"
+}
+
+cmd_list() {
+  resolve_environment 2>/dev/null || true
+  [ -d "$BACKUPS" ] || { log "no backups in $BACKUPS"; return 0; }
+
+  local running
+  running=$(running_fingerprint)
+
+  printf '%-28s %-10s %-10s %-8s %s\n' NAME SIZE VERSION TABLES KEY
+  local entry
+  for entry in $(ls -1 "$BACKUPS" 2>/dev/null | sort -r); do
+    local dir="$BACKUPS/$entry"
+    case "$entry" in
+      *.partial)
+        printf '%-28s %-10s %-10s %-8s %s\n' "$entry" - - - 'INCOMPLETE'
+        continue
+        ;;
+    esac
+    local size version tables fp key
+    size=$(du -sh "$dir" 2>/dev/null | cut -f1)
+    version=$(manifest_field version "$dir/manifest.json")
+    tables=$(manifest_field tableDataSections "$dir/manifest.json")
+    fp=$(manifest_field masterKeyFingerprint "$dir/manifest.json")
+    if fingerprints_match "$fp" "$running"; then key=ok
+    elif [ -z "$fp" ] || [ "$fp" = null ] || [ "$running" = null ]; then key=unknown
+    else key=MISMATCH
+    fi
+    printf '%-28s %-10s %-10s %-8s %s\n' \
+      "$entry" "${size:--}" "${version:--}" "${tables:--}" "$key"
+  done
+}
+
+cmd_restore() {
+  resolve_environment
+
+  local name='' yes=no accept_loss=no arg
+  for arg in "$@"; do
+    case "$arg" in
+      --yes) yes=yes ;;
+      --accept-secret-loss) accept_loss=yes ;;
+      -*) die "unknown option: $arg" ;;
+      *) name="$arg" ;;
+    esac
+  done
+
+  [ -n "$name" ] || die "usage: syntra-backup restore <name> --yes"
+  case "$name" in
+    *.partial) die "$name is an interrupted backup, not a backup; it will not be restored" ;;
+  esac
+
+  local dir="$BACKUPS/$name"
+  [ -d "$dir" ] || die "no such backup: $name"
+  [ -s "$dir/database.dump" ] || die "$name has no dump in it"
+
+  # A backup can rot on disk between being taken and being needed, so the same
+  # checks run again rather than trusting the manifest written months ago.
+  head -c 5 "$dir/database.dump" | grep -q PGDMP \
+    || die "$name is not a PostgreSQL archive any more"
+  local sections
+  sections=$(docker exec -i "$PG_CONTAINER" pg_restore -l < "$dir/database.dump" 2>/dev/null \
+    | grep -c 'TABLE DATA' || true)
+  [ "${sections:-0}" -gt 0 ] || die "$name contains no table data; it is not a backup"
+
+  local backup_fp running_fp
+  backup_fp=$(manifest_field masterKeyFingerprint "$dir/manifest.json")
+  running_fp=$(running_fingerprint)
+
+  if ! fingerprints_match "$backup_fp" "$running_fp"; then
+    if [ "$accept_loss" != yes ]; then
+      printf 'syntra-backup: this backup was taken under a different MASTER_KEY\n' >&2
+      printf '  backup:  %s\n' "${backup_fp:-unknown}" >&2
+      printf '  running: %s\n' "$running_fp" >&2
+      printf 'Restoring it would leave every stored secret unreadable and every SAML\n' >&2
+      printf 'integration to be reconfigured. Recover the original MASTER_KEY, or\n' >&2
+      printf 'restore with --accept-secret-loss if that is genuinely what you want.\n' >&2
+      exit 1
+    fi
+    log "WARNING: restoring under a different MASTER_KEY; stored secrets will be unreadable"
+  fi
+
+  # No prompt. A confirmation prompt inside a script is a prompt answered by a
+  # stray newline, and this is not recoverable.
+  [ "$yes" = yes ] || die "refusing to restore $name without --yes; this replaces the live database"
+
+  log "stopping $SERVICE"
+  systemctl stop "$SERVICE" || die "could not stop $SERVICE; nothing was changed"
+
+  # THE SCHEMAS GO FIRST, and this is not optional -- see restore_database in
+  # syntra-update, where it is a fix for a real defect. `pg_restore --clean
+  # --if-exists` drops only what is IN THE ARCHIVE, so every table, index and
+  # policy created by a migration that ran AFTER this dump was taken survives a
+  # restore that was supposed to remove it.
+  log "restoring $name into $PG_DB"
+  docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_ROLE" -d "$PG_DB" >/dev/null 2>&1 <<'SQL'
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+SQL
+
+  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$PG_DB" --clean --if-exists \
+    < "$dir/database.dump" >/dev/null 2>&1 || true
+
+  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$PG_DB" -c 'SELECT 1' >/dev/null 2>&1 \
+    || die "the database is not answering after the restore; $SERVICE is still stopped"
+
+  log "starting $SERVICE"
+  systemctl start "$SERVICE" || die "restored, but $SERVICE did not start"
+  log "restored $name"
+}
+
+usage() {
+  cat <<'USAGE'
+syntra-backup -- backups that can be told apart from things shaped like backups
+
+  syntra-backup create               take a backup
+  syntra-backup verify [name]        restore one into a scratch database, then drop it
+  syntra-backup restore <name> --yes replace the live database with one
+  syntra-backup list                 what is here, and whether it can be restored
+
+  SYNTRA_BACKUP_DIR   where they live (default /opt/syntra/backups)
+  SYNTRA_BACKUP_KEEP  how many to keep (default 7)
+USAGE
+}
+
+main() {
+  local cmd="${1:-}"
+  [ "$#" -gt 0 ] && shift || true
+  case "$cmd" in
+    create)  cmd_create "$@" ;;
+    verify)  cmd_verify "$@" ;;
+    restore) cmd_restore "$@" ;;
+    list)    cmd_list "$@" ;;
+    help|--help|-h) usage ;;
+    # Never defaults to `create`. A tool whose bare invocation writes something
+    # is a tool that writes something by accident.
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+if [ "${SYNTRA_BACKUP_SOURCE_ONLY:-}" != "1" ]; then
+  main "$@"
+fi
