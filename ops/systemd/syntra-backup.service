@@ -1,0 +1,17 @@
+[Unit]
+Description=Syntra database backup
+# The database is in the container stack. A backup that runs before Postgres
+# is up fails, retries nothing, and leaves a timer that has "succeeded" at
+# doing nothing every night since the last reboot.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/syntra/bin/syntra-backup create
+# Not User=nobody: the tool reads /opt/syntra/shared/.env, which holds
+# MASTER_KEY, and talks to the Docker socket.
+User=root
+# A backup that hangs on an unreachable database must not hold the timer
+# open forever; the next run is a day away and will say the same thing.
+TimeoutStartSec=30min

@@ -1,0 +1,15 @@
+[Unit]
+Description=Take a Syntra backup daily
+
+[Timer]
+OnCalendar=daily
+# A host that was off does not silently skip the day. Without this, a laptop
+# or a machine that reboots nightly can go a week between backups while the
+# timer reports itself perfectly healthy.
+Persistent=true
+# Everything on the host running its daily job at 00:00 is how a backup ends
+# up competing with log rotation and a package update for the same disk.
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

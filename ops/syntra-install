@@ -148,6 +148,32 @@ else
   say "  (no ops/syntra-update in this tree -- deploy a release that has one)"
 fi
 
+say "installing the backup tool"
+if [ -f "$ROOT/releases/$VERSION/ops/syntra-backup" ]; then
+  run install -m 0755 "$ROOT/releases/$VERSION/ops/syntra-backup" "$ROOT/bin/syntra-backup"
+  run mkdir -p "$ROOT/backups"
+  # 0700: a backup is an unfiltered copy of every tenant's data.
+  run chmod 0700 "$ROOT/backups"
+  for unit in syntra-backup.service syntra-backup.timer               syntra-backup-verify.service syntra-backup-verify.timer; do
+    if [ -f "$ROOT/releases/$VERSION/ops/systemd/$unit" ]; then
+      run install -m 0644 "$ROOT/releases/$VERSION/ops/systemd/$unit" "/etc/systemd/system/$unit"
+    fi
+  done
+  run systemctl daemon-reload
+  # INSTALLED, NOT ENABLED, and deliberately.
+  #
+  # A tool that silently starts writing gigabytes to a disk nobody sized for
+  # it is a tool that gets uninstalled, and enabling a unit on an operator's
+  # behalf is a change they did not ask for on a host they own. The retention
+  # default keeps seven, which is a week of the database -- that is their
+  # decision to make, not this script's.
+  say "  timers installed but NOT enabled. To start taking backups:"
+  say "    systemctl enable --now syntra-backup.timer"
+  say "    systemctl enable --now syntra-backup-verify.timer"
+else
+  say "  (no ops/syntra-backup in this tree -- deploy a release that has one)"
+fi
+
 say "rewriting $UNIT"
 run cp -a "$UNIT" "$UNIT.pre-release-layout"
 # WorkingDirectory follows the symlink, and systemd resolves it at start --

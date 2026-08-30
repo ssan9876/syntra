@@ -1,0 +1,15 @@
+[Unit]
+Description=Verify the latest Syntra backup restores
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# THE POINT OF THE WHOLE ARRANGEMENT. A backup schedule nobody checks
+# produces a directory full of files with the shape of backups, and the first
+# time anybody learns otherwise is the worst possible time. This restores the
+# newest one into a scratch database and drops it; it never touches the live
+# database, which is what makes it safe to run unattended.
+ExecStart=/opt/syntra/bin/syntra-backup verify latest
+User=root
+TimeoutStartSec=60min
