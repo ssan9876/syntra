@@ -301,6 +301,35 @@ ok "picks the right one of two compact-JSON assets by name" \
   "$(parse_asset_url "$COMPACT_RESPONSE" "syntra-1.0.0.tar.gz.sha256")" \
   "http://127.0.0.1:8899/assets/1"
 
+# --- parse_tag_name ---------------------------------------------------------
+#
+# The bug this replaced was not in the parsing at all. `latest_version()` was
+# `curl ... | sed -n '...p' | head -1`, and under `set -o pipefail` the SIGPIPE
+# head deals curl on its way out made the pipeline exit 141 while printing the
+# right version -- so `do_check`'s `latest=$(latest_version) || latest=""`
+# discarded it and reported "up to date" against a published newer release.
+# Hence the last case here, which asserts the STATUS as well as the answer:
+# a helper that is right and non-zero is what caused the outage.
+
+ok "reads the version out of a real-GitHub-shaped response, without the v" \
+  "$(parse_tag_name "$GITHUB_SHAPED_RESPONSE")" "1.0.3"
+
+ok "reads it out of a compact, single-line response too" \
+  "$(parse_tag_name "$COMPACT_RESPONSE")" "1.0.0"
+
+ok "takes a tag that carries no v prefix as it stands" \
+  "$(parse_tag_name '{"tag_name": "1.2.3"}')" "1.2.3"
+
+ok "keeps a v that is part of the version rather than a prefix" \
+  "$(parse_tag_name '{"tag_name": "v1.2.3-rc.1"}')" "1.2.3-rc.1"
+
+ok "fails, rather than answering emptily, on a response with no tag" \
+  "$(yes_no parse_tag_name '{"message": "Not Found"}')" "no"
+
+ok "succeeds -- the status, not just the answer, is what do_check reads" \
+  "$(latest=$(parse_tag_name "$GITHUB_SHAPED_RESPONSE") || latest=""; echo "${latest:-unknown}")" \
+  "1.0.3"
+
 # --- status_line ------------------------------------------------------------
 
 ok "the status line is three tab-separated fields" \

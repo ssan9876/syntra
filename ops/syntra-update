@@ -260,6 +260,28 @@ pg_url_field() {
   esac
 }
 
+# The version out of a GitHub releases-API response body, `v` prefix and all
+# stripped -- the parsing half of `latest_version()` below, split out for the
+# same reason `parse_asset_url()` is: it can be tested against a canned
+# response with no network or token involved.
+#
+# Pure bash rather than a pipeline, and that is the fix rather than a style
+# preference. This was `curl ... | sed -n '...p' | head -1`, and `head` exits
+# the moment it has its line -- which hands `curl` a SIGPIPE while it is still
+# writing the rest of the response. Under `set -o pipefail` the pipeline then
+# reports 141 having produced the right answer, so `do_check`'s
+# `latest=$(latest_version) || latest=""` threw that answer away and printed
+# "latest: unknown / state: up to date" against a release sitting there
+# published. A status command that reports "up to date" when it is not is the
+# failure this whole file exists to avoid. It raced, too: the same lookup
+# succeeded by hand, because whether curl is still writing when head leaves
+# depends on how the response lands in the pipe.
+parse_tag_name() {
+  local body="$1"
+  [[ $body =~ \"tag_name\"[[:space:]]*:[[:space:]]*\"v?([^\"]+)\" ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
 # The API download URL for the asset named $2, out of a GitHub releases-API
 # response body given as $1 -- the same lookup `asset_url()` below does over
 # the network, split out so the parsing itself can be tested against a canned
@@ -383,8 +405,7 @@ api() {
 }
 
 latest_version() {
-  api "$RELEASE_API/repos/$REPO/releases/latest" \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1
+  parse_tag_name "$(api "$RELEASE_API/repos/$REPO/releases/latest")"
 }
 
 # The API's asset URL, not browser_download_url: a private repository serves
