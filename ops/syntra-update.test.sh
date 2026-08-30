@@ -303,13 +303,12 @@ ok "picks the right one of two compact-JSON assets by name" \
 
 # --- parse_tag_name ---------------------------------------------------------
 #
-# The bug this replaced was not in the parsing at all. `latest_version()` was
-# `curl ... | sed -n '...p' | head -1`, and under `set -o pipefail` the SIGPIPE
-# head deals curl on its way out made the pipeline exit 141 while printing the
-# right version -- so `do_check`'s `latest=$(latest_version) || latest=""`
-# discarded it and reported "up to date" against a published newer release.
-# Hence the last case here, which asserts the STATUS as well as the answer:
-# a helper that is right and non-zero is what caused the outage.
+# The bug these cover was never in the parsing. `latest_version()` read the
+# right version and `do_check` printed "latest: unknown" anyway, because
+# `latest=$(latest_version) || latest=""` believed a non-zero status that came
+# from auth_curl's leaked RETURN trap rather than from the lookup. Hence the
+# last case, which asserts the STATUS and not just the answer: a helper that
+# is right and non-zero is what took the lab off updates for a day.
 
 ok "reads the version out of a real-GitHub-shaped response, without the v" \
   "$(parse_tag_name "$GITHUB_SHAPED_RESPONSE")" "1.0.3"

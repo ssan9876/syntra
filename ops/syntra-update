@@ -265,17 +265,14 @@ pg_url_field() {
 # same reason `parse_asset_url()` is: it can be tested against a canned
 # response with no network or token involved.
 #
-# Pure bash rather than a pipeline, and that is the fix rather than a style
-# preference. This was `curl ... | sed -n '...p' | head -1`, and `head` exits
-# the moment it has its line -- which hands `curl` a SIGPIPE while it is still
-# writing the rest of the response. Under `set -o pipefail` the pipeline then
-# reports 141 having produced the right answer, so `do_check`'s
-# `latest=$(latest_version) || latest=""` threw that answer away and printed
-# "latest: unknown / state: up to date" against a release sitting there
-# published. A status command that reports "up to date" when it is not is the
-# failure this whole file exists to avoid. It raced, too: the same lookup
-# succeeded by hand, because whether curl is still writing when head leaves
-# depends on how the response lands in the pipe.
+# Pure bash, no pipeline. What it replaced was
+# `curl ... | sed -n '...p' | head -1`, which had to be read together with
+# `do_check`'s `latest=$(latest_version) || latest=""` to see how a lookup
+# that WORKED could still print "latest: unknown": anything that made the
+# pipeline's status non-zero threw the answer away. The thing doing that was
+# the RETURN trap in `auth_curl` (see there), and that is where it is fixed;
+# a single expression with no pipeline and no subprocess is simply one less
+# place for a status to come from that is not the answer.
 parse_tag_name() {
   local body="$1"
   [[ $body =~ \"tag_name\"[[:space:]]*:[[:space:]]*\"v?([^\"]+)\" ]] || return 1
@@ -391,12 +388,22 @@ previous_release() {
 # removed via a RETURN trap, so it is gone whether curl succeeds or dies
 # under `set -e`.
 auth_curl() {
-  local cfg
+  local cfg status
   cfg=$(mktemp)
   chmod 600 "$cfg"
-  trap 'rm -f "$cfg"' RETURN
   printf 'header = "Authorization: Bearer %s"\n' "$SYNTRA_RELEASE_TOKEN" > "$cfg"
-  curl -fsSL --config "$cfg" "$@"
+  # Removed on every path, by hand rather than by a RETURN trap. A trap set
+  # inside a function is NOT scoped to it: it stays installed and fires again
+  # on the next function return, where `cfg` is a dead local -- and under the
+  # `set -u` at the top of this file that is a fatal "cfg: unbound variable".
+  # It killed `syntra-update 1.11.1` mid-download, and before that it was what
+  # made `--check` print "latest: unknown": the trap firing as latest_version
+  # returned became latest_version's own exit status, so do_check discarded a
+  # version it had already read. The `if` is what keeps a failing curl from
+  # taking `set -e` out of the function before the file is gone.
+  if curl -fsSL --config "$cfg" "$@"; then status=0; else status=$?; fi
+  rm -f "$cfg"
+  return "$status"
 }
 
 api() {
