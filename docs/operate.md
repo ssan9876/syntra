@@ -30,20 +30,92 @@ image: set `SYNTRA_VERSION` to the release you want and re-run
 
 Two things to keep, and either one alone is not enough:
 
-- **The `syntra-data` Postgres volume.** The database is the whole state of
-  the deployment — tenants, persons, contracts, policy, the audit log, every
-  application's configuration.
+- **The database.** It is the whole state of the deployment — tenants,
+  persons, contracts, policy, the audit log, every application's
+  configuration.
 - **`MASTER_KEY`.** It encrypts every stored credential and signs SAML. A
   restored database with a lost `MASTER_KEY` means every stored secret is
   unreadable and every SAML integration has to be reconfigured. It is not
   stored in the database, so it does not come back with a database restore —
   back it up separately, and never rotate it by hand.
 
-The in-console updater takes its own pre-migration dump through the Postgres
-container as part of every update (`PG_CONTAINER`, see
-[Configuration](configure.md#updating-from-the-console)) — that dump is a
-safety net for the update itself, not a substitute for a real backup
-schedule of the volume above.
+`syntra-backup` takes care of the first and **detects** a mismatch in the
+second. It does not fix one: keeping the key is still yours.
+
+```
+syntra-backup create               take one
+syntra-backup verify [name]        prove one restores, then throw the copy away
+syntra-backup restore <name> --yes replace the live database with one
+syntra-backup list                 what is here, and whether it can be restored
+```
+
+Backups land in `/opt/syntra/backups`, one directory each, holding a
+`pg_dump` archive and a manifest. `SYNTRA_BACKUP_DIR` moves them and
+`SYNTRA_BACKUP_KEEP` changes how many are kept (seven by default; the oldest
+beyond that are pruned after each successful run).
+
+**They are deliberately not in `shared/backups`.** That is where the updater
+puts its pre-migration dumps, and it prunes that directory to the last three on
+every upgrade — a backup history kept beside them would be silently truncated
+by an unrelated update, and you would find out during a recovery.
+
+### Turning it on
+
+The timers are installed by `syntra-install` and **left disabled**, because a
+tool that starts writing gigabytes to a disk nobody sized for it is a tool that
+gets uninstalled. Turn them on deliberately:
+
+```bash
+systemctl enable --now syntra-backup.timer          # daily
+systemctl enable --now syntra-backup-verify.timer   # weekly
+```
+
+**Enable the second one.** It is the point of the arrangement, not a fourth
+command you might get to later. A backup schedule nobody checks produces a
+directory full of files with the shape of backups, and the first time anybody
+learns otherwise is the worst possible time. `verify` restores the newest
+backup into a scratch database, counts what arrived, and drops it — it never
+touches the live database, which is what makes it safe to run unattended.
+
+A truncated or corrupt archive still starts with the right magic bytes and is
+still non-empty. `verify` is what tells the difference between an archive that
+is well-formed and one that is restorable.
+
+### When a restore refuses
+
+`restore` refuses an interrupted backup, a backup whose archive no longer
+passes the checks it passed when taken — archives rot on disk — and this:
+
+```
+syntra-backup: this backup was taken under a different MASTER_KEY
+  backup:  sha256:9f2b…
+  running: sha256:41c7…
+```
+
+The manifest records a salted fingerprint of `MASTER_KEY`, never the key
+itself, so a stolen backup is not a stolen key. What the fingerprint buys is
+this refusal: restoring a database whose secrets were sealed under a key you no
+longer have is a restore that appears to succeed and has quietly destroyed
+every stored credential's usability.
+
+The right response is almost always to go and find the original key.
+`--accept-secret-loss` overrides it for the cases where the answer is genuinely
+yes — a development host, or a deployment whose secrets are all being rotated
+anyway. It does not imply `--yes`; you still have to say both.
+
+A backup taken where `MASTER_KEY` could not be read records `null` and `list`
+shows its key column as `unknown`. Unknown never counts as a match.
+
+### Getting them off the host
+
+Not this tool's job, deliberately. `rsync`, `restic` and every object-store
+client already do it better than a shell script bolted onto this one would.
+Each backup is a self-contained directory with a stable, sortable name; point
+something at `/opt/syntra/backups` and it will do the right thing.
+
+There is no point-in-time recovery here — that is WAL archiving, a different
+feature with different operational requirements, and `pg_dump` is not a step
+toward it.
 
 ## Metrics
 
