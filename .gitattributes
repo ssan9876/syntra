@@ -9,7 +9,11 @@
 *.yaml text eol=lf
 *.sql text eol=lf
 *.ldif text eol=lf
+*.timer text eol=lf
 ops/syntra-install text eol=lf
 ops/syntra-update text eol=lf
+# No extension, and it has a shebang -- the exact case the comment above
+# describes.
+ops/syntra-backup text eol=lf
 *.jpg binary
 *.png binary
