@@ -139,6 +139,12 @@ export const WEBHOOK_EVENT_GROUPS = {
       'auth.forced_enrolment_completed',
       'session.revoked',
       'oidc.token_revoked',
+      // A machine credential is a credential. An integration watching this
+      // group learns that one was minted without anybody wiring it up
+      // separately -- which is the point of the group existing.
+      'api_token.issued',
+      'api_token.revoked',
+      'auth.token_denied',
     ],
   },
   configuration: {

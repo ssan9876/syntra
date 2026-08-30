@@ -15,6 +15,7 @@ import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { DeleteButton } from './DeleteButton.js';
 import { AccountSessions } from './AccountSessions.js';
+import { AccountTokens } from './AccountTokens.js';
 import { StatusToggle } from './StatusToggle.js';
 import { SubjectLog } from './SubjectLog.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
@@ -637,6 +638,8 @@ export function AccountDetailPage() {
         </Panel>
 
         <AccountSessions userId={data.id} />
+
+        <AccountTokens userId={data.id} />
 
         <SubjectLog subjects={[data.id]} />
 
