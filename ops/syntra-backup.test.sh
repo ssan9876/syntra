@@ -136,6 +136,50 @@ ok "reads an unquoted null as empty" "$(manifest_field masterKeyFingerprint "$m"
 
 rm -f "$m"
 
+# --- running_version --------------------------------------------------------
+#
+# The manifest's version is how a restore tells which schema a dump belongs
+# to. This read the workspace root package.json, which is `private` and
+# carries no `version` key at all -- so every backup taken on a real install
+# recorded "unknown", and the field was decoration. RELEASE.json, written by
+# the release into the same directory, is the file that knows.
+
+RV_ROOT=$(mktemp -d)
+mkdir -p "$RV_ROOT/current"
+RV_SAVED="$ROOT"
+ROOT="$RV_ROOT"
+
+ok "unknown when the install has neither file" "$(running_version)" "unknown"
+
+cat > "$RV_ROOT/current/package.json" <<'JSON'
+{
+  "name": "syntra",
+  "private": true,
+  "type": "module"
+}
+JSON
+ok "unknown for the real workspace package.json" "$(running_version)" "unknown"
+
+cat > "$RV_ROOT/current/RELEASE.json" <<'JSON'
+{
+  "version": "1.11.3",
+  "released": "2026-08-30T23:59:00Z",
+  "commit": "1775771"
+}
+JSON
+ok "reads the version the release wrote" "$(running_version)" "1.11.3"
+
+rm -f "$RV_ROOT/current/RELEASE.json"
+cat > "$RV_ROOT/current/package.json" <<'JSON'
+{
+  "version": "9.9.9"
+}
+JSON
+ok "falls back to package.json in a working tree" "$(running_version)" "9.9.9"
+
+ROOT="$RV_SAVED"
+rm -rf "$RV_ROOT"
+
 # ---------------------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

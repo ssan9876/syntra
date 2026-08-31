@@ -196,12 +196,26 @@ running_fingerprint() {
 }
 
 # The version this deployment is running, or "unknown".
+#
+# RELEASE.json first, because that is the file a release IS: the workspace
+# root package.json is private and carries no `version` at all, so reading it
+# alone meant every manifest on a real install recorded "unknown" -- in the
+# one field a restore needs to tell which schema a dump belongs to. The
+# package.json fallback stays for a working tree, which has no RELEASE.json.
 running_version() {
-  local pkg="$ROOT/current/package.json"
-  [ -f "$pkg" ] || { printf 'unknown'; return 0; }
-  sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pkg" \
-    | head -1 \
-    | grep . || printf 'unknown'
+  local v=""
+  if [ -f "$ROOT/current/RELEASE.json" ]; then
+    v=$(version_in "$ROOT/current/RELEASE.json")
+  fi
+  if [ -z "$v" ] && [ -f "$ROOT/current/package.json" ]; then
+    v=$(version_in "$ROOT/current/package.json")
+  fi
+  printf %s "${v:-unknown}"
+}
+
+# The "version" string in the JSON file named by $1, or empty.
+version_in() {
+  sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -1
 }
 
 # Dumps, and refuses anything that is not a backup.
