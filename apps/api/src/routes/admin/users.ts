@@ -116,7 +116,7 @@ export async function registerAdminUserRoutes(
     async (request) => {
       const { status } = listQuery.parse(request.query);
       const { users, locks } = await request.db(async (tx) => ({
-        users: await listUsers(tx, status ? { status: status as UserStatus } : {}),
+        users: (await listUsers(tx, status ? { status: status as UserStatus } : {})).rows,
         // One read for the page rather than one per row. The table is small
         // by construction — a row exists only for a user with a recent failed
         // sign-in — so this is cheaper than the join it replaces.

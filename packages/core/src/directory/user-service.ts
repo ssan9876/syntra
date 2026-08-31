@@ -2,6 +2,7 @@ import type { TenantClient } from '@syntra/db';
 import { endSessions } from '../auth/end-sessions.js';
 import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { currentTenant } from '../tenant-context.js';
+import { DEFAULT_PAGE_SIZE, type ListOptions } from '../list.js';
 
 export type UserStatus = 'active' | 'inactive';
 
@@ -63,14 +64,42 @@ export async function findUserByLogin(tx: TenantClient, login: string) {
   return tx.user.findFirst({ where: { login } });
 }
 
-export async function listUsers(
-  tx: TenantClient,
-  opts: { status?: UserStatus } = {},
-) {
-  return tx.user.findMany({
-    where: opts.status ? { status: opts.status } : {},
-    orderBy: { login: 'asc' },
-  });
+/**
+ * One page of accounts, and the total behind it.
+ *
+ * `status` is the filter this already had; it moves into the shared options bag
+ * rather than keeping a signature of its own, so a caller that pages and a
+ * caller that filters are writing the same call.
+ */
+export async function listUsers(tx: TenantClient, opts: ListOptions = {}) {
+  const page = opts.page ?? 1;
+  const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
+  const search = opts.search?.trim();
+
+  const where = {
+    ...(opts.status ? { status: opts.status } : {}),
+    ...(search
+      ? {
+          OR: [
+            { login: { contains: search, mode: 'insensitive' as const } },
+            { displayName: { contains: search, mode: 'insensitive' as const } },
+            { email: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
+  };
+
+  const [rows, total] = await Promise.all([
+    tx.user.findMany({
+      where,
+      orderBy: { login: 'asc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    tx.user.count({ where }),
+  ]);
+
+  return { rows, total, page, pageSize };
 }
 
 /**

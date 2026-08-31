@@ -85,7 +85,9 @@ export async function registerAdminGroupRoutes(
   app.get(
     '/groups',
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
-    async (request) => ({ groups: await request.db((tx) => listGroups(tx)) }),
+    async (request) => ({
+      groups: (await request.db((tx) => listGroups(tx))).rows,
+    }),
   );
 
   /**

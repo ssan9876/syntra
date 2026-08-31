@@ -140,7 +140,9 @@ describe('deactivateUser', () => {
     expect(after.statusReason).toBe('left the company');
 
     const all = await withTenant(tenantId, (tx) => listUsers(tx));
-    expect(all).toHaveLength(1);
+    expect(all.rows).toHaveLength(1);
+    // The row is still there, which is the point of deactivation over deletion.
+    expect(all.total).toBe(1);
   });
 });
 
@@ -159,7 +161,7 @@ describe('listUsers', () => {
     const active = await withTenant(tenantId, (tx) =>
       listUsers(tx, { status: 'active' }),
     );
-    expect(active.map((u) => u.login)).toEqual(['b']);
+    expect(active.rows.map((u) => u.login)).toEqual(['b']);
   });
 });
 
