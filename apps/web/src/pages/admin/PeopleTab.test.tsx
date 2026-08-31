@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { PeopleTab } from './PeopleTab.js';
 
@@ -36,6 +37,62 @@ const renderTab = () =>
   );
 
 beforeEach(() => vi.restoreAllMocks());
+
+const renderAt = (url: string) =>
+  render(
+    <MemoryRouter initialEntries={[url]}>
+      <PeopleTab />
+    </MemoryRouter>,
+  );
+
+describe('PeopleTab, finding somebody', () => {
+  it('sends the search from the URL to the API', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(json({ persons: [], total: 0, page: 1, pageSize: 50 }));
+    renderAt('/admin/users?tab=people&q=arch');
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('q=arch'),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it('distinguishes an empty directory from a search that found nobody', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json({ persons: [], total: 0, page: 1, pageSize: 50 }),
+    );
+    renderAt('/admin/users?tab=people&q=zzz');
+
+    expect(await screen.findByText(/Nobody matches/)).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: /clear the search/i }),
+    ).toBeVisible();
+  });
+
+  it('goes back to page one when the search changes', async () => {
+    // Leaving page=7 in the URL strands somebody on an empty table that reads
+    // as broken rather than as a narrower search.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(json({ persons: [], total: 0, page: 7, pageSize: 50 }));
+    renderAt('/admin/users?tab=people&page=7');
+
+    await user.type(await screen.findByLabelText('Search people'), 'arch');
+    await vi.advanceTimersByTimeAsync(300);
+
+    await waitFor(() => {
+      const url = String(fetchSpy.mock.calls.at(-1)?.[0]);
+      expect(url).toContain('q=arch');
+      expect(url).not.toContain('page=7');
+    });
+    vi.useRealTimers();
+  });
+});
 
 describe('PeopleTab', () => {
   it('lists the people the organization knows', async () => {

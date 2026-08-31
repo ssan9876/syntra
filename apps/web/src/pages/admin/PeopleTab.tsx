@@ -1,7 +1,10 @@
-import { Link } from 'react-router-dom';
+import { useCallback } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Empty,
+  ListControls,
+  Pager,
   Panel,
   SkeletonRows,
   Status,
@@ -34,9 +37,48 @@ interface PersonRow {
  * would learn which was which by clicking the wrong one.
  */
 export function PeopleTab() {
-  const { data, error, loading } = useApiResource<{ persons: PersonRow[] }>(
-    '/api/admin/persons',
+  const [params, setParams] = useSearchParams();
+  const q = params.get('q') ?? '';
+  const status = params.get('status') ?? '';
+  const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
+
+  const query = new URLSearchParams();
+  if (q) query.set('q', q);
+  if (status) query.set('status', status);
+  if (page > 1) query.set('page', String(page));
+  const qs = query.toString();
+
+  const { data, error, loading } = useApiResource<{
+    persons: PersonRow[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }>(`/api/admin/persons${qs ? `?${qs}` : ''}`);
+
+  /**
+   * Every control writes through the URL rather than through state.
+   *
+   * A search worth doing is worth sending to somebody, the back button should
+   * undo a filter rather than leave the screen, and a page reloaded mid-triage
+   * should come back where it was.
+   */
+  const update = useCallback(
+    (next: Record<string, string>) => {
+      const merged = new URLSearchParams(params);
+      for (const [key, value] of Object.entries(next)) {
+        if (value) merged.set(key, value);
+        else merged.delete(key);
+      }
+      setParams(merged, { replace: true });
+    },
+    [params, setParams],
   );
+
+  // Page 1 on every narrowing: page 7 of a three-page result is an empty table
+  // that reads as broken.
+  const onSearch = useCallback((value: string) => update({ q: value, page: '' }), [update]);
+  const onStatus = useCallback((value: string) => update({ status: value, page: '' }), [update]);
+  const onPage = useCallback((next: number) => update({ page: String(next) }), [update]);
   // Narrowed once, here, rather than `data?.persons.length` at each use.
   // The optional chain guards `data` and then walks straight into `.persons`,
   // so a 200 that arrives without its collection throws inside render and
@@ -44,6 +86,9 @@ export function PeopleTab() {
   // table. Found when the merged Users screen was asked what it does with a
   // truncated response.
   const persons = data?.persons ?? [];
+  const total = data?.total ?? persons.length;
+  const pageSize = data?.pageSize ?? 50;
+  const filtered = q !== '' || status !== '';
 
   return (
     <>
@@ -56,6 +101,21 @@ export function PeopleTab() {
           Add someone
         </Link>
       </div>
+
+      <ListControls
+        search={q}
+        onSearch={onSearch}
+        searchLabel="Search people"
+        status={{
+          value: status,
+          onChange: onStatus,
+          options: [
+            { value: '', label: 'Any status' },
+            { value: 'active', label: 'Active' },
+            { value: 'inactive', label: 'Inactive' },
+          ],
+        }}
+      />
 
       {error && <Alert tone="danger">{error}</Alert>}
 
@@ -71,7 +131,11 @@ export function PeopleTab() {
         <Panel>
           {loading && <SkeletonRows rows={6} cols={4} />}
 
-          {!loading && persons.length === 0 && (
+          {/* Two empty states, because they need different actions. "Nothing
+              here yet" wants the create button; "nothing matched" wants the
+              search cleared, and saying what was searched makes a typo
+              visible. */}
+          {!loading && persons.length === 0 && !filtered && (
             <div className="p-6">
               {/* An action, not a sentence. The old copy said "Add someone
                   directly, or import a file from your HR system on the Import
@@ -87,6 +151,26 @@ export function PeopleTab() {
                   </Link>
                 }
               />
+            </div>
+          )}
+
+          {!loading && persons.length === 0 && filtered && (
+            <div className="p-6">
+              <Empty
+                title={`Nobody matches ${q || status}`}
+                action={
+                  <button
+                    type="button"
+                    className={buttonClasses('secondary')}
+                    onClick={() => update({ q: '', status: '', page: '' })}
+                  >
+                    Clear the search
+                  </button>
+                }
+              >
+                Names, employee references and work email addresses are
+                searched.
+              </Empty>
             </div>
           )}
 
@@ -146,6 +230,10 @@ export function PeopleTab() {
             </Table>
           )}
         </Panel>
+      )}
+
+      {!error && !loading && persons.length > 0 && (
+        <Pager page={page} pageSize={pageSize} total={total} onPage={onPage} />
       )}
     </>
   );

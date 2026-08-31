@@ -115,6 +115,8 @@ export function UsersPage() {
 
       <Tabs
         label="Users"
+        // People and Accounts both read these, and they are not the same list.
+        resetParams={['q', 'status', 'page']}
         tabs={[
           {
             id: 'people',
