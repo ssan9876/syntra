@@ -100,8 +100,8 @@ export async function registerAdminPersonRoutes(
     '/persons',
     { preHandler: requirePermission(PERMISSIONS.IDENTITY_READ) },
     async (request) => {
-      const persons = await request.db((tx) => listPersons(tx));
-      return { persons };
+      const { rows } = await request.db((tx) => listPersons(tx));
+      return { persons: rows };
     },
   );
 
