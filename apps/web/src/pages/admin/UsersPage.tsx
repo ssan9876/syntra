@@ -8,17 +8,6 @@ import { PeopleTab } from './PeopleTab.js';
 import { AccountsTab } from './AccountsTab.js';
 import { ImportTab } from './ImportTab.js';
 
-interface PersonRow {
-  id: string;
-  status: string;
-}
-
-interface UserRow {
-  id: string;
-  status: string;
-  locked?: boolean;
-}
-
 /**
  * Users: the people the organization knows, and the accounts they sign in with.
  *
@@ -38,15 +27,22 @@ interface UserRow {
  * the relationship as a number instead of a sentence: when "Awaiting an
  * account" reads 1, the split explains itself.
  *
- * The counts are fetched here as well as in the tabs. That is two extra
- * requests on this screen, and the alternative — threading one resource down
- * into both tables — would have made each tab untestable on its own and
- * un-mountable anywhere else. Paid deliberately.
+ * The counts come from /directory/summary rather than from the collections
+ * the tabs fetch. That was two extra full-collection reads on this screen;
+ * now it is one small one, and it stays correct once those lists page --
+ * filtering a fetched array would describe fifty rows while still reading as
+ * a total. Threading one resource down into both tables would still make each
+ * tab untestable on its own, so the separate read stays deliberate.
  */
 export function UsersPage() {
   const can = useCan();
-  const persons = useApiResource<{ persons: PersonRow[] }>('/api/admin/persons');
-  const users = useApiResource<{ users: UserRow[] }>('/api/admin/users');
+  // The cards ask the server for its counts rather than counting a collection
+  // they fetched. Both lists page now, so filtering the fetched array would
+  // describe fifty rows while still reading as a total.
+  const summary = useApiResource<{
+    people: { total: number; active: number };
+    accounts: { total: number; active: number; locked: number };
+  }>('/api/admin/directory/summary');
   // The orphan backlog. Its error is deliberately NOT folded into the banner
   // below: a caller who may read the directory but not people gets a card
   // reading zero rather than a broken front door, the same tolerance the
@@ -62,20 +58,17 @@ export function UsersPage() {
   // read as zero rather than take the whole screen down with it. The tabs
   // below still report the failure properly; this row simply must not be the
   // thing that throws.
-  const personRows = persons.data?.persons ?? [];
-  const userRows = users.data?.users ?? [];
-
-  const peopleCount = personRows.length;
-  const activePeople = personRows.filter((p) => p.status === 'active').length;
-  const accountCount = userRows.length;
-  const lockedCount = userRows.filter((u) => u.locked).length;
+  const peopleCount = summary.data?.people?.total ?? 0;
+  const activePeople = summary.data?.people?.active ?? 0;
+  const accountCount = summary.data?.accounts?.total ?? 0;
+  const lockedCount = summary.data?.accounts?.locked ?? 0;
 
   // The figure that used to be a paragraph. An active person with no account
   // is the joiner state — provisioned but not yet signed in — and it is the
   // only number on this screen that ever needs acting on.
   const awaiting = Math.max(0, activePeople - accountCount);
 
-  const error = persons.error ?? users.error;
+  const error = summary.error;
 
   return (
     <>

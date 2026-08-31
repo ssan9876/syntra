@@ -40,9 +40,28 @@ const USERS = [
   { id: 'u2', login: 'mpuleo', displayName: 'Marc Puleo', email: 'mp@x.test', status: 'active', statusReason: null, sourceId: null, locked: true },
 ];
 
-function mockApi(persons = PERSONS, users = USERS) {
+function mockApi(persons = PERSONS, users = USERS, summary?: unknown) {
   vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     const url = String(input);
+    // The cards read this now. Derived from the same fixtures so the numbers
+    // the older cases assert keep meaning what they meant.
+    if (url.includes('/api/admin/directory/summary')) {
+      return Promise.resolve(
+        json(
+          summary ?? {
+            people: {
+              total: persons.length,
+              active: persons.filter((p) => p.status === 'active').length,
+            },
+            accounts: {
+              total: users.length,
+              active: users.filter((u) => u.status === 'active').length,
+              locked: users.filter((u) => 'locked' in u && u.locked).length,
+            },
+          },
+        ),
+      );
+    }
     if (url.includes('/api/admin/persons')) return Promise.resolve(json({ persons }));
     if (url.includes('/api/admin/users')) return Promise.resolve(json({ users }));
     if (url.includes('/api/admin/org-units')) return Promise.resolve(json({ orgUnits: [] }));
@@ -65,6 +84,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('Users, counting', () => {
+  it('counts the whole directory, not the page it happens to be showing', async () => {
+    // The cards used to filter the fetched arrays. Paging makes those describe
+    // fifty rows while still reading as totals, which is worse than nothing.
+    mockApi(PERSONS, USERS, {
+      people: { total: 4312, active: 4000 },
+      accounts: { total: 3900, active: 3800, locked: 7 },
+    });
+    show();
+
+    // The tab badge carries the same number as the card, legitimately, so the
+    // assertion names the card rather than the text.
+    expect(await screen.findByRole('link', { name: /People/ })).toHaveTextContent(
+      '4312',
+    );
+    expect(screen.getByRole('link', { name: /Accounts$/ })).toHaveTextContent('3900');
+    expect(screen.getByRole('link', { name: /Locked out/ })).toHaveTextContent('7');
+  });
+});
 describe('Users', () => {
   it('is one destination holding people, accounts and import', async () => {
     mockApi();
