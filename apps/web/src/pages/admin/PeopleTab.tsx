@@ -46,6 +46,12 @@ export function PeopleTab() {
   if (q) query.set('q', q);
   if (status) query.set('status', status);
   if (page > 1) query.set('page', String(page));
+  // Carried through rather than fixed here: the route caps it at 200, so
+  // this is a knob for a reader who wants a longer page and for the
+  // end-to-end test that needs a short one -- not a way to ask for
+  // everything.
+  const pageSize = params.get('pageSize');
+  if (pageSize) query.set('pageSize', pageSize);
   const qs = query.toString();
 
   const { data, error, loading } = useApiResource<{
@@ -87,7 +93,7 @@ export function PeopleTab() {
   // truncated response.
   const persons = data?.persons ?? [];
   const total = data?.total ?? persons.length;
-  const pageSize = data?.pageSize ?? 50;
+  const shownPageSize = data?.pageSize ?? 50;
   const filtered = q !== '' || status !== '';
 
   return (
@@ -233,7 +239,7 @@ export function PeopleTab() {
       )}
 
       {!error && !loading && persons.length > 0 && (
-        <Pager page={page} pageSize={pageSize} total={total} onPage={onPage} />
+        <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>
   );

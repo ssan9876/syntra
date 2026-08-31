@@ -33,6 +33,12 @@ export function GroupsPage() {
   const query = new URLSearchParams();
   if (q) query.set('q', q);
   if (page > 1) query.set('page', String(page));
+  // Carried through rather than fixed here: the route caps it at 200, so
+  // this is a knob for a reader who wants a longer page and for the
+  // end-to-end test that needs a short one -- not a way to ask for
+  // everything.
+  const pageSize = params.get('pageSize');
+  if (pageSize) query.set('pageSize', pageSize);
   const qs = query.toString();
 
   const { data, error, loading, reload } = useApiResource<{
@@ -68,7 +74,7 @@ export function GroupsPage() {
   // the collection, so a 200 arriving without it threw inside render.
   const groups = data?.groups ?? [];
   const total = data?.total ?? groups.length;
-  const pageSize = data?.pageSize ?? 50;
+  const shownPageSize = data?.pageSize ?? 50;
   const counts = summary?.groups;
 
   return (
@@ -190,7 +196,7 @@ export function GroupsPage() {
       )}
 
       {!error && !loading && groups.length > 0 && (
-        <Pager page={page} pageSize={pageSize} total={total} onPage={onPage} />
+        <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>
   );
