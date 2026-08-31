@@ -101,12 +101,15 @@ Searchable fields, named per list rather than derived:
 
 | List | Search matches | Filters |
 |---|---|---|
-| People | `givenName`, `familyName`, `externalId`, `businessEmail`, `personalEmail` | `status` |
+| People | `givenName`, `familyName`, `externalId`, `businessEmail` | `status` |
 | Accounts | `login`, `displayName`, `email` | `status` |
 | Groups | `name`, `description` | none |
 
 Search is an `OR` of `contains` with `mode: 'insensitive'` over that list's
-fields. Empty or whitespace-only search is treated as absent, so `?q=` does not
+fields. `personalEmail` is deliberately absent: it is a home address
+held for contacting a leaver, and making it matchable turns an admin search box
+into a way to search staff by private contact details. `businessEmail` is
+corporate and stays. Empty or whitespace-only search is treated as absent, so `?q=` does not
 mean "match nothing".
 
 `listUsers`'s existing `{ status }` option keeps working: it becomes one field
