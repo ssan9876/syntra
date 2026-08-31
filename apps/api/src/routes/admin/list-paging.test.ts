@@ -104,6 +104,22 @@ describe('GET /persons', () => {
   });
 });
 
+describe('GET /users', () => {
+  it('pages, and still says which accounts are locked', async () => {
+    const res = await get('/api/admin/users?pageSize=1');
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.users).toHaveLength(1);
+    expect(body.total).toBeGreaterThanOrEqual(1);
+    expect(body.users[0]).toHaveProperty('locked');
+  });
+
+  it('searches by login', async () => {
+    const res = await get('/api/admin/users?q=admin');
+    expect(res.json().total).toBe(1);
+  });
+});
+
 describe('GET /groups', () => {
   it('pages, and searches name and description', async () => {
     const res = await get('/api/admin/groups?q=finance');

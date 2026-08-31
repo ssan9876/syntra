@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
+import { statusPageQuery } from './list-query.js';
 import {
   adminFactorParams,
   createUserRequest,
@@ -31,15 +31,10 @@ import {
   revokeOrphanedRecoveryCodes,
   type DeactivateOutcome,
   type IssueSetupOutcome,
-  type UserStatus,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
-
-const listQuery = z.object({
-  status: z.enum(['active', 'inactive']).optional(),
-});
 
 export interface AdminUserRouteOptions {
   /** Unseals a directory source's bind credential for a write-back. */
@@ -114,23 +109,30 @@ export async function registerAdminUserRoutes(
     '/users',
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
     async (request) => {
-      const { status } = listQuery.parse(request.query);
-      const { users, locks } = await request.db(async (tx) => ({
-        users: (await listUsers(tx, status ? { status: status as UserStatus } : {})).rows,
-        // One read for the page rather than one per row. The table is small
-        // by construction — a row exists only for a user with a recent failed
-        // sign-in — so this is cheaper than the join it replaces.
-        locks: await tx.loginLockout.findMany({
-          select: { userId: true, lockedAt: true, lockedUntil: true },
-        }),
-      }));
+      const { q, status, page, pageSize } = statusPageQuery.parse(request.query);
+      const { result, locks } = await request.db(async (tx) => {
+        const result = await listUsers(tx, { search: q, status, page, pageSize });
+        return {
+          result,
+          // Scoped to the page. This used to read every lockout row for a list
+          // that was every user; now both are bounded, and the narrower read is
+          // strictly less work than the join it still replaces.
+          locks: await tx.loginLockout.findMany({
+            where: { userId: { in: result.rows.map((u) => u.id) } },
+            select: { userId: true, lockedAt: true, lockedUntil: true },
+          }),
+        };
+      });
 
       const now = new Date();
       const lockedIds = new Set(
         locks.filter((l) => isLocked(l, now)).map((l) => l.userId),
       );
       return {
-        users: users.map((u) => ({ ...u, locked: lockedIds.has(u.id) })),
+        users: result.rows.map((u) => ({ ...u, locked: lockedIds.has(u.id) })),
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
       };
     },
   );
