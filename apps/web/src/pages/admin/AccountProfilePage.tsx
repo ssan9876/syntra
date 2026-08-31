@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
+import { PickerNote } from './PickerNote.js';
 import { PageHeader } from './PageHeader.js';
 
 interface Preview {
@@ -188,8 +189,8 @@ export function AccountProfilePage() {
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<null | 'save' | 'preview'>(null);
 
-  const { data: persons } = useApiResource<{ persons: PersonRow[] }>(
-    '/api/admin/persons',
+  const { data: persons } = useApiResource<{ persons: PersonRow[]; total: number }>(
+    '/api/admin/persons?pageSize=200',
   );
 
   useEffect(() => {
@@ -540,6 +541,12 @@ export function AccountProfilePage() {
                     label: nameOf(person),
                   })),
                 ]}
+              />
+              <PickerNote
+                shown={persons?.persons?.length ?? 0}
+                total={persons?.total ?? 0}
+                to="/admin/users?tab=people"
+                label="People"
               />
               <Button
                 onClick={onPreview}

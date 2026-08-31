@@ -14,6 +14,7 @@ import {
   buttonClasses,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { PickerNote } from './PickerNote.js';
 import { RecordPanel } from './RecordPanel.js';
 
 interface UserRow {
@@ -229,6 +230,12 @@ export function AccountsTab() {
                   label: `${p.givenName} ${p.familyName}`,
                 })),
               ]}
+            />
+            <PickerNote
+              shown={personsData?.persons?.length ?? 0}
+              total={personsData?.total ?? 0}
+              to="/admin/users?tab=people"
+              label="People"
             />
             <Select
               label="Org unit"

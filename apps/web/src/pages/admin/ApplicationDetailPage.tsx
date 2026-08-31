@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Alert, Button, Empty, Panel, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { PickerNote } from './PickerNote.js';
 import { PageHeader } from './PageHeader.js';
 import { ApplicationSso } from './ApplicationSso.js';
 
@@ -40,8 +41,11 @@ export function ApplicationDetailPage() {
   );
   const { data: usersData } = useApiResource<{
     users: { id: string; displayName: string }[];
-  }>('/api/admin/users');
-  const { data: groupsData } = useApiResource<{ groups: Named[] }>('/api/admin/groups');
+    total: number;
+  }>('/api/admin/users?pageSize=200');
+  const { data: groupsData } = useApiResource<{ groups: Named[]; total: number }>(
+    '/api/admin/groups?pageSize=200',
+  );
   const { data: orgUnitsData } = useApiResource<{ orgUnits: Named[] }>('/api/admin/org-units');
 
   const users: Named[] = (usersData?.users ?? []).map((row) => ({
@@ -182,7 +186,19 @@ export function ApplicationDetailPage() {
 
             <div className="space-y-3 border-t border-border-subtle pt-4">
               {picker('user', users)}
+              <PickerNote
+                shown={usersData?.users?.length ?? 0}
+                total={usersData?.total ?? 0}
+                to="/admin/users?tab=accounts"
+                label="Accounts"
+              />
               {picker('group', groups)}
+              <PickerNote
+                shown={groupsData?.groups?.length ?? 0}
+                total={groupsData?.total ?? 0}
+                to="/admin/groups"
+                label="Groups"
+              />
               {picker('orgUnit', orgUnits)}
             </div>
           </div>

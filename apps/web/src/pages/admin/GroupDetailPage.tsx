@@ -13,6 +13,7 @@ import {
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { PickerNote } from './PickerNote.js';
 import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
 import { SubjectLog } from './SubjectLog.js';
@@ -76,7 +77,8 @@ export function GroupDetailPage() {
    */
   const { data: accountData, error: accountsError } = useApiResource<{
     users: { id: string; login: string; displayName: string }[];
-  }>('/api/admin/users');
+    total: number;
+  }>('/api/admin/users?pageSize=200');
 
   const [editing, setEditing] = useState(false);
   const [addUserId, setAddUserId] = useState('');
@@ -284,6 +286,12 @@ export function GroupDetailPage() {
                         label: `${candidate.displayName} — ${candidate.login}`,
                       })),
                     ]}
+                  />
+                  <PickerNote
+                    shown={accountData?.users?.length ?? 0}
+                    total={accountData?.total ?? 0}
+                    to="/admin/users?tab=accounts"
+                    label="Accounts"
                   />
                   <Button
                     variant="primary"

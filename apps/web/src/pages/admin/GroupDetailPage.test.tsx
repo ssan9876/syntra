@@ -112,6 +112,20 @@ describe('GroupDetailPage', () => {
    * whether or not anybody opened it.
    */
   describe('members', () => {
+    it('says so when the picker is not showing every account', async () => {
+      // The accounts list pages now. A picker that renders one page and says
+      // nothing is quietly missing whoever is not on it, and the reader
+      // concludes the account does not exist.
+      mockApi(GROUP, {
+        '/api/admin/users': () =>
+          json({ users: ACCOUNTS, total: 900, page: 1, pageSize: 200 }),
+      });
+      renderPage();
+
+      expect(
+        await screen.findByText(/Showing the first .* of 900/),
+      ).toBeVisible();
+    });
     it('lists the members, each opening its account', async () => {
       mockApi();
       renderPage();

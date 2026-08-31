@@ -12,6 +12,7 @@ import {
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { PickerNote } from './PickerNote.js';
 import { DeleteButton } from './DeleteButton.js';
 
 interface ActionInput {
@@ -313,9 +314,10 @@ function TaskForm({
   onCancel(): void;
   onSaved(): void;
 }) {
-  const { data: groupData } = useApiResource<{ groups: { id: string; name: string }[] }>(
-    '/api/admin/groups',
-  );
+  const { data: groupData } = useApiResource<{
+    groups: { id: string; name: string }[];
+    total: number;
+  }>('/api/admin/groups?pageSize=200');
   const [action, setAction] = useState<Action | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -416,6 +418,14 @@ function TaskForm({
                     label={`Members of ${group.name}`}
                   />
                 ))}
+              {!everyone && (
+                <PickerNote
+                  shown={groupData?.groups?.length ?? 0}
+                  total={groupData?.total ?? 0}
+                  to="/admin/groups"
+                  label="Groups"
+                />
+              )}
             </div>
           </fieldset>
 
