@@ -12,6 +12,7 @@ import {
   Table,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { PickerNote } from './PickerNote.js';
 import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
 import { SubjectLog } from './SubjectLog.js';
@@ -87,7 +88,8 @@ export function PersonDetailPage() {
   // not render at all.
   const { data: usersData } = useApiResource<{
     users: { id: string; login: string; personId: string | null; status: string }[];
-  }>('/api/admin/users');
+    total: number;
+  }>('/api/admin/users?pageSize=200');
 
   // Same treatment as the users list above: a caller who may not read the
   // directory gets an empty selector rather than a page that will not render.
@@ -552,16 +554,24 @@ export function PersonDetailPage() {
               disabledReason="Every account already belongs to somebody."
               build={(v) => ({ userId: v.userId ?? '' })}
               fields={(v, set, errs) => (
-                <Select
-                  label="Account"
-                  value={v.userId ?? ''}
-                  onChange={(x) => set('userId', x)}
-                  error={errs.userId}
-                  options={[
-                    { value: '', label: 'Choose an account' },
-                    ...unlinked.map((u) => ({ value: u.id, label: u.login })),
-                  ]}
-                />
+                <>
+                  <Select
+                    label="Account"
+                    value={v.userId ?? ''}
+                    onChange={(x) => set('userId', x)}
+                    error={errs.userId}
+                    options={[
+                      { value: '', label: 'Choose an account' },
+                      ...unlinked.map((u) => ({ value: u.id, label: u.login })),
+                    ]}
+                  />
+                  <PickerNote
+                    shown={usersData?.users?.length ?? 0}
+                    total={usersData?.total ?? 0}
+                    to="/admin/users?tab=accounts"
+                    label="Accounts"
+                  />
+                </>
               )}
             />
           </div>

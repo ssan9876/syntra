@@ -45,12 +45,23 @@ export function Tabs({
   label,
   tabs,
   param = 'tab',
+  resetParams,
 }: {
   /** Names the strip for a screen reader. Usually the page's own title. */
   label: string;
   tabs: TabDef[];
   /** The search parameter carrying the selection. Overridden where a page has two strips. */
   param?: string;
+  /**
+   * Params belonging to a PANEL rather than to the page, dropped when the tab
+   * changes.
+   *
+   * Two tabs share one query string. Users hosts People and Accounts, and both
+   * read `?q=` and `?page=` — so without this a search and a page number set on
+   * one arrive in the other and silently apply to a different list, which shows
+   * page 3 of something nobody asked for.
+   */
+  resetParams?: readonly string[] | undefined;
 }) {
   const [params, setParams] = useSearchParams();
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -71,6 +82,9 @@ export function Tabs({
     // `replace`, so arrowing across seven tabs leaves one history entry
     // rather than seven for the back button to walk out of.
     const updated = new URLSearchParams(params);
+    if (tab.id !== current.id) {
+      for (const name of resetParams ?? []) updated.delete(name);
+    }
     updated.set(param, tab.id);
     setParams(updated, { replace: true });
     if (focus) refs.current[next]?.focus();

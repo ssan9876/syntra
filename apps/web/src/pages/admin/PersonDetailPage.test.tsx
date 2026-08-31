@@ -137,7 +137,7 @@ describe('PersonDetailPage', () => {
     const posted: unknown[] = [];
     mockRoutes({
       '/api/admin/persons/p1': () => json({ ...person, contracts: [] }),
-      '/api/admin/users': () => json({ users: [] }),
+      '/api/admin/users?pageSize=200': () => json({ users: [] }),
       '/api/admin/persons/p1/contracts': (init) => {
         posted.push(JSON.parse(String(init?.body)));
         return json({ id: 'c9' });
@@ -170,7 +170,7 @@ describe('PersonDetailPage', () => {
     mockRoutes({
       // `person` already holds sequences 1 and 2, and 1 is primary.
       '/api/admin/persons/p1': () => json(person),
-      '/api/admin/users': () => json({ users: [] }),
+      '/api/admin/users?pageSize=200': () => json({ users: [] }),
       '/api/admin/persons/p1/contracts': (init) => {
         posted.push(JSON.parse(String(init?.body)));
         return json({ id: 'c9' });
@@ -193,7 +193,7 @@ describe('PersonDetailPage', () => {
     const posted: unknown[] = [];
     mockRoutes({
       '/api/admin/persons/p1': () => json({ ...person, users: [] }),
-      '/api/admin/users': () =>
+      '/api/admin/users?pageSize=200': () =>
         json({
           users: [
             { id: 'u1', login: 'mokafor', personId: null, status: 'active' },
@@ -242,7 +242,7 @@ describe('PersonDetailPage', () => {
         }
         return json(person);
       },
-      '/api/admin/users': () => json({ users: [] }),
+      '/api/admin/users?pageSize=200': () => json({ users: [] }),
     });
 
     renderPage();
@@ -267,7 +267,7 @@ describe('PersonDetailPage', () => {
         }
         return json(person);
       },
-      '/api/admin/users': () => json({ users: [] }),
+      '/api/admin/users?pageSize=200': () => json({ users: [] }),
     });
 
     renderPage();
@@ -291,7 +291,7 @@ describe('PersonDetailPage', () => {
     const user = userEvent.setup();
     mockRoutes({
       '/api/admin/persons/p1': () => json(person),
-      '/api/admin/users': () => json({ users: [] }),
+      '/api/admin/users?pageSize=200': () => json({ users: [] }),
     });
 
     renderPage();
@@ -352,7 +352,7 @@ describe('PersonDetailPage', () => {
   it('says why it cannot link when every account already belongs to somebody', async () => {
     mockRoutes({
       '/api/admin/persons/p1': () => json({ ...person, users: [] }),
-      '/api/admin/users': () =>
+      '/api/admin/users?pageSize=200': () =>
         json({ users: [{ id: 'u2', login: 'taken', personId: 'p9', status: 'active' }] }),
     });
 
@@ -382,7 +382,7 @@ describe('PersonDetailPage org unit assignment', () => {
       }
       return json(person);
     },
-    '/api/admin/users': () => json({ users: [] }),
+    '/api/admin/users?pageSize=200': () => json({ users: [] }),
     '/api/admin/org-units': () => json(orgUnits),
   });
 

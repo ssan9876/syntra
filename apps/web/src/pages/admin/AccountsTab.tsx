@@ -1,15 +1,20 @@
-import { Link } from 'react-router-dom';
+import { useCallback } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Empty,
   Field,
+  ListControls,
+  Pager,
   Panel,
   Select,
   SkeletonRows,
   Status,
   Table,
+  buttonClasses,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { PickerNote } from './PickerNote.js';
 import { RecordPanel } from './RecordPanel.js';
 
 interface UserRow {
@@ -68,9 +73,47 @@ interface PersonRow {
  * of it.
  */
 export function AccountsTab() {
-  const { data, error, loading, reload } = useApiResource<{ users: UserRow[] }>(
-    '/api/admin/users',
+  const [params, setParams] = useSearchParams();
+  const q = params.get('q') ?? '';
+  const status = params.get('status') ?? '';
+  const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
+
+  const query = new URLSearchParams();
+  if (q) query.set('q', q);
+  if (status) query.set('status', status);
+  if (page > 1) query.set('page', String(page));
+  // Carried through rather than fixed here: the route caps it at 200, so
+  // this is a knob for a reader who wants a longer page and for the
+  // end-to-end test that needs a short one -- not a way to ask for
+  // everything.
+  const pageSize = params.get('pageSize');
+  if (pageSize) query.set('pageSize', pageSize);
+  const qs = query.toString();
+
+  const { data, error, loading, reload } = useApiResource<{
+    users: UserRow[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }>(`/api/admin/users${qs ? `?${qs}` : ''}`);
+
+  // Every control writes through the URL, as People does: same page, same
+  // convention, and a link to a filtered list is worth sending to somebody.
+  const update = useCallback(
+    (next: Record<string, string>) => {
+      const merged = new URLSearchParams(params);
+      for (const [key, value] of Object.entries(next)) {
+        if (value) merged.set(key, value);
+        else merged.delete(key);
+      }
+      setParams(merged, { replace: true });
+    },
+    [params, setParams],
   );
+
+  const onSearch = useCallback((value: string) => update({ q: value, page: '' }), [update]);
+  const onStatus = useCallback((value: string) => update({ status: value, page: '' }), [update]);
+  const onPage = useCallback((next: number) => update({ page: String(next) }), [update]);
   // For the org-unit picker on the create form. A caller without
   // `directory.read` on units gets an empty list and a form that still works,
   // rather than a page that will not render.
@@ -88,8 +131,8 @@ export function AccountsTab() {
   // For the person picker. Its error state is tolerated like the sources read
   // above: a caller who may create accounts but not read people gets a picker
   // holding only "service account", and a form that still works.
-  const { data: personsData } = useApiResource<{ persons: PersonRow[] }>(
-    '/api/admin/persons',
+  const { data: personsData } = useApiResource<{ persons: PersonRow[]; total: number }>(
+    '/api/admin/persons?pageSize=200',
   );
   const people = (personsData?.persons ?? []).filter((p) => p.status === 'active');
   const sourceNames = new Map(
@@ -99,9 +142,26 @@ export function AccountsTab() {
   // collection must render an empty table, not a blank console.
   const users = data?.users ?? [];
   const anySynced = users.some((user) => Boolean(user.sourceId));
+  const total = data?.total ?? users.length;
+  const shownPageSize = data?.pageSize ?? 50;
+  const filtered = q !== '' || status !== '';
 
   return (
     <>
+      <ListControls
+        search={q}
+        onSearch={onSearch}
+        searchLabel="Search accounts"
+        status={{
+          value: status,
+          onChange: onStatus,
+          options: [
+            { value: '', label: 'Any status' },
+            { value: 'active', label: 'Active' },
+            { value: 'inactive', label: 'Inactive' },
+          ],
+        }}
+      />
       {error && <Alert tone="danger">{error}</Alert>}
 
       <RecordPanel
@@ -177,6 +237,12 @@ export function AccountsTab() {
                 })),
               ]}
             />
+            <PickerNote
+              shown={personsData?.persons?.length ?? 0}
+              total={personsData?.total ?? 0}
+              to="/admin/users?tab=people"
+              label="People"
+            />
             <Select
               label="Org unit"
               value={v.orgUnitId ?? ''}
@@ -238,11 +304,30 @@ export function AccountsTab() {
         <Panel>
           {loading && <SkeletonRows rows={6} cols={4} />}
 
-          {!loading && users.length === 0 && (
+          {!loading && users.length === 0 && !filtered && (
             <div className="p-6">
               <Empty title="No users yet">
                 Users appear here once they are created, or once a directory
                 synchronization brings them in.
+              </Empty>
+            </div>
+          )}
+
+          {!loading && users.length === 0 && filtered && (
+            <div className="p-6">
+              <Empty
+                title={`No account matches ${q || status}`}
+                action={
+                  <button
+                    type="button"
+                    className={buttonClasses('secondary')}
+                    onClick={() => update({ q: '', status: '', page: '' })}
+                  >
+                    Clear the search
+                  </button>
+                }
+              >
+                Logins, display names and work email addresses are searched.
               </Empty>
             </div>
           )}
@@ -320,6 +405,10 @@ export function AccountsTab() {
             </Table>
           )}
         </Panel>
+      )}
+
+      {!error && !loading && users.length > 0 && (
+        <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>
   );

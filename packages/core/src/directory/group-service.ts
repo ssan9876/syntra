@@ -1,5 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
+import { DEFAULT_PAGE_SIZE, type ListOptions } from '../list.js';
 
 export async function createGroup(
   tx: TenantClient,
@@ -12,8 +13,32 @@ export async function createGroup(
   });
 }
 
-export async function listGroups(tx: TenantClient) {
-  return tx.group.findMany({ orderBy: { name: 'asc' } });
+/** One page of groups. No status filter: a group does not have one. */
+export async function listGroups(tx: TenantClient, opts: ListOptions = {}) {
+  const page = opts.page ?? 1;
+  const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
+  const search = opts.search?.trim();
+
+  const where = search
+    ? {
+        OR: [
+          { name: { contains: search, mode: 'insensitive' as const } },
+          { description: { contains: search, mode: 'insensitive' as const } },
+        ],
+      }
+    : {};
+
+  const [rows, total] = await Promise.all([
+    tx.group.findMany({
+      where,
+      orderBy: { name: 'asc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    tx.group.count({ where }),
+  ]);
+
+  return { rows, total, page, pageSize };
 }
 
 /** Idempotent: adding an existing member is a no-op, not an error. */

@@ -1,5 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
+import { DEFAULT_PAGE_SIZE, type ListOptions } from '../list.js';
 
 export interface CreatePersonInput {
   givenName: string;
@@ -37,8 +38,46 @@ export async function createPerson(
   });
 }
 
-export async function listPersons(tx: TenantClient) {
-  return tx.person.findMany({ orderBy: [{ familyName: 'asc' }, { givenName: 'asc' }] });
+/**
+ * One page of people, and how many there are to page through.
+ *
+ * The search fields are named here rather than derived from the model, so the
+ * set is legible at the point somebody changes it. `personalEmail` is absent on
+ * purpose: it is a home address held for contacting a leaver, and matching it
+ * would turn this box into a way to search staff by private contact details.
+ */
+export async function listPersons(tx: TenantClient, opts: ListOptions = {}) {
+  const page = opts.page ?? 1;
+  const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
+  const search = opts.search?.trim();
+
+  const where = {
+    ...(opts.status ? { status: opts.status } : {}),
+    ...(search
+      ? {
+          OR: [
+            { givenName: { contains: search, mode: 'insensitive' as const } },
+            { familyName: { contains: search, mode: 'insensitive' as const } },
+            { externalId: { contains: search, mode: 'insensitive' as const } },
+            { businessEmail: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
+  };
+
+  // Both reads on the same client inside the caller's transaction: a total that
+  // disagreed with its own page would be worse than no total.
+  const [rows, total] = await Promise.all([
+    tx.person.findMany({
+      where,
+      orderBy: [{ familyName: 'asc' }, { givenName: 'asc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    tx.person.count({ where }),
+  ]);
+
+  return { rows, total, page, pageSize };
 }
 
 export async function findPerson(tx: TenantClient, id: string) {

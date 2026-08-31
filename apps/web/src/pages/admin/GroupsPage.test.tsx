@@ -1,27 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { GroupsPage } from './GroupsPage.js';
-
-const GROUPS = [
-  {
-    id: 'g1',
-    name: 'Ward Nurses',
-    description: 'Everyone rostered on a ward',
-    status: 'active',
-    statusReason: null,
-    sourceId: null,
-  },
-  {
-    id: 'g2',
-    name: 'Locums',
-    description: null,
-    status: 'inactive',
-    statusReason: 'contract ended',
-    sourceId: null,
-  },
-];
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -29,96 +9,74 @@ const json = (body: unknown, status = 200) =>
     headers: { 'content-type': 'application/json' },
   }) as never;
 
-const mockApi = (
-  groups = GROUPS,
-  overrides: Record<string, (url: string, init?: RequestInit) => Response> = {},
-) =>
-  vi.spyOn(globalThis, 'fetch').mockImplementation(((
-    input: RequestInfo | URL,
-    init?: RequestInit,
-  ) => {
-    const url = String(input);
-    for (const [fragment, handler] of Object.entries(overrides)) {
-      if (url.includes(fragment)) return Promise.resolve(handler(url, init));
-    }
-    return Promise.resolve(json({ groups }));
-  }) as typeof fetch);
+/**
+ * The list and the summary are separate reads, so a test that answers both with
+ * the same body would let a page that asked the wrong one still pass.
+ */
+function mockReads(
+  groups: Record<string, unknown>[],
+  summary = { groups: { total: groups.length, fromDirectory: 0, inactive: 0 } },
+) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
+    Promise.resolve(
+      String(input).includes('/directory/summary')
+        ? json(summary)
+        : json({ groups, total: groups.length, page: 1, pageSize: 50 }),
+    ),
+  );
+}
 
-const renderPage = () =>
+const renderAt = (url: string) =>
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[url]}>
       <GroupsPage />
     </MemoryRouter>,
   );
 
-beforeEach(() => {
-  vi.restoreAllMocks();
-});
+beforeEach(() => vi.restoreAllMocks());
 
 describe('GroupsPage', () => {
-  it('opens a group from its name', async () => {
-    mockApi();
-    renderPage();
+  it('sends the search from the URL to the API', async () => {
+    const fetchSpy = mockReads([]);
+    renderAt('/admin/groups?q=payroll');
 
-    const link = await screen.findByRole('link', { name: 'Ward Nurses' });
-    expect(link).toHaveAttribute('href', '/admin/groups/g1');
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/admin/groups?q=payroll'),
+        expect.anything(),
+      ),
+    );
   });
 
-  it('still says which groups grant nothing', async () => {
-    mockApi();
-    renderPage();
+  it('offers no status filter, because a group has no status to filter on', async () => {
+    mockReads([]);
+    renderAt('/admin/groups');
 
-    expect(await screen.findByText(/contract ended/i)).toBeInTheDocument();
+    await screen.findByLabelText('Search groups');
+    expect(screen.queryByLabelText('Status')).toBeNull();
   });
 
-  it('carries no per-group controls on a row', async () => {
-    mockApi();
-    renderPage();
+  it('says when a search matches no group, and offers to clear it', async () => {
+    mockReads([]);
+    renderAt('/admin/groups?q=zzz');
 
-    await screen.findByRole('link', { name: 'Ward Nurses' });
-    expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /members/i })).not.toBeInTheDocument();
+    expect(await screen.findByText(/No group matches/)).toBeVisible();
     expect(
-      screen.queryByRole('button', { name: /deactivate/i }),
-    ).not.toBeInTheDocument();
+      screen.getByRole('button', { name: /clear the search/i }),
+    ).toBeVisible();
   });
 
-  /**
-   * The list used to fetch every account in the tenant to fill a picker inside
-   * a panel opened from a row — whether or not anybody opened it.
-   */
-  it('reads groups and nothing else', async () => {
-    const fetchSpy = mockApi();
-    renderPage();
-
-    await screen.findByRole('link', { name: 'Ward Nurses' });
-    expect(
-      fetchSpy.mock.calls.some((c) => String(c[0]).includes('/api/admin/users')),
-    ).toBe(false);
-  });
-
-  it('still creates a group, which acts on the collection rather than a member', async () => {
-    const created = vi.fn((_url: string, _init?: RequestInit) => json({ id: 'g3' }));
-    mockApi(GROUPS, {
-      '/api/admin/groups': (url, init) =>
-        init?.method === 'POST' ? created(url, init) : json({ groups: GROUPS }),
+  it('counts every group, not the page it is showing', async () => {
+    // The cards used to filter the fetched array. Paging would have made them
+    // describe fifty rows while still reading as totals.
+    mockReads([{ id: 'g1', name: 'Payroll', description: null, status: 'active', sourceId: null }], {
+      groups: { total: 4312, fromDirectory: 900, inactive: 7 },
     });
-    renderPage();
+    renderAt('/admin/groups');
 
-    await screen.findByRole('link', { name: 'Ward Nurses' });
-    // The panel opens from a trigger carrying the same label as its submit.
-    await userEvent.click(screen.getByRole('button', { name: /new group/i }));
-    await userEvent.type(screen.getByLabelText(/^name$/i), 'Porters');
-    await userEvent.click(screen.getByRole('button', { name: /new group/i }));
-
-    await waitFor(() => expect(created).toHaveBeenCalled());
-    expect(JSON.parse(String(created.mock.calls[0]![1]!.body)).name).toBe('Porters');
-  });
-
-  it('says there are no groups rather than showing an empty list', async () => {
-    mockApi([]);
-    renderPage();
-
-    expect(await screen.findByText(/no groups yet/i)).toBeInTheDocument();
+    // Unformatted, as every other StatCard in the console renders its number.
+    expect(await screen.findByText('4312')).toBeVisible();
+    expect(screen.getByText('900')).toBeVisible();
+    expect(screen.getByText('7')).toBeVisible();
   });
 });

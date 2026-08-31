@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
+import { statusPageQuery } from './list-query.js';
 import {
   adminFactorParams,
   createUserRequest,
@@ -31,15 +31,10 @@ import {
   revokeOrphanedRecoveryCodes,
   type DeactivateOutcome,
   type IssueSetupOutcome,
-  type UserStatus,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
-
-const listQuery = z.object({
-  status: z.enum(['active', 'inactive']).optional(),
-});
 
 export interface AdminUserRouteOptions {
   /** Unseals a directory source's bind credential for a write-back. */
@@ -114,24 +109,95 @@ export async function registerAdminUserRoutes(
     '/users',
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
     async (request) => {
-      const { status } = listQuery.parse(request.query);
-      const { users, locks } = await request.db(async (tx) => ({
-        users: await listUsers(tx, status ? { status: status as UserStatus } : {}),
-        // One read for the page rather than one per row. The table is small
-        // by construction — a row exists only for a user with a recent failed
-        // sign-in — so this is cheaper than the join it replaces.
-        locks: await tx.loginLockout.findMany({
-          select: { userId: true, lockedAt: true, lockedUntil: true },
-        }),
-      }));
+      const { q, status, page, pageSize } = statusPageQuery.parse(request.query);
+      const { result, locks } = await request.db(async (tx) => {
+        const result = await listUsers(tx, { search: q, status, page, pageSize });
+        return {
+          result,
+          // Scoped to the page. This used to read every lockout row for a list
+          // that was every user; now both are bounded, and the narrower read is
+          // strictly less work than the join it still replaces.
+          locks: await tx.loginLockout.findMany({
+            where: { userId: { in: result.rows.map((u) => u.id) } },
+            select: { userId: true, lockedAt: true, lockedUntil: true },
+          }),
+        };
+      });
 
       const now = new Date();
       const lockedIds = new Set(
         locks.filter((l) => isLocked(l, now)).map((l) => l.userId),
       );
       return {
-        users: users.map((u) => ({ ...u, locked: lockedIds.has(u.id) })),
+        users: result.rows.map((u) => ({ ...u, locked: lockedIds.has(u.id) })),
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
       };
+    },
+  );
+
+  /**
+   * The numbers the directory screen puts on its stat cards.
+   *
+   * Server-side because the page used to compute them by filtering the full
+   * collections it had fetched, and paging turns that into page-sized numbers
+   * that still look like totals -- worse than showing nothing.
+   *
+   * Both permissions, because the answer spans both halves of the directory.
+   * `locked` cannot come from a list filter: it is derived from lockout state
+   * rather than a User column, and answering it with a join in the route would
+   * put that logic in the wrong layer.
+   */
+  app.get(
+    '/directory/summary',
+    {
+      preHandler: [
+        requirePermission(PERMISSIONS.IDENTITY_READ),
+        requirePermission(PERMISSIONS.DIRECTORY_READ),
+      ],
+    },
+    async (request) => {
+      const now = new Date();
+      return request.db(async (tx) => {
+        const [
+          people,
+          activePeople,
+          accounts,
+          activeAccounts,
+          locks,
+          groups,
+          groupsFromDirectory,
+          inactiveGroups,
+        ] = await Promise.all([
+          tx.person.count(),
+          tx.person.count({ where: { status: 'active' } }),
+          tx.user.count(),
+          tx.user.count({ where: { status: 'active' } }),
+          tx.loginLockout.findMany({
+            select: { userId: true, lockedAt: true, lockedUntil: true },
+          }),
+          tx.group.count(),
+          tx.group.count({ where: { sourceId: { not: null } } }),
+          tx.group.count({ where: { status: { not: 'active' } } }),
+        ]);
+        return {
+          people: { total: people, active: activePeople },
+          accounts: {
+            total: accounts,
+            active: activeAccounts,
+            locked: locks.filter((l) => isLocked(l, now)).length,
+          },
+          // The groups page counts these three the same way the directory page
+          // counted its two: over the whole table, because a page-sized number
+          // that still looks like a total is worse than no number.
+          groups: {
+            total: groups,
+            fromDirectory: groupsFromDirectory,
+            inactive: inactiveGroups,
+          },
+        };
+      });
     },
   );
 

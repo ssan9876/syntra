@@ -1,5 +1,16 @@
-import { Link } from 'react-router-dom';
-import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { useCallback } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import {
+  Alert,
+  Empty,
+  Field,
+  ListControls,
+  Pager,
+  Panel,
+  SkeletonRows,
+  Status,
+  buttonClasses,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
@@ -15,13 +26,56 @@ interface GroupRow {
 }
 
 export function GroupsPage() {
-  const { data, error, loading, reload } = useApiResource<{ groups: GroupRow[] }>(
-    '/api/admin/groups',
+  const [params, setParams] = useSearchParams();
+  const q = params.get('q') ?? '';
+  const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
+
+  const query = new URLSearchParams();
+  if (q) query.set('q', q);
+  if (page > 1) query.set('page', String(page));
+  // Carried through rather than fixed here: the route caps it at 200, so
+  // this is a knob for a reader who wants a longer page and for the
+  // end-to-end test that needs a short one -- not a way to ask for
+  // everything.
+  const pageSize = params.get('pageSize');
+  if (pageSize) query.set('pageSize', pageSize);
+  const qs = query.toString();
+
+  const { data, error, loading, reload } = useApiResource<{
+    groups: GroupRow[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }>(`/api/admin/groups${qs ? `?${qs}` : ''}`);
+
+  // The cards count the whole table. They used to filter the fetched array,
+  // which paging turns into three page-sized numbers that still read as
+  // totals -- worse than showing nothing.
+  const { data: summary } = useApiResource<{
+    groups: { total: number; fromDirectory: number; inactive: number };
+  }>('/api/admin/directory/summary');
+
+  const update = useCallback(
+    (next: Record<string, string>) => {
+      const merged = new URLSearchParams(params);
+      for (const [key, value] of Object.entries(next)) {
+        if (value) merged.set(key, value);
+        else merged.delete(key);
+      }
+      setParams(merged, { replace: true });
+    },
+    [params, setParams],
   );
+
+  const onSearch = useCallback((value: string) => update({ q: value, page: '' }), [update]);
+  const onPage = useCallback((next: number) => update({ page: String(next) }), [update]);
   // Narrowed once, and reused by both the summary cards and the table.
   // The optional chain used to guard `data` and then walk straight into
   // the collection, so a 200 arriving without it threw inside render.
   const groups = data?.groups ?? [];
+  const total = data?.total ?? groups.length;
+  const shownPageSize = data?.pageSize ?? 50;
+  const counts = summary?.groups;
 
   return (
     <>
@@ -30,16 +84,17 @@ export function GroupsPage() {
       />
 
       <StatGrid>
-        <StatCard label="Groups" value={groups.length} />
-        <StatCard label="From a directory" value={groups.filter((g) => g.sourceId !== null).length} />
+        <StatCard label="Groups" value={counts?.total ?? 0} />
+        <StatCard label="From a directory" value={counts?.fromDirectory ?? 0} />
         <StatCard
           label="Inactive"
-          value={groups.filter((g) => g.status !== 'active').length}
+          value={counts?.inactive ?? 0}
           tone="warning"
           quietWhenZero
         />
       </StatGrid>
 
+      <ListControls search={q} onSearch={onSearch} searchLabel="Search groups" />
       {error && <Alert tone="danger">{error}</Alert>}
 
       <RecordPanel
@@ -76,11 +131,30 @@ export function GroupsPage() {
         <Panel>
           {loading && <SkeletonRows rows={4} cols={2} />}
 
-          {!loading && data?.groups.length === 0 && (
+          {!loading && groups.length === 0 && q === '' && (
             <div className="p-6">
               <Empty title="No groups yet">
                 Create a group to grant the same access to several people at
                 once instead of repeating it per person.
+              </Empty>
+            </div>
+          )}
+
+          {!loading && groups.length === 0 && q !== '' && (
+            <div className="p-6">
+              <Empty
+                title={`No group matches ${q}`}
+                action={
+                  <button
+                    type="button"
+                    className={buttonClasses('secondary')}
+                    onClick={() => update({ q: '', page: '' })}
+                  >
+                    Clear the search
+                  </button>
+                }
+              >
+                Group names and descriptions are searched.
               </Empty>
             </div>
           )}
@@ -119,6 +193,10 @@ export function GroupsPage() {
             </ul>
           )}
         </Panel>
+      )}
+
+      {!error && !loading && groups.length > 0 && (
+        <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>
   );

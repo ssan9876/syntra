@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { statusPageQuery } from './list-query.js';
 import {
   contractParams,
   createContractRequest,
@@ -100,8 +101,16 @@ export async function registerAdminPersonRoutes(
     '/persons',
     { preHandler: requirePermission(PERMISSIONS.IDENTITY_READ) },
     async (request) => {
-      const persons = await request.db((tx) => listPersons(tx));
-      return { persons };
+      const { q, status, page, pageSize } = statusPageQuery.parse(request.query);
+      const result = await request.db((tx) =>
+        listPersons(tx, { search: q, status, page, pageSize }),
+      );
+      return {
+        persons: result.rows,
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
+      };
     },
   );
 
