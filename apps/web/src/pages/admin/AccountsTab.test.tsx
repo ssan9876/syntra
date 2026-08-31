@@ -70,7 +70,61 @@ const renderPage = () =>
     </MemoryRouter>,
   );
 
+const renderAt = (url: string) =>
+  render(
+    <MemoryRouter initialEntries={[url]}>
+      <AccountsTab />
+    </MemoryRouter>,
+  );
+
 beforeEach(() => vi.restoreAllMocks());
+
+describe('AccountsTab, finding an account', () => {
+  it('sends the search from the URL to the API', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(json({ users: [], total: 0, page: 1, pageSize: 50 }));
+    renderAt('/admin/users?tab=accounts&q=barcher');
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/admin/users?q=barcher'),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it('distinguishes no accounts from no matching accounts', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json({ users: [], total: 0, page: 1, pageSize: 50 }),
+    );
+    renderAt('/admin/users?tab=accounts&q=zzz');
+
+    expect(await screen.findByText(/No account matches/)).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: /clear the search/i }),
+    ).toBeVisible();
+  });
+
+  it('goes back to page one when the search changes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(json({ users: [], total: 0, page: 4, pageSize: 50 }));
+    renderAt('/admin/users?tab=accounts&page=4');
+
+    await user.type(await screen.findByLabelText('Search accounts'), 'barch');
+    await vi.advanceTimersByTimeAsync(300);
+
+    await waitFor(() => {
+      const url = String(fetchSpy.mock.calls.at(-1)?.[0]);
+      expect(url).toContain('q=barch');
+      expect(url).not.toContain('page=4');
+    });
+    vi.useRealTimers();
+  });
+});
 
 describe('AccountsTab', () => {
   it('lists users returned by the API', async () => {

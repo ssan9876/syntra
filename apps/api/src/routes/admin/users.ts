@@ -160,22 +160,41 @@ export async function registerAdminUserRoutes(
     async (request) => {
       const now = new Date();
       return request.db(async (tx) => {
-        const [people, activePeople, accounts, activeAccounts, locks] =
-          await Promise.all([
-            tx.person.count(),
-            tx.person.count({ where: { status: 'active' } }),
-            tx.user.count(),
-            tx.user.count({ where: { status: 'active' } }),
-            tx.loginLockout.findMany({
-              select: { userId: true, lockedAt: true, lockedUntil: true },
-            }),
-          ]);
+        const [
+          people,
+          activePeople,
+          accounts,
+          activeAccounts,
+          locks,
+          groups,
+          groupsFromDirectory,
+          inactiveGroups,
+        ] = await Promise.all([
+          tx.person.count(),
+          tx.person.count({ where: { status: 'active' } }),
+          tx.user.count(),
+          tx.user.count({ where: { status: 'active' } }),
+          tx.loginLockout.findMany({
+            select: { userId: true, lockedAt: true, lockedUntil: true },
+          }),
+          tx.group.count(),
+          tx.group.count({ where: { sourceId: { not: null } } }),
+          tx.group.count({ where: { status: { not: 'active' } } }),
+        ]);
         return {
           people: { total: people, active: activePeople },
           accounts: {
             total: accounts,
             active: activeAccounts,
             locked: locks.filter((l) => isLocked(l, now)).length,
+          },
+          // The groups page counts these three the same way the directory page
+          // counted its two: over the whole table, because a page-sized number
+          // that still looks like a total is worse than no number.
+          groups: {
+            total: groups,
+            fromDirectory: groupsFromDirectory,
+            inactive: inactiveGroups,
           },
         };
       });

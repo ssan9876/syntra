@@ -131,6 +131,14 @@ describe('GET /directory/summary', () => {
     expect(body.accounts.total).toBe(1);
     expect(body.accounts.locked).toBe(0);
   });
+
+  it('counts groups too, which their own page shows on stat cards', async () => {
+    const res = await get('/api/admin/directory/summary');
+    const body = res.json();
+    expect(body.groups.total).toBe(1);
+    expect(body.groups.fromDirectory).toBe(0);
+    expect(body.groups.inactive).toBe(0);
+  });
 });
 
 describe('GET /directory/summary, with only half the permissions', () => {
