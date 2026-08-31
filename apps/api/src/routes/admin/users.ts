@@ -138,6 +138,51 @@ export async function registerAdminUserRoutes(
   );
 
   /**
+   * The numbers the directory screen puts on its stat cards.
+   *
+   * Server-side because the page used to compute them by filtering the full
+   * collections it had fetched, and paging turns that into page-sized numbers
+   * that still look like totals -- worse than showing nothing.
+   *
+   * Both permissions, because the answer spans both halves of the directory.
+   * `locked` cannot come from a list filter: it is derived from lockout state
+   * rather than a User column, and answering it with a join in the route would
+   * put that logic in the wrong layer.
+   */
+  app.get(
+    '/directory/summary',
+    {
+      preHandler: [
+        requirePermission(PERMISSIONS.IDENTITY_READ),
+        requirePermission(PERMISSIONS.DIRECTORY_READ),
+      ],
+    },
+    async (request) => {
+      const now = new Date();
+      return request.db(async (tx) => {
+        const [people, activePeople, accounts, activeAccounts, locks] =
+          await Promise.all([
+            tx.person.count(),
+            tx.person.count({ where: { status: 'active' } }),
+            tx.user.count(),
+            tx.user.count({ where: { status: 'active' } }),
+            tx.loginLockout.findMany({
+              select: { userId: true, lockedAt: true, lockedUntil: true },
+            }),
+          ]);
+        return {
+          people: { total: people, active: activePeople },
+          accounts: {
+            total: accounts,
+            active: activeAccounts,
+            locked: locks.filter((l) => isLocked(l, now)).length,
+          },
+        };
+      });
+    },
+  );
+
+  /**
    * Every account with nobody behind it, and who it might be.
    *
    * Declared BEFORE `/users/:id` so a reader meets the static path first.

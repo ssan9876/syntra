@@ -120,6 +120,35 @@ describe('GET /users', () => {
   });
 });
 
+describe('GET /directory/summary', () => {
+  it('counts people and accounts on the server, where paging cannot skew them', async () => {
+    const res = await get('/api/admin/directory/summary');
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.people.total).toBe(4);
+    expect(body.people.active).toBe(4);
+    // The admin seeded for these tests is the only account.
+    expect(body.accounts.total).toBe(1);
+    expect(body.accounts.locked).toBe(0);
+  });
+});
+
+describe('GET /directory/summary, with only half the permissions', () => {
+  // The route declares two preHandlers. A test that only ever calls it holding
+  // both cannot tell whether Fastify runs both or stops at the first -- and if
+  // it stops, the route silently requires less than it says.
+  beforeEach(async () => {
+    ctx = await buildTestApp();
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    cookie = await adminCookie();
+  });
+
+  it('refuses an admin who may read accounts but not people', async () => {
+    const res = await get('/api/admin/directory/summary');
+    expect(res.statusCode).toBe(403);
+  });
+});
+
 describe('GET /groups', () => {
   it('pages, and searches name and description', async () => {
     const res = await get('/api/admin/groups?q=finance');
