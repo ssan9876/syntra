@@ -248,3 +248,26 @@ page, and comes back to the same page of results.
   the second empty state.
 - **`pageSize` cap bypass** by repeated requests is not a threat this cap
   addresses. The cap bounds one query's cost; it does not ration access.
+
+## Two consequences found while planning
+
+Neither is visible from the design above, and both are silent breakage rather
+than a missing feature.
+
+**Tabs share one query string.** People and Accounts are two tabs on
+`/admin/users`, and `Tabs.select()` copies every existing param when it
+switches. Without a change there, `?q=arch&page=3` set on People arrives in
+Accounts and silently applies to a different list. `Tabs` gains an optional
+`resetParams` naming the params that belong to a panel rather than to the
+page, cleared on a tab change.
+
+**Six pickers fetch whole collections.** `AccountProfilePage`, `AccountsTab`,
+`ApplicationDetailPage` (twice), `DelegatedTasksTab`, `GroupDetailPage` and
+`PersonDetailPage` each load one of these three endpoints to populate a
+chooser. Once the endpoint pages, every one of them silently shows the first
+fifty rows and no sign that there were more — a picker quietly missing the
+person you need. Each asks for `?pageSize=200` and, when `total` exceeds what
+came back, says so and points at the list screen that can search. Making those
+pickers searchable in their own right is the better answer and is deliberately
+left for later; admitting the truncation is what stops this change being a
+regression.
