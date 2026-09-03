@@ -5,7 +5,6 @@ import { passwordWasUsedBefore } from './password-ageing.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import { findAttempt } from './attempt-service.js';
 import { endSessions } from './end-sessions.js';
-import { revokeAllRefreshTokensForUser } from './refresh-token.js';
 
 export interface RenewExpiredPasswordInput {
   attemptToken: string;

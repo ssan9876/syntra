@@ -412,8 +412,11 @@ describe('the source address', () => {
     expect(await attemptWithForwardedFor()).toBe('10.9.9.9');
   });
 
-  it('reads it from the proxy when TRUST_PROXY says how many hops', async () => {
-    ctx = await buildTestApp({ env: { TRUST_PROXY: '1' } });
+  it('reads it from the proxy when TRUST_PROXY names the proxy', async () => {
+    // The address form, not a hop count: Fastify 5.12.1 made a count trust
+    // nothing at all, and the config loader now refuses one by name. The
+    // request below arrives from 10.9.9.9, so that is the proxy to name.
+    ctx = await buildTestApp({ env: { TRUST_PROXY: '10.9.9.9' } });
     await ctx.app.ready();
     expect(await attemptWithForwardedFor()).toBe('203.0.113.9');
   });

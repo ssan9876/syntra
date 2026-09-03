@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { pageQuery } from './list-query.js';
+import { statusPageQuery } from './list-query.js';
 import {
   createGroupRequest,
   deactivateGroupRequest,
@@ -87,9 +87,9 @@ export async function registerAdminGroupRoutes(
     '/groups',
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
     async (request) => {
-      const { q, page, pageSize } = pageQuery.parse(request.query);
+      const { q, status, page, pageSize } = statusPageQuery.parse(request.query);
       const result = await request.db((tx) =>
-        listGroups(tx, { search: q, page, pageSize }),
+        listGroups(tx, { search: q, status, page, pageSize }),
       );
       return {
         groups: result.rows,

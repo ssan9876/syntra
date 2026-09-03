@@ -60,6 +60,14 @@ env:
   # timeout, identically on two consecutive attempts. Two workers halves the
   # oversubscription without reintroducing the Postgres-crash risk `SYNTRA_
   # TEST_WORKERS` was pinned to guard against in the first place.
+  #
+  # THE RPC HALF OF THAT STORY IS OVER: Vitest 5 does not produce the
+  # heartbeat timeout, and `vitest.config.ts` no longer suppresses unhandled
+  # errors to hide it. The number below stays at two anyway, because the
+  # FIRST premise still holds -- this runner has two vCPUs and one Postgres
+  # sharing them, and that is what the four-versus-seven measurements above
+  # were about. Left where it was measured rather than raised on the strength
+  # of an upstream fix to a different problem.
   SYNTRA_TEST_WORKERS: 2
 
   # A hosted runner is slower than the machine this budget was calibrated on,
@@ -98,19 +106,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: The updater's own shell logic
+      - name: The operational shell tools' own logic
         # bash -n first: a syntax error in the updater is discovered at 2am
         # by a system that has already migrated its database, and the fast
         # syntax check catches it in under a second rather than after Node
         # and Postgres have spun up for nothing.
         #
-        # The harness sources the SHIPPED script (SYNTRA_UPDATE_SOURCE_ONLY=1)
-        # rather than a copy, so this is the only automated coverage of the
-        # guards release.yml now depends on being correct: version_valid (a
-        # path-traversal refusal), adoption_allowed (keeps --adopt off real
-        # releases), previous_release_of (where a rollback goes), and the
-        # env/URL parsers the migrate step and the dump/restore need.
-        run: bash -n ops/syntra-update ops/syntra-install && bash ops/syntra-update.test.sh
+        # The harnesses source the SHIPPED scripts (SYNTRA_UPDATE_SOURCE_ONLY=1
+        # and the same guard in syntra-backup) rather than a copy, so this is
+        # the only automated coverage of the guards release.yml now depends on
+        # being correct: version_valid (a path-traversal refusal),
+        # adoption_allowed (keeps --adopt off real releases),
+        # previous_release_of (where a rollback goes), and the env/URL parsers
+        # the migrate step and the dump/restore need.
+        #
+        # syntra-backup is checked here for the same reason and was not,
+        # which was the worse omission of the two: it is the disaster-recovery
+        # tool, releases gate on this workflow, and a `create`/`verify`/
+        # `restore` nothing exercises is a tool whose first real run is the
+        # one taken during an incident.
+        run: |
+          bash -n ops/syntra-update ops/syntra-install ops/syntra-backup
+          bash ops/syntra-update.test.sh
+          bash ops/syntra-backup.test.sh
 
       - uses: actions/setup-node@v4
         with:
@@ -162,6 +180,17 @@ jobs:
 
       - name: Typecheck
         run: pnpm exec tsc -b --force
+
+      # AFTER the typecheck and before the suite, which is where its value is.
+      # It runs in about a minute and catches the things `tsc` cannot see --
+      # a promise nobody awaited, a hook behind a condition -- so a run that
+      # fails here fails before spending twenty minutes on the database.
+      #
+      # It needs the generated Prisma client, which is why it cannot move
+      # above `pnpm db:generate`: the type-aware rules ask the compiler about
+      # every `tx.` call, and without the client those are `any`.
+      - name: Lint
+        run: pnpm lint
 
       # TWO FAILURE MODES WORTH TELLING APART before you suspect your change.
       #

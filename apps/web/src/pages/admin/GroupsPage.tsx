@@ -9,6 +9,7 @@ import {
   Panel,
   SkeletonRows,
   Status,
+  Table,
   buttonClasses,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
@@ -28,10 +29,12 @@ interface GroupRow {
 export function GroupsPage() {
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
+  const status = params.get('status') ?? '';
   const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
 
   const query = new URLSearchParams();
   if (q) query.set('q', q);
+  if (status) query.set('status', status);
   if (page > 1) query.set('page', String(page));
   // Carried through rather than fixed here: the route caps it at 200, so
   // this is a knob for a reader who wants a longer page and for the
@@ -51,23 +54,39 @@ export function GroupsPage() {
   // The cards count the whole table. They used to filter the fetched array,
   // which paging turns into three page-sized numbers that still read as
   // totals -- worse than showing nothing.
-  const { data: summary } = useApiResource<{
+  //
+  // `/groups/summary`, NOT `/directory/summary`. The combined one spans both
+  // halves of the directory and so demands `identity.read` as well, which this
+  // screen needs for nothing else: a group administrator got a 403 there and
+  // three confident zeroes above a table listing thousands of groups.
+  const { data: summary, error: summaryError } = useApiResource<{
     groups: { total: number; fromDirectory: number; inactive: number };
-  }>('/api/admin/directory/summary');
+  }>('/api/admin/groups/summary');
 
   const update = useCallback(
-    (next: Record<string, string>) => {
+    (next: Record<string, string>, replaceHistory = false) => {
       const merged = new URLSearchParams(params);
       for (const [key, value] of Object.entries(next)) {
         if (value) merged.set(key, value);
         else merged.delete(key);
       }
-      setParams(merged, { replace: true });
+      // `replace` only for the debounced search, which is this screen acting
+      // on a settled keystroke rather than on a click. A page and a status are
+      // decisions, and the back button should undo a filter rather than leave
+      // the screen.
+      setParams(merged, { replace: replaceHistory });
     },
     [params, setParams],
   );
 
-  const onSearch = useCallback((value: string) => update({ q: value, page: '' }), [update]);
+  const onSearch = useCallback(
+    (value: string) => update({ q: value, page: '' }, true),
+    [update],
+  );
+  const onStatus = useCallback(
+    (value: string) => update({ status: value, page: '' }),
+    [update],
+  );
   const onPage = useCallback((next: number) => update({ page: String(next) }), [update]);
   // Narrowed once, and reused by both the summary cards and the table.
   // The optional chain used to guard `data` and then walk straight into
@@ -76,25 +95,49 @@ export function GroupsPage() {
   const total = data?.total ?? groups.length;
   const shownPageSize = data?.pageSize ?? 50;
   const counts = summary?.groups;
+  const filtered = q !== '' || status !== '';
+  /**
+   * What a card shows when the count could not be read.
+   *
+   * A nought is a measurement. Rendering one for a refusal states as fact that
+   * there are no groups, directly above a table listing them; the dash is what
+   * this console's tables already use for a value that is not there to show.
+   */
+  const figure = (value: number | undefined) =>
+    summaryError || value === undefined ? '—' : value;
 
   return (
     <>
-      <PageHeader
-        title="Groups"
-      />
+      <PageHeader title="Groups" />
 
       <StatGrid>
-        <StatCard label="Groups" value={counts?.total ?? 0} />
-        <StatCard label="From a directory" value={counts?.fromDirectory ?? 0} />
+        <StatCard label="Groups" value={figure(counts?.total)} />
+        <StatCard label="From a directory" value={figure(counts?.fromDirectory)} />
         <StatCard
           label="Inactive"
-          value={counts?.inactive ?? 0}
+          value={figure(counts?.inactive)}
           tone="warning"
           quietWhenZero
         />
       </StatGrid>
 
-      <ListControls search={q} onSearch={onSearch} searchLabel="Search groups" />
+      <ListControls
+        search={q}
+        onSearch={onSearch}
+        searchLabel="Search groups"
+        searchPlaceholder="Name or description"
+        // The card above advertises the inactive groups; without this the only
+        // way to act on that figure was to read every page looking for them.
+        status={{
+          value: status,
+          onChange: onStatus,
+          options: [
+            { value: '', label: 'Any status' },
+            { value: 'active', label: 'Active' },
+            { value: 'inactive', label: 'Inactive' },
+          ],
+        }}
+      />
       {error && <Alert tone="danger">{error}</Alert>}
 
       <RecordPanel
@@ -129,9 +172,9 @@ export function GroupsPage() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={4} cols={2} />}
+          {loading && <SkeletonRows rows={4} cols={3} />}
 
-          {!loading && groups.length === 0 && q === '' && (
+          {!loading && groups.length === 0 && total === 0 && !filtered && (
             <div className="p-6">
               <Empty title="No groups yet">
                 Create a group to grant the same access to several people at
@@ -140,15 +183,15 @@ export function GroupsPage() {
             </div>
           )}
 
-          {!loading && groups.length === 0 && q !== '' && (
+          {!loading && groups.length === 0 && total === 0 && filtered && (
             <div className="p-6">
               <Empty
-                title={`No group matches ${q}`}
+                title={`No group matches ${q || status}`}
                 action={
                   <button
                     type="button"
                     className={buttonClasses('secondary')}
-                    onClick={() => update({ q: '', page: '' })}
+                    onClick={() => update({ q: '', status: '', page: '' })}
                   >
                     Clear the search
                   </button>
@@ -159,43 +202,85 @@ export function GroupsPage() {
             </div>
           )}
 
-          {!loading && data && data.groups.length > 0 && (
-            <ul>
-              {data.groups.map((group) => (
-                <li
-                  key={group.id}
-                  className="flex flex-wrap items-center gap-x-3 border-b border-border-subtle px-4 py-3 last:border-0 transition-colors hover:bg-surface"
-                >
-                  {/* A row opens a record. Edit, Members and the status
-                      control lived here; each of them needs a sentence to say
-                      what it is about to do, and a cell has no room for one. */}
-                  <Link
-                    to={`/admin/groups/${group.id}`}
-                    className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+          {/* A page past the end, which is what a bookmarked `?page=9` becomes
+              once the groups it named are gone. The rows are empty and the
+              tenant is not, so the unfiltered state would say "No groups yet"
+              over thousands of them. */}
+          {!loading && groups.length === 0 && total > 0 && (
+            <div className="p-6">
+              <Empty
+                title={`Page ${page} is past the end`}
+                action={
+                  <button
+                    type="button"
+                    className={buttonClasses('primary')}
+                    onClick={() => update({ page: '' })}
                   >
-                    {group.name}
-                  </Link>
-                  {group.description && (
-                    <span className="text-muted">{group.description}</span>
-                  )}
-                  {group.status !== 'active' && (
-                    // LABELLED, not hidden. A deactivated group keeps its
-                    // members and grants nothing, and an administrator needs
-                    // to see that it is still there and why.
-                    <Status tone="inactive">
-                      {group.statusReason
-                        ? `inactive — ${group.statusReason}`
-                        : 'inactive'}
-                    </Status>
-                  )}
-                </li>
-              ))}
-            </ul>
+                    Go to the first page
+                  </button>
+                }
+              />
+            </div>
+          )}
+
+          {/* `Table`, as every other list in the product uses. The
+              hand-written list here carried its own padding, which is exactly
+              how the console came to have several row heights. */}
+          {!loading && groups.length > 0 && (
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col" className="max-sm:hidden">
+                    Description
+                  </th>
+                  <th scope="col">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((group) => (
+                  <tr key={group.id}>
+                    <td>
+                      {/* A row opens a record. Edit, Members and the status
+                          control lived here; each of them needs a sentence to
+                          say what it is about to do, and a cell has no room
+                          for one. */}
+                      <Link
+                        to={`/admin/groups/${group.id}`}
+                        className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+                      >
+                        {group.name}
+                      </Link>
+                    </td>
+                    <td className="max-sm:hidden">{group.description ?? '—'}</td>
+                    <td>
+                      {group.status === 'active' ? (
+                        <Status tone="active">Active</Status>
+                      ) : (
+                        // LABELLED, not hidden. A deactivated group keeps its
+                        // members and grants nothing, and an administrator
+                        // needs to see that it is still there and why.
+                        <span className="flex flex-wrap items-center gap-2">
+                          <Status tone="inactive">Inactive</Status>
+                          {group.statusReason && (
+                            <span className="text-sm text-muted">
+                              {group.statusReason}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
           )}
         </Panel>
       )}
 
-      {!error && !loading && groups.length > 0 && (
+      {/* Not gated on the rows: the count is the answer to "how many are
+          there", and on a page past the end the pager is the way back. */}
+      {!error && !loading && (
         <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>

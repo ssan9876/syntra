@@ -13,7 +13,6 @@ import {
   localMasterKeyProvider,
   recordEvent,
   endSessions,
-  revokeSession,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
 import { passwordRejectionMessage } from './password-rejection.js';

@@ -11,7 +11,6 @@ import {
   previewImportRun,
   localMasterKeyProvider,
   setPasswordHash,
-  setPersonMappings,
   type Permission,
 } from '@syntra/core';
 import { buildTestApp, createFakeScheduler, type FakeScheduler } from '../../test-support.js';
@@ -456,5 +455,27 @@ describe('naming something that is not there', () => {
     const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
     const response = await get(`/api/admin/person-import-runs/${MISSING}`, cookie);
     expect(response.statusCode).toBe(404);
+  });
+});
+
+describe('the run list filter', () => {
+  /**
+   * `sourceId` used to be cast straight off the query string, so a value that
+   * was not a uuid reached Prisma and came back as a 500 -- the logs, for a
+   * request that was simply wrong.
+   */
+  it('answers 400 for a source id that is not a uuid', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
+    const response = await get('/api/admin/person-import-runs?sourceId=abc', cookie);
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('answers 400 for a confirmation that is not the word true', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const { id } = (await createSource(cookie)).json();
+    // `z.coerce.boolean()` read the string "false" as true. A confirmation
+    // that cannot be declined is not one.
+    const response = await del(`/api/admin/person-sources/${id}?confirm=false`, cookie);
+    expect(response.statusCode).toBe(400);
   });
 });

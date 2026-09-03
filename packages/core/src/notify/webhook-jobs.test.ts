@@ -1,3 +1,5 @@
+import { createServer, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
@@ -6,7 +8,12 @@ import { enqueueOutbox } from '../automate/notify.js';
 import { createEndpoint } from './webhook-service.js';
 import { verifyWebhook } from './webhook-signature.js';
 import { WEBHOOK_MAX_ATTEMPTS, RETRY_DELAYS_MS } from './webhook-retry.js';
-import { runWebhookJob, type PostAttempt, type WebhookPoster } from './webhook-jobs.js';
+import {
+  httpPoster,
+  runWebhookJob,
+  type PostAttempt,
+  type WebhookPoster,
+} from './webhook-jobs.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 3));
 let tenantId: string;
@@ -237,6 +244,74 @@ describe('runWebhookJob', () => {
     );
     const row = await withTenant(tenantId, (tx) => tx.webhookDelivery.findFirstOrThrow());
     expect(row.nextAttemptAt.getTime()).toBe(now.getTime() + RETRY_DELAYS_MS[0]!);
+  });
+
+  /**
+   * The REAL poster, not the fake one every case above uses.
+   *
+   * The scheduling that honours `Retry-After` was written and tested against
+   * a fake that supplied `retryAfterMs` itself, and `retryAfterSeconds` was
+   * written to parse the header -- but nothing joined the two, so on a live
+   * deployment a receiver answering `429 Retry-After: 300` was retried on our
+   * own schedule and told nothing. A test with a fake poster cannot catch
+   * that, because the fake IS the missing half.
+   *
+   * A real server on a real socket, because `guardedFetch` pins the resolved
+   * address and speaks `node:http` rather than `fetch` -- so a stubbed global
+   * would be testing a code path this product does not use.
+   */
+  describe('the poster that actually makes the request', () => {
+    const serving = async (
+      reply: (res: ServerResponse) => void,
+    ): Promise<PostAttempt> => {
+      const server = createServer((_req, res) => reply(res));
+      await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+      const { port } = server.address() as AddressInfo;
+      try {
+        return await httpPoster(true)(`http://127.0.0.1:${port}/hook`, '{}', {}, 5000);
+      } finally {
+        await new Promise((done) => server.close(done));
+      }
+    };
+
+    it('reads Retry-After off the response', async () => {
+      const attempt = await serving((res) => {
+        res.writeHead(429, { 'retry-after': '300' });
+        res.end();
+      });
+
+      expect(attempt).toEqual({ status: 429, retryAfterMs: 300_000 });
+    });
+
+    it('says nothing about a delay the receiver did not ask for', async () => {
+      const attempt = await serving((res) => {
+        res.writeHead(500);
+        res.end();
+      });
+
+      expect(attempt).toEqual({ status: 500 });
+    });
+
+    it('ignores an HTTP-date Retry-After rather than reading it against our clock', async () => {
+      // Legal, almost never sent by an API, and parsing a date from an
+      // untrusted header to compute a delay is a way to be told to wait until
+      // next year. The built-in schedule applies instead.
+      const attempt = await serving((res) => {
+        res.writeHead(429, { 'retry-after': 'Wed, 21 Oct 2099 07:28:00 GMT' });
+        res.end();
+      });
+
+      expect(attempt).toEqual({ status: 429 });
+    });
+
+    it('caps a receiver asking for a year at a day', async () => {
+      const attempt = await serving((res) => {
+        res.writeHead(429, { 'retry-after': '31536000' });
+        res.end();
+      });
+
+      expect(attempt).toEqual({ status: 429, retryAfterMs: 86_400_000 });
+    });
   });
 
   it('does nothing at all for a tenant with no deliveries', async () => {

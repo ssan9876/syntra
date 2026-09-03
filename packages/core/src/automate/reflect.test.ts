@@ -7,11 +7,9 @@ import { reflectProvisionOutcomes } from './reflect.js';
 
 const NOW = new Date('2026-06-15T00:00:00Z');
 const MUCH_LATER = new Date('2026-06-17T00:00:00Z');
-const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
 
 let tenantId: string;
 let personId: string;
-let userId: string;
 let targetSystemId: string;
 let entitlementId: string;
 let requestId: string;
@@ -108,7 +106,7 @@ beforeEach(async () => {
       runId: run.id,
     };
   });
-  ({ personId, userId, targetSystemId, entitlementId, requestId, itemId, grantId, runId } =
+  ({ personId, targetSystemId, entitlementId, requestId, itemId, grantId, runId } =
     seeded);
 });
 

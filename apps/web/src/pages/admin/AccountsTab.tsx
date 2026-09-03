@@ -100,18 +100,24 @@ export function AccountsTab() {
   // Every control writes through the URL, as People does: same page, same
   // convention, and a link to a filtered list is worth sending to somebody.
   const update = useCallback(
-    (next: Record<string, string>) => {
+    (next: Record<string, string>, replaceHistory = false) => {
       const merged = new URLSearchParams(params);
       for (const [key, value] of Object.entries(next)) {
         if (value) merged.set(key, value);
         else merged.delete(key);
       }
-      setParams(merged, { replace: true });
+      // `replace` only for the debounced search, as People does. A page and a
+      // status are decisions somebody clicked, and Back has to undo a filter
+      // rather than leave the console.
+      setParams(merged, { replace: replaceHistory });
     },
     [params, setParams],
   );
 
-  const onSearch = useCallback((value: string) => update({ q: value, page: '' }), [update]);
+  const onSearch = useCallback(
+    (value: string) => update({ q: value, page: '' }, true),
+    [update],
+  );
   const onStatus = useCallback((value: string) => update({ status: value, page: '' }), [update]);
   const onPage = useCallback((next: number) => update({ page: String(next) }), [update]);
   // For the org-unit picker on the create form. A caller without
@@ -131,10 +137,14 @@ export function AccountsTab() {
   // For the person picker. Its error state is tolerated like the sources read
   // above: a caller who may create accounts but not read people gets a picker
   // holding only "service account", and a form that still works.
+  // `status=active` is the SERVER's filter rather than a narrowing of the page
+  // it sends back, so `total` counts the same set the picker is built from.
+  // Filtering a fetched page here left the note beside it saying "the first 200
+  // of 5,000" over a picker holding whatever fraction of those 200 was active.
   const { data: personsData } = useApiResource<{ persons: PersonRow[]; total: number }>(
-    '/api/admin/persons?pageSize=200',
+    '/api/admin/persons?status=active&pageSize=200',
   );
-  const people = (personsData?.persons ?? []).filter((p) => p.status === 'active');
+  const people = personsData?.persons ?? [];
   const sourceNames = new Map(
     (sourcesData?.sources ?? []).map((source) => [source.id, source.name]),
   );
@@ -152,6 +162,7 @@ export function AccountsTab() {
         search={q}
         onSearch={onSearch}
         searchLabel="Search accounts"
+        searchPlaceholder="Login, display name or work email"
         status={{
           value: status,
           onChange: onStatus,
@@ -238,8 +249,8 @@ export function AccountsTab() {
               ]}
             />
             <PickerNote
-              shown={personsData?.persons?.length ?? 0}
-              total={personsData?.total ?? 0}
+              shown={people.length}
+              total={personsData?.total ?? people.length}
               to="/admin/users?tab=people"
               label="People"
             />
@@ -304,7 +315,7 @@ export function AccountsTab() {
         <Panel>
           {loading && <SkeletonRows rows={6} cols={4} />}
 
-          {!loading && users.length === 0 && !filtered && (
+          {!loading && users.length === 0 && total === 0 && !filtered && (
             <div className="p-6">
               <Empty title="No users yet">
                 Users appear here once they are created, or once a directory
@@ -313,7 +324,7 @@ export function AccountsTab() {
             </div>
           )}
 
-          {!loading && users.length === 0 && filtered && (
+          {!loading && users.length === 0 && total === 0 && filtered && (
             <div className="p-6">
               <Empty
                 title={`No account matches ${q || status}`}
@@ -329,6 +340,28 @@ export function AccountsTab() {
               >
                 Logins, display names and work email addresses are searched.
               </Empty>
+            </div>
+          )}
+
+          {/* A page past the end, which is what a shared `?page=9` becomes once
+              the accounts it named are gone. The rows are empty and the
+              directory is not, so the unfiltered empty state would say "No
+              users yet" over thousands of accounts -- and the pager it used to
+              be gated with was the only way back. */}
+          {!loading && users.length === 0 && total > 0 && (
+            <div className="p-6">
+              <Empty
+                title={`Page ${page} is past the end`}
+                action={
+                  <button
+                    type="button"
+                    className={buttonClasses('primary')}
+                    onClick={() => update({ page: '' })}
+                  >
+                    Go to the first page
+                  </button>
+                }
+              />
             </div>
           )}
 
@@ -407,7 +440,8 @@ export function AccountsTab() {
         </Panel>
       )}
 
-      {!error && !loading && users.length > 0 && (
+      {/* Not gated on the rows: see PeopleTab. */}
+      {!error && !loading && (
         <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>

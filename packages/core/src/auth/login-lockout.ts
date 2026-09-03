@@ -48,6 +48,25 @@ export function isLocked(
 }
 
 /**
+ * The same question as `isLocked`, asked of the database instead of a row.
+ *
+ * Here so that counting locked accounts does not mean reading every lockout
+ * row into the process and filtering it in JavaScript, which is what the
+ * directory's stat card did -- client-side counting over a whole collection,
+ * one layer below the route that had just stopped doing exactly that.
+ *
+ * Beside `isLocked` and mirroring it clause for clause, deliberately: two
+ * definitions of "locked" that drift apart would show a number no page could
+ * be filtered to reproduce.
+ */
+export function lockedWhere(now: Date) {
+  return {
+    lockedAt: { not: null },
+    OR: [{ lockedUntil: null }, { lockedUntil: { gt: now } }],
+  };
+}
+
+/**
  * Reads the lock, if any, for a user who has already been resolved.
  *
  * Never called for an unknown login — see `recordFailure`.

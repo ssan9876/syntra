@@ -219,6 +219,28 @@ describe('interpretPatch', () => {
     ).toEqual([{ kind: 'setActive', value: false }]);
   });
 
+  it('refuses a remove of active rather than reading the absent value as true', () => {
+    // `remove` carries no value. Read through the same comparison as a
+    // replace, `undefined !== false` is true, and a client that meant "take
+    // this attribute away" has reactivated the account it was deprovisioning.
+    expect(() =>
+      interpretPatch({ Operations: [{ op: 'remove', path: 'active' }] }),
+    ).toThrow(expect.objectContaining({ status: 400, scimType: 'invalidPath' }));
+  });
+
+  it('accepts only a boolean or the strings true and false for active', () => {
+    // Anything else is a client bug, and guessing what it meant means either
+    // deactivating somebody by accident or leaving somebody live by accident.
+    for (const value of [0, null, {}, 'yes', '']) {
+      expect(() =>
+        interpretPatch({ Operations: [{ op: 'replace', path: 'active', value }] }),
+      ).toThrow(expect.objectContaining({ status: 400, scimType: 'invalidValue' }));
+    }
+    expect(
+      interpretPatch({ Operations: [{ op: 'replace', path: 'active', value: 'TRUE' }] }),
+    ).toEqual([{ kind: 'setActive', value: true }]);
+  });
+
   it('reads add and remove of members', () => {
     expect(
       interpretPatch({

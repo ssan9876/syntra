@@ -14,7 +14,6 @@ let annaPersonId: string;
 let annaUserId: string;
 let janPersonId: string;
 let helpdeskUserId: string;
-let helpdeskPersonId: string;
 let applicationId: string;
 let productId: string;
 let immediateProductId: string;
@@ -75,7 +74,7 @@ beforeEach(async () => {
       applicationId: application.id,
     };
   });
-  ({ annaPersonId, annaUserId, janPersonId, helpdeskPersonId, helpdeskUserId, applicationId } =
+  ({ annaPersonId, annaUserId, janPersonId, helpdeskUserId, applicationId } =
     seeded);
 
   const withStage = await upsertWorkflow(tenantId, null, null, {

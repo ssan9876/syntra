@@ -6,7 +6,6 @@ import {
   assignFinding,
   createRemediationItem,
   detectAccessWithoutContract,
-  detectCoverageGaps,
   detectNoHumanDecision,
   detectPrivilegedUncertified,
   detectStaleSources,

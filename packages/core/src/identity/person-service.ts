@@ -1,6 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
-import { DEFAULT_PAGE_SIZE, type ListOptions } from '../list.js';
+import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
 
 export interface CreatePersonInput {
   givenName: string;
@@ -47,9 +47,9 @@ export async function createPerson(
  * would turn this box into a way to search staff by private contact details.
  */
 export async function listPersons(tx: TenantClient, opts: ListOptions = {}) {
-  const page = opts.page ?? 1;
-  const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
-  const search = opts.search?.trim();
+  const { page, pageSize, skip, take } = normalisePaging(opts);
+  const term = opts.search?.trim();
+  const search = term ? escapeLike(term) : undefined;
 
   const where = {
     ...(opts.status ? { status: opts.status } : {}),
@@ -70,9 +70,12 @@ export async function listPersons(tx: TenantClient, opts: ListOptions = {}) {
   const [rows, total] = await Promise.all([
     tx.person.findMany({
       where,
-      orderBy: [{ familyName: 'asc' }, { givenName: 'asc' }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      // The id last, so two people with the same name come back in the same
+      // order on every request. Without it the pages of a namesake pair are
+      // whatever the planner felt like, and one of them can be on both.
+      orderBy: [{ familyName: 'asc' }, { givenName: 'asc' }, { id: 'asc' }],
+      skip,
+      take,
     }),
     tx.person.count({ where }),
   ]);

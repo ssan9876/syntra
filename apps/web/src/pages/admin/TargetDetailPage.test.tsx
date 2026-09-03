@@ -261,7 +261,6 @@ describe('TargetDetailPage', () => {
     // rebuilt the form from the STORED defaults, discarding exactly the numbers
     // the administrator was about to be asked to correct.
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
-      const path = String(input);
       if (init?.method === 'POST') return Promise.resolve(json({ id: 't1' }));
       if (init?.method === 'PATCH') {
         return Promise.resolve(

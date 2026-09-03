@@ -261,15 +261,44 @@ jobs:
           set -euo pipefail
           echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+          # WHICH TAGS MAY BECOME `:latest`, and this is narrower than the
+          # guard job's `v*`.
+          #
+          # docker-compose.yml defaults to `${SYNTRA_VERSION:-latest}`, so
+          # `:latest` is not a convenience alias here -- it is the image every
+          # deployment that did not pin a version pulls on its next `up -d`.
+          # Under `v*` alone, pushing `v2.0.0-rc1` or `v1.5.0-beta.2` to get a
+          # release candidate built for one test host silently upgraded every
+          # unpinned production stack to a pre-release. Nothing about that is
+          # visible until it has happened.
+          #
+          # So: numeric components only. `v1.4.0` and `v2026.8` move `:latest`;
+          # `v2.0.0-rc1`, `v1.4.0+build3` and `v1.4.0-hotfix` are published
+          # under their own version tag and nothing else, which is exactly what
+          # somebody cutting a candidate wants.
+          #
+          # `grep -Eq` rather than the guard's `case` glob because a shell glob
+          # cannot express "digits, separated by dots, and nothing else" -- and
+          # a pattern that only LOOKS strict is how a candidate reaches
+          # production in the first place. REF_NAME still arrives through env.
+          if printf '%s' "$REF_NAME" | grep -Eq '^v[0-9]+(\.[0-9]+)*$'; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$REF_NAME is a pre-release tag; not moving :latest"
+          fi
+
       - name: Build and push api
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/api/Dockerfile
           push: true
+          # The second line evaluates to the empty string for a pre-release
+          # tag, and build-push-action drops empty entries from this list.
           tags: |
             ghcr.io/ssan9876/syntra-api:${{ steps.meta.outputs.version }}
-            ghcr.io/ssan9876/syntra-api:latest
+            ${{ steps.meta.outputs.latest == 'true' && 'ghcr.io/ssan9876/syntra-api:latest' || '' }}
           cache-from: type=gha,scope=syntra-api
           cache-to: type=gha,mode=max,scope=syntra-api
 
@@ -279,8 +308,9 @@ jobs:
           context: .
           file: apps/web/Dockerfile
           push: true
+          # See the api step above for why `:latest` is conditional.
           tags: |
             ghcr.io/ssan9876/syntra-web:${{ steps.meta.outputs.version }}
-            ghcr.io/ssan9876/syntra-web:latest
+            ${{ steps.meta.outputs.latest == 'true' && 'ghcr.io/ssan9876/syntra-web:latest' || '' }}
           cache-from: type=gha,scope=syntra-web
           cache-to: type=gha,mode=max,scope=syntra-web

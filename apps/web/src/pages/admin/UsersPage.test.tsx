@@ -35,9 +35,12 @@ const PERSONS = [
   { id: 'p3', givenName: 'Kaycen', familyName: 'Tyre', businessEmail: 'kt@x.test', externalId: 'E3', status: 'active' },
 ];
 
+// `personId` is carried here because the summary card counts people who have
+// no account, and counting that means knowing which accounts belong to whom.
+// Andrew and Marc have accounts; Kaycen is the joiner.
 const USERS = [
-  { id: 'u1', login: 'agray', displayName: 'Andrew Gray', email: 'ag@x.test', status: 'active', statusReason: null, sourceId: null },
-  { id: 'u2', login: 'mpuleo', displayName: 'Marc Puleo', email: 'mp@x.test', status: 'active', statusReason: null, sourceId: null, locked: true },
+  { id: 'u1', login: 'agray', displayName: 'Andrew Gray', email: 'ag@x.test', status: 'active', statusReason: null, sourceId: null, personId: 'p1' },
+  { id: 'u2', login: 'mpuleo', displayName: 'Marc Puleo', email: 'mp@x.test', status: 'active', statusReason: null, sourceId: null, locked: true, personId: 'p2' },
 ];
 
 function mockApi(persons = PERSONS, users = USERS, summary?: unknown) {
@@ -52,6 +55,15 @@ function mockApi(persons = PERSONS, users = USERS, summary?: unknown) {
             people: {
               total: persons.length,
               active: persons.filter((p) => p.status === 'active').length,
+              // Counted by the server now rather than inferred here by
+              // subtracting accounts from people -- that subtraction charged
+              // service accounts and leavers against the joiners. Derived from
+              // the same fixtures so the cases below keep their meaning.
+              withoutAccount: persons.filter(
+                (p) =>
+                  p.status === 'active' &&
+                  !users.some((u) => 'personId' in u && u.personId === p.id),
+              ).length,
             },
             accounts: {
               total: users.length,

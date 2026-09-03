@@ -101,6 +101,29 @@ describe('DeleteButton', () => {
     expect(screen.getByRole('button', { name: 'Delete user' })).toBeDisabled();
   });
 
+  it('puts focus in the confirmation box, not on the body', async () => {
+    // Pressing Delete unmounts the button that was pressed, and a browser
+    // drops focus from a removed element to <body>. For a destructive action
+    // that left a keyboard reader tabbing the length of the page to reach the
+    // field confirming the thing they had just asked to delete.
+    const user = userEvent.setup();
+    renderButton();
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(screen.getByLabelText(/type mokafor/i)).toHaveFocus();
+  });
+
+  it('puts focus back on the row control when the delete is called off', async () => {
+    const user = userEvent.setup();
+    renderButton();
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('button', { name: 'Delete' })).toHaveFocus();
+  });
+
   it('tells the page when the delete succeeded', async () => {
     const user = userEvent.setup();
     const onDeleted = vi.fn();

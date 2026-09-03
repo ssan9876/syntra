@@ -287,9 +287,13 @@ export function GroupDetailPage() {
                       })),
                     ]}
                   />
+                  {/* Both figures count the same thing the picker holds:
+                      accounts that are not already members. `users.length`
+                      was the raw fetched page, so the note read "the first
+                      200 of 5,000" over a select holding forty-three. */}
                   <PickerNote
-                    shown={accountData?.users?.length ?? 0}
-                    total={accountData?.total ?? 0}
+                    shown={candidates.length}
+                    total={Math.max(0, (accountData?.total ?? 0) - members.length)}
                     to="/admin/users?tab=accounts"
                     label="Accounts"
                   />

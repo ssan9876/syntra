@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Button, Panel } from '@syntra/ui';
 import { ApiError, api, type Problem } from '../../session/api.js';
 import { fieldErrors } from './hooks.js';
@@ -115,6 +115,10 @@ export function RecordPanel({
     setValues((current) => ({ ...current, [key]: value }));
 
   const close = () => {
+    // Send focus back where it came from. The trigger is unmounted while the
+    // form is open, so this is a request honoured by the effect below once it
+    // is back on the page.
+    restoreFocus.current = true;
     setOpen(false);
     setValues(initial ?? {});
     setErrors({});
@@ -122,6 +126,35 @@ export function RecordPanel({
     setPending(null);
     onCancel?.();
   };
+
+  /**
+   * Focus follows the disclosure, in both directions.
+   *
+   * Opening this panel unmounts the button that opened it, and a browser drops
+   * focus from a removed element to `<body>` -- so a keyboard reader who
+   * pressed "New user" landed nowhere, with nothing announced, and had to tab
+   * from the top of the document to reach the form they had just asked for.
+   * Closing it puts them back on the trigger rather than at the top again.
+   */
+  const panelRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+
+  useEffect(() => {
+    if (open) {
+      // The first field, not the heading: somebody who opened a form wants to
+      // type into it, and the panel's title is announced by the region anyway.
+      const first = panelRef.current?.querySelector<HTMLElement>(
+        'input, select, textarea',
+      );
+      first?.focus();
+      return;
+    }
+    if (restoreFocus.current) {
+      restoreFocus.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [open]);
 
   async function submit(extra: Record<string, unknown> = {}) {
     setBusy(true);
@@ -173,6 +206,8 @@ export function RecordPanel({
           // spent on the primary action, the current selection and state —
           // and "New user" on the users page is exactly that.
           variant="primary"
+          ref={triggerRef}
+          aria-expanded={false}
           onClick={() => {
             // Values are taken from `initial` HERE rather than only at mount,
             // so opening the form after a reload shows what is on the row now.
@@ -194,7 +229,7 @@ export function RecordPanel({
 
   return (
     <Panel title={title}>
-      <div className="space-y-4 p-4">
+      <div className="space-y-4 p-4" ref={panelRef}>
         {problem && <Alert tone="danger">{problem}</Alert>}
 
         {pending && (

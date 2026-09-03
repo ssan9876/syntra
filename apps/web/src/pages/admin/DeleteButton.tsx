@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Field } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 
@@ -44,10 +44,35 @@ export function DeleteButton({
   const [problem, setProblem] = useState<string | null>(null);
 
   const close = () => {
+    restoreFocus.current = true;
     setOpen(false);
     setTyped('');
     setProblem(null);
   };
+
+  /**
+   * Focus follows the confirmation, in both directions.
+   *
+   * Pressing Delete unmounts the button that was pressed, and a browser drops
+   * focus from a removed element to `<body>`. For a DESTRUCTIVE action that
+   * meant a keyboard reader heard nothing, then had to tab the length of the
+   * page to reach the confirmation field for the thing they had just asked to
+   * delete. Cancelling puts them back on the row they were on.
+   */
+  const confirmRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+
+  useEffect(() => {
+    if (open) {
+      confirmRef.current?.focus();
+      return;
+    }
+    if (restoreFocus.current) {
+      restoreFocus.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [open]);
 
   async function remove() {
     setBusy(true);
@@ -76,7 +101,13 @@ export function DeleteButton({
       // `danger-quiet`, not `danger`. A filled red button repeated on every
       // row of a table is a table that looks like a hazard; the filled one is
       // spent on the control that actually does it.
-      <Button size="sm" variant="danger-quiet" onClick={() => setOpen(true)}>
+      <Button
+        size="sm"
+        variant="danger-quiet"
+        ref={triggerRef}
+        aria-expanded={false}
+        onClick={() => setOpen(true)}
+      >
         Delete
       </Button>
     );
@@ -92,6 +123,7 @@ export function DeleteButton({
         label={`To confirm, type ${confirmWord}`}
         value={typed}
         onChange={setTyped}
+        ref={confirmRef}
       />
       <div className="flex gap-2">
         <Button

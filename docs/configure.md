@@ -63,14 +63,26 @@ carries the proxy's own address, so the policy engine's source-IP condition
 matches everyone or nobody and every per-IP rate limit collapses into one
 global bucket.
 
-Give it a hop count (`1`) or the proxies to trust as addresses and CIDRs
+Name the proxies to trust as addresses and CIDRs
 (`10.0.0.0/8, 192.168.1.7`). **Never `true`** — that believes
 `X-Forwarded-For` from any client, letting anyone choose their own source
 address; the config loader refuses the literal value `true` by name rather
-than accepting it. The container path's own `docker-compose.yml` sets
-`TRUST_PROXY=1` for the API service, because nginx is the only thing a client
-reaches and terminates every connection to the API from inside the compose
-network — one hop, always from that proxy.
+than accepting it.
+
+**A hop count is refused too, and used to be accepted.** Fastify took a
+number until 5.12.1, which fixed GHSA-3m5p-2c4r-xxw2 by making hop-count
+trust fail closed — a count cannot check which proxy actually connected, so a
+direct client could send enough hops to choose its own address. Upstream now
+trusts *nothing* when given a number, so `TRUST_PROXY=1` would mean the same
+as leaving it unset while reading as though a proxy were configured. The
+config loader refuses it by name and names the address form to use instead.
+If you are upgrading and had a hop count set, replace it with the addresses
+your proxy connects from; the API will not start until you do, which is
+deliberate — the alternative is a deployment that looks configured and is
+not. The container path's own `docker-compose.yml` now trusts the private
+ranges Docker allocates its bridge networks from, because nginx is the only
+thing a client reaches, it connects from inside that network, and its address
+there is assigned at run time rather than fixed.
 
 ### BOOTSTRAP variables
 
@@ -92,6 +104,22 @@ Bootstrap refuses to run without `MASTER_KEY` set, unlike the dev seed which
 merely warns — a production tenant with a SAML tile and no signing key is a
 deployment an operator has to come back and fix by hand, and refusing up
 front is cheaper than discovering it later as a `409 saml-no-key`.
+
+### SEED variables
+
+Read once, by `pnpm seed` (`packages/db/src/seed.ts`), which creates **demo
+data** — a tenant, an administrator and an ordinary portal user, for
+development and for the browser suite. It is not the production bootstrap
+above and must not be used as one.
+
+| Variable | Meaning |
+|---|---|
+| `SEED_ADMIN_PASSWORD` | The demo `admin` account's password. Required — the seed refuses to run without it, and refuses anything under 12 characters. |
+| `SEED_USER_PASSWORD` | The demo `jdoe` account's password. Falls back to `SEED_ADMIN_PASSWORD` when unset. |
+
+`SEED_ADMIN_PASSWORD` is required rather than defaulted for one reason: a seed
+with a built-in password creates a well-known administrator on every machine it
+ever runs on, including the one somebody puts on a network "just to have a look".
 
 ### Updating from the console
 

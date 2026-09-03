@@ -82,6 +82,6 @@ describe('the detail pages under a merged list', () => {
   ];
 
   it.each(KEPT)('keeps /admin/%s as a page', (path) => {
-    expect(source).toMatch(new RegExp(`<Route path="${path.replace(/[:/]/g, '\$&')}" element=\{<[A-Z]`));
+    expect(source).toMatch(new RegExp(`<Route path="${path.replace(/[:/]/g, '$&')}" element={<[A-Z]`));
   });
 });

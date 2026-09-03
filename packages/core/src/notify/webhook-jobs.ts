@@ -89,7 +89,17 @@ export function httpPoster(allowPrivateAddresses: boolean): WebhookPoster {
         headers,
         signal: controller.signal,
       });
-      return { status: response.status };
+      // The receiver's own backpressure, read here because this is the only
+      // place the response headers exist. `retryAfterSeconds` and the
+      // scheduling that honours it were both written and tested against a
+      // fake poster that supplied the number -- but nothing ever asked the
+      // real response for it, so on a live deployment a receiver answering
+      // `429 Retry-After: 300` was retried on our own schedule regardless.
+      const seconds = retryAfterSeconds(response.headers);
+      return {
+        status: response.status,
+        ...(seconds === undefined ? {} : { retryAfterMs: seconds * 1000 }),
+      };
     } catch (cause) {
       // Everything the guard refuses arrives here too: a private address, a
       // redirect, a name that will not resolve. All of them are "this did not

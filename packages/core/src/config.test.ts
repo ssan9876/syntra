@@ -37,6 +37,9 @@ describe('loadConfig', () => {
   });
 
   it('rejects a missing database url', () => {
+    // The destructuring is how DATABASE_URL is REMOVED from what is passed;
+    // the binding is meant to be unused. `ignoreRestSiblings` in the lint
+    // config is what keeps this idiom legal.
     const { DATABASE_URL, ...rest } = valid;
     expect(() => loadConfig(rest)).toThrow(/DATABASE_URL/);
   });
@@ -76,8 +79,20 @@ describe('loadConfig — TRUST_PROXY', () => {
     );
   });
 
-  it('takes a hop count', () => {
-    expect(loadConfig({ ...valid, TRUST_PROXY: '1' }).trustProxy).toBe(1);
+  it('refuses a hop count, by name, and says what to write instead', () => {
+    // Fastify 5.12.1 fixed GHSA-3m5p-2c4r-xxw2 by making a hop count trust
+    // NOTHING, so `1` no longer means "one proxy" -- it means the same as
+    // unset. A value whose meaning reversed underneath the operator has to be
+    // refused rather than carried forward silently.
+    expect(() => loadConfig({ ...valid, TRUST_PROXY: '1' })).toThrow(
+      /must not be a hop count/,
+    );
+  });
+
+  it('refuses a hop count of zero as a hop count too, not as junk', () => {
+    expect(() => loadConfig({ ...valid, TRUST_PROXY: '0' })).toThrow(
+      /must not be a hop count/,
+    );
   });
 
   it('takes a list of addresses and CIDRs', () => {

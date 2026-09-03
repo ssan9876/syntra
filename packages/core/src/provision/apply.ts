@@ -1410,7 +1410,6 @@ async function finish(
      * the wrong order to fail in.
      */
     let deliver: { to: string; login: string; password: string } | null = null;
-    let deliveryNote = 'not applicable';
 
     if (
       status === 'applied' &&
@@ -1433,7 +1432,7 @@ async function finish(
         account?.personId ?? null,
         meta.delivery ?? 'vaultOnly',
       );
-      deliveryNote = address.reason;
+      let deliveryNote = address.reason;
       if (address.to !== null && meta.transport !== undefined) {
         deliver = {
           to: address.to,

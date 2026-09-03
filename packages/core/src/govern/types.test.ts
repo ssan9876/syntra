@@ -19,7 +19,6 @@ import {
   sumRegions,
   unknownValue,
   type CountableRegion,
-  type Tri,
 } from './types.js';
 
 describe('subject keys', () => {

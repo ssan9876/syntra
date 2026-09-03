@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
@@ -52,7 +52,12 @@ export function ProvisionRunsPage() {
   // request already applied.
   const requestSeq = useRef(0);
 
-  const reload = () => {
+  // Memoised on `id` alone: everything else it touches is a ref or a state
+  // setter, and both are stable across renders. Without this it was a new
+  // function every render, so the effects below could not honestly list it as
+  // a dependency -- and the poll effect that calls it would have restarted its
+  // timer on every render if they had.
+  const reload = useCallback(() => {
     const seq = ++requestSeq.current;
     void api<{ runs: Run[] }>(`/api/admin/targets/${id}/runs`)
       .then((body) => {
@@ -71,8 +76,8 @@ export function ProvisionRunsPage() {
         if (seq !== requestSeq.current) return;
         setLoading(false);
       });
-  };
-  useEffect(reload, [id]);
+  }, [id]);
+  useEffect(reload, [reload]);
 
   /**
    * A run is enqueued, not performed in the request — a full target read
@@ -88,7 +93,7 @@ export function ProvisionRunsPage() {
       setWaiting((n) => (n >= POLL_LIMIT ? 0 : n + 1));
     }, POLL_MS);
     return () => clearTimeout(timer);
-  }, [waiting, id]);
+  }, [waiting, reload]);
 
   async function onRun() {
     setBusy(true);

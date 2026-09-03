@@ -154,6 +154,36 @@ manifest_field() {
     | head -1
 }
 
+# Why a restore that produced $1 tables holding $2 rows is not a restore --
+# printed, with a non-zero status. Silent and zero when it is one.
+#
+# THIS IS THE CHECK THAT TELLS A RESTORE FROM AN EMPTY DATABASE. pg_restore's
+# exit status cannot: it reports the ownership and role notices a restore
+# into a different role always emits as errors, so its status is discarded
+# everywhere it is called -- and the only thing left standing between "the
+# restore failed" and "the log says restored" was a `SELECT 1`, which an
+# empty database answers perfectly well. `verify` and `restore` both ask
+# this question now, and it is one function so they cannot disagree about
+# the answer.
+#
+# ANYTHING THAT IS NOT A NUMBER IS ZERO. A psql that could not connect prints
+# nothing, and nothing is not evidence of rows; the same rule as
+# fingerprints_match, where unknown never reads as agreement.
+empty_restore_reason() {
+  local tables="${1:-0}" rows="${2:-0}"
+  case "$tables" in ''|*[!0-9]*) tables=0 ;; esac
+  case "$rows"   in ''|*[!0-9]*) rows=0 ;;   esac
+  if [ "$tables" -eq 0 ]; then
+    printf 'no tables'
+    return 1
+  fi
+  if [ "$rows" -eq 0 ]; then
+    printf '%s table(s) and no rows at all' "$tables"
+    return 1
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Everything below this line talks to Docker, PostgreSQL or systemd, and is
 # exercised by ops/syntra-backup.test.sh only through the functions above.
@@ -378,23 +408,36 @@ cmd_verify() {
   docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$SCRATCH_DB" --no-owner --no-acl \
     < "$dir/database.dump" >/dev/null 2>&1 || true
 
-  # ANALYZE first: pg_stat_user_tables is an estimate, and a verify reporting
-  # "0 rows" because statistics were never gathered is a false alarm that
-  # teaches operators to ignore this command.
-  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$SCRATCH_DB" -c 'ANALYZE' >/dev/null 2>&1 || true
-
-  local tables rows
-  tables=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$SCRATCH_DB" -tAc \
-    "SELECT count(*) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
-  rows=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$SCRATCH_DB" -tAc \
-    "SELECT COALESCE(SUM(n_live_tup), 0) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
-
-  [ "${tables:-0}" -gt 0 ] || die "$name restored no tables; it is not restorable"
+  local counts tables rows reason
+  counts=$(restored_counts "$SCRATCH_DB")
+  tables="${counts%% *}"
+  rows="${counts##* }"
   # Zero rows is a failure for the same reason an empty dump is: it is the
   # shape a backup of nothing takes.
-  [ "${rows:-0}" -gt 0 ] || die "$name restored $tables table(s) and no rows at all"
+  reason=$(empty_restore_reason "$tables" "$rows") \
+    || die "$name restored $reason; it is not restorable"
 
   log "verified $name -- $tables tables, ~$rows rows, restored and dropped"
+}
+
+# What a restore into database $1 actually produced, as "<tables> <rows>".
+#
+# Shared by `verify` and `restore`: the scratch-database check and the live
+# one are the same question, and the live one used to not ask it.
+#
+# ANALYZE first: pg_stat_user_tables is an estimate, and a check reporting
+# "0 rows" because statistics were never gathered is a false alarm that
+# teaches operators to ignore this command.
+restored_counts() {
+  local db="$1" tables rows
+  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$db" -c 'ANALYZE' >/dev/null 2>&1 || true
+  tables=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$db" -tAc \
+    "SELECT count(*) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
+  rows=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$db" -tAc \
+    "SELECT COALESCE(SUM(n_live_tup), 0) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
+  # `0` rather than empty, so the caller always gets two words back and a
+  # psql that failed reads as nothing restored rather than as a parse error.
+  printf '%s %s' "${tables:-0}" "${rows:-0}"
 }
 
 cmd_list() {
@@ -489,16 +532,30 @@ cmd_restore() {
   # policy created by a migration that ran AFTER this dump was taken survives a
   # restore that was supposed to remove it.
   log "restoring $name into $PG_DB"
-  docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_ROLE" -d "$PG_DB" >/dev/null 2>&1 <<'SQL'
+  # `|| die`, not left to `set -e`: a failure here used to end the script
+  # with the service stopped and no line saying why.
+  docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_ROLE" -d "$PG_DB" >/dev/null 2>&1 <<'SQL' || die "the schema could not be dropped before restoring; nothing was restored and $SERVICE is still stopped"
 DROP SCHEMA IF EXISTS public CASCADE;
 CREATE SCHEMA public;
 SQL
 
+  # pg_restore's status is not the test -- see cmd_verify. What arrived is,
+  # and that is asked below.
   docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$PG_DB" --clean --if-exists \
     < "$dir/database.dump" >/dev/null 2>&1 || true
 
   docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$PG_DB" -c 'SELECT 1' >/dev/null 2>&1 \
     || die "the database is not answering after the restore; $SERVICE is still stopped"
+
+  # THE SERVICE STAYS STOPPED IF NOTHING ARRIVED. The schema above was
+  # dropped, so a pg_restore that failed has left an empty database -- and
+  # starting the service over one would run every migration against nothing
+  # and present a sign-in page to a directory with nobody in it. The dump is
+  # still on disk, untouched, for a restore by hand.
+  local counts reason
+  counts=$(restored_counts "$PG_DB")
+  reason=$(empty_restore_reason "${counts%% *}" "${counts##* }") \
+    || die "$name restored $reason into $PG_DB -- the database is EMPTY and $SERVICE is still stopped; restore $dir/database.dump by hand"
 
   log "starting $SERVICE"
   systemctl start "$SERVICE" || die "restored, but $SERVICE did not start"

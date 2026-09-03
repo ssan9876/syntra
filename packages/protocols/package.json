@@ -11,7 +11,7 @@
     "@node-saml/node-saml": "5.1.0",
     "@syntra/contracts": "workspace:*",
     "@syntra/core": "workspace:*",
-    "@xmldom/xmldom": "0.9.11",
+    "@xmldom/xmldom": "0.9.12",
     "jose": "6.2.9",
     "oidc-provider": "9.11.3",
     "openid-client": "6.8.5",

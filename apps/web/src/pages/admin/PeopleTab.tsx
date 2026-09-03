@@ -69,20 +69,28 @@ export function PeopleTab() {
    * should come back where it was.
    */
   const update = useCallback(
-    (next: Record<string, string>) => {
+    (next: Record<string, string>, replaceHistory = false) => {
       const merged = new URLSearchParams(params);
       for (const [key, value] of Object.entries(next)) {
         if (value) merged.set(key, value);
         else merged.delete(key);
       }
-      setParams(merged, { replace: true });
+      // `replace` only for the debounced search, which is the one update
+      // this screen makes on the reader's behalf rather than on their click:
+      // committing every keystroke's settled value as history would make Back
+      // walk backwards through a word. A page and a status are decisions, and
+      // Back has to undo a filter rather than leave the console.
+      setParams(merged, { replace: replaceHistory });
     },
     [params, setParams],
   );
 
   // Page 1 on every narrowing: page 7 of a three-page result is an empty table
   // that reads as broken.
-  const onSearch = useCallback((value: string) => update({ q: value, page: '' }), [update]);
+  const onSearch = useCallback(
+    (value: string) => update({ q: value, page: '' }, true),
+    [update],
+  );
   const onStatus = useCallback((value: string) => update({ status: value, page: '' }), [update]);
   const onPage = useCallback((next: number) => update({ page: String(next) }), [update]);
   // Narrowed once, here, rather than `data?.persons.length` at each use.
@@ -112,6 +120,7 @@ export function PeopleTab() {
         search={q}
         onSearch={onSearch}
         searchLabel="Search people"
+        searchPlaceholder="Name, employee reference or work email"
         status={{
           value: status,
           onChange: onStatus,
@@ -141,7 +150,7 @@ export function PeopleTab() {
               here yet" wants the create button; "nothing matched" wants the
               search cleared, and saying what was searched makes a typo
               visible. */}
-          {!loading && persons.length === 0 && !filtered && (
+          {!loading && persons.length === 0 && total === 0 && !filtered && (
             <div className="p-6">
               {/* An action, not a sentence. The old copy said "Add someone
                   directly, or import a file from your HR system on the Import
@@ -160,7 +169,7 @@ export function PeopleTab() {
             </div>
           )}
 
-          {!loading && persons.length === 0 && filtered && (
+          {!loading && persons.length === 0 && total === 0 && filtered && (
             <div className="p-6">
               <Empty
                 title={`Nobody matches ${q || status}`}
@@ -177,6 +186,28 @@ export function PeopleTab() {
                 Names, employee references and work email addresses are
                 searched.
               </Empty>
+            </div>
+          )}
+
+          {/* A page past the end of the result, which is what a bookmarked or
+              shared `?page=9` becomes once somebody leaves. The rows are empty
+              and the directory is not, so the unfiltered empty state would say
+              "No people yet" over thousands of people. One way out, and it is
+              the only thing this state offers. */}
+          {!loading && persons.length === 0 && total > 0 && (
+            <div className="p-6">
+              <Empty
+                title={`Page ${page} is past the end`}
+                action={
+                  <button
+                    type="button"
+                    className={buttonClasses('primary')}
+                    onClick={() => update({ page: '' })}
+                  >
+                    Go to the first page
+                  </button>
+                }
+              />
             </div>
           )}
 
@@ -238,7 +269,10 @@ export function PeopleTab() {
         </Panel>
       )}
 
-      {!error && !loading && persons.length > 0 && (
+      {/* Not gated on the rows. The count is the answer to "how many are
+          there", a page past the end has none of them, and the pager is what
+          gets back. */}
+      {!error && !loading && (
         <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>

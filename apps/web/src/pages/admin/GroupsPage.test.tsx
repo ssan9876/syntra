@@ -19,7 +19,7 @@ function mockReads(
 ) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
     Promise.resolve(
-      String(input).includes('/directory/summary')
+      String(input).includes('/groups/summary')
         ? json(summary)
         : json({ groups, total: groups.length, page: 1, pageSize: 50 }),
     ),
@@ -48,12 +48,46 @@ describe('GroupsPage', () => {
     );
   });
 
-  it('offers no status filter, because a group has no status to filter on', async () => {
+  it('offers the status filter its own inactive card advertises', async () => {
+    // A group has always had a status -- deactivating one sets it, and the
+    // card above this list counts them -- so the list that could not be
+    // filtered by it was showing a number with nowhere to go.
     mockReads([]);
     renderAt('/admin/groups');
 
     await screen.findByLabelText('Search groups');
-    expect(screen.queryByLabelText('Status')).toBeNull();
+    expect(screen.getByLabelText('Status')).toBeVisible();
+  });
+
+  it('sends the status from the URL to the API', async () => {
+    const fetchSpy = mockReads([]);
+    renderAt('/admin/groups?status=inactive');
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('status=inactive'),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it('reads its counts from the groups summary, which needs no identity permission', async () => {
+    // The combined directory summary demands identity.read as well, so a
+    // group administrator got a 403 and three confident zeroes above a table
+    // listing thousands of groups.
+    const fetchSpy = mockReads([]);
+    renderAt('/admin/groups');
+
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/admin/groups/summary'),
+        expect.anything(),
+      ),
+    );
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('/directory/summary'),
+      expect.anything(),
+    );
   });
 
   it('says when a search matches no group, and offers to clear it', async () => {

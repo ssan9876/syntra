@@ -92,6 +92,22 @@ export function interpretPatch(body: unknown): ScimPatchOperation[] {
   return result;
 }
 
+/**
+ * A boolean, or the strings `"true"` and `"false"` in any case, which is what
+ * some clients send. Nothing else: reading `0` or `null` or `{}` as either
+ * side of the switch deactivates somebody by accident or leaves somebody live
+ * by accident, and the client that sent it should hear about it instead.
+ */
+function activeValue(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const text = value.trim().toLowerCase();
+    if (text === 'true') return true;
+    if (text === 'false') return false;
+  }
+  throw new ScimError(400, 'invalidValue', 'active must be true or false');
+}
+
 function operationFor(
   path: string,
   value: unknown,
@@ -101,12 +117,19 @@ function operationFor(
   // `Active` is not making a mistake.
   switch (path.toLowerCase()) {
     case 'active':
-      // `"False"` is what some clients send. Treating a non-empty string as
-      // truthy would reactivate an account somebody was deprovisioning.
-      return {
-        kind: 'setActive',
-        value: typeof value === 'string' ? value.toLowerCase() !== 'false' : value !== false,
-      };
+      // `remove` carries no value. Read through the same comparison as a
+      // replace, "no value" is "not false" is active, and a client that meant
+      // "take this attribute away" has just reactivated the account it was
+      // deprovisioning. There is no reading of `remove active` that is safe
+      // to act on, so it is refused.
+      if (op === 'remove') {
+        throw new ScimError(
+          400,
+          'invalidPath',
+          "'active' cannot be removed; replace it with false to deactivate",
+        );
+      }
+      return { kind: 'setActive', value: activeValue(value) };
     case 'username': {
       const next = asString(value);
       if (next === null) throw new ScimError(400, 'invalidValue', 'userName cannot be empty');

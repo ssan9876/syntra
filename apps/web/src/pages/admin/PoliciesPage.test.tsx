@@ -246,7 +246,7 @@ describe('PoliciesPage', () => {
   });
 
   it('sends the devices as a list, chosen by pressing them', async () => {
-    const spy = vi.fn(async (url: unknown, init?: RequestInit) =>
+    const spy = vi.fn(async (url: unknown, _init?: RequestInit) =>
       String(url).includes('/impact')
         ? json({
             matchedUsers: 1,

@@ -324,7 +324,10 @@ export const scimTargetConnector: TargetConnector<Config> = {
     }
   },
 
-  // eslint-disable-next-line @typescript-eslint/require-await -- interface requires an async iterable
+  // An async generator that yields nothing, which is the honest
+  // implementation: the interface hands back an async iterable and SCIM has
+  // no containers to put in it.
+  // eslint-disable-next-line require-yield
   async *listContainers(): AsyncIterable<{ dn: string }> {
     // SCIM has no organizational-unit concept: there is nowhere for an
     // account to be placed other than the flat `Users` collection.

@@ -139,61 +139,80 @@ function toRoute(row: RuleRow): RoutingRule | null {
 }
 
 /**
+ * A policy rule the administrator wrote that could never be honoured.
+ *
+ * A NAMED class rather than a bare Error, because the route above it used to
+ * catch everything and answer 400 with the caught message attached. That
+ * relabelled a lost database connection as the administrator's mistake, and
+ * put a message never written for a client into the response body -- the one
+ * thing the problem+json handler refuses to do, since such a message may
+ * carry connection strings or stack detail. With a class to test, the route
+ * answers 400 for this and rethrows everything else to be handled as the
+ * server fault it is.
+ */
+export class PolicyRuleInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PolicyRuleInvalidError';
+  }
+}
+
+/**
  * Rejects a rule that could never be honoured as written. This is where a bad
  * rule is caught; the engine's backstops exist for rows that predate the check
  * or arrive some other way, not as a substitute for it.
  */
 function validate(input: RuleInput): void {
   if (!(RULE_OUTCOMES as string[]).includes(input.outcome)) {
-    throw new Error(`unknown outcome: ${input.outcome}`);
+    throw new PolicyRuleInvalidError(`unknown outcome: ${input.outcome}`);
   }
   if (input.outcome === 'require_factor' && !input.factorType) {
-    throw new Error('factorType is required when the outcome is require_factor');
+    throw new PolicyRuleInvalidError('factorType is required when the outcome is require_factor');
   }
   if (input.outcome === 'federate') {
     if (!input.upstreamIdpId) {
-      throw new Error('upstreamIdpId is required when the outcome is federate');
+      throw new PolicyRuleInvalidError('upstreamIdpId is required when the outcome is federate');
     }
     if (input.groupIds && input.groupIds.length > 0) {
-      throw new Error(
+      throw new PolicyRuleInvalidError(
         'a federate rule cannot match on group membership: the upstream is chosen before the user is known',
       );
     }
     if (input.contractField) {
-      throw new Error(
+      throw new PolicyRuleInvalidError(
         'a federate rule cannot match on a contract attribute: the upstream is chosen before the user is known',
       );
     }
     if (input.factorType) {
-      throw new Error(
+      throw new PolicyRuleInvalidError(
         'a federate rule cannot require a factor: requirements are decided by authorize() after the upstream returns',
       );
     }
   } else if (input.upstreamIdpId) {
-    throw new Error('upstreamIdpId is only meaningful on a federate rule');
+    throw new PolicyRuleInvalidError('upstreamIdpId is only meaningful on a federate rule');
   }
   if ((input.loginDomains?.length ?? 0) > 0 && input.outcome !== 'federate') {
-    throw new Error('loginDomains is only meaningful on a federate rule');
+    throw new PolicyRuleInvalidError('loginDomains is only meaningful on a federate rule');
   }
   if (input.factorType && !(FACTOR_TYPES as string[]).includes(input.factorType)) {
-    throw new Error(`unknown factorType: ${input.factorType}`);
+    throw new PolicyRuleInvalidError(`unknown factorType: ${input.factorType}`);
   }
   if (input.contractField && !(CONTRACT_FIELDS as string[]).includes(input.contractField)) {
-    throw new Error(`unknown contractField: ${input.contractField}`);
+    throw new PolicyRuleInvalidError(`unknown contractField: ${input.contractField}`);
   }
   for (const day of input.daysOfWeek ?? []) {
     if (!Number.isInteger(day) || day < 0 || day > 6) {
-      throw new Error(`daysOfWeek must hold integers 0..6, got ${day}`);
+      throw new PolicyRuleInvalidError(`daysOfWeek must hold integers 0..6, got ${day}`);
     }
   }
   for (const minute of [input.startMinute, input.endMinute]) {
     if (minute === null || minute === undefined) continue;
     if (!Number.isInteger(minute) || minute < 0 || minute > 1439) {
-      throw new Error(`Minute must be an integer 0..1439, got ${minute}`);
+      throw new PolicyRuleInvalidError(`Minute must be an integer 0..1439, got ${minute}`);
     }
   }
   if (input.timezone && !isValidTimeZone(input.timezone)) {
-    throw new Error(`timezone is not a zone this platform knows: ${input.timezone}`);
+    throw new PolicyRuleInvalidError(`timezone is not a zone this platform knows: ${input.timezone}`);
   }
   for (const range of input.ipRanges ?? []) {
     // A parse, which is what a syntax check is. Asking instead whether the
@@ -202,7 +221,7 @@ function validate(input: RuleInput): void {
     // every literal host address — which is to say most of what a tenant
     // actually types into an office allowlist.
     if (!isIpRangeUsable(range)) {
-      throw new Error(`ipRanges holds something that is not an address or CIDR: ${range}`);
+      throw new PolicyRuleInvalidError(`ipRanges holds something that is not an address or CIDR: ${range}`);
     }
   }
   for (const platform of input.devicePlatforms ?? []) {
@@ -210,7 +229,7 @@ function validate(input: RuleInput): void {
     // would save cleanly and then never match anything, and a policy that
     // silently never fires is worse than one that refuses to be written.
     if (!isDevicePlatform(platform)) {
-      throw new Error(
+      throw new PolicyRuleInvalidError(
         `devicePlatforms holds something that is not a device kind: ${platform}`,
       );
     }
@@ -221,7 +240,7 @@ function validate(input: RuleInput): void {
     // that list changes, and refusing a code because this release predates it
     // would be a bug nobody could work around.
     if (!/^[A-Za-z]{2}$/.test(country.trim())) {
-      throw new Error(
+      throw new PolicyRuleInvalidError(
         `countries holds something that is not a two-letter country code: ${country}`,
       );
     }
@@ -249,7 +268,7 @@ async function assertFactorUsable(
   const tenantId = await currentTenant(tx);
   const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
   if (factorType === 'webauthn' && !tenant.primaryDomain) {
-    throw new Error(
+    throw new PolicyRuleInvalidError(
       'this tenant has no primary domain set, so security keys cannot be registered — set one before requiring them',
     );
   }
@@ -258,7 +277,7 @@ async function assertFactorUsable(
   // off sends every user it matches to an enrolment screen that cannot
   // enrol them.
   if (factorType === 'email_otp' && !tenant.emailOtpEnabled) {
-    throw new Error(
+    throw new PolicyRuleInvalidError(
       'emailed codes are switched off for this tenant — turn them on before requiring one',
     );
   }
@@ -307,7 +326,7 @@ export async function setPolicyDefault(
   fallback: PolicyFallback,
 ): Promise<void> {
   if (fallback.outcome === 'require_factor' && !fallback.factorType) {
-    throw new Error('factorType is required when the default outcome is require_factor');
+    throw new PolicyRuleInvalidError('factorType is required when the default outcome is require_factor');
   }
   await assertFactorUsable(tx, fallback.outcome, fallback.factorType);
   const id = await policyId(tx);
@@ -398,11 +417,11 @@ export async function reorderRules(tx: TenantClient, ruleIds: string[]): Promise
   });
   const wanted = new Set(ruleIds);
   if (wanted.size !== ruleIds.length || wanted.size !== existing.length) {
-    throw new Error('reorderRules must name every rule in the policy exactly once');
+    throw new PolicyRuleInvalidError('reorderRules must name every rule in the policy exactly once');
   }
   for (const row of existing) {
     if (!wanted.has(row.id)) {
-      throw new Error('reorderRules must name every rule in the policy exactly once');
+      throw new PolicyRuleInvalidError('reorderRules must name every rule in the policy exactly once');
     }
   }
 

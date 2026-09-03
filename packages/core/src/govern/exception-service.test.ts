@@ -3,7 +3,6 @@ import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { PERMISSIONS, assignRole, createRole } from '@syntra/core';
 import {
-  ExceptionRefusedError,
   decideSodException,
   requestSodException,
   revokeSodException,

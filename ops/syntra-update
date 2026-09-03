@@ -323,6 +323,38 @@ parse_asset_url() {
       '
 }
 
+# Why a restore that produced $1 tables holding $2 rows is not a restore --
+# printed, with a non-zero status. Silent and zero when it is one.
+#
+# Copied from `syntra-backup` rather than sourced, for the reason env_value
+# is copied there: two standalone tools, and neither may fail to run because
+# the other is absent.
+#
+# THIS IS WHAT TELLS A ROLLBACK FROM AN EMPTY DATABASE. restore_database
+# drops every schema before pg_restore runs and cannot trust pg_restore's
+# exit status (see there), so until this existed the only thing between
+# "pg_restore failed" and the console saying "restored v1.4.0" was a
+# `SELECT 1` -- which an empty database answers perfectly well, after which
+# the service restarted, migrated nothing, and served a directory with nobody
+# in it.
+#
+# ANYTHING THAT IS NOT A NUMBER IS ZERO. A psql that could not connect prints
+# nothing, and nothing is not evidence of rows.
+empty_restore_reason() {
+  local tables="${1:-0}" rows="${2:-0}"
+  case "$tables" in ''|*[!0-9]*) tables=0 ;; esac
+  case "$rows"   in ''|*[!0-9]*) rows=0 ;;   esac
+  if [ "$tables" -eq 0 ]; then
+    printf 'no tables'
+    return 1
+  fi
+  if [ "$rows" -eq 0 ]; then
+    printf '%s table(s) and no rows at all' "$tables"
+    return 1
+  fi
+  return 0
+}
+
 # --- everything below does I/O ----------------------------------------------
 
 log()   { echo "[syntra-update] $*" >&2; }
@@ -531,11 +563,44 @@ SQL
     return 1
   fi
 
-  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$PG_DB" --clean --if-exists \
-    < "$src" >/dev/null 2>&1
   # pg_restore exits non-zero on benign "does not exist" noise from --clean,
-  # so its status is not the test. Whether the schema is usable is.
-  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$PG_DB" -c 'SELECT 1' >/dev/null 2>&1
+  # so its status is not the test. What arrived is, below.
+  docker exec -i "$PG_CONTAINER" pg_restore -U "$PG_ROLE" -d "$PG_DB" --clean --if-exists \
+    < "$src" >/dev/null 2>&1 || true
+
+  if ! docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$PG_DB" -c 'SELECT 1' >/dev/null 2>&1; then
+    log "the database is not answering after the restore"
+    return 1
+  fi
+
+  # AND IT HOLDS ROWS. The schemas were dropped above, so a pg_restore that
+  # failed has left an EMPTY database that answers SELECT 1 -- and returning
+  # zero here would restart the service over it and report the rollback a
+  # success. Non-zero instead, so the caller says RESTORE IT BY HAND and the
+  # dump stays on disk for that.
+  local counts reason
+  counts=$(restored_counts "$PG_DB")
+  if ! reason=$(empty_restore_reason "${counts%% *}" "${counts##* }"); then
+    log "the rollback did NOT restore data: $PG_DB holds $reason after restoring $src"
+    return 1
+  fi
+  log "restored $src -- ${counts%% *} tables, ~${counts##* } rows"
+}
+
+# What a restore into database $1 actually produced, as "<tables> <rows>".
+# The same query `syntra-backup verify` runs against its scratch database.
+#
+# ANALYZE first: pg_stat_user_tables is an estimate, and statistics that were
+# never gathered read as zero rows in a database that is full of them.
+restored_counts() {
+  local db="$1" tables rows
+  docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$db" -c 'ANALYZE' >/dev/null 2>&1 || true
+  tables=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$db" -tAc \
+    "SELECT count(*) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
+  rows=$(docker exec "$PG_CONTAINER" psql -U "$PG_ROLE" -d "$db" -tAc \
+    "SELECT COALESCE(SUM(n_live_tup), 0) FROM pg_stat_user_tables" 2>/dev/null | tr -d ' \r')
+  # `0` rather than empty, so the caller always gets two words back.
+  printf '%s %s' "${tables:-0}" "${rows:-0}"
 }
 
 # The symlink alone -- no restart. Shared by the normal switch and by the
@@ -760,6 +825,10 @@ restore_after_failure() {
   # recreated.
   stop_service
   link_current "$back_to"
+  # restore_database is non-zero when the restore FAILED, and also when it
+  # "succeeded" into an empty database -- see there. Either way the service
+  # is not restarted over it: a database with nothing in it is not one to
+  # migrate and serve, and the dump is still on disk.
   if restore_database "$dump"; then
     systemctl restart "$SERVICE" || true
   else

@@ -8,7 +8,6 @@ import {
   SourceOwnsObjectsError,
   createSource,
   deleteSource,
-  listSources,
   mappingsFor,
   setMappings,
   sourceWithPassword,

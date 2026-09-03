@@ -193,13 +193,10 @@ describe('PersonDetailPage', () => {
     const posted: unknown[] = [];
     mockRoutes({
       '/api/admin/persons/p1': () => json({ ...person, users: [] }),
-      '/api/admin/users?pageSize=200': () =>
-        json({
-          users: [
-            { id: 'u1', login: 'mokafor', personId: null, status: 'active' },
-            { id: 'u2', login: 'taken', personId: 'p9', status: 'active' },
-          ],
-        }),
+      // The unpaged endpoint that answers with exactly the unlinked set,
+      // rather than a page of accounts this screen filtered itself.
+      '/api/admin/users/unlinked': () =>
+        json({ accounts: [{ id: 'u1', login: 'mokafor' }] }),
       '/api/admin/persons/p1/link-user': (init) => {
         posted.push(JSON.parse(String(init?.body)));
         return noContent();
@@ -349,20 +346,21 @@ describe('PersonDetailPage', () => {
     expect(audit).toContain('subject=u1');
   });
 
-  it('says why it cannot link when every account already belongs to somebody', async () => {
+  it('offers no link control when there is no unlinked account to offer', async () => {
+    // It used to say "every account already belongs to somebody" -- a claim
+    // about the whole directory made from the first two hundred rows of it, so
+    // past that many accounts it stated as fact something it could not know.
+    // The control is simply unavailable now, and the endpoint behind the
+    // picker is unpaged, so the empty case is the whole truth.
     mockRoutes({
       '/api/admin/persons/p1': () => json({ ...person, users: [] }),
-      '/api/admin/users?pageSize=200': () =>
-        json({ users: [{ id: 'u2', login: 'taken', personId: 'p9', status: 'active' }] }),
+      '/api/admin/users/unlinked': () => json({ accounts: [] }),
     });
 
     renderPage();
 
-    // Disabled with the reason beside it, rather than a control that opens
-    // onto an empty picker.
-    expect(
-      await screen.findByText(/every account already belongs to somebody/i),
-    ).toBeInTheDocument();
+    await screen.findByText('Link an account');
+    expect(screen.getByRole('button', { name: 'Link an account' })).toBeDisabled();
   });
 });
 

@@ -41,6 +41,7 @@ import {
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
+import { confirmQuery } from './list-query.js';
 
 export interface TargetRouteOptions {
   masterKey: Buffer;
@@ -501,7 +502,7 @@ export async function registerAdminTargetRoutes(
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      const { confirm } = request.query as { confirm?: string };
+      const { confirm } = confirmQuery.parse(request.query ?? {});
       let result;
       try {
         result = await deleteTarget(

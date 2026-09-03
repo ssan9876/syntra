@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { idParam } from '@syntra/contracts';
 import {
   approvalDelegationBody,
@@ -45,6 +46,7 @@ import {
   upsertResourceOwner,
   upsertWorkflow,
   type Scheduler,
+  type RequestStatus,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -79,6 +81,35 @@ function asProblem(cause: unknown): never {
   }
   throw cause;
 }
+
+/**
+ * The filters the request list takes. Parsed, not cast: `request.query` was
+ * spread straight into a Prisma `where`, so `?status=a&status=b` arrived as an
+ * array and a product id that was not a uuid reached the database, and both
+ * answered 500 for a request that was simply wrong.
+ *
+ * The status list is checked against core's `RequestStatus` so a state added
+ * there cannot be silently unfilterable here.
+ */
+const requestListQuery = z
+  .object({
+    status: z
+      .enum([
+        'pending_approval',
+        'blocked_no_approver',
+        'approved',
+        'awaiting_fulfilment',
+        'fulfilled',
+        'partially_fulfilled',
+        'fulfilment_failed',
+        'rejected',
+        'cancelled',
+        'expired',
+      ] as const satisfies readonly RequestStatus[])
+      .optional(),
+    productId: z.string().uuid().optional(),
+  })
+  .strict();
 
 export async function registerAdminAutomateRoutes(
   app: FastifyInstance,
@@ -408,12 +439,12 @@ export async function registerAdminAutomateRoutes(
     '/automate/requests',
     { preHandler: requirePermission(PERMISSIONS.AUTOMATE_READ) },
     async (request) => {
-      const query = request.query as { status?: string; productId?: string };
+      const { status, productId } = requestListQuery.parse(request.query ?? {});
       const requests = await request.db((tx) =>
         tx.accessRequest.findMany({
           where: {
-            ...(query.status === undefined ? {} : { status: query.status }),
-            ...(query.productId === undefined ? {} : { productId: query.productId }),
+            ...(status === undefined ? {} : { status }),
+            ...(productId === undefined ? {} : { productId }),
           },
           include: { product: { select: { name: true } }, items: true },
           // Leading with the ones that are stuck.

@@ -109,24 +109,53 @@ export async function registerScimGroupRoutes(app: FastifyInstance): Promise<voi
       const filter = parseScimFilter(query.filter, ['displayName', 'externalId']);
       const page = parsePagination(query.startIndex, query.count, SCIM_MAX_RESULTS);
 
+      // `displayName` is caseExact false in SCIM's core schema, and the
+      // correlate-then-POST flow depends on this lookup finding the group: an
+      // IdP holding "Payroll" against a group stored as "payroll" would
+      // otherwise be told it does not exist, POST it, and be refused 409 --
+      // provisioning wedged with no move left from its side.
       const where =
         filter === null
           ? {}
           : filter.attribute === 'displayName'
-            ? { name: filter.value }
+            ? { name: { equals: filter.value, mode: 'insensitive' as const } }
             : { sourceAnchor: filter.value };
 
-      const [total, rows] = await request.db((tx) =>
-        Promise.all([
-          tx.group.count({ where }),
-          tx.group.findMany({ where, select: groupSelect, skip: page.startIndex - 1, take: page.count }),
-        ]),
-      );
-
       const base = scimBaseUrl(request);
-      const resources = await request.db(async (tx) =>
-        Promise.all(rows.map(async (row) => toScimGroup(row, await membersOf(tx, row.id), base))),
-      );
+      // ONE transaction for the page, its total AND its memberships. Two
+      // meant the members described a different instant than the count, and
+      // the member read was one query per group -- two hundred round trips
+      // for one list. `membersOf` stays for the single-resource route, where
+      // there is one group and nothing to batch.
+      const [total, rows, memberships] = await request.db(async (tx) => {
+        const [total, rows] = await Promise.all([
+          tx.group.count({ where }),
+          tx.group.findMany({
+            where,
+            select: groupSelect,
+            // A total order. Without the id, two groups sharing a name have
+            // no defined order between pages, so a provisioning walk sees one
+            // twice and never sees another -- and the symptom surfaces weeks
+            // later as an access-review discrepancy, not as an error.
+            orderBy: [{ name: 'asc' }, { id: 'asc' }],
+            skip: page.startIndex - 1,
+            take: page.count,
+          }),
+        ]);
+        const memberships = await tx.groupMembership.findMany({
+          where: { groupId: { in: rows.map((row) => row.id) } },
+          select: { groupId: true, user: { select: { id: true, displayName: true } } },
+        });
+        return [total, rows, memberships] as const;
+      });
+
+      const byGroup = new Map<string, { id: string; displayName: string }[]>();
+      for (const row of memberships) {
+        const list = byGroup.get(row.groupId) ?? [];
+        list.push({ id: row.user.id, displayName: row.user.displayName });
+        byGroup.set(row.groupId, list);
+      }
+      const resources = rows.map((row) => toScimGroup(row, byGroup.get(row.id) ?? [], base));
 
       return reply
         .type('application/scim+json')
@@ -171,7 +200,12 @@ export async function registerScimGroupRoutes(app: FastifyInstance): Promise<voi
       const resource = await request.db(async (tx) => {
         const sourceId = await scimSourceId(tx);
 
-        const clash = await tx.group.findFirst({ where: { name: displayName } });
+        // Case-insensitive to match the filter above: a client that looked
+        // for "Payroll", found nothing and POSTed it must not create a second
+        // group beside "payroll".
+        const clash = await tx.group.findFirst({
+          where: { name: { equals: displayName, mode: 'insensitive' } },
+        });
         if (clash) {
           throw new ScimError(
             409,
@@ -237,10 +271,25 @@ export async function registerScimGroupRoutes(app: FastifyInstance): Promise<voi
               await audit(request, tx, 'scim.member_removed', id, { count: current.length });
               break;
             }
-            case 'setDisplayName':
+            case 'setDisplayName': {
+              // The same pre-check the POST does. Without it the unique index
+              // raises P2002, which is not a ScimError, so the IdP renaming a
+              // group onto a name in use -- routine when two are swapped, or a
+              // rename is retried -- is told the server broke.
+              const clash = await tx.group.findFirst({
+                where: { name: { equals: operation.value, mode: 'insensitive' } },
+              });
+              if (clash && clash.id !== id) {
+                throw new ScimError(
+                  409,
+                  'uniqueness',
+                  `A group named '${operation.value}' already exists.`,
+                );
+              }
               await tx.group.update({ where: { id }, data: { name: operation.value } });
               await audit(request, tx, 'scim.group_updated', id, { displayName: true });
               break;
+            }
             default:
               throw new ScimError(400, 'invalidPath', 'That operation is not valid on a Group');
           }

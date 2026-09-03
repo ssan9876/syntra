@@ -4,7 +4,6 @@ import {
   acceptHostKeyRequest,
   applyImportRunRequest,
   createPersonSourceRequest,
-  deletePersonSourceQuery,
   idParam,
   setPersonMappingsRequest,
   updatePersonSourceRequest,
@@ -40,6 +39,7 @@ import {
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
+import { confirmQuery, sourceIdQuery } from './list-query.js';
 
 export interface PersonSourceRouteOptions {
   masterKey: Buffer;
@@ -188,9 +188,9 @@ export async function registerAdminPersonSourceRoutes(
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      const { confirm } = deletePersonSourceQuery.parse(request.query ?? {});
+      const { confirm } = confirmQuery.parse(request.query ?? {});
       const released = await request
-        .db((tx) => deletePersonSource(tx, id, { confirm: confirm === true }))
+        .db((tx) => deletePersonSource(tx, id, { confirm: confirm === 'true' }))
         .catch(asProblem);
       if (released === null) {
         throw new ProblemError(404, 'not-found', 'Person source not found');
@@ -365,8 +365,8 @@ export async function registerAdminPersonSourceRoutes(
     '/person-import-runs',
     { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
     async (request) => {
-      const query = (request.query ?? {}) as { sourceId?: string };
-      return { runs: await request.db((tx) => listImportRuns(tx, query.sourceId)) };
+      const { sourceId } = sourceIdQuery.parse(request.query ?? {});
+      return { runs: await request.db((tx) => listImportRuns(tx, sourceId)) };
     },
   );
 

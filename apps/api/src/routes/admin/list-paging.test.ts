@@ -132,6 +132,15 @@ describe('GET /directory/summary', () => {
     expect(body.accounts.locked).toBe(0);
   });
 
+  it('counts the people who have nobody to sign in as', async () => {
+    // Counted, not inferred by subtracting accounts from people: that
+    // subtraction charges service accounts, leavers' accounts and second
+    // accounts against the joiners, so it reads zero on a real tenant. The
+    // four seeded people have no accounts; the admin's account has no person.
+    const res = await get('/api/admin/directory/summary');
+    expect(res.json().people.withoutAccount).toBe(4);
+  });
+
   it('counts groups too, which their own page shows on stat cards', async () => {
     const res = await get('/api/admin/directory/summary');
     const body = res.json();
@@ -155,6 +164,18 @@ describe('GET /directory/summary, with only half the permissions', () => {
     const res = await get('/api/admin/directory/summary');
     expect(res.statusCode).toBe(403);
   });
+
+  it('still answers the groups-only summary, which needs one of the two', async () => {
+    // The groups screen needs `directory.read` and nothing else. Sending it to
+    // the combined summary made its stat cards depend on `identity.read`, so a
+    // group administrator got a 403 and three zeroes over a table listing
+    // thousands of groups -- a wrong answer delivered confidently.
+    // This block seeds an admin and no groups, so the count is zero -- the
+    // assertion that matters is that the answer arrives at all.
+    const res = await get('/api/admin/groups/summary');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().groups).toEqual({ total: 0, fromDirectory: 0, inactive: 0 });
+  });
 });
 
 describe('GET /groups', () => {
@@ -167,8 +188,20 @@ describe('GET /groups', () => {
     expect(body.pageSize).toBe(50);
   });
 
-  it('rejects a status filter, which groups do not have', async () => {
-    const res = await get('/api/admin/groups?status=active');
+  it('filters by status, which the inactive stat card counts', async () => {
+    // A group does have a status -- `deactivateGroup` sets it and the stat
+    // card counts it -- so a card counting something no list could be filtered
+    // to was a number with nowhere to go.
+    const active = await get('/api/admin/groups?status=active');
+    expect(active.statusCode).toBe(200);
+    expect(active.json().total).toBe(1);
+
+    const inactive = await get('/api/admin/groups?status=inactive');
+    expect(inactive.json().total).toBe(0);
+  });
+
+  it('rejects a status it does not recognise', async () => {
+    const res = await get('/api/admin/groups?status=archived');
     expect(res.statusCode).toBe(400);
   });
 });

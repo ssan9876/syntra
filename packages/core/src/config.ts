@@ -156,12 +156,24 @@ const schema = z.object({
 });
 
 /**
- * Turns TRUST_PROXY into what Fastify wants: `false`, a hop count, or a list
- * of trusted proxies. `true` is refused by name rather than quietly accepted,
- * because it is the one value that turns the source address into a
- * client-supplied string.
+ * Turns TRUST_PROXY into what Fastify wants: `false`, or a list of trusted
+ * proxies. `true` is refused by name rather than quietly accepted, because it
+ * is the one value that turns the source address into a client-supplied
+ * string.
+ *
+ * A HOP COUNT IS REFUSED TOO, and that is newer than the rest of this
+ * function. Fastify accepted a number until 5.12.1, which fixed
+ * GHSA-3m5p-2c4r-xxw2 by making hop-count trust fail CLOSED: a count cannot
+ * validate the immediate peer, so a direct client could supply enough hops to
+ * choose its own `X-Forwarded-For`. The upstream fix now trusts NOTHING when
+ * given a number. Accepting one here would therefore be accepting a value
+ * whose meaning silently changed from "trust one proxy" to "trust no proxy" --
+ * and the symptom of that is every per-IP rate limit collapsing into one
+ * bucket and every source-address policy condition matching the proxy, which
+ * is exactly the failure this variable exists to prevent, arriving quietly.
+ * So it is refused loudly, with the address form to use instead.
  */
-function parseTrustProxy(raw: string | undefined): false | number | string {
+function parseTrustProxy(raw: string | undefined): false | string {
   if (!raw || raw === 'false') return false;
   if (raw === 'true') {
     throw new Error(
@@ -169,11 +181,9 @@ function parseTrustProxy(raw: string | undefined): false | number | string {
     );
   }
   if (/^\d+$/.test(raw)) {
-    const hops = Number(raw);
-    if (hops < 1) {
-      throw new Error('TRUST_PROXY as a hop count must be 1 or more');
-    }
-    return hops;
+    throw new Error(
+      `TRUST_PROXY must not be a hop count — Fastify stopped trusting them in 5.12.1 (GHSA-3m5p-2c4r-xxw2) because a count cannot check which proxy actually connected, and it now trusts nothing at all when given one. Name the proxies instead, as addresses or CIDRs: TRUST_PROXY=10.0.0.0/8 rather than TRUST_PROXY=${raw}.`,
+    );
   }
   const entries = raw.split(',').map((entry) => entry.trim()).filter(Boolean);
   const bad = entries.filter((entry) => !isIpRangeUsable(entry));
@@ -208,8 +218,8 @@ export interface Config {
   governCheckpointKeyId: string;
   governAnchorDir: string | null;
   governAnchorEmail: string | null;
-  /** false, a hop count, or a comma-separated list of trusted proxies. */
-  trustProxy: false | number | string;
+  /** false, or a comma-separated list of trusted proxies. Never a hop count. */
+  trustProxy: false | string;
   outboundAllowPrivate: boolean;
   /** Absolute path to the built web application, or null to serve the API alone. */
   webRoot: string | null;
@@ -238,7 +248,7 @@ export function loadConfig(
   }
 
   const v = parsed.data;
-  let trustProxy: false | number | string;
+  let trustProxy: false | string;
   try {
     trustProxy = parseTrustProxy(v.TRUST_PROXY);
   } catch (cause) {
@@ -246,6 +256,10 @@ export function loadConfig(
     // startup, naming the variable.
     throw new Error(
       `Invalid configuration — ${cause instanceof Error ? cause.message : String(cause)}`,
+      // The original is kept as the cause. The message above is what an
+      // operator reads; the chain is what somebody debugging a parse failure
+      // needs, and rethrowing without it discards the only stack there was.
+      { cause },
     );
   }
 

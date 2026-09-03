@@ -40,7 +40,7 @@ export function UsersPage() {
   // they fetched. Both lists page now, so filtering the fetched array would
   // describe fifty rows while still reading as a total.
   const summary = useApiResource<{
-    people: { total: number; active: number };
+    people: { total: number; active: number; withoutAccount: number };
     accounts: { total: number; active: number; locked: number };
   }>('/api/admin/directory/summary');
   // The orphan backlog. Its error is deliberately NOT folded into the banner
@@ -59,14 +59,18 @@ export function UsersPage() {
   // below still report the failure properly; this row simply must not be the
   // thing that throws.
   const peopleCount = summary.data?.people?.total ?? 0;
-  const activePeople = summary.data?.people?.active ?? 0;
   const accountCount = summary.data?.accounts?.total ?? 0;
   const lockedCount = summary.data?.accounts?.locked ?? 0;
 
   // The figure that used to be a paragraph. An active person with no account
   // is the joiner state — provisioned but not yet signed in — and it is the
   // only number on this screen that ever needs acting on.
-  const awaiting = Math.max(0, activePeople - accountCount);
+  //
+  // COUNTED BY THE SERVER, not derived here. Subtracting all accounts from
+  // active people counts service accounts, leavers' accounts and second
+  // accounts against the joiners: it read zero on any real tenant, and
+  // `Math.max` was what hid that it had gone negative.
+  const awaiting = summary.data?.people?.withoutAccount ?? 0;
 
   const error = summary.error;
 

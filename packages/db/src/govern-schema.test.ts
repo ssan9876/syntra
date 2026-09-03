@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from './index.js';
-import { asDatabaseSuperuser, resetDatabase } from './test-support.js';
+import { resetDatabase } from './test-support.js';
 
 let tenantId: string;
 let otherTenantId: string;

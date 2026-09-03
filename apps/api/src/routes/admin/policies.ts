@@ -18,6 +18,7 @@ import {
   updateRule,
   type RuleInput,
 } from '@syntra/core';
+import { PolicyRuleInvalidError } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -27,17 +28,29 @@ import { requireSession } from '../../plugins/require-session.js';
  * CIDR, a timezone the platform cannot resolve. Those are the administrator's
  * mistakes, not server faults, so they come back as 400 with the message
  * attached rather than as a 500 with nothing.
+ *
+ * NARROWED to the service's own error class, which is the whole point. These
+ * calls write to the database, so an untyped catch swept up a dropped
+ * connection, a transaction timeout and any genuine bug in here too --
+ * answering 400 for all of them, with the raw message as the client-facing
+ * detail. That destroyed the 400/500 distinction and published text never
+ * written for a client, which is exactly what problem-json.ts refuses to do
+ * for unrecognised errors. Anything that is not this class is rethrown and
+ * handled there.
  */
 async function domainError<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (cause) {
-    throw new ProblemError(
-      400,
-      'invalid-policy-rule',
-      'That rule cannot be stored as written',
-      cause instanceof Error ? cause.message : undefined,
-    );
+    if (cause instanceof PolicyRuleInvalidError) {
+      throw new ProblemError(
+        400,
+        'invalid-policy-rule',
+        'That rule cannot be stored as written',
+        cause.message,
+      );
+    }
+    throw cause;
   }
 }
 

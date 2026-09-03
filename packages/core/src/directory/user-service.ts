@@ -1,8 +1,7 @@
 import type { TenantClient } from '@syntra/db';
 import { endSessions } from '../auth/end-sessions.js';
-import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { currentTenant } from '../tenant-context.js';
-import { DEFAULT_PAGE_SIZE, type ListOptions } from '../list.js';
+import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
 
 export type UserStatus = 'active' | 'inactive';
 
@@ -72,9 +71,9 @@ export async function findUserByLogin(tx: TenantClient, login: string) {
  * caller that filters are writing the same call.
  */
 export async function listUsers(tx: TenantClient, opts: ListOptions = {}) {
-  const page = opts.page ?? 1;
-  const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
-  const search = opts.search?.trim();
+  const { page, pageSize, skip, take } = normalisePaging(opts);
+  const term = opts.search?.trim();
+  const search = term ? escapeLike(term) : undefined;
 
   const where = {
     ...(opts.status ? { status: opts.status } : {}),
@@ -93,8 +92,8 @@ export async function listUsers(tx: TenantClient, opts: ListOptions = {}) {
     tx.user.findMany({
       where,
       orderBy: { login: 'asc' },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      skip,
+      take,
     }),
     tx.user.count({ where }),
   ]);

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createPerson, deactivatePerson, listPersons } from './person-service.js';
+import { MAX_PAGE_SIZE } from '../list.js';
 
 let tenantId: string;
 
@@ -107,5 +108,61 @@ describe('listPersons', () => {
     const page = await withTenant(tenantId, (tx) => listPersons(tx, {}));
     expect(page.page).toBe(1);
     expect(page.pageSize).toBe(50);
+  });
+
+  // Two people with the same name are ordinary, and the sort has to put them
+  // in the same order on every request or paging shows one twice and never
+  // shows the other.
+  it('shows two people with identical names once each across pages', async () => {
+    const made = await withTenant(tenantId, async (tx) => [
+      await createPerson(tx, { givenName: 'Sam', familyName: 'Lee' }),
+      await createPerson(tx, { givenName: 'Sam', familyName: 'Lee' }),
+    ]);
+    const seen: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      for (const page of [1, 2]) {
+        const result = await withTenant(tenantId, (tx) =>
+          listPersons(tx, { page, pageSize: 1 }),
+        );
+        seen.push(...result.rows.map((r) => r.id));
+      }
+    }
+    for (const person of made) {
+      expect(seen.filter((id) => id === person.id)).toHaveLength(20);
+    }
+  });
+
+  it('treats % and _ in a search as characters, not wildcards', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createPerson(tx, { givenName: 'A%B', familyName: 'Percent' });
+      await createPerson(tx, { givenName: 'AXB', familyName: 'Plain' });
+      await createPerson(tx, { givenName: 'A_B', familyName: 'Underscore' });
+    });
+    const percent = await withTenant(tenantId, (tx) => listPersons(tx, { search: '%' }));
+    expect(percent.rows.map((r) => r.familyName)).toEqual(['Percent']);
+    const underscore = await withTenant(tenantId, (tx) => listPersons(tx, { search: 'A_B' }));
+    expect(underscore.rows.map((r) => r.familyName)).toEqual(['Underscore']);
+  });
+
+  it('clamps page 0 and a negative page to the first page', async () => {
+    await seed(3);
+    for (const page of [0, -4]) {
+      const result = await withTenant(tenantId, (tx) =>
+        listPersons(tx, { page, pageSize: 2 }),
+      );
+      expect(result.page).toBe(1);
+      expect(result.rows.map((r) => r.familyName)).toEqual(['Family000', 'Family001']);
+    }
+  });
+
+  it('caps an oversized page size at the ceiling and refuses an empty one', async () => {
+    await seed(2);
+    const big = await withTenant(tenantId, (tx) =>
+      listPersons(tx, { pageSize: MAX_PAGE_SIZE * 10 }),
+    );
+    expect(big.pageSize).toBe(MAX_PAGE_SIZE);
+    const none = await withTenant(tenantId, (tx) => listPersons(tx, { pageSize: 0 }));
+    expect(none.pageSize).toBe(1);
+    expect(none.rows).toHaveLength(1);
   });
 });

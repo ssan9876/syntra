@@ -34,3 +34,24 @@ export const pageQuery = z
 export const statusPageQuery = pageQuery.extend({
   status: z.enum(['active', 'inactive']).optional(),
 });
+
+/**
+ * A list filtered to one source.
+ *
+ * Parsed rather than cast: `?sourceId=abc` used to reach Prisma as a uuid it
+ * could not read, which answered 500 for a request that was simply wrong.
+ */
+export const sourceIdQuery = z
+  .object({ sourceId: z.string().uuid().optional() })
+  .strict();
+
+/**
+ * The one question a destructive route asks before it acts.
+ *
+ * A literal, not a coerced boolean: `z.coerce.boolean()` reads `?confirm=false`
+ * as true, because the string "false" is truthy, and a confirmation that
+ * cannot be declined is not one. Only the exact word counts.
+ */
+export const confirmQuery = z
+  .object({ confirm: z.literal('true').optional() })
+  .strict();

@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { memoryTransport } from '../notify/notification-service.js';
-import { PERMISSIONS } from '../rbac/permissions.js';
 import { PROVISION_JOB } from '../provision/jobs.js';
 import {
   AUTOMATE_DIGEST_JOB,

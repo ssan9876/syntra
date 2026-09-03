@@ -11,7 +11,7 @@ describe('ListControls', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const onSearch = vi.fn();
-    render(<ListControls search="" onSearch={onSearch} searchLabel="Search people" />);
+    render(<ListControls search="" onSearch={onSearch} searchLabel="Search people" searchPlaceholder="Name or login" />);
 
     await user.type(screen.getByLabelText('Search people'), 'arch');
     expect(onSearch).not.toHaveBeenCalled();
@@ -23,23 +23,23 @@ describe('ListControls', () => {
   });
 
   it('shows the value it was given, so a URL with ?q= arrives populated', () => {
-    render(<ListControls search="arch" onSearch={() => {}} searchLabel="Search people" />);
+    render(<ListControls search="arch" onSearch={() => {}} searchLabel="Search people" searchPlaceholder="Name or login" />);
     expect(screen.getByLabelText('Search people')).toHaveValue('arch');
   });
 
   it('follows the search changing underneath it, which is what back does', () => {
     const { rerender } = render(
-      <ListControls search="arch" onSearch={() => {}} searchLabel="Search people" />,
+      <ListControls search="arch" onSearch={() => {}} searchLabel="Search people" searchPlaceholder="Name or login" />,
     );
     rerender(
-      <ListControls search="" onSearch={() => {}} searchLabel="Search people" />,
+      <ListControls search="" onSearch={() => {}} searchLabel="Search people" searchPlaceholder="Name or login" />,
     );
     expect(screen.getByLabelText('Search people')).toHaveValue('');
   });
 
   it('offers a status filter only when it is given one', () => {
     const { rerender } = render(
-      <ListControls search="" onSearch={() => {}} searchLabel="Search" />,
+      <ListControls search="" onSearch={() => {}} searchLabel="Search" searchPlaceholder="Name or login" />,
     );
     expect(screen.queryByLabelText('Status')).toBeNull();
 
@@ -47,7 +47,7 @@ describe('ListControls', () => {
       <ListControls
         search=""
         onSearch={() => {}}
-        searchLabel="Search"
+        searchLabel="Search" searchPlaceholder="Name or login"
         status={{
           value: '',
           onChange: () => {},

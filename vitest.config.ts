@@ -14,12 +14,20 @@ const database = testDatabaseConfig();
 /**
  * One worker, one database.
  *
- * `resetDatabase()` TRUNCATEs every table, so the count of workers and the
- * count of databases have to be the same number -- and it is literally the
- * same call, `testWorkerCount()`, that the global setup provisions against.
- * `minForks` and `maxForks` are both pinned to it so vitest cannot decide to
- * run more workers than there are databases, which would put two of them on
- * one and reproduce the failure this change exists to remove.
+ * `resetDatabase()` TRUNCATEs every table, so the count of workers must not
+ * exceed the count of databases -- and it is literally the same call,
+ * `testWorkerCount()`, that the global setup provisions against. `maxWorkers`
+ * is pinned to it so vitest cannot decide to run more workers than there are
+ * databases, which would put two of them on one and reproduce the failure
+ * this change exists to remove.
+ *
+ * `maxWorkers` alone is enough, and it is all Vitest 5 offers -- `minForks`
+ * and `maxForks` went with the pool rework, and there is no `minWorkers`. The
+ * invariant was never "exactly this many workers": it is that a worker's
+ * `VITEST_POOL_ID`, which `vitest.setup-worker.ts` turns into a database
+ * name, must name a database that exists. Vitest documents that id as never
+ * exceeding `maxWorkers`, so a run that decides on fewer workers simply
+ * leaves the last database or two unused, which costs nothing.
  *
  * Sharding is off when the operator exported `DATABASE_URL` (`name === null`):
  * that database is theirs, not ours to shard, and the setup file leaves it
@@ -51,27 +59,29 @@ export default defineConfig({
     // with no change to the code. A red run that says nothing about the code
     // is the most expensive kind on this programme; it has cost it days.
     hookTimeout: 30_000,
-    // A KNOWN, LONG-UNFIXED VITEST BUG, NOT A SAFETY VALVE FOR THIS CODEBASE'S
-    // OWN TESTS -- read the whole comment before touching this again.
+    // WAS `dangerouslyIgnoreUnhandledErrors: true`, and is deliberately not
+    // any more.
     //
-    // Vitest's worker<->main RPC layer (`birpc`) has a hardcoded, unconfigurable
-    // 60s timeout on internal status pings, independent of testTimeout/
-    // hookTimeout above. Under sustained load it can time out even though every
-    // test passed, and Vitest reports that as an "Unhandled Error" that fails
-    // the whole run -- see vitest-dev/vitest#6479, #4497, #8164, all open for
-    // a long time with no real fix. First hit cutting this project's very
-    // first tagged release, three times running, GitHub's own runner reporting
-    // "Test Files 181 passed (181)", "Tests 3644 passed (3644)" and the job
-    // still red on this one unrelated line.
+    // Vitest's worker<->main RPC layer (`birpc`) had a hardcoded 60s timeout
+    // on internal status pings, independent of the two budgets above. Under
+    // sustained load it timed out even though every test passed, and Vitest
+    // reported that as an "Unhandled Error" that failed the whole run -- see
+    // vitest-dev/vitest#6479, #4497, #8164. It was first hit cutting this
+    // project's very first tagged release, three times running, with the
+    // runner reporting every one of 3,644 tests passing and the job still red
+    // on that one unrelated line. Silencing every unhandled rejection was the
+    // only lever there was.
     //
-    // This does not distinguish that RPC timeout from a genuine unhandled
-    // promise rejection in APPLICATION code under test -- it silences both.
-    // That is a real, ongoing loss: a future test whose async work throws
-    // after its own assertions already returned would now fail to fail here.
-    // It was accepted anyway because the alternative -- a release pipeline
-    // that cannot reliably finish a green run at all -- was worse, and no
-    // narrower fix exists in this Vitest version.
-    dangerouslyIgnoreUnhandledErrors: true,
+    // The cost was real and this comment used to say so: the flag could not
+    // tell that RPC timeout from a genuine unhandled rejection in application
+    // code, so a test whose async work threw after its assertions had already
+    // returned would have failed to fail.
+    //
+    // Vitest 5 does not produce it. Measured, not assumed: the full suite ran
+    // clean with no "Unhandled Error" line and no `onTaskUpdate` timeout,
+    // where every run under Vitest 3 ended with one. So the flag is gone and
+    // the check it was suppressing is back. If the error ever returns, the
+    // fix is to find what is rejecting -- not to reinstate this.
     globalSetup: ['./vitest.global-setup.ts'],
     // Runs in each worker BEFORE the test module, and therefore before
     // `packages/db/src/client.ts` constructs its `PrismaClient` from
@@ -97,6 +107,11 @@ export default defineConfig({
       ...(database.name === null ? {} : { SYNTRA_TEST_DB_BASE: database.name }),
     },
     pool: 'forks',
-    poolOptions: { forks: { singleFork: shards === 1, minForks: shards, maxForks: shards } },
+    maxWorkers: shards,
+    // The `singleFork` of the old pool options. One database means every file
+    // has to share it, and files that share a database cannot run beside each
+    // other -- the truncate at the head of each test would pull the table out
+    // from under whatever else was mid-transaction.
+    ...(shards === 1 ? { fileParallelism: false } : {}),
   },
 });

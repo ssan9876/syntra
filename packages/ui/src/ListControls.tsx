@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Field } from './Field.js';
 import { Select } from './Select.js';
 
@@ -7,6 +7,17 @@ export interface ListControlsProps {
   search: string;
   onSearch(value: string): void;
   searchLabel: string;
+  /**
+   * The fields this particular list searches, in its own words.
+   *
+   * Required rather than defaulted, because the default was wrong on every
+   * list that had one: "Name, login or id" sat over Groups, which searches
+   * name and description, and over People, which searches names, employee
+   * reference and work email -- and nothing in the console searches an id at
+   * all. A placeholder that names fields the server does not look at teaches
+   * a reader to type something that will never match.
+   */
+  searchPlaceholder: string;
   status?:
     | {
         value: string;
@@ -30,19 +41,37 @@ export function ListControls({
   search,
   onSearch,
   searchLabel,
+  searchPlaceholder,
   status,
 }: ListControlsProps) {
   const [draft, setDraft] = useState(search);
-
-  // The URL is the source of truth: back, forward, or a link somebody shared
-  // changes the search underneath us, and the box has to follow it.
-  useEffect(() => setDraft(search), [search]);
+  /**
+   * The last value this component put into the URL.
+   *
+   * Adopting `search` on every change of it adopted the component's OWN
+   * change too. Under react-router 7 that commit lands inside
+   * `startTransition`, so the re-render carrying it can arrive after further
+   * keystrokes -- and the box then reverted to what was typed 250ms ago,
+   * mid-word. Comparing against this is what tells the two apart: a value we
+   * did not submit came from back, forward, or a pasted link, and that one the
+   * box does have to follow.
+   */
+  const submitted = useRef(search);
 
   useEffect(() => {
-    if (draft === search) return;
-    const timer = setTimeout(() => onSearch(draft), DEBOUNCE_MS);
+    if (search === submitted.current) return;
+    submitted.current = search;
+    setDraft(search);
+  }, [search]);
+
+  useEffect(() => {
+    if (draft === submitted.current) return;
+    const timer = setTimeout(() => {
+      submitted.current = draft;
+      onSearch(draft);
+    }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [draft, search, onSearch]);
+  }, [draft, onSearch]);
 
   return (
     <div className="mb-4 flex flex-wrap items-end gap-3">
@@ -51,7 +80,7 @@ export function ListControls({
         type="search"
         value={draft}
         onChange={setDraft}
-        placeholder="Name, login or id"
+        placeholder={searchPlaceholder}
       />
       {status && (
         <Select

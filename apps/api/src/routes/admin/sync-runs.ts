@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { applyRunRequest, idParam } from '@syntra/contracts';
 import {
   PERMISSIONS,
@@ -11,8 +10,7 @@ import {
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
-
-const listQuery = z.object({ sourceId: z.string().uuid().optional() });
+import { sourceIdQuery } from './list-query.js';
 
 export async function registerAdminSyncRunRoutes(
   app: FastifyInstance,
@@ -23,7 +21,7 @@ export async function registerAdminSyncRunRoutes(
     '/sync-runs',
     { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
     async (request) => {
-      const { sourceId } = listQuery.parse(request.query);
+      const { sourceId } = sourceIdQuery.parse(request.query);
       return { runs: await request.db((tx) => listRuns(tx, sourceId)) };
     },
   );

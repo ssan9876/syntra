@@ -437,6 +437,10 @@ model Person {
   @@index([orgUnitId])
   @@index([tenantId])
   @@index([sourceId])
+  /// What listPersons orders by, so a page is an index range rather than a
+  /// sort of every person in the tenant; and the status filter it offers.
+  @@index([tenantId, familyName, givenName])
+  @@index([tenantId, status])
 }
 
 /// One employment or engagement relationship held by a Person. A person may
