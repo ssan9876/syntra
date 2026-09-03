@@ -18,6 +18,7 @@ import {
   provisionJobPayload,
   type Scheduler,
   type Transport,
+  type DriftKind,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -43,6 +44,28 @@ const runParams = idParam.extend({ runId: z.string().uuid() });
 /** How many runs, actions and findings one request may return. */
 const RUN_PAGE = 50;
 const DRIFT_PAGE = 500;
+
+/**
+ * The drift list's filters. Parsed, not cast: cast, a repeated `?status=`
+ * reached Prisma as an array and answered 500 for a caller's mistake. The
+ * kinds are checked against core's `DriftKind`; the statuses are the three
+ * the schema documents on `DriftFinding.status`.
+ */
+const driftListQuery = z
+  .object({
+    status: z.enum(['open', 'acknowledged', 'resolved']).optional(),
+    kind: z
+      .enum([
+        'unmanaged_entitlement',
+        'missing_grant',
+        'orphan_account',
+        'account_missing_at_target',
+        'unexpected_status',
+        'container_vanished',
+      ] as const satisfies readonly DriftKind[])
+      .optional(),
+  })
+  .strict();
 
 export async function registerAdminProvisionRunRoutes(
   app: FastifyInstance,
@@ -264,7 +287,7 @@ export async function registerAdminProvisionRunRoutes(
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      const { status, kind } = request.query as { status?: string; kind?: string };
+      const { status, kind } = driftListQuery.parse(request.query ?? {});
       return {
         findings: await request.db((tx) =>
           tx.driftFinding.findMany({

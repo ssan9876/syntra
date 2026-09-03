@@ -315,7 +315,16 @@ export async function buildApp(
   // Not under /api: SCIM clients are configured with a base URL and expect
   // /scim/v2 to be it, and putting it elsewhere is a support conversation on
   // every single setup.
-  await app.register(registerScimRoutes, { prefix: '/scim/v2' });
+  await app.register(registerScimRoutes, {
+    prefix: '/scim/v2',
+    // `meta.location` is built from this rather than from the request's own
+    // Host, so a client cannot make the directory hand out links to a host it
+    // chose. The rate limits are the password ones scaled up: a provisioning
+    // sync is the load here, not a person signing in.
+    publicUrl: config.publicUrl,
+    authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
+  });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
   // `masterKey`, because deleting a source-owned unit unseals that source's
   // bind credential to remove the container from the directory first.

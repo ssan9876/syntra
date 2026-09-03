@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { TenantClient } from '@syntra/db';
+import { Prisma } from '@syntra/db';
 import {
   PERMISSIONS,
   ScimError,
   createPerson,
+  matchPersonForAccount,
   createUser,
   deactivateUser,
   interpretPatch,
@@ -142,7 +144,12 @@ export async function registerScimUserRoutes(app: FastifyInstance): Promise<void
           tx.user.findMany({
             where,
             select: scimUserSelect,
-            orderBy: { createdAt: 'asc' },
+            // A total order. `createdAt` alone is not unique -- accounts
+            // bulk-imported in one transaction share a timestamp -- and rows
+            // that tie straddle a page boundary in whichever order the plan
+            // happened to produce, so a client walking the pages sees one
+            // twice and never sees another.
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
             skip: page.startIndex - 1,
             take: page.count,
           }),
@@ -185,6 +192,26 @@ export async function registerScimUserRoutes(app: FastifyInstance): Promise<void
             'uniqueness',
             `A user with userName '${input.userName}' already exists.`,
           );
+        }
+
+        // The anchor is unique per source, so a second push of one externalId
+        // under a different login is a duplicate the database would refuse
+        // with a P2002 -- an error carrying no status, which the SCIM error
+        // handler can only report as 500. A client retries a 500 forever and
+        // stops on a 409, so the check is made here, in the same idiom as the
+        // userName clash above, rather than left to the index.
+        if (input.externalId !== null) {
+          const anchored = await tx.user.findFirst({
+            where: { sourceId, sourceAnchor: input.externalId },
+            select: { id: true },
+          });
+          if (anchored) {
+            throw new ScimError(
+              409,
+              'uniqueness',
+              `A user with externalId '${input.externalId}' already exists.`,
+            );
+          }
         }
 
         const personId = await linkedPersonId(tx, input);
@@ -263,7 +290,13 @@ export async function registerScimUserRoutes(app: FastifyInstance): Promise<void
             login: input.userName,
             email: input.email ?? '',
             displayName: input.displayName,
-            sourceAnchor: input.externalId,
+            // Only when the payload carries one. A full replace that omits
+            // externalId -- which some Okta profile mappings do -- would
+            // otherwise null the anchor the IdP finds this account by again,
+            // silently: NULLs are distinct to the unique index, so nothing
+            // errors, the next filter finds nothing, and the IdP concludes the
+            // account is gone and POSTs a replacement.
+            ...(input.externalId === null ? {} : { sourceAnchor: input.externalId }),
             ...(input.active && before.status !== 'active'
               ? { status: 'active', statusReason: null }
               : {}),
@@ -391,11 +424,72 @@ async function linkedPersonId(
 ): Promise<string | null> {
   if (input.givenName === null || input.familyName === null) return null;
 
-  const person = await createPerson(tx, {
-    givenName: input.givenName,
-    familyName: input.familyName,
-    ...(input.email === null ? {} : { businessEmail: input.email }),
-    ...(input.externalId === null ? {} : { externalId: input.externalId }),
-  });
-  return person.id;
+  // FIND BEFORE CREATING, and by the strongest key first. The normal
+  // deployment has an HR feed that already registered this human under the
+  // employee id the IdP is now sending as externalId; creating regardless
+  // either collides on `@@unique([tenantId, externalId])` -- a P2002 the SCIM
+  // error handler can only report as 500, which a client retries forever --
+  // or, where the ids differ, quietly forks the register into two records for
+  // one person, which is the half-record this function's docstring exists to
+  // prevent, arriving by another door.
+  if (input.externalId !== null) {
+    const byExternalId = await tx.person.findFirst({
+      where: { externalId: input.externalId },
+      select: { id: true },
+    });
+    if (byExternalId) return byExternalId.id;
+  }
+
+  // Then the same matcher the console's link-an-account screen uses, under
+  // the same two rules the admin create path applies (see the
+  // `hasActiveAccount` branch in routes/admin/users.ts). Only a CONFIDENT
+  // verdict is acted on: a candidate list is something a person chooses from,
+  // and there is nobody at the other end of a SCIM push. And a confident
+  // match who already signs in somewhere is demoted, because linking there
+  // silently produces the second account the console warns about, without the
+  // warning.
+  if (input.email !== null) {
+    const match = await matchPersonForAccount(tx, {
+      email: input.email,
+      displayName: `${input.givenName} ${input.familyName}`,
+    });
+    if (match.confident && !match.confident.hasActiveAccount) {
+      return match.confident.personId;
+    }
+  }
+
+  return createdPersonId(tx, input);
+}
+
+/**
+ * The create, with the unique index turned into the answer it deserves.
+ *
+ * Two pushes racing on one externalId is a client's duplicate, not a server
+ * fault, and 409 is the code a provisioning client knows how to stop on.
+ */
+async function createdPersonId(
+  tx: TenantClient,
+  input: ScimUserInput,
+): Promise<string> {
+  try {
+    const person = await createPerson(tx, {
+      givenName: input.givenName!,
+      familyName: input.familyName!,
+      ...(input.email === null ? {} : { businessEmail: input.email }),
+      ...(input.externalId === null ? {} : { externalId: input.externalId }),
+    });
+    return person.id;
+  } catch (cause) {
+    if (
+      cause instanceof Prisma.PrismaClientKnownRequestError &&
+      cause.code === 'P2002'
+    ) {
+      throw new ScimError(
+        409,
+        'uniqueness',
+        `A person with externalId '${input.externalId}' already exists.`,
+      );
+    }
+    throw cause;
+  }
 }

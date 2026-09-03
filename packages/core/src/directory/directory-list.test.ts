@@ -3,6 +3,7 @@ import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser, listUsers } from './user-service.js';
 import { createGroup, listGroups } from './group-service.js';
+import { MAX_PAGE_SIZE } from '../list.js';
 
 let tenantId: string;
 
@@ -44,6 +45,27 @@ describe('listUsers', () => {
     }
   });
 
+  it('treats % in a search as a character, not a wildcard', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createUser(tx, { login: 'a%b', email: 'pct@acme.test', displayName: 'A%B' });
+      await createUser(tx, { login: 'axb', email: 'plain@acme.test', displayName: 'AXB' });
+    });
+    const page = await withTenant(tenantId, (tx) => listUsers(tx, { search: '%' }));
+    expect(page.rows.map((r) => r.login)).toEqual(['a%b']);
+  });
+
+  it('clamps page and page size to the shared bounds', async () => {
+    await withTenant(tenantId, (tx) =>
+      createUser(tx, { login: 'a', email: 'a@acme.test', displayName: 'A' }),
+    );
+    const page = await withTenant(tenantId, (tx) =>
+      listUsers(tx, { page: -1, pageSize: MAX_PAGE_SIZE + 1 }),
+    );
+    expect(page.page).toBe(1);
+    expect(page.pageSize).toBe(MAX_PAGE_SIZE);
+    expect(page.rows).toHaveLength(1);
+  });
+
   it('still honours the status filter it already had', async () => {
     await withTenant(tenantId, (tx) =>
       createUser(tx, { login: 'a', email: 'a@acme.test', displayName: 'A' }),
@@ -69,5 +91,24 @@ describe('listGroups', () => {
       listGroups(tx, { search: 'finance' }),
     );
     expect(byDescription.rows.map((r) => r.name)).toEqual(['Payroll']);
+  });
+
+  it('treats % in a search as a character, not a wildcard', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await createGroup(tx, 'A%B');
+      await createGroup(tx, 'AXB');
+    });
+    const page = await withTenant(tenantId, (tx) => listGroups(tx, { search: '%' }));
+    expect(page.rows.map((r) => r.name)).toEqual(['A%B']);
+  });
+
+  it('clamps page and page size to the shared bounds', async () => {
+    await withTenant(tenantId, (tx) => createGroup(tx, 'Payroll'));
+    const page = await withTenant(tenantId, (tx) =>
+      listGroups(tx, { page: 0, pageSize: 0 }),
+    );
+    expect(page.page).toBe(1);
+    expect(page.pageSize).toBe(1);
+    expect(page.rows).toHaveLength(1);
   });
 });

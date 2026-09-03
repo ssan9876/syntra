@@ -41,6 +41,14 @@ import {
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
+import { confirmQuery } from './list-query.js';
+
+/**
+ * The contract's acknowledgement counts, with the same `confirm` every other
+ * destructive route reads. `merge` takes the strictness of its argument, so an
+ * unknown key is refused here as it is there.
+ */
+const deleteQuery = deleteSourceQuery.omit({ confirm: true }).merge(confirmQuery);
 
 export interface SourceRouteOptions {
   masterKey: Buffer;
@@ -447,8 +455,9 @@ export async function registerAdminSourceRoutes(
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
-      const { confirm, ackUsers, ackGroups, ackOrgUnits } =
-        deleteSourceQuery.parse(request.query);
+      const { confirm, ackUsers, ackGroups, ackOrgUnits } = deleteQuery.parse(
+        request.query ?? {},
+      );
 
       // All three or none: a partial acknowledgement would check some of the
       // numbers the caller was shown and quietly ignore the rest.
@@ -462,7 +471,7 @@ export async function registerAdminSourceRoutes(
       await request.db(async (tx) => {
         let released;
         try {
-          released = await deleteSource(tx, id, { confirm, acknowledged });
+          released = await deleteSource(tx, id, { confirm: confirm === 'true', acknowledged });
         } catch (cause) {
           if (cause instanceof SourceCountsChangedError) {
             // The same 409 shape as the unconfirmed case, because it is the

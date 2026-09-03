@@ -1,6 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
-import { DEFAULT_PAGE_SIZE, type ListOptions } from '../list.js';
+import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
 
 export async function createGroup(
   tx: TenantClient,
@@ -15,9 +15,9 @@ export async function createGroup(
 
 /** One page of groups. No status filter: a group does not have one. */
 export async function listGroups(tx: TenantClient, opts: ListOptions = {}) {
-  const page = opts.page ?? 1;
-  const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
-  const search = opts.search?.trim();
+  const { page, pageSize, skip, take } = normalisePaging(opts);
+  const term = opts.search?.trim();
+  const search = term ? escapeLike(term) : undefined;
 
   const where = search
     ? {
@@ -32,8 +32,8 @@ export async function listGroups(tx: TenantClient, opts: ListOptions = {}) {
     tx.group.findMany({
       where,
       orderBy: { name: 'asc' },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      skip,
+      take,
     }),
     tx.group.count({ where }),
   ]);

@@ -63,14 +63,26 @@ carries the proxy's own address, so the policy engine's source-IP condition
 matches everyone or nobody and every per-IP rate limit collapses into one
 global bucket.
 
-Give it a hop count (`1`) or the proxies to trust as addresses and CIDRs
+Name the proxies to trust as addresses and CIDRs
 (`10.0.0.0/8, 192.168.1.7`). **Never `true`** — that believes
 `X-Forwarded-For` from any client, letting anyone choose their own source
 address; the config loader refuses the literal value `true` by name rather
-than accepting it. The container path's own `docker-compose.yml` sets
-`TRUST_PROXY=1` for the API service, because nginx is the only thing a client
-reaches and terminates every connection to the API from inside the compose
-network — one hop, always from that proxy.
+than accepting it.
+
+**A hop count is refused too, and used to be accepted.** Fastify took a
+number until 5.12.1, which fixed GHSA-3m5p-2c4r-xxw2 by making hop-count
+trust fail closed — a count cannot check which proxy actually connected, so a
+direct client could send enough hops to choose its own address. Upstream now
+trusts *nothing* when given a number, so `TRUST_PROXY=1` would mean the same
+as leaving it unset while reading as though a proxy were configured. The
+config loader refuses it by name and names the address form to use instead.
+If you are upgrading and had a hop count set, replace it with the addresses
+your proxy connects from; the API will not start until you do, which is
+deliberate — the alternative is a deployment that looks configured and is
+not. The container path's own `docker-compose.yml` now trusts the private
+ranges Docker allocates its bridge networks from, because nginx is the only
+thing a client reaches, it connects from inside that network, and its address
+there is assigned at run time rather than fixed.
 
 ### BOOTSTRAP variables
 

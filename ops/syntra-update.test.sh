@@ -426,6 +426,31 @@ ok "a path already under the new root is left alone" \
 ok "an unset WEB_ROOT is left alone" \
   "$(rewritten_web_root '' /root/syntra /opt/syntra || echo LEAVE)" "LEAVE"
 
+# --- empty_restore_reason ---------------------------------------------------
+#
+# restore_database drops every schema and then cannot trust pg_restore's exit
+# status, so its last word used to be `SELECT 1` -- which an empty database
+# answers. A pg_restore that failed during a rollback therefore ended with the
+# service restarted over nothing and the console reading "restored v1.4.0".
+# This is the count that tells the two apart; restore_database returns
+# non-zero on it and restore_after_failure then says RESTORE IT BY HAND.
+
+ok "a restore with tables and rows is a restore" \
+  "$(yes_no empty_restore_reason 87 4096)" yes
+
+ok "an empty database is not a restore" "$(yes_no empty_restore_reason 0 0)" no
+ok "and says so" "$(empty_restore_reason 0 0)" "no tables"
+
+ok "tables without rows is not a restore either" \
+  "$(yes_no empty_restore_reason 87 0)" no
+ok "and names the count" \
+  "$(empty_restore_reason 87 0)" "87 table(s) and no rows at all"
+
+# A psql that could not connect prints nothing, and nothing is not rows.
+ok "no answer at all is not a restore" "$(yes_no empty_restore_reason '' '')" no
+ok "a non-numeric answer is not a restore" \
+  "$(yes_no empty_restore_reason ERROR ERROR)" no
+
 # --- report -----------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

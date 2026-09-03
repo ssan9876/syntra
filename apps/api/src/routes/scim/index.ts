@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ScimError, SCIM_ERROR_SCHEMA } from '@syntra/core';
+import { ScimError, SCIM_ERROR_SCHEMA, protocolBase } from '@syntra/core';
 import { resolveBearerPrincipal } from '../../plugins/bearer-token.js';
+import { perTenantRateLimit } from '../../plugins/rate-limit.js';
 import { registerScimDiscovery } from './discovery.js';
 import { registerScimUserRoutes } from './users.js';
 import { registerScimGroupRoutes } from './groups.js';
@@ -8,10 +9,52 @@ import { registerScimGroupRoutes } from './groups.js';
 /** How many resources a list may return, whatever a client asks for. */
 export const SCIM_MAX_RESULTS = 200;
 
+/**
+ * How many SCIM requests a minute a tenant may make, as a multiple of the
+ * password allowance -- and of the tenant-wide password ceiling for the
+ * second dimension.
+ *
+ * A multiple rather than its own setting so that the two ceilings move
+ * together: an operator who raised `AUTH_RATE_LIMIT_MAX` for a busy site has
+ * a busy site, and the SCIM client serving it is busier for the same reason.
+ *
+ * Sixty, because a full provisioning sync is the load to size against, not a
+ * person. Entra and Okta walk every user and every group of a tenant one
+ * request at a time when they first connect and whenever they reconcile, at
+ * a few requests a second. With the default password allowance of ten a
+ * minute this is six hundred a minute per address, ten a second, which is
+ * above the rate either of them sustains and low enough that a leaked token
+ * cannot enumerate a directory faster than the audit log notices.
+ */
+export const SCIM_RATE_LIMIT_FACTOR = 60;
+
+export interface ScimRouteOptions {
+  /**
+   * What `meta.location` and the `Location` header are built from. Never the
+   * request's own Host or X-Forwarded-Proto: `trustProxy` decides which
+   * proxies may be believed about a request, and reading the headers raw
+   * would bypass that decision for every link the IdP stores.
+   */
+  publicUrl: string;
+  authRateLimitMax: number;
+  authRateLimitTenantMax: number;
+}
+
+/**
+ * The base for each request, resolved once in the plugin's own hook. A
+ * WeakMap rather than a request decorator: the value is private to this
+ * plugin, and a decorator would put a SCIM-only field on every request in
+ * the process.
+ */
+const baseByRequest = new WeakMap<FastifyRequest, string>();
+
 /** The absolute base a `meta.location` is built from. */
 export function scimBaseUrl(request: FastifyRequest): string {
-  const proto = (request.headers['x-forwarded-proto'] as string | undefined) ?? request.protocol;
-  return `${proto}://${request.headers.host ?? ''}/scim/v2`;
+  const base = baseByRequest.get(request);
+  if (base === undefined) {
+    throw new Error('scimBaseUrl read before the SCIM plugin resolved the tenant');
+  }
+  return base;
 }
 
 /**
@@ -33,7 +76,10 @@ export function scimBaseUrl(request: FastifyRequest): string {
  * `directory.read` can list and read and nothing else — which is a genuinely
  * useful way to prove a connection before trusting it to write.
  */
-export async function registerScimRoutes(app: FastifyInstance): Promise<void> {
+export async function registerScimRoutes(
+  app: FastifyInstance,
+  options: ScimRouteOptions,
+): Promise<void> {
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ScimError) {
       return reply.code(error.status).type('application/scim+json').send({
@@ -81,6 +127,23 @@ export async function registerScimRoutes(app: FastifyInstance): Promise<void> {
     }),
   );
 
+  // Both dimensions, as every other credential-presenting route carries
+  // them: a machine token is a credential, and a route that takes one and
+  // answers as fast as it is asked is a directory-enumeration primitive for
+  // whoever holds a leaked token. Plugin-wide hooks rather than per-route
+  // config so that a route added later cannot forget.
+  app.addHook(
+    'onRequest',
+    app.rateLimit({
+      max: options.authRateLimitMax * SCIM_RATE_LIMIT_FACTOR,
+      timeWindow: '1 minute',
+    }),
+  );
+  app.addHook(
+    'onRequest',
+    perTenantRateLimit(app, options.authRateLimitTenantMax * SCIM_RATE_LIMIT_FACTOR),
+  );
+
   app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
     const principal = await resolveBearerPrincipal(request);
     if (principal === null) {
@@ -97,6 +160,16 @@ export async function registerScimRoutes(app: FastifyInstance): Promise<void> {
         });
     }
     request.session = principal;
+
+    // The same formula every protocol identifier uses, so a location here and
+    // an issuer over there never disagree by a scheme or a port.
+    const tenant = await request.db((tx) =>
+      tx.tenant.findUniqueOrThrow({
+        where: { id: request.tenantId },
+        select: { primaryDomain: true },
+      }),
+    );
+    baseByRequest.set(request, `${protocolBase(tenant, options.publicUrl)}/scim/v2`);
     return undefined;
   });
 

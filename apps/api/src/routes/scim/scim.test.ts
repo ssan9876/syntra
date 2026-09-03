@@ -5,6 +5,7 @@ import {
   SCIM_USER_SCHEMA,
   assignRole,
   createRole,
+  createPerson,
   createScimSource,
   createUser,
   hashPassword,
@@ -258,6 +259,54 @@ describe('creating users', () => {
     expect(row.personId).not.toBeNull();
   });
 
+  it('links the Person the HR feed already registered by externalId, rather than forking one', async () => {
+    // The register is what Provision and Govern read. A second Person for the
+    // same externalId is two records for one human, and the HR feed will
+    // keep updating the one this account is not linked to.
+    const person = await withTenant(ctx.tenantId, (tx) =>
+      createPerson(tx, { givenName: 'Ada', familyName: 'Lovelace', externalId: 'e-1' }),
+    );
+
+    const created = await createAda();
+
+    expect(created.statusCode).toBe(201);
+    const row = await withTenant(ctx.tenantId, (tx) =>
+      tx.user.findUniqueOrThrow({ where: { id: created.json().id } }),
+    );
+    expect(row.personId).toBe(person.id);
+    expect(await withTenant(ctx.tenantId, (tx) => tx.person.count())).toBe(1);
+  });
+
+  it('links a Person matched confidently on the business address', async () => {
+    // The address the organization issued is a statement about who somebody
+    // is, and the matcher already treats it as one everywhere else.
+    const person = await withTenant(ctx.tenantId, (tx) =>
+      createPerson(tx, {
+        givenName: 'Ada',
+        familyName: 'Lovelace',
+        businessEmail: 'ada@acme.test',
+      }),
+    );
+
+    const created = await createAda({ externalId: undefined });
+
+    const row = await withTenant(ctx.tenantId, (tx) =>
+      tx.user.findUniqueOrThrow({ where: { id: created.json().id } }),
+    );
+    expect(row.personId).toBe(person.id);
+  });
+
+  it('answers 409 uniqueness, not 500, for a second POST of one externalId under another login', async () => {
+    // The anchor is unique per source. Letting the database refuse it turns a
+    // client's duplicate into "the server broke", and a client retries a 500.
+    await createAda();
+
+    const again = await createAda({ userName: 'ada2' });
+
+    expect(again.statusCode).toBe(409);
+    expect(again.json().scimType).toBe('uniqueness');
+  });
+
   it('creates no Person when the payload is only a login', async () => {
     // An IdP that knows a login and an address should not fill the register
     // with half-records no HR feed will reconcile against.
@@ -273,6 +322,24 @@ describe('creating users', () => {
     const created = await createAda({ active: false });
 
     expect(created.json().active).toBe(false);
+  });
+});
+
+describe('replacing users', () => {
+  it('keeps the anchor when a PUT carries no externalId', async () => {
+    // externalId is the key the IdP finds this account by again. A PUT that
+    // omits it must not detach the account from the IdP that owns it.
+    const created = await createAda();
+    const id = created.json().id as string;
+
+    const res = await scim('PUT', `/Users/${id}`, token, {
+      schemas: [SCIM_USER_SCHEMA],
+      userName: 'ada',
+      name: { givenName: 'Ada', familyName: 'Lovelace' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().externalId).toBe('e-1');
   });
 });
 
@@ -345,6 +412,29 @@ describe('listing', () => {
     expect((await scim('GET', '/Users?startIndex=0', token)).statusCode).toBe(400);
   });
 
+  it('builds meta.location from the public URL, whatever forwarded headers claim', async () => {
+    // `trustProxy` decides which proxies may be believed, and a base built
+    // straight from X-Forwarded-Proto and Host bypasses that decision: an
+    // attacker who can reach the port chooses the host in every link the
+    // IdP stores.
+    const created = await createAda();
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: `/scim/v2/Users/${created.json().id}`,
+      headers: {
+        host: TEST_HOST,
+        authorization: `Bearer ${token}`,
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'attacker.example',
+      },
+    });
+
+    expect(res.json().meta.location).toBe(
+      `http://${TEST_HOST}/scim/v2/Users/${created.json().id}`,
+    );
+  });
+
   it('404s in SCIM\'s shape for an unknown user', async () => {
     const res = await scim('GET', '/Users/11111111-2222-4333-8444-555555555555', token);
 
@@ -354,6 +444,27 @@ describe('listing', () => {
 });
 
 describe('groups', () => {
+  it('walks every group exactly once across pages', async () => {
+    // An unordered LIMIT/OFFSET is free to return rows in a different order
+    // per query, so a provisioning walk sees one group twice and never sees
+    // another. The one it never sees is a group whose memberships are never
+    // reconciled, and nothing reports it -- it surfaces weeks later as an
+    // access-review discrepancy.
+    const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo'];
+    for (const displayName of names) {
+      await scim('POST', '/Groups', token, { displayName });
+    }
+
+    const seen: string[] = [];
+    for (let startIndex = 1; startIndex <= names.length; startIndex += 1) {
+      const page = await scim('GET', `/Groups?startIndex=${startIndex}&count=1`, token);
+      expect(page.json().totalResults).toBe(names.length);
+      for (const resource of page.json().Resources) seen.push(resource.displayName);
+    }
+
+    expect(seen.sort()).toEqual([...names].sort());
+  });
+
   it('creates a group with members and reads them back', async () => {
     const ada = await createAda();
 
@@ -408,6 +519,77 @@ describe('groups', () => {
     expect(res.json().totalResults).toBe(1);
   });
 
+  it('filters by displayName without regard to case, as the schema says', async () => {
+    // displayName is caseExact false. A client that finds nothing for
+    // "PAYROLL" creates a second Payroll.
+    await scim('POST', '/Groups', token, { displayName: 'Payroll' });
+
+    const res = await scim('GET', '/Groups?filter=displayName eq "PAYROLL"', token);
+
+    expect(res.json().totalResults).toBe(1);
+    expect(res.json().Resources[0].displayName).toBe('Payroll');
+  });
+
+  it('refuses a POST whose name differs from an existing group only by case', async () => {
+    await scim('POST', '/Groups', token, { displayName: 'Payroll' });
+
+    const res = await scim('POST', '/Groups', token, { displayName: 'payroll' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().scimType).toBe('uniqueness');
+  });
+
+  it('answers 409 uniqueness, not 500, for a rename onto an existing name', async () => {
+    await scim('POST', '/Groups', token, { displayName: 'Payroll' });
+    const other = await scim('POST', '/Groups', token, { displayName: 'Finance' });
+
+    const res = await scim('PATCH', `/Groups/${other.json().id}`, token, {
+      Operations: [{ op: 'replace', path: 'displayName', value: 'Payroll' }],
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().scimType).toBe('uniqueness');
+  });
+
+  it('pages every group exactly once', async () => {
+    // Without an order, Postgres is free to hand back pages that overlap or
+    // skip, and a client walking the list misses a group without any error.
+    const names = ['Gamma', 'Alpha', 'Beta', 'Delta'];
+    const ids: string[] = [];
+    for (const displayName of names) {
+      const created = await scim('POST', '/Groups', token, { displayName });
+      ids.push(created.json().id as string);
+    }
+
+    const seen: string[] = [];
+    for (let startIndex = 1; startIndex <= names.length; startIndex++) {
+      const page = await scim('GET', `/Groups?startIndex=${startIndex}&count=1`, token);
+      expect(page.json().Resources).toHaveLength(1);
+      seen.push(page.json().Resources[0].id);
+    }
+
+    expect([...seen].sort()).toEqual([...ids].sort());
+  });
+
+  it('reads members for every group on a page', async () => {
+    const ada = await createAda();
+    await scim('POST', '/Groups', token, { displayName: 'Empty' });
+    await scim('POST', '/Groups', token, {
+      displayName: 'Eng',
+      members: [{ value: ada.json().id }],
+    });
+
+    const res = await scim('GET', '/Groups', token);
+
+    const byName = Object.fromEntries(
+      (res.json().Resources as { displayName: string; members: unknown[] }[]).map((g) => [
+        g.displayName,
+        g.members.length,
+      ]),
+    );
+    expect(byName).toEqual({ Empty: 0, Eng: 1 });
+  });
+
   it('DELETE deactivates the group and keeps the membership record', async () => {
     // Reactivating puts back exactly what was there, which a delete would
     // make impossible.
@@ -427,6 +609,28 @@ describe('groups', () => {
       tx.groupMembership.count({ where: { groupId: id } }),
     );
     expect(members).toBe(1);
+  });
+});
+
+describe('rate limiting', () => {
+  it('has a ceiling, because a machine token is still a credential', async () => {
+    // Every other credential-presenting route carries one. The SCIM ceiling
+    // is a multiple of the password allowance, which is what brings it within
+    // reach of a test.
+    ctx = await buildTestApp({
+      env: { AUTH_RATE_LIMIT_MAX: '1', AUTH_RATE_LIMIT_TENANT_MAX: '100' },
+    });
+    await ctx.app.ready();
+    await withTenant(ctx.tenantId, (tx) => createScimSource(tx, { name: 'Entra' }));
+    token = await tokenFor([PERMISSIONS.DIRECTORY_READ], 'limited');
+
+    const codes: number[] = [];
+    for (let i = 0; i < 61; i++) {
+      codes.push((await scim('GET', '/ServiceProviderConfig', token)).statusCode);
+    }
+
+    expect(codes[0]).toBe(200);
+    expect(codes.at(-1)).toBe(429);
   });
 });
 

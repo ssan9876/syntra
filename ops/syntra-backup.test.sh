@@ -180,6 +180,35 @@ ok "falls back to package.json in a working tree" "$(running_version)" "9.9.9"
 ROOT="$RV_SAVED"
 rm -rf "$RV_ROOT"
 
+# --- empty_restore_reason ---------------------------------------------------
+#
+# `restore` dropped the public schema, ran pg_restore with its status thrown
+# away (it reports ownership notices as errors), asked `SELECT 1`, and logged
+# "restored". A pg_restore that failed outright therefore left an EMPTY
+# database, a started service, and a log line saying everything was fine.
+# `verify` already counted tables and rows; this is that count, extracted so
+# both commands ask it and the tests can reach it.
+
+ok "a restore with tables and rows is a restore" \
+   "$(yes_no empty_restore_reason 87 4096)" yes
+
+ok "an empty database is not a restore" \
+   "$(yes_no empty_restore_reason 0 0)" no
+ok "and says so" \
+   "$(empty_restore_reason 0 0)" "no tables"
+
+# The shape an RLS-filtered dump restores to: every table, none of the rows.
+ok "tables without rows is not a restore either" \
+   "$(yes_no empty_restore_reason 87 0)" no
+ok "and names the count, so the operator can tell it from no tables" \
+   "$(empty_restore_reason 87 0)" "87 table(s) and no rows at all"
+
+# A psql that could not connect prints nothing. Nothing is not evidence.
+ok "no answer at all is not a restore"  "$(yes_no empty_restore_reason '' '')" no
+ok "a non-numeric answer is not a restore" \
+   "$(yes_no empty_restore_reason 'ERROR' 'ERROR')" no
+ok "no arguments at all is not a restore" "$(yes_no empty_restore_reason)" no
+
 # ---------------------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

@@ -38,11 +38,19 @@ services:
       NODE_ENV: production
       # This deployment IS the proxy: nginx (the `web` service) is the only
       # thing a client ever reaches, and it terminates every connection to
-      # `api` from inside the same compose network. One hop, always from that
-      # proxy, so trusting exactly one is correct here -- never a bare `true`,
-      # which would believe X-Forwarded-For from any client. See TRUST_PROXY's
-      # own documentation in packages/core/src/config.ts and .env.example.
-      TRUST_PROXY: '1'
+      # `api` from inside the same compose network. `api` publishes no ports,
+      # so nothing outside that network can reach it to be believed about
+      # anything.
+      #
+      # These are the private ranges Docker allocates its bridge networks
+      # from, which is where nginx's address in that network comes from -- the
+      # address is assigned at run time, so it cannot be named exactly here.
+      # This was `1` until Fastify 5.12.1 fixed GHSA-3m5p-2c4r-xxw2 by making
+      # a hop count trust NOTHING; leaving it would have quietly turned every
+      # per-IP rate limit into one global bucket. Never a bare `true`, which
+      # would believe X-Forwarded-For from any client. See TRUST_PROXY's own
+      # documentation in packages/core/src/config.ts and .env.example.
+      TRUST_PROXY: '172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16'
     healthcheck:
       # READINESS, not /health: a liveness check that only proves the process
       # is listening would report the api "healthy" while it cannot reach

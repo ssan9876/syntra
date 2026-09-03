@@ -958,3 +958,34 @@ describe('GET /api/admin/persons/:id/access', () => {
     });
   });
 });
+
+describe('the drift list parses its filters', () => {
+  /**
+   * `status` and `kind` were cast off the query string into a Prisma `where`,
+   * so `?status=open&status=acknowledged` arrived as an array and answered
+   * 500 for a caller's mistake.
+   */
+  it('answers 400, not 500, for a repeated status', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const response = await get(
+      `/api/admin/targets/${targetId}/drift?status=open&status=acknowledged`,
+      cookie,
+    );
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('answers 400, not 500, for a kind it does not know', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const response = await get(`/api/admin/targets/${targetId}/drift?kind=nope`, cookie);
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('answers 400 for a target deletion confirmed with anything but the word true', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const response = await del(`/api/admin/targets/${targetId}?confirm=yes`, cookie);
+    expect(response.statusCode).toBe(400);
+  });
+});

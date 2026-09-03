@@ -755,3 +755,37 @@ describe('delegated tasks', () => {
     expect(res.json().runs).toEqual([]);
   });
 });
+
+describe('the admin request list parses its filters', () => {
+  /**
+   * The query was spread straight into a Prisma `where`. A repeated key
+   * arrives as an array and a product id that is not a uuid reaches the
+   * database, and both used to answer 500 for a caller's mistake.
+   */
+  it('answers 400, not 500, for a repeated status', async () => {
+    const res = await call('GET', '/api/admin/automate/requests?status=a&status=b');
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('answers 400, not 500, for a status it does not know', async () => {
+    const res = await call('GET', '/api/admin/automate/requests?status=Approved');
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('answers 400, not 500, for a product id that is not a uuid', async () => {
+    const res = await call('GET', '/api/admin/automate/requests?productId=not-a-uuid');
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('still filters by a real status', async () => {
+    const { requestId } = await pendingRequest();
+    const res = await call(
+      'GET',
+      '/api/admin/automate/requests?status=blocked_no_approver',
+    );
+    expect(res.statusCode).toBe(200);
+    expect((res.json().requests as { id: string }[]).map((r) => r.id)).toContain(requestId);
+    const none = await call('GET', '/api/admin/automate/requests?status=expired');
+    expect(none.json().requests).toEqual([]);
+  });
+});
