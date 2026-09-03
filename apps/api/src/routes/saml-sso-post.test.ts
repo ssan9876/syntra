@@ -35,7 +35,6 @@ const PASSWORD = 'correct horse battery staple';
 const PASSWORD_HASH = await hashPassword(PASSWORD);
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
-let userId: string;
 let applicationId: string;
 let cookie: string;
 
@@ -154,7 +153,7 @@ describe('SAML single sign-on over HTTP-POST', () => {
       data: { primaryDomain: TEST_HOST },
     });
 
-    ({ userId, applicationId } = await withTenant(ctx.tenantId, async (tx) => {
+    ({ applicationId } = await withTenant(ctx.tenantId, async (tx) => {
       const user = await createUser(tx, {
         login: 'jdoe', email: 'j@acme.test', displayName: 'J Doe',
       });

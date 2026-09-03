@@ -1,6 +1,5 @@
 import type { TenantClient } from '@syntra/db';
 import { endSessions } from '../auth/end-sessions.js';
-import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { currentTenant } from '../tenant-context.js';
 import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
 

@@ -72,7 +72,12 @@ export function BrandProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.title = brandName(brand);
-  }, [brand.name]);
+    // `brand`, not `brand.name`. `brandName` reads only the name today, so
+    // the narrower list was correct -- but it was correct because of what a
+    // function elsewhere happens to do, which is exactly the dependency a
+    // reader cannot check. Re-running this when any other brand field changes
+    // assigns the same title, which costs nothing.
+  }, [brand]);
 
   return <BrandContext.Provider value={brand}>{children}</BrandContext.Provider>;
 }

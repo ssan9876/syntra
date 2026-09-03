@@ -106,7 +106,6 @@ export function Portal() {
     const tile = data.applications.find((row) => row.id === wanted);
     window.history.replaceState({}, '', '/');
     if (tile) void launch(tile);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
   async function launch(tile: ApplicationTile) {

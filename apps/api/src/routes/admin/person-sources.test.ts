@@ -11,7 +11,6 @@ import {
   previewImportRun,
   localMasterKeyProvider,
   setPasswordHash,
-  setPersonMappings,
   type Permission,
 } from '@syntra/core';
 import { buildTestApp, createFakeScheduler, type FakeScheduler } from '../../test-support.js';

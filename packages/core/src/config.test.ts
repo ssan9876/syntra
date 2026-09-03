@@ -37,6 +37,9 @@ describe('loadConfig', () => {
   });
 
   it('rejects a missing database url', () => {
+    // The destructuring is how DATABASE_URL is REMOVED from what is passed;
+    // the binding is meant to be unused. `ignoreRestSiblings` in the lint
+    // config is what keeps this idiom legal.
     const { DATABASE_URL, ...rest } = valid;
     expect(() => loadConfig(rest)).toThrow(/DATABASE_URL/);
   });

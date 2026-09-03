@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { asDatabaseSuperuser, resetDatabase } from '@syntra/db/src/test-support.js';
 import { recordEvent } from '../audit/audit-service.js';

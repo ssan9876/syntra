@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { prisma, withTenant } from '@syntra/db';
+import { withTenant } from '@syntra/db';
 import {
   ALL_PERMISSIONS,
   assignRole,

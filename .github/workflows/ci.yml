@@ -173,6 +173,17 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc -b --force
 
+      # AFTER the typecheck and before the suite, which is where its value is.
+      # It runs in about a minute and catches the things `tsc` cannot see --
+      # a promise nobody awaited, a hook behind a condition -- so a run that
+      # fails here fails before spending twenty minutes on the database.
+      #
+      # It needs the generated Prisma client, which is why it cannot move
+      # above `pnpm db:generate`: the type-aware rules ask the compiler about
+      # every `tx.` call, and without the client those are `any`.
+      - name: Lint
+        run: pnpm lint
+
       # TWO FAILURE MODES WORTH TELLING APART before you suspect your change.
       #
       # `Hook timed out in 30000ms` on a `resetDatabase()` hook: seven workers

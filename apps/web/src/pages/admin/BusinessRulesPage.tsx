@@ -7,7 +7,6 @@ import {
   Empty,
   Field,
   Panel,
-  Select,
   SkeletonRows,
   Status,
 } from '@syntra/ui';

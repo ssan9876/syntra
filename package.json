@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "db:up": "docker compose -f infra/docker-compose.yml up -d",
     "db:down": "docker compose -f infra/docker-compose.yml down",
     "db:migrate": "pnpm --filter @syntra/db migrate",
@@ -28,14 +30,18 @@
     "samba:wait": "node --input-type=module -e \"import {Client} from 'ldapts';const url=process.env.SAMBA_LDAPS_URL??'ldaps://localhost:1637';const dn=process.env.SAMBA_BIND_DN??'CN=Administrator,CN=Users,DC=syntra,DC=test';const pw=process.env.SAMBA_BIND_PASSWORD??'Syntra!Passw0rd';const deadline=Date.now()+120000;for(;;){const c=new Client({url,tlsOptions:{rejectUnauthorized:false},connectTimeout:5000});try{await c.bind(dn,pw);await c.unbind();console.log('samba bindable');process.exit(0)}catch(e){await c.unbind().catch(()=>{});if(Date.now()>deadline){console.error('samba never became bindable:',e.message);process.exit(1)}await new Promise(r=>setTimeout(r,2000))}}\""
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
     "@types/node": "^22.10.0",
     "@types/pg": "^8.21.0",
+    "eslint": "^10.9.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "ldapts": "^9.0.0",
     "otpauth": "9.5.1",
     "pg": "^8.23.0",
     "tsx": "^4.23.12",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.69.0",
     "vitest": "^3.0.0"
   },
   "pnpm": {

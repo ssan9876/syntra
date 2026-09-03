@@ -3,7 +3,6 @@ import * as client from 'openid-client';
 import { createLocalJWKSet, jwtVerify } from 'jose';
 import { prisma, withTenant } from '@syntra/db';
 import {
-  addRule,
   assignApplication,
   createApplication,
   createClaimMapping,

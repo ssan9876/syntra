@@ -5,7 +5,6 @@ import { recordEvent } from '../audit/audit-service.js';
 import { sourceWithPassword } from '../sync/source-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { endSessions } from '../auth/end-sessions.js';
-import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { deactivateUser, reactivateUser } from './user-service.js';
 import { PROVISION_JOB, provisionJobPayload } from '../provision/jobs.js';
 import type { Scheduler } from '../jobs/scheduler.js';

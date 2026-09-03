@@ -54,7 +54,10 @@ export async function createApprovalDelegation(
     startsAt: Date;
     endsAt: Date;
   },
-  options: { now?: Date; publicUrl?: string } = {},
+  // Underscored: this function takes the same options bag as its siblings so
+  // callers can pass one shape everywhere, and reads neither field. Renaming
+  // rather than removing keeps that call-site symmetry.
+  _options: { now?: Date; publicUrl?: string } = {},
 ): Promise<{ id: string }> {
   return withTenant(tenantId, async (tx) => {
     const settings = await automateSettings(tx);

@@ -3,7 +3,6 @@ import type { ObjectType } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { endSessions } from '../auth/end-sessions.js';
-import { revokeAllRefreshTokensForUser } from '../auth/refresh-token.js';
 import { unassignableFields } from './mapping.js';
 import { DISABLED_IN_SOURCE } from './diff.js';
 

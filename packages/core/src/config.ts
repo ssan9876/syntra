@@ -256,6 +256,10 @@ export function loadConfig(
     // startup, naming the variable.
     throw new Error(
       `Invalid configuration — ${cause instanceof Error ? cause.message : String(cause)}`,
+      // The original is kept as the cause. The message above is what an
+      // operator reads; the chain is what somebody debugging a parse failure
+      // needs, and rethrowing without it discards the only stack there was.
+      { cause },
     );
   }
 

@@ -18,7 +18,6 @@ import { parseDocument } from './target-form.js';
  * name. It is just not the thing you meet first.
  */
 export function HttpConnectorFields({
-  isNew,
   documentKey,
   documentJson,
   credential,

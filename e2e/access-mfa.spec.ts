@@ -126,6 +126,11 @@ async function withRule(page: Page, name: string, body: () => Promise<void>) {
       await page.goto('/admin/policy');
       await removeRule(page, name);
     } catch (cleanup) {
+      // Guarded by `failed`, so this only throws when the body SUCCEEDED and
+      // there is no in-flight exception for it to mask. Swallowing it instead
+      // would leave a policy rule behind on a passing test, and the next test
+      // in this serial file would then fail for a reason of somebody else's.
+      // eslint-disable-next-line no-unsafe-finally
       if (!failed) throw cleanup;
       console.error(`could not remove the "${name}" rule after a failing test`, cleanup);
     }

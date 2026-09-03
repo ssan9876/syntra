@@ -43,7 +43,7 @@ import {
   type ProtocolIdentity,
 } from './protocol-identity.js';
 import { tenantRelyingParty } from './relying-party.js';
-import { challengeRedirect, issueSession, renewReply } from './session-reply.js';
+import { challengeRedirect, issueSession } from './session-reply.js';
 import { clientFacts } from '../plugins/client-facts.js';
 
 export interface FederationRouteOptions {

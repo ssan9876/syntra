@@ -1,7 +1,7 @@
-import { withTenant, type TenantClient } from '@syntra/db';
+import { withTenant } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { foldIdentifier } from './collect.js';
-import { createRemediationItem, type FindingDraft } from './finding-service.js';
+import { type FindingDraft } from './finding-service.js';
 import { reconcileLinkedFindings } from './drift-link.js';
 import { readableSnapshot } from './readable.js';
 

@@ -59,7 +59,6 @@ const CAMPAIGN = `Ward review ${STAMP}`;
 const SUBJECT_LOGIN = `ward${STAMP}`;
 const GROUP_NAME = `Ward ${STAMP}`;
 let campaignId = '';
-let joPersonId = '';
 
 /**
  * A SUBJECT WHO IS NOT THE REVIEWER.
@@ -142,7 +141,6 @@ test('a campaign against that snapshot appears with its denominator, never a bar
   const jo = ((await persons.json()) as { persons: { id: string; givenName: string }[] }).persons
     .find((p) => p.givenName === 'Jo');
   expect(jo, 'the seed must have Jo Doe in it').toBeTruthy();
-  joPersonId = jo!.id;
 
   const created = await page.request.post('/api/admin/govern/campaigns', {
     data: {

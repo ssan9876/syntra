@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { diffMemberships, diffObjects } from './diff.js';
-import type { Correlation, ExistingObject } from './correlate.js';
+import type { ExistingObject } from './correlate.js';
 import type { DirectoryObject } from './mapping.js';
 
 const object = (

@@ -897,7 +897,11 @@ describe('desiredState — persons Provision cannot process', () => {
     // stored DN. Passing it through renderContainer here would escape the
     // BACKSLASH and the structural commas too, collapsing the whole DN into
     // one literal RDN value naming nothing.
-    const dn = 'OU=Sales\, West,OU=Users,DC=acme,DC=test';
+    // Two backslashes, so the string actually HOLDS one. Written with a
+    // single backslash it held none -- JavaScript drops an unrecognised
+    // escape -- so this case round-tripped a DN with no backslash in it and
+    // proved nothing about the character the comment above is entirely about.
+    const dn = 'OU=Sales\\, West,OU=Users,DC=acme,DC=test';
     const result = evaluate([contract({ department: 'Finance' })], [everyoneRule], {
       orgUnitContainer: dn,
     });

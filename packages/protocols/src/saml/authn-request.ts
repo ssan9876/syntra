@@ -109,9 +109,9 @@ export function decodeRedirectMessage(param: string): string {
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     if (/buffer|maxOutputLength|length/i.test(message)) {
-      throw new Error('SAML message too large once decompressed');
+      throw new Error('SAML message too large once decompressed', { cause });
     }
-    throw new Error(`SAML message could not be decompressed: ${message}`);
+    throw new Error(`SAML message could not be decompressed: ${message}`, { cause });
   }
 }
 

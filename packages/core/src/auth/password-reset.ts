@@ -10,7 +10,6 @@ import { hashPassword, setPasswordHash } from './password.js';
 import { passwordWasUsedBefore } from './password-ageing.js';
 import { validateNewPassword } from './password-policy.js';
 import { endSessions } from './end-sessions.js';
-import { revokeAllRefreshTokensForUser } from './refresh-token.js';
 import { enrolledFactorTypes, hasRecoveryCodes, verifyFactor } from './mfa/registry.js';
 import type { RelyingParty } from './mfa/relying-party.js';
 import type { FactorPresentation } from './mfa/types.js';

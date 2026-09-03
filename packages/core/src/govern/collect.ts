@@ -3,7 +3,6 @@ import { LIVE_GRANT_STATUSES } from '../automate/types.js';
 import type {
   AttributionInput,
   DirectAssignmentFact,
-  DirectorySourceFact,
   DiscoveredFact,
   GroupInheritanceFact,
   ManualFact,
@@ -598,7 +597,6 @@ export async function collectTenant(
   }
 
   for (const entitlement of provision.unreadable) {
-    const target = targets.find((t) => t.id === entitlement.targetSystemId);
     gaps.push({
       kind: 'resource_unreadable',
       systemKind: 'targetSystem',

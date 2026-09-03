@@ -1,7 +1,7 @@
 import type {
   FastifyInstance,
   FastifyRequest,
-  onRequestHookHandler,
+  onRequestAsyncHookHandler,
 } from 'fastify';
 import { ProblemError } from './problem-json.js';
 
@@ -45,7 +45,7 @@ export function tenantAndIpKey(request: FastifyRequest): string {
 export function perTenantRateLimit(
   app: FastifyInstance,
   max: number,
-): onRequestHookHandler {
+): onRequestAsyncHookHandler {
   const limit = app.createRateLimit({
     max,
     timeWindow: '1 minute',

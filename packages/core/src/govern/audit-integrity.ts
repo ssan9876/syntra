@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { GENESIS_HASH, auditEventHash, recordEvent } from '../audit/audit-service.js';
-import { sendMessage, type Transport } from '../notify/notification-service.js';
+import { type Transport } from '../notify/notification-service.js';
 import { resolveAuditIntegrityFindings, upsertFindings } from './finding-service.js';
 import { AUDIT_CHAIN_REF, AUDIT_CHECKPOINT_REF } from './types.js';
 

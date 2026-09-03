@@ -7,7 +7,6 @@ import { validateNewPassword } from './password-policy.js';
 import { passwordWasUsedBefore } from './password-ageing.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import { endSessions } from './end-sessions.js';
-import { revokeAllRefreshTokensForUser } from './refresh-token.js';
 
 export interface ChangeOwnPasswordInput {
   userId: string;

@@ -1,6 +1,5 @@
-import { withTenant, type TenantClient } from '@syntra/db';
+import { withTenant } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
-import { currentTenant } from '../tenant-context.js';
 import {
   attributionsFor,
   isUnattributable,
@@ -13,7 +12,6 @@ import {
   gapsForSources,
   worstCompleteness,
   worstStaleness,
-  type ClassifiedSource,
 } from './freshness.js';
 import { SYNTRA_SYSTEM_ID, subjectKey, type ResourceKind } from './types.js';
 import {
