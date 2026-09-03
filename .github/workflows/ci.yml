@@ -98,19 +98,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: The updater's own shell logic
+      - name: The operational shell tools' own logic
         # bash -n first: a syntax error in the updater is discovered at 2am
         # by a system that has already migrated its database, and the fast
         # syntax check catches it in under a second rather than after Node
         # and Postgres have spun up for nothing.
         #
-        # The harness sources the SHIPPED script (SYNTRA_UPDATE_SOURCE_ONLY=1)
-        # rather than a copy, so this is the only automated coverage of the
-        # guards release.yml now depends on being correct: version_valid (a
-        # path-traversal refusal), adoption_allowed (keeps --adopt off real
-        # releases), previous_release_of (where a rollback goes), and the
-        # env/URL parsers the migrate step and the dump/restore need.
-        run: bash -n ops/syntra-update ops/syntra-install && bash ops/syntra-update.test.sh
+        # The harnesses source the SHIPPED scripts (SYNTRA_UPDATE_SOURCE_ONLY=1
+        # and the same guard in syntra-backup) rather than a copy, so this is
+        # the only automated coverage of the guards release.yml now depends on
+        # being correct: version_valid (a path-traversal refusal),
+        # adoption_allowed (keeps --adopt off real releases),
+        # previous_release_of (where a rollback goes), and the env/URL parsers
+        # the migrate step and the dump/restore need.
+        #
+        # syntra-backup is checked here for the same reason and was not,
+        # which was the worse omission of the two: it is the disaster-recovery
+        # tool, releases gate on this workflow, and a `create`/`verify`/
+        # `restore` nothing exercises is a tool whose first real run is the
+        # one taken during an incident.
+        run: |
+          bash -n ops/syntra-update ops/syntra-install ops/syntra-backup
+          bash ops/syntra-update.test.sh
+          bash ops/syntra-backup.test.sh
 
       - uses: actions/setup-node@v4
         with:

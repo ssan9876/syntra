@@ -81,6 +81,39 @@ A truncated or corrupt archive still starts with the right magic bytes and is
 still non-empty. `verify` is what tells the difference between an archive that
 is well-formed and one that is restorable.
 
+The verify unit is ordered `After=syntra-backup.service`, so on the night both
+timers elapse it cannot start while the dump is still being written — a verify
+that read a half-written `latest` would report the backup unrestorable, and the
+alarm would be real-looking and wrong.
+
+### Seeing that a run failed
+
+A `Type=oneshot` timer job that fails leaves the timer itself perfectly
+healthy: `active (waiting)`, with a plausible next elapse. **The timer's state
+is not the backup's state.** Ask about the service:
+
+```bash
+systemctl list-timers syntra-backup\*        # when each last ran and next will
+systemctl is-failed syntra-backup.service    # "failed" or "active"; exit 0 means failed
+systemctl status syntra-backup.service       # and why
+journalctl -u syntra-backup.service -n 50 --no-pager
+```
+
+You should not have to remember to ask. Both units carry
+`OnFailure=syntra-backup-failed@%n.service`, a handler installed alongside them
+by `syntra-install`, which writes to the journal at **error** priority naming
+the unit that failed, the command to read its log, and the fact that there is
+now no recovery point newer than the last successful run:
+
+```bash
+journalctl -p err -t syntra-backup --since -7d --no-pager
+```
+
+That is the line to put in whatever already watches this host's journal for
+errors. It is journal-only on purpose: mail would need an MTA this host may not
+have and an address the unit cannot know, and a notification that silently
+fails to send is worse than one that was never promised.
+
 ### When a restore refuses
 
 `restore` refuses an interrupted backup, a backup whose archive no longer

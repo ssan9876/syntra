@@ -2,6 +2,19 @@
 Description=Verify the latest Syntra backup restores
 After=docker.service
 Requires=docker.service
+# ORDERED AFTER THE DUMP, not merely after docker. Both timers carry a
+# randomized delay -- 30min here, 1h there -- and weekly and daily elapse on
+# the same night, so their windows overlap by design. A verify that starts
+# mid-dump restores `latest`, which at that moment is a directory holding a
+# half-written archive, and reports the backup unrestorable. The alarm would be
+# real-looking, wrong, and would go off roughly one week in seven.
+#
+# After= only orders; it does not pull the backup in. If the backup unit is not
+# queued in this transaction this line does nothing, which is the wanted
+# behaviour -- a verify is still allowed to run on a day no backup was due.
+After=syntra-backup.service
+# A verify that fails is the one alarm this whole arrangement exists to raise.
+OnFailure=syntra-backup-failed@%n.service
 
 [Service]
 Type=oneshot

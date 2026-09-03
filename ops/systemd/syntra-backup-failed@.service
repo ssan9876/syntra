@@ -1,0 +1,41 @@
+[Unit]
+# WHAT A FAILED BACKUP LOOKS LIKE, which until this unit existed was: nothing.
+#
+# `syntra-backup.service` is Type=oneshot with no OnFailure=. A run that failed
+# -- an unreachable database, a full disk, a MASTER_KEY mismatch -- exited
+# non-zero into a journal nobody was reading, the timer stayed "active
+# (waiting)", `systemctl list-timers` still showed a healthy next elapse, and
+# the arrangement went on looking exactly like one that was working. That
+# directly contradicts the argument docs/operate.md makes for the verify timer:
+# a backup schedule nobody checks produces a directory full of files with the
+# shape of backups. A schedule that cannot report its own failures is the same
+# defect one level up.
+#
+# Instantiated as syntra-backup-failed@syntra-backup.service, so %i is the unit
+# that failed and one handler serves the backup and the verify alike.
+Description=Report that %i failed
+
+[Service]
+Type=oneshot
+
+# Priority 3 (err), so this is what `journalctl -p err` and anything watching
+# the journal for errors actually surfaces -- systemd's own "Failed with result
+# 'exit-code'" line is logged at that priority too, but says nothing about what
+# was being attempted or what to do next. This does.
+#
+# `systemd-cat` rather than `echo`: a bare ExecStart's stdout lands at
+# `info`, which is precisely the level that gets filtered out.
+#
+# Only the journal, deliberately. Mail needs an MTA this host may not have and
+# a destination this file cannot know, and a notification that silently fails
+# to send is worse than one that was never promised. What this guarantees is
+# that the failure is loud in the one place every systemd host already has, and
+# that the two commands in docs/operate.md will find it.
+#
+# `echo` rather than `printf`: a printf format string needs a literal `%`,
+# which a unit file spells `%%`, next to specifiers like `%i` that must NOT be
+# doubled. That is a line nobody can read correctly twice, in a unit whose
+# entire job is to be reliable on the one night everything else went wrong.
+ExecStart=/bin/sh -c '{ echo "BACKUP FAILED: %i did not complete. No new backup was taken."; echo "  what happened:   journalctl -u %i -n 50 --no-pager"; echo "  what is on disk: /opt/syntra/bin/syntra-backup list"; echo "Until this is fixed there is no recovery point newer than the last successful run."; } | systemd-cat -t syntra-backup -p err'
+
+User=root

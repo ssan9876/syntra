@@ -5,6 +5,13 @@ Description=Syntra database backup
 # doing nothing every night since the last reboot.
 After=docker.service
 Requires=docker.service
+# A failed backup must not be silent. Type=oneshot with no OnFailure= exits
+# non-zero into a journal nobody reads, while the timer stays "active
+# (waiting)" and `list-timers` still shows a healthy next elapse -- so the
+# schedule goes on looking exactly like one that is working, which is the
+# failure docs/operate.md argues against for verify and had here as well.
+# See syntra-backup-failed@.service; %n is this unit, so the report names it.
+OnFailure=syntra-backup-failed@%n.service
 
 [Service]
 Type=oneshot

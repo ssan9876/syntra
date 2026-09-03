@@ -26,22 +26,28 @@ services:
         condition: service_started
 
   web:
-    # Caddy is the only thing that should be reachable from outside this
-    # host once it is in front; `web`'s own 8080:80 mapping in the base file
-    # would otherwise still answer plain HTTP on that port beside it.
+    # Caddy is the only thing that should be reachable from outside this host
+    # once it is in front, and it reaches `web` over the compose network --
+    # `web` needs no published port at all under this overlay.
+    #
+    # THE BASE FILE NOW BINDS 127.0.0.1:8080:80, not 8080:80, which is the fix
+    # the earlier version of this comment described as the fallback. So the
+    # unproxied origin is already off the network whether or not this block
+    # takes effect, and this is now defence in depth rather than the only
+    # thing standing between a plaintext origin and the internet: it closes
+    # the loopback listener too, so nothing else on this host can talk to
+    # nginx around Caddy either.
     #
     # `!override`, not a bare `ports: []` -- Compose merges sequences from
     # multiple files by APPENDING them by default, so an empty list here
-    # would add nothing and leave the base file's 8080:80 mapping standing.
+    # would add nothing and leave the base file's mapping standing.
     # `!override` replaces it outright. Requires a Compose Specification
     # release with the merge-type YAML tags (Docker Compose v2.24+ /
     # `docker compose version` reporting a Compose Spec that documents
     # `!override`; this repo validated against Docker Compose v5.3.1). If
-    # your `docker compose config` rejects the tag, drop this block and
-    # instead bind the base file's port to loopback only -- change
-    # `ports: ['8080:80']` in docker-compose.yml to `['127.0.0.1:8080:80']`
-    # -- so the unproxied origin is reachable from this host but not beyond
-    # it.
+    # your `docker compose config` rejects the tag, delete these two lines:
+    # the base file's loopback bind is safe on its own, and all you lose is
+    # the extra hop being unreachable from the host itself.
     ports: !override []
 
 volumes:

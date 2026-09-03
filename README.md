@@ -30,7 +30,7 @@ uploads.
 
 | Module | Status | Contents |
 |---|---|---|
-| **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications with webhook endpoints for Automate, Govern and security events, an optional Prometheus endpoint, scheduled backups that verify themselves by restoring, web console. Users, groups, org units and people can be created, edited and deactivated from the console — never deleted |
+| **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications with webhook endpoints for Automate, Govern and security events, an optional Prometheus endpoint, a backup tool that verifies itself by restoring — with systemd timers for it, on the release layout only; the container path has no backup mechanism of its own (see [Operating Syntra](docs/operate.md#backups)) — web console. Users, groups, org units and people can be created, edited and deactivated from the console — never deleted |
 | **Directory Sync** | built | **Inbound SCIM 2.0**: an identity provider pushes users and groups to `/scim/v2`, authenticating with a machine token, and what it pushes is owned by the source that pushed it — the push counterpart to the pull connectors, not a replacement for them. LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, and console screens for the lot: a source editor with a connection test, a mapping editor, and a run review with per-change skip and partial apply |
 | **Access** | built | Application catalog and assignments, authentication policy, TOTP and WebAuthn second factors, recovery codes, self-service password reset, step-up MFA for the console, a session inventory an administrator or the person themselves can revoke from, and API tokens for machines — issued against a service account, bounded by the intersection of its roles and the token's scopes, and refused by the same `authorize()` as everybody else. **SAML 2.0 identity provider**: both bindings, SP-initiated and IdP-initiated, signed assertions, optional encryption, front-channel single logout, metadata by upload or URL. **OpenID Connect provider**: authorization code with PKCE, refresh-token rotation, discovery, JWKS with overlapping rotation, UserInfo, RP-initiated logout, working token revocation and introspection, back-channel logout to relying parties that ask for it, and a bounded client-credentials grant. **Upstream federation**: Syntra as a SAML service provider and as an OIDC relying party, with just-in-time provisioning and policy-driven routing. Every path reaches the same `authorize()`. See [what it does not do](docs/configure.md#what-the-federation-half-does-not-do) |
 | **Provision** | built | Source systems, business rules, evaluation and enforcement, target systems and entitlements, previewed runs in the same idiom as Directory Sync. Org units drive placement: materialise a unit against a target and the accounts of everyone in it are created in that container, which Provision creates where an administrator asked for it by name and never to satisfy a template |
@@ -47,10 +47,16 @@ apps/
   api/        Fastify: REST API, the SAML and OIDC endpoints, and federation
   web/        One React application - portal at /, console at /admin
 packages/
-  db/         Prisma schema, migrations, the withTenant helper
-  core/       Domain services; knows nothing about HTTP
-  contracts/  Zod schemas shared by the API and the web app
-  ui/         Design system
+  db/          Prisma schema, migrations, the withTenant helper
+  core/        Domain services; knows nothing about HTTP
+  contracts/   Zod schemas shared by the API and the web app
+  connectors/  Outbound: the LDAP/AD, SCIM, HTTP and SFTP clients a source or
+               target is reached through, plus the guard that refuses private
+               and link-local addresses
+  protocols/   The wire formats Syntra speaks as an identity provider and as a
+               relying party: SAML, WS-Federation, OIDC, and the XML signing
+               and verification underneath them
+  ui/          Design system
 ```
 
 Three decisions shape everything else:
@@ -95,7 +101,10 @@ matter, in [Install](docs/install.md).
 
 `pnpm dev` is a development server and does not belong in front of real
 users. Either build the application and run it as one process
-(`pnpm build && WEB_ROOT=apps/web/dist pnpm start`), or use the container
+(`pnpm build && WEB_ROOT=$PWD/apps/web/dist pnpm start` — an **absolute**
+path: `pnpm start` runs with the working directory set to `apps/api`, so a
+relative `apps/web/dist` is resolved to `apps/api/apps/web/dist` and the
+server refuses to start), or use the container
 path: `docker-compose.yml` runs published images behind Postgres and nginx,
 with a `docker-compose.tls.yml` overlay for automatic TLS. See
 [Install](docs/install.md) for both, and [Configure](docs/configure.md) for

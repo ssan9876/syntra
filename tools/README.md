@@ -25,5 +25,11 @@ One file per task or ruling that was mutation-tested (`p29-mutants.json`,
 exact text to find and replace, the test file to run, and a pattern used to
 select which test(s) exercise it. These are inputs to `mutate.mjs`, not
 generated — write a new one by hand for a new task and run it with the
-commands above; the accompanying `.run.log` and `.verify.log` files are its
-output, kept as the record of what was checked.
+commands above.
+
+The `.run.log` and `.verify.log` files a run writes beside its input are
+**local output, not part of the repository** — `.gitignore` excludes `*.log`,
+so they are never committed and are not a record anybody else can read. Treat
+them as the working output of the run in front of you: read the survivors,
+then act on them. What is worth keeping goes into the mutants file itself, or
+into a test.

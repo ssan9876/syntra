@@ -56,7 +56,7 @@ services:
       # is listening would report the api "healthy" while it cannot reach
       # Postgres, and `web`'s `condition: service_healthy` below exists
       # precisely to stop that from serving traffic. No curl/wget in the
-      # node:24-alpine runtime image, so this uses Node's own fetch rather
+      # node:22-alpine runtime image, so this uses Node's own fetch rather
       # than adding a package to the runtime stage just for a healthcheck.
       test:
         - CMD-SHELL
@@ -76,7 +76,21 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    ports: ['8080:80']
+    # LOOPBACK ONLY, and the `127.0.0.1:` is the whole point.
+    #
+    # docs/install.md tells the operator to put their own TLS in front of
+    # :8080 (Caddy, Traefik, a load balancer). A bare `8080:80` binds every
+    # interface, so the plaintext origin stayed reachable from the network
+    # BESIDE the proxy -- and anything that reached it directly bypassed TLS
+    # entirely. For an IAM product that is the session cookie, the SAML POST
+    # carrying an assertion and the OIDC authorization code, all in the clear,
+    # with the deployment looking correctly configured from the outside.
+    #
+    # A proxy on this host reaches 127.0.0.1:8080 exactly as before. A proxy
+    # on ANOTHER host cannot, which is deliberate: that arrangement needs a
+    # published port, and republishing it is a decision to make on purpose --
+    # see docker-compose.tls.yml, which does exactly that for Caddy.
+    ports: ['127.0.0.1:8080:80']
     depends_on:
       api:
         condition: service_healthy

@@ -81,6 +81,26 @@ if [ -e "$ROOT/current" ]; then
   die "$ROOT/current already exists; this install has already been converted"
 fi
 
+# THE TWO LINES THE UNIT REWRITE BELOW DEPENDS ON EXISTING.
+#
+# That rewrite is two `sed -i` substitutions, and a substitution that matches
+# nothing is not an error -- sed exits 0 having changed nothing, `run` reports
+# success, and the conversion goes on to announce that it worked. What it has
+# actually produced is an install whose tree now lives under $ROOT while
+# systemd still points at $SRC and still reads $SRC/.env. It keeps running,
+# because the old tree is deliberately left in place; the first symptom
+# arrives at the NEXT update, as a migrate step that cannot find DATABASE_URL,
+# by which time nobody is thinking about a conversion that reported success.
+#
+# Checked here rather than beside the sed, and this is the point of the
+# placement: by the time that code runs the tree has been copied, .env has
+# been moved and `current` has been created. Dying there leaves a half-built
+# layout to unpick. Dying here leaves the host exactly as it was found.
+grep -q '^WorkingDirectory=' "$UNIT" \
+  || die "$UNIT has no WorkingDirectory= line; this conversion cannot repoint it. Add one naming the current tree's apps/api, or convert the unit by hand."
+grep -q -- '--env-file-if-exists=' "$UNIT" \
+  || die "$UNIT has no --env-file-if-exists= argument; this conversion cannot repoint it at $ROOT/shared/.env. Check that $SERVICE.service is the unit that runs the API."
+
 # The version being converted. An in-place tree has no RELEASE.json, so it is
 # `dev` -- and that is correct and important: the console will refuse to
 # update it until a real release is installed over it. Naming it 0.0.0 here
@@ -154,7 +174,15 @@ if [ -f "$ROOT/releases/$VERSION/ops/syntra-backup" ]; then
   run mkdir -p "$ROOT/backups"
   # 0700: a backup is an unfiltered copy of every tenant's data.
   run chmod 0700 "$ROOT/backups"
-  for unit in syntra-backup.service syntra-backup.timer               syntra-backup-verify.service syntra-backup-verify.timer; do
+  # syntra-backup-failed@.service is the OnFailure= handler both service units
+  # name. It is NOT a timer and is never enabled: systemd instantiates it on
+  # demand. Missing, the failing unit's OnFailure= would simply find nothing --
+  # systemd logs that it could not start the handler and carries on, which puts
+  # the deployment straight back to a backup that fails silently. So it is
+  # installed with the rest rather than left to be remembered.
+  for unit in syntra-backup.service syntra-backup.timer \
+              syntra-backup-verify.service syntra-backup-verify.timer \
+              syntra-backup-failed@.service; do
     if [ -f "$ROOT/releases/$VERSION/ops/systemd/$unit" ]; then
       run install -m 0644 "$ROOT/releases/$VERSION/ops/systemd/$unit" "/etc/systemd/system/$unit"
     fi
@@ -176,6 +204,10 @@ fi
 
 say "rewriting $UNIT"
 run cp -a "$UNIT" "$UNIT.pre-release-layout"
+# Both substitutions below are known to have something to match: the checks
+# at the top of this script refused the conversion outright if either line was
+# absent, because a `sed -i` that matches nothing succeeds silently.
+#
 # WorkingDirectory follows the symlink, and systemd resolves it at start --
 # so a restart after a swap picks up the new release with no unit change.
 # $ROOT is configuration (SYNTRA_ROOT), not a literal this script controls,

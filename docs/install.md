@@ -90,8 +90,15 @@ front of real users. Build the application instead and let the API serve it:
 
 ```bash
 pnpm build                                  # vite build -> apps/web/dist
-WEB_ROOT=apps/web/dist pnpm start           # one process, one origin, on PORT
+WEB_ROOT=$PWD/apps/web/dist pnpm start      # one process, one origin, on PORT
 ```
+
+**`$PWD`, not a relative path.** `pnpm start` runs the API with its working
+directory set to `apps/api`, so a bare `apps/web/dist` is resolved against
+*that* and becomes `apps/api/apps/web/dist`. Nothing is there, and the error
+names a path you never typed. (It at least refuses to start rather than
+serving 404s — see below — but only because the path does not exist. Point it
+at one that does and is not a build, and readiness is what says so.)
 
 Then open **http://acme.localhost:3000**. There is no second port and no proxy:
 the same process answers `/api`, `/saml`, `/oidc`, `/federation` and every
@@ -130,7 +137,10 @@ A container path exists at the repository root, separate from
 [Configuration](configure.md) and [Operating Syntra](operate.md)).
 `docker-compose.yml` runs a `postgres` container, the API with a health check,
 and an nginx-fronted web image whose `apps/web/nginx.conf` proxies `/api/`,
-`/saml/`, `/oidc/` and `/federation/` to it. `docs/lab/systemd/` holds the
+`/saml/`, `/oidc/`, `/federation/`, `/scim/`, `/health` and `/metrics` to it —
+everything the API owns, so that a path it owns never falls through to the
+single-page bundle and answers a machine caller with a 200 and a page of HTML.
+`docs/lab/systemd/` holds the
 service units the lab itself runs under — `syntra.service`, which still runs
 the API from source with `tsx` rather than either image, and
 `syntra-infra.service`, which brings up `infra/docker-compose.yml` for the
@@ -141,12 +151,18 @@ database and directory fixtures the lab depends on.
 Plain `docker compose up -d` pulls those images; add `--build` to build from
 source instead.
 
+`latest` only ever moves to a fully numeric tag (`v1.4.0`, `v2026.8`). A
+pre-release — `v2.0.0-rc1` — is published under its own version and nothing
+else, so an unpinned deployment cannot be carried onto a release candidate by
+somebody cutting one. Pin `SYNTRA_VERSION` anyway if you want to choose when
+you move.
+
 ```bash
 git clone https://github.com/ssan9876/syntra.git && cd syntra
 export POSTGRES_PASSWORD=...  SYNTRA_APP_PASSWORD=...          # any two strong values
 export SESSION_SECRET=...     MASTER_KEY=...                   # 32 random bytes each, base64 (see .env.example)
 export PUBLIC_URL=https://idm.example.com SMTP_URL=smtp://mail.example.com:25
-docker compose up -d                                           # migrates, then serves on :8080
+docker compose up -d                                           # migrates, then serves on 127.0.0.1:8080
 # docker compose up --build -d                                 # to build the images from source instead of pulling
 
 # Once, to create your tenant and its first administrator. The dev `pnpm seed`
@@ -171,6 +187,18 @@ balancer); the image speaks plain HTTP and `TRUST_PROXY` is already set so it
 believes the proxy's `X-Forwarded-*`. `PUBLIC_URL` must be the origin users
 type, because the session cookie and the WebAuthn relying party are derived
 from it.
+
+`web` publishes its port as `127.0.0.1:8080:80` — **loopback only, on
+purpose.** Your proxy has to run on this host to reach it. That is the
+constraint that makes "TLS in front" mean something: bound to every interface,
+the plaintext origin would answer on the network *beside* the proxy, and
+anyone who connected to :8080 directly would get session cookies, SAML POSTs
+and OIDC authorization codes in the clear on a deployment that looked properly
+configured.
+
+If the proxy is on a different host, change that mapping in
+`docker-compose.yml` deliberately — and restrict who can reach it with a
+firewall, because nothing else will.
 
 **Use the bundled overlay.** `docker-compose.tls.yml` is a Compose overlay
 that runs Caddy in front of the stack and obtains and renews a certificate

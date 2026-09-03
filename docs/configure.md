@@ -105,6 +105,22 @@ merely warns — a production tenant with a SAML tile and no signing key is a
 deployment an operator has to come back and fix by hand, and refusing up
 front is cheaper than discovering it later as a `409 saml-no-key`.
 
+### SEED variables
+
+Read once, by `pnpm seed` (`packages/db/src/seed.ts`), which creates **demo
+data** — a tenant, an administrator and an ordinary portal user, for
+development and for the browser suite. It is not the production bootstrap
+above and must not be used as one.
+
+| Variable | Meaning |
+|---|---|
+| `SEED_ADMIN_PASSWORD` | The demo `admin` account's password. Required — the seed refuses to run without it, and refuses anything under 12 characters. |
+| `SEED_USER_PASSWORD` | The demo `jdoe` account's password. Falls back to `SEED_ADMIN_PASSWORD` when unset. |
+
+`SEED_ADMIN_PASSWORD` is required rather than defaulted for one reason: a seed
+with a built-in password creates a well-known administrator on every machine it
+ever runs on, including the one somebody puts on a network "just to have a look".
+
 ### Updating from the console
 
 `RELEASE_REPO`, `RELEASE_TOKEN`, `RELEASE_ROOT` and `PG_CONTAINER` configure
