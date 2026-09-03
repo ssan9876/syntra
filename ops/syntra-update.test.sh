@@ -31,7 +31,10 @@ ok() {
   fi
 }
 
-yes_no() { if "$@"; then echo yes; else echo no; fi; }
+# Only the exit status. The function's own stdout is discarded, because
+# `empty_restore_reason` both prints WHY and fails -- and letting that reason
+# through would concatenate it with the verdict below.
+yes_no() { if "$@" >/dev/null; then echo yes; else echo no; fi; }
 
 # --- version_newer ----------------------------------------------------------
 
