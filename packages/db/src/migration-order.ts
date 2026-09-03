@@ -111,6 +111,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20260930000000_backchannel_logout',
   '20261001000000_logout_delivery_subject',
   '20261002000000_api_tokens',
+  '20261003000000_person_list_indexes',
 ];
 
 /**
