@@ -60,6 +60,14 @@ env:
   # timeout, identically on two consecutive attempts. Two workers halves the
   # oversubscription without reintroducing the Postgres-crash risk `SYNTRA_
   # TEST_WORKERS` was pinned to guard against in the first place.
+  #
+  # THE RPC HALF OF THAT STORY IS OVER: Vitest 5 does not produce the
+  # heartbeat timeout, and `vitest.config.ts` no longer suppresses unhandled
+  # errors to hide it. The number below stays at two anyway, because the
+  # FIRST premise still holds -- this runner has two vCPUs and one Postgres
+  # sharing them, and that is what the four-versus-seven measurements above
+  # were about. Left where it was measured rather than raised on the strength
+  # of an upstream fix to a different problem.
   SYNTRA_TEST_WORKERS: 2
 
   # A hosted runner is slower than the machine this budget was calibrated on,

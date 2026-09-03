@@ -10,7 +10,23 @@
     "outDir": "dist",
     "rootDir": "src",
     "types": [
-      "vite/client"
+      "vite/client",
+      // EXPLICIT, because it used to arrive by accident. Five test files under
+      // `src` read the source tree off disk to assert on it -- the navigation
+      // labels, the merged routes, the no-prose rule -- so `node:fs` and
+      // `node:path` have to resolve for this project to build at all. Until
+      // Vitest 5 the `node` types reached the program transitively through
+      // Vitest's own, and the upgrade removed that path: `tsc -b --force`
+      // then failed on all five with "Cannot find module 'node:fs'", while
+      // the incremental `tsc -b` stayed green off a stale build info and hid
+      // it. A dependency this project relies on belongs in this list rather
+      // than in the type graph of a test runner.
+      //
+      // The cost is that Node's globals are now visible to application code
+      // here as well, where they would fail in a browser. That is not the
+      // guard it appears to be -- it was never deliberate, and what actually
+      // catches it is `pnpm --filter @syntra/web build`, which CI runs.
+      "node"
     ]
   },
   "include": [
