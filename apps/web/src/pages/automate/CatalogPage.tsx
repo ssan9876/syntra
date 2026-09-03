@@ -1,6 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Empty,
+  ListControls,
+  Panel,
+  SkeletonRows,
+  Status,
+} from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { useApiResource } from '../../session/use-api-resource.js';
 
@@ -101,8 +108,17 @@ export function CatalogPage() {
 
         {!error && (
           <>
+            {/* The same control as every other list in the product, rather
+                than a bare box: it debounces, it names the fields it looks at,
+                and a search that behaves differently here would be a second
+                convention on a screen an employee sees for four seconds. */}
             <div className="mt-6 max-w-md">
-              <Field label="Search" value={query} onChange={setQuery} />
+              <ListControls
+                search={query}
+                onSearch={setQuery}
+                searchLabel="Search"
+                searchPlaceholder="Name, description or category"
+              />
             </div>
 
             {loading && (

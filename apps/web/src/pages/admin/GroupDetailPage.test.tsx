@@ -122,8 +122,12 @@ describe('GroupDetailPage', () => {
       });
       renderPage();
 
+      // 899, not 900: both figures count the same thing the picker holds --
+      // accounts that are not already members -- and one of the 900 is in this
+      // group. The note used to compare the raw fetched page against the whole
+      // table, so it described a set the select was not showing.
       expect(
-        await screen.findByText(/Showing the first .* of 900/),
+        await screen.findByText(/Showing the first 1 of 899/),
       ).toBeVisible();
     });
     it('lists the members, each opening its account', async () => {

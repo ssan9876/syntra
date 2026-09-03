@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ComponentPropsWithRef, ReactNode } from 'react';
 
 type Variant =
   | 'primary'
@@ -8,7 +8,11 @@ type Variant =
   | 'danger-quiet';
 type Size = 'sm' | 'md';
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+// `ComponentPropsWithRef`, not `ButtonHTMLAttributes`: a caller that opens a
+// form in place of this button has to put focus back on it afterwards, and
+// without a ref the only way to reach the element was to query the DOM around
+// it.
+export interface ButtonProps extends ComponentPropsWithRef<'button'> {
   variant?: Variant;
   size?: Size;
   loading?: boolean;

@@ -12,7 +12,6 @@ import {
   Table,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
-import { PickerNote } from './PickerNote.js';
 import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
 import { SubjectLog } from './SubjectLog.js';
@@ -82,14 +81,22 @@ export function PersonDetailPage() {
   const { data, error, loading, reload } = useApiResource<PersonDetail>(
     `/api/admin/persons/${id}`,
   );
-  // Its error state is deliberately ignored, as on the users page: a caller
-  // who may read people but not the directory gets an empty list and a
-  // control that says it has nothing to offer, rather than a page that will
-  // not render at all.
-  const { data: usersData } = useApiResource<{
-    users: { id: string; login: string; personId: string | null; status: string }[];
-    total: number;
-  }>('/api/admin/users?pageSize=200');
+  /**
+   * Every active account with nobody behind it -- the whole set, unpaged.
+   *
+   * This used to be the first two hundred accounts filtered in the browser, so
+   * on a directory of more than two hundred the panel disabled itself and
+   * stated as fact that every account already belonged to somebody. That is
+   * the shape of wrong answer this console exists to remove: confident, and
+   * about a record the reader can see exists.
+   *
+   * Its error state is deliberately ignored, as on the users page: a caller
+   * who may read people but not the directory gets an empty picker rather than
+   * a page that will not render at all.
+   */
+  const { data: unlinkedData } = useApiResource<{
+    accounts: { id: string; login: string }[];
+  }>('/api/admin/users/unlinked');
 
   // Same treatment as the users list above: a caller who may not read the
   // directory gets an empty selector rather than a page that will not render.
@@ -99,8 +106,9 @@ export function PersonDetailPage() {
 
   // An account already carrying a person is not offered. `link-user` would
   // move it rather than refuse, so listing one is offering to detach somebody
-  // else's login by picking the wrong row.
-  const unlinked = (usersData?.users ?? []).filter((u) => u.personId === null);
+  // else's login by picking the wrong row. The endpoint answers with exactly
+  // that set.
+  const unlinked = unlinkedData?.accounts ?? [];
 
   if (error) return <Alert tone="danger">{error}</Alert>;
   if (loading || !data) {
@@ -550,8 +558,11 @@ export function PersonDetailPage() {
               submitLabel="Link an account"
               path={`/api/admin/persons/${data.id}/link-user`}
               onCreated={reload}
+              // No `disabledReason`. The one it carried -- "Every account
+              // already belongs to somebody" -- was a claim about the whole
+              // directory made from one page of it, and the picker now holds
+              // the whole set, so the empty case IS the sentence.
               disabled={unlinked.length === 0}
-              disabledReason="Every account already belongs to somebody."
               build={(v) => ({ userId: v.userId ?? '' })}
               fields={(v, set, errs) => (
                 <>
@@ -565,12 +576,9 @@ export function PersonDetailPage() {
                       ...unlinked.map((u) => ({ value: u.id, label: u.login })),
                     ]}
                   />
-                  <PickerNote
-                    shown={usersData?.users?.length ?? 0}
-                    total={usersData?.total ?? 0}
-                    to="/admin/users?tab=accounts"
-                    label="Accounts"
-                  />
+                  {/* No PickerNote. It says a picker is not showing
+                      everything it chooses from, and this one is: the
+                      endpoint behind it is unpaged. */}
                 </>
               )}
             />

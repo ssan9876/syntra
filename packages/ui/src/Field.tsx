@@ -1,7 +1,12 @@
-import { useId, type InputHTMLAttributes } from 'react';
+import { useId, type ComponentPropsWithRef } from 'react';
 
+// `ComponentPropsWithRef`, matching Button and for the same reason: a caller
+// that puts a form on screen in place of a control has to move focus into it,
+// and the confirmation field of a destructive action is the one place where
+// landing nowhere is most expensive. The ref rides through the `...props`
+// spread onto the input below.
 export interface FieldProps
-  extends Omit<InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'id'> {
+  extends Omit<ComponentPropsWithRef<'input'>, 'onChange' | 'id'> {
   label: string;
   value: string;
   onChange(value: string): void;

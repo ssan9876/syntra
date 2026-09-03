@@ -295,6 +295,26 @@ describe('RecordPanel confirmable refusals', () => {
     return onCreated;
   }
 
+  it('puts focus in the first field when the form opens', async () => {
+    // Opening the panel unmounts the button that opened it, so focus fell to
+    // <body> and a keyboard reader had to tab from the top of the document to
+    // reach the form they had just asked for.
+    renderPanel(asksToConfirm);
+
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+
+    expect(screen.getByLabelText('Login')).toHaveFocus();
+  });
+
+  it('puts focus back on the trigger when the form is cancelled', async () => {
+    renderPanel(asksToConfirm);
+
+    await userEvent.click(screen.getByRole('button', { name: 'New user' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('button', { name: 'New user' })).toHaveFocus();
+  });
+
   const asksToConfirm = (problem: { type: string }) =>
     problem.type.endsWith('second-account')
       ? { message: 'They already have an account.', retryWith: { allowSecondAccount: true } }

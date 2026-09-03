@@ -349,7 +349,16 @@ describe('AccountsTab person picker', () => {
         writes.push({ url, body: JSON.parse(String(init!.body)) });
         return Promise.resolve(write?.() ?? json({ id: 'u9' }, 201));
       }
-      if (url.includes('/persons')) return Promise.resolve(json({ persons: PERSONS }));
+      // Honours `?status=active`, because the server does. The picker asks for
+      // the filtered set now rather than fetching everybody and filtering in
+      // the browser, so a mock that ignored the filter would answer with rows
+      // the real endpoint never sends and hide whether the page still asks.
+      if (url.includes('/persons')) {
+        const persons = url.includes('status=active')
+          ? PERSONS.filter((p) => p.status === 'active')
+          : PERSONS;
+        return Promise.resolve(json({ persons, total: persons.length }));
+      }
       if (url.includes('/org-units')) {
         return Promise.resolve(
           json({ orgUnits: [{ id: 'ou1', name: 'Care' }, { id: 'ou2', name: 'Sales' }] }),
