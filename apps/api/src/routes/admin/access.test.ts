@@ -397,6 +397,22 @@ describe('the policy', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('does not answer 400 for a fault the administrator did not cause', async () => {
+    // The catch around these calls used to be untyped, so a dropped
+    // connection or a bug in the service came back as "that rule cannot be
+    // stored as written" -- 400, carrying an internal message as the detail a
+    // client reads. A well-formed id for a rule that does not exist passes the
+    // validator and fails in the database, which is the shape of that fault.
+    const res = await call(
+      'PUT',
+      '/api/admin/policy/rules/00000000-0000-4000-8000-000000000000',
+      { name: 'Fine', outcome: 'allow' },
+    );
+
+    expect(res.statusCode).not.toBe(400);
+    expect(res.json().type).not.toContain('invalid-policy-rule');
+  });
+
   it('reorders', async () => {
     const a = (await call('POST', '/api/admin/policy/rules', { name: 'A', outcome: 'allow' })).json();
     const b = (await call('POST', '/api/admin/policy/rules', { name: 'B', outcome: 'allow' })).json();

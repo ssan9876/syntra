@@ -58,6 +58,33 @@ describe('when a token is configured', () => {
     expect((await scrape(null)).statusCode).toBe(401);
   });
 
+  it('is scraped by address, not by tenant hostname', async () => {
+    // Every series here is installation-wide, and a Prometheus target is
+    // written as an address -- http://10.0.0.5:3000/metrics -- which resolves
+    // no tenant. Scoped to one, this answered 404 before the token was ever
+    // read, so the endpoint operate.md documents could not be scraped the way
+    // operate.md documents it.
+    const byAddress = await ctx.app.inject({
+      method: 'GET',
+      url: '/metrics',
+      headers: { host: '10.0.0.5:3000', authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(byAddress.statusCode).toBe(200);
+  });
+
+  it('still refuses a bad token when scraped by address', async () => {
+    // The Host header is not what guards this route; the token is. Making the
+    // path unscoped must not have made it open.
+    const byAddress = await ctx.app.inject({
+      method: 'GET',
+      url: '/metrics',
+      headers: { host: '10.0.0.5:3000', authorization: 'Bearer not-the-token' },
+    });
+
+    expect(byAddress.statusCode).toBe(401);
+  });
+
   it('refuses a wrong token', async () => {
     expect((await scrape('not-the-metrics-token')).statusCode).toBe(401);
   });

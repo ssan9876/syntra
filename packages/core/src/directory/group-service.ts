@@ -13,20 +13,30 @@ export async function createGroup(
   });
 }
 
-/** One page of groups. No status filter: a group does not have one. */
+/**
+ * One page of groups, searched by name and description.
+ *
+ * `status` filters the same way it does for accounts. This used to say a group
+ * does not have one, which was never true -- `deactivateGroup` sets it, the
+ * directory screen counts inactive groups on a stat card, and a card counting
+ * something no list could be filtered to was a number with nowhere to go.
+ */
 export async function listGroups(tx: TenantClient, opts: ListOptions = {}) {
   const { page, pageSize, skip, take } = normalisePaging(opts);
   const term = opts.search?.trim();
   const search = term ? escapeLike(term) : undefined;
 
-  const where = search
-    ? {
-        OR: [
-          { name: { contains: search, mode: 'insensitive' as const } },
-          { description: { contains: search, mode: 'insensitive' as const } },
-        ],
-      }
-    : {};
+  const where = {
+    ...(opts.status ? { status: opts.status } : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' as const } },
+            { description: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
+  };
 
   const [rows, total] = await Promise.all([
     tx.group.findMany({

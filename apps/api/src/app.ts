@@ -18,6 +18,7 @@ import {
 } from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
 import { registerWebApp } from './plugins/web-app.js';
+import { registerSecurityHeaders } from './plugins/security-headers.js';
 import { tenantAndIpKey } from './plugins/rate-limit.js';
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerEnrolRoutes } from './routes/enrol.js';
@@ -148,6 +149,12 @@ export async function buildApp(
   // serves a deep link, and the page shown when no tenant claims the hostname.
   // Fastify permits one not-found handler per context, so it has to be known
   // before `registerProblemJson` sets it — not bolted on afterwards.
+  // Before the routes, so every response carries them -- including the ones
+  // an error handler produces, which are the responses a header is most often
+  // missing from. `cookieSecure` is the same question as "is this deployment
+  // reached over HTTPS", so HSTS is derived from it rather than asked again.
+  registerSecurityHeaders(app, { https: config.cookieSecure });
+
   const web = config.webRoot ? await registerWebApp(app, config.webRoot) : null;
 
   registerProblemJson(app, web ? { notFound: web.notFound } : {});

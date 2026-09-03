@@ -17,8 +17,16 @@ declare module 'fastify' {
  * header curl happens to send on localhost. Left tenant-scoped it would 404
  * on an unrecognised host -- and a rollback gate that fails for the WRONG
  * reason rolls back every update, including the good ones.
+ *
+ * `/metrics` is here for the same reason and one of its own: every series it
+ * reports is installation-wide rather than a tenant's, and it is scraped by a
+ * machine pointed at an address -- `http://10.0.0.5:3000/metrics` -- which
+ * resolves no tenant at all. Left scoped it answered 404 before the bearer
+ * token was ever looked at, so the endpoint documented in operate.md could
+ * not be scraped the documented way. Its own route opens the per-tenant
+ * transactions it needs.
  */
-const UNSCOPED_PATHS = new Set(['/health', '/health/ready']);
+const UNSCOPED_PATHS = new Set(['/health', '/health/ready', '/metrics']);
 
 /**
  * Resolves a tenant from the Host header, in three passes: the exact primary

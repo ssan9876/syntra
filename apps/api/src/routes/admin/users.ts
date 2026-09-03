@@ -13,6 +13,7 @@ import {
   PERMISSIONS,
   clearLockout,
   isLocked,
+  lockedWhere,
   createUser,
   deactivateDirectoryUser,
   deleteDirectoryUser,
@@ -169,24 +170,51 @@ export async function registerAdminUserRoutes(
           groups,
           groupsFromDirectory,
           inactiveGroups,
+          peopleWithoutAccount,
         ] = await Promise.all([
           tx.person.count(),
           tx.person.count({ where: { status: 'active' } }),
           tx.user.count(),
           tx.user.count({ where: { status: 'active' } }),
-          tx.loginLockout.findMany({
-            select: { userId: true, lockedAt: true, lockedUntil: true },
-          }),
+          // Counted in the database, not read out and filtered here. This
+          // was every lockout row in the tenant loaded into the process on
+          // every render of the directory screen -- the same client-side
+          // counting over a whole collection that this endpoint exists to
+          // have stopped.
+          tx.loginLockout.count({ where: lockedWhere(now) }),
           tx.group.count(),
           tx.group.count({ where: { sourceId: { not: null } } }),
           tx.group.count({ where: { status: { not: 'active' } } }),
+          // An active person with nobody to sign in as. THE number on this
+          // screen that needs acting on, and it used to be guessed by
+          // subtracting all accounts from active people -- which counts
+          // service accounts, leavers' accounts and second accounts against
+          // the joiners, so it read zero on any real tenant and invented a
+          // backlog on others.
+          //
+          // Raw because `User.personId` carries no Prisma relation to follow
+          // -- it is a bare column, deliberately, since a person routinely has
+          // no account -- so there is no `users: { none: {} }` to write. RLS
+          // applies here as to any other statement on this connection.
+          tx.$queryRaw<{ count: bigint }[]>`
+            SELECT COUNT(*) AS count
+            FROM "Person" p
+            WHERE p.status = 'active'
+              AND NOT EXISTS (
+                SELECT 1 FROM "User" u WHERE u."personId" = p.id
+              )
+          `,
         ]);
         return {
-          people: { total: people, active: activePeople },
+          people: {
+            total: people,
+            active: activePeople,
+            withoutAccount: Number(peopleWithoutAccount[0]?.count ?? 0),
+          },
           accounts: {
             total: accounts,
             active: activeAccounts,
-            locked: locks.filter((l) => isLocked(l, now)).length,
+            locked: locks,
           },
           // The groups page counts these three the same way the directory page
           // counted its two: over the whole table, because a page-sized number
@@ -197,6 +225,34 @@ export async function registerAdminUserRoutes(
             inactive: inactiveGroups,
           },
         };
+      });
+    },
+  );
+
+  /**
+   * The same three group numbers, for a caller who may only read the
+   * directory.
+   *
+   * Split out because the combined summary above spans both halves of the
+   * directory and so demands both permissions -- which made the groups screen,
+   * a screen that needs `directory.read` and nothing else, depend on
+   * `identity.read` to render its own stat cards. A group administrator got a
+   * 403 there and three zeroes above a table listing thousands of groups.
+   *
+   * Counted over the whole table, like everything else on a stat card here: a
+   * page-sized number that still reads as a total is worse than no number.
+   */
+  app.get(
+    '/groups/summary',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
+    async (request) => {
+      return request.db(async (tx) => {
+        const [total, fromDirectory, inactive] = await Promise.all([
+          tx.group.count(),
+          tx.group.count({ where: { sourceId: { not: null } } }),
+          tx.group.count({ where: { status: { not: 'active' } } }),
+        ]);
+        return { groups: { total, fromDirectory, inactive } };
       });
     },
   );
