@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isRetryable, type WriteOperation } from '../types.js';
+import { isRetryable, readBackTarget, type WriteOperation } from '../types.js';
 import { FakeTarget } from './fake-target.js';
 import { readProvenanceActionId } from '../ad/provenance.js';
 
@@ -37,6 +37,20 @@ const seeded = () => {
 };
 
 describe('FakeTarget', () => {
+  it('reads back the account and observed entitlement membership', async () => {
+    const target = seeded();
+    const created = await target.write(config, create('read-back-1', 'anna.novak'));
+    await target.write(config, {
+      op: 'grant_entitlement', actionId: 'read-back-2', anchor: created.anchor!, entitlementId: 'guid-finance',
+    });
+
+    const observed = await readBackTarget(target, config, created.anchor!);
+    expect(observed.account?.anchor).toBe(created.anchor);
+    expect(observed.entitlementIds).toEqual(['guid-finance']);
+    expect(observed.enabled).toBe(true);
+    expect(observed.complete).toBe(true);
+  });
+
   it('creates an account and returns an anchor', async () => {
     const target = new FakeTarget();
     const result = await target.write(config, create('act-1', 'a.novak'));

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
+import { entraIdDocument, forgetEntraTokens } from '@syntra/connectors';
+import { vi } from 'vitest';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 // `localMasterKeyProvider`, which is what packages/core/src/vault/master-key.ts
 // actually exports. There is no `staticMasterKeyProvider`; the existing
@@ -18,6 +20,11 @@ import {
   upsertAccountProfile,
   upsertBusinessRule,
 } from './target-service.js';
+
+vi.mock('@syntra/connectors', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@syntra/connectors')>();
+  return { ...actual, forgetEntraTokens: vi.fn(), forgetAccessTokens: vi.fn() };
+});
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 let tenantId: string;
@@ -77,6 +84,25 @@ describe('createTarget', () => {
         bindPassword: 'x',
       }),
     ).rejects.toThrow();
+  });
+
+  it('accepts a declarative HTTPS target without an LDAP tlsMode', async () => {
+    const document = structuredClone(entraIdDocument);
+    if (document.auth.type !== 'oauth2') throw new Error('Entra document must use OAuth');
+    document.auth.tokenUrl = document.auth.tokenUrl.replace('{tenant}', 'tenant-id');
+    document.auth.clientId = 'client-id';
+
+    const { id } = await createTarget(tenantId, provider, null, {
+      type: 'httpJson',
+      name: 'Microsoft Entra ID',
+      config: { document },
+      bindPassword: 'a-client-secret',
+    });
+
+    const target = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id } }),
+    );
+    expect(target.type).toBe('httpJson');
   });
 });
 
@@ -176,6 +202,18 @@ describe('updateTarget', () => {
       targetWithCredential(tx, provider, id),
     );
     expect(loaded?.bindPassword).toBe('rotated');
+  });
+
+  it('forgets cached access tokens when the credential is rotated', async () => {
+    // The caches are process-wide: a run holding a token minted by the
+    // retired secret would otherwise keep using it for the rest of its hour.
+    const { id } = await create();
+    const forget = vi.mocked(forgetEntraTokens);
+    forget.mockClear();
+    await updateTarget(tenantId, provider, null, id, { name: 'renamed' });
+    expect(forget).not.toHaveBeenCalled();
+    await updateTarget(tenantId, provider, null, id, { bindPassword: 'rotated' });
+    expect(forget).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -690,6 +728,37 @@ describe('testTargetConfiguration', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/none to borrow/);
+  });
+
+  // SKIPPED until the schema owner extends the `target_system_encrypted_transport`
+  // CHECK constraint to admit `type = 'entraId'` (see docs/connectors/entra-id.md,
+  // "Database constraint"). Until then no entraId row can be stored at all, so
+  // there is nothing to borrow from.
+  it('refuses to borrow an Entra secret for a different tenant or token URL', async () => {
+    // The borrowed client secret is POSTed to `tokenUrl`, so a test that could
+    // name a different one -- or a different tenant, from which the token URL
+    // is derived -- would hand the saved secret to whoever answers there.
+    const entra = { tenantId: 'contoso.onmicrosoft.com', clientId: 'client-1' };
+    const { id } = await createTarget(tenantId, provider, null, {
+      type: 'entraId',
+      name: 'Entra',
+      config: entra,
+      bindPassword: 'a-client-secret',
+    });
+    for (const requested of [
+      { ...entra, tenantId: 'attacker.example' },
+      { ...entra, tokenUrl: 'https://attacker.example/token' },
+      { ...entra, graphBaseUrl: 'https://attacker.example/v1.0' },
+      { ...entra, clientId: 'client-2' },
+    ]) {
+      const result = await testTargetConfiguration(tenantId, provider, {
+        type: 'entraId',
+        config: requested,
+        borrowFromTargetId: id,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.message).toMatch(/only be borrowed for a target of the same type/);
+    }
   });
 
   it('refuses to borrow for a different URL', async () => {

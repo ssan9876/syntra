@@ -24,7 +24,7 @@ export type AutomateTemplate = Extract<TemplateName, `automate-${string}`>;
  */
 export type OutboxTemplate = Extract<
   TemplateName,
-  `automate-${string}` | `govern-${string}`
+  `automate-${string}` | `govern-${string}` | `lifecycle-${string}`
 >;
 
 /**
@@ -51,6 +51,13 @@ export const NEVER_DIGESTED: readonly OutboxTemplate[] = [
   // hold, arriving in tomorrow morning's summary, is an audit chain nobody
   // acted on today.
   'govern-finding-critical',
+  // Lifecycle work that is stuck, failed, blocked or needs a signature is the
+  // same class of message: tomorrow's digest is too late for all of them.
+  'lifecycle-failed',
+  'lifecycle-overdue',
+  'lifecycle-escalated',
+  'lifecycle-access-blocked',
+  'lifecycle-approval-requested',
 ];
 
 export function isDigestible(template: OutboxTemplate): boolean {

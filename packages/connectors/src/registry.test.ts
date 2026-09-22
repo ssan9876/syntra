@@ -11,10 +11,12 @@ import { adTargetConfigSchema } from './ad/config.js';
 import { scim2TargetConfigSchema } from './scim/config.js';
 import { httpTargetConnector } from './http/connector.js';
 import { httpTargetConfigSchema } from './http/document.js';
+import { entraTargetConnector } from './entra/connector.js';
+import { entraTargetConfigSchema } from './entra/config.js';
 
 describe('registry', () => {
   it('lists every connector type', () => {
-    expect(TARGET_CONNECTOR_TYPES).toEqual(['activeDirectory', 'scim2', 'httpJson']);
+    expect(TARGET_CONNECTOR_TYPES).toEqual(['activeDirectory', 'scim2', 'httpJson', 'entraId']);
   });
 
   it('resolves activeDirectory to the AD connector and config schema', () => {
@@ -30,6 +32,11 @@ describe('registry', () => {
   it('resolves httpJson to the declarative connector and config schema', () => {
     expect(targetConnectorFor('httpJson')).toBe(httpTargetConnector);
     expect(targetConfigSchemaFor('httpJson')).toBe(httpTargetConfigSchema);
+  });
+
+  it('resolves entraId to the native Graph connector and config schema', () => {
+    expect(targetConnectorFor('entraId')).toBe(entraTargetConnector);
+    expect(targetConfigSchemaFor('entraId')).toBe(entraTargetConfigSchema);
   });
 
   it('has a schema and a connector for every declared type', () => {

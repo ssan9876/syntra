@@ -251,6 +251,27 @@ const actionsOf = (runId: string) =>
   );
 
 describe('previewProvisionRun', () => {
+  it('persists the exact run and person evidence on a durable receipt', async () => {
+    const personId = await seedPerson('Anna', 'Novak', null);
+    const receipt = await withTenant(tenantId, (tx) => tx.personProvisionReceipt.create({ data: {
+      tenantId,
+      personId,
+      targetSystemId: targetId,
+      targetName: 'Acme AD',
+      requestKey: '11111111-1111-4111-8111-111111111111',
+      status: 'planning',
+    } }));
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+      receiptId: receipt.id,
+    });
+    const stored = await withTenant(tenantId, (tx) => tx.personProvisionReceipt.findUniqueOrThrow({ where: { id: receipt.id } }));
+    expect(stored.runId).toBe(run.id);
+    expect(stored.runIds).toEqual([run.id]);
+    expect(stored.evidence).toMatchObject({ evaluated: true, accountRequired: true });
+  });
+
   it('proposes a create and a grant on a first run, and blocks it for confirmation', async () => {
     await seedPerson('Anna', 'Novak', null);
     const run = await preview();
@@ -436,6 +457,39 @@ describe('previewProvisionRun', () => {
     const disabledRun = await previewProvisionRun(tenantId, provider, targetId, {
       now: NOW,
       connector: withUserAccountControl('66050') as never,
+    });
+    expect((await actionsOf(disabledRun.id)).map((a) => a.actionType)).toContain(
+      'enable_account',
+    );
+  });
+
+  it('reads enabled from accountEnabled when a target has no userAccountControl', async () => {
+    // A Graph or SCIM target reports `accountEnabled`/`active` as 'true' or
+    // 'false' and never a bit field. Read as NOT enabled for want of the bit,
+    // every such account would be proposed an `enable_account` on every run
+    // and dropped out of the disable guard's denominator.
+    const personId = await seedPerson('Anna', 'Novak', null);
+    const anchor = await seedObject('anna.novak', { holdsFinance: true });
+    await seedKnownAccount(personId, anchor, 'anna.novak', { holdsFinance: true });
+    await markApplied();
+
+    const withAccountEnabled = (value: string) =>
+      mapping((record) => {
+        const { userAccountControl: _uac, ...rest } = record.attributes;
+        return { ...record, attributes: { ...rest, accountEnabled: [value] } };
+      });
+
+    const enabledRun = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: withAccountEnabled('true') as never,
+    });
+    expect((await actionsOf(enabledRun.id)).map((a) => a.actionType)).not.toContain(
+      'enable_account',
+    );
+
+    const disabledRun = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: withAccountEnabled('false') as never,
     });
     expect((await actionsOf(disabledRun.id)).map((a) => a.actionType)).toContain(
       'enable_account',

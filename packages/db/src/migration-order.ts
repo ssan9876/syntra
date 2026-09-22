@@ -112,6 +112,13 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261001000000_logout_delivery_subject',
   '20261002000000_api_tokens',
   '20261003000000_person_list_indexes',
+  '20261004000000_lifecycle_operations',
+  '20261005000000_person_provision_receipts',
+  '20261006000000_http_target_encrypted_transport',
+  '20261007000000_lifecycle_hardening',
+  '20261008000000_entra_target_transport',
+  '20261009000000_lifecycle_concurrency',
+  '20261010000000_target_transport_not_null',
 ];
 
 /**

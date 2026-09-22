@@ -98,8 +98,39 @@ export const httpTargetConfigSchema = z
   .object({ document: z.record(z.unknown()) })
   .strict();
 
+/**
+ * The native Entra ID target's config shape, kept in parallel with
+ * `@syntra/connectors`' `entraTargetConfigSchema` for the reason the two above
+ * are: this is the outer boundary an administrator's save is checked against,
+ * and `.strict()` here turns a typo'd key into a 400 rather than a save that
+ * silently reverts that key to its default. The connector's copy is the one
+ * that resolves defaults and is parsed again before every run.
+ */
+export const entraTargetConfigSchema = z
+  .object({
+    tenantId: directoryString,
+    clientId: directoryString,
+    graphBaseUrl: directoryString.url().optional(),
+    tokenUrl: directoryString.url().optional(),
+    allowPrivateAddresses: z.boolean().optional(),
+    timeoutMs: z.number().int().positive().max(600_000).optional(),
+    correlationField: z
+      .string()
+      .regex(/^(employeeId|extensionAttribute([1-9]|1[0-5]))$/)
+      .optional(),
+    managedAttributes: z.array(directoryString).max(32).optional(),
+    groupScope: z
+      .object({
+        securityEnabledOnly: z.boolean().optional(),
+        includeMailEnabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 /** Every `TargetSystem.type` the API accepts, kept in step with `@syntra/connectors`' `TARGET_CONNECTOR_TYPES`. */
-export const targetTypeSchema = z.enum(['activeDirectory', 'scim2', 'httpJson']);
+export const targetTypeSchema = z.enum(['activeDirectory', 'scim2', 'httpJson', 'entraId']);
 
 /**
  * Either connector's config shape. Not a discriminated union on `type`
@@ -113,6 +144,7 @@ const anyTargetConfigSchema = z.union([
   targetConfigSchema,
   scim2TargetConfigSchema,
   httpTargetConfigSchema,
+  entraTargetConfigSchema,
 ]);
 
 /**

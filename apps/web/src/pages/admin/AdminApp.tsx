@@ -38,6 +38,12 @@ import { GovernSnapshotDetailPage } from './GovernSnapshotDetailPage.js';
 import { GovernCampaignNewPage } from './GovernCampaignNewPage.js';
 import { GovernCampaignDetailPage } from './GovernCampaignDetailPage.js';
 import { GovernBatchPage } from './GovernBatchPage.js';
+import { ProvisioningSetupPage } from './ProvisioningSetupPage.js';
+import { EmployeeWorkPage } from './EmployeeWorkPage.js';
+import { GuidedOnboardingPage } from './GuidedOnboardingPage.js';
+import { LifecycleOperationPage } from './LifecycleOperationPage.js';
+import { LifecycleSimulationPage } from './LifecycleSimulationPage.js';
+import { LifecyclePolicyPage } from './LifecyclePolicyPage.js';
 
 export function AdminApp() {
   return (
@@ -75,11 +81,17 @@ export function AdminApp() {
             {/* Listed before the parametric route for readability, as
                 sources/new is. React Router ranks the static segment above the
                 dynamic one regardless, so "new" is never read as an id. */}
-            <Route path="people/new" element={<OnboardPersonPage />} />
+            <Route path="people/new" element={<GuidedOnboardingPage />} />
+            <Route path="people/new/manual" element={<OnboardPersonPage />} />
             <Route path="people/:id" element={<PersonDetailPage />} />
             {/* After the person, so the more specific path is reached rather
                 than shadowed by the less specific one. */}
             <Route path="people/:id/access" element={<PersonAccessPage />} />
+            <Route path="employee-work" element={<EmployeeWorkPage />} />
+            <Route path="lifecycle-operations/:id" element={<LifecycleOperationPage />} />
+            <Route path="lifecycle-simulation" element={<LifecycleSimulationPage />} />
+            <Route path="lifecycle-policy" element={<LifecyclePolicyPage />} />
+            <Route path="provisioning-setup" element={<ProvisioningSetupPage />} />
             <Route path="sources" element={<SourcesPage />} />
             {/* Before the parametric route, so "new" is a page rather than an
                 id that will 404 on its way to the editor. */}

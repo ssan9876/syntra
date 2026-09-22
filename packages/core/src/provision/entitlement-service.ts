@@ -280,6 +280,9 @@ export async function refreshEntitlements(
         type: true,
         displayName: true,
         description: true,
+        manageable: true,
+        unmanageableReason: true,
+        membershipKind: true,
       },
     });
     const knownByExternalId = new Map(knownRows.map((row) => [row.externalId, row]));
@@ -301,6 +304,12 @@ export async function refreshEntitlements(
           type: entitlement.type,
           displayName: entitlement.displayName,
           description: entitlement.description ?? null,
+          // Absent means manageable: every connector that predates the field
+          // manages everything it lists. The Entra connector lists a dynamic
+          // group with `manageable: false` so the catalog says what it is.
+          manageable: entitlement.manageable ?? true,
+          unmanageableReason: entitlement.unmanageableReason ?? null,
+          membershipKind: entitlement.membershipKind ?? null,
           status: 'present',
           lastSeenAt: now,
         })),
@@ -317,11 +326,17 @@ export async function refreshEntitlements(
       const row = knownByExternalId.get(externalId);
       if (row === undefined) continue;
       const description = entitlement.description ?? null;
+      const manageable = entitlement.manageable ?? true;
+      const unmanageableReason = entitlement.unmanageableReason ?? null;
+      const membershipKind = entitlement.membershipKind ?? null;
       if (
         row.dn === entitlement.dn &&
         row.type === entitlement.type &&
         row.displayName === entitlement.displayName &&
-        row.description === description
+        row.description === description &&
+        row.manageable === manageable &&
+        row.unmanageableReason === unmanageableReason &&
+        row.membershipKind === membershipKind
       ) {
         continue;
       }
@@ -332,6 +347,9 @@ export async function refreshEntitlements(
           type: entitlement.type,
           displayName: entitlement.displayName,
           description,
+          manageable,
+          unmanageableReason,
+          membershipKind,
           // `status` is deliberately NOT written here. This function knows
           // whether a group is in the catalog; it knows nothing about whether
           // its membership could be read. Writing `present` unconditionally

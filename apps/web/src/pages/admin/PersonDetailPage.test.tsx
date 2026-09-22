@@ -309,17 +309,26 @@ describe('PersonDetailPage', () => {
     );
   });
 
-  it('deactivates the person, saying what it does and does not touch', async () => {
+  it('previews linked sign-ins and target work before ending employment', async () => {
     const user = userEvent.setup();
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(person));
+    mockRoutes({
+      '/api/admin/persons/p1': () => json(person),
+      '/api/admin/users/unlinked': () => json({ accounts: [] }),
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/persons/p1/provision-receipts': () => json({ receipts: [] }),
+      '/api/admin/audit?subject=p1&subject=u1': () => json({ events: [], chainValid: true }),
+      '/api/admin/persons/p1/offboarding': () => json({
+        revision: 'a'.repeat(64),
+        accounts: [{ id: 'u1', login: 'jdoe', status: 'active', source: null }],
+        targets: [],
+        latestAttempt: null,
+      }),
+    });
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: 'Deactivate' }));
-    // Sign-in accounts are a separate object with a separate status, and an
-    // administrator who assumes otherwise leaves a leaver able to sign in.
-    expect(
-      screen.getByText(/sign-in accounts are not changed/i),
-    ).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'End employment' }));
+    expect(await screen.findByText(/disables linked Syntra sign-ins/)).toBeInTheDocument();
+    expect(screen.getAllByText(/jdoe/).length).toBeGreaterThan(0);
   });
 
   /**

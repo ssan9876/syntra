@@ -72,7 +72,7 @@ const simple = (over: Partial<HttpConnectorDocument> = {}): HttpConnectorDocumen
 
 const config = (document: HttpConnectorDocument = simple()) => ({
   document,
-  credential: 'a-secret',
+  bindPassword: 'a-secret',
 });
 
 const collect = async <T>(source: AsyncIterable<T>): Promise<T[]> => {
@@ -502,5 +502,29 @@ describe('auth', () => {
     await expect(collect(httpTargetConnector.read(config(document)))).rejects.toThrow(
       /^the token endpoint answered HTTP 400$/,
     );
+  });
+
+  it('shows only Microsoft\'s stable diagnostic code, never its token response', async () => {
+    const document = simple({
+      auth: { type: 'oauth2', tokenUrl: 'https://login.example.com/token', clientId: 'client-1' },
+    });
+    answers = [
+      {
+        status: 401,
+        body: {
+          error: 'invalid_client',
+          error_description: 'AADSTS7000215: client_secret a-secret is invalid',
+        },
+      },
+    ];
+
+    let message = '';
+    try {
+      await collect(httpTargetConnector.read(config(document)));
+    } catch (cause) {
+      message = cause instanceof Error ? cause.message : String(cause);
+    }
+    expect(message).toBe('the token endpoint answered HTTP 401 (AADSTS7000215)');
+    expect(message).not.toContain('a-secret');
   });
 });

@@ -342,6 +342,19 @@ export interface DiscoveredEntitlement {
   type: 'group' | 'licence' | 'role';
   displayName: string;
   description?: string;
+  /**
+   * Whether Provision can grant and revoke this entitlement at all.
+   *
+   * Absent means yes -- every connector that predates the field manages
+   * everything it lists. The Entra connector sets it false on a dynamic
+   * group, which it lists so the catalog says what the group is rather than
+   * pretending it is not there, and never grants.
+   */
+  manageable?: boolean;
+  /** Why not, when `manageable` is false. Safe to show. */
+  unmanageableReason?: string;
+  /** How the target decides who holds it. Absent when the target has one kind. */
+  membershipKind?: 'assigned' | 'dynamic';
 }
 
 export interface Connector<C> {
@@ -402,6 +415,91 @@ export interface TargetConnector<C> extends Connector<C> {
    * exercise is a check nothing tests.
    */
   readEntitlementMembers(config: C, entitlementDn: string): Promise<string[]>;
+}
+
+/**
+ * A normalized observation made after target work. `complete` is deliberately
+ * separate from "the account was found": a connector that cannot finish a
+ * group-membership read must leave the lifecycle step awaiting manual review,
+ * not turn a partial picture into a successful verification.
+ */
+export interface TargetReadBack {
+  account: SourceRecord | null;
+  entitlementIds: string[];
+  /** Null means the adapter read the account but cannot prove enabled state. */
+  enabled: boolean | null;
+  complete: boolean;
+}
+
+/**
+ * Whether a record says its account is enabled, in the three spellings
+ * targets use: SCIM's `active`, a plain `enabled`, Graph's `accountEnabled`
+ * (all `'true'`/`'false'`), and Active Directory's `userAccountControl` bit.
+ * Null when the record carries none of them, which is "cannot tell" and not
+ * "disabled".
+ */
+export function observedEnabled(record: SourceRecord): boolean | null {
+  const active =
+    first(record, 'active') ?? first(record, 'enabled') ?? first(record, 'accountEnabled');
+  if (active !== undefined) {
+    if (active.toLowerCase() === 'true') return true;
+    if (active.toLowerCase() === 'false') return false;
+  }
+  const uac = first(record, 'userAccountControl');
+  if (uac !== undefined && /^\d+$/.test(uac)) return (Number(uac) & 2) === 0;
+  return null;
+}
+
+/**
+ * The read-back contract shared by every target adapter.
+ *
+ * The adapters already own the hard protocol work (paged account reads and
+ * all-or-error entitlement membership reads). Keeping this composition here
+ * means every target gets the same completeness rule and callers never infer
+ * completion from a successful mutation alone.
+ */
+export async function readBackTarget<C>(
+  connector: TargetConnector<C>,
+  config: C,
+  anchor: string,
+): Promise<TargetReadBack> {
+  // A connector that can read ONE account back does so: one GET and one
+  // membership walk instead of an enumeration of the whole directory and a
+  // membership read of every group in it. The completeness rule is the
+  // connector's to honour and is documented on `TargetReadBack`.
+  const own = (connector as Partial<{ readBack: (config: C, anchor: string) => Promise<TargetReadBack> }>)
+    .readBack;
+  if (typeof own === 'function') return own.call(connector, config, anchor);
+
+  let account: SourceRecord | null = null;
+  for await (const candidate of connector.read(config)) {
+    if (candidate.anchor === anchor) {
+      account = candidate;
+      break;
+    }
+  }
+  if (!account) return { account: null, entitlementIds: [], enabled: null, complete: true };
+
+  const enabled = observedEnabled(account);
+
+  const entitlementIds: string[] = [];
+  try {
+    for await (const entitlement of connector.listEntitlements(config)) {
+      const members = await connector.readEntitlementMembers(config, entitlement.dn);
+      // Entitlement APIs frequently expose membership as a DN or object ID,
+      // while Syntra's stable correlation value is the record anchor. Accept
+      // either representation, but derive the alternate only from the
+      // observed account rather than guessing a target-specific format.
+      if (members.includes(anchor) || members.includes(account.dn)) {
+        entitlementIds.push(entitlement.externalId);
+      }
+    }
+  } catch {
+    return { account, entitlementIds: [...entitlementIds].sort(), enabled, complete: false };
+  }
+  // A successful account enumeration is not a complete account-state
+  // observation when the target did not publish whether it is enabled.
+  return { account, entitlementIds: entitlementIds.sort(), enabled, complete: enabled !== null };
 }
 
 /**

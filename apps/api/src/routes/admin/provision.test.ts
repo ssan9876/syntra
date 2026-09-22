@@ -268,6 +268,123 @@ describe('PATCH and DELETE /api/admin/targets/:id', () => {
   });
 });
 
+describe('GET /api/admin/targets/:id/capabilities and entitlements/search', () => {
+  it('reports the static capabilities and no matrix for an Active Directory target', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const response = await get(`/api/admin/targets/${targetId}/capabilities`, cookie);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      type: 'activeDirectory',
+      matrix: null,
+      capabilities: { available: true, createAccount: true, manageEntitlements: true },
+    });
+  });
+
+  // SKIPPED until the schema owner extends the `target_system_encrypted_transport`
+  // CHECK constraint to admit `type = 'entraId'` (see docs/connectors/entra-id.md,
+  // "Database constraint"); the POST answers 500 from that constraint today.
+  it('reports the versioned matrix for a native Entra target', async () => {
+    const cookie = await manager();
+    const created = await post('/api/admin/targets', cookie, {
+      name: 'Entra',
+      type: 'entraId',
+      config: { tenantId: 'contoso.onmicrosoft.com', clientId: 'client-1' },
+      bindPassword: 'a-client-secret',
+    });
+    expect(created.statusCode).toBe(201);
+    const response = await get(`/api/admin/targets/${created.json().id}/capabilities`, cookie);
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.type).toBe('entraId');
+    expect(body.matrix.version).toBe(1);
+    expect(body.matrix.entries.deleteAccount.status).toBe('never');
+    expect(body.matrix.entries.dynamicGroups.status).toBe('unsupported');
+    expect(body.capabilities.available).toBe(true);
+  });
+
+  it('refuses an entraId config with a key it does not know', async () => {
+    const cookie = await manager();
+    const created = await post('/api/admin/targets', cookie, {
+      name: 'Entra',
+      type: 'entraId',
+      config: { tenantId: 'contoso.onmicrosoft.com', clientId: 'client-1', nestedGroups: true },
+      bindPassword: 'a-client-secret',
+    });
+    expect(created.statusCode).toBe(400);
+  });
+
+  it('searches the stored catalog case-insensitively for a non-Entra target', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    await withTenant(ctx.tenantId, async (tx) => {
+      for (const [displayName, manageable] of [
+        ['Finance', true],
+        ['finance-archive', false],
+        ['Nurses', true],
+      ] as const) {
+        await tx.entitlement.create({
+          data: {
+            tenantId: ctx.tenantId,
+            targetSystemId: targetId,
+            externalId: `ext-${displayName}`,
+            dn: `CN=${displayName}`,
+            type: 'group',
+            displayName,
+            manageable,
+            ...(manageable ? {} : { unmanageableReason: 'archived' }),
+          },
+        });
+      }
+    });
+    const response = await get(
+      `/api/admin/targets/${targetId}/entitlements/search?q=FIN&top=10`,
+      cookie,
+    );
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.source).toBe('catalog');
+    expect(body.entitlements.map((e: { displayName: string }) => e.displayName)).toEqual([
+      'Finance',
+      'finance-archive',
+    ]);
+    expect(body.entitlements[1]).toMatchObject({ manageable: false, unmanageableReason: 'archived' });
+
+    expect((await get(`/api/admin/targets/${targetId}/entitlements/search?q=`, cookie)).statusCode).toBe(400);
+    expect((await get(`/api/admin/targets/${targetId}/entitlements/search?q=x&top=500`, cookie)).statusCode).toBe(400);
+  });
+
+  it('records a readiness check when the credential is rotated', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const before = await withTenant(ctx.tenantId, (tx) =>
+      tx.connectionReadinessCheck.count({ where: { systemKind: 'target', systemId: targetId } }),
+    );
+    const response = await patch(`/api/admin/targets/${targetId}`, cookie, {
+      bindPassword: 'rotated-secret',
+    });
+    expect(response.statusCode).toBe(204);
+    const checks = await withTenant(ctx.tenantId, (tx) =>
+      tx.connectionReadinessCheck.findMany({
+        where: { systemKind: 'target', systemId: targetId },
+        orderBy: { checkedAt: 'desc' },
+      }),
+    );
+    expect(checks.length).toBe(before + 1);
+    // The fake directory is not reachable from here, so the check fails --
+    // and it is the record that matters: a rotation leaves evidence either way.
+    expect(checks[0]!.message).toMatch(/^credential rotated: /);
+    expect(checks[0]!.status).toBe('failed');
+
+    // A PATCH that does not touch the credential records nothing.
+    await patch(`/api/admin/targets/${targetId}`, cookie, { preHireDays: 3 });
+    const after = await withTenant(ctx.tenantId, (tx) =>
+      tx.connectionReadinessCheck.count({ where: { systemKind: 'target', systemId: targetId } }),
+    );
+    expect(after).toBe(before + 1);
+  });
+});
+
 describe('rules', () => {
   const seedEntitlement = (over: Record<string, unknown> = {}) =>
     withTenant(ctx.tenantId, async (tx) =>

@@ -162,6 +162,14 @@ model Tenant {
   targetAccounts            TargetAccount[]
   accountEntitlements       AccountEntitlement[]
   provisionRuns             ProvisionRun[]
+  personProvisionReceipts   PersonProvisionReceipt[]
+  lifecycleOperations       LifecycleOperation[]
+  lifecycleSteps            LifecycleStep[]
+  lifecycleObservations     LifecycleObservation[]
+  lifecycleStepAttempts     LifecycleStepAttempt[]
+  lifecyclePolicies         LifecyclePolicy[]
+  lifecycleSimulations      LifecycleSimulation[]
+  connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
   provisionExceptions       ProvisionException[]
   driftFindings             DriftFinding[]
@@ -308,6 +316,7 @@ model User {
 
   memberships GroupMembership[]
   attributes  UserAttribute[]
+  apiTokens   ApiToken[]
 
   /// Case-SENSITIVE. The case-insensitive login rule, and the local-only email
   /// rule, are functional indexes in migration
@@ -319,7 +328,6 @@ model User {
   @@unique([tenantId, sourceId, sourceAnchor])
   @@index([tenantId])
   @@index([orgUnitId])
-  apiTokens          ApiToken[]
 }
 
 model Group {
@@ -391,6 +399,8 @@ model Person {
   contracts           Contract[]
   targetAccounts      TargetAccount[]
   provisionExceptions ProvisionException[]
+  provisionReceipts   PersonProvisionReceipt[]
+  lifecycleOperations LifecycleOperation[]
   placements          AccountPlacement[]
 
   /// The unit this person belongs to, which places their account in the
@@ -637,29 +647,29 @@ model Session {
 /// Only a digest is stored. The value is shown once, at issue, and never
 /// again, exactly as a client secret is.
 model ApiToken {
-  id        String @id @default(uuid()) @db.Uuid
-  tenantId  String @db.Uuid
-  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// The service account this token acts as.
   ///
   /// Cascade, not restrict: an account that is deleted must not leave a live
   /// credential behind that authenticates as a user who no longer exists.
-  userId    String @db.Uuid
-  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String    @db.Uuid
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// What it is for, in the words of whoever issued it. "SCIM from Workday".
-  name      String
+  name       String
   /// SHA-256, deliberately not Argon2id -- see `hashApiToken` for the same
   /// argument `hashClientSecret` makes about client secrets.
-  tokenHash String @unique
+  tokenHash  String    @unique
   /// The permissions this token may exercise, INTERSECTED with the account's
   /// roles and never unioned with them. A scope the account does not hold
   /// grants nothing. Empty means the account's full authority, which the
   /// console never writes -- an integrator has to ask for it.
-  scopes    String[] @default([])
+  scopes     String[]  @default([])
   /// Null is allowed and discouraged. An integration nobody is staffed to
   /// rotate is worse broken than long-lived, so the choice exists -- but it is
   /// a choice, and `list` marks it as one.
-  expiresAt DateTime?
+  expiresAt  DateTime?
   /// Written at most once a minute, not on every request: a busy integration
   /// would otherwise turn every read into a write, and "used within the last
   /// minute" is as useful as the second.
@@ -668,8 +678,8 @@ model ApiToken {
   /// tell is unused is a credential nobody ever revokes.
   lastUsedAt DateTime?
   revokedAt  DateTime?
-  createdAt  DateTime @default(now())
-  createdBy  String?  @db.Uuid
+  createdAt  DateTime  @default(now())
+  createdBy  String?   @db.Uuid
 
   @@index([tenantId])
   @@index([userId])
@@ -1421,28 +1431,28 @@ model SamlConfig {
 
 /// An OIDC relying party. One per Application of type 'oidc'.
 model OidcClient {
-  id                       String      @id @default(uuid()) @db.Uuid
-  tenantId                 String      @db.Uuid
-  tenant                   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  applicationId            String      @unique @db.Uuid
-  application              Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  clientId                 String
+  id                               String      @id @default(uuid()) @db.Uuid
+  tenantId                         String      @db.Uuid
+  tenant                           Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  applicationId                    String      @unique @db.Uuid
+  application                      Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  clientId                         String
   /// SHA-256 of a 256-bit random secret. Task 11 records why this is not
   /// Argon2id.
-  clientSecretHash         String
+  clientSecretHash                 String
   /// Exact-match allowlist. Never prefix-matched, never wildcarded.
-  redirectUris             String[]    @default([])
-  postLogoutRedirectUris   String[]    @default([])
+  redirectUris                     String[]    @default([])
+  postLogoutRedirectUris           String[]    @default([])
   /// Where a logout token is POSTed when a session this client's user holds
   /// ends. Null means this client is not told, which is the default and shows
   /// as such in the console. Validated on write by the same address check the
   /// webhook endpoints get: it is an outbound request Syntra makes on
   /// somebody else's say-so.
-  backchannelLogoutUri     String?
+  backchannelLogoutUri             String?
   /// Whether the logout token must carry `sid`. A client that asks for it and
   /// does not get it is required by spec to reject the token.
-  backchannelLogoutSessionRequired Boolean @default(false)
-  grantTypes               String[]    @default(["authorization_code", "refresh_token"])
+  backchannelLogoutSessionRequired Boolean     @default(false)
+  grantTypes                       String[]    @default(["authorization_code", "refresh_token"])
   /// Whether this client may use the client credentials grant.
   ///
   /// Its own column rather than a member of `grantTypes`, and default false.
@@ -1452,15 +1462,15 @@ model OidcClient {
   /// arrive by accident alongside an unrelated change. `loadClients` derives
   /// the protocol-level grant type from this flag; the admin API refuses
   /// `client_credentials` in `grantTypes` outright.
-  clientCredentialsEnabled Boolean     @default(false)
-  scopes                   String[]    @default(["openid", "profile", "email"])
-  requirePkce              Boolean     @default(true)
-  tokenEndpointAuthMethod  String      @default("client_secret_basic")
-  idTokenSignedResponseAlg String      @default("RS256")
-  accessTokenTtlSeconds    Int         @default(3600)
-  refreshTokenTtlSeconds   Int         @default(1209600)
-  createdAt                DateTime    @default(now())
-  updatedAt                DateTime    @updatedAt
+  clientCredentialsEnabled         Boolean     @default(false)
+  scopes                           String[]    @default(["openid", "profile", "email"])
+  requirePkce                      Boolean     @default(true)
+  tokenEndpointAuthMethod          String      @default("client_secret_basic")
+  idTokenSignedResponseAlg         String      @default("RS256")
+  accessTokenTtlSeconds            Int         @default(3600)
+  refreshTokenTtlSeconds           Int         @default(1209600)
+  createdAt                        DateTime    @default(now())
+  updatedAt                        DateTime    @updatedAt
 
   logoutDeliveries LogoutDelivery[]
 
@@ -2047,32 +2057,41 @@ model RuleEntitlement {
 /// immutable identifier — the group's objectGUID — never its name or DN. A
 /// name-keyed entitlement turns a group rename into a mass revoke-and-regrant.
 model Entitlement {
-  id             String       @id @default(uuid()) @db.Uuid
-  tenantId       String       @db.Uuid
-  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  targetSystemId String       @db.Uuid
-  target         TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
-  externalId     String
+  id                 String       @id @default(uuid()) @db.Uuid
+  tenantId           String       @db.Uuid
+  tenant             Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  targetSystemId     String       @db.Uuid
+  target             TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  externalId         String
   /// The target's distinguished name for this object, as last read.
   /// Active Directory reports a user's group membership as a list of DNs in
   /// `memberOf`, never as objectGUIDs, so mapping membership back onto
   /// entitlements needs the DN. It is NOT the identity -- `externalId` is --
   /// which is why it is nullable and may go stale between catalog refreshes.
-  dn             String?
+  dn                 String?
   /// 'group' | 'licence' | 'role'
-  type           String
-  displayName    String
-  description    String?
+  type               String
+  displayName        String
+  description        String?
   /// 'present' | 'missing' | 'unreadable'. A rule naming a missing or
   /// unreadable entitlement is unresolvable AS A WHOLE — see plan.ts.
-  status         String       @default("present")
+  status             String       @default("present")
   /// Current holders, the denominator of the per-entitlement guard axis.
-  holderCount    Int          @default(0)
+  holderCount        Int          @default(0)
   /// Whether this entitlement may be named by a catalog product. False by
   /// default, so a target's catalog can be published without publishing every
   /// group in the domain.
-  requestable    Boolean      @default(false)
-  lastSeenAt     DateTime?
+  requestable        Boolean      @default(false)
+  lastSeenAt         DateTime?
+  /// False for a group Syntra can see but must not manage: a dynamic Entra
+  /// group, a distribution list. The reason is the connector's own words.
+  manageable         Boolean      @default(true)
+  unmanageableReason String?
+  /// 'assigned' | 'dynamic' where the target says; null where it does not.
+  membershipKind     String?
+  /// Flagged by an administrator or matched by policy patterns: changes to
+  /// membership of this entitlement are high-impact and may need approval.
+  privileged         Boolean      @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2163,6 +2182,240 @@ model AccountEntitlement {
 /// 'running' | 'previewed' | 'blocked' | 'applying' | 'applied'
 /// | 'partially_applied' | 'failed'. A run reaches `applied` only when every
 /// action it proposed reached a terminal state and none failed.
+model PersonProvisionReceipt {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @db.Uuid
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personId       String   @db.Uuid
+  person         Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  targetSystemId String   @db.Uuid
+  requestKey     String   @db.Uuid
+  targetName     String
+  status         String   @default("pending")
+  jobId          String?
+  runId          String?  @db.Uuid
+  runIds         String[] @default([])
+  evidence       Json?
+  message        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, personId, targetSystemId, requestKey])
+  @@index([tenantId, personId, createdAt])
+  @@index([tenantId, status])
+}
+
+/// One durable hire, change, departure, verification, or simulation. The
+/// idempotency key is tenant-scoped so an HR delivery can be replayed safely.
+model LifecycleOperation {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personId          String?   @db.Uuid
+  person            Person?   @relation(fields: [personId], references: [id], onDelete: SetNull)
+  kind              String
+  idempotencyKey    String
+  status            String    @default("queued")
+  attempt           Int       @default(1)
+  input             Json      @default("{}")
+  inputFingerprint  String
+  ownerUserId       String?   @db.Uuid
+  priority          String    @default("normal")
+  dueAt             DateTime?
+  acknowledgedAt    DateTime?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  /// Policy said a person must approve before high-impact steps run. The
+  /// reason names which control fired so the approver knows what they are
+  /// signing. `approvedByUserId` is never the requester (four eyes).
+  approvalRequired  Boolean   @default(false)
+  approvalReason    String?
+  requestedByUserId String?   @db.Uuid
+  approvedAt        DateTime?
+  approvedByUserId  String?   @db.Uuid
+  rejectedAt        DateTime?
+  rejectedByUserId  String?   @db.Uuid
+  rejectionReason   String?
+  /// Service level: the deadline is computed ONCE from durable timestamps
+  /// when the operation is created, so a later policy edit cannot move the
+  /// goalposts on work already in flight. Breach is recorded, not inferred.
+  sloMinutes        Int?
+  sloDeadlineAt     DateTime?
+  sloBreachedAt     DateTime?
+  escalatedAt       DateTime?
+  escalatedToUserId String?   @db.Uuid
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  steps    LifecycleStep[]
+  attempts LifecycleStepAttempt[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, status, updatedAt])
+  @@index([tenantId, personId, createdAt])
+  @@index([tenantId, ownerUserId, status])
+  @@index([tenantId, dueAt, status])
+}
+
+/// An ordered, resumable part of a lifecycle operation.
+model LifecycleStep {
+  id               String             @id @default(uuid()) @db.Uuid
+  tenantId         String             @db.Uuid
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  operationId      String             @db.Uuid
+  operation        LifecycleOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  key              String
+  title            String
+  position         Int
+  required         Boolean            @default(true)
+  status           String             @default("pending")
+  message          String?
+  evidence         Json?
+  /// How the target answered, in the closed vocabulary the connector uses:
+  /// confirmed, read_back_incomplete, transient, throttled, unauthorized,
+  /// not_found, conflict, rejected, blocked, unavailable. Null until known.
+  responseCategory String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  observations LifecycleObservation[]
+  attempts     LifecycleStepAttempt[]
+
+  @@unique([operationId, key])
+  @@unique([operationId, position])
+  @@index([tenantId, status, updatedAt])
+}
+
+/// A normalized target read-back captured after a lifecycle write or during
+/// verification. Raw connector responses do not become completion evidence.
+model LifecycleObservation {
+  id             String        @id @default(uuid()) @db.Uuid
+  tenantId       String        @db.Uuid
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stepId         String        @db.Uuid
+  step           LifecycleStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  targetSystemId String?       @db.Uuid
+  completeness   String
+  matches        Boolean
+  expected       Json
+  observed       Json?
+  differences    Json          @default("[]")
+  fingerprint    String?
+  observedAt     DateTime      @default(now())
+  expiresAt      DateTime?
+
+  @@index([tenantId, stepId, observedAt])
+  @@index([tenantId, expiresAt])
+}
+
+/// Append-only history of every attempt a step made. A retry never edits or
+/// deletes one of these: the original evidence of what happened stays, and
+/// the new attempt is a new row. Written when a step reaches a terminal
+/// status and again when a retry abandons an unfinished one.
+model LifecycleStepAttempt {
+  id               String             @id @default(uuid()) @db.Uuid
+  tenantId         String             @db.Uuid
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  operationId      String             @db.Uuid
+  operation        LifecycleOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  stepId           String             @db.Uuid
+  step             LifecycleStep      @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  stepKey          String
+  attempt          Int
+  status           String
+  message          String?
+  evidence         Json?
+  responseCategory String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  recordedAt       DateTime           @default(now())
+
+  @@index([tenantId, operationId, attempt])
+  @@index([tenantId, stepId, recordedAt])
+}
+
+/// One row per tenant: the controls a pilot runs under. Approvals gate the
+/// high-impact actions; service levels set the deadlines breach is measured
+/// against; retention says how long low-level evidence is kept. Absent row
+/// means the defaults in `lifecycle/policy.ts`, which are the conservative
+/// ones.
+model LifecyclePolicy {
+  id                                 String   @id @default(uuid()) @db.Uuid
+  tenantId                           String   @unique @db.Uuid
+  tenant                             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requireApprovalForAccountCreation  Boolean  @default(false)
+  requireApprovalForPrivilegedGroups Boolean  @default(true)
+  privilegedGroupPatterns            String[] @default(["admin", "privileged", "domain admins", "global admin"])
+  requireApprovalForUrgentDeparture  Boolean  @default(false)
+  requireApprovalForBulkRequeue      Boolean  @default(true)
+  bulkRequeueThreshold               Int      @default(10)
+  /// Target operations in flight at once, per tenant. The worker defers the
+  /// rest visibly rather than queueing them silently.
+  maxConcurrentTargetOperations      Int      @default(8)
+  urgentLeaverSloMinutes             Int      @default(15)
+  onboardSloHours                    Int      @default(24)
+  moveSloHours                       Int      @default(24)
+  offboardSloHours                   Int      @default(24)
+  escalationOwnerUserId              String?  @db.Uuid
+  notifyOnFailure                    Boolean  @default(true)
+  notifyOnOverdue                    Boolean  @default(true)
+  notifyOnAccessBlocked              Boolean  @default(true)
+  receiptRetentionDays               Int      @default(365)
+  observationRetentionDays           Int      @default(90)
+  notificationRetentionDays          Int      @default(180)
+  simulationRetentionDays            Int      @default(30)
+  /// Null means audit events are never removed by the retention job.
+  auditRetentionDays                 Int?
+  updatedByUserId                    String?  @db.Uuid
+  createdAt                          DateTime @default(now())
+  updatedAt                          DateTime @updatedAt
+}
+
+/// A no-write rehearsal of a hire, move or departure computed by the same
+/// planner a run uses. Kept so a reviewer can sign off on what was shown,
+/// and expired by the retention job because a simulation ages badly.
+model LifecycleSimulation {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @db.Uuid
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind            String
+  scope           String
+  personId        String?   @db.Uuid
+  department      String?
+  input           Json      @default("{}")
+  result          Json
+  peopleCount     Int       @default(0)
+  writesPerformed Boolean   @default(false)
+  createdByUserId String?   @db.Uuid
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime?
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, expiresAt])
+}
+
+/// Immutable evidence from testing a source or target with one exact saved
+/// configuration. A different fingerprint makes this evidence stale.
+model ConnectionReadinessCheck {
+  id                       String   @id @default(uuid()) @db.Uuid
+  tenantId                 String   @db.Uuid
+  tenant                   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  systemKind               String
+  systemId                 String   @db.Uuid
+  configurationFingerprint String
+  capabilities             String[] @default([])
+  status                   String
+  latencyMs                Int?
+  message                  String?
+  actorUserId              String?  @db.Uuid
+  checkedAt                DateTime @default(now())
+
+  @@index([tenantId, systemKind, systemId, checkedAt])
+  @@index([tenantId, status, checkedAt])
+}
+
 model ProvisionRun {
   id             String       @id @default(uuid()) @db.Uuid
   tenantId       String       @db.Uuid

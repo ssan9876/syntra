@@ -72,6 +72,9 @@ const GROUPS: NavGroup[] = [
       // file's header records sixteen links being removed for.
       { to: '/admin/sources', label: 'Sources', permission: 'sync.read' },
       { to: '/admin/targets', label: 'Target systems', permission: 'provision.read' },
+      { to: '/admin/provisioning-setup', label: 'Provisioning setup', permission: 'provision.read' },
+      { to: '/admin/employee-work', label: 'Employee work', permission: 'provision.read' },
+      { to: '/admin/lifecycle-policy', label: 'Lifecycle policy', permission: 'provision.read' },
     ],
   },
   {

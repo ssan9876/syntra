@@ -26,3 +26,7 @@ tools/*-mutants.results.*.json
 # the project, and a committed lock file is a merge conflict waiting for the
 # next person who runs the same tool.
 .claude/
+
+# Local tooling caches, not the project.
+.impeccable/
+.pnpm-store/

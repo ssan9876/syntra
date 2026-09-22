@@ -394,10 +394,12 @@ describe('startSyncScheduler', () => {
     scheduler.start = async () => {
       throw new Error('pg-boss could not reach the database');
     };
+    scheduler.stop = vi.fn(async () => {});
 
     await expect(
       startSyncScheduler(config, createFakeLogger(), () => scheduler),
     ).resolves.toBeNull();
+    expect(scheduler.stop).toHaveBeenCalledOnce();
   });
 
   it('starts the scheduler and hands it back when it comes up', async () => {

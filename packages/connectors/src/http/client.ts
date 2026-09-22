@@ -83,9 +83,16 @@ async function accessToken(
   });
   const text = await response.text();
   if (response.status >= 400) {
-    // The status, not the body. A token endpoint's error body echoes the
-    // request it was sent, and the request contained the client secret.
-    throw new Error(`the token endpoint answered HTTP ${response.status}`);
+    // Token responses can echo the request, including the client secret, so
+    // never surface their body. Microsoft does include a stable `AADSTS` code
+    // in its diagnostic text, however; extracting that code alone gives an
+    // administrator an actionable cause without turning an error screen into
+    // a credential disclosure.
+    const microsoftCode = /\bAADSTS\d{5,8}\b/.exec(text)?.[0];
+    throw new Error(
+      `the token endpoint answered HTTP ${response.status}` +
+        (microsoftCode ? ` (${microsoftCode})` : ''),
+    );
   }
 
   const body = JSON.parse(text) as { access_token?: string; expires_in?: number };

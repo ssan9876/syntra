@@ -1,0 +1,29 @@
+api:
+  image: ghcr.io/ssan9876/syntra-api:latest
+  replicas: 1
+  servicePort: 3000
+web:
+  image: ghcr.io/ssan9876/syntra-web:latest
+  replicas: 1
+  servicePort: 80
+migration:
+  enabled: true
+imagePullSecrets: []
+# Create this Secret outside the chart. Never commit these values in Helm
+# values files: the API container reads the exact keys below.
+existingSecret: syntra-runtime
+secretKeys:
+  databaseUrl: DATABASE_URL
+  publicUrl: PUBLIC_URL
+  sessionSecret: SESSION_SECRET
+  masterKey: MASTER_KEY
+  smtpUrl: SMTP_URL
+  metricsToken: METRICS_TOKEN
+# Conservative defaults; tune from observed usage in the environment values.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi

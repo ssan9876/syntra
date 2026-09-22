@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
@@ -179,6 +179,11 @@ const nameOf = (person: PersonRow) =>
 
 export function AccountProfilePage() {
   const { id } = useParams<{ id: string }>();
+  return <AccountProfileEditor key={id} />;
+}
+
+function AccountProfileEditor() {
+  const { id } = useParams<{ id: string }>();
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [profile, setProfile] = useState<Draft>(EMPTY);
   const [policyExtras, setPolicyExtras] = useState<Record<string, unknown>>({});
@@ -188,20 +193,31 @@ export function AccountProfilePage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<null | 'save' | 'preview'>(null);
+  const previewSeq = useRef(0);
+  useEffect(() => () => { previewSeq.current += 1; }, []);
+
+  function invalidatePreview() {
+    previewSeq.current += 1;
+    setPreview(null);
+    setBusy((current) => current === 'preview' ? null : current);
+  }
 
   const { data: persons } = useApiResource<{ persons: PersonRow[]; total: number }>(
     '/api/admin/persons?pageSize=200',
   );
 
   useEffect(() => {
+    let active = true;
     setLoad({ state: 'loading' });
     void api<Record<string, unknown>>(`/api/admin/targets/${id}/profile`)
       .then((stored) => {
+        if (!active) return;
         setProfile(draftFrom(stored));
         setPolicyExtras(policyExtrasFrom(stored));
         setLoad({ state: 'ready', stored: true });
       })
       .catch((cause: unknown) => {
+        if (!active) return;
         // A 404 here is "no profile saved yet", which is the ordinary state of
         // a target somebody has just created, not an error to apologise for —
         // and it is the ONLY status for which the defaults are the right thing
@@ -222,10 +238,13 @@ export function AccountProfilePage() {
               : 'The account profile could not be read.',
         });
       });
+    return () => { active = false; };
   }, [id]);
 
-  const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
+  const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
+    invalidatePreview();
     setProfile((current) => ({ ...current, [key]: value }));
+  };
 
   const mark = (field: string): { error?: string } =>
     invalid[field] ? { error: invalid[field] } : {};
@@ -295,6 +314,7 @@ export function AccountProfilePage() {
   }
 
   async function onPreview() {
+    const seq = ++previewSeq.current;
     setBusy('preview');
     setInvalid({});
     setProblem(null);
@@ -305,16 +325,15 @@ export function AccountProfilePage() {
       return;
     }
     try {
-      setPreview(
-        await api<Preview>(`/api/admin/targets/${id}/profile/preview`, {
+      const result = await api<Preview>(`/api/admin/targets/${id}/profile/preview`, {
           method: 'POST',
           body: JSON.stringify({ profile: payload, personId }),
-        }),
-      );
+        });
+      if (seq === previewSeq.current) setPreview(result);
     } catch (cause) {
-      fail(cause, 'That could not be previewed.');
+      if (seq === previewSeq.current) fail(cause, 'That could not be previewed.');
     } finally {
-      setBusy(null);
+      if (seq === previewSeq.current) setBusy(null);
     }
   }
 
@@ -533,7 +552,7 @@ export function AccountProfilePage() {
               <Select
                 label="Person"
                 value={personId}
-                onChange={setPersonId}
+                onChange={(value) => { invalidatePreview(); setPersonId(value); }}
                 options={[
                   { value: '', label: 'Pick a person…' },
                   ...(persons?.persons ?? []).map((person) => ({

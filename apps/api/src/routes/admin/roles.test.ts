@@ -407,3 +407,28 @@ describe('DELETE /api/admin/roles/:id/assignments/:userId?scopeOrgUnitId', () =>
     expect(unitId).toBeTruthy();
   });
 });
+
+describe('role presets', () => {
+  it('lists the operational presets and creates a role from one, once', async () => {
+    await seedAdmin('rbac', [PERMISSIONS.RBAC_MANAGE]);
+    const cookie = await authCookie('rbac');
+    const presets = await send('GET', '/api/admin/roles/presets', cookie);
+    expect(presets.statusCode).toBe(200);
+    expect(presets.json().presets.map((preset: { key: string }) => preset.key)).toEqual([
+      'platform-operator',
+      'lifecycle-owner',
+      'target-administrator',
+      'auditor',
+      'read-only-reviewer',
+    ]);
+    const created = await send('POST', '/api/admin/roles/presets/lifecycle-owner', cookie);
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ name: 'Lifecycle owner', builtIn: false });
+    expect(created.json().permissions).toContain(PERMISSIONS.PROVISION_MANAGE);
+    expect(created.json().permissions).not.toContain(PERMISSIONS.RBAC_MANAGE);
+    const again = await send('POST', '/api/admin/roles/presets/lifecycle-owner', cookie);
+    expect(again.statusCode).toBe(409);
+    const unknown = await send('POST', '/api/admin/roles/presets/nope', cookie);
+    expect(unknown.statusCode).toBe(404);
+  });
+});

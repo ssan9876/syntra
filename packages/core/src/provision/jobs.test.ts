@@ -921,7 +921,7 @@ describe('registerProvisionJobs — what the registration passes, and what arriv
       preview: previewed as never,
       apply: apply as never,
     });
-    const handler = scheduler.register.mock.calls[0]![1] as (
+    const handler = scheduler.register.mock.calls.find(([name]) => name === PROVISION_JOB)![1] as (
       payload: unknown,
     ) => Promise<void>;
     await handler({ tenantId, targetSystemId: targetId });

@@ -9,7 +9,7 @@
 
 export type TlsMode = 'ldaps' | 'starttls';
 export type EnforcementMode = 'additive' | 'authoritative';
-export type TargetType = 'activeDirectory' | 'scim2' | 'httpJson';
+export type TargetType = 'activeDirectory' | 'scim2' | 'httpJson' | 'entraId';
 
 export interface Target {
   id: string;
@@ -61,6 +61,13 @@ export interface Form {
   // target that was built from it.
   documentKey: string;
   documentJson: string;
+  // Microsoft Graph's OAuth values. These remain ordinary target configuration
+  // (identifiers, not credentials); the client secret stays in the vault.
+  entraTenantId: string;
+  entraClientId: string;
+  // Native Entra ID only: where the ProvisionAction id is recorded on a
+  // created user. `employeeId` or one of the fifteen extension attributes.
+  entraCorrelationField: string;
   schedule: string;
   enabled: boolean;
   autoApply: boolean;
@@ -97,6 +104,9 @@ export const BLANK: Form = {
   baseUrl: 'https://',
   documentKey: '',
   documentJson: '',
+  entraTenantId: '',
+  entraClientId: '',
+  entraCorrelationField: 'employeeId',
   schedule: '',
   enabled: true,
   autoApply: false,
@@ -126,6 +136,16 @@ export const OWNED_CONFIG_KEYS = [
   'entitlementSearchBase',
   'archiveContainer',
   'baseUrl',
+  // Native Entra ID. `managedAttributes`, `groupScope` and the rest are
+  // carried through untouched.
+  'tenantId',
+  'clientId',
+  'correlationField',
+];
+
+export const ENTRA_CORRELATION_FIELDS = [
+  'employeeId',
+  ...Array.from({ length: 15 }, (_, i) => `extensionAttribute${i + 1}`),
 ];
 
 export const THRESHOLDS = [
@@ -211,6 +231,9 @@ export function parseDocument(json: string): Record<string, unknown> | null {
 
 export function formFrom(target: Target): Form {
   const config = target.config ?? {};
+  const document = config.document as Record<string, unknown> | undefined;
+  const auth = document?.auth as Record<string, unknown> | undefined;
+  const tokenUrl = typeof auth?.tokenUrl === 'string' ? auth.tokenUrl : '';
   const url = text(config.url, BLANK.url);
   return {
     name: target.name,
@@ -219,10 +242,25 @@ export function formFrom(target: Target): Form {
         ? 'scim2'
         : target.type === 'httpJson'
           ? 'httpJson'
-          : 'activeDirectory',
+          : target.type === 'entraId'
+            ? 'entraId'
+            : 'activeDirectory',
     documentKey: '',
     documentJson:
       config.document === undefined ? '' : JSON.stringify(config.document, null, 2),
+    // The native connector stores these as plain config keys; the document
+    // connector keeps them inside the document's OAuth block.
+    entraTenantId:
+      target.type === 'entraId'
+        ? text(config.tenantId)
+        : (tokenUrl.match(/login\.microsoftonline\.com\/([^/]+)\//i)?.[1] ?? ''),
+    entraClientId:
+      target.type === 'entraId'
+        ? text(config.clientId)
+        : typeof auth?.clientId === 'string'
+          ? auth.clientId
+          : '',
+    entraCorrelationField: text(config.correlationField, BLANK.entraCorrelationField),
     baseUrl: text(config.baseUrl, BLANK.baseUrl),
     url,
     tlsMode:
@@ -275,10 +313,21 @@ export function configFromForm(
     // Parsed here so a malformed document is a message under the box rather
     // than a 400 from a field the reader cannot see. `submit` checks the
     // same thing first and stops; this is the shape the server gets.
-    return { document: parseDocument(form.documentJson) ?? {} };
+    const document = parseDocument(form.documentJson) ?? {};
+    return {
+      document: applyEntraOAuthValues(document, form.entraTenantId, form.entraClientId),
+    };
   }
   if (form.type === 'scim2') {
     return { ...extraConfig, baseUrl: form.baseUrl.trim() };
+  }
+  if (form.type === 'entraId') {
+    return {
+      ...extraConfig,
+      tenantId: form.entraTenantId.trim(),
+      clientId: form.entraClientId.trim(),
+      correlationField: form.entraCorrelationField,
+    };
   }
   return {
     ...extraConfig,
@@ -290,6 +339,28 @@ export function configFromForm(
     entitlementSearchBase: form.entitlementSearchBase.trim(),
     archiveContainer: form.archiveContainer.trim(),
   };
+}
+
+/**
+ * The shipped Entra document deliberately contains placeholders: values that
+ * identify a customer's directory must not be shipped in a shared document.
+ * Replace only the two OAuth placeholders, never action templates such as
+ * `{{anchor}}`, which belong to runtime provisioning.
+ */
+export function applyEntraOAuthValues(
+  document: Record<string, unknown>,
+  tenantId: string,
+  clientId: string,
+): Record<string, unknown> {
+  const copy = structuredClone(document) as Record<string, unknown>;
+  const auth = copy.auth;
+  if (auth === null || typeof auth !== 'object' || Array.isArray(auth)) return copy;
+  const oauth = auth as Record<string, unknown>;
+  if (typeof oauth.tokenUrl === 'string' && oauth.tokenUrl.includes('{tenant}')) {
+    oauth.tokenUrl = oauth.tokenUrl.replace('{tenant}', tenantId.trim());
+  }
+  if (oauth.clientId === '{clientId}') oauth.clientId = clientId.trim();
+  return copy;
 }
 
 /**

@@ -37,6 +37,9 @@ import { registerScimRoutes } from './routes/scim/index.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
 import { registerAdminPersonRoutes } from './routes/admin/persons.js';
+import { registerEmployeeLifecycleRoutes } from './routes/admin/employee-lifecycle.js';
+import { registerAdminPersonReceiptRoutes } from './routes/admin/person-receipts.js';
+import { registerAdminLifecycleOperationRoutes } from './routes/admin/lifecycle-operations.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
@@ -64,6 +67,7 @@ import { registerOidcTokenRoutes } from './routes/oidc-token.js';
 import { registerOidcLogoutRoutes } from './routes/oidc-logout.js';
 import { registerFederationRoutes } from './routes/federation.js';
 import { invalidateProvider } from '@syntra/protocols';
+import { serializeRequest } from './request-logging.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -101,7 +105,10 @@ export async function buildApp(
   options: AppOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: options.logger === false ? false : { level: process.env.LOG_LEVEL ?? 'info' },
+    logger: options.logger === false ? false : {
+      level: process.env.LOG_LEVEL ?? 'info',
+      serializers: { req: serializeRequest },
+    },
     // Which proxies may be believed about a request's source address. Off
     // unless TRUST_PROXY says otherwise, and never a bare `true` — see the
     // variable's own documentation in config.ts. request.ip feeds both the
@@ -171,6 +178,7 @@ export async function buildApp(
   // exists. See the plugin's own docstring.
   await registerMetricsRoutes(app, {
     token: config.metricsToken,
+    ...(options.scheduler ? { schedulerRunning: () => options.scheduler!() !== null } : {}),
     // The same call `/health/ready` makes below, so there is one readiness
     // definition rather than two that can disagree.
     isReady: async () =>
@@ -310,7 +318,10 @@ export async function buildApp(
     outboundAllowPrivate: config.outboundAllowPrivate,
   });
   await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
-  await app.register(registerAdminIncidentRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminIncidentRoutes, {
+    prefix: '/api/admin',
+    ...(options.scheduler ? { schedulerRunning: () => options.scheduler!() !== null } : {}),
+  });
   await app.register(registerAdminUserRoutes, {
     prefix: '/api/admin',
     masterKey: config.masterKey,
@@ -340,6 +351,16 @@ export async function buildApp(
     masterKey: config.masterKey,
   });
   await app.register(registerAdminPersonRoutes, { prefix: '/api/admin' });
+  await app.register(registerEmployeeLifecycleRoutes, { prefix: '/api/admin', masterKey: config.masterKey, publicUrl: config.publicUrl, ...(options.scheduler ? { scheduler: options.scheduler } : {}) });
+  await app.register(registerAdminPersonReceiptRoutes, {
+    prefix: '/api/admin',
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+  await app.register(registerAdminLifecycleOperationRoutes, {
+    prefix: '/api/admin',
+    publicUrl: config.publicUrl,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
   await app.register(registerAdminAuditRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminUpdateRoutes, {
     prefix: '/api/admin',

@@ -58,7 +58,10 @@ export function AppShell({
             misprinted against its own sidebar. */}
         <div
           className={[
-            'flex h-14 w-full items-center justify-between gap-4 px-6',
+            // `min-h` and wrap rather than a fixed height: at phone widths the
+            // three header actions do not fit beside the wordmark, and a row
+            // that cannot wrap pushes the whole page sideways instead.
+            'flex min-h-14 w-full flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-1 sm:px-6',
             'mx-auto',
             sidebar ? 'max-w-[var(--shell-max)]' : 'max-w-7xl',
           ].join(' ')}
@@ -67,7 +70,7 @@ export function AppShell({
             <Wordmark />
           </Link>
 
-          <div className="flex items-center gap-1">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             {session?.mayElevate && (
               <Link
                 to={session.scope === 'admin' ? '/admin/users' : '/elevate'}

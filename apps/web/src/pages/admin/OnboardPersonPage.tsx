@@ -39,6 +39,7 @@ interface Progress {
   personId: string | null;
   personName: string;
   contract: boolean;
+  userId: string | null;
   user: boolean;
 }
 
@@ -121,6 +122,7 @@ export function OnboardPersonPage() {
       personId: null,
       personName,
       contract: false,
+      userId: null,
       user: false,
     };
 
@@ -206,6 +208,7 @@ export function OnboardPersonPage() {
             ...(v.orgUnitId ? { orgUnitId: v.orgUnitId } : {}),
           }),
         });
+        done.userId = created.id;
         // Linked immediately. An account created and not linked is the orphan
         // this page exists to stop producing.
         await api(`/api/admin/persons/${done.personId}/link-user`, {
@@ -255,11 +258,28 @@ export function OnboardPersonPage() {
       {progress?.personId && (
         <div className="mb-4">
           <Alert tone="warning" title="Partly done">
-            {progress.personName} was created
-            {progress.contract
-              ? ', with their contract, but the login was not'
-              : ', but their contract was not. Nothing will be provisioned for them until one exists'}
-            . Finish the rest on their page.
+            <p>
+              {progress.personName} was created.
+              {progress.contract
+                ? ' Their contract was saved.'
+                : ' Their contract was not saved. Nothing will be provisioned for them until one exists.'}
+              {progress.user
+                ? ' Their Syntra login was created and linked.'
+                : progress.userId
+                  ? ' Their Syntra login was created but could not be linked.'
+                  : wantsLogin && progress.contract
+                    ? ' Their Syntra login was not created.'
+                    : ''}
+              {' '}Onboarding is incomplete. Review the error before continuing from the saved records.
+            </p>
+            <Link to={`/admin/people/${progress.personId}`} className="underline">
+              Open saved person
+            </Link>
+            {progress.userId && (
+              <Link to={`/admin/users/${progress.userId}`} className="ml-4 underline">
+                Open saved login
+              </Link>
+            )}
           </Alert>
         </div>
       )}
@@ -514,7 +534,7 @@ export function OnboardPersonPage() {
             variant="primary"
             onClick={() => void submit()}
             loading={busy}
-            disabled={busy || unplaced.length > 0}
+            disabled={busy || unplaced.length > 0 || progress?.personId != null}
           >
             Add someone
           </Button>

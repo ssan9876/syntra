@@ -25,6 +25,29 @@ export interface MetricsSnapshot {
   usersActive: number;
   usersInactive: number;
   accountsLocked: number;
+  lifecycleOperationsUnresolved: number;
+  lifecycleOperationsFailed: number;
+  lifecycleOperationsOverdue: number;
+  lifecycleOperationsAwaitingApproval: number;
+  lifecycleOperationsSloBreached: number;
+  /** Age of the oldest unresolved lifecycle operation, installation-wide. Null when none. */
+  lifecycleOldestUnresolvedAgeSeconds: number | null;
+  /** Receipts stepping back from a saturated tenant right now. */
+  lifecycleReceiptsDeferred: number;
+  /** Fraction of lifecycle operations resolved in the last day that needed more than one attempt. Null when none resolved. */
+  lifecycleRetryRate: number | null;
+  /** Provisioning actions that exhausted their retries and wait for the next run: the dead-letter equivalent. */
+  provisionActionsPendingRetry: number;
+  provisionActionsFailed24h: number;
+  provisionRunsFailed24h: number;
+  /** Enabled, scheduled targets whose last run is older than a day, or that never ran. */
+  targetsStale: number;
+  /** Age of the OLDEST current readiness check across targets. Null when no target has one. */
+  readinessFreshnessSeconds: number | null;
+  /** Completed-operation duration quantiles over the last day, by kind. */
+  lifecycleOperationDurationSeconds: { kind: string; quantile: string; seconds: number }[];
+  /** Applied-receipt duration quantiles over the last day, by target TYPE (never by target id). */
+  targetOperationDurationSeconds: { targetType: string; quantile: string; seconds: number }[];
   /** Null when pg-boss has never created its schema in this database. */
   jobsPending: number | null;
   /** Null when no signing key exists yet. */
@@ -85,10 +108,28 @@ export async function collectMetrics(now: Date = new Date()): Promise<MetricsSna
     usersActive: 0,
     usersInactive: 0,
     accountsLocked: 0,
+    lifecycleOperationsUnresolved: 0,
+    lifecycleOperationsFailed: 0,
+    lifecycleOperationsOverdue: 0,
+    lifecycleOperationsAwaitingApproval: 0,
+    lifecycleOperationsSloBreached: 0,
+    lifecycleReceiptsDeferred: 0,
+    provisionActionsPendingRetry: 0,
+    provisionActionsFailed24h: 0,
+    provisionRunsFailed24h: 0,
+    targetsStale: 0,
   };
 
   const totals = { ...zero };
   let nearestExpiry: Date | null = null;
+  let oldestUnresolved: Date | null = null;
+  let oldestReadiness: Date | null = null;
+  let anyReadiness = false;
+  let resolvedDay = 0;
+  let retriedDay = 0;
+  const durations = new Map<string, number[]>();
+  const receiptDurations = new Map<string, number[]>();
+  const dayAgo = new Date(now.getTime() - 86_400_000);
 
   for (const tenant of tenants) {
     const [
@@ -100,6 +141,9 @@ export async function collectMetrics(now: Date = new Date()): Promise<MetricsSna
       active,
       inactive,
       locked,
+      lifecycleUnresolved,
+      lifecycleFailed,
+      lifecycleOverdue,
       key,
     ] = await withTenant(tenant.id, (tx) =>
       Promise.all([
@@ -128,6 +172,17 @@ export async function collectMetrics(now: Date = new Date()): Promise<MetricsSna
             OR: [{ lockedUntil: null }, { lockedUntil: { gt: now } }],
           },
         }),
+        tx.lifecycleOperation.count({
+          where: { status: { notIn: ['completed', 'cancelled'] } },
+        }),
+        tx.lifecycleOperation.count({ where: { status: 'failed' } }),
+        tx.lifecycleOperation.count({
+          where: {
+            status: { notIn: ['completed', 'cancelled'] },
+            dueAt: { lt: now },
+            acknowledgedAt: null,
+          },
+        }),
         tx.signingKey.findFirst({
           where: { status: 'active' },
           orderBy: { notAfter: 'asc' },
@@ -135,6 +190,81 @@ export async function collectMetrics(now: Date = new Date()): Promise<MetricsSna
         }),
       ]),
     );
+    const capacity = await withTenant(tenant.id, async (tx) => {
+      const [awaiting, breached, oldest, deferred, pendingRetry, failedActions, failedRuns, targets, resolved, applied] =
+        await Promise.all([
+          tx.lifecycleOperation.count({ where: { status: 'awaiting_approval' } }),
+          tx.lifecycleOperation.count({
+            where: {
+              status: { notIn: ['completed', 'cancelled', 'rejected'] },
+              OR: [{ sloBreachedAt: { not: null } }, { sloDeadlineAt: { lt: now } }],
+            },
+          }),
+          tx.lifecycleOperation.findFirst({
+            where: { status: { notIn: ['completed', 'cancelled', 'rejected'] } },
+            orderBy: { createdAt: 'asc' },
+            select: { createdAt: true },
+          }),
+          tx.personProvisionReceipt.count({ where: { status: 'deferred' } }),
+          tx.provisionAction.count({ where: { status: 'pending_retry' } }),
+          tx.provisionAction.count({ where: { status: 'failed', createdAt: { gte: dayAgo } } }),
+          tx.provisionRun.count({ where: { status: 'failed', startedAt: { gte: dayAgo } } }),
+          tx.targetSystem.findMany({
+            where: { enabled: true, schedule: { not: null } },
+            select: { id: true, lastRunAt: true },
+          }),
+          tx.lifecycleOperation.findMany({
+            where: { completedAt: { gte: dayAgo }, status: { in: ['completed', 'failed'] } },
+            select: { kind: true, attempt: true, createdAt: true, completedAt: true },
+          }),
+          tx.personProvisionReceipt.findMany({
+            where: { status: 'applied', updatedAt: { gte: dayAgo } },
+            select: { targetSystemId: true, createdAt: true, updatedAt: true },
+          }),
+        ]);
+      const targetTypes = new Map(
+        (await tx.targetSystem.findMany({ select: { id: true, type: true } })).map((t) => [t.id, t.type]),
+      );
+      const readiness = await tx.connectionReadinessCheck.groupBy({
+        by: ['systemId'],
+        where: { systemKind: 'target', systemId: { in: targets.map((t) => t.id) } },
+        _max: { checkedAt: true },
+      });
+      return { awaiting, breached, oldest, deferred, pendingRetry, failedActions, failedRuns, targets, resolved, applied, targetTypes, readiness };
+    });
+    totals.lifecycleOperationsAwaitingApproval += capacity.awaiting;
+    totals.lifecycleOperationsSloBreached += capacity.breached;
+    totals.lifecycleReceiptsDeferred += capacity.deferred;
+    totals.provisionActionsPendingRetry += capacity.pendingRetry;
+    totals.provisionActionsFailed24h += capacity.failedActions;
+    totals.provisionRunsFailed24h += capacity.failedRuns;
+    totals.targetsStale += capacity.targets.filter(
+      (target) => target.lastRunAt === null || target.lastRunAt < dayAgo,
+    ).length;
+    if (capacity.oldest && (oldestUnresolved === null || capacity.oldest.createdAt < oldestUnresolved)) {
+      oldestUnresolved = capacity.oldest.createdAt;
+    }
+    for (const row of capacity.readiness) {
+      const checkedAt = row._max.checkedAt;
+      if (!checkedAt) continue;
+      anyReadiness = true;
+      if (oldestReadiness === null || checkedAt < oldestReadiness) oldestReadiness = checkedAt;
+    }
+    for (const operation of capacity.resolved) {
+      resolvedDay += 1;
+      if (operation.attempt > 1) retriedDay += 1;
+      if (operation.completedAt) {
+        const list = durations.get(operation.kind) ?? [];
+        list.push((operation.completedAt.getTime() - operation.createdAt.getTime()) / 1000);
+        durations.set(operation.kind, list);
+      }
+    }
+    for (const receipt of capacity.applied) {
+      const type = capacity.targetTypes.get(receipt.targetSystemId) ?? 'unknown';
+      const list = receiptDurations.get(type) ?? [];
+      list.push((receipt.updatedAt.getTime() - receipt.createdAt.getTime()) / 1000);
+      receiptDurations.set(type, list);
+    }
 
     totals.webhookDeliveriesPending += webhookPending;
     totals.webhookDeliveriesAbandoned += webhookAbandoned;
@@ -144,6 +274,9 @@ export async function collectMetrics(now: Date = new Date()): Promise<MetricsSna
     totals.usersActive += active;
     totals.usersInactive += inactive;
     totals.accountsLocked += locked;
+    totals.lifecycleOperationsUnresolved += lifecycleUnresolved;
+    totals.lifecycleOperationsFailed += lifecycleFailed;
+    totals.lifecycleOperationsOverdue += lifecycleOverdue;
 
     // The NEAREST expiry across the installation, because one tenant's key
     // expiring is one tenant's outage and the alert should fire for it.
@@ -152,8 +285,27 @@ export async function collectMetrics(now: Date = new Date()): Promise<MetricsSna
     }
   }
 
+  const quantiles = <K extends string>(source: Map<string, number[]>, label: K) =>
+    [...source].flatMap(([key, values]) => {
+      const sorted = [...values].sort((a, b) => a - b);
+      const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
+      return [
+        { [label]: key, quantile: '0.5', seconds: at(0.5) },
+        { [label]: key, quantile: '0.95', seconds: at(0.95) },
+      ] as ({ [P in K]: string } & { quantile: string; seconds: number })[];
+    });
+
   return {
     ...totals,
+    lifecycleOldestUnresolvedAgeSeconds:
+      oldestUnresolved === null ? null : Math.max(0, Math.floor((now.getTime() - oldestUnresolved.getTime()) / 1000)),
+    lifecycleRetryRate: resolvedDay === 0 ? null : retriedDay / resolvedDay,
+    readinessFreshnessSeconds:
+      !anyReadiness || oldestReadiness === null
+        ? null
+        : Math.max(0, Math.floor((now.getTime() - oldestReadiness.getTime()) / 1000)),
+    lifecycleOperationDurationSeconds: quantiles(durations, 'kind'),
+    targetOperationDurationSeconds: quantiles(receiptDurations, 'targetType'),
     jobsPending: await pendingJobs(),
     signingKeyExpiresInSeconds:
       nearestExpiry === null

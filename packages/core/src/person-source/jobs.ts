@@ -29,8 +29,8 @@ export interface SchedulablePersonSource {
  * records: pg-boss keys its schedule table on `(name, key)`, so two sources
  * scheduled without one are the same row and all but the last stop running.
  */
-function scheduleKey(tenantId: string, sourceId: string): string {
-  return `${tenantId}:${sourceId}`;
+export function personSourceScheduleKey(tenantId: string, sourceId: string): string {
+  return `${tenantId}/${sourceId}`;
 }
 
 /**
@@ -81,7 +81,7 @@ export async function applyPersonSourceSchedule(
   tenantId: string,
   source: SchedulablePersonSource,
 ): Promise<void> {
-  const key = scheduleKey(tenantId, source.id);
+  const key = personSourceScheduleKey(tenantId, source.id);
 
   if (!source.enabled || !source.schedule) {
     await scheduler.unschedule(PERSON_IMPORT_JOB, key);
@@ -101,7 +101,7 @@ export async function removePersonSourceSchedule(
   tenantId: string,
   sourceId: string,
 ): Promise<void> {
-  await scheduler.unschedule(PERSON_IMPORT_JOB, scheduleKey(tenantId, sourceId));
+  await scheduler.unschedule(PERSON_IMPORT_JOB, personSourceScheduleKey(tenantId, sourceId));
 }
 
 /**

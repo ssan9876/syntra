@@ -1,7 +1,96 @@
 import { useState } from 'react';
-import { Alert, Button, Field } from '@syntra/ui';
+import { Alert, Button, Field, Select } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
-import { parseDocument } from './target-form.js';
+import { ENTRA_CORRELATION_FIELDS, parseDocument } from './target-form.js';
+
+/**
+ * Configuring the native Microsoft Entra ID connector.
+ *
+ * Three identifiers and one secret. The tenant and client ids are ordinary
+ * configuration (they appear in exports); the client secret goes to the
+ * vault and is never shown again. The correlation field is where the
+ * connector records which ProvisionAction created a user -- it is written
+ * once, on create, and is what makes a retried create find the object the
+ * first attempt made instead of making a second one.
+ */
+export function EntraConnectorFields({
+  isNew,
+  tenantId,
+  clientId,
+  credential,
+  correlationField,
+  onTenantIdChange,
+  onClientIdChange,
+  onCredentialChange,
+  onCorrelationFieldChange,
+  mark,
+}: {
+  isNew: boolean;
+  tenantId: string;
+  clientId: string;
+  credential: string;
+  correlationField: string;
+  onTenantIdChange(value: string): void;
+  onClientIdChange(value: string): void;
+  onCredentialChange(value: string): void;
+  onCorrelationFieldChange(value: string): void;
+  mark(field: string): { error?: string };
+}) {
+  return (
+    <>
+      <Field
+        label="Directory (tenant) ID"
+        value={tenantId}
+        onChange={onTenantIdChange}
+        autoComplete="off"
+        {...mark('tenantId')}
+      />
+      <Field
+        label="Application (client) ID"
+        value={clientId}
+        onChange={onClientIdChange}
+        autoComplete="off"
+        {...mark('clientId')}
+      />
+      <Field
+        label="Application client secret"
+        type="password"
+        autoComplete="new-password"
+        value={credential}
+        onChange={onCredentialChange}
+        {...mark('bindPassword')}
+      />
+      <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
+        The tenant is the directory id or a verified domain such as
+        contoso.onmicrosoft.com; a domain lets a correlation key without one be
+        completed. Neither id is a secret.{' '}
+        {isNew
+          ? 'The client secret is stored encrypted by Syntra and never shown again.'
+          : 'Leave the secret blank to keep the stored one; typing a new one rotates it and records a readiness check.'}
+      </p>
+      <Select
+        label="Correlation field"
+        value={correlationField}
+        onChange={onCorrelationFieldChange}
+        options={ENTRA_CORRELATION_FIELDS.map((value) => ({ value, label: value }))}
+        {...mark('correlationField')}
+      />
+      <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
+        The correlation field holds the id of the action that created a user. It is written once, on create, and never by an update.
+      </p>
+      <p className="sm:col-span-2 text-sm text-ink-muted">
+        Grant the app registration these application permissions, with admin
+        consent, and no more: <code>User.ReadWrite.All</code>,{' '}
+        <code>GroupMember.ReadWrite.All</code> and <code>Group.Read.All</code>.
+        Graph does not publish effective permissions, so the connection test
+        reports every right as unchecked; the readiness check is where consent
+        is recorded. Only direct memberships of assigned security groups are
+        managed. Nested and dynamic groups are not, and there is no setting
+        that makes them so.
+      </p>
+    </>
+  );
+}
 
 /**
  * Configuring a REST API target.
@@ -21,17 +110,25 @@ export function HttpConnectorFields({
   documentKey,
   documentJson,
   credential,
+  entraTenantId,
+  entraClientId,
   onPick,
   onDocumentChange,
   onCredentialChange,
+  onEntraTenantIdChange,
+  onEntraClientIdChange,
 }: {
   isNew: boolean;
   documentKey: string;
   documentJson: string;
   credential: string;
+  entraTenantId: string;
+  entraClientId: string;
   onPick(key: string, document: Record<string, unknown>): void;
   onDocumentChange(value: string): void;
   onCredentialChange(value: string): void;
+  onEntraTenantIdChange(value: string): void;
+  onEntraClientIdChange(value: string): void;
 }) {
   const { data } = useApiResource<{
     documents: { key: string; name: string; document: Record<string, unknown> }[];
@@ -41,6 +138,7 @@ export function HttpConnectorFields({
   const documents = data?.documents ?? [];
   const parsed = parseDocument(documentJson);
   const unreadable = documentJson.trim() !== '' && parsed === null;
+  const isEntra = documentKey === 'entra-id' || parsed?.name === 'Microsoft Entra ID';
 
   return (
     <div className="sm:col-span-2 space-y-4">
@@ -60,13 +158,38 @@ export function HttpConnectorFields({
         </div>
       </div>
 
+      {isEntra && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Directory (tenant) ID"
+            value={entraTenantId}
+            onChange={onEntraTenantIdChange}
+            autoComplete="off"
+          />
+          <Field
+            label="Application (client) ID"
+            value={entraClientId}
+            onChange={onEntraClientIdChange}
+            autoComplete="off"
+          />
+          <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
+            These identify the directory and app registration; neither is a secret.
+          </p>
+        </div>
+      )}
+
       <Field
-        label="Client secret"
+        label={isEntra ? 'Application client secret' : 'Client secret'}
         type="password"
         autoComplete="new-password"
         value={credential}
         onChange={onCredentialChange}
       />
+      {isEntra && (
+        <p className="-mt-2 text-sm text-ink-muted">
+          Stored encrypted by Syntra and never shown again.
+        </p>
+      )}
 
       <div>
         <Button type="button" variant="ghost" onClick={() => setShowJson(!showJson)}>

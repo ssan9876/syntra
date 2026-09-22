@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '@syntra/db';
 import { syncScheduleKey } from '../sync/jobs.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
+import { applyPersonSourceSchedule, PERSON_IMPORT_JOB, personSourceScheduleKey } from '../person-source/jobs.js';
 
 let scheduler: Scheduler;
 
@@ -27,6 +28,31 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 20_000) => {
 };
 
 describe('scheduler', () => {
+  it('registers and removes an HR import schedule using the real pg-boss validator', async () => {
+    const tenantId = '11111111-1111-4111-8111-111111111111';
+    const sourceId = '22222222-2222-4222-8222-222222222222';
+    const key = personSourceScheduleKey(tenantId, sourceId);
+    scheduler.register(PERSON_IMPORT_JOB, async () => {});
+    await scheduler.start();
+    try {
+      await applyPersonSourceSchedule(scheduler, tenantId, {
+        id: sourceId, enabled: true, schedule: '0 0 1 1 *',
+      });
+      const rows = await prisma.$queryRaw<{ key: string }[]>`
+        SELECT key FROM pgboss.schedule WHERE name = ${PERSON_IMPORT_JOB} AND key = ${key}
+      `;
+      expect(rows).toEqual([{ key }]);
+      await applyPersonSourceSchedule(scheduler, tenantId, {
+        id: sourceId, enabled: false, schedule: '0 0 1 1 *',
+      });
+      expect(await prisma.$queryRaw`
+        SELECT key FROM pgboss.schedule WHERE name = ${PERSON_IMPORT_JOB} AND key = ${key}
+      `).toEqual([]);
+    } finally {
+      await scheduler.unschedule(PERSON_IMPORT_JOB, key);
+    }
+  });
+
   it('runs an enqueued job', async () => {
     const seen: string[] = [];
     scheduler.register<{ value: string }>('test.echo', async (data) => {

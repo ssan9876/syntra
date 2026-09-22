@@ -1,5 +1,6 @@
 services:
   postgres:
+    restart: unless-stopped
     image: postgres:16
     environment:
       POSTGRES_USER: syntra
@@ -19,6 +20,7 @@ services:
       retries: 20
 
   api:
+    restart: unless-stopped
     # `image` lets `docker compose up` PULL a published release instead of
     # building one; `build` stays alongside it so `docker compose up --build`
     # still builds from source (Compose prefers a local build to a pull only
@@ -70,6 +72,7 @@ services:
         condition: service_healthy
 
   web:
+    restart: unless-stopped
     # See the api service's comment above: image for pull-and-run, build kept
     # for --build. Same tag, same default.
     image: ghcr.io/ssan9876/syntra-web:${SYNTRA_VERSION:-latest}

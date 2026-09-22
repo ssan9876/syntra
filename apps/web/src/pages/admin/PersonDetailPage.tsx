@@ -14,6 +14,9 @@ import {
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { StatusToggle } from './StatusToggle.js';
+import { EmployeeOffboarding } from './EmployeeOffboarding.js';
+import { PersonProvisionReceipts } from './PersonProvisionReceipts.js';
+import { EmployeeMover } from './EmployeeMover.js';
 import { SubjectLog } from './SubjectLog.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
 
@@ -130,13 +133,21 @@ export function PersonDetailPage() {
                 Edit
               </Button>
             )}
-            <StatusToggle
-              active={data.status === 'active'}
-              basePath={`/api/admin/persons/${data.id}`}
-              label="person"
-              consequences="Contracts end today. Sign-in accounts are not changed."
-              onChanged={reload}
-            />
+            {data.status === 'active' ? (
+              <EmployeeOffboarding
+                personId={data.id}
+                personName={`${data.givenName} ${data.familyName}`}
+                onChanged={reload}
+              />
+            ) : (
+              <StatusToggle
+                active={false}
+                basePath={`/api/admin/persons/${data.id}`}
+                label="person"
+                consequences="This makes the person active again. It does not restore revoked sessions or automatically re-enable every target account."
+                onChanged={reload}
+              />
+            )}
           </>
         }
       />
@@ -584,6 +595,16 @@ export function PersonDetailPage() {
             />
           </div>
         </Panel>
+
+        {data.contracts.find((contract) => contract.isPrimary) && (
+          <EmployeeMover
+            personId={data.id}
+            contract={data.contracts.find((contract) => contract.isPrimary)!}
+            onApplied={reload}
+          />
+        )}
+
+        <PersonProvisionReceipts personId={data.id} />
 
         {/*
           The person AND every account linked to them. A person's own record

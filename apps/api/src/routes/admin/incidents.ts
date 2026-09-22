@@ -15,7 +15,10 @@ import { requirePermission } from '../../plugins/require-permission.js';
  * disappears when the thing behind it is fixed and not before, so the page
  * cannot be made to look clean by anybody except by making it true.
  */
-export async function registerAdminIncidentRoutes(app: FastifyInstance): Promise<void> {
+export async function registerAdminIncidentRoutes(
+  app: FastifyInstance,
+  options: { schedulerRunning?: () => boolean } = {},
+): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
   app.get(
@@ -24,6 +27,17 @@ export async function registerAdminIncidentRoutes(app: FastifyInstance): Promise
     async (request) => {
       const now = new Date();
       const incidents = await request.db((tx) => listIncidents(tx, now));
+      if (options.schedulerRunning && !options.schedulerRunning()) {
+        incidents.unshift({
+          kind: 'scheduler_unavailable',
+          severity: 'critical',
+          title: 'Background work is unavailable',
+          detail: 'The job scheduler has not started. Automatic startup retries are in progress; check the server logs if this persists.',
+          count: 1,
+          lastAt: null,
+          href: '/admin/incidents',
+        });
+      }
       return {
         incidents: incidents.map((incident) => ({
           ...incident,

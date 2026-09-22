@@ -184,6 +184,9 @@ Process and runtime metrics — heap, CPU, event-loop lag — plus:
 | `syntra_sessions_active` | |
 | `syntra_users_total{status}` | Accounts, active and inactive |
 | `syntra_accounts_locked` | A lockout spike, before the tickets arrive |
+| `syntra_lifecycle_operations_unresolved` | Lifecycle work still in progress or awaiting verification |
+| `syntra_lifecycle_operations_failed` | Lifecycle work requiring recovery |
+| `syntra_lifecycle_operations_overdue` | Unacknowledged lifecycle work past its due date |
 | `syntra_signing_key_expires_in_seconds` | The nearest signing key's expiry |
 | `syntra_audit_events_total{action,outcome}` | Security events, by kind |
 | `syntra_readiness` | The same probe `/health/ready` runs |
@@ -195,6 +198,12 @@ above zero each mean something that was supposed to leave the building did not.
 scheduled monthly and its failure is completely silent until every token stops
 verifying at once. `syntra_readiness` at 0 is the process telling you it cannot
 do its job.
+
+`ops/prometheus-alerts.yml` is an installation-wide starter rule group. Load it
+into Alertmanager/Prometheus and route its alerts to the operations channel;
+the lifecycle rules intentionally name no tenant because metrics expose no
+tenant labels. Use the authenticated employee-work queue to identify the owner
+and record.
 
 Two metrics are **absent rather than zero** when the answer is unknown:
 `syntra_jobs_pending` where the scheduler has never run, and
@@ -491,6 +500,29 @@ argon2, and the install looks clean until nothing can reach the database.
 [Continuous integration](#continuous-integration) above for the vitest worker
 count issue (`SYNTRA_TEST_WORKERS`) and its two different correct values on a
 workstation versus a two-vCPU CI runner.
+
+## Runbooks
+
+Step-by-step procedures for the situations this page describes, written
+against the scripts and routes in this repository, live under
+[`docs/runbooks/`](runbooks/README.md):
+
+- [Backup and restore](runbooks/backup-and-restore.md) — the `syntra-backup`
+  procedures, a restore rehearsal in isolation, and a before/after
+  reconciliation checklist.
+- [Master-key recovery](runbooks/master-key-recovery.md) — a wrong or lost
+  `MASTER_KEY`, the fingerprint refusal, and the full list of secrets that
+  would have to be re-entered.
+- [Database migration](runbooks/database-migration.md) — the release layout,
+  compose and Helm paths, the migration-name floor, and rollback by restore.
+- [Secret rotation](runbooks/secret-rotation.md) — every rotatable secret and
+  what rotating it does to sessions and integrations.
+- [Incident response](runbooks/incident-response.md) — severity, the first
+  fifteen minutes, evidence capture, and which alert leads where.
+- [Target rollback](runbooks/target-rollback.md) — stopping a target, blocked
+  and partial runs, reverting a mover, and what cannot be undone.
+- [Tabletop exercises](runbooks/tabletop-exercises.md) — four rehearsed
+  incidents with scorecards.
 
 ## Further reading
 

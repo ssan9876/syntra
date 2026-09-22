@@ -6,7 +6,7 @@ import {
   resetSecurityEventCounts,
 } from '@syntra/core';
 import { withTenant } from '@syntra/db';
-import { buildTestApp, TEST_HOST } from '../test-support.js';
+import { buildTestApp, createFakeScheduler, TEST_HOST } from '../test-support.js';
 
 const TOKEN = 'a-long-enough-metrics-token';
 
@@ -53,6 +53,20 @@ describe('when no token is configured', () => {
 
 describe('when a token is configured', () => {
   beforeEach(withMetrics);
+
+  it('reports scheduler recovery separately from readiness', async () => {
+    await ctx.app.close();
+    let running = false;
+    const scheduler = createFakeScheduler();
+    ctx = await buildTestApp({
+      env: { METRICS_TOKEN: TOKEN },
+      scheduler: () => running ? scheduler : null,
+    });
+    expect((await scrape()).body).toMatch(/^syntra_scheduler_running 0$/m);
+    running = true;
+    expect((await scrape()).body).toMatch(/^syntra_scheduler_running 1$/m);
+    await ctx.app.close();
+  });
 
   it('refuses a caller with no credential', async () => {
     expect((await scrape(null)).statusCode).toBe(401);
@@ -181,6 +195,9 @@ describe('the installation gauges', () => {
     expect(body).toContain('syntra_logout_deliveries_abandoned');
     expect(body).toContain('syntra_sessions_active');
     expect(body).toContain('syntra_accounts_locked');
+    expect(body).toContain('syntra_lifecycle_operations_unresolved');
+    expect(body).toContain('syntra_lifecycle_operations_failed');
+    expect(body).toContain('syntra_lifecycle_operations_overdue');
     expect(body).toMatch(/syntra_users_total\{status="active"\}/);
   });
 
