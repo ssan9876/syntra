@@ -78,6 +78,22 @@ describe('collectMetrics', () => {
     expect(snapshot.usersInactive).toBe(1);
   });
 
+  it('reports unresolved, failed, and overdue lifecycle work without tenant labels', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.lifecycleOperation.createMany({
+        data: [
+          { tenantId, kind: 'onboard', idempotencyKey: 'metric-waiting', inputFingerprint: 'waiting', status: 'waiting' },
+          { tenantId, kind: 'move', idempotencyKey: 'metric-failed', inputFingerprint: 'failed', status: 'failed', dueAt: new Date('2020-01-01') },
+          { tenantId, kind: 'verify', idempotencyKey: 'metric-done', inputFingerprint: 'done', status: 'completed' },
+        ],
+      }),
+    );
+    const snapshot = await collectMetrics(new Date('2026-01-01'));
+    expect(snapshot.lifecycleOperationsUnresolved).toBe(2);
+    expect(snapshot.lifecycleOperationsFailed).toBe(1);
+    expect(snapshot.lifecycleOperationsOverdue).toBe(1);
+  });
+
   it('counts a lock with no expiry as locked', async () => {
     // The strictest setting: a lock that does not lift itself. Reading a null
     // lockedUntil as "no expiry recorded, so not locked" would turn it into
@@ -200,5 +216,48 @@ describe('cachedMetrics', () => {
     await Promise.all([read(), read(), read()]);
 
     expect(calls).toBe(1);
+  });
+});
+
+describe('capacity and latency telemetry', () => {
+  it('reports approvals, breaches, deferrals, dead letters, stale targets and durations without tenant labels', async () => {
+    const now = new Date('2026-09-21T12:00:00Z');
+    await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({ data: { tenantId, givenName: 'A', familyName: 'B' } });
+      const target = await tx.targetSystem.create({ data: { tenantId, name: 'AD', type: 'activeDirectory', config: { url: 'ldaps://x:636', tlsMode: 'ldaps' }, secretName: 's', schedule: '* * * * *', lastRunAt: new Date('2026-09-01T00:00:00Z') } });
+      await tx.lifecycleOperation.create({ data: { tenantId, kind: 'onboard', idempotencyKey: 'a', inputFingerprint: 'f', input: {}, status: 'awaiting_approval', approvalRequired: true } });
+      await tx.lifecycleOperation.create({ data: { tenantId, kind: 'offboard', idempotencyKey: 'b', inputFingerprint: 'f', input: {}, status: 'running', sloMinutes: 15, sloDeadlineAt: new Date('2026-09-21T11:00:00Z'), createdAt: new Date('2026-09-21T10:00:00Z') } });
+      await tx.lifecycleOperation.create({ data: { tenantId, kind: 'move', idempotencyKey: 'c', inputFingerprint: 'f', input: {}, status: 'completed', attempt: 2, createdAt: new Date('2026-09-21T09:00:00Z'), completedAt: new Date('2026-09-21T09:30:00Z') } });
+      await tx.personProvisionReceipt.create({ data: { tenantId, personId: person.id, targetSystemId: target.id, targetName: 'AD', requestKey: '00000000-0000-4000-8000-000000000003', status: 'deferred' } });
+      await tx.personProvisionReceipt.create({ data: { tenantId, personId: person.id, targetSystemId: target.id, targetName: 'AD', requestKey: '00000000-0000-4000-8000-000000000004', status: 'applied', createdAt: new Date('2026-09-21T11:00:00Z'), updatedAt: new Date('2026-09-21T11:05:00Z') } });
+      const run = await tx.provisionRun.create({ data: { tenantId, targetSystemId: target.id, status: 'failed', startedAt: new Date('2026-09-21T11:00:00Z') } });
+      await tx.provisionAction.create({ data: { tenantId, runId: run.id, actionType: 'create_account', status: 'pending_retry' } });
+      await tx.connectionReadinessCheck.create({ data: { tenantId, systemKind: 'target', systemId: target.id, configurationFingerprint: 'x', status: 'passed', checkedAt: new Date('2026-09-20T12:00:00Z') } });
+    });
+    const snapshot = await collectMetrics(now);
+    expect(snapshot.lifecycleOperationsAwaitingApproval).toBe(1);
+    expect(snapshot.lifecycleOperationsSloBreached).toBe(1);
+    expect(snapshot.lifecycleReceiptsDeferred).toBe(1);
+    expect(snapshot.provisionActionsPendingRetry).toBe(1);
+    expect(snapshot.provisionRunsFailed24h).toBe(1);
+    expect(snapshot.targetsStale).toBe(1);
+    expect(snapshot.lifecycleOldestUnresolvedAgeSeconds).toBe(2 * 3600);
+    expect(snapshot.readinessFreshnessSeconds).toBe(24 * 3600);
+    expect(snapshot.lifecycleRetryRate).toBe(1);
+    expect(snapshot.lifecycleOperationDurationSeconds).toEqual([
+      { kind: 'move', quantile: '0.5', seconds: 1800 },
+      { kind: 'move', quantile: '0.95', seconds: 1800 },
+    ]);
+    expect(snapshot.targetOperationDurationSeconds).toEqual([
+      { targetType: 'activeDirectory', quantile: '0.5', seconds: 300 },
+      { targetType: 'activeDirectory', quantile: '0.95', seconds: 300 },
+    ]);
+  });
+
+  it('publishes null, not zero, for ages nothing can answer', async () => {
+    const snapshot = await collectMetrics();
+    expect(snapshot.lifecycleOldestUnresolvedAgeSeconds).toBeNull();
+    expect(snapshot.readinessFreshnessSeconds).toBeNull();
+    expect(snapshot.lifecycleRetryRate).toBeNull();
   });
 });

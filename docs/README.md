@@ -9,6 +9,10 @@
 - [lab/](lab/) — a complete worked build: Syntra over HTTPS, an Active
   Directory domain behind it, sync in both directions, and SAML single
   sign-on to a third-party application.
+- [runbooks/](runbooks/README.md) — operational procedures: backup and
+  restore, master-key recovery, database migration, secret rotation,
+  incident response, target rollback, and tabletop exercises; with an on-call
+  quick reference mapping each alert to its runbook.
 - [superpowers/](superpowers/) — design and plan documents.
 
 Start at the [repository README](../README.md) for what Syntra is and how it

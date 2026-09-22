@@ -223,6 +223,19 @@ export async function verifyChain(tx: TenantClient): Promise<ChainResult> {
   const events = await tx.auditEvent.findMany({ orderBy: { sequence: 'asc' } });
 
   let expectedPrev = GENESIS_HASH;
+  // A log that no longer starts at sequence 1 has been pruned by retention,
+  // which only ever removes events at or before a verified checkpoint. The
+  // checkpoint immediately before the first surviving event is the seed; a
+  // gap with no checkpoint to anchor it is a break, not a tolerated absence.
+  const first = events[0];
+  if (first !== undefined && first.sequence > 1) {
+    const anchor = await tx.auditCheckpoint.findFirst({
+      where: { sequence: first.sequence - 1 },
+      select: { hash: true },
+    });
+    if (anchor === null) return { valid: false, brokenAtSequence: first.sequence };
+    expectedPrev = anchor.hash;
+  }
   for (const e of events) {
     if (e.prevHash !== expectedPrev) {
       return { valid: false, brokenAtSequence: e.sequence };

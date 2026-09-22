@@ -163,26 +163,31 @@ async function probeMigrations(): Promise<Probe> {
  */
 async function probeVault(provider: MasterKeyProvider): Promise<Probe> {
   try {
-    const tenant = await prisma.tenant.findFirst({ select: { id: true } });
-    if (!tenant) return skip('vault', 'no tenants yet');
+    const tenants = await prisma.tenant.findMany({ select: { id: true } });
+    if (tenants.length === 0) return skip('vault', 'no tenants yet');
 
-    const secretName = await withTenant(tenant.id, async (tx) => {
-      const key = await tx.signingKey.findFirst({
-        where: { status: 'active' },
-        select: { secretName: true },
+    // An empty tenant must not hide a bad master key in an established one.
+    // Sample the first active signing key we find, using each tenant's RLS.
+    for (const tenant of tenants) {
+      const secretName = await withTenant(tenant.id, async (tx) => {
+        const key = await tx.signingKey.findFirst({
+          where: { status: 'active' },
+          select: { secretName: true },
+        });
+        return key?.secretName ?? null;
       });
-      return key?.secretName ?? null;
-    });
-    if (secretName === null) return skip('vault', 'no signing key issued yet');
+      if (secretName === null) continue;
 
-    const unsealed = await withTenant(tenant.id, (tx) =>
-      getSecret(tx, provider, secretName),
-    );
-    // The VALUE is never returned or logged -- only whether it came back.
-    if (unsealed === null) {
-      return fail('vault', 'a signing key names a secret the vault does not hold');
+      const unsealed = await withTenant(tenant.id, (tx) =>
+        getSecret(tx, provider, secretName),
+      );
+      // The VALUE is never returned or logged -- only whether it came back.
+      if (unsealed === null) {
+        return fail('vault', 'a signing key names a secret the vault does not hold');
+      }
+      return pass('vault', 'the master key unseals stored secrets');
     }
-    return pass('vault', 'the master key unseals stored secrets');
+    return skip('vault', 'no signing key issued yet');
   } catch (cause) {
     return fail('vault', `secrets could not be unsealed: ${reason(cause)}`);
   }

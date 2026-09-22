@@ -22,12 +22,16 @@ import {
 } from './document.js';
 import { MISSING, renderBody, renderPath, type TemplateVars } from './template.js';
 
-type Config = HttpTargetConfig & { credential: string };
+// Every target connector is handed its vault value as `bindPassword` by core.
+// HTTP targets do not bind to a directory, but keeping the shared input name
+// here is essential: treating it as a connector-private `credential` field
+// meant OAuth serialised `undefined` as the client_secret.
+type Config = HttpTargetConfig & { bindPassword: string };
 type Resolved = ResolvedHttpTargetConfig & { credential: string };
 
 function normalise(config: Config): Resolved {
-  const { credential, ...rest } = config;
-  return { ...httpTargetConfigSchema.parse(rest), credential };
+  const { bindPassword, ...rest } = config;
+  return { ...httpTargetConfigSchema.parse(rest), credential: bindPassword };
 }
 
 /** A JSON scalar as the single-valued attribute string Syntra stores. */

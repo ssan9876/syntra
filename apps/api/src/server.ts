@@ -1,8 +1,9 @@
 import { prisma } from '@syntra/db';
-import { loadConfig, type Scheduler } from '@syntra/core';
+import { loadConfig } from '@syntra/core';
 import { buildApp } from './app.js';
 import { startSyncScheduler } from './scheduler.js';
 import { shutdownHandler } from './shutdown.js';
+import { schedulerRecovery } from './scheduler-recovery.js';
 
 const config = loadConfig(process.env);
 
@@ -11,14 +12,14 @@ const config = loadConfig(process.env);
 // than at the next restart -- but the scheduler needs the app's logger, and it
 // is allowed to fail to start without keeping the API down. So the app is
 // handed a way to ask for the scheduler, and asks only when a source changes.
-let scheduler: Scheduler | null = null;
-const app = await buildApp(config, { scheduler: () => scheduler });
+const app = await buildApp(config, { scheduler: () => recovery?.current() ?? null });
 
 // Every failure here -- pg-boss unable to start, a bad cron expression on one
 // tenant's source, a transient DB error -- is logged inside
 // startSyncScheduler, which resolves either way and never rejects. Sync being
 // unscheduled must not keep people from signing in.
-scheduler = await startSyncScheduler(config, app.log);
+const recovery = schedulerRecovery(() => startSyncScheduler(config, app.log), app.log);
+app.addHook('onClose', async () => { await recovery?.stop(); });
 
 // Registered BEFORE `listen`, so a container that is killed seconds after it
 // starts still shuts down through this path. Node's default action for either
@@ -26,7 +27,7 @@ scheduler = await startSyncScheduler(config, app.log);
 // mid-directory, and pg-boss left holding the job it was working.
 const shutdown = shutdownHandler({
   app,
-  scheduler: () => scheduler,
+  scheduler: () => recovery?.current() ?? null,
   disconnect: () => prisma.$disconnect(),
 });
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
@@ -34,3 +35,4 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 }
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
+void recovery.start();

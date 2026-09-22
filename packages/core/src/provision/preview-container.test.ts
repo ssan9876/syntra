@@ -33,7 +33,7 @@ async function seedTarget(profile?: {
       data: {
         tenantId,
         name: 'AD',
-        type: 'ad',
+        type: 'activeDirectory',
         // `tlsMode` is not decoration: a check constraint refuses a target
         // configured to reach a directory in the clear.
         config: { tlsMode: 'ldaps', url: 'ldaps://dc.acme.test:636', baseDn: BASE_DN },

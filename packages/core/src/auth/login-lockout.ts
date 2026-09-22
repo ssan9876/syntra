@@ -128,7 +128,7 @@ export async function recordFailure(
 
   // A failure arriving against a lock that has already lifted starts a fresh
   // run too, rather than landing on top of the count that produced the lock.
-  const continuing = existing !== null && !runExpired && !isLocked(existing, now);
+  const continuing = existing !== null && !runExpired && existing.lockedAt === null;
 
   const failedCount = continuing ? existing.failedCount + 1 : 1;
   const firstFailedAt = continuing ? existing.firstFailedAt : now;

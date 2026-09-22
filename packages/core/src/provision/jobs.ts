@@ -7,6 +7,7 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
 import { applyProvisionRun } from './apply.js';
 import { ProvisionRunInFlightError, previewProvisionRun } from './run-service.js';
 import { claimSyntraUsers, enqueuePairedSync } from './syntra-user.js';
+import { PERSON_PROVISION_JOB, runPersonProvision, type PersonProvisionPayload } from './person-receipts.js';
 
 export const PROVISION_JOB = 'provision.run';
 
@@ -465,6 +466,9 @@ export function registerProvisionJobs(
   transport: Transport,
   seams: Omit<RunProvisionJobOptions, 'transport'> = {},
 ): void {
+  scheduler.register<PersonProvisionPayload>(PERSON_PROVISION_JOB, payload =>
+    runPersonProvision(scheduler, provider, payload, { transport, ...(seams.connector ? { connector: seams.connector } : {}) }),
+  );
   scheduler.register<ProvisionJobPayload>(PROVISION_JOB, (payload) =>
     runProvisionJob(scheduler, provider, payload, { ...seams, transport }),
   );

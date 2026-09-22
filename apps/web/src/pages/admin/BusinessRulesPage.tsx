@@ -20,6 +20,9 @@ interface Entitlement {
   displayName: string;
   status: 'present' | 'missing' | 'unreadable' | string;
   holderCount: number;
+  manageable?: boolean;
+  unmanageableReason?: string | null;
+  membershipKind?: string | null;
 }
 
 interface StoredRule {
@@ -269,18 +272,44 @@ const describe = (rule: StoredRule) => describeCondition(rule.condition);
 
 export function BusinessRulesPage() {
   const { id } = useParams<{ id: string }>();
+  return <BusinessRulesEditor key={id} />;
+}
+
+function BusinessRulesEditor() {
+  const { id } = useParams<{ id: string }>();
   const [rules, setRules] = useState<StoredRule[]>([]);
   const [entitlements, setEntitlements] = useState<Entitlement[]>([]);
-  const [draft, setDraft] = useState<Draft>(BLANK);
+  const [entitlementQuery, setEntitlementQuery] = useState('');
+  const [entitlementResults, setEntitlementResults] = useState<Entitlement[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const searchSeq = useRef(0);
+  const [draft, updateDraft] = useState<Draft>(BLANK);
   const [impact, setImpact] = useState<Impact | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<
-    null | 'save' | 'impact' | 'delete' | 'refresh'
+    null | 'save' | 'impact' | 'delete' | 'delete-preview' | 'refresh'
   >(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [loading, setLoading] = useState(true);
+  const previewSeq = useRef(0);
+  const deletePreviewSeq = useRef(0);
+  useEffect(() => () => {
+    previewSeq.current += 1;
+    deletePreviewSeq.current += 1;
+  }, []);
+
+  // Invalidate synchronously in the edit handler, including edits that restore
+  // an earlier value. A response belongs to one draft revision, not just JSON.
+  const setDraft = (next: Draft) => {
+    previewSeq.current += 1;
+    deletePreviewSeq.current += 1;
+    setImpact(null);
+    setPending(null);
+    setBusy((current) => current === 'impact' || current === 'delete-preview' ? null : current);
+    updateDraft(next);
+  };
 
   // Ruling P2's mode decides whether the standing reassurance below is true, so
   // this screen has to know it rather than assume the gentler of the two.
@@ -334,8 +363,41 @@ export function BusinessRulesPage() {
   };
   useEffect(reload, [id]);
 
+  // Server-backed, debounced: a large catalog is searched where it lives
+  // rather than shipped to the browser, and a keystroke that is overtaken
+  // by the next one never paints its answer.
+  useEffect(() => {
+    const q = entitlementQuery.trim();
+    if (q === '') {
+      setEntitlementResults(null);
+      setSearching(false);
+      return;
+    }
+    const seq = ++searchSeq.current;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      api<{ entitlements: Entitlement[] }>(
+        `/api/admin/targets/${id}/entitlements/search?q=${encodeURIComponent(q)}&top=50`,
+      )
+        .then((body) => {
+          if (seq !== searchSeq.current) return;
+          setEntitlementResults(body.entitlements);
+        })
+        .catch(() => {
+          if (seq !== searchSeq.current) return;
+          setEntitlementResults(
+            entitlements.filter((e) => e.displayName.toLowerCase().includes(q.toLowerCase())),
+          );
+        })
+        .finally(() => {
+          if (seq === searchSeq.current) setSearching(false);
+        });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [entitlementQuery, id, entitlements]);
+
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
-    setDraft((current) => ({ ...current, [key]: value }));
+    setDraft({ ...draft, [key]: value });
 
   const mark = (field: string): { error?: string } =>
     invalid[field] ? { error: invalid[field] } : {};
@@ -353,7 +415,9 @@ export function BusinessRulesPage() {
   }
 
   async function onSave() {
+    if ((draft.id !== undefined || authoritative || !target) && !impact) return;
     setBusy('save');
+    setPending(null);
     setInvalid({});
     setProblem(null);
     setNotice(null);
@@ -374,21 +438,21 @@ export function BusinessRulesPage() {
   }
 
   async function onImpact() {
+    const seq = ++previewSeq.current;
     setBusy('impact');
     setInvalid({});
     setProblem(null);
     setImpact(null);
     try {
-      setImpact(
-        await api<Impact>(`/api/admin/targets/${id}/rules/impact`, {
+      const result = await api<Impact>(`/api/admin/targets/${id}/rules/impact`, {
           method: 'POST',
           body: JSON.stringify(bodyOf(draft)),
-        }),
-      );
+        });
+      if (seq === previewSeq.current) setImpact(result);
     } catch (cause) {
-      fail(cause, 'The impact of that rule could not be previewed.');
+      if (seq === previewSeq.current) fail(cause, 'The impact of that rule could not be previewed.');
     } finally {
-      setBusy(null);
+      if (seq === previewSeq.current) setBusy(null);
     }
   }
 
@@ -402,6 +466,8 @@ export function BusinessRulesPage() {
    */
   async function onRefresh() {
     setBusy('refresh');
+    setPending(null);
+    setImpact(null);
     setProblem(null);
     setNotice(null);
     try {
@@ -434,7 +500,8 @@ export function BusinessRulesPage() {
    * destructive action.
    */
   async function onAskDelete(rule: StoredRule) {
-    setBusy('delete');
+    const seq = ++deletePreviewSeq.current;
+    setBusy('delete-preview');
     setProblem(null);
     setPending({ rule, impact: null, impactProblem: null });
     try {
@@ -442,10 +509,9 @@ export function BusinessRulesPage() {
         `/api/admin/targets/${id}/rules/impact`,
         { method: 'POST', body: JSON.stringify(deletionOf(rule)) },
       );
-      setPending({ rule, impact, impactProblem: null });
+      if (seq === deletePreviewSeq.current) setPending({ rule, impact, impactProblem: null });
     } catch (cause) {
-      // Still a confirmation, and a louder one: not knowing the number is a
-      // reason to be more careful, not a reason to skip the question.
+      if (seq !== deletePreviewSeq.current) return;
       setPending({
         rule,
         impact: null,
@@ -455,15 +521,17 @@ export function BusinessRulesPage() {
             : 'The impact of deleting this rule could not be previewed.',
       });
     } finally {
-      setBusy(null);
+      if (seq === deletePreviewSeq.current) setBusy(null);
     }
   }
 
   async function onDelete(ruleId: string) {
+    if (pending?.rule.id !== ruleId || !pending.impact) return;
     setBusy('delete');
     setProblem(null);
     try {
       await api(`/api/admin/rules/${ruleId}`, { method: 'DELETE' });
+      setImpact(null);
       if (draft.id === ruleId) setDraft(BLANK);
       setPending(null);
       reload();
@@ -543,8 +611,8 @@ export function BusinessRulesPage() {
             {pending.impactProblem && (
               <p className="mt-2">
                 What that would cost could not be worked out —{' '}
-                {pending.impactProblem} — so this is being asked without a
-                number behind it.
+                {pending.impactProblem}. Keep the rule and try Delete again
+                to obtain a fresh impact before removing it.
               </p>
             )}
             {pending.rule.grantsAccount && (
@@ -558,8 +626,8 @@ export function BusinessRulesPage() {
               <Button
                 variant="danger"
                 onClick={() => onDelete(pending.rule.id)}
-                loading={busy === 'delete'}
-                disabled={!!busy}
+                loading={busy === 'delete' || busy === 'delete-preview'}
+                disabled={!!busy || !pending.impact}
               >
                 Delete this rule
               </Button>
@@ -672,34 +740,66 @@ export function BusinessRulesPage() {
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {entitlements.map((entitlement) => (
-                    <Check
-                      key={entitlement.id}
-                      checked={draft.entitlementIds.includes(entitlement.id)}
-                      onChange={(checked) =>
-                        set(
-                          'entitlementIds',
-                          checked
-                            ? [...draft.entitlementIds, entitlement.id]
-                            : draft.entitlementIds.filter(
-                                (x) => x !== entitlement.id,
-                              ),
-                        )
-                      }
-                      label={
-                        <>
-                          {entitlement.displayName}
-                          {entitlement.status !== 'present' && (
-                            <span className="ml-2 text-danger">
-                              ({entitlement.status} — a rule naming it makes
-                              every person it is evaluated against
-                              unprocessable)
-                            </span>
-                          )}
-                        </>
-                      }
-                    />
-                  ))}
+                  <Field
+                    label="Search entitlements"
+                    value={entitlementQuery}
+                    onChange={setEntitlementQuery}
+                    placeholder="Type part of a group name"
+                    warning={searching ? 'Searching…' : undefined}
+                  />
+                  <p className="text-sm text-muted">
+                    Groups without a note are direct-membership groups Syntra can manage. Dynamic or unsupported groups are marked and cannot be selected.
+                  </p>
+                  {(() => {
+                    const shown = entitlementResults ?? entitlements;
+                    // What is selected stays visible even when the search
+                    // no longer returns it: a choice must be inspectable to
+                    // be reversible.
+                    const selectedHidden = entitlements.filter(
+                      (e) => draft.entitlementIds.includes(e.id) && !shown.some((s) => s.id === e.id),
+                    );
+                    const rows = [...selectedHidden, ...shown];
+                    if (rows.length === 0) {
+                      return <p className="text-muted">No entitlement matches that search.</p>;
+                    }
+                    return rows.map((entitlement) => {
+                      const unmanageable = entitlement.manageable === false;
+                      return (
+                        <Check
+                          key={entitlement.id}
+                          checked={draft.entitlementIds.includes(entitlement.id)}
+                          disabled={unmanageable && !draft.entitlementIds.includes(entitlement.id)}
+                          onChange={(checked) =>
+                            set(
+                              'entitlementIds',
+                              checked
+                                ? [...draft.entitlementIds, entitlement.id]
+                                : draft.entitlementIds.filter(
+                                    (x) => x !== entitlement.id,
+                                  ),
+                            )
+                          }
+                          label={
+                            <>
+                              {entitlement.displayName}
+                              {entitlement.membershipKind === 'dynamic' || unmanageable ? (
+                                <span className="ml-2 text-muted">
+                                  ({entitlement.membershipKind === 'dynamic' ? 'dynamic membership — ' : ''}not manageable by Syntra{entitlement.unmanageableReason ? `: ${entitlement.unmanageableReason}` : ''})
+                                </span>
+                              ) : null}
+                              {entitlement.status !== 'present' && (
+                                <span className="ml-2 text-danger">
+                                  ({entitlement.status} — a rule naming it makes
+                                  every person it is evaluated against
+                                  unprocessable)
+                                </span>
+                              )}
+                            </>
+                          }
+                        />
+                      );
+                    });
+                  })()}
                 </div>
               )}
             </fieldset>
@@ -716,11 +816,15 @@ export function BusinessRulesPage() {
                 variant="primary"
                 onClick={onSave}
                 loading={busy === 'save'}
-                disabled={!!busy}
+                disabled={!!busy || ((draft.id !== undefined || authoritative || !target) && !impact)}
               >
                 Save rule
               </Button>
             </div>
+
+            {(draft.id !== undefined || authoritative || !target) && !impact && (
+              <p className="text-muted">Preview the current rule before saving changes that may remove access.</p>
+            )}
 
             {impact && (
               <div className="rounded-panel border border-border-subtle p-4">

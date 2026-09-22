@@ -54,6 +54,32 @@ async function fillMinimum(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => vi.restoreAllMocks());
 
 describe('OnboardPersonPage', () => {
+  it.each(['link', 'provision'])('reports the saved login after a %s failure and prevents duplicate creation', async (failure) => {
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () => json({ targets: [{ id: 't1', name: 'AD', enabled: true }] }),
+      '/api/admin/persons': () => json({ id: 'p1' }, 201),
+      '/api/admin/persons/p1/contracts': () => json({ id: 'c1' }, 201),
+      '/api/admin/users': () => json({ id: 'u1' }, 201),
+      '/api/admin/persons/p1/link-user': () => failure === 'link'
+        ? problem(500, 'Link failed') : json({ ok: true }),
+      '/api/admin/persons/p1/provision-receipts': () => problem(503, 'Provisioning unavailable'),
+    });
+    renderPage();
+    await fillMinimum(user);
+    await user.click(screen.getByLabelText('Also create a Syntra login'));
+    await user.type(screen.getByLabelText('Login'), 'mokafor');
+    await user.type(screen.getByLabelText('Email'), 'maya@acme.test');
+    await user.click(screen.getByRole('button', { name: 'Add someone' }));
+    expect(await screen.findByText(/Their Syntra login was created/)).toHaveTextContent(
+      failure === 'link' ? 'could not be linked' : 'created and linked',
+    );
+    expect(screen.getByRole('link', { name: 'Open saved person' })).toHaveAttribute('href', '/admin/people/p1');
+    expect(screen.getByRole('link', { name: 'Open saved login' })).toHaveAttribute('href', '/admin/users/u1');
+    expect(screen.getByRole('button', { name: 'Add someone' })).toBeDisabled();
+  });
+
   it('creates the person, then their contract, in that order', async () => {
     const user = userEvent.setup();
     const calls: string[] = [];
@@ -191,37 +217,18 @@ describe('OnboardPersonPage', () => {
     await waitFor(() => expect(calls).toEqual(['person', 'contract']));
   });
 
-  it('applies only the new person actions and leaves the rest of the run alone', async () => {
+  it('queues a durable receipt for only the new person and target', async () => {
     const user = userEvent.setup();
-    let applied: unknown = null;
-    let listed = 0;
+    let requested: unknown = null;
     mockRoutes({
       '/api/admin/org-units': () => json({ orgUnits: [] }),
       '/api/admin/targets': () =>
         json({ targets: [{ id: 't1', name: 'AD', enabled: true }] }),
       '/api/admin/persons': () => json({ id: 'p1' }, 201),
       '/api/admin/persons/p1/contracts': () => json({ id: 'c1' }, 201),
-      '/api/admin/targets/t1/runs': (init) => {
-        if (init?.method === 'POST') return json({ jobId: 'j1' }, 202);
-        listed += 1;
-        // The FIRST read happens before the run is enqueued and returns the
-        // previous run, which must not be mistaken for this one.
-        return listed === 1
-          ? json({ runs: [{ id: 'r0', status: 'previewed' }] })
-          : json({ runs: [{ id: 'r1', status: 'previewed' }] });
-      },
-      '/api/admin/targets/t1/runs/r1': () =>
-        json({
-          id: 'r1',
-          status: 'previewed',
-          actions: [
-            { id: 'a1', personId: 'p1', actionType: 'create_account' },
-            { id: 'a2', personId: 'p9', actionType: 'disable_account' },
-          ],
-        }),
-      '/api/admin/targets/t1/runs/r1/apply': (init) => {
-        applied = JSON.parse(String(init?.body));
-        return json({ ok: true });
+      '/api/admin/persons/p1/provision-receipts': (init) => {
+        requested = JSON.parse(String(init?.body));
+        return json({ receipts: [{ id: 'receipt-1', personId: 'p1', targetSystemId: 't1', status: 'pending' }] }, 202);
       },
     });
 
@@ -229,16 +236,11 @@ describe('OnboardPersonPage', () => {
     await fillMinimum(user);
     await user.click(screen.getByRole('button', { name: 'Add someone' }));
 
-    // a2 belongs to somebody else. Applying the run wholesale would have
-    // disabled them on the strength of somebody else being hired.
-    await waitFor(() => expect(applied).toEqual({ only: ['a1'] }), {
-      timeout: 5000,
-    });
+    await waitFor(() => expect(requested).toMatchObject({ targetIds: ['t1'] }));
+    expect(await screen.findByText('person page')).toBeInTheDocument();
   });
 
-  // The stale-run and never-plans cases live in provision-on-create.test.ts,
-  // where the poll interval is injectable and they cost milliseconds rather
-  // than the real thirty-second bound.
+  // Exact run correlation and retry behavior live behind the receipt endpoint.
 
   it('skips a disabled target', async () => {
     const user = userEvent.setup();

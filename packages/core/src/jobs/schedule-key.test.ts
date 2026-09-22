@@ -5,6 +5,7 @@ import { keyRotationScheduleKey } from '../keys/jobs.js';
 import { webhookScheduleKey } from '../notify/webhook-jobs.js';
 import { provisionScheduleKey } from '../provision/jobs.js';
 import { syncScheduleKey } from '../sync/jobs.js';
+import { personSourceScheduleKey } from '../person-source/jobs.js';
 
 /**
  * Every schedule key pg-boss will accept.
@@ -45,6 +46,7 @@ const keys: [string, string][] = [
   ['webhook', webhookScheduleKey(TENANT)],
   ['provision', provisionScheduleKey(TENANT, 'a-target-id')],
   ['sync', syncScheduleKey(TENANT, 'a-source-id')],
+  ['person-source', personSourceScheduleKey(TENANT, 'an-hr-source-id')],
 ];
 
 describe('schedule keys', () => {

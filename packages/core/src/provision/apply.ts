@@ -1544,8 +1544,27 @@ async function finish(
  * rather than a network operation — the same reason `provenanceAttribute`
  * below is read off the config rather than off the connector.
  */
-function correlationAttributeFor(targetType: string): string {
-  return targetType === 'activeDirectory' ? 'sAMAccountName' : 'userName';
+function correlationAttributeFor(targetType: string, config: unknown): string {
+  if (targetType === 'activeDirectory') return 'sAMAccountName';
+  // The native Graph connector reports the login under Graph's own name.
+  if (targetType === 'entraId') return 'userPrincipalName';
+  if (targetType === 'httpJson') {
+    // Whatever Syntra attribute the document maps its `correlationAt` field
+    // to. `toRecord` in the connector reads the correlation value from that
+    // field and reports the mapped fields under their Syntra names, so this
+    // is the name the value is reachable by -- when the document maps it at
+    // all. A document that names `correlationAt` but does not list it under
+    // `fields` reports the value nowhere but the dn, and falls through.
+    const document = (
+      config as {
+        document?: { account?: { correlationAt?: string; fields?: Record<string, string> } };
+      } | null
+    )?.document;
+    const at = document?.account?.correlationAt;
+    const mapped = at === undefined ? undefined : document?.account?.fields?.[at];
+    if (mapped !== undefined) return mapped;
+  }
+  return 'userName';
 }
 
 export async function resolveInFlightActions(
@@ -1592,7 +1611,7 @@ export async function resolveInFlightActions(
   // flight reads the entire directory forty times, and every one of those
   // reads returns the same answer.
   const objects: { anchor: string; correlationKey: string; provenance: string[] }[] = [];
-  const correlationAttribute = correlationAttributeFor(prepared.targetType!);
+  const correlationAttribute = correlationAttributeFor(prepared.targetType!, prepared.config);
   for await (const record of connector.read(prepared.config as never)) {
     objects.push({
       anchor: record.anchor,

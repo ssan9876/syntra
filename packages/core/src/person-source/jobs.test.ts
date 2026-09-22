@@ -112,7 +112,7 @@ describe('applyPersonSourceSchedule', () => {
       PERSON_IMPORT_JOB,
       '0 2 * * *',
       { tenantId, sourceId: 's-1' },
-      `${tenantId}:s-1`,
+      `${tenantId}/s-1`,
     );
   });
 

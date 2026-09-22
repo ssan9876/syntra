@@ -15,6 +15,8 @@ import {
   assignRole,
   countHoldersOf,
   createRole,
+  createRoleFromPreset,
+  ROLE_PRESETS,
   deleteRole,
   listRolesWithAssignmentCounts,
   recordEvent,
@@ -73,6 +75,45 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
     }
     throw cause;
   };
+
+  app.get(
+    '/roles/presets',
+    { preHandler: requirePermission(PERMISSIONS.RBAC_MANAGE) },
+    async () => ({ presets: ROLE_PRESETS }),
+  );
+
+  app.post(
+    '/roles/presets/:key',
+    { preHandler: requirePermission(PERMISSIONS.RBAC_MANAGE) },
+    async (request, reply) => {
+      const { key } = request.params as { key: string };
+      if (!ROLE_PRESETS.some((preset) => preset.key === key)) {
+        throw new ProblemError(404, 'not-found', 'No such role preset');
+      }
+      try {
+        const created = await request.db(async (tx) => {
+          const preset = ROLE_PRESETS.find((candidate) => candidate.key === key)!;
+          if (await tx.role.findFirst({ where: { name: preset.name }, select: { id: true } })) {
+            throw new ProblemError(409, 'role-exists', 'A role with this name already exists', `Edit the existing "${preset.name}" role instead of creating it again.`);
+          }
+          const role = await createRoleFromPreset(tx, key);
+          await recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: 'rbac.role_created',
+            targetType: 'Role',
+            targetId: role.id,
+            outcome: 'success',
+            sourceIp: request.ip,
+            payload: { name: role.name, permissions: role.permissions, preset: key },
+          });
+          return role;
+        });
+        return reply.status(201).send(created);
+      } catch (cause) {
+        return asProblem(cause);
+      }
+    },
+  );
 
   app.get(
     '/roles',

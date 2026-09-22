@@ -125,6 +125,18 @@ describe('account lockout', () => {
     });
   });
 
+  it('starts a fresh failure count when a short lock expires inside the failure window', async () => {
+    await seedTenant({ lockoutThreshold: 2, lockoutWindowMinutes: 15, lockoutDurationMinutes: 1 });
+    const start = new Date('2026-08-26T09:00:00Z');
+    await wrong(start);
+    await wrong(start);
+    const expired = new Date('2026-08-26T09:01:00Z');
+    await wrong(expired);
+    expect(await withTenant(tenantId, (tx) => tx.loginLockout.findUnique({ where: { userId } })))
+      .toMatchObject({ failedCount: 1, firstFailedAt: expired, lockedAt: null, lockedUntil: null });
+    expect(await right(expired)).toEqual({ ok: true, userId, mayElevate: false });
+  });
+
   it('holds a lock indefinitely when the duration is zero', async () => {
     await seedTenant({ lockoutThreshold: 2, lockoutDurationMinutes: 0 });
     const t0 = new Date('2026-08-26T09:00:00Z');

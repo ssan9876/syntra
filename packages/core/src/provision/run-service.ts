@@ -1,5 +1,6 @@
 import { withTenant } from '@syntra/db';
 import {
+  observedEnabled,
   targetConnectorFor,
   first,
   isEnabled,
@@ -113,6 +114,7 @@ async function adoptStaleRunsAndStart(
   tenantId: string,
   targetSystemId: string,
   resolveInFlight: (targetSystemId: string) => Promise<number>,
+  receiptId?: string,
 ): Promise<{ id: string }> {
   const stale = await withTenant(tenantId, async (tx) => {
     const runs = await tx.provisionRun.findMany({
@@ -164,7 +166,7 @@ async function adoptStaleRunsAndStart(
   try {
     return await withTenant(tenantId, async (tx) => {
       const bound = await currentTenant(tx);
-      return tx.provisionRun.create({
+      const run = await tx.provisionRun.create({
         // `lastProgressAt` alongside `startedAt`, and they are not the same
         // question. `startedAt` is when this plan was computed and never
         // moves; `lastProgressAt` is when the run last showed a sign of life,
@@ -177,6 +179,12 @@ async function adoptStaleRunsAndStart(
           lastProgressAt: new Date(),
         },
       });
+      if (receiptId) {
+        await tx.personProvisionReceipt.update({ where: { id: receiptId }, data: {
+          runId: run.id, runIds: { push: run.id },
+        } });
+      }
+      return run;
     });
   } catch (cause) {
     // P2002 on `provision_run_one_non_terminal`: another process created a run
@@ -355,6 +363,8 @@ async function writeHolderCounts(
 }
 
 export interface PreviewProvisionRunOptions {
+  /** Internal durable person request; correlation is committed with run creation. */
+  receiptId?: string;
   now?: Date;
   connector?: TargetConnector<never>;
   /** Task 14 supplies `resolveInFlightActions` here. */
@@ -424,7 +434,7 @@ export async function previewProvisionRun(
       }));
 
   // Phase 1, and phase 3 inside it.
-  const run = await adoptStaleRunsAndStart(tenantId, targetSystemId, resolveInFlight);
+  const run = await adoptStaleRunsAndStart(tenantId, targetSystemId, resolveInFlight, options.receiptId);
 
   try {
     // Phase 2.
@@ -581,7 +591,15 @@ export async function previewProvisionRun(
        */
       const uacRaw = first(record, 'userAccountControl');
       const uac = uacRaw === undefined ? Number.NaN : Number(uacRaw);
-      const enabled = Number.isFinite(uac) && isEnabled(uac);
+      // A target with no `userAccountControl` -- SCIM's `active`, Graph's
+      // `accountEnabled`, a plain `enabled` -- is read through the same
+      // three-spelling rule `readBackTarget` uses, so a connector that
+      // reports `'true'` is not read as disabled for want of a bit field.
+      // Absent everywhere is still NOT enabled: same fail-closed reading.
+      const enabled =
+        uacRaw !== undefined
+          ? Number.isFinite(uac) && isEnabled(uac)
+          : (observedEnabled(record) ?? false);
 
       objects.push({
         anchor: record.anchor,
@@ -1424,6 +1442,20 @@ export async function previewProvisionRun(
           reactivateSyntraUserCount: counts('reactivate_syntra_user'),
         },
       });
+
+      if (options.receiptId) {
+        const receipt = await tx.personProvisionReceipt.findUniqueOrThrow({ where: { id: options.receiptId } });
+        const state = desired.find((item) => item.personId === receipt.personId);
+        await tx.personProvisionReceipt.update({ where: { id: receipt.id }, data: {
+          evidence: {
+            accountRequired: state?.account?.required ?? false,
+            notYetStarted: state?.notYetStarted ?? false,
+            evaluated: state !== undefined,
+            exceptions: exceptions.filter((item) => item.personId === receipt.personId),
+            plannedActionIds: actions.filter((item) => item.personId === receipt.personId).map((item) => item.actionType),
+          },
+        } });
+      }
 
       await tx.targetSystem.update({
         where: { id: targetSystemId },

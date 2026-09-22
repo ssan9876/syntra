@@ -18,6 +18,7 @@ import type { TenantClient } from '@syntra/db';
  */
 
 export type IncidentKind =
+  | 'scheduler_unavailable'
   | 'webhook_undelivered'
   | 'notification_undelivered'
   | 'target_runs_skipped'

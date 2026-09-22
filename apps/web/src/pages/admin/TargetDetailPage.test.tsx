@@ -481,6 +481,50 @@ describe('TargetDetailPage', () => {
     });
   });
 
+  it('fills the Entra OAuth placeholders from dedicated non-secret fields', async () => {
+    const document = {
+      name: 'Microsoft Entra ID',
+      version: 1,
+      auth: {
+        type: 'oauth2',
+        tokenUrl: 'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token',
+        clientId: '{clientId}',
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).includes('/connector-documents')) {
+        return Promise.resolve(
+          json({ documents: [{ key: 'entra-id', name: 'Microsoft Entra ID', document }] }),
+        );
+      }
+      if (init?.method === 'POST' && String(input).endsWith('/api/admin/targets')) {
+        return Promise.resolve(json({ id: 't1' }));
+      }
+      if (init?.method === 'PATCH') return Promise.resolve(json(null));
+      return Promise.resolve(json(target({ type: 'httpJson' })));
+    });
+
+    renderNew();
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    await userEvent.click(await screen.findByRole('button', { name: /microsoft entra id/i }));
+    await userEvent.type(screen.getByLabelText(/directory \(tenant\) id/i), 'tenant-1');
+    await userEvent.type(screen.getByLabelText(/application \(client\) id/i), 'client-1');
+    await userEvent.type(screen.getByLabelText(/application client secret/i), 'a-secret');
+    await userEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await waitFor(() => {
+      const create = (fetchMock.mock.calls as [unknown, RequestInit | undefined][]).find(
+        ([input, init]) =>
+          String(input).endsWith('/api/admin/targets') && init?.method === 'POST',
+      );
+      const body = JSON.parse(String(create![1]!.body));
+      expect(body.config.document.auth).toMatchObject({
+        tokenUrl: 'https://login.microsoftonline.com/tenant-1/oauth2/v2.0/token',
+        clientId: 'client-1',
+      });
+    });
+  });
+
   it('names the target after the system that was picked', async () => {
     const document = { name: 'Microsoft Entra ID', version: 1 };
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
@@ -541,6 +585,98 @@ describe('TargetDetailPage', () => {
     expect(body.type).toBe('scim2');
     expect(body.config).toEqual({ baseUrl: 'https://api.example.test/scim/v2' });
     expect(body.bindPassword).toBe('a-token');
+  });
+
+  it('shows the native Entra field group and submits its config shape', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'POST' && String(input).endsWith('/api/admin/targets')) {
+        return Promise.resolve(json({ id: 't1' }));
+      }
+      if (init?.method === 'PATCH') return Promise.resolve(json(null));
+      return Promise.resolve(json(target({ type: 'entraId' })));
+    });
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'entraId');
+    expect(screen.queryByLabelText(/bind dn/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/User\.ReadWrite\.All/)).toBeVisible();
+    expect(screen.getByText(/Nested and dynamic groups are not/)).toBeVisible();
+
+    await userEvent.type(screen.getByLabelText(/^name$/i), 'Entra');
+    await userEvent.type(screen.getByLabelText(/directory \(tenant\) id/i), 'contoso.onmicrosoft.com');
+    await userEvent.type(screen.getByLabelText(/application \(client\) id/i), 'client-1');
+    await userEvent.type(screen.getByLabelText(/application client secret/i), 'a-secret');
+    await userEvent.selectOptions(screen.getByLabelText(/correlation field/i), 'extensionAttribute1');
+    await userEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await waitFor(() => {
+      const create = (fetchMock.mock.calls as [unknown, RequestInit | undefined][]).find(
+        ([input, init]) =>
+          String(input).endsWith('/api/admin/targets') && init?.method === 'POST',
+      );
+      const body = JSON.parse(String(create![1]!.body));
+      expect(body.type).toBe('entraId');
+      expect(body.bindPassword).toBe('a-secret');
+      expect(body.config).toEqual({
+        tenantId: 'contoso.onmicrosoft.com',
+        clientId: 'client-1',
+        correlationField: 'extensionAttribute1',
+      });
+    });
+  });
+
+  it('renders the Entra capability matrix and says which entries still need tenant evidence', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      if (String(input).endsWith('/capabilities')) {
+        return Promise.resolve(
+          json({
+            type: 'entraId',
+            matrix: {
+              version: 1,
+              entries: {
+                createAccount: {
+                  status: 'available',
+                  validation: 'automated+tenant-evidence-required',
+                  note: 'POST /users with the correlation marker.',
+                },
+                dynamicGroups: {
+                  status: 'unsupported',
+                  validation: 'automated',
+                  note: 'Refused before any request.',
+                },
+                deleteAccount: {
+                  status: 'never',
+                  validation: 'automated',
+                  note: 'No code path issues DELETE.',
+                },
+              },
+            },
+            capabilities: {
+              available: true,
+              readBack: true,
+              createAccount: true,
+              updateAccount: true,
+              disableAccount: true,
+              manageEntitlements: true,
+            },
+          }),
+        );
+      }
+      return Promise.resolve(
+        json(target({ type: 'entraId', config: { tenantId: 'contoso.onmicrosoft.com', clientId: 'c' } })),
+      );
+    });
+    renderExisting();
+
+    expect(await screen.findByText('createAccount')).toBeVisible();
+    expect(screen.getByText('tenant evidence required')).toBeVisible();
+    expect(screen.getByText(/1 of these are verified against the fake Graph only/)).toBeVisible();
+    expect(screen.getByText('not supported')).toBeVisible();
+    expect(screen.getByText('never')).toBeVisible();
+    // Three statuses, three tones: an administrator must not read "never"
+    // in the same colour as "available".
+    const tone = (text: string) => screen.getByText(text).className;
+    expect(new Set([tone('available'), tone('not supported'), tone('never')]).size).toBe(3);
   });
 
   it('cannot change type once a target exists', async () => {

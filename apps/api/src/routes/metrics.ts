@@ -26,6 +26,8 @@ export interface MetricsRouteOptions {
    * pair of answers.
    */
   isReady: () => Promise<boolean>;
+  /** Process-local worker status; independent of sign-in readiness. */
+  schedulerRunning?: () => boolean;
 }
 
 /**
@@ -60,6 +62,9 @@ export interface MetricsHandles {
 /** Named, because `publish` needs the name and the metric does not carry it. */
 const JOBS_PENDING = 'syntra_jobs_pending';
 const KEY_EXPIRY = 'syntra_signing_key_expires_in_seconds';
+const OLDEST_UNRESOLVED = 'syntra_lifecycle_oldest_unresolved_age_seconds';
+const RETRY_RATE = 'syntra_lifecycle_retry_rate';
+const READINESS_FRESHNESS = 'syntra_target_readiness_age_seconds';
 
 function buildRegistry(): MetricsHandles {
   const registry = new Registry();
@@ -115,6 +120,70 @@ function buildRegistry(): MetricsHandles {
     'syntra_accounts_locked',
     'Accounts currently locked out by failed sign-ins.',
   );
+  const lifecycleUnresolved = gauge(
+    'syntra_lifecycle_operations_unresolved',
+    'Lifecycle operations that have not reached a terminal state.',
+  );
+  const lifecycleFailed = gauge(
+    'syntra_lifecycle_operations_failed',
+    'Lifecycle operations currently failed and requiring recovery.',
+  );
+  const lifecycleOverdue = gauge(
+    'syntra_lifecycle_operations_overdue',
+    'Unacknowledged lifecycle operations past their due time.',
+  );
+  const lifecycleAwaiting = gauge(
+    'syntra_lifecycle_operations_awaiting_approval',
+    'Lifecycle operations waiting for a second person to approve them.',
+  );
+  const lifecycleBreached = gauge(
+    'syntra_lifecycle_operations_slo_breached',
+    'Unresolved lifecycle operations past their service-level deadline.',
+  );
+  const receiptsDeferred = gauge(
+    'syntra_lifecycle_receipts_deferred',
+    'Target operations stepping back from a saturated tenant (concurrency cap reached).',
+  );
+  const actionsPendingRetry = gauge(
+    'syntra_provision_actions_pending_retry',
+    'Provisioning actions that exhausted their retries and wait for the next run.',
+  );
+  const actionsFailedDay = gauge(
+    'syntra_provision_actions_failed_24h',
+    'Provisioning actions that failed permanently in the last day.',
+  );
+  const runsFailedDay = gauge(
+    'syntra_provision_runs_failed_24h',
+    'Provisioning runs that failed in the last day.',
+  );
+  const targetsStale = gauge(
+    'syntra_targets_stale',
+    'Enabled, scheduled targets that have not run in a day, or never.',
+  );
+  const operationDuration = new Gauge({
+    name: 'syntra_lifecycle_operation_duration_seconds',
+    help: 'Duration quantiles of lifecycle operations resolved in the last day, by kind.',
+    labelNames: ['kind', 'quantile'] as const,
+    registers: [registry],
+  });
+  const targetDuration = new Gauge({
+    name: 'syntra_target_operation_duration_seconds',
+    help: 'Duration quantiles of applied target operations in the last day, by connector type (never by target).',
+    labelNames: ['target_type', 'quantile'] as const,
+    registers: [registry],
+  });
+  const oldestUnresolved = gauge(
+    OLDEST_UNRESOLVED,
+    'Age of the oldest unresolved lifecycle operation. Absent when nothing is unresolved.',
+  );
+  const retryRate = gauge(
+    RETRY_RATE,
+    'Fraction of lifecycle operations resolved in the last day that needed more than one attempt. Absent when none resolved.',
+  );
+  const readinessFreshness = gauge(
+    READINESS_FRESHNESS,
+    'Age of the oldest current target readiness check. Absent when no target has been tested.',
+  );
   const jobsPending = gauge(
     JOBS_PENDING,
     'Scheduler jobs waiting. Absent where the scheduler has never run.',
@@ -156,6 +225,24 @@ function buildRegistry(): MetricsHandles {
     logoutAbandoned.set(snapshot.logoutDeliveriesAbandoned);
     sessionsActive.set(snapshot.sessionsActive);
     accountsLocked.set(snapshot.accountsLocked);
+    lifecycleUnresolved.set(snapshot.lifecycleOperationsUnresolved);
+    lifecycleFailed.set(snapshot.lifecycleOperationsFailed);
+    lifecycleOverdue.set(snapshot.lifecycleOperationsOverdue);
+    lifecycleAwaiting.set(snapshot.lifecycleOperationsAwaitingApproval);
+    lifecycleBreached.set(snapshot.lifecycleOperationsSloBreached);
+    receiptsDeferred.set(snapshot.lifecycleReceiptsDeferred);
+    actionsPendingRetry.set(snapshot.provisionActionsPendingRetry);
+    actionsFailedDay.set(snapshot.provisionActionsFailed24h);
+    runsFailedDay.set(snapshot.provisionRunsFailed24h);
+    targetsStale.set(snapshot.targetsStale);
+    operationDuration.reset();
+    for (const row of snapshot.lifecycleOperationDurationSeconds) {
+      operationDuration.set({ kind: row.kind, quantile: row.quantile }, row.seconds);
+    }
+    targetDuration.reset();
+    for (const row of snapshot.targetOperationDurationSeconds) {
+      targetDuration.set({ target_type: row.targetType, quantile: row.quantile }, row.seconds);
+    }
     usersTotal.set({ status: 'active' }, snapshot.usersActive);
     usersTotal.set({ status: 'inactive' }, snapshot.usersInactive);
 
@@ -171,6 +258,9 @@ function buildRegistry(): MetricsHandles {
     // data" and what an alert rule can be written against.
     publish(JOBS_PENDING, jobsPending, snapshot.jobsPending);
     publish(KEY_EXPIRY, keyExpiry, snapshot.signingKeyExpiresInSeconds);
+    publish(OLDEST_UNRESOLVED, oldestUnresolved, snapshot.lifecycleOldestUnresolvedAgeSeconds);
+    publish(RETRY_RATE, retryRate, snapshot.lifecycleRetryRate);
+    publish(READINESS_FRESHNESS, readinessFreshness, snapshot.readinessFreshnessSeconds);
   };
 
   // Core counts security events in a plain map, because core must not depend
@@ -226,6 +316,13 @@ export async function registerMetricsRoutes(
 
   const { registry, httpDuration, setGauges, setReadiness, copyAuditCounts } =
     buildRegistry();
+  const schedulerRunning = options.schedulerRunning
+    ? new Gauge({
+        name: 'syntra_scheduler_running',
+        help: '1 when the background scheduler has started, 0 while startup is retrying.',
+        registers: [registry],
+      })
+    : null;
 
   // Ten seconds, so a normal fifteen-second scrape pays for the queries once
   // and a misconfigured one polling every second cannot multiply the load on
@@ -268,6 +365,9 @@ export async function registerMetricsRoutes(
       }
 
       setGauges(await readSnapshot());
+      if (schedulerRunning && options.schedulerRunning) {
+        schedulerRunning.set(options.schedulerRunning() ? 1 : 0);
+      }
       // Never allowed to fail the scrape: a readiness probe that throws would
       // take the metrics down at exactly the moment they are being consulted.
       setReadiness(await options.isReady().catch(() => false));

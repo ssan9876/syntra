@@ -259,6 +259,17 @@ export * from './provision/apply.js';
 // concepts, which is the collision that has bitten this slice twice; under
 // TS2308 the barrel would then export NEITHER side, silently.
 export * from './provision/jobs.js';
+export * from './provision/person-receipts.js';
+export * from './lifecycle/operation-service.js';
+export * from './lifecycle/onboarding-service.js';
+export * from './lifecycle/verification.js';
+export * from './lifecycle/management.js';
+export * from './lifecycle/jobs.js';
+export * from './lifecycle/policy.js';
+export * from './rbac/presets.js';
+export * from './lifecycle/simulation-service.js';
+export * from './lifecycle/retention.js';
+export * from './provision/desired-state-loader.js';
 // Member by member, not `export *`, and for the same reason as
 // `provision/types.js` and `provision/guard.js` above: `policy/impact.js`
 // ALREADY exports `previewRuleImpact` and `RuleImpact` -- the policy

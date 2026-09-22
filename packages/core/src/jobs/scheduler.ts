@@ -7,7 +7,7 @@ export interface Scheduler {
   start(): Promise<void>;
   stop(): Promise<void>;
   register<T>(name: string, handler: JobHandler<T>): void;
-  enqueue<T>(name: string, data: T): Promise<string | null>;
+  enqueue<T>(name: string, data: T, options?: { startAfterSeconds?: number }): Promise<string | null>;
   /**
    * `key` distinguishes several schedules on one queue, and is not optional
    * in practice. pg-boss keys its schedule table on `(name, key)` with `key`
@@ -39,8 +39,14 @@ export interface Scheduler {
  * therefore no bound tenant, so a handler opens its own withTenant using what
  * it was given; there is deliberately no ambient tenant to inherit.
  */
-export function createScheduler(databaseUrl: string): Scheduler {
+export function createScheduler(
+  databaseUrl: string,
+  onError: (error: Error) => void = (error) => { process.emitWarning(error); },
+): Scheduler {
   const boss = new PgBoss({ connectionString: databaseUrl });
+  // EventEmitter treats an unhandled 'error' as a process-level exception.
+  // pg-boss emits these for transient polling failures and keeps retrying.
+  boss.on('error', onError);
 
   const handlers = new Map<string, JobHandler<unknown>>();
   // What this process has asked to be scheduled, so startup can check.
@@ -81,14 +87,19 @@ export function createScheduler(databaseUrl: string): Scheduler {
     },
 
     async stop() {
-      if (!started) return;
+      // pg-boss can own a pool and timers even when start() failed halfway.
+      // Its stop() is idempotent and handles both partial and complete starts.
       await boss.stop({ graceful: true });
       started = false;
     },
 
-    async enqueue<T>(name: string, data: T) {
+    async enqueue<T>(name: string, data: T, options?: { startAfterSeconds?: number }) {
       assertRegistered(name);
-      return boss.send(name, data as object);
+      return boss.send(
+        name,
+        data as object,
+        options?.startAfterSeconds === undefined ? {} : { startAfter: options.startAfterSeconds },
+      );
     },
 
     async schedule(name: string, cron: string, data: unknown = {}, key = '') {

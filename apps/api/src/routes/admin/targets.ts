@@ -10,7 +10,14 @@ import {
   updateTargetRequestSchema,
   adoptAccountRequest,
 } from '@syntra/contracts';
-import { BUILTIN_CONNECTOR_DOCUMENTS, targetConnectorFor } from '@syntra/connectors';
+import {
+  BUILTIN_CONNECTOR_DOCUMENTS,
+  ENTRA_CAPABILITY_MATRIX,
+  capabilitiesForTarget,
+  entraTargetConnector,
+  targetConnectorFor,
+  type DiscoveredEntitlement,
+} from '@syntra/connectors';
 import {
   PERMISSIONS,
   ContainerNotInTargetError,
@@ -32,8 +39,11 @@ import {
   localMasterKeyProvider,
   moveAccount,
   recordEvent,
+  recordReadinessCheck,
+  currentReadiness,
   refreshEntitlements,
   targetContainers,
+  targetWithCredential,
   testTargetConfiguration,
   updateTarget,
   type Scheduler,
@@ -117,6 +127,16 @@ function defined<T extends object>(value: T): Defined<T> {
     Object.entries(value).filter(([, v]) => v !== undefined),
   ) as Defined<T>;
 }
+
+/**
+ * A catalog search. `q` is non-blank; `top` is bounded, because for an Entra
+ * target the search goes to Graph live and an unbounded page is a request
+ * Graph refuses anyway.
+ */
+const entitlementSearchQuery = z.object({
+  q: z.string().trim().min(1).max(200),
+  top: z.coerce.number().int().min(1).max(100).default(25),
+});
 
 /** Both ids, so a route cannot read one and forget to validate the other. */
 const placementParams = z.object({
@@ -450,6 +470,7 @@ export async function registerAdminTargetRoutes(
       const { thresholds, ladder, ...scalars } = updateTargetRequestSchema.parse(
         request.body,
       );
+      const startedAt = Date.now();
       try {
         await updateTarget(
           request.tenantId,
@@ -493,7 +514,140 @@ export async function registerAdminTargetRoutes(
         }
         throw cause;
       }
+
+      if (scalars.bindPassword !== undefined) {
+        // A rotation is a change to the one thing a readiness check attests,
+        // so it leaves one behind: the new credential is tried against the
+        // saved configuration and the outcome recorded, prefixed so the
+        // history says why this check exists. Outside `request.db` -- this
+        // opens a socket to a third party, and `testTargetConfiguration`
+        // opens its own short transaction for the vault read.
+        const saved = await request.db((tx) =>
+          tx.targetSystem.findUnique({ where: { id }, select: { type: true, config: true } }),
+        );
+        if (saved) {
+          const result = await testTargetConfiguration(request.tenantId, provider, {
+            type: saved.type,
+            config: saved.config,
+            borrowFromTargetId: id,
+          }).catch((cause: unknown) => ({
+            ok: false,
+            message: cause instanceof Error ? cause.message : String(cause),
+          }));
+          await recordReadinessCheck(request.tenantId, {
+            systemKind: 'target',
+            systemId: id,
+            configuration: saved.config,
+            capabilities:
+              'rights' in result
+                ? (result.rights?.map((right) => `${right.right}:${right.status}`) ?? [])
+                : [],
+            status: result.ok ? 'passed' : 'failed',
+            latencyMs: Date.now() - startedAt,
+            message: `credential rotated: ${result.message}`,
+            actorUserId: request.session.userId,
+          });
+        }
+      }
       return reply.code(204).send();
+    },
+  );
+
+  /**
+   * What this target can do, as the console should say it.
+   *
+   * `capabilities` is the per-target answer (`capabilitiesForTarget` reads an
+   * `httpJson` document rather than reporting the family's ceiling); `matrix`
+   * is the versioned Entra matrix with its validation status per entry, and
+   * null for every other type.
+   */
+  app.get(
+    '/targets/:id/capabilities',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const target = await request.db((tx) =>
+        tx.targetSystem.findUnique({ where: { id }, select: { type: true, config: true } }),
+      );
+      if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
+      return {
+        type: target.type,
+        matrix: target.type === 'entraId' ? ENTRA_CAPABILITY_MATRIX : null,
+        capabilities: capabilitiesForTarget(target.type, target.config),
+      };
+    },
+  );
+
+  /**
+   * A picker's search of the entitlement catalog.
+   *
+   * Live against Graph for an Entra target, because its catalog can be tens
+   * of thousands of groups and the refresh is what populates the stored copy;
+   * a stored search for every other type. The same shape either way, with
+   * `manageable` from the connector or from the stored column.
+   */
+  app.get(
+    '/targets/:id/entitlements/search',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { q, top } = entitlementSearchQuery.parse(request.query ?? {});
+      const target = await request.db((tx) =>
+        tx.targetSystem.findUnique({ where: { id }, select: { id: true, type: true } }),
+      );
+      if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
+
+      if (target.type === 'entraId') {
+        const config = await request.db((tx) => targetWithCredential(tx, provider, id));
+        if (!config) {
+          throw new ProblemError(409, 'no-credential', 'This target has no saved credential');
+        }
+        // Outside `request.db`: a network call.
+        const entitlements: DiscoveredEntitlement[] = await entraTargetConnector
+          .searchEntitlements(config as never, { query: q, top })
+          .catch((cause: unknown) => {
+            throw new ProblemError(
+              502,
+              'target-unreachable',
+              'The target could not be searched',
+              cause instanceof Error ? cause.message : String(cause),
+            );
+          });
+        return {
+          source: 'live',
+          entitlements: entitlements.map((e) => ({
+            externalId: e.externalId,
+            dn: e.dn,
+            type: e.type,
+            displayName: e.displayName,
+            description: e.description ?? null,
+            manageable: e.manageable ?? true,
+            unmanageableReason: e.unmanageableReason ?? null,
+            membershipKind: e.membershipKind ?? null,
+          })),
+        };
+      }
+
+      const rows = await request.db((tx) =>
+        tx.entitlement.findMany({
+          where: { targetSystemId: id, displayName: { contains: q, mode: 'insensitive' } },
+          orderBy: { displayName: 'asc' },
+          take: top,
+        }),
+      );
+      return {
+        source: 'catalog',
+        entitlements: rows.map((row) => ({
+          externalId: row.externalId,
+          dn: row.dn ?? row.externalId,
+          type: row.type,
+          displayName: row.displayName,
+          description: row.description,
+          manageable: row.manageable,
+          unmanageableReason: row.unmanageableReason,
+          membershipKind: row.membershipKind,
+        })),
+      };
     },
   );
 
@@ -549,7 +703,35 @@ export async function registerAdminTargetRoutes(
       // five-second budget and this opens a socket to a third party.
       // `testTargetConfiguration` opens its own short transaction for the
       // vault read and closes it before the connection is made.
-      return testTargetConfiguration(request.tenantId, provider, defined(body));
+      const startedAt = Date.now();
+      const result = await testTargetConfiguration(request.tenantId, provider, defined(body));
+      // A form-only test has no stable system to attest. When the credential
+      // is borrowed from a saved target, however, this is evidence for that
+      // exact configuration and belongs in the durable readiness history.
+      if (body.borrowFromTargetId) {
+        await recordReadinessCheck(request.tenantId, {
+          systemKind: 'target',
+          systemId: body.borrowFromTargetId,
+          configuration: body.config,
+          capabilities: result.rights?.map((right) => `${right.right}:${right.status}`) ?? [],
+          status: result.ok ? 'passed' : 'failed',
+          latencyMs: Date.now() - startedAt,
+          message: result.message,
+          actorUserId: request.session.userId,
+        });
+      }
+      return result;
+    },
+  );
+
+  app.get(
+    '/targets/:id/readiness',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const target = await request.db((tx) => tx.targetSystem.findUnique({ where: { id }, select: { id: true, config: true } }));
+      if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
+      return currentReadiness(request.tenantId, 'target', target.id, target.config);
     },
   );
 

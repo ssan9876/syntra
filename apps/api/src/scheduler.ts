@@ -22,7 +22,9 @@ import {
   registerSyncJobs,
   registerLogoutJobs,
   registerWebhookJobs,
+  registerLifecycleJobs,
   scheduleKeyRotation,
+  scheduleLifecycleMaintenance,
   smtpTransport,
   type Config,
   type Scheduler,
@@ -121,6 +123,16 @@ export async function scheduleBackgroundWork(
         { err: cause, tenantId: tenant.id },
         'failed to schedule signing key rotation',
       );
+    }
+  }
+
+  for (const tenant of tenants) {
+    try {
+      attempt('lifecycle maintenance');
+      await scheduleLifecycleMaintenance(scheduler, tenant.id);
+    } catch (cause) {
+      failure('lifecycle maintenance');
+      logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule lifecycle maintenance');
     }
   }
 
@@ -256,6 +268,35 @@ export async function scheduleBackgroundWork(
     }
   }
 
+  for (const tenant of tenants) {
+    let personSources;
+    try {
+      // Every source, not only the eligible ones -- the same reasoning the
+      // directory-source loop above records. A source disabled or unscheduled
+      // while this process was down still has a schedule row waiting for it,
+      // and reading the whole list lets `applyPersonSourceSchedule` remove
+      // those as well as add the rest.
+      personSources = await withTenant(tenant.id, (tx) => tx.personSource.findMany());
+    } catch (cause) {
+      logger.error(
+        { err: cause, tenantId: tenant.id },
+        'failed to load person sources for scheduling',
+      );
+      continue;
+    }
+
+    for (const source of personSources) {
+      try {
+        await applyPersonSourceSchedule(scheduler, tenant.id, source);
+      } catch (cause) {
+        logger.error(
+          { err: cause, tenantId: tenant.id, sourceId: source.id },
+          'failed to schedule person source import',
+        );
+      }
+    }
+  }
+
   // --- did any of that actually take? -------------------------------------
   //
   // Everything above logs its own failures per tenant and carries on, which is
@@ -314,34 +355,7 @@ export async function scheduleBackgroundWork(
     logger.error({ err: cause }, 'could not verify the registered schedules');
   }
 
-  for (const tenant of tenants) {
-    let personSources;
-    try {
-      // Every source, not only the eligible ones -- the same reasoning the
-      // directory-source loop above records. A source disabled or unscheduled
-      // while this process was down still has a schedule row waiting for it,
-      // and reading the whole list lets `applyPersonSourceSchedule` remove
-      // those as well as add the rest.
-      personSources = await withTenant(tenant.id, (tx) => tx.personSource.findMany());
-    } catch (cause) {
-      logger.error(
-        { err: cause, tenantId: tenant.id },
-        'failed to load person sources for scheduling',
-      );
-      continue;
-    }
 
-    for (const source of personSources) {
-      try {
-        await applyPersonSourceSchedule(scheduler, tenant.id, source);
-      } catch (cause) {
-        logger.error(
-          { err: cause, tenantId: tenant.id, sourceId: source.id },
-          'failed to schedule person source import',
-        );
-      }
-    }
-  }
 }
 
 /**
@@ -364,10 +378,11 @@ export async function scheduleBackgroundWork(
 export async function startSyncScheduler(
   config: Config,
   logger: FastifyBaseLogger,
-  create: (databaseUrl: string) => Scheduler = createScheduler,
+  create: (databaseUrl: string) => Scheduler = (databaseUrl) =>
+    createScheduler(databaseUrl, (err) => logger.error({ err }, 'background scheduler error')),
   options: { transport?: Transport } = {},
 ): Promise<Scheduler | null> {
-  let scheduler: Scheduler;
+  let scheduler: Scheduler | undefined;
   try {
     scheduler = create(config.databaseUrl);
     const provider = localMasterKeyProvider(config.masterKey);
@@ -399,6 +414,7 @@ export async function startSyncScheduler(
     });
     registerKeyRotationJob(scheduler, provider);
     registerProvisionJobs(scheduler, provider, transport);
+    registerLifecycleJobs(scheduler, { publicUrl: config.publicUrl });
     // The transport is NOT optional here. Ruling P16 made this point about
     // Provision's initial passwords: without one, an unattended path produces
     // something and delivers it to nobody. In Automate the whole notification
@@ -447,6 +463,11 @@ export async function startSyncScheduler(
     });
     await scheduler.start();
   } catch (cause) {
+    try {
+      await scheduler?.stop();
+    } catch (err) {
+      logger.error({ err }, 'could not clean up the failed scheduler');
+    }
     logger.error(
       { err: cause },
       'the background job scheduler failed to start; no directory sources were scheduled',

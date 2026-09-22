@@ -13,7 +13,8 @@ import {
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
-import { HttpConnectorFields } from './TargetConnectorFields.js';
+import { EntraConnectorFields, HttpConnectorFields } from './TargetConnectorFields.js';
+import { CapabilitiesPanel } from './TargetCapabilitiesPanel.js';
 import { TestReport, type TestResult } from './TargetTestReport.js';
 import {
   BLANK,
@@ -323,6 +324,7 @@ export function TargetDetailPage() {
             {...mark('type')}
             options={[
               { value: 'activeDirectory', label: 'Active Directory' },
+              { value: 'entraId', label: 'Microsoft Entra ID (native)' },
               { value: 'scim2', label: 'SCIM 2.0' },
               { value: 'httpJson', label: 'REST API' },
             ]}
@@ -334,6 +336,8 @@ export function TargetDetailPage() {
               documentKey={form.documentKey}
               documentJson={form.documentJson}
               credential={form.bindPassword}
+              entraTenantId={form.entraTenantId}
+              entraClientId={form.entraClientId}
               onPick={(key, document) => {
                 setForm((current) => ({
                   ...current,
@@ -347,6 +351,21 @@ export function TargetDetailPage() {
               }}
               onDocumentChange={(v) => set('documentJson', v)}
               onCredentialChange={(v) => set('bindPassword', v)}
+              onEntraTenantIdChange={(v) => set('entraTenantId', v)}
+              onEntraClientIdChange={(v) => set('entraClientId', v)}
+            />
+          ) : form.type === 'entraId' ? (
+            <EntraConnectorFields
+              isNew={isNew}
+              tenantId={form.entraTenantId}
+              clientId={form.entraClientId}
+              credential={form.bindPassword}
+              correlationField={form.entraCorrelationField}
+              onTenantIdChange={(v) => set('entraTenantId', v)}
+              onClientIdChange={(v) => set('entraClientId', v)}
+              onCredentialChange={(v) => set('bindPassword', v)}
+              onCorrelationFieldChange={(v) => set('entraCorrelationField', v)}
+              mark={mark}
             />
           ) : form.type === 'activeDirectory' ? (
             <>
@@ -427,6 +446,8 @@ export function TargetDetailPage() {
             </>
           )}
         </Panel>
+
+        {!isNew && targetId !== null && <CapabilitiesPanel targetId={targetId} />}
 
         {/*
           These three links are the only route into the rest of the target's

@@ -7,11 +7,6 @@ organization's people, decide what they may reach, and give them a single
 front door to every application they use. Self-hosted, multi-tenant,
 Apache-2.0.
 
-## Register
-
-product — design serves the task. This is authenticated tooling, not a
-marketing surface. The interface should disappear into the work.
-
 ## Platform
 
 web

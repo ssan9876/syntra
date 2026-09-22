@@ -143,7 +143,12 @@ export const useT = () => useLocale().t;
 export function LanguagePicker({ className = '' }: { className?: string }) {
   const { locale, setLocale, t } = useLocale();
   return (
-    <label className={`inline-flex items-center gap-2 text-sm text-muted ${className}`}>
+    // The caller's display class must win over the default: under Tailwind 4
+    // `hidden` and `inline-flex` both set `display`, and whichever the
+    // stylesheet emits later wins regardless of the order written here, so a
+    // header that asked for `hidden sm:inline-flex` was still rendered at 320
+    // pixels and pushed the whole header row off the right edge.
+    <label className={`${/(^|\s)(hidden|flex|inline-flex|block)(\s|$)/.test(className) ? '' : 'inline-flex'} items-center gap-2 text-sm text-muted ${className}`}>
       <span>{t('common.language')}</span>
       <select
         value={locale}

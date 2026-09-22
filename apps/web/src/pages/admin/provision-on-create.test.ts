@@ -21,101 +21,41 @@ function mockRoutes(
   }) as never);
 }
 
-/** Fast, so the bounded-wait case does not cost thirty seconds of suite. */
-const FAST = { attempts: 3, intervalMs: 1 };
-
 beforeEach(() => vi.restoreAllMocks());
 
 describe('provisionForPerson', () => {
-  it('applies only the actions carrying this person id', async () => {
-    let applied: unknown = null;
-    let listed = 0;
+  it('asks the server for a durable receipt scoped to this person and target', async () => {
+    let body: unknown;
+    const receipt = { id: 'receipt-1', targetSystemId: 't1', targetName: 'AD', status: 'pending' };
     mockRoutes({
-      '/api/admin/targets/t1/runs': (init) => {
-        if (init?.method === 'POST') return json({ jobId: 'j1' }, 202);
-        listed += 1;
-        return listed === 1
-          ? json({ runs: [{ id: 'r0', status: 'previewed' }] })
-          : json({ runs: [{ id: 'r1', status: 'previewed' }] });
-      },
-      '/api/admin/targets/t1/runs/r1': () =>
-        json({
-          actions: [
-            { id: 'a1', personId: 'p1' },
-            { id: 'a2', personId: 'p9' },
-            { id: 'a3', personId: 'p1' },
-          ],
-        }),
-      '/api/admin/targets/t1/runs/r1/apply': (init) => {
-        applied = JSON.parse(String(init?.body));
-        return json({ ok: true });
+      '/api/admin/persons/p1/provision-receipts': (init) => {
+        body = JSON.parse(String(init?.body));
+        expect(init?.method).toBe('POST');
+        return json({ receipts: [receipt] }, 202);
       },
     });
 
-    const count = await provisionForPerson('t1', 'p1', FAST);
-
-    // a2 belongs to somebody else and stays pending. Applying the run
-    // wholesale would have committed it on the strength of p1 being hired.
-    expect(applied).toEqual({ only: ['a1', 'a3'] });
-    expect(count).toBe(2);
+    expect(await provisionForPerson('t1', 'p1')).toEqual([receipt]);
+    expect(body).toMatchObject({ targetIds: ['t1'] });
+    expect((body as { requestKey: string }).requestKey).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
-  it('never applies the run that was already there before the enqueue', async () => {
-    let touchedDetail = false;
+  it('does not poll or infer a result from the newest target run', async () => {
+    const urls: string[] = [];
     mockRoutes({
-      // The newest run never changes: the enqueued one never starts.
-      '/api/admin/targets/t1/runs': (init) =>
-        init?.method === 'POST'
-          ? json({ jobId: 'j1' }, 202)
-          : json({ runs: [{ id: 'r0', status: 'previewed' }] }),
-      '/api/admin/targets/t1/runs/r0': () => {
-        touchedDetail = true;
-        return json({ actions: [] });
+      '/api/admin/persons/p1/provision-receipts': () => {
+        urls.push('/api/admin/persons/p1/provision-receipts');
+        return json({ receipts: [{ id: 'saved', status: 'planning' }] }, 202);
       },
     });
-
-    const count = await provisionForPerson('t1', 'p1', FAST);
-
-    // r0 is a previewed plan full of somebody else's pending actions. Reading
-    // it at all would be the bug; applying it would be the incident.
-    expect(touchedDetail).toBe(false);
-    expect(count).toBe(0);
+    await provisionForPerson('t1', 'p1');
+    expect(urls).toEqual(['/api/admin/persons/p1/provision-receipts']);
   });
 
-  it('waits past a run that is still planning', async () => {
-    let listed = 0;
+  it('propagates refusal so onboarding can link to the records already saved', async () => {
     mockRoutes({
-      '/api/admin/targets/t1/runs': (init) => {
-        if (init?.method === 'POST') return json({ jobId: 'j1' }, 202);
-        listed += 1;
-        if (listed === 1) return json({ runs: [] });
-        return listed === 2
-          ? json({ runs: [{ id: 'r1', status: 'running' }] })
-          : json({ runs: [{ id: 'r1', status: 'previewed' }] });
-      },
-      '/api/admin/targets/t1/runs/r1': () =>
-        json({ actions: [{ id: 'a1', personId: 'p1' }] }),
-      '/api/admin/targets/t1/runs/r1/apply': () => json({ ok: true }),
+      '/api/admin/persons/p1/provision-receipts': () => json({ title: 'Background jobs are not running', status: 503 }, 503),
     });
-
-    expect(await provisionForPerson('t1', 'p1', FAST)).toBe(1);
-  });
-
-  it('applies nothing when no rule matched their contract', async () => {
-    let listed = 0;
-    mockRoutes({
-      '/api/admin/targets/t1/runs': (init) => {
-        if (init?.method === 'POST') return json({ jobId: 'j1' }, 202);
-        listed += 1;
-        return listed === 1
-          ? json({ runs: [] })
-          : json({ runs: [{ id: 'r1', status: 'previewed' }] });
-      },
-      '/api/admin/targets/t1/runs/r1': () =>
-        json({ actions: [{ id: 'a2', personId: 'p9' }] }),
-      // No apply handler: calling it rejects and fails this test.
-    });
-
-    expect(await provisionForPerson('t1', 'p1', FAST)).toBe(0);
+    await expect(provisionForPerson('t1', 'p1')).rejects.toThrow();
   });
 });

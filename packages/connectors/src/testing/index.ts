@@ -12,6 +12,7 @@
 export * from './fake-target.js';
 export * from './fake-person-source.js';
 export * from './fake-scim-server.js';
+export * from './fake-graph-server.js';
 
 /**
  * The live Samba domain controller's connection contract, re-exported here

@@ -40,6 +40,21 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('readiness', () => {
+  it('does not let an empty tenant hide a master-key failure in another tenant', async () => {
+    const other = await prisma.tenant.create({ data: { name: 'Established', slug: 'established' } });
+    await withTenant(other.id, async (tx) => {
+      await putSecret(tx, provider, 'signing.other', 'PEM');
+      await tx.signingKey.create({ data: {
+        tenantId: other.id, kind: 'saml', kid: 'other', status: 'active',
+        secretName: 'signing.other', publicJwk: {}, certificate: 'cert',
+        notBefore: new Date(), notAfter: new Date(Date.now() + 86_400_000),
+      } });
+    });
+    const report = await readiness(deps({ provider: localMasterKeyProvider(Buffer.alloc(32, 99)) }));
+    expect(probe(report, 'vault').status).toBe('fail');
+    expect(report.ready).toBe(false);
+  });
+
   it('is ready when everything it checks is true', async () => {
     const report = await readiness(deps());
     expect(report.ready).toBe(true);

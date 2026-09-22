@@ -211,6 +211,47 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nThe exception to "{{ruleName}}" for {{beneficiaryName}} expires on {{endsAt}}.\n\nRenew it here, pre-filled with the existing justification: {{renewUrl}}\n\nNothing is removed when it lapses. The violation reopens and everybody involved is told.',
     html: '<p>Hello {{displayName}},</p><p>The exception to <strong>{{ruleName}}</strong> for {{beneficiaryName}} expires on {{endsAt}}.</p><p><a href="{{renewUrl}}">Renew it</a>, pre-filled with the existing justification.</p><p>Nothing is removed when it lapses. The violation reopens and everybody involved is told.</p>',
   },
+  /**
+   * Employee lifecycle work. Every one of these names the employee and the
+   * operation and links to the timeline, because the reader's next act is to
+   * open it. None quotes a target's error text: the timeline holds that,
+   * behind a sign-in, and a mail is neither.
+   */
+  'lifecycle-assigned': {
+    subject: 'Lifecycle work for {{personName}} is yours — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{operationKind}} operation for {{personName}} has been assigned to you at {{priority}} priority{{dueNote}}.\n\n{{operationUrl}}',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{operationKind}}</strong> operation for {{personName}} has been assigned to you at {{priority}} priority{{dueNote}}.</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
+  },
+  'lifecycle-failed': {
+    subject: 'Lifecycle work for {{personName}} failed — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{operationKind}} operation for {{personName}} has failed and needs a person: {{summary}}\n\n{{operationUrl}}\n\nNothing about this is retried until somebody looks at it.',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{operationKind}}</strong> operation for {{personName}} has failed and needs a person: {{summary}}</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p><p>Nothing about this is retried until somebody looks at it.</p>',
+  },
+  'lifecycle-overdue': {
+    subject: 'Lifecycle work for {{personName}} is overdue — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{operationKind}} operation for {{personName}} passed its due time ({{dueAt}}) and has not been acknowledged.{{breachNote}}\n\n{{operationUrl}}',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{operationKind}}</strong> operation for {{personName}} passed its due time ({{dueAt}}) and has not been acknowledged.{{breachNote}}</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
+  },
+  'lifecycle-escalated': {
+    subject: 'Escalated: lifecycle work for {{personName}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{operationKind}} operation for {{personName}} has been escalated to you: {{reason}}\n\nThe original owner{{ownerNote}} remains on it.\n\n{{operationUrl}}',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{operationKind}}</strong> operation for {{personName}} has been escalated to you: {{reason}}</p><p>The original owner{{ownerNote}} remains on it.</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
+  },
+  'lifecycle-access-blocked': {
+    subject: 'Access for {{personName}} is blocked — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nTarget work for {{personName}} on {{targetName}} is blocked and will not proceed on its own: {{summary}}\n\n{{operationUrl}}',
+    html: '<p>Hello {{displayName}},</p><p>Target work for {{personName}} on <strong>{{targetName}}</strong> is blocked and will not proceed on its own: {{summary}}</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
+  },
+  'lifecycle-approval-requested': {
+    subject: 'Approval needed: {{operationKind}} for {{personName}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\n{{requesterName}} started a {{operationKind}} operation for {{personName}} that policy says a second person must approve. {{reason}}\n\nNothing has been written to any target. Approve or reject it here:\n\n{{operationUrl}}',
+    html: '<p>Hello {{displayName}},</p><p><strong>{{requesterName}}</strong> started a {{operationKind}} operation for {{personName}} that policy says a second person must approve. {{reason}}</p><p>Nothing has been written to any target. Approve or reject it here:</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
+  },
+  'lifecycle-completed': {
+    subject: 'Lifecycle work for {{personName}} is complete — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{operationKind}} operation for {{personName}} completed: every required step reached its observed state or was resolved by hand.\n\n{{operationUrl}}',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{operationKind}}</strong> operation for {{personName}} completed: every required step reached its observed state or was resolved by hand.</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
+  },
 } satisfies Record<string, Template>;
 
 export type TemplateName = keyof typeof TEMPLATES;

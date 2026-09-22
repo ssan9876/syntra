@@ -2,6 +2,8 @@ import { withTenant, type TenantClient } from '@syntra/db';
 import {
   targetConnectorFor,
   targetConfigSchemaFor,
+  forgetAccessTokens,
+  forgetEntraTokens,
   TARGET_CONNECTOR_TYPES,
   type ConnectionResult,
 } from '@syntra/connectors';
@@ -595,6 +597,17 @@ export async function updateTarget(
     });
   });
 
+  if (scalars.bindPassword !== undefined) {
+    // A rotation invalidates every access token the old credential obtained.
+    // The caches are process-wide and in memory, so a run already holding a
+    // token minted by the retired secret would otherwise keep using it for
+    // the rest of its hour -- and a rotation done BECAUSE the old secret was
+    // compromised would not take effect until then. Cleared after the commit,
+    // so a rolled-back write does not drop a cache that was still right.
+    forgetAccessTokens();
+    forgetEntraTokens();
+  }
+
   // Outside the transaction, for the reason `createTarget` records.
   if (scheduler) {
     await applyTargetSchedule(scheduler, tenantId, {
@@ -739,6 +752,26 @@ export async function testTargetConfiguration(
         where: { id: borrowFromTargetId },
       });
       if (!target) return null;
+      if (type === 'entraId' && target.type === 'httpJson') {
+        // The one cross-type borrow: the native Entra connector testing with
+        // the secret a document-driven Entra target already holds. Allowed
+        // only when the document's token endpoint and client id are exactly
+        // the ones the native config would post the secret to, and the Graph
+        // base is the document's own base -- the same rule as below, applied
+        // across the two shapes an Entra target can take.
+        const document = (target.config as { document?: { auth?: { type?: string; tokenUrl?: string; clientId?: string }; baseUrl?: string } }).document;
+        const requested = config as { tenantId: string; clientId: string; graphBaseUrl: string; tokenUrl?: string };
+        const derivedTokenUrl = requested.tokenUrl ?? `https://login.microsoftonline.com/${requested.tenantId}/oauth2/v2.0/token`;
+        if (
+          document?.auth?.type !== 'oauth2' ||
+          document.auth.tokenUrl !== derivedTokenUrl ||
+          document.auth.clientId !== requested.clientId ||
+          (document.baseUrl ?? '').replace(/\/$/, '') !== requested.graphBaseUrl.replace(/\/$/, '')
+        ) {
+          return 'mismatch' as const;
+        }
+        return getSecret(tx, provider, target.secretName);
+      }
       if (target.type !== type) return 'mismatch' as const;
       // The Active-Directory-specific transport comparison — url, tlsMode,
       // rejectUnauthorized — only makes sense for that connector's own config
@@ -763,13 +796,36 @@ export async function testTargetConfiguration(
           return 'mismatch' as const;
         }
       }
+      if (type === 'entraId') {
+        // The same rule, for the same reason: the borrowed secret is POSTed
+        // to `tokenUrl`, so a test that could name a different one would
+        // hand the saved client secret to whoever answers there. The token
+        // URL is derived from the tenant when absent, so the tenant is part
+        // of the comparison too, and the Graph base URL is where the bearer
+        // token then goes.
+        const savedConfig = targetConfigSchemaFor(target.type).parse(target.config) as {
+          tenantId: string;
+          clientId: string;
+          graphBaseUrl: string;
+          tokenUrl?: string;
+        };
+        const requested = config as typeof savedConfig;
+        if (
+          savedConfig.tenantId !== requested.tenantId ||
+          savedConfig.clientId !== requested.clientId ||
+          savedConfig.graphBaseUrl !== requested.graphBaseUrl ||
+          (savedConfig.tokenUrl ?? '') !== (requested.tokenUrl ?? '')
+        ) {
+          return 'mismatch' as const;
+        }
+      }
       return getSecret(tx, provider, target.secretName);
     });
     if (saved === 'mismatch') {
       return {
         ok: false,
         message:
-          'a saved credential can only be borrowed for a target of the same type and, for Active Directory, the same transport',
+          'a saved credential can only be borrowed for a target of the same type and, for Active Directory and Entra ID, the same transport',
       };
     }
     if (saved === null) return { ok: false, message: 'no saved credential' };

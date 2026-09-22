@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { BusinessRulesPage } from './BusinessRulesPage.js';
 
 const json = (body: unknown, status = 200) =>
@@ -41,6 +41,7 @@ function mockFetch(options: {
   impact?: unknown;
   impactFails?: boolean;
   enforcementMode?: 'additive' | 'authoritative';
+  impactResponse?: () => Promise<Response>;
 }) {
   const rules = options.rules ?? [];
   const entitlements = options.entitlements ?? [ENTITLEMENT];
@@ -48,7 +49,7 @@ function mockFetch(options: {
   return vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     const path = String(input);
     if (path.endsWith('/rules/impact'))
-      return Promise.resolve(
+      return options.impactResponse?.() ?? Promise.resolve(
         options.impactFails
           ? json({ title: 'Internal Server Error', status: 500 }, 500)
           : json(impact),
@@ -69,6 +70,7 @@ function mockFetch(options: {
 const renderPage = () =>
   render(
     <MemoryRouter initialEntries={['/admin/targets/t1/rules']}>
+      <Link to="/admin/targets/t2/rules">Other target</Link>
       <Routes>
         <Route path="/admin/targets/:id/rules" element={<BusinessRulesPage />} />
       </Routes>
@@ -85,6 +87,94 @@ const bodyOfLastPost = (mock: ReturnType<typeof mockFetch>, suffix: string) => {
 beforeEach(() => vi.restoreAllMocks());
 
 describe('BusinessRulesPage', () => {
+  it('requires impact review for a new rule on an authoritative target', async () => {
+    mockFetch({ enforcementMode: 'authoritative' });
+    renderPage();
+    await screen.findByText(/adding a rule can also remove access/);
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
+    await screen.findByText(/This rule matches/);
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeEnabled();
+  });
+
+  it('cannot restore a deletion confirmation after the operator starts editing', async () => {
+    let finish!: (response: Response) => void;
+    mockFetch({ rules: [RULE], impactResponse: () => new Promise((resolve) => { finish = resolve; }) });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await act(async () => finish(json(IMPACT)));
+    expect(screen.queryByRole('button', { name: 'Delete this rule' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Preview impact' })).toBeEnabled();
+  });
+
+  it('discards a delayed impact when moving to another target', async () => {
+    let finish!: (response: Response) => void;
+    mockFetch({ impactResponse: () => new Promise((resolve) => { finish = resolve; }) });
+    renderPage();
+    await screen.findByText('Finance');
+    await userEvent.type(screen.getByLabelText('Name'), 'Old target draft');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
+    await userEvent.click(screen.getByRole('link', { name: 'Other target' }));
+    await screen.findByText('Finance');
+    await act(async () => finish(json(IMPACT)));
+    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    expect(screen.getByLabelText('Name')).toHaveValue('');
+  });
+
+  it('does not let an obsolete impact release the loading guard on a newer request', async () => {
+    const finish: ((response: Response) => void)[] = [];
+    mockFetch({ impactResponse: () => new Promise((resolve) => { finish.push(resolve); }) });
+    renderPage();
+    await screen.findByText('Finance');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
+    await userEvent.type(screen.getByLabelText('Value'), 'New value');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
+    await act(async () => finish[0]!(json(IMPACT)));
+    expect(screen.getByRole('button', { name: 'Preview impact' })).toBeDisabled();
+    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    await act(async () => finish[1]!(json({ ...IMPACT, wouldRevoke: 9 })));
+    expect(await screen.findByText('9 holdings would be taken away')).toBeVisible();
+  });
+
+  it.each(['Name', 'Value', 'Enabled', 'Finance'])('clears impact after editing %s', async (label) => {
+    mockFetch({});
+    renderPage();
+    await screen.findByText('Finance');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
+    expect(await screen.findByText(/This rule matches/)).toBeVisible();
+    if (label === 'Enabled' || label === 'Finance') await userEvent.click(screen.getByLabelText(label));
+    else await userEvent.type(screen.getByLabelText(label), 'x');
+    expect(screen.queryByText(/This rule matches/)).toBeNull();
+  });
+
+  it.each([false, true])('ignores an in-flight impact after editing (failure=%s)', async (fails) => {
+    let finish!: (response: Response) => void;
+    mockFetch({ impactResponse: () => new Promise((resolve) => { finish = resolve; }) });
+    renderPage();
+    await screen.findByText('Finance');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
+    await userEvent.type(screen.getByLabelText('Value'), 'New value');
+    await act(async () => finish(fails
+      ? json({ title: 'Old draft failed', status: 500 }, 500)
+      : json(IMPACT)));
+    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    expect(screen.queryByText('Old draft failed')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Preview impact' })).toBeEnabled();
+  });
+
+  it('requires a fresh impact before saving edits to an existing rule', async () => {
+    mockFetch({ rules: [RULE] });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
+    await screen.findByText(/This rule matches/);
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeEnabled();
+    await userEvent.click(screen.getByLabelText('Finance'));
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
+  });
+
   it('sends a bare leaf for an operator that takes no value', async () => {
     // `isEmpty` and `isNotEmpty` are the only two leaves with no `value`, and
     // sending one anyway is refused by the closed schema.
@@ -257,7 +347,7 @@ describe('BusinessRulesPage', () => {
     expect(body.condition).toEqual(RULE.condition);
   });
 
-  it('still asks before deleting when the impact could not be worked out', async () => {
+  it('prevents deletion when the impact could not be worked out', async () => {
     // Not knowing the number is a reason to be more careful, not a reason to
     // skip the question.
     const fetchMock = mockFetch({ rules: [RULE], impactFails: true });
@@ -266,13 +356,14 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
 
     expect(
-      await screen.findByText(/without a number behind it/),
+      await screen.findByText(/could not be worked out/),
     ).toBeVisible();
     expect(
       fetchMock.mock.calls.some(
         ([, init]) => (init as RequestInit | undefined)?.method === 'DELETE',
       ),
     ).toBe(false);
+    expect(screen.getByRole('button', { name: 'Delete this rule' })).toBeDisabled();
   });
 
   it('claims nothing about this target before the server has answered', async () => {

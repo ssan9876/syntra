@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { AccountProfilePage } from './AccountProfilePage.js';
 
 const json = (body: unknown, status = 200) =>
@@ -33,6 +33,7 @@ function mockFetch(
     profileStatus?: number;
     profileProblem?: Record<string, unknown>;
     saveProblem?: { status: number; body: Record<string, unknown> };
+    previewResponse?: () => Promise<Response>;
   } = {},
 ) {
   const status = options.profileStatus ?? 200;
@@ -46,7 +47,7 @@ function mockFetch(
       );
     }
     if (path.endsWith('/profile/preview'))
-      return Promise.resolve(
+      return options.previewResponse?.() ?? Promise.resolve(
         json({
           correlationKey: 'anna.novak',
           taken: false,
@@ -68,13 +69,14 @@ function mockFetch(
               status,
             ),
           );
-    return Promise.resolve(json({ persons: [] }));
+    return Promise.resolve(json({ persons: [{ id: 'p1', givenName: 'Anna', familyName: 'Novak' }, { id: 'p2', givenName: 'Ben', familyName: 'Smith' }], total: 2 }));
   });
 }
 
 const renderPage = () =>
   render(
     <MemoryRouter initialEntries={['/admin/targets/t1/profile']}>
+      <Link to="/admin/targets/t2/profile">Other target</Link>
       <Routes>
         <Route
           path="/admin/targets/:id/profile"
@@ -87,6 +89,64 @@ const renderPage = () =>
 beforeEach(() => vi.restoreAllMocks());
 
 describe('AccountProfilePage', () => {
+  it('discards a delayed preview when moving to another target', async () => {
+    let finish!: (response: Response) => void;
+    mockFetch({ previewResponse: () => new Promise((resolve) => { finish = resolve; }) });
+    renderPage();
+    await screen.findByLabelText('Account name template');
+    await userEvent.selectOptions(screen.getByLabelText('Person'), 'p1');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await userEvent.click(screen.getByRole('link', { name: 'Other target' }));
+    await screen.findByLabelText('Account name template');
+    await act(async () => finish(json({ correlationKey: 'wrong.target', container: '', attributes: {}, problems: [] })));
+    expect(screen.queryByText('wrong.target')).toBeNull();
+    expect(screen.getByLabelText('Person')).toHaveValue('');
+  });
+
+  it('keeps the newer person preview when an older response finishes last', async () => {
+    const finish: ((response: Response) => void)[] = [];
+    mockFetch({ previewResponse: () => new Promise((resolve) => { finish.push(resolve); }) });
+    renderPage();
+    await screen.findByLabelText('Account name template');
+    await userEvent.selectOptions(screen.getByLabelText('Person'), 'p1');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await userEvent.selectOptions(screen.getByLabelText('Person'), 'p2');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await act(async () => finish[1]!(json({ correlationKey: 'ben.smith', container: '', attributes: {}, problems: [] })));
+    expect(await screen.findByText('ben.smith')).toBeVisible();
+    await act(async () => finish[0]!(json({ correlationKey: 'anna.novak', container: '', attributes: {}, problems: [] })));
+    expect(screen.getByText('ben.smith')).toBeVisible();
+    expect(screen.queryByText('anna.novak')).toBeNull();
+  });
+
+  it.each(['Account name template', 'Template 1', 'Length', 'Person'])('clears the preview after changing %s', async (label) => {
+    mockFetch();
+    renderPage();
+    await screen.findByLabelText('Account name template');
+    await userEvent.selectOptions(screen.getByLabelText('Person'), 'p1');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText('anna.novak')).toBeVisible();
+    if (label === 'Person') await userEvent.selectOptions(screen.getByLabelText(label), 'p2');
+    else await userEvent.type(screen.getByLabelText(label), 'x');
+    expect(screen.queryByText('anna.novak')).toBeNull();
+  });
+
+  it.each([false, true])('ignores an in-flight preview after editing (failure=%s)', async (fails) => {
+    let finish!: (response: Response) => void;
+    mockFetch({ previewResponse: () => new Promise((resolve) => { finish = resolve; }) });
+    renderPage();
+    await screen.findByLabelText('Account name template');
+    await userEvent.selectOptions(screen.getByLabelText('Person'), 'p1');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await userEvent.type(screen.getByLabelText('Container template'), 'x');
+    await act(async () => finish(fails
+      ? json({ title: 'Old draft failed', status: 500 }, 500)
+      : json({ correlationKey: 'old.result', container: '', attributes: {}, problems: [] })));
+    expect(screen.queryByText('old.result')).toBeNull();
+    expect(screen.queryByText('Old draft failed')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeEnabled();
+  });
+
   it('sends back only the fields the strict schema accepts', async () => {
     // `accountProfileRequestSchema` is `.strict()` and the GET returns the
     // stored row — id, tenantId, targetSystemId, createdAt, updatedAt and all.
