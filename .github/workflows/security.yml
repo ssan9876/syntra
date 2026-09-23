@@ -30,7 +30,11 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - uses: gitleaks/gitleaks-action@v2
-        env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
+        # Keep the expression out of a YAML flow mapping. The two closing
+        # braces are otherwise parsed as mapping delimiters, so GitHub rejects
+        # the whole workflow before creating even one job.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   dependencies:
     name: Dependency vulnerabilities
