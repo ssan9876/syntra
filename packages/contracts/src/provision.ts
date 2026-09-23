@@ -232,6 +232,12 @@ export const updateTargetRequestSchema = createTargetRequestSchema
     thresholds: thresholdsSchema.optional(),
     preHireDays: z.number().int().min(0).max(365).optional(),
     maxAttempts: z.number().int().min(1).max(10).optional(),
+    maintenanceWindow: z.object({
+      enabled: z.boolean(),
+      days: z.array(z.number().int().min(0).max(6)).min(1).max(7).refine((days) => new Set(days).size === days.length, 'days must be unique'),
+      startMinute: z.number().int().min(0).max(1439),
+      durationMinutes: z.number().int().min(1).max(1440),
+    }).strict().optional(),
   })
   .strict();
 export type UpdateTargetRequest = z.input<typeof updateTargetRequestSchema>;
@@ -379,6 +385,7 @@ export const accountProfileRequestSchema = z
     attributeTemplates: z.record(z.string()),
     initialPasswordPolicy: z.record(z.unknown()),
     initialPasswordDelivery: z.enum(['manager', 'personalEmail', 'vaultOnly']),
+    sensitiveApprovalReason: z.string().trim().min(20).max(1000).optional(),
   })
   .strict();
 export type AccountProfileRequest = z.input<typeof accountProfileRequestSchema>;
@@ -389,6 +396,8 @@ export const applyRunRequestSchema = z
     only: z.array(z.string().uuid()).optional(),
     /** Required to apply a blocked run, or any action needing confirmation. */
     confirm: z.boolean().default(false),
+    /** Explicit, reasoned exception for leaver-only actions outside the target window. */
+    maintenanceOverrideReason: z.string().trim().min(10).max(500).optional(),
   })
   .strict();
 export type ApplyRunRequest = z.input<typeof applyRunRequestSchema>;

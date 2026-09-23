@@ -23,6 +23,8 @@ beforeEach(async () => {
       PERMISSIONS.DIRECTORY_WRITE,
       PERMISSIONS.PROVISION_READ,
       PERMISSIONS.PROVISION_MANAGE,
+      PERMISSIONS.GOVERN_READ,
+      PERMISSIONS.GOVERN_MANAGE,
     ]);
     await assignRole(tx, admin.id, role.id);
     const session = await createSession(
@@ -157,6 +159,35 @@ describe('lifecycle operation routes', () => {
     });
     expect(acknowledged.statusCode).toBe(200);
     expect(acknowledged.json().acknowledgedAt).not.toBeNull();
+    const note = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/admin/lifecycle-operations/${operation.id}/case-notes`,
+      headers: { host: ctx.host, cookie },
+      payload: { message: 'Waiting for a target owner.' },
+    });
+    expect(note.statusCode).toBe(201);
+    const resolved = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/admin/lifecycle-operations/${operation.id}/resolve`,
+      headers: { host: ctx.host, cookie },
+      payload: { code: 'configuration_corrected', summary: 'Credential replaced and verified.' },
+    });
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.json().operation).toMatchObject({ caseStatus: 'resolved', resolutionCode: 'configuration_corrected' });
+    const duplicate = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/admin/lifecycle-operations/${operation.id}/resolve`,
+      headers: { host: ctx.host, cookie },
+      payload: { code: 'duplicate', summary: 'Duplicate closure.' },
+    });
+    expect(duplicate.statusCode).toBe(409);
+    const read = await ctx.app.inject({
+      method: 'GET', url: `/api/admin/lifecycle-operations/${operation.id}`, headers: { host: ctx.host, cookie },
+    });
+    expect(read.json().caseEvents.map((event: { kind: string }) => event.kind)).toEqual([
+      'assignment', 'acknowledgement', 'note', 'resolution',
+    ]);
+    expect(read.json().caseEvents[2]).toMatchObject({ actorName: 'Operator', message: 'Waiting for a target owner.' });
   });
 
   it('requeues failed lifecycle work without creating another operation', async () => {
@@ -179,6 +210,38 @@ describe('lifecycle operation routes', () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ id: operation.id, status: 'queued', attempt: 2 });
+  });
+
+  it('places, lists and releases a legal hold on lifecycle evidence', async () => {
+    const operation = await withTenant(ctx.tenantId, (tx) => tx.lifecycleOperation.create({
+      data: { tenantId: ctx.tenantId, kind: 'verify', idempotencyKey: 'legal-hold-api', inputFingerprint: 'f', status: 'completed' },
+    }));
+    const placed = await ctx.app.inject({
+      method: 'POST', url: '/api/admin/lifecycle-legal-holds', headers: { host: ctx.host, cookie },
+      payload: { subjectType: 'lifecycle_operation', subjectId: operation.id, reference: 'LEGAL-42', reason: 'Preserve for counsel' },
+    });
+    expect(placed.statusCode).toBe(201);
+    const listed = await ctx.app.inject({ method: 'GET', url: '/api/admin/lifecycle-legal-holds', headers: { host: ctx.host, cookie } });
+    expect(listed.json().holds).toHaveLength(1);
+    const released = await ctx.app.inject({
+      method: 'POST', url: `/api/admin/lifecycle-legal-holds/${placed.json().id}/release`, headers: { host: ctx.host, cookie },
+    });
+    expect(released.statusCode).toBe(200);
+    expect(released.json().releasedAt).not.toBeNull();
+  });
+
+  it('refuses retry-after-verification until a complete divergent observation exists', async () => {
+    const operation = await withTenant(ctx.tenantId, (tx) => tx.lifecycleOperation.create({
+      data: {
+        tenantId: ctx.tenantId, kind: 'verify', idempotencyKey: 'verify-after-readback', inputFingerprint: 'f', status: 'failed',
+        steps: { create: { tenantId: ctx.tenantId, key: 'target', title: 'Verify target', position: 0, required: true, status: 'failed' } },
+      },
+    }));
+    const response = await ctx.app.inject({
+      method: 'POST', url: `/api/admin/lifecycle-operations/${operation.id}/retry-after-verification`, headers: { host: ctx.host, cookie },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ type: expect.stringContaining('verification-required') });
   });
 
   it('does not reset a target lifecycle operation when its durable receipts cannot be queued', async () => {

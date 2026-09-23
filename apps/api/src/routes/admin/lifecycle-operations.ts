@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   getLifecycleOperation,
   retryLifecycleOperation,
+  assertRetryAfterVerification,
   approveLifecycleOperation,
   rejectLifecycleOperation,
   cancelLifecycleOperation,
@@ -14,6 +15,11 @@ import {
   simulateLifecycle,
   assignLifecycleOperation,
   acknowledgeLifecycleOperation,
+  addLifecycleCaseNote,
+  resolveLifecycleCase,
+  reopenLifecycleCase,
+  lifecycleResolutionCodes,
+  LifecycleCaseStateError,
   lifecycleWorkMetrics,
   lifecycleNotifications,
   overdueReason,
@@ -31,6 +37,10 @@ import {
   getLifecycleSimulation,
   LifecycleApprovalError,
   LifecycleApprovalRequiredError,
+  LifecycleVerificationRequiredError,
+  listLifecycleLegalHolds,
+  placeLifecycleLegalHold,
+  releaseLifecycleLegalHold,
   PERMISSIONS,
   TARGET_STEP_KEY,
   type Scheduler,
@@ -43,6 +53,17 @@ import { ProblemError } from '../../plugins/problem-json.js';
 import { pageQuery } from './list-query.js';
 
 const idParams = z.object({ id: z.string().uuid() });
+const legalHoldRequest = z.object({
+  subjectType: z.enum(['lifecycle_operation', 'lifecycle_simulation']),
+  subjectId: z.string().uuid(),
+  reference: z.string().trim().min(1).max(200),
+  reason: z.string().trim().min(1).max(2000),
+}).strict();
+const legalHoldQuery = z.object({
+  active: z.enum(['true', 'false']).default('true'),
+  subjectType: z.enum(['lifecycle_operation', 'lifecycle_simulation']).optional(),
+  subjectId: z.string().uuid().optional(),
+}).refine((value) => !value.subjectId || value.subjectType, { message: 'subjectType is required with subjectId' });
 const optionalText = z.string().trim().min(1).max(255).optional();
 const onboardingRequest = z.object({
   idempotencyKey: z.string().trim().min(1).max(200),
@@ -140,6 +161,12 @@ const assignmentRequest = z.object({
   priority: z.enum(['low', 'normal', 'high', 'critical']),
   dueAt: z.coerce.date().nullable().default(null),
 });
+const caseNoteRequest = z.object({ message: z.string().trim().min(1).max(4000) }).strict();
+const caseResolutionRequest = z.object({
+  code: z.enum(lifecycleResolutionCodes),
+  summary: z.string().trim().min(1).max(4000),
+}).strict();
+const caseReopenRequest = z.object({ reason: z.string().trim().min(1).max(4000) }).strict();
 const bulkLifecycleRequest = z.object({
   operationIds: z.array(z.string().uuid()).min(1).max(100),
   action: z.enum(['acknowledge', 'retry']),
@@ -193,6 +220,12 @@ function translate(error: unknown): never {
       error.message,
     );
   }
+  if (error instanceof LifecycleVerificationRequiredError) {
+    throw new ProblemError(409, 'verification-required', 'Verification required', error.message, {
+      operationId: error.operationId,
+      reason: error.reason,
+    });
+  }
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
     throw new ProblemError(404, 'not-found', 'Lifecycle operation not found');
   }
@@ -224,6 +257,8 @@ export async function registerAdminLifecycleOperationRoutes(
       operation.approvedByUserId,
       operation.rejectedByUserId,
       operation.escalatedToUserId,
+      operation.resolvedByUserId,
+      ...operation.caseEvents.map((event) => event.actorUserId),
     ].filter((id): id is string => id !== null);
     const [users, person] = await db(async (tx) => [
       ids.length ? await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, displayName: true, login: true } }) : [],
@@ -241,6 +276,8 @@ export async function registerAdminLifecycleOperationRoutes(
       approvedByName: nameOf(operation.approvedByUserId),
       rejectedByName: nameOf(operation.rejectedByUserId),
       escalatedToName: nameOf(operation.escalatedToUserId),
+      resolvedByName: nameOf(operation.resolvedByUserId),
+      caseEvents: operation.caseEvents.map((event) => ({ ...event, actorName: nameOf(event.actorUserId) })),
       overdueReason: overdueReason(operation),
     };
   };
@@ -391,7 +428,7 @@ export async function registerAdminLifecycleOperationRoutes(
     async (request) => {
       const { id } = idParams.parse(request.params);
       try {
-        return await acknowledgeLifecycleOperation(request.tenantId, id);
+        return await acknowledgeLifecycleOperation(request.tenantId, id, request.session.userId);
       } catch (error) {
         translate(error);
       }
@@ -404,6 +441,113 @@ export async function registerAdminLifecycleOperationRoutes(
     async (request) => {
       const { id } = idParams.parse(request.params);
       try {
+        return await retryOperation(request.tenantId, id, request.db);
+      } catch (error) {
+        translate(error);
+      }
+    },
+  );
+
+  app.post(
+    '/lifecycle-operations/:id/case-notes',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParams.parse(request.params);
+      const { message } = caseNoteRequest.parse(request.body);
+      try {
+        return reply.code(201).send(await addLifecycleCaseNote(request.tenantId, id, request.session.userId, message));
+      } catch (error) {
+        translate(error);
+      }
+    },
+  );
+
+  app.post(
+    '/lifecycle-operations/:id/resolve',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParams.parse(request.params);
+      const body = caseResolutionRequest.parse(request.body);
+      try {
+        return await resolveLifecycleCase(request.tenantId, id, request.session.userId, body.code, body.summary);
+      } catch (error) {
+        if (error instanceof LifecycleCaseStateError) {
+          throw new ProblemError(409, 'case-state-conflict', 'Lifecycle case state conflict', error.message);
+        }
+        translate(error);
+      }
+    },
+  );
+
+  app.post(
+    '/lifecycle-operations/:id/reopen',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParams.parse(request.params);
+      const { reason } = caseReopenRequest.parse(request.body);
+      try {
+        return await reopenLifecycleCase(request.tenantId, id, request.session.userId, reason);
+      } catch (error) {
+        if (error instanceof LifecycleCaseStateError) {
+          throw new ProblemError(409, 'case-state-conflict', 'Lifecycle case state conflict', error.message);
+        }
+        translate(error);
+      }
+    },
+  );
+
+  app.get(
+    '/lifecycle-legal-holds',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_READ) },
+    async (request) => {
+      const query = legalHoldQuery.parse(request.query ?? {});
+      return {
+        holds: await listLifecycleLegalHolds(request.tenantId, {
+          activeOnly: query.active === 'true',
+          ...(query.subjectType ? { subjectType: query.subjectType } : {}),
+          ...(query.subjectId ? { subjectId: query.subjectId } : {}),
+        }),
+      };
+    },
+  );
+
+  app.post(
+    '/lifecycle-legal-holds',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request, reply) => {
+      const body = legalHoldRequest.parse(request.body);
+      try {
+        const hold = await placeLifecycleLegalHold(request.tenantId, { ...body, actorUserId: request.session.userId });
+        return reply.code(201).send(hold);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'Legal-hold subject not found') {
+          throw new ProblemError(404, 'not-found', 'Legal-hold subject not found');
+        }
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/lifecycle-legal-holds/:id/release',
+    { preHandler: requirePermission(PERMISSIONS.GOVERN_MANAGE) },
+    async (request) => {
+      const { id } = idParams.parse(request.params);
+      try {
+        return await releaseLifecycleLegalHold(request.tenantId, id, request.session.userId);
+      } catch (error) {
+        translate(error);
+      }
+    },
+  );
+
+  app.post(
+    '/lifecycle-operations/:id/retry-after-verification',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParams.parse(request.params);
+      try {
+        await assertRetryAfterVerification(request.tenantId, id);
         return await retryOperation(request.tenantId, id, request.db);
       } catch (error) {
         translate(error);
@@ -495,7 +639,7 @@ export async function registerAdminLifecycleOperationRoutes(
       const settled = await Promise.allSettled(
         operationIds.map((id) =>
           body.action === 'acknowledge'
-            ? acknowledgeLifecycleOperation(request.tenantId, id)
+            ? acknowledgeLifecycleOperation(request.tenantId, id, request.session.userId)
             : retryOperation(request.tenantId, id, request.db),
         ),
       );
@@ -572,6 +716,7 @@ export async function registerAdminLifecycleOperationRoutes(
           priority: body.priority,
           dueAt: body.dueAt,
           ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
+          actorUserId: request.session.userId,
         });
       } catch (error) {
         translate(error);

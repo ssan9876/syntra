@@ -109,6 +109,32 @@ async function noticeHeaded(title: string): Promise<HTMLElement> {
 beforeEach(() => vi.restoreAllMocks());
 
 describe('ProvisionRunDetailPage', () => {
+  it('collects confirmation and a reason before retrying an urgent-leaver exception', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    let posts = 0;
+    fetchMock.mockImplementation((input, init) => {
+      const path = String(input);
+      if (init?.method === 'POST') {
+        posts += 1;
+        return Promise.resolve(posts === 1
+          ? json({ type: 'https://syntra.dev/problems/maintenance-window-closed', title: 'Target maintenance window is closed', status: 409, detail: 'Outside window', overrideAllowed: true }, 409)
+          : json({ status: 'applied', applied: 1, failed: 0, pendingRetry: 0, inFlight: 0, deferred: 0, skipped: 0 }));
+      }
+      if (path.includes('/drift')) return Promise.resolve(json({ findings: [] }));
+      return Promise.resolve(json(run({ actions: [action({ actionType: 'disable_account' })] })));
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Apply 1 action' }));
+    expect(await screen.findByText('Outside the target maintenance window')).toBeVisible();
+    const retry = screen.getByRole('button', { name: 'Apply 1 action' });
+    expect(retry).toBeDisabled();
+    await userEvent.click(screen.getByLabelText('I have read what needs confirmation and want to apply it'));
+    await userEvent.type(screen.getByLabelText('Urgent leaver exception reason'), 'Immediate termination');
+    await userEvent.click(retry);
+    const body = JSON.parse(String(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')[1]?.[1]?.body));
+    expect(body).toMatchObject({ confirm: true, maintenanceOverrideReason: 'Immediate termination' });
+  });
+
   it('offers a way past a block that can be confirmed', async () => {
     mockFetch(
       run({

@@ -1,12 +1,79 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { startFakeScimServer, type FakeScimServer } from '../testing/fake-scim-server.js';
 import { scimTargetConnector } from './connector.js';
+import { certifyTargetConnector } from '../testing/target-connector-certification.js';
 
 let server: FakeScimServer | undefined;
 
 afterEach(async () => {
   await server?.close();
   server = undefined;
+});
+
+describe('shared connector certification', () => {
+  it('certifies the SCIM lifecycle against a disposable SCIM service', async () => {
+    server = await startFakeScimServer({
+      bearerToken: 'cert-token',
+      groups: [{ id: 'g-cert', displayName: 'Certified users', members: [] }],
+    });
+    const config = {
+      baseUrl: server.baseUrl,
+      bearerToken: 'cert-token',
+      pageSize: 2,
+      allowPrivateAddresses: true,
+    };
+
+    const report = await certifyTargetConnector({
+      name: 'SCIM 2.0',
+      connector: scimTargetConnector,
+      config,
+      create: {
+        op: 'create_account',
+        actionId: 'cert-scim-create',
+        correlationKey: 'connector.certification',
+        attributes: { 'name.givenName': ['Connector'], 'name.familyName': ['Certification'], title: ['Tester'] },
+        enabled: true,
+        initialPassword: 'Initial-Passw0rd!',
+      },
+      update: (anchor) => ({
+        op: 'update_account',
+        actionId: 'cert-scim-update',
+        anchor,
+        attributes: { title: ['Verified Tester'] },
+      }),
+      disable: (anchor) => ({
+        op: 'disable_account',
+        actionId: 'cert-scim-disable',
+        anchor,
+        reason: 'connector certification',
+      }),
+      entitlement: {
+        id: 'g-cert',
+        grant: (anchor) => ({
+          op: 'grant_entitlement',
+          actionId: 'cert-scim-grant',
+          anchor,
+          entitlementId: 'g-cert',
+        }),
+        revoke: (anchor) => ({
+          op: 'revoke_entitlement',
+          actionId: 'cert-scim-revoke',
+          anchor,
+          entitlementId: 'g-cert',
+        }),
+      },
+      missingAnchor: 'missing-scim-user',
+      assertCreated: (observed) => {
+        expect(observed.account?.attributes['name.givenName']).toEqual(['Connector']);
+      },
+      assertUpdated: (observed) => {
+        expect(observed.account?.attributes.title).toEqual(['Verified Tester']);
+      },
+    });
+
+    expect(report.checks).toContain('idempotent-create');
+    expect(report.checks).toContain('revoke-read-back');
+  });
 });
 
 describe('scimTargetConnector.test', () => {

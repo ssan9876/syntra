@@ -19,10 +19,12 @@ credential unusable.
   data key, and that data key is wrapped under `MASTER_KEY` with AES-256-GCM
   (`packages/core/src/vault/master-key.ts`, `vault-service.ts`). GCM
   authenticates, so a wrong key produces a loud decryption error, not garbage.
-- **There is no key-rotation or re-wrap tool.** `vault-service.ts` notes that
-  the two-layer design would allow rotating the master key by re-wrapping data
-  keys; nothing in the repository implements that. There is no CLI, no route,
-  and no migration that re-wraps `Secret` rows.
+- `rewrapSecrets` performs the safe half of a rotation: it unwraps each data
+  key with the current provider and re-wraps it with the next provider without
+  decrypting secret ciphertext. It is intentionally a core operation, not an
+  unauthenticated HTTP route: run it in a maintenance transaction while both
+  keys are available, verify readiness using the next key, then switch the
+  deployment configuration.
 - Readiness checks the key on every `/health/ready`: the `vault` probe unseals
   one active signing key per tenant and fails if it cannot
   (`packages/core/src/health/readiness.ts`). `syntra_readiness` goes to 0 and
@@ -182,10 +184,10 @@ decision.
 
 ## What this does not cover
 
-- **Rotating a working key.** There is no tool. The design would allow
-  re-wrapping data keys under a new master key without touching ciphertext;
-  it is not built. Until it is, "rotate `MASTER_KEY`" means the full
-  re-entry above, planned as a change rather than an incident.
+- **Rotating a working key without an operator-run maintenance wrapper.**
+  `rewrapSecrets` is deliberately not exposed as a web route or release CLI.
+  A deployment-specific change procedure must hold both keys, invoke it in a
+  transaction, verify the next key, and only then replace `MASTER_KEY`.
 - **A KMS-backed provider.** `MasterKeyProvider` is an interface; only the
   local provider exists.
 - **`SESSION_SECRET` and `GOVERN_CHECKPOINT_KEY`.** Different keys, different

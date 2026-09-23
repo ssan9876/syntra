@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from './master-key.js';
-import { getSecret, putSecret } from './vault-service.js';
+import { getSecret, putSecret, rewrapSecrets } from './vault-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 9));
 let tenantId: string;
@@ -99,6 +99,19 @@ describe('vault', () => {
     await expect(
       withTenant(tenantId, (tx) => getSecret(tx, wrong, 'k')),
     ).rejects.toThrow();
+  });
+
+  it('re-wraps every data key under the next master key without changing plaintext', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await putSecret(tx, provider, 'a', 'first');
+      await putSecret(tx, provider, 'b', 'second');
+    });
+    const next = localMasterKeyProvider(randomBytes(32));
+    const rotated = await withTenant(tenantId, (tx) => rewrapSecrets(tx, provider, next));
+    expect(rotated).toEqual({ rewrapped: 2 });
+    await expect(withTenant(tenantId, (tx) => getSecret(tx, provider, 'a'))).rejects.toThrow();
+    expect(await withTenant(tenantId, (tx) => getSecret(tx, next, 'a'))).toBe('first');
+    expect(await withTenant(tenantId, (tx) => getSecret(tx, next, 'b'))).toBe('second');
   });
 
   it('keeps secrets of the same name separate per tenant', async () => {

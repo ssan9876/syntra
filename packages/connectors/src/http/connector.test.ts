@@ -7,6 +7,7 @@ import {
 import { httpConnectorDocument, type HttpConnectorDocument } from './document.js';
 import { httpTargetConnector } from './connector.js';
 import { forgetAccessTokens, readPath } from './client.js';
+import { certifyTargetConnector } from '../testing/target-connector-certification.js';
 
 /**
  * Every request the connector made, and the canned answers it got.
@@ -18,6 +19,9 @@ import { forgetAccessTokens, readPath } from './client.js';
  */
 let calls: { url: string; method: string; headers: Record<string, string>; body: unknown }[];
 let answers: { status: number; body: unknown; headers?: Record<string, string> }[];
+let responder:
+  | ((call: (typeof calls)[number]) => { status: number; body: unknown; headers?: Record<string, string> })
+  | undefined;
 
 vi.mock('../net/guarded-fetch.js', () => ({
   guardedFetch: () => async (url: string | URL, init?: RequestInit) => {
@@ -25,13 +29,14 @@ vi.mock('../net/guarded-fetch.js', () => ({
     new Headers(init?.headers).forEach((value, key) => {
       headers[key] = value;
     });
-    calls.push({
+    const call = {
       url: String(url),
       method: init?.method ?? 'GET',
       headers,
       body: init?.body ? safeParse(String(init.body)) : undefined,
-    });
-    const answer = answers.shift() ?? { status: 200, body: null };
+    };
+    calls.push(call);
+    const answer = responder?.(call) ?? answers.shift() ?? { status: 200, body: null };
     return new Response(answer.body === null ? '' : JSON.stringify(answer.body), {
       status: answer.status,
       headers: { 'content-type': 'application/json', ...(answer.headers ?? {}) },
@@ -57,11 +62,12 @@ const simple = (over: Partial<HttpConnectorDocument> = {}): HttpConnectorDocumen
     list: { path: '/users', itemsAt: 'items' },
     anchorAt: 'id',
     correlationAt: 'login',
+    provenance: { kind: 'scalar', path: 'actionId' },
     fields: { displayName: 'displayName', 'name.given': 'givenName' },
     create: {
       method: 'POST',
       path: '/users',
-      body: { login: '{{correlationKey}}', displayName: '{{attr.displayName}}' },
+      body: { login: '{{correlationKey}}', displayName: '{{attr.displayName}}', actionId: '{{actionId}}' },
       anchorAt: 'id',
     },
     update: { method: 'PATCH', path: '/users/{{anchor}}', body: { displayName: '{{attr.displayName}}' } },
@@ -84,7 +90,125 @@ const collect = async <T>(source: AsyncIterable<T>): Promise<T[]> => {
 beforeEach(() => {
   calls = [];
   answers = [];
+  responder = undefined;
   forgetAccessTokens();
+});
+
+describe('shared connector certification', () => {
+  it('certifies a provenance-declaring HTTP document', async () => {
+    const users = new Map<string, Record<string, unknown>>();
+    const members = new Set<string>();
+    let nextId = 1;
+    responder = (call) => {
+      const url = new URL(call.url);
+      const path = url.pathname.replace('/v1', '');
+      if (call.method === 'GET' && path === '/users') {
+        return { status: 200, body: { items: [...users.values()] } };
+      }
+      if (call.method === 'POST' && path === '/users') {
+        const id = `u-${nextId++}`;
+        users.set(id, { id, active: true, ...(call.body as Record<string, unknown>) });
+        return { status: 201, body: { id } };
+      }
+      const user = /^\/users\/([^/]+)$/.exec(path);
+      if (user && call.method === 'PATCH') {
+        const existing = users.get(user[1]!);
+        if (!existing) return { status: 404, body: null };
+        Object.assign(existing, call.body as Record<string, unknown>);
+        return { status: 200, body: existing };
+      }
+      if (call.method === 'GET' && path === '/groups') {
+        return { status: 200, body: { items: [{ id: 'g-1', name: 'Certified users' }] } };
+      }
+      if (call.method === 'GET' && path === '/groups/g-1/members') {
+        return { status: 200, body: { items: [...members].map((id) => ({ id })) } };
+      }
+      if (call.method === 'POST' && path === '/groups/g-1/members') {
+        members.add(String((call.body as { id: unknown }).id));
+        return { status: 200, body: null };
+      }
+      const membership = /^\/groups\/g-1\/members\/([^/]+)$/.exec(path);
+      if (membership && call.method === 'DELETE') {
+        members.delete(membership[1]!);
+        return { status: 200, body: null };
+      }
+      return { status: 404, body: null };
+    };
+
+    const document = simple({
+      account: {
+        ...simple().account,
+        fields: { displayName: 'displayName', active: 'active' },
+        update: {
+          method: 'PATCH',
+          path: '/users/{{anchor}}',
+          body: { displayName: '{{attr.displayName}}' },
+        },
+        disable: {
+          method: 'PATCH',
+          path: '/users/{{anchor}}',
+          body: { active: false },
+        },
+      },
+      entitlement: {
+        list: { path: '/groups', itemsAt: 'items' },
+        anchorAt: 'id',
+        displayNameAt: 'name',
+        members: {
+          path: '/groups/{{entitlementId}}/members',
+          itemsAt: 'items',
+          memberAnchorAt: 'id',
+        },
+        grant: {
+          method: 'POST',
+          path: '/groups/{{entitlementId}}/members',
+          body: { id: '{{anchor}}' },
+        },
+        revoke: {
+          method: 'DELETE',
+          path: '/groups/{{entitlementId}}/members/{{anchor}}',
+        },
+      },
+    });
+
+    const report = await certifyTargetConnector({
+      name: 'document-driven HTTP',
+      connector: httpTargetConnector,
+      config: config(document),
+      create: {
+        op: 'create_account',
+        actionId: 'cert-http-create',
+        correlationKey: 'connector.certification',
+        attributes: { displayName: ['Connector Certification'] },
+        enabled: true,
+        initialPassword: 'not-retained',
+      },
+      update: (anchor) => ({
+        op: 'update_account',
+        actionId: 'cert-http-update',
+        anchor,
+        attributes: { displayName: ['Certified Connector'] },
+      }),
+      disable: (anchor) => ({
+        op: 'disable_account',
+        actionId: 'cert-http-disable',
+        anchor,
+        reason: 'connector certification',
+      }),
+      entitlement: {
+        id: 'g-1',
+        grant: (anchor) => ({ op: 'grant_entitlement', actionId: 'cert-http-grant', anchor, entitlementId: 'g-1' }),
+        revoke: (anchor) => ({ op: 'revoke_entitlement', actionId: 'cert-http-revoke', anchor, entitlementId: 'g-1' }),
+      },
+      missingAnchor: 'missing-http-user',
+      assertUpdated: (observed) => {
+        expect(observed.account?.attributes.displayName).toEqual(['Certified Connector']);
+      },
+    });
+
+    expect(report.checks).toContain('idempotent-create');
+    expect(report.checks).toContain('grant-read-back');
+  });
 });
 
 afterEach(() => {
@@ -319,8 +443,55 @@ describe('readEntitlementMembers', () => {
 });
 
 describe('write', () => {
+  it('refuses create when the document cannot prove idempotency', async () => {
+    const unsafe = simple({
+      account: { ...simple().account, provenance: undefined },
+    } as never);
+    const result = await httpTargetConnector.write(config(unsafe), {
+      op: 'create_account',
+      actionId: 'unsafe-create',
+      correlationKey: 'ada',
+      attributes: {},
+      enabled: true,
+      initialPassword: 'not-retained',
+    });
+    expect(result).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(result.message).toMatch(/provenance read-back/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('adopts only an exact action-id match and rejects a foreign collision', async () => {
+    answers = [{ status: 200, body: { items: [{ id: 'u-1', login: 'ada', actionId: 'act-1' }] } }];
+    const adopted = await httpTargetConnector.write(config(), {
+      op: 'create_account',
+      actionId: 'act-1',
+      correlationKey: 'ADA',
+      attributes: {},
+      enabled: true,
+      initialPassword: 'not-retained',
+    });
+    expect(adopted).toMatchObject({ ok: true, anchor: 'u-1' });
+    expect(calls).toHaveLength(1);
+
+    calls = [];
+    answers = [{ status: 200, body: { items: [{ id: 'u-1', login: 'ada', actionId: 'act-10' }] } }];
+    const collision = await httpTargetConnector.write(config(), {
+      op: 'create_account',
+      actionId: 'act-1',
+      correlationKey: 'ada',
+      attributes: {},
+      enabled: true,
+      initialPassword: 'not-retained',
+    });
+    expect(collision).toMatchObject({ ok: false, failure: 'conflict' });
+    expect(calls).toHaveLength(1);
+  });
+
   it('creates an account and reports the anchor the target chose', async () => {
-    answers = [{ status: 201, body: { id: 'new-1' } }];
+    answers = [
+      { status: 200, body: { items: [] } },
+      { status: 201, body: { id: 'new-1' } },
+    ];
 
     const result = await httpTargetConnector.write(config(), {
       op: 'create_account',
@@ -332,15 +503,18 @@ describe('write', () => {
     });
 
     expect(result).toMatchObject({ ok: true, anchor: 'new-1' });
-    expect(calls[0]).toMatchObject({
+    expect(calls[1]).toMatchObject({
       url: 'https://api.example.com/v1/users',
       method: 'POST',
-      body: { login: 'ada', displayName: 'Ada Lovelace' },
+      body: { login: 'ada', displayName: 'Ada Lovelace', actionId: 'act-1' },
     });
   });
 
   it('omits a key whose attribute nobody set', async () => {
-    answers = [{ status: 201, body: { id: 'new-1' } }];
+    answers = [
+      { status: 200, body: { items: [] } },
+      { status: 201, body: { id: 'new-1' } },
+    ];
 
     await httpTargetConnector.write(config(), {
       op: 'create_account',
@@ -353,7 +527,7 @@ describe('write', () => {
 
     // Not `{"login": "ada", "displayName": null}` — null is a WRITE that
     // clears the field at most targets.
-    expect(calls[0]!.body).toEqual({ login: 'ada' });
+    expect(calls[1]!.body).toEqual({ login: 'ada', actionId: 'act-1' });
   });
 
   it('sends no body at all when every field of one would be missing', async () => {
@@ -409,7 +583,10 @@ describe('write', () => {
   it("never puts the target's response body in the message", async () => {
     // A target's error text quotes back what was sent, and what was sent may
     // include an initial password.
-    answers = [{ status: 400, body: { error: "password 'hunter2' is too weak" } }];
+    answers = [
+      { status: 200, body: { items: [] } },
+      { status: 400, body: { error: "password 'hunter2' is too weak" } },
+    ];
     const result = await httpTargetConnector.write(config(), {
       op: 'create_account',
       actionId: 'act-1',

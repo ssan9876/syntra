@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLANK, configFromForm, formFrom, type Target } from './target-form.js';
+import { BLANK, configFromForm, formFrom, validateNumbers, type Target } from './target-form.js';
 
 const target = (overrides: Partial<Target> = {}): Target => ({
   id: 't1',
@@ -23,9 +23,28 @@ const target = (overrides: Partial<Target> = {}): Target => ({
   deactivateSyntraUserThresholdPercent: 10,
   perEntitlementThresholdPercent: 50,
   personPopulationDropPercent: 20,
+  maxAttempts: 3,
   consecutiveSkippedRuns: 0,
   lastSkipReason: null,
+  externalWritesPausedAt: null,
+  externalWritesPausedByUserId: null,
+  externalWritesPauseReason: null,
+  externalWritesPauseExpiresAt: null,
+  externalWritesResumedAt: null,
+  externalWritesResumedByUserId: null,
+  maintenanceWindowEnabled: false,
+  maintenanceWindowDays: [],
+  maintenanceWindowStartMinute: null,
+  maintenanceWindowDurationMinutes: null,
   ...overrides,
+});
+
+describe('bounded connector retries', () => {
+  it('round-trips the saved attempt limit and refuses values outside 1–10', () => {
+    expect(formFrom(target({ maxAttempts: 6 })).maxAttempts).toBe('6');
+    expect(validateNumbers({ ...BLANK, maxAttempts: '0' })).toMatchObject({ bad: { maxAttempts: expect.any(String) } });
+    expect(validateNumbers({ ...BLANK, maxAttempts: '10' })).toMatchObject({ values: { maxAttempts: 10 } });
+  });
 });
 
 describe('the native Entra ID target form', () => {

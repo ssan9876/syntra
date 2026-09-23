@@ -197,35 +197,22 @@ describe('diffPersons', () => {
     expect(changes[0]?.after).toEqual({ managerPersonId: 'p-9' });
   });
 
-  /**
-   * A manager not yet imported is ordinary on a first run and fixed by the
-   * next one. It must never be a null write, which would clear a manager
-   * somebody set by hand.
-   *
-   * And it must not manufacture a change of its own. A note attached to an
-   * otherwise-empty diff is an `update_contract` that writes nothing, is
-   * proposed again on every subsequent run because nothing about it ever
-   * changes, and under `autoApply` applies a no-op write and an audit event
-   * every night for as long as that manager is missing. Nothing is lost by
-   * staying quiet: when the manager IS imported, `managerPersonId` genuinely
-   * differs from what is stored, and a real change appears then.
-   */
-  it('proposes nothing when the only news is an unresolvable manager', () => {
+  it('carries a same-feed manager identity for apply-time resolution', () => {
     const record = mapped('1');
     record.contracts[0]!.managerExternalId = '9';
     const changes = diffPersons(input({ mapped: [record], existing: [existing('1')] }));
-    expect(changes).toEqual([]);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.after).toEqual({ managerExternalId: '9' });
   });
 
-  it('carries the note on a change that exists for another reason', () => {
+  it('carries a deferred manager alongside another contract change', () => {
     const record = mapped('1');
     record.contracts[0]!.managerExternalId = '9';
     record.contracts[0]!.department = 'Engineering';
     const changes = diffPersons(input({ mapped: [record], existing: [existing('1')] }));
     expect(changes).toHaveLength(1);
     expect(changes[0]?.changeType).toBe('update_contract');
-    expect(changes[0]?.message).toMatch(/manager "9" is not in the register yet/);
-    expect(changes[0]?.after).toEqual({ department: 'Engineering' });
+    expect(changes[0]?.after).toEqual({ department: 'Engineering', managerExternalId: '9' });
     expect(changes[0]?.after).not.toHaveProperty('managerPersonId');
   });
 

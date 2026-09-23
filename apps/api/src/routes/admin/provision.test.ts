@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
+import { entraIdDocument } from '@syntra/connectors';
 import {
   PERMISSIONS,
   assignRole,
@@ -276,14 +277,17 @@ describe('GET /api/admin/targets/:id/capabilities and entitlements/search', () =
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       type: 'activeDirectory',
+      metadata: {
+        adapterVersion: '1.0.0',
+        supportState: 'supported',
+        rollout: 'general',
+        certification: { status: 'passed' },
+      },
       matrix: null,
       capabilities: { available: true, createAccount: true, manageEntitlements: true },
     });
   });
 
-  // SKIPPED until the schema owner extends the `target_system_encrypted_transport`
-  // CHECK constraint to admit `type = 'entraId'` (see docs/connectors/entra-id.md,
-  // "Database constraint"); the POST answers 500 from that constraint today.
   it('reports the versioned matrix for a native Entra target', async () => {
     const cookie = await manager();
     const created = await post('/api/admin/targets', cookie, {
@@ -297,6 +301,12 @@ describe('GET /api/admin/targets/:id/capabilities and entitlements/search', () =
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.type).toBe('entraId');
+    expect(body.metadata).toMatchObject({
+      adapterVersion: '1.0.0',
+      supportState: 'preview',
+      rollout: 'controlled',
+      certification: { status: 'partial' },
+    });
     expect(body.matrix.version).toBe(1);
     expect(body.matrix.entries.deleteAccount.status).toBe('never');
     expect(body.matrix.entries.dynamicGroups.status).toBe('unsupported');
@@ -382,6 +392,96 @@ describe('GET /api/admin/targets/:id/capabilities and entitlements/search', () =
       tx.connectionReadinessCheck.count({ where: { systemKind: 'target', systemId: targetId } }),
     );
     expect(after).toBe(before + 1);
+  });
+
+  it('returns bounded connector health history to provision readers', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    await withTenant(ctx.tenantId, (tx) => tx.connectionReadinessCheck.create({
+      data: {
+        tenantId: ctx.tenantId, systemKind: 'target', systemId: targetId,
+        configurationFingerprint: 'fixture', status: 'failed', latencyMs: 87,
+        message: 'Authentication failed with HTTP 401',
+      },
+    }));
+    const response = await get(`/api/admin/targets/${targetId}/health-series?days=7`, cookie);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      targetSystemId: targetId,
+      days: 7,
+      totals: { readinessChecks: 1, readinessFailures: 1, authenticationFailures: 1 },
+    });
+    expect(response.json().series).toHaveLength(7);
+    expect((await get(`/api/admin/targets/${targetId}/health-series?days=91`, cookie)).statusCode).toBe(400);
+  });
+
+  it('requires four eyes to resume an audited external-write stop', async () => {
+    const first = await manager();
+    await create(first);
+    const paused = await post(`/api/admin/targets/${targetId}/external-write-stop`, first, {
+      reason: 'Contain unexpected connector writes',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(paused.statusCode).toBe(200);
+    expect(paused.json()).toMatchObject({ externalWritesPauseReason: 'Contain unexpected connector writes' });
+    expect((await post(`/api/admin/targets/${targetId}/external-write-resume`, first, { reason: 'Self approval' })).statusCode).toBe(403);
+    const second = await adminCookie([PERMISSIONS.PROVISION_MANAGE, PERMISSIONS.PROVISION_READ, PERMISSIONS.IDENTITY_READ]);
+    const resumed = await post(`/api/admin/targets/${targetId}/external-write-resume`, second, { reason: 'Connection retested after remediation' });
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.json().externalWritesPausedAt).toBeNull();
+  });
+});
+
+describe('document-driven Entra migration', () => {
+  it('previews and applies the revision-bound migration without replacing the target', async () => {
+    const cookie = await manager();
+    const document = structuredClone(entraIdDocument);
+    if (document.auth.type !== 'oauth2') throw new Error('fixture must use OAuth');
+    document.auth.tokenUrl = 'https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token';
+    document.auth.clientId = '11111111-2222-3333-4444-555555555555';
+    const created = await post('/api/admin/targets', cookie, {
+      name: 'Legacy Entra',
+      type: 'httpJson',
+      config: { document },
+      bindPassword: 'preserved-secret',
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id as string;
+
+    const preview = await get(`/api/admin/targets/${id}/migrations/native-entra/preview`, cookie);
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({
+      targetId: id,
+      from: { type: 'httpJson' },
+      to: { type: 'entraId' },
+      preserved: { targetId: true, credential: true },
+    });
+
+    const applied = await post(`/api/admin/targets/${id}/migrations/native-entra/apply`, cookie, {
+      revision: preview.json().revision,
+    });
+    expect(applied.statusCode).toBe(200);
+    const target = await get(`/api/admin/targets/${id}`, cookie);
+    expect(target.json()).toMatchObject({ id, type: 'entraId' });
+  });
+
+  it('rejects a stale migration preview', async () => {
+    const cookie = await manager();
+    const document = structuredClone(entraIdDocument);
+    if (document.auth.type !== 'oauth2') throw new Error('fixture must use OAuth');
+    document.auth.tokenUrl = 'https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token';
+    document.auth.clientId = '11111111-2222-3333-4444-555555555555';
+    const created = await post('/api/admin/targets', cookie, {
+      name: 'Legacy Entra', type: 'httpJson', config: { document }, bindPassword: 'secret',
+    });
+    const id = created.json().id as string;
+    const preview = await get(`/api/admin/targets/${id}/migrations/native-entra/preview`, cookie);
+    await patch(`/api/admin/targets/${id}`, cookie, { name: 'Changed target' });
+    const applied = await post(`/api/admin/targets/${id}/migrations/native-entra/apply`, cookie, {
+      revision: preview.json().revision,
+    });
+    expect(applied.statusCode).toBe(409);
+    expect(applied.json().type).toContain('preview-stale');
   });
 });
 
@@ -567,6 +667,35 @@ describe('rules', () => {
 });
 
 describe('the account profile', () => {
+  it('blocks an unapproved sensitive mapping and reports its recorded purpose', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const sensitive = {
+      ...profile,
+      attributeTemplates: { recoveryMail: '%person.personalEmail%' },
+    };
+
+    const refused = await put(`/api/admin/targets/${targetId}/profile`, cookie, sensitive);
+    expect(refused.statusCode).toBe(400);
+    expect(JSON.stringify(refused.json())).toContain('sensitiveApprovalReason');
+
+    const saved = await put(`/api/admin/targets/${targetId}/profile`, cookie, {
+      ...sensitive,
+      sensitiveApprovalReason: 'Required for the documented account recovery process.',
+    });
+    expect(saved.statusCode).toBe(204);
+    const read = await get(`/api/admin/targets/${targetId}/profile`, cookie);
+    expect(read.json().dataMinimization).toMatchObject({
+      approved: true,
+      approvalReason: 'Required for the documented account recovery process.',
+      sensitiveMappings: [{
+        targetAttribute: 'recoveryMail',
+        sourceField: 'person.personalEmail',
+        classification: 'sensitive',
+      }],
+    });
+  });
+
   it('saves, reads back and previews against a real person', async () => {
     const cookie = await manager();
     await create(cookie);

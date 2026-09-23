@@ -119,6 +119,18 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261008000000_entra_target_transport',
   '20261009000000_lifecycle_concurrency',
   '20261010000000_target_transport_not_null',
+  '20261011000000_lifecycle_open_queue_index',
+  '20261012000000_lifecycle_operation_retention',
+  '20261013000000_lifecycle_legal_holds',
+  '20261014000000_lifecycle_case_history',
+  '20261015000000_target_external_write_stop',
+  '20261016000000_target_maintenance_window',
+  '20261017000000_person_duplicate_review',
+  '20261018000000_person_duplicate_review_rls',
+  '20261019000000_person_source_links',
+  '20261020000000_duplicate_review_link_resolution',
+  '20261021000000_identity_reference_values',
+  '20261022000000_profile_sensitive_mapping_approval',
 ];
 
 /**

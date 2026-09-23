@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Check, Field, Panel, Status, Table } from '@syntra/ui';
+import { Alert, Button, Check, Field, Panel, Select, Status, Table } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
@@ -27,11 +27,19 @@ interface Operation {
   approvedAt: string | null; approvedByName: string | null; rejectedAt: string | null; rejectedByName: string | null; rejectionReason: string | null;
   sloMinutes: number | null; sloDeadlineAt: string | null; sloBreachedAt: string | null;
   escalatedAt: string | null; escalatedToName: string | null; overdueReason: string | null;
+  caseStatus: string; resolvedAt: string | null; resolvedByName: string | null;
+  resolutionCode: string | null; resolutionSummary: string | null; caseEvents: CaseEvent[];
   createdAt: string; completedAt: string | null;
   steps: Step[];
 }
 interface Delivery {
   id: string; template: string; to: string; attempts: number; lastError: string | null; sentAt: string | null; createdAt: string;
+}
+interface LegalHold {
+  id: string; reference: string; reason: string; placedAt: string; releasedAt: string | null;
+}
+interface CaseEvent {
+  id: string; kind: string; actorName: string | null; message: string | null; metadata: Record<string, unknown>; createdAt: string;
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -121,6 +129,101 @@ function ObservationForm({ operationId, step, onDone }: { operationId: string; s
       <Button type="submit" loading={busy}>Record observation</Button>
     </form>
   );
+}
+
+const RESOLUTION_OPTIONS = [
+  { value: 'recovered', label: 'Recovered after retry' },
+  { value: 'manually_verified', label: 'Manually verified' },
+  { value: 'configuration_corrected', label: 'Configuration corrected' },
+  { value: 'accepted_risk', label: 'Accepted risk' },
+  { value: 'duplicate', label: 'Duplicate work' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+function CaseHistoryPanel({ operation, onChanged }: { operation: Operation; onChanged(message: string): void }) {
+  const [message, setMessage] = useState('');
+  const [code, setCode] = useState('recovered');
+  const [busy, setBusy] = useState(false);
+  const submit = async (path: string, body: unknown, done: string) => {
+    setBusy(true);
+    try {
+      await api(`/api/admin/lifecycle-operations/${operation.id}/${path}`, { method: 'POST', body: JSON.stringify(body) });
+      setMessage('');
+      onChanged(done);
+    } catch (error) {
+      onChanged(problemText(error, 'The case update could not be saved.'));
+    } finally { setBusy(false); }
+  };
+  const events = operation.caseEvents ?? [];
+  const resolved = operation.caseStatus === 'resolved';
+  return <Panel title="Case history" actions={<Status tone={resolved ? 'active' : 'warning'}>{resolved ? 'resolved' : 'open'}</Status>}>
+    <div className="space-y-4 p-4">
+      {resolved ? <Alert tone="info" title={`${operation.resolutionCode?.replaceAll('_', ' ') ?? 'Resolved'} · ${when(operation.resolvedAt)}`}>
+        {operation.resolutionSummary} {operation.resolvedByName ? `— ${operation.resolvedByName}` : ''}
+      </Alert> : null}
+      {events.length ? <Table tight><thead><tr><th scope="col">When</th><th scope="col">Event</th><th scope="col">Operator</th><th scope="col">Details</th></tr></thead><tbody aria-live="polite">
+        {events.map((event) => <tr key={event.id}><td>{when(event.createdAt)}</td><td><Status tone={event.kind === 'resolution' ? 'active' : event.kind === 'reopened' ? 'warning' : 'neutral'}>{event.kind}</Status></td><td>{event.actorName ?? 'System'}</td><td>{event.message ?? (event.kind === 'assignment' ? `Owner or due date updated` : '—')}</td></tr>)}
+      </tbody></Table> : <p className="text-sm text-muted">No case activity has been recorded yet.</p>}
+      <form className="grid gap-3 sm:grid-cols-[minmax(18rem,1fr)_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); void submit('case-notes', { message }, 'Case note saved.'); }}>
+        <Field label="Add an escalation or investigation note" value={message} onChange={setMessage} />
+        <Button type="submit" variant="secondary" loading={busy} disabled={!message.trim()}>Add note</Button>
+      </form>
+      {resolved ? <Button variant="secondary" loading={busy} disabled={!message.trim()} onClick={() => void submit('reopen', { reason: message }, 'Case reopened.')}>Reopen with note</Button> : <div className="grid gap-3 sm:grid-cols-[minmax(14rem,0.5fr)_minmax(18rem,1fr)_auto] sm:items-end">
+        <Select label="Resolution" value={code} onChange={setCode} options={RESOLUTION_OPTIONS} />
+        <Field label="Resolution summary" value={message} onChange={setMessage} />
+        <Button loading={busy} disabled={!message.trim()} onClick={() => void submit('resolve', { code, summary: message }, 'Case resolved.')}>Resolve case</Button>
+      </div>}
+    </div>
+  </Panel>;
+}
+
+function LegalHoldPanel({ operationId }: { operationId: string }) {
+  const resource = useApiResource<{ holds: LegalHold[] }>(
+    `/api/admin/lifecycle-legal-holds?active=false&subjectType=lifecycle_operation&subjectId=${operationId}`,
+  );
+  const [reference, setReference] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  // A 403 means this operator may work the lifecycle queue but may not see
+  // legal matters. Do not turn that deliberate field-level boundary into a
+  // broken-looking panel.
+  if (resource.error) return null;
+  const holds = resource.data?.holds ?? [];
+  const active = holds.filter((hold) => hold.releasedAt === null);
+  const place = async () => {
+    setBusy(true); setNotice('');
+    try {
+      await api('/api/admin/lifecycle-legal-holds', {
+        method: 'POST',
+        body: JSON.stringify({ subjectType: 'lifecycle_operation', subjectId: operationId, reference, reason }),
+      });
+      setReference(''); setReason(''); setNotice('Legal hold placed. Retention is suspended for this operation.'); resource.reload();
+    } catch (error) { setNotice(problemText(error, 'The legal hold could not be placed.')); }
+    finally { setBusy(false); }
+  };
+  const release = async (holdId: string) => {
+    setBusy(true); setNotice('');
+    try {
+      await api(`/api/admin/lifecycle-legal-holds/${holdId}/release`, { method: 'POST' });
+      setNotice('Legal hold released. Normal retention policy applies again.'); resource.reload();
+    } catch (error) { setNotice(problemText(error, 'The legal hold could not be released.')); }
+    finally { setBusy(false); }
+  };
+  return <Panel title="Legal holds" actions={active.length ? <Status tone="warning">{active.length} active</Status> : undefined}>
+    <div className="space-y-4 p-4">
+      {active.length > 0 ? <Alert tone="warning" title="Retention suspended">This operation and its linked receipts, observations, and delivery records are preserved.</Alert> : null}
+      {holds.length > 0 ? <Table tight><thead><tr><th scope="col">Reference</th><th scope="col">Reason</th><th scope="col">Placed</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>
+        {holds.map((hold) => <tr key={hold.id}><td className="font-mono">{hold.reference}</td><td>{hold.reason}</td><td>{when(hold.placedAt)}</td><td>{hold.releasedAt ? <Status tone="inactive">released {when(hold.releasedAt)}</Status> : <Status tone="warning">active</Status>}</td><td className="text-right">{hold.releasedAt ? null : <Button size="sm" variant="danger-quiet" loading={busy} onClick={() => void release(hold.id)}>Release hold</Button>}</td></tr>)}
+      </tbody></Table> : null}
+      <form className="grid gap-3 sm:grid-cols-[minmax(12rem,0.7fr)_minmax(18rem,1fr)_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); void place(); }}>
+        <Field label="Matter or case reference" value={reference} onChange={setReference} />
+        <Field label="Preservation reason" value={reason} onChange={setReason} />
+        <Button type="submit" loading={busy} disabled={!reference.trim() || !reason.trim()}>Place legal hold</Button>
+      </form>
+      {notice ? <Alert tone="info">{notice}</Alert> : null}
+    </div>
+  </Panel>;
 }
 
 export function LifecycleOperationPage() {
@@ -217,6 +320,7 @@ export function LifecycleOperationPage() {
         </> : null}
       </div>
     </div></Panel>
+    <CaseHistoryPanel operation={operation} onChanged={(message) => { setNotice(message); resource.reload(); }} />
     <Panel title="Notification delivery">
       <div className="p-4">
         {deliveries.data?.notifications.length ? <Table tight><thead><tr><th scope="col">Message</th><th scope="col">To</th><th scope="col">Queued</th><th scope="col">Delivery</th></tr></thead><tbody>
@@ -224,5 +328,6 @@ export function LifecycleOperationPage() {
         </tbody></Table> : <p className="text-sm text-muted">No notification has been queued for this operation.</p>}
       </div>
     </Panel>
+    <LegalHoldPanel operationId={operation.id} />
   </>;
 }

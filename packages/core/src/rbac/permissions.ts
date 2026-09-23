@@ -18,6 +18,8 @@ export const PERMISSIONS = {
    */
   DIRECTORY_DELETE: 'directory.delete',
   IDENTITY_READ: 'identity.read',
+  /** Read private HR contact fields such as a person's personal email. */
+  IDENTITY_SENSITIVE_READ: 'identity.sensitive.read',
   IDENTITY_WRITE: 'identity.write',
   AUDIT_READ: 'audit.read',
   SECRETS_WRITE: 'secrets.write',

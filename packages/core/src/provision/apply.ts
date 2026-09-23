@@ -24,6 +24,8 @@ import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
 import { escapeDnValue } from './templates.js';
 import { movesContainer } from './guard.js';
 import { targetWithCredential } from './target-service.js';
+import { ExternalWritesPausedError, externalWriteStopActive } from './target-write-stop.js';
+import { MaintenanceWindowClosedError, maintenanceWindowOpen, urgentLeaverOverrideAllowed } from './target-maintenance.js';
 import { applySyntraUserAction } from './syntra-user.js';
 
 /**
@@ -184,6 +186,8 @@ export interface ApplyOptions {
    */
   confirm?: boolean;
   confirmedByUserId?: string | null;
+  /** Non-blank justification for a confirmed, leaver-only apply outside the configured window. */
+  maintenanceOverrideReason?: string;
   connector?: TargetConnector<never>;
   /**
    * How the initial password is delivered. Absent, the password is still
@@ -494,6 +498,37 @@ export async function applyProvisionRun(
     const target = await tx.targetSystem.findUniqueOrThrow({
       where: { id: run.targetSystemId },
     });
+    if (externalWriteStopActive(target, options.now ?? new Date())) {
+      throw new ExternalWritesPausedError(
+        target.id,
+        target.externalWritesPauseReason ?? 'emergency stop',
+        target.externalWritesPauseExpiresAt,
+      );
+    }
+    if (!maintenanceWindowOpen(target, options.now ?? new Date())) {
+      const selected = await tx.provisionAction.findMany({
+        where: {
+          runId,
+          status: { in: ['proposed', 'pending_retry'] },
+          ...(options.only === undefined ? {} : { id: { in: options.only } }),
+        },
+        select: { actionType: true },
+      });
+      const overrideAllowed = urgentLeaverOverrideAllowed(selected.map((action) => action.actionType));
+      const reason = options.maintenanceOverrideReason?.trim();
+      if (!overrideAllowed || !confirmed || !reason) {
+        throw new MaintenanceWindowClosedError(target.id, overrideAllowed);
+      }
+      await recordEvent(tx, {
+        actorUserId,
+        action: 'provision.run.maintenance_override',
+        targetType: 'ProvisionRun',
+        targetId: runId,
+        outcome: 'success',
+        sourceIp: null,
+        payload: { targetSystemId: target.id, reason, actionCount: selected.length },
+      });
+    }
     const config = await targetWithCredential(tx, provider, run.targetSystemId);
     if (!config) throw new Error('target configuration or credential missing');
     const profile = await tx.accountProfile.findFirst({

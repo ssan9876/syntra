@@ -10,7 +10,8 @@ import {
   Status,
   Table,
 } from '@syntra/ui';
-import { isLaunchableUrl } from '@syntra/contracts';
+// The file, not the package index: the index carries every zod schema.
+import { isLaunchableUrl } from '@syntra/contracts/src/launchable-url.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';

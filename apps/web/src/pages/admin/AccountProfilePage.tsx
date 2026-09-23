@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Field, Panel, Select, SkeletonRows, Status, Table } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { PickerNote } from './PickerNote.js';
@@ -38,6 +38,9 @@ interface Draft {
   attributeTemplates: Record<string, string>;
   passwordLength: string;
   initialPasswordDelivery: Delivery;
+  sensitiveApprovalReason: string;
+  sensitiveApprovedByUserId: string;
+  sensitiveApprovedAt: string;
 }
 
 const EMPTY: Draft = {
@@ -48,6 +51,9 @@ const EMPTY: Draft = {
   attributeTemplates: { displayName: '%person.givenName% %person.familyName%' },
   passwordLength: '24',
   initialPasswordDelivery: 'vaultOnly',
+  sensitiveApprovalReason: '',
+  sensitiveApprovedByUserId: '',
+  sensitiveApprovedAt: '',
 };
 
 /**
@@ -95,6 +101,9 @@ function draftFrom(stored: Record<string, unknown>): Draft {
     passwordLength: typeof policy.length === 'number' ? String(policy.length) : '',
     initialPasswordDelivery: (stored.initialPasswordDelivery ??
       'vaultOnly') as Delivery,
+    sensitiveApprovalReason: String(stored.sensitiveApprovalReason ?? ''),
+    sensitiveApprovedByUserId: String(stored.sensitiveApprovedByUserId ?? ''),
+    sensitiveApprovedAt: String(stored.sensitiveApprovedAt ?? ''),
   };
 }
 
@@ -126,6 +135,13 @@ function bodyOf(
   policyExtras: Record<string, unknown>,
 ): { body: Record<string, unknown> } | { invalid: Record<string, string> } {
   const invalid: Record<string, string> = {};
+
+  if (
+    sensitiveAttributeMappings(draft.attributeTemplates).length > 0 &&
+    draft.sensitiveApprovalReason.trim().length < 20
+  ) {
+    invalid.sensitiveApprovalReason = 'record at least 20 characters explaining why this target needs personal email';
+  }
 
   const attemptsRaw = draft.maxUniquenessAttempts.trim();
   const attempts = Number(attemptsRaw);
@@ -164,9 +180,17 @@ function bodyOf(
         ...(lengthRaw === '' ? {} : { length }),
       },
       initialPasswordDelivery: draft.initialPasswordDelivery,
+      ...(sensitiveAttributeMappings(draft.attributeTemplates).length === 0
+        ? {}
+        : { sensitiveApprovalReason: draft.sensitiveApprovalReason }),
     },
   };
 }
+
+const sensitiveAttributeMappings = (templates: Record<string, string>) =>
+  Object.entries(templates)
+    .filter(([, template]) => /%person\.personalEmail(?:\.[^%]+)?%/i.test(template))
+    .map(([targetAttribute]) => targetAttribute);
 
 interface PersonRow {
   id: string;
@@ -277,6 +301,7 @@ function AccountProfileEditor() {
    * so the rows are the state and the record is built at the boundary.
    */
   const rows = Object.entries(profile.attributeTemplates);
+  const sensitiveAttributes = sensitiveAttributeMappings(profile.attributeTemplates);
   const setRows = (next: [string, string][]) =>
     set('attributeTemplates', Object.fromEntries(next));
 
@@ -511,12 +536,44 @@ function AccountProfileEditor() {
                 </div>
               </div>
             ))}
-            <p className="text-muted">
-              <code>userAccountControl</code>, <code>member</code> and{' '}
-              <code>distinguishedName</code> are refused here: they are what the
-              enable, membership and move operations write, and the guard counts
-              those. An attribute template that set them would be a way past it.
-            </p>
+            {sensitiveAttributes.length > 0 && (
+              <div className="space-y-3" aria-live="polite">
+                <Alert tone="warning" title="Sensitive data needs approval">
+                  Personal email will be sent to {sensitiveAttributes.length} target attribute{sensitiveAttributes.length === 1 ? '' : 's'}.
+                </Alert>
+                <Table tight>
+                  <thead><tr><th scope="col">Target attribute</th><th scope="col">Source field</th><th scope="col">Classification</th></tr></thead>
+                  <tbody>
+                    {sensitiveAttributes.map((attribute) => (
+                      <tr key={attribute}>
+                        <th scope="row" className="font-mono">{attribute}</th>
+                        <td className="font-mono">person.personalEmail</td>
+                        <td><Status tone="warning">Sensitive</Status></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+                <Field
+                  label="Purpose for sharing personal email"
+                  value={profile.sensitiveApprovalReason}
+                  onChange={(value) => set('sensitiveApprovalReason', value)}
+                  maxLength={1000}
+                  {...mark('sensitiveApprovalReason')}
+                />
+                {profile.sensitiveApprovedAt && (
+                  <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                    <div>
+                      <dt className="text-muted">Approval</dt>
+                      <dd><Status tone="active">Recorded</Status></dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted">Recorded at</dt>
+                      <dd className="tabular-nums text-ink">{new Date(profile.sensitiveApprovedAt).toLocaleString()}</dd>
+                    </div>
+                  </dl>
+                )}
+              </div>
+            )}
           </div>
         </Panel>
 

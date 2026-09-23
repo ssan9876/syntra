@@ -7,7 +7,7 @@ import type {
   WriteOperation,
   WriteResult,
 } from '../types.js';
-import { withProvenanceMarker } from '../ad/provenance.js';
+import { provenanceActionId, withProvenanceMarker } from '../ad/provenance.js';
 import { scim2TargetConfigSchema, type ResolvedScim2TargetConfig, type Scim2TargetConfig } from './config.js';
 import { scimRequest, ScimMalformedBodyError } from './client.js';
 
@@ -76,6 +76,32 @@ function classifyFailure(status: number): 'unauthorized' | 'conflict' | 'rejecte
   if (status === 409) return 'conflict';
   if (status >= 500) return 'transient';
   return 'rejected';
+}
+
+async function findCreateCollision(
+  config: Resolved,
+  correlationKey: string,
+): Promise<ScimUserResource | undefined> {
+  let startIndex = 1;
+  for (;;) {
+    const result = await scimRequest(
+      config,
+      'GET',
+      `${config.userResourcePath}?startIndex=${startIndex}&count=${config.pageSize}`,
+    );
+    if (result.status >= 400) {
+      throw new Error(`${config.userResourcePath} answered HTTP ${result.status} while checking a create retry`);
+    }
+    const page = result.json as { Resources: ScimUserResource[]; totalResults: number };
+    const found = page.Resources.find(
+      (resource) => resource.userName.toLocaleLowerCase() === correlationKey.toLocaleLowerCase(),
+    );
+    if (found) return found;
+    if (page.Resources.length < config.pageSize || startIndex + page.Resources.length > page.totalResults) {
+      return undefined;
+    }
+    startIndex += page.Resources.length;
+  }
 }
 
 async function patchUser(
@@ -223,6 +249,21 @@ export const scimTargetConnector: TargetConnector<Config> = {
     try {
       switch (op.op) {
         case 'create_account': {
+          const existing = await findCreateCollision(config, op.correlationKey);
+          if (existing) {
+            if (provenanceActionId(existing.externalId ?? '') === op.actionId) {
+              return {
+                ok: true,
+                message: 'adopted the account this action already created',
+                anchor: existing.id,
+              };
+            }
+            return {
+              ok: false,
+              message: `an account named ${op.correlationKey} already exists and was not created by this action`,
+              failure: 'conflict',
+            };
+          }
           const body: Record<string, unknown> = {
             schemas: ['urn:ietf:params:scim:schemas:core:2.0:User'],
             userName: op.correlationKey,

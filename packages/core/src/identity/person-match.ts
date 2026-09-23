@@ -56,6 +56,7 @@ const key = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
 export async function matchPersonForAccount(
   tx: TenantClient,
   input: { email: string; displayName: string },
+  options: { includePersonalEmail?: boolean } = {},
 ): Promise<PersonMatch> {
   const email = key(input.email);
   const name = key(input.displayName);
@@ -107,7 +108,7 @@ export async function matchPersonForAccount(
     return { confident: build(byBusiness[0]!, 'businessEmail'), candidates: [] };
   }
 
-  const byPersonal = email
+  const byPersonal = options.includePersonalEmail !== false && email
     ? people.filter((p) => p.personalEmail && key(p.personalEmail) === email)
     : [];
   const byName = name

@@ -5,6 +5,7 @@ import { forgetEntraTokens } from './graph.js';
 import { entraTargetConfigSchema, type EntraTargetConfig } from './config.js';
 import { readBackTarget, type TargetConnector, type TargetReadBack } from '../types.js';
 import { ENTRA_CAPABILITY_MATRIX } from './capabilities.js';
+import { certifyTargetConnector } from '../testing/target-connector-certification.js';
 
 /**
  * Against the fake Graph in `testing/fake-graph-server.ts`. Real network
@@ -82,6 +83,67 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await server.close();
+});
+
+describe('shared connector certification', () => {
+  it('certifies the native Entra lifecycle against disposable Graph', async () => {
+    const report = await certifyTargetConnector({
+      name: 'native Entra ID',
+      connector: entraTargetConnector,
+      config: config(),
+      create: {
+        op: 'create_account',
+        actionId: 'cert-entra-create',
+        correlationKey: 'connector.certification',
+        attributes: {
+          displayName: ['Connector Certification'],
+          givenName: ['Connector'],
+          familyName: ['Certification'],
+          title: ['Tester'],
+        },
+        enabled: true,
+        initialPassword: 'Initial-Passw0rd!',
+      },
+      update: (anchor) => ({
+        op: 'update_account',
+        actionId: 'cert-entra-update',
+        anchor,
+        attributes: { displayName: ['Certified Connector'], title: ['Verified Tester'] },
+      }),
+      disable: (anchor) => ({
+        op: 'disable_account',
+        actionId: 'cert-entra-disable',
+        anchor,
+        reason: 'connector certification',
+      }),
+      entitlement: {
+        id: G_SEC,
+        grant: (anchor) => ({
+          op: 'grant_entitlement',
+          actionId: 'cert-entra-grant',
+          anchor,
+          entitlementId: G_SEC,
+        }),
+        revoke: (anchor) => ({
+          op: 'revoke_entitlement',
+          actionId: 'cert-entra-revoke',
+          anchor,
+          entitlementId: G_SEC,
+        }),
+      },
+      missingAnchor: 'ffffffff-ffff-ffff-ffff-ffffffffffff',
+      assertCreated: (observed) => {
+        expect(observed.account?.attributes.displayName).toEqual(['Connector Certification']);
+      },
+      assertUpdated: (observed) => {
+        expect(observed.account?.attributes.displayName).toEqual(['Certified Connector']);
+        expect(observed.account?.attributes.title).toEqual(['Verified Tester']);
+      },
+    });
+
+    expect(report.checks).toContain('grant-read-back');
+    expect(report.checks).toContain('disable-read-back');
+  });
 });
 
 describe('configuration', () => {
@@ -310,6 +372,30 @@ describe('create', () => {
     expect(second.message).toMatch(/adopted/);
     expect([...server.users.values()].filter((u) => u.userPrincipalName.startsWith('fay.wong'))).toHaveLength(1);
     expect(graphRequests().filter((r) => r.method === 'POST' && r.url === '/v1.0/users')).toHaveLength(1);
+  });
+
+  it('uses a deterministic 16-character marker for a UUID action in employeeId', async () => {
+    const actionId = 'b9bd1e3d-e86b-4f51-8379-d5ce1339102a';
+    const first = await create(actionId, 'uuid.marker');
+    expect(first.ok).toBe(true);
+    const created = server.users.get(first.anchor!)!;
+    expect(created.employeeId).toMatch(/^[A-Za-z0-9_-]{16}$/);
+    expect(created.employeeId).not.toBe(actionId);
+
+    const second = await create(actionId, 'uuid.marker');
+    expect(second).toMatchObject({ ok: true, anchor: first.anchor });
+    expect(graphRequests().filter((r) => r.method === 'POST' && r.url === '/v1.0/users')).toHaveLength(1);
+  });
+
+  it('adopts a delayed marker after the retry receives a duplicate-UPN conflict', async () => {
+    server.delayVisibility(3);
+    const first = await create('delayed-create', 'delayed.marker');
+    expect(first).toMatchObject({ ok: true });
+    const retry = await create('delayed-create', 'delayed.marker');
+    expect(retry).toMatchObject({ ok: true, anchor: first.anchor });
+    expect(retry.message).toMatch(/became visible and was adopted/);
+    expect(graphRequests().filter((r) => r.method === 'POST' && r.url === '/v1.0/users')).toHaveLength(2);
+    expect([...server.users.values()].filter((u) => u.userPrincipalName === 'delayed.marker@contoso.example')).toHaveLength(1);
   });
 
   it('records the marker in an extension attribute when configured, with an advanced query', async () => {
@@ -630,6 +716,9 @@ describe('the capability matrix', () => {
     expect(ENTRA_CAPABILITY_MATRIX.entries.dynamicGroups.status).toBe('unsupported');
     for (const entry of Object.values(ENTRA_CAPABILITY_MATRIX.entries)) {
       expect(entry.note.length).toBeGreaterThan(20);
+      if (entry.status === 'available') {
+        expect(entry.requiredPermissions.length).toBeGreaterThan(0);
+      }
     }
   });
 });

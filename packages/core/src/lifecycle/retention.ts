@@ -12,6 +12,7 @@ export interface RetentionReport {
   observationsRemoved: number;
   notificationsRemoved: number;
   simulationsRemoved: number;
+  lifecycleOperationsRemoved: number;
   readinessChecksRemoved: number;
   /**
    * Always zero from this job. Audit events are immutable at the database
@@ -31,6 +32,7 @@ export interface RetentionReport {
     | 'observationRetentionDays'
     | 'notificationRetentionDays'
     | 'simulationRetentionDays'
+    | 'lifecycleOperationRetentionDays'
     | 'auditRetentionDays'
   >;
 }
@@ -59,24 +61,42 @@ export async function runLifecycleRetention(
   return withTenant(tenantId, async (tx) => {
     const policy = await readLifecyclePolicy(tx);
     const dry = options.dryRun === true;
+    const activeHolds = await tx.lifecycleLegalHold.findMany({
+      where: { releasedAt: null }, select: { subjectType: true, subjectId: true },
+    });
+    const heldOperationIds = activeHolds.filter((hold) => hold.subjectType === 'lifecycle_operation').map((hold) => hold.subjectId);
+    const heldSimulationIds = activeHolds.filter((hold) => hold.subjectType === 'lifecycle_simulation').map((hold) => hold.subjectId);
 
     const receiptWhere = {
       updatedAt: { lt: cutoff(now, policy.receiptRetentionDays) },
       status: { in: ['applied', 'no_match'] },
+      ...(heldOperationIds.length ? { requestKey: { notIn: heldOperationIds } } : {}),
     };
     const observationWhere = {
       observedAt: { lt: cutoff(now, policy.observationRetentionDays) },
       step: { operation: { status: { in: RESOLVED } } },
+      ...(heldOperationIds.length ? { step: { operation: { id: { notIn: heldOperationIds }, status: { in: RESOLVED } } } } : {}),
     };
     const notificationWhere = {
       createdAt: { lt: cutoff(now, policy.notificationRetentionDays) },
       OR: [{ sentAt: { not: null } }, { attempts: { gte: OUTBOX_MAX_ATTEMPTS } }],
+      ...(heldOperationIds.length ? { requestId: { notIn: heldOperationIds } } : {}),
     };
     const simulationWhere = {
       OR: [
         { createdAt: { lt: cutoff(now, policy.simulationRetentionDays) } },
         { expiresAt: { lt: now } },
       ],
+      ...(heldSimulationIds.length ? { id: { notIn: heldSimulationIds } } : {}),
+    };
+    // Deleting this row releases its tenant-scoped idempotency key. That is
+    // allowed only for resolved work past the separately visible policy; an
+    // unresolved row is the durable receipt that makes a retried HR delivery
+    // safe and must never be aged out.
+    const lifecycleOperationWhere = {
+      updatedAt: { lt: cutoff(now, policy.lifecycleOperationRetentionDays) },
+      status: { in: RESOLVED },
+      ...(heldOperationIds.length ? { id: { notIn: heldOperationIds } } : {}),
     };
 
     const staleReadiness = await staleReadinessCheckIds(tx, cutoff(now, policy.receiptRetentionDays));
@@ -87,6 +107,7 @@ export async function runLifecycleRetention(
           observations: await tx.lifecycleObservation.count({ where: observationWhere }),
           notifications: await tx.notificationOutbox.count({ where: notificationWhere }),
           simulations: await tx.lifecycleSimulation.count({ where: simulationWhere }),
+          operations: await tx.lifecycleOperation.count({ where: lifecycleOperationWhere }),
           readiness: staleReadiness.length,
         }
       : {
@@ -94,6 +115,7 @@ export async function runLifecycleRetention(
           observations: (await tx.lifecycleObservation.deleteMany({ where: observationWhere })).count,
           notifications: (await tx.notificationOutbox.deleteMany({ where: notificationWhere })).count,
           simulations: (await tx.lifecycleSimulation.deleteMany({ where: simulationWhere })).count,
+          operations: (await tx.lifecycleOperation.deleteMany({ where: lifecycleOperationWhere })).count,
           readiness:
             staleReadiness.length === 0
               ? 0
@@ -125,6 +147,7 @@ export async function runLifecycleRetention(
       observationsRemoved: counts.observations,
       notificationsRemoved: counts.notifications,
       simulationsRemoved: counts.simulations,
+      lifecycleOperationsRemoved: counts.operations,
       readinessChecksRemoved: counts.readiness,
       auditEventsRemoved: 0,
       auditEventsEligible,
@@ -134,6 +157,7 @@ export async function runLifecycleRetention(
         observationRetentionDays: policy.observationRetentionDays,
         notificationRetentionDays: policy.notificationRetentionDays,
         simulationRetentionDays: policy.simulationRetentionDays,
+        lifecycleOperationRetentionDays: policy.lifecycleOperationRetentionDays,
         auditRetentionDays: policy.auditRetentionDays,
       },
     };

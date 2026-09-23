@@ -77,6 +77,13 @@ const put = (url: string, cookie: string, payload: unknown) =>
     headers: { host: ctx.host, cookie },
     payload: payload as object,
   });
+const patch = (url: string, cookie: string, payload: unknown) =>
+  ctx.app.inject({
+    method: 'PATCH',
+    url,
+    headers: { host: ctx.host, cookie },
+    payload: payload as object,
+  });
 const del = (url: string, cookie: string) =>
   ctx.app.inject({ method: 'DELETE', url, headers: { host: ctx.host, cookie } });
 
@@ -107,6 +114,33 @@ beforeEach(async () => {
   scheduler = createFakeScheduler();
   ctx = await buildTestApp({ scheduler: () => scheduler });
   connectorFor.mockReset();
+});
+
+describe('identity reference values', () => {
+  it('creates, lists, disables, and audits governed HR values', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const created = await post('/api/admin/identity-reference-values', cookie, {
+      kind: 'department',
+      value: '  Customer   Success ',
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ kind: 'department', value: 'Customer Success', active: true });
+
+    const listed = await get('/api/admin/identity-reference-values?kind=department', cookie);
+    expect(listed.json().values).toHaveLength(1);
+
+    const disabled = await patch(`/api/admin/identity-reference-values/${created.json().id}`, cookie, { active: false });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json().active).toBe(false);
+    const events = await withTenant(ctx.tenantId, (tx) => tx.auditEvent.findMany({
+      where: { action: { startsWith: 'identity_reference.' } },
+      orderBy: { sequence: 'asc' },
+    }));
+    expect(events.map((event) => event.action)).toEqual([
+      'identity_reference.create',
+      'identity_reference.disable',
+    ]);
+  });
 });
 
 async function createSource(cookie: string, over: Record<string, unknown> = {}) {

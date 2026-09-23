@@ -46,9 +46,26 @@ interface Evidence {
 }
 
 const evidence: Evidence[] = [];
+const evidenceFile = `test-results/entra-evidence-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+
+function persistEvidence(): void {
+  mkdirSync('test-results', { recursive: true });
+  writeFileSync(evidenceFile, JSON.stringify(evidence, null, 2));
+}
+
+// The runner is deliberately explicit about its variables, but loading the
+// ignored workspace `.env` makes a local disposable-tenant run possible from
+// Codex without copying a client secret into chat or a command line. Node
+// leaves a process-provided value untouched.
+try {
+  process.loadEnvFile('.env');
+} catch {
+  // CI commonly supplies environment variables and has no workspace `.env`.
+}
 
 function record(row: Omit<Evidence, 'timestamp'>): void {
   evidence.push({ ...row, timestamp: new Date().toISOString() });
+  persistEvidence();
   const mark = row.pass ? 'PASS' : 'FAIL';
   console.log(`${mark}  ${row.capability.padEnd(20)} ${row.operationId.padEnd(38)} ${row.observed}`);
 }
@@ -58,6 +75,14 @@ function env(name: string): string | undefined {
   return value === undefined || value.trim() === '' ? undefined : value.trim();
 }
 
+function firstEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = env(name);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
 function describeReadBack(back: TargetReadBack): string {
   if (back.account === null) return 'account not observed';
   return `enabled=${back.enabled === null ? 'unknown' : back.enabled} groups=[${back.entitlementIds.join(',')}] complete=${back.complete}`;
@@ -65,14 +90,14 @@ function describeReadBack(back: TargetReadBack): string {
 
 async function main(): Promise<number> {
   const write = process.argv.includes('--write');
-  const tenantId = env('ENTRA_TENANT_ID');
-  const clientId = env('ENTRA_CLIENT_ID');
-  const clientSecret = env('ENTRA_CLIENT_SECRET');
+  const tenantId = firstEnv('ENTRA_TENANT_ID', 'ENTRA_TEST_TENANT_ID');
+  const clientId = firstEnv('ENTRA_CLIENT_ID', 'ENTRA_TEST_CLIENT_ID');
+  const clientSecret = firstEnv('ENTRA_CLIENT_SECRET', 'ENTRA_TEST_CLIENT_SECRET');
   if (!tenantId || !clientId || !clientSecret) {
     console.error('ENTRA_TENANT_ID, ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET are required');
     return 2;
   }
-  if (write && env('ENTRA_DISPOSABLE_TENANT') !== 'yes') {
+  if (write && firstEnv('ENTRA_DISPOSABLE_TENANT', 'ENTRA_TEST_DISPOSABLE_TENANT') !== 'yes') {
     console.error(
       '--write creates and changes objects in the tenant and is refused unless ENTRA_DISPOSABLE_TENANT=yes',
     );
@@ -268,18 +293,28 @@ async function main(): Promise<number> {
   const disableId = `validate-disable-${runId}`;
   const disabled = await entraTargetConnector.write(config, { op: 'disable_account', actionId: disableId, anchor, reason: 'validation run' });
   record({ capability: 'disableAccount', operationId: disableId, anchor, expected: 'account present and disabled', observed: disabled.message, pass: disabled.ok });
-  await settle('account present and disabled', (b) => b.account !== null && b.enabled === false);
+  const finalReadBack = await settle('account present and disabled', (b) => b.account !== null && b.enabled === false);
+
+  // Validation users are intentionally never deleted automatically. Make the
+  // remaining human cleanup explicit and durable in the same evidence file so
+  // a disposable tenant does not quietly accumulate disabled accounts.
+  record({
+    capability: 'cleanupRequired',
+    operationId: `validate-cleanup-${runId}`,
+    anchor,
+    expected: `remove disabled validation account ${upn} after reviewing this evidence`,
+    observed: describeReadBack(finalReadBack),
+    pass: finalReadBack.account !== null && finalReadBack.enabled === false,
+  });
 
   console.log(`test user ${upn} (${anchor}) was left DISABLED and not deleted; remove it in the tenant when done`);
   return finish();
 }
 
 function finish(code?: number): number {
-  mkdirSync('test-results', { recursive: true });
-  const file = `test-results/entra-evidence-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-  writeFileSync(file, JSON.stringify(evidence, null, 2));
+  persistEvidence();
   const failed = evidence.filter((e) => !e.pass).length;
-  console.log(`\n${evidence.length} rows, ${failed} failed -> ${file}`);
+  console.log(`\n${evidence.length} rows, ${failed} failed -> ${evidenceFile}`);
   return code ?? (failed === 0 ? 0 : 1);
 }
 
@@ -287,6 +322,6 @@ main().then(
   (code) => process.exit(code),
   (cause) => {
     console.error(cause);
-    process.exit(1);
+    process.exit(finish(1));
   },
 );

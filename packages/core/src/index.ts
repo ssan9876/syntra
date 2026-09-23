@@ -7,6 +7,7 @@ export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
 export * from './tenant/brand-service.js';
+export * from './tenant/offboarding-service.js';
 export * from './health/readiness.js';
 export * from './health/incidents.js';
 export * from './update/update-service.js';
@@ -101,6 +102,7 @@ export * from './notify/webhook-retry.js';
 export * from './notify/webhook-service.js';
 export * from './notify/webhook-signature.js';
 export * from './jobs/scheduler.js';
+export * from './jobs/enqueue-for-row.js';
 export * from './sync/mapping.js';
 export * from './sync/correlate.js';
 export * from './sync/diff.js';
@@ -139,6 +141,9 @@ export * from './person-source/diff.js';
 export * from './person-source/guard.js';
 export * from './person-source/run-service.js';
 export * from './person-source/jobs.js';
+export * from './person-source/duplicate-review.js';
+export * from './person-source/reference-data.js';
+export * from './identity/field-classification.js';
 export * from './access/application-service.js';
 export * from './access/catalog/index.js';
 export * from './access/assignment-service.js';
@@ -223,6 +228,10 @@ export type {
 // (Task 10) both collided with `sync/`, and under TS2308 the barrel exports
 // NEITHER side silently. Nothing in these two modules collides today.
 export * from './provision/target-service.js';
+export * from './provision/target-migration.js';
+export * from './provision/target-health.js';
+export * from './provision/target-write-stop.js';
+export * from './provision/target-maintenance.js';
 export * from './provision/placement-service.js';
 export * from './provision/adoption-service.js';
 export * from './provision/entitlement-service.js';
@@ -269,6 +278,8 @@ export * from './lifecycle/policy.js';
 export * from './rbac/presets.js';
 export * from './lifecycle/simulation-service.js';
 export * from './lifecycle/retention.js';
+export * from './lifecycle/legal-hold.js';
+export * from './lifecycle/case-management.js';
 export * from './provision/desired-state-loader.js';
 // Member by member, not `export *`, and for the same reason as
 // `provision/types.js` and `provision/guard.js` above: `policy/impact.js`

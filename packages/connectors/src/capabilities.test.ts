@@ -39,6 +39,14 @@ describe('target connector capabilities', () => {
     expect(capabilitiesForTarget('httpJson', {})).toMatchObject({ available: true, createAccount: false, readBack: false });
   });
 
+  it('does not advertise HTTP account creation without correlation and provenance read-back', () => {
+    const unsafe = {
+      ...entraIdDocument,
+      account: { ...entraIdDocument.account, provenance: undefined },
+    };
+    expect(capabilitiesForTarget('httpJson', { document: unsafe }).createAccount).toBe(false);
+  });
+
   it('is static for every hand-written connector', () => {
     expect(capabilitiesForTarget('entraId', { tenantId: 'x' })).toEqual(targetConnectorCapabilities('entraId'));
     expect(capabilitiesForTarget('activeDirectory', {})).toEqual(targetConnectorCapabilities('activeDirectory'));

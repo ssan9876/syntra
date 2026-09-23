@@ -170,6 +170,14 @@ export function parsePersonCsv(text: string): {
       endDate = parsed;
     }
 
+    if (endDate && endDate < startDate) {
+      errors.push({
+        line: lineNumber,
+        message: 'endDate must be on or after startDate',
+      });
+      continue;
+    }
+
     const sequenceRaw = at(cells, 'sequence');
     const sequence = Number(sequenceRaw);
     if (!sequenceRaw || !Number.isInteger(sequence)) {

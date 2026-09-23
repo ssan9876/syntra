@@ -14,6 +14,7 @@ import {
   queueImportRun,
   runPersonImportJob,
 } from './jobs.js';
+import { JobNotQueuedError } from '../jobs/enqueue-for-row.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 
@@ -98,6 +99,34 @@ describe('queueImportRun', () => {
     const runs = await withTenant(tenantId, (tx) => tx.personImportRun.findMany());
     expect(runs).toEqual([]);
     expect(scheduler.enqueue).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The row commits before the enqueue, so a refused enqueue used to leave a
+   * run in `queued` for ever: nothing picks it up and nothing reaps it.
+   */
+  it('marks the run failed and says why when the enqueue throws', async () => {
+    const source = await makeSource();
+    scheduler.enqueue.mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(
+      queueImportRun(scheduler as never, tenantId, source.id),
+    ).rejects.toThrow(JobNotQueuedError);
+
+    const [run] = await withTenant(tenantId, (tx) => tx.personImportRun.findMany());
+    expect(run?.status).toBe('failed');
+    expect(run?.finishedAt).not.toBeNull();
+    expect(run?.error).toContain('connection terminated');
+  });
+
+  it('marks the run failed when the queue declines the job', async () => {
+    const source = await makeSource();
+    scheduler.enqueue.mockResolvedValueOnce(null);
+    await expect(
+      queueImportRun(scheduler as never, tenantId, source.id),
+    ).rejects.toThrow(JobNotQueuedError);
+
+    const [run] = await withTenant(tenantId, (tx) => tx.personImportRun.findMany());
+    expect(run?.status).toBe('failed');
   });
 });
 

@@ -7,6 +7,7 @@ import {
   previewAccountProfile,
   previewContainerForFacts,
   upsertAccountProfile,
+  sensitiveProfileMappings,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -57,7 +58,18 @@ export async function registerAdminProfileRoutes(app: FastifyInstance): Promise<
         tx.accountProfile.findFirst({ where: { targetSystemId: id } }),
       );
       if (!profile) throw new ProblemError(404, 'not-found', 'No account profile yet');
-      return profile;
+      return {
+        ...profile,
+        dataMinimization: {
+          sensitiveMappings: sensitiveProfileMappings(
+            profile.attributeTemplates as Record<string, string>,
+          ),
+          approved: profile.sensitiveApprovedAt !== null,
+          approvalReason: profile.sensitiveApprovalReason,
+          approvedByUserId: profile.sensitiveApprovedByUserId,
+          approvedAt: profile.sensitiveApprovedAt,
+        },
+      };
     },
   );
 

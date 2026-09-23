@@ -8,6 +8,7 @@ import { isPersonMappingFailure, mapPersonRecord, type MappedPerson } from './ma
 import { diffPersons, type ExistingSourcePerson, type PersonChangeType } from './diff.js';
 import { evaluatePersonGuard } from './guard.js';
 import { personMappingsFor, personSourceWithCredential } from './source-service.js';
+import { normalizeIdentityReference } from './reference-data.js';
 
 /**
  * The order changes are applied in.
@@ -33,13 +34,15 @@ async function loadExisting(
   tx: TenantClient,
   sourceId: string,
 ): Promise<ExistingSourcePerson[]> {
-  const rows = await tx.person.findMany({
+  const links = await tx.personSourceLink.findMany({
     where: { sourceId },
-    include: { contracts: true },
+    include: { person: { include: { contracts: true } } },
   });
-  return rows.map((row) => ({
+  return links.map((link) => {
+    const row = link.person;
+    return ({
     id: row.id,
-    externalId: row.externalId ?? '',
+    externalId: link.externalId,
     status: row.status,
     fields: {
       givenName: row.givenName,
@@ -63,7 +66,8 @@ async function loadExisting(
       managerPersonId: c.managerPersonId,
       fte: c.fte === null ? null : String(c.fte),
     })),
-  }));
+    });
+  });
 }
 
 /** People the rest of the platform counts: active, holding a live contract. */
@@ -131,7 +135,7 @@ export async function previewImportRun(
     }
 
     // Phase 4: map. Failures are counted and excluded -- never absent.
-    const mapped: MappedPerson[] = [];
+    let mapped: MappedPerson[] = [];
     const failureReasons = new Set<string>();
     const failureAnchors: string[] = [];
     let mappingFailures = 0;
@@ -146,19 +150,48 @@ export async function previewImportRun(
       mapped.push(result);
     }
 
+    // A source identity must name exactly one row in a feed. Allowing both
+    // rows through would create two incompatible change sets for the same
+    // durable PersonSourceLink and leave the eventual database constraint to
+    // choose the winner. Reject every occurrence instead: an operator must
+    // correct the source, and an already-owned person with that identity is
+    // protected from snapshot absence below.
+    const identityCounts = new Map<string, number>();
+    for (const person of mapped) {
+      identityCounts.set(person.externalId, (identityCounts.get(person.externalId) ?? 0) + 1);
+    }
+    const duplicateExternalIds = new Set(
+      [...identityCounts].filter(([, count]) => count > 1).map(([externalId]) => externalId),
+    );
+    if (duplicateExternalIds.size > 0) {
+      mapped = mapped.filter((person) => {
+        if (!duplicateExternalIds.has(person.externalId)) return true;
+        mappingFailures += 1;
+        failureAnchors.push(person.externalId);
+        failureReasons.add(
+          `employee identifier "${person.externalId}" occurs more than once; every occurrence was withheld`,
+        );
+        return false;
+      });
+    }
+
     // Phase 5: one short transaction for the whole database-side snapshot the
     // diff is computed against.
     const snapshot = await withTenant(tenantId, async (tx) => {
-      const managers = await tx.person.findMany({
-        where: { externalId: { not: null } },
-        select: { id: true, externalId: true },
-      });
+      const incomingEmails = [...new Set(mapped.map((person) => person.fields.businessEmail?.trim()).filter((value): value is string => Boolean(value)))];
+      const existing = await loadExisting(tx, sourceId);
       return {
-        existing: await loadExisting(tx, sourceId),
+        existing,
+        referenceValues: await tx.identityReferenceValue.findMany({
+          where: { active: true, kind: { in: ['department', 'location'] } },
+          select: { kind: true, normalizedValue: true },
+        }),
+        duplicateCandidates: incomingEmails.length === 0 ? [] : await tx.person.findMany({
+          where: { status: 'active', businessEmail: { in: incomingEmails, mode: 'insensitive' } },
+          select: { id: true, givenName: true, familyName: true, businessEmail: true, sourceId: true },
+        }),
         managerIdByExternalId: new Map(
-          managers.flatMap((m) =>
-            m.externalId === null ? [] : ([[m.externalId, m.id]] as const),
-          ),
+          existing.map((person) => [person.externalId, person.id] as const),
         ),
         activeContractsFromSource: await tx.contract.count({
           where: {
@@ -178,6 +211,61 @@ export async function previewImportRun(
           select: { id: true },
         }),
       };
+    });
+
+    // A catalog is opt-in per kind: no active values means the tenant has not
+    // chosen to govern that field yet. Once enabled, every non-empty value
+    // must match after conservative whitespace/case normalization.
+    const referenceValues = new Map<string, Set<string>>();
+    for (const reference of snapshot.referenceValues) {
+      const values = referenceValues.get(reference.kind) ?? new Set<string>();
+      values.add(reference.normalizedValue);
+      referenceValues.set(reference.kind, values);
+    }
+    mapped = mapped.filter((person) => {
+      const invalid = new Set<string>();
+      for (const contract of person.contracts) {
+        for (const kind of ['department', 'location'] as const) {
+          const allowed = referenceValues.get(kind);
+          const value = contract[kind];
+          if (allowed !== undefined && value !== null && !allowed.has(normalizeIdentityReference(value))) {
+            invalid.add(`${kind} "${value}"`);
+          }
+        }
+      }
+      if (invalid.size === 0) return true;
+      mappingFailures += 1;
+      failureAnchors.push(person.externalId);
+      failureReasons.add(
+        `employee "${person.externalId}" uses unapproved reference value(s): ${[...invalid].join(', ')}`,
+      );
+      return false;
+    });
+
+    // Manager identifiers belong to the same HR identity namespace as the
+    // employee identifier. Accept a manager already linked to this source or
+    // one included in the same feed (their Person may be created later in the
+    // ordered apply); withhold rows that point nowhere rather than silently
+    // dropping an authoritative reporting line.
+    const knownManagerExternalIds = new Set([
+      ...snapshot.existing.map((person) => person.externalId),
+      ...mapped.map((person) => person.externalId),
+    ]);
+    mapped = mapped.filter((person) => {
+      const unknown = [...new Set(
+        person.contracts
+          .map((contract) => contract.managerExternalId)
+          .filter((externalId): externalId is string =>
+            externalId !== null && !knownManagerExternalIds.has(externalId),
+          ),
+      )];
+      if (unknown.length === 0) return true;
+      mappingFailures += 1;
+      failureAnchors.push(person.externalId);
+      failureReasons.add(
+        `employee "${person.externalId}" references unknown manager identifier(s): ${unknown.join(', ')}`,
+      );
+      return false;
     });
 
     /**
@@ -275,9 +363,20 @@ export async function previewImportRun(
     // no changes at all.
     return await withTenant(tenantId, async (tx) => {
       const boundTenant = await currentTenant(tx);
-      if (changes.length > 0) {
-        await tx.personImportChange.createMany({
-          data: changes.map((change) => ({
+      const duplicateCandidatesByEmail = new Map<string, typeof snapshot.duplicateCandidates>();
+      for (const candidate of snapshot.duplicateCandidates) {
+        const key = candidate.businessEmail?.trim().toLocaleLowerCase();
+        if (key) duplicateCandidatesByEmail.set(key, [...(duplicateCandidatesByEmail.get(key) ?? []), candidate]);
+      }
+      let duplicateReviewCount = 0;
+      for (const change of changes) {
+        const after = (change.after ?? {}) as Record<string, unknown>;
+        const email = typeof after.businessEmail === 'string' ? after.businessEmail.trim().toLocaleLowerCase() : '';
+        const candidates = change.changeType === 'create_person' && email !== ''
+          ? (duplicateCandidatesByEmail.get(email) ?? [])
+          : [];
+        const createdChange = await tx.personImportChange.create({
+          data: {
             tenantId: boundTenant,
             runId: run.id,
             changeType: change.changeType,
@@ -286,15 +385,30 @@ export async function previewImportRun(
             externalId: change.externalId,
             before: (change.before ?? undefined) as never,
             after: (change.after ?? undefined) as never,
-            status: 'proposed',
+            status: candidates.length > 0 ? 'needs_review' : 'proposed',
             message: change.message === undefined ? null : storableMessage(change.message),
-          })),
+          },
         });
+        for (const candidate of candidates) {
+          await tx.personDuplicateReview.create({
+            data: {
+              tenantId: boundTenant,
+              runId: run.id,
+              changeId: createdChange.id,
+              candidatePersonId: candidate.id,
+              matchedValue: candidate.businessEmail ?? email,
+              restoreStatus: verdict.blocked ? 'blocked' : 'previewed',
+              restoreBlockedReason: verdict.blocked ? verdict.reason : null,
+              restoreRequiresConfirmation: verdict.blocked ? verdict.requiresConfirmation : false,
+            },
+          });
+          duplicateReviewCount += 1;
+        }
       }
       return tx.personImportRun.update({
         where: { id: run.id },
         data: {
-          status: verdict.blocked ? 'blocked' : 'previewed',
+          status: duplicateReviewCount > 0 ? 'blocked' : verdict.blocked ? 'blocked' : 'previewed',
           finishedAt: new Date(),
           recordsRead: records.length,
           mappingFailures,
@@ -302,8 +416,10 @@ export async function previewImportRun(
           // readFailure, so they carry foreign text too.
           mappingFailureReasons: [...failureReasons].map(storableMessage),
           personsAbsent: departures,
-          requiresConfirmation: verdict.blocked ? verdict.requiresConfirmation : false,
-          blockedReason: verdict.blocked ? verdict.reason : null,
+          requiresConfirmation: duplicateReviewCount > 0 ? false : verdict.blocked ? verdict.requiresConfirmation : false,
+          blockedReason: duplicateReviewCount > 0
+            ? `${duplicateReviewCount} possible duplicate match${duplicateReviewCount === 1 ? '' : 'es'} require review before this run can apply`
+            : verdict.blocked ? verdict.reason : null,
         },
       });
     });
@@ -339,10 +455,23 @@ type ChangeRow = {
 async function applyOne(tx: TenantClient, sourceId: string, change: ChangeRow) {
   const after = (change.after ?? {}) as Record<string, unknown>;
   const tenantId = await currentTenant(tx);
+  const resolveDeferredManager = async () => {
+    if (typeof after.managerExternalId !== 'string') return;
+    const managerLink = await tx.personSourceLink.findUnique({
+      where: {
+        sourceId_externalId: { sourceId, externalId: after.managerExternalId },
+      },
+      select: { personId: true },
+    });
+    if (managerLink === null) {
+      throw new Error(`manager ${after.managerExternalId} no longer exists in source ${sourceId}`);
+    }
+    after.managerPersonId = managerLink.personId;
+  };
 
   switch (change.changeType) {
-    case 'create_person':
-      await tx.person.create({
+    case 'create_person': {
+      const createdPerson = await tx.person.create({
         data: {
           tenantId,
           sourceId,
@@ -360,7 +489,13 @@ async function applyOne(tx: TenantClient, sourceId: string, change: ChangeRow) {
             : { personalEmail: String(after.personalEmail) }),
         },
       });
+      if (change.externalId !== null) {
+        await tx.personSourceLink.create({
+          data: { tenantId, sourceId, personId: createdPerson.id, externalId: change.externalId },
+        });
+      }
       return;
+    }
 
     case 'update_person':
       if (change.targetId === null) throw new Error('update_person names no person');
@@ -393,15 +528,18 @@ async function applyOne(tx: TenantClient, sourceId: string, change: ChangeRow) {
       return;
 
     case 'create_contract': {
-      const person = await tx.person.findFirst({
-        where: { sourceId, externalId: change.externalId },
+      if (change.externalId === null) throw new Error('create_contract names no person external id');
+      const link = await tx.personSourceLink.findUnique({
+        where: { sourceId_externalId: { sourceId, externalId: change.externalId } },
       });
+      const person = link === null ? null : await tx.person.findUnique({ where: { id: link.personId } });
       if (!person) throw new Error(`no person ${change.externalId} to hold this contract`);
       const highest = await tx.contract.findFirst({
         where: { personId: person.id },
         orderBy: { sequence: 'desc' },
         select: { sequence: true },
       });
+      await resolveDeferredManager();
       await tx.contract.create({
         data: {
           tenantId,
@@ -430,7 +568,8 @@ async function applyOne(tx: TenantClient, sourceId: string, change: ChangeRow) {
       if (change.targetId === null) throw new Error(`${change.changeType} names no contract`);
       // `personExternalId` rides along on the change so a create can find its
       // person; it is not a column and must not reach an update.
-      const { personExternalId: _ignored, ...data } = after;
+      await resolveDeferredManager();
+      const { personExternalId: _ignored, managerExternalId: _managerExternalId, ...data } = after;
       await tx.contract.update({ where: { id: change.targetId }, data: data as never });
       return;
     }

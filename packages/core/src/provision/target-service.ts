@@ -445,7 +445,16 @@ export interface UpdateTargetInput extends Partial<CreateTargetInput> {
   preHireDays?: number;
   maxAttempts?: number;
   concurrency?: number;
+  maintenanceWindow?: { enabled: boolean; days: number[]; startMinute: number; durationMinutes: number };
 }
+
+const maintenanceWindowSchema = z.object({
+  enabled: z.boolean(),
+  days: z.array(z.number().int().min(0).max(6)).min(1).max(7)
+    .refine((days) => new Set(days).size === days.length, 'days must be unique'),
+  startMinute: z.number().int().min(0).max(1439),
+  durationMinutes: z.number().int().min(1).max(1440),
+}).strict();
 
 export async function updateTarget(
   tenantId: string,
@@ -492,6 +501,9 @@ export async function updateTarget(
     ...(input.concurrency === undefined ? {} : { concurrency: input.concurrency }),
   });
   const thresholds = pickThresholds(input.thresholds);
+  const maintenanceWindow = input.maintenanceWindow === undefined
+    ? undefined
+    : maintenanceWindowSchema.parse(input.maintenanceWindow);
 
   const after = await withTenant(tenantId, async (tx) => {
     const before = await tx.targetSystem.findUnique({ where: { id: targetId } });
@@ -549,6 +561,12 @@ export async function updateTarget(
         archiveAfterDays: ladder.archiveAfterDays,
         // Seven named columns, never a spread of whatever arrived.
         ...thresholds,
+        ...(maintenanceWindow === undefined ? {} : {
+          maintenanceWindowEnabled: maintenanceWindow.enabled,
+          maintenanceWindowDays: maintenanceWindow.days,
+          maintenanceWindowStartMinute: maintenanceWindow.startMinute,
+          maintenanceWindowDurationMinutes: maintenanceWindow.durationMinutes,
+        }),
       },
     });
 
@@ -583,6 +601,7 @@ export async function updateTarget(
         ...(input.thresholds === undefined ? {} : { thresholds }),
         ladder,
         credentialReplaced: scalars.bindPassword !== undefined,
+        ...(maintenanceWindow === undefined ? {} : { maintenanceWindow }),
       },
     });
 
@@ -977,8 +996,30 @@ export const accountProfileSchema = z.object({
   // way out is what actually decides.
   initialPasswordPolicy: z.record(z.unknown()).pipe(initialPasswordPolicySchema),
   initialPasswordDelivery: z.enum(['manager', 'personalEmail', 'vaultOnly']),
+  sensitiveApprovalReason: z.string().trim().min(20).max(1000).optional(),
+}).superRefine((profile, ctx) => {
+  if (
+    sensitiveProfileMappings(profile.attributeTemplates).length > 0 &&
+    profile.sensitiveApprovalReason === undefined
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['sensitiveApprovalReason'],
+      message: 'a reason of at least 20 characters is required before sending personal email to a target',
+    });
+  }
 });
 export type AccountProfileInput = z.input<typeof accountProfileSchema>;
+
+export function sensitiveProfileMappings(attributeTemplates: Record<string, string>) {
+  return Object.entries(attributeTemplates)
+    .filter(([, template]) => /%person\.personalEmail(?:\.[^%]+)?%/i.test(template))
+    .map(([targetAttribute]) => ({
+      targetAttribute,
+      sourceField: 'person.personalEmail' as const,
+      classification: 'sensitive' as const,
+    }));
+}
 
 export async function upsertAccountProfile(
   tenantId: string,
@@ -986,7 +1027,9 @@ export async function upsertAccountProfile(
   targetId: string,
   input: AccountProfileInput,
 ): Promise<void> {
-  const profile = accountProfileSchema.parse(input);
+  const parsed = accountProfileSchema.parse(input);
+  const { sensitiveApprovalReason, ...profile } = parsed;
+  const sensitiveMappings = sensitiveProfileMappings(profile.attributeTemplates);
   await withTenant(tenantId, async (tx) => {
     const bound = await currentTenant(tx);
     // Named, so a profile for a target that is not there is a message rather
@@ -1000,8 +1043,20 @@ export async function upsertAccountProfile(
     // of racing between the read and the write.
     await tx.accountProfile.upsert({
       where: { targetSystemId: targetId },
-      create: { tenantId: bound, targetSystemId: targetId, ...profile },
-      update: profile,
+      create: {
+        tenantId: bound,
+        targetSystemId: targetId,
+        ...profile,
+        sensitiveApprovalReason: sensitiveMappings.length > 0 ? sensitiveApprovalReason! : null,
+        sensitiveApprovedByUserId: sensitiveMappings.length > 0 ? actorUserId : null,
+        sensitiveApprovedAt: sensitiveMappings.length > 0 ? new Date() : null,
+      },
+      update: {
+        ...profile,
+        sensitiveApprovalReason: sensitiveMappings.length > 0 ? sensitiveApprovalReason! : null,
+        sensitiveApprovedByUserId: sensitiveMappings.length > 0 ? actorUserId : null,
+        sensitiveApprovedAt: sensitiveMappings.length > 0 ? new Date() : null,
+      },
     });
 
     await recordEvent(tx, {
@@ -1020,6 +1075,8 @@ export async function upsertAccountProfile(
         correlationKeyTemplate: profile.correlationKeyTemplate,
         containerTemplate: profile.containerTemplate,
         initialPasswordDelivery: profile.initialPasswordDelivery,
+        sensitiveMappings,
+        sensitiveApprovalReason: sensitiveMappings.length > 0 ? sensitiveApprovalReason : null,
       },
     });
   });

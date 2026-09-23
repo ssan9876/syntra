@@ -54,6 +54,13 @@ export const googleWorkspaceDocument: HttpConnectorDocument = {
     },
     anchorAt: 'id',
     correlationAt: 'primaryEmail',
+    provenance: {
+      kind: 'collection',
+      path: 'externalIds',
+      valueAt: 'value',
+      whereAt: 'type',
+      whereEquals: 'organization',
+    },
     fields: {
       primaryEmail: 'userPrincipalName',
       'name.fullName': 'displayName',

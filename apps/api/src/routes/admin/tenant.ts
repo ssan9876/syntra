@@ -15,6 +15,8 @@ import {
   recordEvent,
   setBrand,
   updateTenant,
+  assessTenantOffboarding,
+  createTenantDataExport,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
@@ -39,6 +41,25 @@ export async function registerAdminTenantRoutes(
     '/tenant',
     { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
     async (request) => request.db((tx) => readTenant(tx)),
+  );
+
+  app.post(
+    '/tenant/offboarding/assess',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => assessTenantOffboarding(request.tenantId, request.session.userId),
+  );
+
+  app.post(
+    '/tenant/offboarding/export',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request, reply) => {
+      const artifact = await createTenantDataExport(request.tenantId, request.session.userId);
+      return reply
+        .header('content-type', 'application/json; charset=utf-8')
+        .header('content-disposition', `attachment; filename="syntra-tenant-${request.tenantId}.json"`)
+        .header('x-syntra-export-digest', artifact.digest)
+        .send(artifact);
+    },
   );
 
   app.get(

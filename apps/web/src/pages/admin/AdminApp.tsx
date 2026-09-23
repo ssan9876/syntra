@@ -1,49 +1,77 @@
+import { lazy, Suspense, type ComponentType } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell.js';
 import { AdminNav } from './AdminNav.js';
-import { UsersPage } from './UsersPage.js';
-import { GroupsPage } from './GroupsPage.js';
-import { OrgUnitsPage } from './OrgUnitsPage.js';
-import { OrgUnitDetailPage } from './OrgUnitDetailPage.js';
-import { GroupDetailPage } from './GroupDetailPage.js';
-import { OnboardPersonPage } from './OnboardPersonPage.js';
-import { PersonDetailPage } from './PersonDetailPage.js';
-import { ActivityPage } from './ActivityPage.js';
-import { UpdatesPage } from './UpdatesPage.js';
-import { SourcesPage } from './SourcesPage.js';
-import { PersonSourceDetailPage } from './PersonSourceDetailPage.js';
-import { PersonImportRunDetailPage } from './PersonImportRunDetailPage.js';
-import { SourceDetailPage } from './SourceDetailPage.js';
-import { SyncRunDetailPage } from './SyncRunDetailPage.js';
-import { ApplicationsPage } from './ApplicationsPage.js';
-import { ApplicationDetailPage } from './ApplicationDetailPage.js';
-import { PoliciesPage } from './PoliciesPage.js';
-import { RolesPage } from './RolesPage.js';
-import { TenantSettingsPage } from './TenantSettingsPage.js';
-import { TargetsPage } from './TargetsPage.js';
-import { TargetDetailPage } from './TargetDetailPage.js';
-import { AccountProfilePage } from './AccountProfilePage.js';
-import { AccountDetailPage } from './AccountDetailPage.js';
-import { UnlinkedAccountsPage } from './UnlinkedAccountsPage.js';
-import { BusinessRulesPage } from './BusinessRulesPage.js';
-import { ProvisionRunsPage } from './ProvisionRunsPage.js';
-import { ProvisionRunDetailPage } from './ProvisionRunDetailPage.js';
-import { PersonAccessPage } from './PersonAccessPage.js';
-import { RequestsPage } from './RequestsPage.js';
-import { ProductEditorPage } from './ProductEditorPage.js';
-import { RequestDetailAdminPage } from './RequestDetailAdminPage.js';
-import { SweepDetailPage } from './SweepDetailPage.js';
-import { GovernPage } from './GovernPage.js';
-import { GovernSnapshotDetailPage } from './GovernSnapshotDetailPage.js';
-import { GovernCampaignNewPage } from './GovernCampaignNewPage.js';
-import { GovernCampaignDetailPage } from './GovernCampaignDetailPage.js';
-import { GovernBatchPage } from './GovernBatchPage.js';
-import { ProvisioningSetupPage } from './ProvisioningSetupPage.js';
-import { EmployeeWorkPage } from './EmployeeWorkPage.js';
-import { GuidedOnboardingPage } from './GuidedOnboardingPage.js';
-import { LifecycleOperationPage } from './LifecycleOperationPage.js';
-import { LifecycleSimulationPage } from './LifecycleSimulationPage.js';
-import { LifecyclePolicyPage } from './LifecyclePolicyPage.js';
+
+/**
+ * Every console page is its own chunk.
+ *
+ * The console used to be one lazy chunk holding all forty-odd pages, which
+ * reached 589 kB minified: opening the users list downloaded the governance
+ * campaign editor, the rule editor and everything else with it. Each page now
+ * loads when its route is first visited. The shell and navigation stay in the
+ * console chunk, so the frame is on screen while a page arrives.
+ */
+function page<K extends string>(
+  load: () => Promise<Record<K, ComponentType>>,
+  name: K,
+) {
+  return lazy(() => load().then((module) => ({ default: module[name] })));
+}
+
+const UsersPage = page(() => import('./UsersPage.js'), 'UsersPage');
+const GroupsPage = page(() => import('./GroupsPage.js'), 'GroupsPage');
+const OrgUnitsPage = page(() => import('./OrgUnitsPage.js'), 'OrgUnitsPage');
+const OrgUnitDetailPage = page(() => import('./OrgUnitDetailPage.js'), 'OrgUnitDetailPage');
+const GroupDetailPage = page(() => import('./GroupDetailPage.js'), 'GroupDetailPage');
+const OnboardPersonPage = page(() => import('./OnboardPersonPage.js'), 'OnboardPersonPage');
+const PersonDetailPage = page(() => import('./PersonDetailPage.js'), 'PersonDetailPage');
+const ActivityPage = page(() => import('./ActivityPage.js'), 'ActivityPage');
+const UpdatesPage = page(() => import('./UpdatesPage.js'), 'UpdatesPage');
+const SourcesPage = page(() => import('./SourcesPage.js'), 'SourcesPage');
+const PersonSourceDetailPage = page(() => import('./PersonSourceDetailPage.js'), 'PersonSourceDetailPage');
+const PersonImportRunDetailPage = page(() => import('./PersonImportRunDetailPage.js'), 'PersonImportRunDetailPage');
+const SourceDetailPage = page(() => import('./SourceDetailPage.js'), 'SourceDetailPage');
+const SyncRunDetailPage = page(() => import('./SyncRunDetailPage.js'), 'SyncRunDetailPage');
+const ApplicationsPage = page(() => import('./ApplicationsPage.js'), 'ApplicationsPage');
+const ApplicationDetailPage = page(() => import('./ApplicationDetailPage.js'), 'ApplicationDetailPage');
+const PoliciesPage = page(() => import('./PoliciesPage.js'), 'PoliciesPage');
+const RolesPage = page(() => import('./RolesPage.js'), 'RolesPage');
+const TenantSettingsPage = page(() => import('./TenantSettingsPage.js'), 'TenantSettingsPage');
+const TargetsPage = page(() => import('./TargetsPage.js'), 'TargetsPage');
+const TargetDetailPage = page(() => import('./TargetDetailPage.js'), 'TargetDetailPage');
+const AccountProfilePage = page(() => import('./AccountProfilePage.js'), 'AccountProfilePage');
+const AccountDetailPage = page(() => import('./AccountDetailPage.js'), 'AccountDetailPage');
+const UnlinkedAccountsPage = page(() => import('./UnlinkedAccountsPage.js'), 'UnlinkedAccountsPage');
+const BusinessRulesPage = page(() => import('./BusinessRulesPage.js'), 'BusinessRulesPage');
+const ProvisionRunsPage = page(() => import('./ProvisionRunsPage.js'), 'ProvisionRunsPage');
+const ProvisionRunDetailPage = page(() => import('./ProvisionRunDetailPage.js'), 'ProvisionRunDetailPage');
+const PersonAccessPage = page(() => import('./PersonAccessPage.js'), 'PersonAccessPage');
+const RequestsPage = page(() => import('./RequestsPage.js'), 'RequestsPage');
+const ProductEditorPage = page(() => import('./ProductEditorPage.js'), 'ProductEditorPage');
+const RequestDetailAdminPage = page(() => import('./RequestDetailAdminPage.js'), 'RequestDetailAdminPage');
+const SweepDetailPage = page(() => import('./SweepDetailPage.js'), 'SweepDetailPage');
+const GovernPage = page(() => import('./GovernPage.js'), 'GovernPage');
+const GovernSnapshotDetailPage = page(() => import('./GovernSnapshotDetailPage.js'), 'GovernSnapshotDetailPage');
+const GovernCampaignNewPage = page(() => import('./GovernCampaignNewPage.js'), 'GovernCampaignNewPage');
+const GovernCampaignDetailPage = page(() => import('./GovernCampaignDetailPage.js'), 'GovernCampaignDetailPage');
+const GovernBatchPage = page(() => import('./GovernBatchPage.js'), 'GovernBatchPage');
+const ProvisioningSetupPage = page(() => import('./ProvisioningSetupPage.js'), 'ProvisioningSetupPage');
+const EmployeeWorkPage = page(() => import('./EmployeeWorkPage.js'), 'EmployeeWorkPage');
+const GuidedOnboardingPage = page(() => import('./GuidedOnboardingPage.js'), 'GuidedOnboardingPage');
+const LifecycleOperationPage = page(() => import('./LifecycleOperationPage.js'), 'LifecycleOperationPage');
+const LifecycleSimulationPage = page(() => import('./LifecycleSimulationPage.js'), 'LifecycleSimulationPage');
+const LifecyclePolicyPage = page(() => import('./LifecyclePolicyPage.js'), 'LifecyclePolicyPage');
+
+/** Quiet, like the boot screen: most pages arrive before it is noticed. */
+function PageLoading() {
+  return (
+    <div className="py-8" role="status">
+      <span className="sr-only">Loading page</span>
+      <div className="skeleton h-2 w-32 rounded-full" />
+    </div>
+  );
+}
 
 export function AdminApp() {
   return (
@@ -53,6 +81,7 @@ export function AdminApp() {
           over the outer one and silently undo it, which is how the console
           ended up narrow and hugging its rail on a wide monitor. */}
       <div className="w-full">
+          <Suspense fallback={<PageLoading />}>
           <Routes>
             <Route path="users" element={<UsersPage />} />
             {/* Declared before `users/:id` so a reader meets the static path
@@ -169,6 +198,7 @@ export function AdminApp() {
             <Route path="updates" element={<UpdatesPage />} />
             <Route path="*" element={<Navigate to="/admin/users" replace />} />
           </Routes>
+          </Suspense>
       </div>
     </AppShell>
   );

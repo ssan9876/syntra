@@ -76,3 +76,12 @@ export const applyImportRunRequest = z
 export const deletePersonSourceQuery = z
   .object({ confirm: z.coerce.boolean().optional() })
   .strict();
+
+export const resolveDuplicateReviewRequest = z.object({
+  resolution: z.enum(['keep_separate', 'link_existing', 'skip_source_record']),
+  note: z.string().trim().min(10).max(1000),
+}).strict();
+
+export const unlinkPersonSourceRequest = z.object({
+  reason: z.string().trim().min(10).max(1000),
+}).strict();

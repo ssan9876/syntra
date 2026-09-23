@@ -2,7 +2,24 @@
 
 ## Status
 
-As of 22 September 2026 the four workstreams are built and verified to the extent this repository allows; see [the pilot evidence record](pilot-evidence-2026-09-22.md) for what passed, what was measured, and the items that need a disposable Entra tenant or a second host.
+As of 23 September 2026 the four workstreams are built and verified to the extent this repository allows; see [the pilot evidence record](pilot-evidence-2026-09-22.md) for what passed, what was measured, and the items that need a second disposable Entra tenant, production deployment access, or human review.
+
+### Selected enterprise backlog — implementation status
+
+This is the traceable status of the current delivery slice (items **1–4**,
+**71–80**, and **115–124** from the enterprise backlog). It distinguishes a
+product capability from evidence or infrastructure that must be supplied by a
+deployment.
+
+| Items | Current state | Remaining proof / deployment action |
+| --- | --- | --- |
+| 1–4 — Entra write, read-back, failure handling, rotation | Implemented and tenant-validated for OAuth, user paging, create/retry, update, disable and account read-back. Read-back is bounded; a timeout remains manual work, never a verified result. | Record direct-group grant/revoke evidence once disposable security groups exist; validate against a second tenant before broad rollout. |
+| 71–73 — backup schedule, verification, non-empty restore | Runbooks and scratch-restore verification exist; a 10,000-person/10,000-operation staging dump was restored and reconciled. | Wire the schedule into the chosen Compose/Helm deployment and repeat the rehearsal on an isolated second host with the production access model. |
+| 74–78 — master-key and secret operations | Recovery, secret inventory, expiry reminders and database/key-boundary runbooks are implemented. `rewrapSecrets` now safely re-wraps data keys under a next provider, with an automated rotation test. | Build the deployment-specific maintenance wrapper, perform and record a staging key-rotation drill, then choose and configure the organisation's KMS/HSM provider. |
+| 79–80 — DR and incident response | RPO/RTO and incident/tabletop runbooks are published. | Name on-call owners, set alert destinations, and run the table-top exercises with the pilot team. |
+| 115–116 — 10k fixture and query-plan review | Implemented and measured with 10,000 synthetic people/operations. The people page and open-operation queue have recorded indexed plans. | Repeat against production-shaped hardware and the expected tenant mix before committing SLOs. |
+| 117–120 — paging, filtering, exports, job control | Operations, people, directory lists and the composite employee-work queue are database-paged; job metrics/dead-letter visibility and safe retry exist. | Add an audited asynchronous export service before any report is allowed beyond its interactive paging limit. |
+| 121–124 — idempotency, timelines, live state, accessibility | Durable idempotency receipts now have a tenant-configurable retention window; long timelines are paged and live status updates are announced. The retry-after-verification path requires a complete divergent read-back. | Obtain privacy/legal approval for retention and complete manual screen-reader, high-zoom, reduced-motion and translated-UI checks. |
 
 ## Purpose
 
@@ -29,10 +46,11 @@ Syntra currently has the foundations needed for a controlled pilot:
 - Work queues expose retry and acknowledgement actions, plus live-status
   announcements and keyboard-selectable bulk queue actions.
 
-The Entra target is presently a document-driven REST connector. It is valid
-for authenticated discovery and connection testing, but it must not be
-described as a completed Entra provisioning connector until each write and
-read-back operation below has passed against a disposable tenant.
+Syntra now includes a native `entraId` connector beside the document-driven
+REST connector. It is tenant-validated for account operations, while direct
+group membership remains marked as requiring its own disposable-tenant
+evidence. The capability matrix is the authority; do not describe unverified
+entries as production-ready.
 
 ## Delivery principles
 

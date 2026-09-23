@@ -730,10 +730,6 @@ describe('testTargetConfiguration', () => {
     expect(result.message).toMatch(/none to borrow/);
   });
 
-  // SKIPPED until the schema owner extends the `target_system_encrypted_transport`
-  // CHECK constraint to admit `type = 'entraId'` (see docs/connectors/entra-id.md,
-  // "Database constraint"). Until then no entraId row can be stored at all, so
-  // there is nothing to borrow from.
   it('refuses to borrow an Entra secret for a different tenant or token URL', async () => {
     // The borrowed client secret is POSTed to `tokenUrl`, so a test that could
     // name a different one -- or a different tenant, from which the token URL
@@ -857,6 +853,39 @@ describe('upsertAccountProfile, beyond the brief', () => {
     initialPasswordPolicy: {},
     initialPasswordDelivery: 'vaultOnly' as const,
   };
+
+  it('requires and records a reason before sending personal email to a target', async () => {
+    const { id } = await create();
+    const actor = await withTenant(tenantId, (tx) => tx.user.create({
+      data: { tenantId, login: 'privacy-reviewer', email: 'privacy@acme.test', displayName: 'Privacy reviewer' },
+    }));
+    const sensitive = {
+      ...profile,
+      attributeTemplates: { recoveryMail: '%person.personalEmail%' },
+    };
+
+    await expect(upsertAccountProfile(tenantId, actor.id, id, sensitive))
+      .rejects.toThrow(/reason of at least 20 characters/);
+
+    await upsertAccountProfile(tenantId, actor.id, id, {
+      ...sensitive,
+      sensitiveApprovalReason: 'Required for the documented account recovery process.',
+    });
+    const stored = await withTenant(tenantId, (tx) =>
+      tx.accountProfile.findUniqueOrThrow({ where: { targetSystemId: id } }),
+    );
+    expect(stored.sensitiveApprovalReason).toBe('Required for the documented account recovery process.');
+    expect(stored.sensitiveApprovedByUserId).toBe(actor.id);
+    expect(stored.sensitiveApprovedAt).not.toBeNull();
+
+    await upsertAccountProfile(tenantId, actor.id, id, profile);
+    const cleared = await withTenant(tenantId, (tx) =>
+      tx.accountProfile.findUniqueOrThrow({ where: { targetSystemId: id } }),
+    );
+    expect(cleared.sensitiveApprovalReason).toBeNull();
+    expect(cleared.sensitiveApprovedByUserId).toBeNull();
+    expect(cleared.sensitiveApprovedAt).toBeNull();
+  });
 
   it('replaces the profile rather than adding a second one', async () => {
     const { id } = await create();

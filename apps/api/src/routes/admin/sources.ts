@@ -27,6 +27,7 @@ import {
   localMasterKeyProvider,
   mappingsFor,
   ownedObjectCounts,
+  JobNotQueuedError,
   queueRun,
   SourceDisabledError,
   recordEvent,
@@ -626,6 +627,14 @@ export async function registerAdminSourceRoutes(
         const run = await queueRun(scheduler, request.tenantId, id);
         return reply.status(202).send(run);
       } catch (cause) {
+        if (cause instanceof JobNotQueuedError) {
+          throw new ProblemError(
+            503,
+            'job-not-queued',
+            'The run was recorded but not queued',
+            `${cause.message}. The run is marked failed; start it again once the job queue is healthy.`,
+          );
+        }
         if (cause instanceof SourceDisabledError) {
           throw new ProblemError(
             409,

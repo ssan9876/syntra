@@ -86,7 +86,10 @@ export function capabilitiesForTarget(type: string, config: unknown): ConnectorC
   return {
     available: true,
     readBack: isObject(entitlement.members),
-    createAccount: isObject(account.create),
+    createAccount:
+      isObject(account.create) &&
+      typeof account.correlationAt === 'string' &&
+      isObject(account.provenance),
     updateAccount: isObject(account.update),
     disableAccount: isObject(account.disable) || isObject(account.enable),
     manageEntitlements: isObject(entitlement.grant) || isObject(entitlement.revoke),

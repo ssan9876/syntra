@@ -631,22 +631,39 @@ describe('TargetDetailPage', () => {
         return Promise.resolve(
           json({
             type: 'entraId',
+            metadata: {
+              displayName: 'Microsoft Entra ID',
+              adapterVersion: '1.0.0',
+              connectorApiVersion: 1,
+              supportState: 'preview',
+              rollout: 'controlled',
+              deprecationDate: null,
+              certification: {
+                contractVersion: 1,
+                status: 'partial',
+                verifiedAt: '2026-09-23',
+                evidence: 'Shared fake-Graph contract passed; direct-group tenant evidence remains required',
+              },
+            },
             matrix: {
               version: 1,
               entries: {
                 createAccount: {
                   status: 'available',
                   validation: 'automated+tenant-evidence-required',
+                  requiredPermissions: ['User.ReadWrite.All'],
                   note: 'POST /users with the correlation marker.',
                 },
                 dynamicGroups: {
                   status: 'unsupported',
                   validation: 'automated',
+                  requiredPermissions: [],
                   note: 'Refused before any request.',
                 },
                 deleteAccount: {
                   status: 'never',
                   validation: 'automated',
+                  requiredPermissions: [],
                   note: 'No code path issues DELETE.',
                 },
               },
@@ -669,6 +686,9 @@ describe('TargetDetailPage', () => {
     renderExisting();
 
     expect(await screen.findByText('createAccount')).toBeVisible();
+    expect(screen.getByText('Microsoft Entra ID v1.0.0')).toBeVisible();
+    expect(screen.getByText('controlled')).toBeVisible();
+    expect(screen.getByText(/direct-group tenant evidence remains required/)).toBeVisible();
     expect(screen.getByText('tenant evidence required')).toBeVisible();
     expect(screen.getByText(/1 of these are verified against the fake Graph only/)).toBeVisible();
     expect(screen.getByText('not supported')).toBeVisible();

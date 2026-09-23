@@ -24,6 +24,7 @@ interface Policy {
   observationRetentionDays: number;
   notificationRetentionDays: number;
   simulationRetentionDays: number;
+  lifecycleOperationRetentionDays: number;
   auditRetentionDays: number | null;
 }
 
@@ -58,6 +59,7 @@ export function LifecyclePolicyPage() {
       observationRetentionDays: String(resource.data.observationRetentionDays),
       notificationRetentionDays: String(resource.data.notificationRetentionDays),
       simulationRetentionDays: String(resource.data.simulationRetentionDays),
+      lifecycleOperationRetentionDays: String(resource.data.lifecycleOperationRetentionDays),
       auditRetentionDays: resource.data.auditRetentionDays === null ? '' : String(resource.data.auditRetentionDays),
     });
   }, [resource.data]);
@@ -103,6 +105,7 @@ export function LifecyclePolicyPage() {
           observationRetentionDays: Number(numbers.observationRetentionDays),
           notificationRetentionDays: Number(numbers.notificationRetentionDays),
           simulationRetentionDays: Number(numbers.simulationRetentionDays),
+          lifecycleOperationRetentionDays: Number(numbers.lifecycleOperationRetentionDays),
           auditRetentionDays: audit,
         }),
       });
@@ -152,6 +155,7 @@ export function LifecyclePolicyPage() {
         {number('observationRetentionDays', 'Target observations on resolved work: days', 1, 3650)}
         {number('notificationRetentionDays', 'Delivered notification records: days', 1, 3650)}
         {number('simulationRetentionDays', 'Simulations: days', 1, 3650)}
+        {number('lifecycleOperationRetentionDays', 'Resolved operations and idempotency keys: days', 1, 3650, 'Open operations are never removed. Expiry permits the same key to be used again only after this period.')}
         <div className="sm:col-span-2">{number('auditRetentionDays', 'Audit events: days (blank means never)', 90, 3650, 'Only events at or before a verified audit checkpoint are ever removed, so the chain still verifies.')}</div>
         <p className="text-sm text-muted sm:col-span-2">The nightly retention pass records an audit event with every count it removed.</p>
       </div></Panel>

@@ -24,6 +24,8 @@ import {
   ProvisionRunNotAppliableError,
   resolveInFlightActions,
 } from './apply.js';
+import { ExternalWritesPausedError } from './target-write-stop.js';
+import { MaintenanceWindowClosedError } from './target-maintenance.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 const USERS = 'OU=Users,DC=acme,DC=test';
@@ -161,6 +163,39 @@ const eventsOf = (prefix: string) =>
       orderBy: { sequence: 'asc' },
     }),
   );
+
+describe('external-write circuit breaker', () => {
+  it('refuses the run before changing its state or attempting an action', async () => {
+    const run = await previewProvisionRun(tenantId, provider, targetId, { now: NOW, connector: target as never });
+    const actor = await seedConfirmingUser();
+    await withTenant(tenantId, (tx) => tx.targetSystem.update({
+      where: { id: targetId },
+      data: { externalWritesPausedAt: NOW, externalWritesPausedByUserId: actor, externalWritesPauseReason: 'Incident containment' },
+    }));
+    await expect(applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true, confirmedByUserId: actor, connector: target as never, now: NOW, sleep: noSleep,
+    })).rejects.toBeInstanceOf(ExternalWritesPausedError);
+    const persisted = await withTenant(tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: run.id } }));
+    expect(persisted.status).toBe(run.status);
+    expect((await actionsOf(run.id)).every((action) => action.attempts === 0)).toBe(true);
+  });
+});
+
+describe('target maintenance window', () => {
+  it('leaves an ordinary run untouched outside the configured UTC window', async () => {
+    await updateTarget(tenantId, provider, null, targetId, {
+      maintenanceWindow: { enabled: true, days: [2], startMinute: 60, durationMinutes: 60 },
+    });
+    const run = await previewProvisionRun(tenantId, provider, targetId, { now: NOW, connector: target as never });
+    const actor = await seedConfirmingUser();
+    await expect(applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true, confirmedByUserId: actor, connector: target as never, now: NOW, sleep: noSleep,
+    })).rejects.toBeInstanceOf(MaintenanceWindowClosedError);
+    const persisted = await withTenant(tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: run.id } }));
+    expect(persisted.status).toBe(run.status);
+    expect((await actionsOf(run.id)).every((action) => action.attempts === 0)).toBe(true);
+  });
+});
 
 /** A person who has already left, with an account and an object at the target. */
 async function seedLeaver(

@@ -26,6 +26,8 @@ import {
   recordEvent,
   updateContract,
   usersForPerson,
+  hasPermission,
+  projectPersonFields,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -103,13 +105,17 @@ export async function registerAdminPersonRoutes(
     async (request) => {
       const { q, status, page, pageSize } = statusPageQuery.parse(request.query);
       const result = await request.db((tx) =>
-        listPersons(tx, { search: q, status, page, pageSize }),
+        Promise.all([
+          listPersons(tx, { search: q, status, page, pageSize }),
+          hasPermission(tx, request.session.userId, PERMISSIONS.IDENTITY_SENSITIVE_READ),
+        ]),
       );
+      const [pageResult, canReadSensitive] = result;
       return {
-        persons: result.rows,
-        total: result.total,
-        page: result.page,
-        pageSize: result.pageSize,
+        persons: pageResult.rows.map((person) => projectPersonFields(person, canReadSensitive)),
+        total: pageResult.total,
+        page: pageResult.page,
+        pageSize: pageResult.pageSize,
       };
     },
   );
@@ -125,11 +131,16 @@ export async function registerAdminPersonRoutes(
         if (!person) {
           throw new ProblemError(404, 'not-found', 'Person not found');
         }
-        return {
+        const canReadSensitive = await hasPermission(
+          tx,
+          request.session.userId,
+          PERMISSIONS.IDENTITY_SENSITIVE_READ,
+        );
+        return projectPersonFields({
           ...person,
           contracts: await listContracts(tx, id),
           users: await usersForPerson(tx, id),
-        };
+        }, canReadSensitive);
       });
     },
   );
@@ -551,6 +562,19 @@ export async function registerAdminPersonRoutes(
         const before = await tx.contract.findFirst({
           where: { personId: id, sequence },
         });
+        if (!before) throw new ProblemError(404, 'not-found', 'Contract not found');
+
+        const startDate = body.startDate ?? before.startDate;
+        const endDate = body.endDate === undefined ? before.endDate : body.endDate;
+        if (endDate !== null && endDate < startDate) {
+          throw new ProblemError(
+            400,
+            'invalid-contract-dates',
+            'Invalid contract dates',
+            'The end date must be on or after the start date.',
+            { errors: [{ path: 'endDate', message: 'must be on or after startDate' }] },
+          );
+        }
         const updated = await updateContract(tx, id, sequence, body);
         if (!updated) throw new ProblemError(404, 'not-found', 'Contract not found');
 

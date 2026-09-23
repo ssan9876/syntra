@@ -152,12 +152,32 @@ const writeSpec = (method: z.ZodTypeAny) =>
  */
 const fieldMap = z.record(jsonPath, trimmed);
 
+const provenanceSelector = z.union([
+  z.object({ kind: z.literal('scalar'), path: jsonPath }),
+  z.object({
+    kind: z.literal('collection'),
+    path: jsonPath,
+    valueAt: jsonPath,
+    whereAt: jsonPath.optional(),
+    whereEquals: trimmed.optional(),
+  }).refine((value) => (value.whereAt === undefined) === (value.whereEquals === undefined), {
+    message: 'whereAt and whereEquals must be supplied together',
+  }),
+]);
+
 const accountResource = z.object({
   list: listSpec,
   /** Where each item's immutable identifier is. Never its display name. */
   anchorAt: jsonPath,
   /** Where the item's login-ish natural key is, for correlation. */
   correlationAt: jsonPath.optional(),
+  /**
+   * Where a create stores its exact action id. Together with `correlationAt`,
+   * this lets a repeated create adopt only the object that the same action
+   * made. Without both selectors, account creation is refused rather than
+   * risking a duplicate after a lost response.
+   */
+  provenance: provenanceSelector.optional(),
   /** Target field → Syntra attribute, for everything else worth reading. */
   fields: fieldMap.default({}),
   create: writeSpec(accountMethod).optional(),

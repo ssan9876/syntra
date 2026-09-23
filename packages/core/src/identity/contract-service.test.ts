@@ -25,6 +25,18 @@ beforeEach(async () => {
 const d = (s: string) => new Date(`${s}T00:00:00Z`);
 
 describe('concurrent contracts', () => {
+  it('rejects an impossible date range at the service boundary', async () => {
+    await expect(
+      withTenant(tenantId, (tx) =>
+        createContract(tx, personId, {
+          sequence: 1,
+          startDate: d('2026-06-02'),
+          endDate: d('2026-06-01'),
+        }),
+      ),
+    ).rejects.toThrow(/endDate/i);
+  });
+
   it('returns both contracts a person holds at once', async () => {
     await withTenant(tenantId, async (tx) => {
       await createContract(tx, personId, {

@@ -1,6 +1,7 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
 import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
+import { assertValidContractDates } from './contract-service.js';
 
 export interface CreatePersonInput {
   givenName: string;
@@ -146,6 +147,11 @@ export async function updateContract(
 ) {
   const existing = await tx.contract.findFirst({ where: { personId, sequence } });
   if (!existing) return null;
+
+  assertValidContractDates(
+    data.startDate ?? existing.startDate,
+    data.endDate === undefined ? existing.endDate : data.endDate,
+  );
 
   if (data.isPrimary === true) {
     await tx.contract.updateMany({

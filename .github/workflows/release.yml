@@ -236,6 +236,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -301,6 +302,8 @@ jobs:
             ${{ steps.meta.outputs.latest == 'true' && 'ghcr.io/ssan9876/syntra-api:latest' || '' }}
           cache-from: type=gha,scope=syntra-api
           cache-to: type=gha,mode=max,scope=syntra-api
+          provenance: mode=max
+          sbom: true
 
       - name: Build and push web
         uses: docker/build-push-action@v6
@@ -314,3 +317,5 @@ jobs:
             ${{ steps.meta.outputs.latest == 'true' && 'ghcr.io/ssan9876/syntra-web:latest' || '' }}
           cache-from: type=gha,scope=syntra-web
           cache-to: type=gha,mode=max,scope=syntra-web
+          provenance: mode=max
+          sbom: true

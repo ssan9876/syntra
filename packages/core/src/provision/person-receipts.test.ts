@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import type { Scheduler } from '../jobs/scheduler.js';
-import { DEFERRAL_SECONDS, requestPersonProvision, retryPersonProvision, runPersonProvision } from './person-receipts.js';
+import { DEFERRAL_SECONDS, requestPersonProvision, retryPersonProvision, runPersonProvision, waitForExpectedReadBack } from './person-receipts.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { updateLifecyclePolicy } from '../lifecycle/policy.js';
 
@@ -23,6 +23,27 @@ beforeEach(async () => {
 });
 
 describe('person provisioning receipts', () => {
+  it('waits for delayed membership removal and leaves a mismatched target unverified', async () => {
+    const account = { anchor: 'a', objectType: 'user' as const, dn: 'a', attributes: {} };
+    const reads = [
+      { account, entitlementIds: ['group-a'], enabled: true, complete: true },
+      { account, entitlementIds: [], enabled: true, complete: true },
+    ];
+    const settled = await waitForExpectedReadBack(
+      async () => reads.shift()!,
+      { accountPresent: true, enabled: true, attributes: {}, entitlements: [] },
+      { delayMs: 0, sleep: async () => undefined },
+    );
+    expect(settled).toMatchObject({ matched: true, attempts: 2 });
+
+    const neverObserved = await waitForExpectedReadBack(
+      async () => ({ account, entitlementIds: ['group-a'], enabled: true, complete: true }),
+      { accountPresent: true, enabled: true, attributes: {}, entitlements: [] },
+      { attempts: 2, delayMs: 0, sleep: async () => undefined },
+    );
+    expect(neverObserved).toMatchObject({ matched: false, attempts: 2 });
+  });
+
   it('is idempotent per person, target and request and queues exactly once', async () => {
     const jobs = scheduler();
     const first = await requestPersonProvision(tenantId, personId, key, jobs, [targetId]);

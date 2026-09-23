@@ -482,7 +482,7 @@ export async function assignLifecycleOperation(
   tenantId: string,
   operationId: string,
   ownerUserId: string,
-  options: { priority: string; dueAt: Date | null; publicUrl?: string },
+  options: { priority: string; dueAt: Date | null; publicUrl?: string; actorUserId?: string | null },
 ) {
   return withTenant(tenantId, async (tx) => {
     const owner = await tx.user.findFirstOrThrow({ where: { id: ownerUserId } });
@@ -493,6 +493,15 @@ export async function assignLifecycleOperation(
         priority: options.priority,
         dueAt: options.dueAt,
         acknowledgedAt: null,
+      },
+    });
+    await tx.lifecycleCaseEvent.create({
+      data: {
+        tenantId,
+        operationId,
+        kind: 'assignment',
+        actorUserId: options.actorUserId ?? null,
+        metadata: { ownerUserId, priority: options.priority, dueAt: options.dueAt?.toISOString() ?? null },
       },
     });
     await notifyLifecycle(
@@ -507,13 +516,17 @@ export async function assignLifecycleOperation(
   });
 }
 
-export async function acknowledgeLifecycleOperation(tenantId: string, operationId: string) {
-  return withTenant(tenantId, (tx) =>
-    tx.lifecycleOperation.update({
+export async function acknowledgeLifecycleOperation(tenantId: string, operationId: string, actorUserId?: string | null) {
+  return withTenant(tenantId, async (tx) => {
+    const operation = await tx.lifecycleOperation.update({
       where: { id: operationId },
       data: { acknowledgedAt: new Date() },
-    }),
-  );
+    });
+    await tx.lifecycleCaseEvent.create({
+      data: { tenantId, operationId, kind: 'acknowledgement', actorUserId: actorUserId ?? null },
+    });
+    return operation;
+  });
 }
 
 /**
@@ -631,6 +644,16 @@ export async function recordSloBreaches(
         await tx.lifecycleOperation.update({
           where: { id: operation.id },
           data: { escalatedAt: now, escalatedToUserId: owner.userId },
+        });
+        await tx.lifecycleCaseEvent.create({
+          data: {
+            tenantId,
+            operationId: operation.id,
+            kind: 'escalation',
+            actorUserId: null,
+            message: reason,
+            metadata: { escalatedToUserId: owner.userId },
+          },
         });
         const original = operation.ownerUserId
           ? await tx.user.findFirst({ where: { id: operation.ownerUserId }, select: { displayName: true } })

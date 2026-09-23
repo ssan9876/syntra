@@ -11,6 +11,7 @@ import {
   PROVISION_JOB,
   ProvisionRunNotAppliableError,
   ProvisionRunNotConfirmableError,
+  MaintenanceWindowClosedError,
   acknowledgeDriftFinding,
   applyProvisionRun,
   enqueuePairedSync,
@@ -242,6 +243,9 @@ export async function registerAdminProvisionRunRoutes(
           ...(body.confirm
             ? { confirm: true, confirmedByUserId: request.session.userId }
             : {}),
+          ...(body.maintenanceOverrideReason === undefined
+            ? {}
+            : { maintenanceOverrideReason: body.maintenanceOverrideReason }),
           transport: options.transport,
         });
       } catch (cause) {
@@ -262,6 +266,15 @@ export async function registerAdminProvisionRunRoutes(
             'run-not-appliable',
             'This run cannot be applied',
             cause.message,
+          );
+        }
+        if (cause instanceof MaintenanceWindowClosedError) {
+          throw new ProblemError(
+            409,
+            'maintenance-window-closed',
+            'Target maintenance window is closed',
+            cause.message,
+            { overrideAllowed: cause.overrideAllowed },
           );
         }
         throw cause;

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import type { TenantClient } from '@syntra/db';
+import { Prisma, type TenantClient } from '@syntra/db';
 import { z } from 'zod';
 import { idParam } from '@syntra/contracts';
 import { PERMISSIONS, approvalDecision, approvalGateOpen, createLifecycleOperation, deactivateDirectoryUser, getLifecyclePolicy, localMasterKeyProvider, notifyLifecycleApprovers, overdueReason, queueTargetWork, recordEvent, sloMinutesFor, transitionLifecycleStep, TARGET_STEP_KEY, type Scheduler } from '@syntra/core';
@@ -15,6 +15,47 @@ const writePermissions = [...readPermissions, PERMISSIONS.IDENTITY_WRITE, PERMIS
 const employeeWorkQuery = pageQuery.extend({
   kind: z.enum(['onboarding', 'offboarding', 'failed']).optional(),
 });
+
+type EmployeeWorkRow = {
+  id: string; kind: 'onboarding' | 'offboarding' | 'failed'; lifecycleKind: string | null;
+  personId: string | null; personName: string; status: string; priority: string | null;
+  overdue: boolean; overdueReason: string | null; approvalRequired: boolean; summary: string; updatedAt: Date;
+  onboarding: bigint; offboarding: bigint; failed: bigint; total: bigint; filteredTotal: bigint;
+};
+
+/** The cross-source work queue is paged in PostgreSQL, not after an in-memory merge. */
+async function listEmployeeWork(tx: TenantClient, query: z.infer<typeof employeeWorkQuery>) {
+  const needle = query.q ? `%${query.q.toLocaleLowerCase()}%` : null;
+  const kind = query.kind ?? null;
+  const rows = await tx.$queryRaw<EmployeeWorkRow[]>(Prisma.sql`
+    WITH items AS (
+      SELECT 'lifecycle:' || o.id AS id,
+        CASE WHEN o.status = 'failed' THEN 'failed' WHEN o.kind = 'offboard' THEN 'offboarding' ELSE 'onboarding' END AS kind,
+        o.kind AS "lifecycleKind", o."personId", COALESCE(p."givenName" || ' ' || p."familyName", 'No employee assigned') AS "personName",
+        o.status, o.priority, (o."dueAt" < now() AND o."acknowledgedAt" IS NULL) OR o."sloDeadlineAt" < now() AS overdue,
+        CASE WHEN o."dueAt" < now() AND o."acknowledgedAt" IS NULL THEN 'Work is overdue' WHEN o."sloDeadlineAt" < now() THEN 'Service-level deadline breached' ELSE NULL END AS "overdueReason",
+        o."approvalRequired" AND o."approvedAt" IS NULL AND o."rejectedAt" IS NULL AS "approvalRequired",
+        CASE WHEN o.status = 'awaiting_approval' THEN o.kind || ' operation is waiting for a second person to approve it' ELSE o.kind || ' operation is ' || o.status END AS summary,
+        o."updatedAt"
+      FROM "LifecycleOperation" o LEFT JOIN "Person" p ON p.id = o."personId"
+      WHERE o.status NOT IN ('completed', 'cancelled')
+      UNION ALL
+      SELECT 'provision:' || r.id, CASE WHEN r.status = 'failed' THEN 'failed' ELSE 'onboarding' END, NULL, r."personId",
+        COALESCE(p."givenName" || ' ' || p."familyName", 'Unknown employee'), r.status, NULL, false, NULL, false,
+        r."targetName" || ': ' || COALESCE(r.message, r.status), r."updatedAt"
+      FROM (SELECT DISTINCT ON ("personId", "targetSystemId") * FROM "PersonProvisionReceipt" ORDER BY "personId", "targetSystemId", "updatedAt" DESC, id DESC) r
+      LEFT JOIN "Person" p ON p.id = r."personId"
+      WHERE r.status NOT IN ('applied', 'no_match') AND NOT EXISTS (SELECT 1 FROM "LifecycleOperation" o WHERE o.id = r."requestKey" AND o.status NOT IN ('completed', 'cancelled'))
+      UNION ALL
+      SELECT 'departure:' || p.id, 'offboarding', NULL, p.id, p."givenName" || ' ' || p."familyName", 'incomplete', NULL, false, NULL, false,
+        (SELECT count(*) FROM "User" u WHERE u."personId" = p.id AND u.status = 'active') || ' active sign-ins and ' || (SELECT count(*) FROM "TargetAccount" a WHERE a."personId" = p.id AND a.status IN ('active','pending','conflict')) || ' unfinished target accounts', p."updatedAt"
+      FROM "Person" p WHERE p.status = 'inactive' AND (EXISTS (SELECT 1 FROM "User" u WHERE u."personId" = p.id AND u.status = 'active') OR EXISTS (SELECT 1 FROM "TargetAccount" a WHERE a."personId" = p.id AND a.status IN ('active','pending','conflict')))
+    ), counted AS (SELECT *, count(*) FILTER (WHERE kind = 'onboarding') OVER () AS onboarding, count(*) FILTER (WHERE kind = 'offboarding') OVER () AS offboarding, count(*) FILTER (WHERE kind = 'failed') OVER () AS failed, count(*) OVER () AS total FROM items)
+    SELECT *, count(*) OVER () AS "filteredTotal" FROM counted WHERE (${kind}::text IS NULL OR kind = ${kind}) AND (${needle}::text IS NULL OR lower("personName" || ' ' || summary || ' ' || status || ' ' || kind || ' ' || COALESCE("lifecycleKind",'')) LIKE ${needle})
+    ORDER BY "updatedAt" ASC, id ASC OFFSET ${(query.page - 1) * query.pageSize} LIMIT ${query.pageSize}`);
+  const first = rows[0];
+  return { items: rows.map(({ onboarding, offboarding, failed, total, filteredTotal, ...item }) => item), counts: { onboarding: Number(first?.onboarding ?? 0), offboarding: Number(first?.offboarding ?? 0), failed: Number(first?.failed ?? 0), total: Number(first?.total ?? 0) }, total: rows.length ? Number(first!.filteredTotal) : 0, page: query.page, pageSize: query.pageSize };
+}
 
 async function snapshot(tx: TenantClient, id: string) {
   const person = await tx.person.findUnique({ where: { id }, select: { id: true, givenName: true, familyName: true, status: true, departureOverride: true, updatedAt: true } });
@@ -46,6 +87,10 @@ export async function registerEmployeeLifecycleRoutes(app: FastifyInstance, opti
   app.get('/employee-work', { preHandler: readPermissions.map(requirePermission) }, async (request) =>
     request.db(async (tx) => {
       const query = employeeWorkQuery.parse(request.query);
+      return listEmployeeWork(tx, query);
+      /* Legacy in-memory implementation retained below temporarily as a
+       * reference while the raw-query result shape is covered by route tests.
+       * The return above makes PostgreSQL own filtering and pagination. */
       const receiptHistory = await tx.personProvisionReceipt.findMany({
         orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       });
@@ -92,8 +137,10 @@ export async function registerEmployeeLifecycleRoutes(app: FastifyInstance, opti
       });
       const activeUserCounts = new Map<string, number>();
       for (const user of activeUsers) {
-        if (!user.personId) continue;
-        activeUserCounts.set(user.personId, (activeUserCounts.get(user.personId) ?? 0) + 1);
+        const linkedPersonId = user.personId;
+        if (typeof linkedPersonId !== 'string') continue;
+        const personKey: string = linkedPersonId as string;
+        activeUserCounts.set(personKey, (activeUserCounts.get(personKey) ?? 0) + 1);
       }
       const provisioning = receipts.map((receipt) => ({
         id: `provision:${receipt.id}`,

@@ -6,6 +6,8 @@ import { PageHeader } from './PageHeader.js';
 import { SourcesTab } from './SourcesTab.js';
 import { PersonSourcesTab } from './PersonSourcesTab.js';
 import { RunsTab } from './RunsTab.js';
+import { DuplicateReviewsTab, type DuplicateReview } from './DuplicateReviewsTab.js';
+import { ReferenceDataTab } from './ReferenceDataTab.js';
 
 interface SourceRow {
   id: string;
@@ -37,6 +39,7 @@ export function SourcesPage() {
   );
   const runs = useApiResource<{ runs: RunRow[] }>('/api/admin/sync-runs');
   const importRuns = useApiResource<{ runs: RunRow[] }>('/api/admin/person-import-runs');
+  const duplicateReviews = useApiResource<{ reviews: DuplicateReview[] }>('/api/admin/person-duplicate-reviews');
 
   const sourceRows = sources.data?.sources ?? [];
   const personSourceRows = personSources.data?.sources ?? [];
@@ -45,6 +48,7 @@ export function SourcesPage() {
   // A blocked run is the one state that needs somebody to act, and it is
   // invisible if it is only ever a row in a list.
   const blocked = runRows.filter((run) => run.status === 'blocked').length;
+  const reviewRows = duplicateReviews.data?.reviews ?? [];
 
   const error = sources.error ?? personSources.error ?? runs.error ?? importRuns.error;
 
@@ -60,6 +64,7 @@ export function SourcesPage() {
           value={sourceRows.length + personSourceRows.length}
           to="/admin/sources?tab=sources"
         />
+        <StatCard label="Duplicate reviews" value={reviewRows.length} tone="warning" quietWhenZero to="/admin/sources?tab=duplicates" />
         <StatCard label="Runs" value={runRows.length} to="/admin/sources?tab=runs" />
         <StatCard
           label="Failed runs"
@@ -107,10 +112,21 @@ export function SourcesPage() {
             content: <PersonSourcesTab />,
           },
           {
+            id: 'reference-data',
+            label: 'Reference data',
+            content: <ReferenceDataTab />,
+          },
+          {
             id: 'runs',
             label: 'Runs',
             badge: runRows.length || undefined,
             content: <RunsTab />,
+          },
+          {
+            id: 'duplicates',
+            label: 'Duplicate reviews',
+            badge: reviewRows.length || undefined,
+            content: <DuplicateReviewsTab reviews={reviewRows} loading={duplicateReviews.loading} error={duplicateReviews.error} reload={duplicateReviews.reload} />,
           },
         ]}
       />

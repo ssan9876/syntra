@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 import {
   acceptHostKeyRequest,
   applyImportRunRequest,
@@ -7,6 +7,8 @@ import {
   idParam,
   setPersonMappingsRequest,
   updatePersonSourceRequest,
+  resolveDuplicateReviewRequest,
+  unlinkPersonSourceRequest,
 } from '@syntra/contracts';
 import { UnknownPersonSourceTypeError, personSourceConnectorFor } from '@syntra/connectors';
 import {
@@ -27,12 +29,23 @@ import {
   personMappingsFor,
   personSourceOwnedCount,
   personSourceWithCredential,
+  JobNotQueuedError,
   queueImportRun,
   recordEvent,
   removePersonSourceSchedule,
   setPersonMappings,
   skipImportChange,
   updatePersonSource,
+  listDuplicateReviews,
+  resolveDuplicateReview,
+  DuplicateReviewNotFoundError,
+  listPersonSourceLinks,
+  unlinkPersonSourceIdentity,
+  PersonSourceLinkNotFoundError,
+  IDENTITY_REFERENCE_KINDS,
+  createIdentityReferenceValue,
+  listIdentityReferenceValues,
+  setIdentityReferenceValueActive,
   type SchedulablePersonSource,
   type Scheduler,
 } from '@syntra/core';
@@ -94,6 +107,14 @@ export async function registerAdminPersonSourceRoutes(
     if (cause instanceof PersonSourceDisabledError) {
       throw new ProblemError(409, 'source-disabled', 'This source is disabled', cause.message);
     }
+    if (cause instanceof JobNotQueuedError) {
+      throw new ProblemError(
+        503,
+        'job-not-queued',
+        'The run was recorded but not queued',
+        `${cause.message}. The run is marked failed; start it again once the job queue is healthy.`,
+      );
+    }
     if (cause instanceof PersonSourceOwnsPersonsError) {
       throw new ProblemError(
         409,
@@ -112,6 +133,94 @@ export async function registerAdminPersonSourceRoutes(
   };
 
   app.addHook('preHandler', requireSession('admin'));
+
+  app.get(
+    '/identity-reference-values',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async (request) => {
+      const query = z.object({ kind: z.enum(IDENTITY_REFERENCE_KINDS).optional() }).strict().parse(request.query ?? {});
+      return { values: await request.db((tx) => listIdentityReferenceValues(tx, query.kind)) };
+    },
+  );
+
+  app.post(
+    '/identity-reference-values',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
+    async (request, reply) => {
+      const body = z.object({
+        kind: z.enum(IDENTITY_REFERENCE_KINDS),
+        value: z.string().trim().min(1).max(200),
+      }).strict().parse(request.body);
+      const created = await request.db((tx) =>
+        createIdentityReferenceValue(tx, request.session.userId, body),
+      );
+      return reply.code(201).send(created);
+    },
+  );
+
+  app.patch(
+    '/identity-reference-values/:id',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = z.object({ active: z.boolean() }).strict().parse(request.body);
+      return request.db((tx) =>
+        setIdentityReferenceValueActive(tx, request.session.userId, id, body.active),
+      );
+    },
+  );
+
+  app.get(
+    '/person-duplicate-reviews',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async (request) => {
+      const query = z.object({ status: z.enum(['open', 'resolved']).default('open') }).strict().parse(request.query ?? {});
+      return { reviews: await listDuplicateReviews(request.tenantId, query.status) };
+    },
+  );
+
+  app.post(
+    '/person-duplicate-reviews/:id/resolve',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = resolveDuplicateReviewRequest.parse(request.body);
+      try {
+        return await resolveDuplicateReview(request.tenantId, id, request.session.userId, body.resolution, body.note);
+      } catch (cause) {
+        if (cause instanceof DuplicateReviewNotFoundError) {
+          throw new ProblemError(404, 'not-found', 'Open duplicate review not found', cause.message);
+        }
+        throw cause;
+      }
+    },
+  );
+
+  app.get(
+    '/person-source-links',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
+    async (request) => {
+      const query = z.object({ personId: z.string().uuid().optional() }).strict().parse(request.query ?? {});
+      return { links: await listPersonSourceLinks(request.tenantId, query.personId) };
+    },
+  );
+
+  app.delete(
+    '/person-source-links/:id',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = unlinkPersonSourceRequest.parse(request.body);
+      try {
+        return await unlinkPersonSourceIdentity(request.tenantId, id, request.session.userId, body.reason);
+      } catch (cause) {
+        if (cause instanceof PersonSourceLinkNotFoundError) {
+          throw new ProblemError(404, 'not-found', 'Person source link not found', cause.message);
+        }
+        throw cause;
+      }
+    },
+  );
 
   app.get(
     '/person-sources',

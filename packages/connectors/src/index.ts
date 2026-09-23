@@ -15,6 +15,7 @@ export * from './entra/capabilities.js';
 export * from './entra/connector.js';
 export * from './registry.js';
 export * from './capabilities.js';
+export * from './metadata.js';
 export * from './person/types.js';
 export * from './person/delimited.js';
 export * from './person/registry.js';

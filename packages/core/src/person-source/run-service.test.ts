@@ -5,6 +5,7 @@ import { FakePersonSource } from '@syntra/connectors/testing';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createPersonSource, setPersonMappings } from './source-service.js';
 import { PERSON_IMPORT_APPLY_ORDER, applyImportRun, previewImportRun } from './run-service.js';
+import { listDuplicateReviews, resolveDuplicateReview, unlinkPersonSourceIdentity } from './duplicate-review.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
 
@@ -64,6 +65,153 @@ const changesOf = (runId: string) =>
   withTenant(tenantId, (tx) => tx.personImportChange.findMany({ where: { runId } }));
 
 describe('previewImportRun', () => {
+  it('enforces an active department catalog without changing ungoverned fields', async () => {
+    await withTenant(tenantId, (tx) => tx.identityReferenceValue.create({
+      data: {
+        tenantId,
+        kind: 'department',
+        value: 'Research',
+        normalizedValue: 'research',
+      },
+    }));
+    connectorFor.mockReturnValue(new FakePersonSource([
+      row('approved', { dept: '  RESEARCH  ' }),
+      row('rejected', { dept: 'Finance' }),
+    ]));
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.mappingFailures).toBe(1);
+    expect(run.mappingFailureReasons).toEqual(expect.arrayContaining([
+      'employee "rejected" uses unapproved reference value(s): department "Finance"',
+    ]));
+    const changes = await changesOf(run.id);
+    expect(changes.some((change) => change.externalId === 'approved')).toBe(true);
+    expect(changes.some((change) => change.externalId === 'rejected')).toBe(false);
+  });
+
+  it('does not enforce a reference kind until it has an active value', async () => {
+    await withTenant(tenantId, (tx) => tx.identityReferenceValue.create({
+      data: {
+        tenantId,
+        kind: 'department',
+        value: 'Research',
+        normalizedValue: 'research',
+        active: false,
+      },
+    }));
+    connectorFor.mockReturnValue(new FakePersonSource([row('employee', { dept: 'Finance' })]));
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.mappingFailures).toBe(0);
+    expect((await changesOf(run.id)).some((change) => change.externalId === 'employee')).toBe(true);
+  });
+
+  it('withholds every occurrence of a duplicate employee identifier', async () => {
+    connectorFor.mockReturnValue(new FakePersonSource([
+      row('duplicate', { firstName: 'Ada' }),
+      row('duplicate', { firstName: 'Grace' }),
+    ]));
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.mappingFailures).toBe(2);
+    expect(run.mappingFailureReasons).toEqual(expect.arrayContaining([
+      'employee identifier "duplicate" occurs more than once; every occurrence was withheld',
+    ]));
+    expect(await changesOf(run.id)).toEqual([]);
+  });
+
+  it('withholds an employee whose manager identifier is not in the source namespace', async () => {
+    await withTenant(tenantId, (tx) => setPersonMappings(tx, sourceId, [
+      ...rules,
+      { recordType: 'contract', sourceColumn: 'managerId', targetField: 'managerExternalId', transform: 'trim', isCorrelation: false },
+    ]));
+    connectorFor.mockReturnValue(new FakePersonSource([
+      row('employee', { managerId: 'missing-manager' }),
+    ]));
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.mappingFailures).toBe(1);
+    expect(run.mappingFailureReasons).toEqual(expect.arrayContaining([
+      'employee "employee" references unknown manager identifier(s): missing-manager',
+    ]));
+    expect(await changesOf(run.id)).toEqual([]);
+  });
+
+  it('accepts a manager included in the same feed', async () => {
+    await withTenant(tenantId, (tx) => setPersonMappings(tx, sourceId, [
+      ...rules,
+      { recordType: 'contract', sourceColumn: 'managerId', targetField: 'managerExternalId', transform: 'trim', isCorrelation: false },
+    ]));
+    connectorFor.mockReturnValue(new FakePersonSource([
+      row('manager'),
+      row('employee', { managerId: 'manager' }),
+    ]));
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.mappingFailures).toBe(0);
+    expect((await changesOf(run.id)).filter((change) => change.changeType === 'create_person')).toHaveLength(2);
+    await applyImportRun(tenantId, run.id);
+    const employee = await withTenant(tenantId, (tx) => tx.personSourceLink.findUniqueOrThrow({
+      where: { sourceId_externalId: { sourceId, externalId: 'employee' } },
+      include: { person: { include: { contracts: true } } },
+    }));
+    const manager = await withTenant(tenantId, (tx) => tx.personSourceLink.findUniqueOrThrow({
+      where: { sourceId_externalId: { sourceId, externalId: 'manager' } },
+    }));
+    expect(employee.person.contracts[0]?.managerPersonId).toBe(manager.personId);
+  });
+
+  it('links a source identity to an existing survivor without merging people', async () => {
+    const actor = await withTenant(tenantId, async (tx) => {
+      await setPersonMappings(tx, sourceId, [
+        ...rules,
+        { recordType: 'person', sourceColumn: 'email', targetField: 'businessEmail', transform: 'lowercase', isCorrelation: false },
+      ]);
+      await tx.person.create({
+        data: { tenantId, givenName: 'Existing', familyName: 'Person', businessEmail: 'ada@example.test' },
+      });
+      return (await tx.user.create({ data: { tenantId, login: 'reviewer', email: 'reviewer@example.test', displayName: 'Reviewer' } })).id;
+    });
+    connectorFor.mockReturnValue(new FakePersonSource([row('new-1', { email: 'ADA@example.test' })]));
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+    expect(run.status).toBe('blocked');
+    expect(run.requiresConfirmation).toBe(false);
+    const reviews = await listDuplicateReviews(tenantId);
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]?.change.status).toBe('needs_review');
+
+    await resolveDuplicateReview(tenantId, reviews[0]!.id, actor, 'link_existing', 'Confirmed this is the existing employee');
+    const restored = await withTenant(tenantId, (tx) => tx.personImportRun.findUniqueOrThrow({ where: { id: run.id } }));
+    expect(restored.status).toBe('previewed');
+    expect((await changesOf(run.id)).find((change) => change.changeType === 'create_person')?.status).toBe('skipped');
+    expect(await listDuplicateReviews(tenantId)).toEqual([]);
+    expect(await listDuplicateReviews(tenantId, 'resolved')).toHaveLength(1);
+    await applyImportRun(tenantId, run.id);
+    const state = await withTenant(tenantId, async (tx) => ({
+      persons: await tx.person.count(),
+      links: await tx.personSourceLink.findMany({ where: { sourceId } }),
+      contracts: await tx.contract.count(),
+    }));
+    expect(state.persons).toBe(1);
+    expect(state.links).toHaveLength(1);
+    expect(state.contracts).toBe(1);
+    await unlinkPersonSourceIdentity(tenantId, state.links[0]!.id, actor, 'HR identity was linked to the wrong survivor');
+    const afterUnlink = await withTenant(tenantId, async (tx) => ({
+      persons: await tx.person.count(),
+      links: await tx.personSourceLink.count({ where: { sourceId } }),
+      audit: await tx.auditEvent.findFirst({ where: { action: 'person_source.link.remove' } }),
+    }));
+    expect(afterUnlink.persons).toBe(1);
+    expect(afterUnlink.links).toBe(0);
+    expect(afterUnlink.audit).not.toBeNull();
+  });
+
   it('creates persons and contracts on a first run, and applies them', async () => {
     connectorFor.mockReturnValue(new FakePersonSource([row('1'), row('2')]));
 

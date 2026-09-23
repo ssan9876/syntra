@@ -2,6 +2,7 @@ import { withTenant } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import type { Scheduler } from '../jobs/scheduler.js';
+import { enqueueForRow } from '../jobs/enqueue-for-row.js';
 import { applyRun, previewRun } from './run-service.js';
 
 export const SYNC_JOB = 'sync.run';
@@ -78,12 +79,19 @@ export async function queueRun(
   });
 
   // Enqueued AFTER the row commits. The other order races: a worker free at
-  // that moment reads a run id that no transaction has written yet.
-  await scheduler.enqueue<SyncJobPayload>(SYNC_JOB, {
-    tenantId,
-    sourceId,
-    runId: run.id,
-  });
+  // that moment reads a run id that no transaction has written yet. A failed
+  // enqueue is written onto the row, or it would sit in `queued` for ever.
+  await enqueueForRow(
+    SYNC_JOB,
+    () => scheduler.enqueue<SyncJobPayload>(SYNC_JOB, { tenantId, sourceId, runId: run.id }),
+    (message) =>
+      withTenant(tenantId, (tx) =>
+        tx.syncRun.updateMany({
+          where: { id: run.id, status: 'queued' },
+          data: { status: 'failed', finishedAt: new Date(), error: message },
+        }),
+      ),
+  );
   return run;
 }
 

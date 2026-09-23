@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Check, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Check, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
 
@@ -182,6 +182,9 @@ export function ProvisionRunDetailPage() {
   const [tab, setTab] = useState<Tab>('person');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState(false);
+  const [maintenanceClosed, setMaintenanceClosed] = useState(false);
+  const [maintenanceOverrideAllowed, setMaintenanceOverrideAllowed] = useState(false);
+  const [maintenanceReason, setMaintenanceReason] = useState('');
   const [outcome, setOutcome] = useState<ApplyResult | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -258,13 +261,25 @@ export function ProvisionRunDetailPage() {
         `/api/admin/targets/${id}/runs/${runId}/apply`,
         {
           method: 'POST',
-          body: JSON.stringify({ only: [...selected], confirm }),
+          body: JSON.stringify({
+            only: [...selected],
+            confirm,
+            ...(maintenanceClosed && maintenanceOverrideAllowed
+              ? { maintenanceOverrideReason: maintenanceReason.trim() }
+              : {}),
+          }),
         },
       );
       setOutcome(result);
       setConfirm(false);
+      setMaintenanceClosed(false);
+      setMaintenanceReason('');
       reload();
     } catch (cause) {
+      if (cause instanceof ApiError && cause.kind === 'maintenance-window-closed') {
+        setMaintenanceClosed(true);
+        setMaintenanceOverrideAllowed(cause.problem.overrideAllowed === true);
+      }
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
@@ -312,7 +327,7 @@ export function ProvisionRunDetailPage() {
   // A ticked action that needs its own confirmation is enough to require the
   // box, even in a run the guard did not block.
   const needsConfirmation =
-    run.requiresConfirmation ||
+    maintenanceClosed || run.requiresConfirmation ||
     run.actions.some((a) => selected.has(a.id) && a.requiresConfirmation);
 
   /**
@@ -670,6 +685,22 @@ export function ProvisionRunDetailPage() {
         {run.actions.length > 0 && appliable && (
           <Panel title="Apply">
             <div className="space-y-4 p-4">
+              {maintenanceClosed && (
+                <Alert tone={maintenanceOverrideAllowed ? 'warning' : 'danger'} title="Outside the target maintenance window">
+                  {maintenanceOverrideAllowed
+                    ? 'Only the selected leaver-removal actions are eligible for an urgent exception. Confirm the apply and record the operational reason.'
+                    : 'This selection includes actions that cannot bypass the maintenance window. Wait for the window or select only revocations, disables, archives, and Syntra-login deactivations.'}
+                </Alert>
+              )}
+              {maintenanceClosed && maintenanceOverrideAllowed && (
+                <Field
+                  label="Urgent leaver exception reason"
+                  value={maintenanceReason}
+                  onChange={setMaintenanceReason}
+                  maxLength={500}
+                  required
+                />
+              )}
               {needsConfirmation && run.requiresConfirmation && (
                 <Check
                   checked={confirm}
@@ -689,7 +720,8 @@ export function ProvisionRunDetailPage() {
                 onClick={apply}
                 loading={busy}
                 disabled={
-                  selected.size === 0 || busy || (needsConfirmation && !confirm)
+                  selected.size === 0 || busy || (needsConfirmation && !confirm) ||
+                  (maintenanceClosed && (!maintenanceOverrideAllowed || maintenanceReason.trim().length < 10))
                 }
               >
                 Apply {selected.size} action{selected.size === 1 ? '' : 's'}

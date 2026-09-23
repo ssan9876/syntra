@@ -16,6 +16,43 @@ export interface PersonProvisionPayload { tenantId: string; receiptId: string }
 const BUSY = ['pending', 'planning', 'deferred'];
 /** How long a deferred receipt waits before it asks for a slot again. */
 export const DEFERRAL_SECONDS = 30;
+/**
+ * A target write may be accepted before its read API reflects the change.
+ * Keep this small and bounded: after this window the receipt remains visible
+ * as manual work instead of allowing a worker to wait forever.
+ */
+export const READ_BACK_ATTEMPTS = 5;
+export const READ_BACK_DELAY_MS = 2_000;
+
+export async function waitForExpectedReadBack(
+  read: () => ReturnType<typeof readBackTarget>,
+  expected: Parameters<typeof compareObservedState>[0],
+  options: { attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+) {
+  const attempts = Math.max(1, options.attempts ?? READ_BACK_ATTEMPTS);
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let last = await read();
+  for (let attempt = 1; attempt < attempts; attempt += 1) {
+    const observed = {
+      accountPresent: last.account !== null,
+      enabled: last.enabled ?? false,
+      attributes: {},
+      entitlements: last.entitlementIds,
+      complete: last.complete && last.enabled !== null,
+    };
+    if (compareObservedState(expected, observed).matches) return { readBack: last, matched: true, attempts: attempt };
+    await sleep(options.delayMs ?? READ_BACK_DELAY_MS);
+    last = await read();
+  }
+  const observed = {
+    accountPresent: last.account !== null,
+    enabled: last.enabled ?? false,
+    attributes: {},
+    entitlements: last.entitlementIds,
+    complete: last.complete && last.enabled !== null,
+  };
+  return { readBack: last, matched: compareObservedState(expected, observed).matches, attempts };
+}
 
 async function enqueueReceipt(tenantId: string, receiptId: string, scheduler: Scheduler, startAfterSeconds?: number) {
   try {
@@ -161,24 +198,26 @@ async function verifyReceiptAtTarget(
     return { matched: false, message: 'Target identity or credential is unavailable for read-back. Manual verification is required.' };
   }
   const connector = (options.connector ?? targetConnectorFor(prepared.target.type)) as unknown as TargetConnector<unknown>;
-  const readBack = await readBackTarget(connector, prepared.config, prepared.account.anchor);
   const expected = {
     accountPresent: prepared.account.status !== 'archived',
     enabled: prepared.account.status === 'active',
     attributes: {},
     entitlements: prepared.account.entitlements.map((item) => item.entitlement.externalId).sort(),
   };
-  const observed = {
-    accountPresent: readBack.account !== null,
-    enabled: readBack.enabled ?? false,
-    attributes: {},
-    entitlements: readBack.entitlementIds,
-    complete: readBack.complete && readBack.enabled !== null,
+  const result = await waitForExpectedReadBack(
+    () => readBackTarget(connector, prepared.config, prepared.account!.anchor!),
+    expected,
+  );
+  if (result.matched) {
+    return { matched: true, message: `Target account and entitlement state were confirmed by read-back after ${result.attempts} observation${result.attempts === 1 ? '' : 's'}.` };
+  }
+  const complete = result.readBack.complete && result.readBack.enabled !== null;
+  return {
+    matched: false,
+    message: complete
+      ? `Target state still did not match after ${result.attempts} observations. Manual verification is required.`
+      : `Target read-back remained incomplete after ${result.attempts} observations. Manual verification is required.`,
   };
-  const result = compareObservedState(expected, observed);
-  return result.matches
-    ? { matched: true, message: 'Target account and entitlement state were confirmed by read-back.' }
-    : { matched: false, message: observed.complete ? 'Target read-back does not yet match the expected state.' : 'Target read-back is incomplete. Manual verification is required.' };
 }
 
 export async function runPersonProvision(scheduler: Scheduler, provider: MasterKeyProvider, payload: PersonProvisionPayload, options: PersonProvisionOptions = {}) {

@@ -14,11 +14,26 @@ import { useApiResource } from './hooks.js';
 interface MatrixEntry {
   status: 'available' | 'unsupported' | 'never';
   validation: 'automated' | 'automated+tenant-evidence-required';
+  requiredPermissions: string[];
   note: string;
 }
 
 interface CapabilitiesResponse {
   type: string;
+  metadata: {
+    displayName: string;
+    adapterVersion: string;
+    connectorApiVersion: number;
+    supportState: 'supported' | 'preview' | 'deprecated' | 'unavailable';
+    rollout: 'general' | 'controlled' | 'disabled';
+    deprecationDate: string | null;
+    certification: {
+      contractVersion: number;
+      status: 'passed' | 'partial' | 'failed' | 'not-run';
+      verifiedAt: string | null;
+      evidence: string;
+    };
+  };
   matrix: { version: number; entries: Record<string, MatrixEntry> } | null;
   capabilities: {
     available: boolean;
@@ -84,6 +99,47 @@ export function CapabilitiesPanel({ targetId }: { targetId: string }) {
       }
     >
       <div className="space-y-4 p-4">
+        <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <dt className="text-muted">Adapter</dt>
+            <dd className="font-medium text-ink">
+              {data.metadata.displayName} v{data.metadata.adapterVersion}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted">Support</dt>
+            <dd className="mt-1">
+              <Status tone={data.metadata.supportState === 'supported' ? 'active' : data.metadata.supportState === 'unavailable' ? 'danger' : 'warning'}>
+                {data.metadata.supportState}
+              </Status>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted">Rollout</dt>
+            <dd className="mt-1">
+              <Status tone={data.metadata.rollout === 'general' ? 'active' : data.metadata.rollout === 'disabled' ? 'danger' : 'warning'}>
+                {data.metadata.rollout}
+              </Status>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted">Certification</dt>
+            <dd className="mt-1">
+              <Status tone={data.metadata.certification.status === 'passed' ? 'active' : data.metadata.certification.status === 'failed' ? 'danger' : 'warning'}>
+                {data.metadata.certification.status}
+              </Status>
+            </dd>
+          </div>
+        </dl>
+        <p className="text-sm text-ink-muted">
+          {data.metadata.certification.evidence}
+          {data.metadata.certification.verifiedAt
+            ? ` · verified ${data.metadata.certification.verifiedAt}`
+            : ''}
+          {data.metadata.deprecationDate
+            ? ` · deprecated after ${data.metadata.deprecationDate}`
+            : ''}
+        </p>
         {!data.capabilities.available && (
           <p className="text-sm text-danger">
             This connector type is not available. Nothing here will be applied.
@@ -114,6 +170,7 @@ export function CapabilitiesPanel({ targetId }: { targetId: string }) {
                     <th className="py-1 pr-3 font-medium">Capability</th>
                     <th className="py-1 pr-3 font-medium">Status</th>
                     <th className="py-1 pr-3 font-medium">Validation</th>
+                    <th className="py-1 pr-3 font-medium">Graph application permissions</th>
                     <th className="py-1 font-medium">Note</th>
                   </tr>
                 </thead>
@@ -130,6 +187,11 @@ export function CapabilitiesPanel({ targetId }: { targetId: string }) {
                         ) : (
                           <Status tone="neutral">automated</Status>
                         )}
+                      </td>
+                      <td className="py-2 pr-3 font-mono text-xs text-ink-muted">
+                        {entry.requiredPermissions.length > 0
+                          ? entry.requiredPermissions.join(', ')
+                          : 'none'}
                       </td>
                       <td className="py-2 text-ink-muted">{entry.note}</td>
                     </tr>

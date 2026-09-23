@@ -17,12 +17,25 @@ export interface CreateContractInput {
 
 export type ContractStrategy = 'primary' | 'lowestSequence';
 
+/**
+ * A contract is inclusive at both ends, so a one-day contract is valid but a
+ * date range that ends before it starts is never a meaningful employment
+ * record.  Keep this guard in the service as well as at the HTTP boundary:
+ * CSV and future event sources call this layer directly.
+ */
+export function assertValidContractDates(startDate: Date, endDate?: Date | null): void {
+  if (endDate !== null && endDate !== undefined && endDate < startDate) {
+    throw new RangeError('contract endDate must be on or after startDate');
+  }
+}
+
 export async function createContract(
   tx: TenantClient,
   personId: string,
   input: CreateContractInput,
 ) {
   const tenantId = await currentTenant(tx);
+  assertValidContractDates(input.startDate, input.endDate);
   return tx.contract.create({
     data: {
       tenantId,

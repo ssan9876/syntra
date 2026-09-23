@@ -44,7 +44,7 @@ export const entraIdDocument: HttpConnectorDocument = {
     list: {
       path: '/users',
       query: {
-        $select: 'id,userPrincipalName,displayName,givenName,surname,mail,jobTitle,department,accountEnabled',
+        $select: 'id,userPrincipalName,displayName,givenName,surname,mail,jobTitle,department,accountEnabled,employeeId',
         $top: '999',
       },
       itemsAt: 'value',
@@ -55,6 +55,7 @@ export const entraIdDocument: HttpConnectorDocument = {
     },
     anchorAt: 'id',
     correlationAt: 'userPrincipalName',
+    provenance: { kind: 'scalar', path: 'employeeId' },
     fields: {
       userPrincipalName: 'userPrincipalName',
       displayName: 'displayName',

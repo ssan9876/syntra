@@ -119,6 +119,9 @@ model Tenant {
   passwordHistories         PasswordHistory[]
   sessions                  Session[]
   directorySources          DirectorySource[]
+  personDuplicateReviews    PersonDuplicateReview[]
+  personSourceLinks         PersonSourceLink[]
+  identityReferenceValues  IdentityReferenceValue[]
   attributeMappings         AttributeMapping[]
   syncRuns                  SyncRun[]
   syncChanges               SyncChange[]
@@ -169,6 +172,8 @@ model Tenant {
   lifecycleStepAttempts     LifecycleStepAttempt[]
   lifecyclePolicies         LifecyclePolicy[]
   lifecycleSimulations      LifecycleSimulation[]
+  lifecycleLegalHolds       LifecycleLegalHold[]
+  lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
   provisionExceptions       ProvisionException[]
@@ -402,6 +407,8 @@ model Person {
   provisionReceipts   PersonProvisionReceipt[]
   lifecycleOperations LifecycleOperation[]
   placements          AccountPlacement[]
+  duplicateReviewCandidates PersonDuplicateReview[]
+  sourceLinks PersonSourceLink[]
 
   /// The unit this person belongs to, which places their account in the
   /// container that unit is materialised at on each target.
@@ -849,6 +856,7 @@ model PersonSource {
   /// deleting a source strands its persons permanently unfed, and SetNull
   /// turns them into hand-managed rows that nothing keeps current.
   persons  Person[]
+  personLinks PersonSourceLink[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -897,6 +905,7 @@ model PersonImportRun {
   confirmedBy           String?      @db.Uuid
 
   changes PersonImportChange[]
+  duplicateReviews PersonDuplicateReview[]
 
   @@index([tenantId, startedAt])
   @@index([sourceId])
@@ -917,6 +926,7 @@ model PersonImportChange {
   after      Json?
   status     String          @default("proposed")
   message    String?
+  duplicateReviews PersonDuplicateReview[]
 
   @@index([tenantId])
   /// Both of the next two. The console reads a run's changes by type; apply
@@ -1888,6 +1898,17 @@ model TargetSystem {
   schedule  String?
   autoApply Boolean @default(false)
   enabled   Boolean @default(true)
+  externalWritesPausedAt DateTime?
+  externalWritesPausedByUserId String? @db.Uuid
+  externalWritesPauseReason String?
+  externalWritesPauseExpiresAt DateTime?
+  externalWritesResumedAt DateTime?
+  externalWritesResumedByUserId String? @db.Uuid
+  /// Optional UTC write window. Days use JavaScript's 0=Sunday..6=Saturday.
+  maintenanceWindowEnabled Boolean @default(false)
+  maintenanceWindowDays Int[] @default([])
+  maintenanceWindowStartMinute Int?
+  maintenanceWindowDurationMinutes Int?
 
   /// 'additive' | 'authoritative'. Additive is the default because an engine
   /// that silently strips what it did not grant gets switched off. Drift is
@@ -2003,6 +2024,10 @@ model AccountProfile {
   initialPasswordPolicy   Json
   /// 'manager' | 'personalEmail' | 'vaultOnly'
   initialPasswordDelivery String @default("vaultOnly")
+  /// Required whenever attributeTemplates send a sensitive person field.
+  sensitiveApprovalReason String?
+  sensitiveApprovedByUserId String? @db.Uuid
+  sensitiveApprovedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2244,11 +2269,17 @@ model LifecycleOperation {
   sloBreachedAt     DateTime?
   escalatedAt       DateTime?
   escalatedToUserId String?   @db.Uuid
+  caseStatus        String    @default("open")
+  resolvedAt        DateTime?
+  resolvedByUserId  String?   @db.Uuid
+  resolutionCode    String?
+  resolutionSummary String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
   steps    LifecycleStep[]
   attempts LifecycleStepAttempt[]
+  caseEvents LifecycleCaseEvent[]
 
   @@unique([tenantId, idempotencyKey])
   @@index([tenantId, status, updatedAt])
@@ -2366,11 +2397,123 @@ model LifecyclePolicy {
   observationRetentionDays           Int      @default(90)
   notificationRetentionDays          Int      @default(180)
   simulationRetentionDays            Int      @default(30)
+  /// Resolved operations retain their idempotency key for this period. Open
+  /// work is never eligible: its key remains a permanent retry receipt.
+  lifecycleOperationRetentionDays    Int      @default(730)
   /// Null means audit events are never removed by the retention job.
   auditRetentionDays                 Int?
   updatedByUserId                    String?  @db.Uuid
   createdAt                          DateTime @default(now())
   updatedAt                          DateTime @updatedAt
+}
+
+/// Reversible ownership/correlation between one HR source identity and the
+/// surviving Person record. Multiple sources may describe the same person;
+/// unlinking this row never deletes or merges a Person.
+model PersonSourceLink {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sourceId       String       @db.Uuid
+  source         PersonSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  personId       String       @db.Uuid
+  person         Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
+  externalId     String
+  linkedByUserId String?      @db.Uuid
+  linkedAt       DateTime     @default(now())
+
+  @@unique([sourceId, externalId])
+  @@index([tenantId, personId])
+  @@index([sourceId, personId])
+}
+
+/// Tenant-owned HR reference data. A kind is enforced only when it has at
+/// least one active value, preserving compatibility until governance is
+/// deliberately enabled.
+model IdentityReferenceValue {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @db.Uuid
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind            String
+  value           String
+  normalizedValue String
+  active          Boolean  @default(true)
+  createdByUserId String?  @db.Uuid
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, kind, normalizedValue])
+  @@index([tenantId, kind, active])
+}
+
+/// A durable, non-destructive question raised when an incoming HR identity
+/// shares a business email with a different person. Resolution never merges
+/// records: an administrator may keep them separate or skip the source row.
+model PersonDuplicateReview {
+  id                String             @id @default(uuid()) @db.Uuid
+  tenantId          String             @db.Uuid
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runId             String             @db.Uuid
+  run               PersonImportRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  changeId          String             @db.Uuid
+  change             PersonImportChange @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  candidatePersonId String             @db.Uuid
+  candidatePerson   Person             @relation(fields: [candidatePersonId], references: [id], onDelete: Restrict)
+  matchKind         String             @default("business_email")
+  matchedValue      String
+  status            String             @default("open")
+  resolution        String?
+  note              String?
+  reviewedByUserId  String?            @db.Uuid
+  reviewedAt        DateTime?
+  /// The guard verdict that existed before duplicate review took precedence.
+  restoreStatus               String
+  restoreBlockedReason        String?
+  restoreRequiresConfirmation Boolean            @default(false)
+  createdAt         DateTime           @default(now())
+
+  @@unique([changeId, candidatePersonId])
+  @@index([tenantId, status, createdAt])
+  @@index([runId, status])
+}
+
+/// Append-only operator history for unresolved lifecycle work. Assignment,
+/// notes, escalation and resolution remain explainable after the live fields
+/// on the operation have changed.
+model LifecycleCaseEvent {
+  id          String             @id @default(uuid()) @db.Uuid
+  tenantId    String             @db.Uuid
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  operationId String             @db.Uuid
+  operation   LifecycleOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  kind        String
+  actorUserId String?            @db.Uuid
+  message     String?
+  metadata    Json               @default("{}")
+  createdAt   DateTime           @default(now())
+
+  @@index([tenantId, operationId, createdAt])
+}
+
+/// An explicit preservation order for lifecycle evidence. It is generic on
+/// purpose: the held object may be an operation, a simulation, or a future
+/// evidence type without teaching the schema a second copy of each relation.
+/// Retention services resolve the subject before deleting any aged data.
+model LifecycleLegalHold {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @db.Uuid
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subjectType     String
+  subjectId       String    @db.Uuid
+  reference       String
+  reason          String
+  placedByUserId  String?   @db.Uuid
+  placedAt        DateTime  @default(now())
+  releasedByUserId String?  @db.Uuid
+  releasedAt      DateTime?
+
+  @@index([tenantId, subjectType, subjectId, releasedAt])
+  @@index([tenantId, reference])
 }
 
 /// A no-write rehearsal of a hire, move or departure computed by the same

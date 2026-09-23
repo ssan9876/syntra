@@ -112,6 +112,23 @@ export class LifecycleApprovalError extends Error {
   }
 }
 
+/**
+ * An ambiguous target response is not a retry authorization. The operator
+ * must first obtain a complete read-back that says the requested state is
+ * still absent; otherwise a second write can duplicate an account or undo a
+ * target-side success that simply had not reached Syntra yet.
+ */
+export class LifecycleVerificationRequiredError extends Error {
+  constructor(readonly operationId: string, readonly reason: 'missing' | 'already-confirmed') {
+    super(
+      reason === 'missing'
+        ? 'A complete target read-back is required before retrying this operation.'
+        : 'Target state is already confirmed; retrying would repeat a completed write.',
+    );
+    this.name = 'LifecycleVerificationRequiredError';
+  }
+}
+
 export async function createLifecycleOperation(input: CreateLifecycleOperationInput) {
   if (!input.idempotencyKey.trim()) throw new Error('An idempotency key is required');
   if (input.steps.length === 0) throw new Error('At least one lifecycle step is required');
@@ -178,7 +195,10 @@ export async function getLifecycleOperation(tenantId: string, operationId: strin
   return withTenant(tenantId, (tx) =>
     tx.lifecycleOperation.findFirstOrThrow({
       where: { id: operationId },
-      include: includeSteps,
+      include: {
+        ...includeSteps,
+        caseEvents: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
+      },
     }),
   );
 }
@@ -377,6 +397,31 @@ export async function retryLifecycleOperation(tenantId: string, operationId: str
       },
       include: includeSteps,
     });
+  });
+}
+
+/**
+ * Guards the explicit "retry after verification" path. This is intentionally
+ * separate from ordinary retry: ordinary transient failures remain retryable,
+ * while an operator who calls this path has said the target result was
+ * ambiguous and must bring fresh observed evidence with them.
+ */
+export async function assertRetryAfterVerification(
+  tenantId: string,
+  operationId: string,
+): Promise<void> {
+  await withTenant(tenantId, async (tx) => {
+    const latest = await tx.lifecycleObservation.findFirst({
+      where: { step: { operationId } },
+      orderBy: { observedAt: 'desc' },
+      select: { completeness: true, matches: true },
+    });
+    if (!latest || latest.completeness !== 'complete') {
+      throw new LifecycleVerificationRequiredError(operationId, 'missing');
+    }
+    if (latest.matches) {
+      throw new LifecycleVerificationRequiredError(operationId, 'already-confirmed');
+    }
   });
 }
 

@@ -94,3 +94,38 @@ export async function deleteSecret(
 ): Promise<void> {
   await tx.secret.deleteMany({ where: { name } });
 }
+
+/**
+ * Re-wrap data keys without decrypting the secret ciphertext. Call this while
+ * the old master key is still available, verify with `next`, then switch the
+ * deployment's configured key. A failure leaves the surrounding transaction
+ * to roll back rather than leaving a mixed key set.
+ */
+export async function rewrapSecrets(
+  tx: TenantClient,
+  current: MasterKeyProvider,
+  next: MasterKeyProvider,
+): Promise<{ rewrapped: number }> {
+  const rows = await tx.secret.findMany({ select: { id: true, wrappedDek: true, dekIv: true, dekTag: true } });
+  for (const row of rows) {
+    const dek = await current.unwrap({
+      ciphertext: Buffer.from(row.wrappedDek),
+      iv: Buffer.from(row.dekIv),
+      tag: Buffer.from(row.dekTag),
+    });
+    try {
+      const wrapped = await next.wrap(dek);
+      await tx.secret.update({
+        where: { id: row.id },
+        data: {
+          wrappedDek: new Uint8Array(wrapped.ciphertext),
+          dekIv: new Uint8Array(wrapped.iv),
+          dekTag: new Uint8Array(wrapped.tag),
+        },
+      });
+    } finally {
+      dek.fill(0);
+    }
+  }
+  return { rewrapped: rows.length };
+}

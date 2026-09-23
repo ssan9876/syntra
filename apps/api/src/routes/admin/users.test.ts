@@ -1446,7 +1446,7 @@ describe('GET /api/admin/users/:id/person-candidates', () => {
   ];
 
   it('suggests a person for an unlinked account, with the reason', async () => {
-    await seedAdmin(BOTH);
+    await seedAdmin([...BOTH, PERMISSIONS.IDENTITY_SENSITIVE_READ]);
     const cookie = await authCookie('admin');
     await post('/api/admin/persons', cookie, {
       givenName: 'Maya',
@@ -1467,6 +1467,27 @@ describe('GET /api/admin/users/:id/person-candidates', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json().candidates[0]).toMatchObject({ rule: 'personalEmail' });
+  });
+
+  it('does not reveal a personal-email match without sensitive-read authority', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    await post('/api/admin/persons', cookie, {
+      givenName: 'Maya',
+      familyName: 'Okafor',
+      personalEmail: 'maya@gmail.test',
+    });
+    const user = await post('/api/admin/users', cookie, {
+      login: 'm',
+      email: 'maya@gmail.test',
+      displayName: 'Unrelated',
+      personId: null,
+    });
+
+    const res = await get(`/api/admin/users/${user.json().id}/person-candidates`, cookie);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().candidates).toEqual([]);
   });
 
   it('suggests nothing for an account that already has a person', async () => {

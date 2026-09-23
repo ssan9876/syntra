@@ -57,6 +57,18 @@ describe('matchPersonForAccount', () => {
     expect(result.candidates[0]?.rule).toBe('personalEmail');
   });
 
+  it('does not reveal personal-email correlation when the caller excluded it', async () => {
+    await person({ personalEmail: 'maya@gmail.test' });
+
+    const result = await withTenant(tenantId, (tx) => matchPersonForAccount(
+      tx,
+      { email: 'maya@gmail.test', displayName: '' },
+      { includePersonalEmail: false },
+    ));
+
+    expect(result).toEqual({ confident: null, candidates: [] });
+  });
+
   it('never auto-links on a name, and normalises whitespace to find one', async () => {
     await person({ givenName: 'Maya', familyName: 'Okafor' });
 

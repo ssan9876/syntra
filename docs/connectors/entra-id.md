@@ -1,5 +1,22 @@
 # Microsoft Entra ID (native connector)
 
+## Migrating a document-driven Entra target
+
+An existing `httpJson` target pointed at Microsoft Graph can be converted in
+place from its target page. Syntra first produces a revision-bound preview of
+the derived native configuration and the accounts, entitlements, rules, run
+history, schedule, profile, target identifier, and saved credential that will
+be preserved. Applying the preview changes only the adapter type and config;
+the credential is never returned to the browser. The apply writes
+`provision.target.connector-migrate` to the audit chain and refuses a preview
+if the target changed after it was generated.
+
+The migration accepts only the supported Microsoft Graph base URL and the
+standard HTTPS Microsoft identity v2 token endpoint. After applying it, test
+the native connection and run a lifecycle simulation before enabling external
+writes. Earlier readiness evidence is intentionally stale because the
+configuration fingerprint changed.
+
 Target type `entraId`. Talks to Microsoft Graph v1.0 directly, through the
 same outbound guard every administrator-supplied URL in Syntra goes through.
 The shipped `entra-id` document for the `httpJson` connector keeps working;
@@ -15,18 +32,18 @@ Code: `packages/connectors/src/entra/`. Fake for tests:
 `ENTRA_CAPABILITY_MATRIX` in `entra/capabilities.ts`, served by
 `GET /api/admin/targets/:id/capabilities` and rendered on the target page.
 
-| Capability | Status | Validation | What it does |
-| --- | --- | --- | --- |
-| readAccounts | available | automated + tenant evidence | Paged `GET /users`; direct memberships per user through `$batch` (20 per call). A user whose membership read fails is returned with `readFailure`, never dropped. |
-| createAccount | available | automated + tenant evidence | `POST /users` with the ProvisionAction id in the correlation field. A retry finds the object by that marker and returns its anchor. |
-| updateAccount | available | automated + tenant evidence | `PATCH /users/{id}` with the intersection of the requested attributes and `managedAttributes`. Never the UPN, `accountEnabled` or the marker. |
-| enableAccount / disableAccount | available | automated + tenant evidence | `PATCH accountEnabled`. |
-| renameAccount | available | automated only | `PATCH userPrincipalName` and `mailNickname`. |
-| archiveAccount | available | automated + tenant evidence | Revoke each managed membership, then `accountEnabled: false`. No container, no delete. |
-| grantEntitlement | available | automated + tenant evidence | `POST /groups/{id}/members/$ref`. Refused before any request for a dynamic group. "Already exists" is success. |
-| revokeEntitlement | available | automated + tenant evidence | `DELETE /groups/{id}/members/{user}/$ref`. Absent membership is success; a missing group is `not_found`. |
-| readBack | available | automated + tenant evidence | `GET /users/{id}` plus direct `memberOf`. `complete: false` when the membership read fails. |
-| searchEntitlements | available | automated only | `$search="displayName:..."` with `ConsistencyLevel: eventual`, falling back to `startswith` on 400. |
+| Capability | Status | Required Graph application permission(s) | Validation | What it does |
+| --- | --- | --- | --- | --- |
+| readAccounts | available | `User.Read.All`, `GroupMember.Read.All` | automated + tenant evidence | Paged `GET /users`; direct memberships per user through `$batch` (20 per call). A user whose membership read fails is returned with `readFailure`, never dropped. |
+| createAccount | available | `User.ReadWrite.All` | automated + tenant evidence | `POST /users` with the ProvisionAction id in the correlation field. A retry finds the object by that marker and returns its anchor. |
+| updateAccount | available | `User.ReadWrite.All` | automated + tenant evidence | `PATCH /users/{id}` with the intersection of the requested attributes and `managedAttributes`. Never the UPN, `accountEnabled` or the marker. |
+| enableAccount / disableAccount | available | `User.ReadWrite.All` | automated + tenant evidence | `PATCH accountEnabled`. |
+| renameAccount | available | `User.ReadWrite.All` | automated only | `PATCH userPrincipalName` and `mailNickname`. |
+| archiveAccount | available | `User.ReadWrite.All`, `GroupMember.ReadWrite.All` | automated + tenant evidence | Revoke each managed membership, then `accountEnabled: false`. No container, no delete. |
+| grantEntitlement | available | `GroupMember.ReadWrite.All` | automated + tenant evidence | `POST /groups/{id}/members/$ref`. Refused before any request for a dynamic group. "Already exists" is success. |
+| revokeEntitlement | available | `GroupMember.ReadWrite.All` | automated + tenant evidence | `DELETE /groups/{id}/members/{user}/$ref`. Absent membership is success; a missing group is `not_found`. |
+| readBack | available | `User.Read.All`, `GroupMember.Read.All` | automated + tenant evidence | `GET /users/{id}` plus direct `memberOf`. `complete: false` when the membership read fails. |
+| searchEntitlements | available | `Group.Read.All` | automated only | `$search="displayName:..."` with `ConsistencyLevel: eventual`, falling back to `startswith` on 400. |
 | nestedGroups | unsupported | — | Direct memberships only. |
 | dynamicGroups | unsupported | — | Listed as `manageable: false`; grants refused. |
 | deleteAccount | never | — | No code path issues `DELETE /users`. |
@@ -68,40 +85,25 @@ message. Record consent in the readiness check rather than assuming it.
 
 There is no option for nested or dynamic groups. See below.
 
-## Database constraint (outstanding)
+## Database transport constraint
 
-`TargetSystem` carries a CHECK constraint, `target_system_encrypted_transport`
-(migration `20261006000000_http_target_encrypted_transport`), that admits only
-`activeDirectory`, `scim2` and `httpJson` rows. **An `entraId` target cannot be
-saved until it is extended.** The connector's own schema already refuses a
-non-HTTPS `graphBaseUrl` or `tokenUrl` unless `allowPrivateAddresses` is set,
-so the database clause mirrors that:
-
-```sql
-ALTER TABLE "TargetSystem" DROP CONSTRAINT "target_system_encrypted_transport";
-ALTER TABLE "TargetSystem" ADD CONSTRAINT "target_system_encrypted_transport" CHECK (
-  ("type" = 'activeDirectory' AND ("config" ->> 'tlsMode') IN ('ldaps', 'starttls'))
-  OR ("type" = 'scim2' AND ("config" ->> 'baseUrl') LIKE 'https://%')
-  OR ("type" = 'httpJson' AND ("config" #>> '{document,baseUrl}') LIKE 'https://%')
-  OR (
-    "type" = 'entraId'
-    AND coalesce("config" ->> 'graphBaseUrl', 'https://graph.microsoft.com/v1.0') LIKE 'https://%'
-    AND coalesce("config" ->> 'tokenUrl', 'https://login.microsoftonline.com/') LIKE 'https://%'
-  )
-);
-```
-
-Two tests are marked `it.skip` with this reason and should be un-skipped when
-the migration lands: `target-service.test.ts` ("refuses to borrow an Entra
-secret...") and `apps/api/.../provision.test.ts` ("reports the versioned
-matrix for a native Entra target").
+Native Entra targets are admitted by migration
+`20261008000000_entra_target_transport`; migration
+`20261010000000_target_transport_not_null` closes PostgreSQL's NULL pass-through
+in the same CHECK constraint. The database therefore requires HTTPS Graph and
+token endpoints for `entraId`, matching the connector schema. A native Entra
+target can be saved once both migrations are applied.
 
 ## The correlation marker
 
 Every `create_account` carries the id of the ProvisionAction that proposed
-it. The connector writes that id into `correlationField` on the new user and
-never touches it again: an update cannot reach it (`managedAttributes` cannot
-name it) and a rename changes only the UPN.
+it. The connector writes a deterministic marker into `correlationField` on
+the new user and never touches it again: an update cannot reach it
+(`managedAttributes` cannot name it) and a rename changes only the UPN. When
+the field is `employeeId`, Microsoft Graph limits it to 16 characters, so a
+long action id is represented by the first 16 base64url characters of its
+SHA-256 digest. Retries derive the same marker; the 96-bit value avoids the
+unsafe UUID truncation that would otherwise make the field fit.
 
 Before any `POST /users`, the connector queries
 `$filter=<field> eq '<actionId>'` (with `ConsistencyLevel: eventual` and

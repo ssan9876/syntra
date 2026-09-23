@@ -174,6 +174,49 @@ describe('AccountProfilePage', () => {
     ]);
   });
 
+  it('shows sensitive mappings and sends their recorded purpose', async () => {
+    const fetchMock = mockFetch({
+      profile: {
+        ...STORED,
+        attributeTemplates: { recoveryMail: '%person.personalEmail%' },
+        sensitiveApprovalReason: 'Required for the documented account recovery process.',
+        sensitiveApprovedByUserId: '55555555-5555-4555-8555-555555555555',
+        sensitiveApprovedAt: '2026-09-23T20:00:00.000Z',
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByText('Sensitive data needs approval')).toBeVisible();
+    expect(screen.getByRole('rowheader', { name: 'recoveryMail' })).toBeVisible();
+    expect(screen.getByText('person.personalEmail')).toBeVisible();
+    expect(screen.getByLabelText('Purpose for sharing personal email')).toHaveValue(
+      'Required for the documented account recovery process.',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
+    expect(JSON.parse(String(put![1]!.body)).sensitiveApprovalReason).toBe(
+      'Required for the documented account recovery process.',
+    );
+  });
+
+  it('marks a sensitive mapping purpose before sending an incomplete approval', async () => {
+    const fetchMock = mockFetch({
+      profile: {
+        ...STORED,
+        attributeTemplates: { recoveryMail: '%person.personalEmail%' },
+        sensitiveApprovalReason: '',
+      },
+    });
+    renderPage();
+    await screen.findByText('Sensitive data needs approval');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+
+    expect(screen.getAllByText(/record at least 20 characters explaining why/i)).toHaveLength(2);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false);
+  });
+
   it('treats no profile yet as the ordinary state of a new target', async () => {
     // A 404 here means nobody has saved one, which is what every target looks
     // like the minute after it is created. Apologising for it would send

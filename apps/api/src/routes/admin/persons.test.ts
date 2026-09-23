@@ -93,6 +93,44 @@ beforeEach(async () => {
 });
 
 describe('person administration', () => {
+  it('omits personal email from list and detail without sensitive-read authority', async () => {
+    await seedAdmin([PERMISSIONS.IDENTITY_READ]);
+    const cookie = await adminCookie();
+    const person = await withTenant(ctx.tenantId, (tx) => tx.person.create({
+      data: {
+        tenantId: ctx.tenantId,
+        givenName: 'Private',
+        familyName: 'Person',
+        personalEmail: 'home@example.test',
+      },
+    }));
+
+    const list = await get('/api/admin/persons', cookie);
+    const detail = await get(`/api/admin/persons/${person.id}`, cookie);
+
+    expect(list.json().persons[0]).not.toHaveProperty('personalEmail');
+    expect(detail.json()).not.toHaveProperty('personalEmail');
+  });
+
+  it('returns personal email only with sensitive-read authority', async () => {
+    await seedAdmin([PERMISSIONS.IDENTITY_READ, PERMISSIONS.IDENTITY_SENSITIVE_READ]);
+    const cookie = await adminCookie();
+    const person = await withTenant(ctx.tenantId, (tx) => tx.person.create({
+      data: {
+        tenantId: ctx.tenantId,
+        givenName: 'Private',
+        familyName: 'Person',
+        personalEmail: 'home@example.test',
+      },
+    }));
+
+    const list = await get('/api/admin/persons', cookie);
+    const detail = await get(`/api/admin/persons/${person.id}`, cookie);
+
+    expect(list.json().persons[0].personalEmail).toBe('home@example.test');
+    expect(detail.json().personalEmail).toBe('home@example.test');
+  });
+
   it('creates a person', async () => {
     await seedAdmin(BOTH);
     const cookie = await adminCookie();
@@ -169,6 +207,20 @@ describe('person administration', () => {
 
     expect(second.statusCode).toBe(409);
     expect(second.json().detail).toMatch(/primary contract/i);
+  });
+
+  it('rejects a contract whose end date precedes its start date', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    const person = await post('/api/admin/persons', cookie, {
+      givenName: 'Jo', familyName: 'Doe',
+    });
+
+    const created = await post(`/api/admin/persons/${person.json().id}/contracts`, cookie, {
+      sequence: 1, startDate: '2026-06-02', endDate: '2026-06-01',
+    });
+    expect(created.statusCode).toBe(400);
+    expect(created.json().errors[0].path).toBe('endDate');
   });
 
   it('links a user to a person', async () => {

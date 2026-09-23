@@ -6,6 +6,7 @@ import {
   lifecycleInputFingerprint,
   getLifecycleOperation,
   retryLifecycleOperation,
+  assertRetryAfterVerification,
   transitionLifecycleStep,
 } from './operation-service.js';
 
@@ -145,5 +146,22 @@ describe('lifecycle operations', () => {
       status: 'pending',
       message: null,
     });
+  });
+
+  it('requires a complete divergent read-back before an ambiguous result is retried', async () => {
+    const operation = await createLifecycleOperation({
+      tenantId, personId, kind: 'onboard', idempotencyKey: 'hire-HR-1046', input: {},
+      steps: [{ key: 'targets', title: 'Provision targets', required: true }],
+    });
+    await expect(assertRetryAfterVerification(tenantId, operation.id)).rejects.toThrow(/read-back/i);
+    const step = operation.steps[0]!;
+    await withTenant(tenantId, (tx) => tx.lifecycleObservation.create({
+      data: {
+        tenantId, stepId: step.id, completeness: 'complete', matches: false,
+        expected: { accountPresent: true }, observed: { accountPresent: false },
+        differences: [{ path: 'accountPresent' }],
+      },
+    }));
+    await expect(assertRetryAfterVerification(tenantId, operation.id)).resolves.toBeUndefined();
   });
 });

@@ -118,6 +118,64 @@ describe('GET /api/admin/tenant', () => {
   });
 });
 
+describe('POST /api/admin/tenant/offboarding/assess', () => {
+  const assess = (cookie: string) => ctx.app.inject({
+    method: 'POST',
+    url: '/api/admin/tenant/offboarding/assess',
+    headers: { host: ctx.host, cookie },
+  });
+
+  it('requires tenant management authority', async () => {
+    await seedAdmin([PERMISSIONS.IDENTITY_READ]);
+    expect((await assess(await adminCookie())).statusCode).toBe(403);
+  });
+
+  it('returns a durable digest-bound preflight receipt', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const response = await assess(await adminCookie());
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      deletionReady: true,
+      blockers: { activeLegalHolds: 0, unresolvedLifecycleOperations: 0 },
+      receipt: { sequence: expect.any(Number), hash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+    });
+    expect(response.json().digest).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
+
+describe('POST /api/admin/tenant/offboarding/export', () => {
+  const exportTenant = (cookie: string) => ctx.app.inject({
+    method: 'POST',
+    url: '/api/admin/tenant/offboarding/export',
+    headers: { host: ctx.host, cookie },
+  });
+
+  it('requires tenant management authority', async () => {
+    await seedAdmin([PERMISSIONS.IDENTITY_READ]);
+    expect((await exportTenant(await adminCookie())).statusCode).toBe(403);
+  });
+
+  it('downloads a digest-bound JSON artifact and records its receipt', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const response = await exportTenant(await adminCookie());
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-disposition']).toMatch(/^attachment; filename="syntra-tenant-/);
+    const artifact = response.json();
+    expect(response.headers['x-syntra-export-digest']).toBe(artifact.digest);
+    expect(artifact).toMatchObject({
+      schema: 'syntra.tenant-export.v1',
+      data: { users: expect.any(Array), people: expect.any(Array) },
+      receipt: { auditEventId: expect.any(String), sequence: expect.any(Number) },
+    });
+    const event = await withTenant(ctx.tenantId, (tx) => tx.auditEvent.findUniqueOrThrow({
+      where: { id: artifact.receipt.auditEventId as string },
+    }));
+    expect(event.action).toBe('tenant.offboarding.exported');
+  });
+});
+
 describe('PUT /api/admin/tenant', () => {
   it('turns admin MFA on, and the elevation endpoint acts on it', async () => {
     await seedAdmin([...ALL_PERMISSIONS]);

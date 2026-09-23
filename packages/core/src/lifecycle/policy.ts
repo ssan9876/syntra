@@ -32,6 +32,7 @@ export interface LifecyclePolicy {
   observationRetentionDays: number;
   notificationRetentionDays: number;
   simulationRetentionDays: number;
+  lifecycleOperationRetentionDays: number;
   auditRetentionDays: number | null;
 }
 
@@ -55,6 +56,10 @@ export const DEFAULT_LIFECYCLE_POLICY: LifecyclePolicy = {
   observationRetentionDays: 90,
   notificationRetentionDays: 180,
   simulationRetentionDays: 30,
+  // Long enough that a delayed HR delivery cannot accidentally become a new
+  // operation, while still allowing a contractual retention policy to expire
+  // old idempotency keys deliberately.
+  lifecycleOperationRetentionDays: 730,
   auditRetentionDays: null,
 };
 
@@ -82,6 +87,7 @@ export const lifecyclePolicyUpdateSchema = z
     observationRetentionDays: days,
     notificationRetentionDays: days,
     simulationRetentionDays: days,
+    lifecycleOperationRetentionDays: days,
     // Null means never. A floor of 90 days: an audit trail shorter than a
     // quarter cannot answer the questions an audit asks of it.
     auditRetentionDays: z.number().int().min(90).max(3650).nullable(),

@@ -33,6 +33,7 @@ import {
 } from './management.js';
 import { runLifecycleSimulation } from './simulation-service.js';
 import { runLifecycleRetention } from './retention.js';
+import { placeLifecycleLegalHold, releaseLifecycleLegalHold } from './legal-hold.js';
 
 let tenantId: string;
 let requesterId: string;
@@ -231,7 +232,7 @@ describe('mover preview access and simulation', () => {
   async function targetWithRule() {
     return withTenant(tenantId, async (tx) => {
       const target = await tx.targetSystem.create({
-        data: { tenantId, name: 'AD', type: 'activeDirectory', config: { baseDn: 'DC=acme,DC=test' }, secretName: 'ad', enabled: true },
+        data: { tenantId, name: 'AD', type: 'activeDirectory', config: { baseDn: 'DC=acme,DC=test', tlsMode: 'ldaps' }, secretName: 'ad', enabled: true },
       });
       await tx.accountProfile.create({
         data: {
@@ -296,6 +297,48 @@ describe('mover preview access and simulation', () => {
 });
 
 describe('retention', () => {
+  it('never prunes a resolved operation whose preservation hold is active', async () => {
+    const operation = await withTenant(tenantId, async (tx) => {
+      const target = await tx.targetSystem.create({
+        data: { tenantId, name: 'Held target', type: 'activeDirectory', config: { url: 'ldaps://dc.test:636', tlsMode: 'ldaps' }, secretName: 'target/held' },
+      });
+      const created = await tx.lifecycleOperation.create({
+        data: {
+          tenantId, personId, kind: 'onboard', idempotencyKey: 'held', status: 'completed', inputFingerprint: 'held', input: {},
+          steps: { create: { tenantId, key: 'targets', title: 'Targets', position: 0, status: 'succeeded' } },
+        }, include: { steps: true },
+      });
+      await tx.lifecycleObservation.create({
+        data: { tenantId, stepId: created.steps[0]!.id, completeness: 'complete', matches: true, expected: {}, observed: {}, observedAt: new Date('2020-01-01') },
+      });
+      await tx.personProvisionReceipt.create({
+        data: { tenantId, personId, targetSystemId: target.id, targetName: target.name, requestKey: created.id, status: 'applied', updatedAt: new Date('2020-01-01') },
+      });
+      await tx.notificationOutbox.create({
+        data: { tenantId, requestId: created.id, template: 'lifecycle-failed', to: 'legal@acme.test', vars: {}, createdAt: new Date('2020-01-01'), sentAt: new Date('2020-01-01') },
+      });
+      return created;
+    });
+    const hold = await placeLifecycleLegalHold(tenantId, {
+      subjectType: 'lifecycle_operation', subjectId: operation.id, reference: 'LEGAL-42',
+      reason: 'Litigation preservation', actorUserId: requesterId,
+    });
+    const held = await runLifecycleRetention(tenantId, new Date('2030-01-01T00:00:00Z'));
+    expect(held.lifecycleOperationsRemoved).toBe(0);
+    await withTenant(tenantId, async (tx) => {
+      await expect(tx.lifecycleOperation.findUnique({ where: { id: operation.id } })).resolves.not.toBeNull();
+      expect(await tx.personProvisionReceipt.count({ where: { requestKey: operation.id } })).toBe(1);
+      expect(await tx.lifecycleObservation.count({ where: { step: { operationId: operation.id } } })).toBe(1);
+      expect(await tx.notificationOutbox.count({ where: { requestId: operation.id } })).toBe(1);
+    });
+
+    await releaseLifecycleLegalHold(tenantId, hold.id, requesterId);
+    const released = await runLifecycleRetention(tenantId, new Date('2030-01-01T00:00:00Z'));
+    expect(released.lifecycleOperationsRemoved).toBe(1);
+    expect(released.receiptsRemoved).toBe(1);
+    expect(released.notificationsRemoved).toBe(1);
+  });
+
   it('removes only aged resolved evidence, keeps the audit chain verifiable, and records what it did', async () => {
     const old = new Date('2020-01-01T00:00:00Z');
     await withTenant(tenantId, async (tx) => {
@@ -330,6 +373,9 @@ describe('retention', () => {
     expect(report.observationsRemoved).toBe(1);
     expect(report.notificationsRemoved).toBe(1);
     expect(report.simulationsRemoved).toBe(1);
+    // The completed operation is old enough to release its idempotency key;
+    // the open one is deliberately retained as a retry receipt.
+    expect(report.lifecycleOperationsRemoved).toBe(1);
     // Audit events are immutable to the application role: the pass counts
     // what is eligible for the database-owner archive procedure and removes
     // nothing itself.
@@ -338,11 +384,13 @@ describe('retention', () => {
     expect(report.auditNote).toContain('checkpoint sequence 2');
     const remaining = await withTenant(tenantId, async (tx) => ({
       observations: await tx.lifecycleObservation.count(),
+      operations: await tx.lifecycleOperation.count(),
       unsent: await tx.notificationOutbox.count({ where: { sentAt: null } }),
       chain: await verifyChain(tx),
       events: await tx.auditEvent.findMany({ orderBy: { sequence: 'asc' }, select: { action: true } }),
     }));
     expect(remaining.observations).toBe(1);
+    expect(remaining.operations).toBe(1);
     expect(remaining.unsent).toBe(1);
     expect(remaining.chain).toEqual({ valid: true });
     expect(remaining.events.map((event) => event.action)).toEqual(['test.0', 'test.1', 'test.2', 'lifecycle.retention.run']);

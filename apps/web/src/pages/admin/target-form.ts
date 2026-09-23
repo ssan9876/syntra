@@ -33,8 +33,19 @@ export interface Target {
   deactivateSyntraUserThresholdPercent: number;
   perEntitlementThresholdPercent: number;
   personPopulationDropPercent: number;
+  maxAttempts: number;
   consecutiveSkippedRuns: number;
   lastSkipReason: string | null;
+  externalWritesPausedAt: string | null;
+  externalWritesPausedByUserId: string | null;
+  externalWritesPauseReason: string | null;
+  externalWritesPauseExpiresAt: string | null;
+  externalWritesResumedAt: string | null;
+  externalWritesResumedByUserId: string | null;
+  maintenanceWindowEnabled: boolean;
+  maintenanceWindowDays: number[];
+  maintenanceWindowStartMinute: number | null;
+  maintenanceWindowDurationMinutes: number | null;
 }
 
 export interface Form {
@@ -85,6 +96,7 @@ export interface Form {
   deactivateSyntraUserThresholdPercent: string;
   perEntitlementThresholdPercent: string;
   personPopulationDropPercent: string;
+  maxAttempts: string;
 }
 
 export const BLANK: Form = {
@@ -124,6 +136,7 @@ export const BLANK: Form = {
   deactivateSyntraUserThresholdPercent: '10',
   perEntitlementThresholdPercent: '50',
   personPopulationDropPercent: '20',
+  maxAttempts: '3',
 };
 
 /** Config keys this form owns. Anything else on a saved target is carried through. */
@@ -302,6 +315,7 @@ export function formFrom(target: Target): Form {
     ),
     perEntitlementThresholdPercent: String(target.perEntitlementThresholdPercent),
     personPopulationDropPercent: String(target.personPopulationDropPercent),
+    maxAttempts: String(target.maxAttempts ?? 3),
   };
 }
 
@@ -401,6 +415,12 @@ export function validateNumbers(
     'reenableWithoutConfirmationDays',
   ] as const) {
     whole(key, key === 'preHireDays' ? 365 : 3650);
+  }
+  const attempts = Number(form.maxAttempts.trim());
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 10) {
+    bad.maxAttempts = 'a whole number between 1 and 10';
+  } else {
+    values.maxAttempts = attempts;
   }
   // Blank is `null`, which is what "never archive" is stored as.
   const archive = form.archiveAfterDays.trim();

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   ConnectionResult,
   ConnectorRight,
@@ -89,10 +90,22 @@ function markerOf(item: Record<string, unknown>, field: EntraCorrelationField): 
 }
 
 /** Where the marker goes in a create body. */
-function markerBody(field: EntraCorrelationField, actionId: string): Record<string, unknown> {
+/**
+ * `employeeId` is limited to 16 characters by Microsoft Graph. Provision
+ * action ids are UUIDs, so retain a short test id as-is but use the first 96
+ * bits of SHA-256 for normal action ids. This is deterministic (a retry finds
+ * the first write) and has an astronomically lower collision chance than a
+ * 16-character truncation of a UUID.
+ */
+function markerForAction(field: EntraCorrelationField, actionId: string): string {
+  if (field !== 'employeeId' || actionId.length <= 16) return actionId;
+  return createHash('sha256').update(actionId).digest('base64url').slice(0, 16);
+}
+
+function markerBody(field: EntraCorrelationField, marker: string): Record<string, unknown> {
   return field === 'employeeId'
-    ? { employeeId: actionId }
-    : { onPremisesExtensionAttributes: { [field]: actionId } };
+    ? { employeeId: marker }
+    : { onPremisesExtensionAttributes: { [field]: marker } };
 }
 
 /**
@@ -428,6 +441,35 @@ async function findByMarker(
   return { anchor: anchor ?? null };
 }
 
+/**
+ * Graph can accept a POST before its marker filter sees the new object. On a
+ * duplicate-UPN response, resolve the UPN and insist on the expected marker
+ * before adopting it; an unrelated pre-existing account is never adopted.
+ */
+async function findConflictCreate(
+  connection: EntraConnection,
+  upn: string,
+  marker: string,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await graphRequest(connection, {
+      method: 'GET', path: '/users',
+      query: { $filter: `userPrincipalName eq ${odataLiteral(upn)}`, $select: `id,${correlationSelect(connection.correlationField)}`, $top: '2' },
+    });
+    if (response.status < 400) {
+      const item = (response.body as { value?: unknown } | null)?.value;
+      if (Array.isArray(item)) {
+        const found = item[0];
+        if (found && typeof found === 'object' && markerOf(found as Record<string, unknown>, connection.correlationField) === marker) {
+          return asString((found as Record<string, unknown>).id) ?? null;
+        }
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  return null;
+}
+
 /** `userPrincipalName` from the correlation key, or why it cannot be. */
 function principalName(
   connection: EntraConnection,
@@ -731,7 +773,8 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
           // FIRST, look for the object a previous attempt made. A create is
           // the one non-idempotent write, and the marker is what makes a
           // retry safe.
-          const existing = await findByMarker(connection, op.actionId);
+          const marker = markerForAction(connection.correlationField, op.actionId);
+          const existing = await findByMarker(connection, marker);
           if ('response' in existing) return failed(existing.response);
           if (existing.anchor !== null) {
             return {
@@ -758,7 +801,7 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
                 forceChangePasswordNextSignIn: true,
               },
               ...managed,
-              ...markerBody(connection.correlationField, op.actionId),
+              ...markerBody(connection.correlationField, marker),
             },
           });
           if (response.status >= 400) {
@@ -768,6 +811,10 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
               (response.status === 400 &&
                 /userPrincipalName|already exists|ObjectConflict/i.test(graphErrorMessage(response.body)))
             ) {
+              const adopted = await findConflictCreate(connection, named.upn, marker);
+              if (adopted !== null) {
+                return { ok: true, message: 'an account carrying this action\'s correlation marker became visible and was adopted', anchor: adopted };
+              }
               return { ...result, failure: 'conflict', message: `${result.message}: userPrincipalName ${named.upn} is taken` };
             }
             return result;

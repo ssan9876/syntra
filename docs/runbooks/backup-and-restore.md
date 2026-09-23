@@ -378,5 +378,7 @@ happens to the schema on upgrade.
   the key. Keeping the key is a separate procedure with a separate custodian.
 - **The AD or Entra side.** Accounts at targets are not in this backup.
   A restored Syntra will reconcile against whatever the target holds now.
-- **Compose and Helm automation.** See the gaps in the final report of this
-  runbook set; `ops/syntra-backup` is release-layout only.
+- **Compose and Helm automation.** `ops/syntra-backup` is release-layout
+  only. Nothing in this repository schedules a backup, prunes old ones or
+  writes a manifest for a Compose or Helm installation; the manual steps above
+  are the whole of it until that is built.

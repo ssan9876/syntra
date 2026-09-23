@@ -14,6 +14,7 @@ import {
   BUILTIN_CONNECTOR_DOCUMENTS,
   ENTRA_CAPABILITY_MATRIX,
   capabilitiesForTarget,
+  connectorLifecycleMetadata,
   entraTargetConnector,
   targetConnectorFor,
   type DiscoveredEntitlement,
@@ -46,6 +47,16 @@ import {
   targetWithCredential,
   testTargetConfiguration,
   updateTarget,
+  previewDocumentEntraMigration,
+  applyDocumentEntraMigration,
+  TargetMigrationNotAvailableError,
+  TargetMigrationPreviewStaleError,
+  targetConnectorHealth,
+  pauseTargetExternalWrites,
+  resumeTargetExternalWrites,
+  TargetWriteStopNotFoundError,
+  TargetWriteStopStateError,
+  TargetWriteStopSeparationError,
   type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -106,6 +117,16 @@ const TARGET_FIELDS = {
   consecutiveSkippedRuns: true,
   lastSkippedAt: true,
   lastSkipReason: true,
+  externalWritesPausedAt: true,
+  externalWritesPausedByUserId: true,
+  externalWritesPauseReason: true,
+  externalWritesPauseExpiresAt: true,
+  externalWritesResumedAt: true,
+  externalWritesResumedByUserId: true,
+  maintenanceWindowEnabled: true,
+  maintenanceWindowDays: true,
+  maintenanceWindowStartMinute: true,
+  maintenanceWindowDurationMinutes: true,
 } as const;
 
 /**
@@ -137,6 +158,12 @@ const entitlementSearchQuery = z.object({
   q: z.string().trim().min(1).max(200),
   top: z.coerce.number().int().min(1).max(100).default(25),
 });
+const targetHealthQuery = z.object({ days: z.coerce.number().int().min(1).max(90).default(30) });
+const writeStopRequest = z.object({
+  reason: z.string().trim().min(1).max(2000),
+  expiresAt: z.coerce.date().nullable().default(null),
+}).strict();
+const writeResumeRequest = z.object({ reason: z.string().trim().min(1).max(2000) }).strict();
 
 /** Both ids, so a route cannot read one and forget to validate the other. */
 const placementParams = z.object({
@@ -467,7 +494,7 @@ export async function registerAdminTargetRoutes(
       // treatment one level down (`Partial<GuardThresholds>` does not admit an
       // explicit `undefined` either), and spreading them twice would leave the
       // compiler unioning the cleaned shape with the uncleaned one.
-      const { thresholds, ladder, ...scalars } = updateTargetRequestSchema.parse(
+      const { thresholds, ladder, maintenanceWindow, ...scalars } = updateTargetRequestSchema.parse(
         request.body,
       );
       const startedAt = Date.now();
@@ -481,6 +508,7 @@ export async function registerAdminTargetRoutes(
             ...defined(scalars),
             ...(thresholds === undefined ? {} : { thresholds: defined(thresholds) }),
             ...(ladder === undefined ? {} : { ladder: defined(ladder) }),
+            ...(maintenanceWindow === undefined ? {} : { maintenanceWindow }),
           },
           scheduler(),
         );
@@ -572,9 +600,57 @@ export async function registerAdminTargetRoutes(
       if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
       return {
         type: target.type,
+        metadata: connectorLifecycleMetadata(target.type),
         matrix: target.type === 'entraId' ? ENTRA_CAPABILITY_MATRIX : null,
         capabilities: capabilitiesForTarget(target.type, target.config),
       };
+    },
+  );
+
+  app.get(
+    '/targets/:id/migrations/native-entra/preview',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      try {
+        return await previewDocumentEntraMigration(request.tenantId, id);
+      } catch (cause) {
+        if (cause instanceof TargetNotFoundError) {
+          throw new ProblemError(404, 'not-found', 'Target not found');
+        }
+        if (cause instanceof TargetMigrationNotAvailableError) {
+          throw new ProblemError(409, 'migration-not-available', 'Migration is not available', cause.message);
+        }
+        throw cause;
+      }
+    },
+  );
+
+  app.post(
+    '/targets/:id/migrations/native-entra/apply',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = z.object({ revision: z.string().length(64) }).strict().parse(request.body);
+      try {
+        return await applyDocumentEntraMigration(
+          request.tenantId,
+          request.session.userId,
+          id,
+          body.revision,
+        );
+      } catch (cause) {
+        if (cause instanceof TargetNotFoundError) {
+          throw new ProblemError(404, 'not-found', 'Target not found');
+        }
+        if (cause instanceof TargetMigrationNotAvailableError) {
+          throw new ProblemError(409, 'migration-not-available', 'Migration is not available', cause.message);
+        }
+        if (cause instanceof TargetMigrationPreviewStaleError) {
+          throw new ProblemError(409, 'preview-stale', 'Migration preview is stale', cause.message);
+        }
+        throw cause;
+      }
     },
   );
 
@@ -732,6 +808,55 @@ export async function registerAdminTargetRoutes(
       const target = await request.db((tx) => tx.targetSystem.findUnique({ where: { id }, select: { id: true, config: true } }));
       if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
       return currentReadiness(request.tenantId, 'target', target.id, target.config);
+    },
+  );
+
+  app.get(
+    '/targets/:id/health-series',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { days } = targetHealthQuery.parse(request.query ?? {});
+      const result = await targetConnectorHealth(request.tenantId, id, { days });
+      if (!result) throw new ProblemError(404, 'not-found', 'Target not found');
+      return result;
+    },
+  );
+
+  app.post(
+    '/targets/:id/external-write-stop',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = writeStopRequest.parse(request.body);
+      const now = new Date();
+      if (body.expiresAt && body.expiresAt.getTime() > now.getTime() + 30 * 86_400_000) {
+        throw new ProblemError(400, 'invalid-expiry', 'Pause expiry is too far away', 'Emergency stops may expire no more than 30 days from now.');
+      }
+      try {
+        return await pauseTargetExternalWrites(request.tenantId, id, request.session.userId, body.reason, body.expiresAt, now);
+      } catch (error) {
+        if (error instanceof TargetWriteStopNotFoundError) throw new ProblemError(404, 'not-found', 'Target not found');
+        if (error instanceof TargetWriteStopStateError) throw new ProblemError(409, 'write-stop-state', 'External-write stop state conflict', error.message);
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/targets/:id/external-write-resume',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { reason } = writeResumeRequest.parse(request.body);
+      try {
+        return await resumeTargetExternalWrites(request.tenantId, id, request.session.userId, reason);
+      } catch (error) {
+        if (error instanceof TargetWriteStopNotFoundError) throw new ProblemError(404, 'not-found', 'Target not found');
+        if (error instanceof TargetWriteStopSeparationError) throw new ProblemError(403, 'four-eyes-required', 'A second administrator must resume writes', error.message);
+        if (error instanceof TargetWriteStopStateError) throw new ProblemError(409, 'write-stop-state', 'External-write stop state conflict', error.message);
+        throw error;
+      }
     },
   );
 

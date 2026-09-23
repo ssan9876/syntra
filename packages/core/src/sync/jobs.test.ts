@@ -6,6 +6,7 @@ import { DEFAULT_MAPPINGS } from './defaults.js';
 import { createSource, setMappings } from './source-service.js';
 import { applyRun } from './run-service.js';
 import { queueRun, runSyncJob, SourceDisabledError, SYNC_JOB, syncJobPayload } from './jobs.js';
+import { JobNotQueuedError } from '../jobs/enqueue-for-row.js';
 import type { Scheduler } from '../jobs/scheduler.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 11));
@@ -206,5 +207,39 @@ describe('queueing a run for a disabled source', () => {
     const run = await queueRun(scheduler, tenantId, sourceId);
     expect(run.status).toBe('queued');
     expect(scheduler.enqueued).toHaveLength(1);
+  });
+});
+
+describe('queueing a run the job queue will not take', () => {
+  /**
+   * The row commits before the enqueue, so a refused enqueue used to leave a
+   * run in `queued` for ever: nothing picks it up and nothing reaps it.
+   */
+  const refusing = (enqueue: () => Promise<string | null>) =>
+    ({ enqueue } as unknown as Scheduler);
+
+  it('marks the run failed and says why when the enqueue throws', async () => {
+    const scheduler = refusing(async () => {
+      throw new Error('connection terminated');
+    });
+    await expect(queueRun(scheduler, tenantId, sourceId)).rejects.toBeInstanceOf(
+      JobNotQueuedError,
+    );
+
+    const [run] = await withTenant(tenantId, (tx) => tx.syncRun.findMany());
+    expect(run?.status).toBe('failed');
+    expect(run?.finishedAt).not.toBeNull();
+    expect(run?.error).toContain('connection terminated');
+  });
+
+  it('marks the run failed when the queue declines the job', async () => {
+    const scheduler = refusing(async () => null);
+    await expect(queueRun(scheduler, tenantId, sourceId)).rejects.toBeInstanceOf(
+      JobNotQueuedError,
+    );
+
+    const [run] = await withTenant(tenantId, (tx) => tx.syncRun.findMany());
+    expect(run?.status).toBe('failed');
+    expect(run?.error).toBe('the job queue did not accept this run');
   });
 });

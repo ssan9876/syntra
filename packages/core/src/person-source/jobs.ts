@@ -2,6 +2,7 @@ import { withTenant } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import type { Scheduler } from '../jobs/scheduler.js';
+import { enqueueForRow } from '../jobs/enqueue-for-row.js';
 import { PersonSourceDisabledError } from './source-service.js';
 import { applyImportRun, previewImportRun } from './run-service.js';
 
@@ -59,11 +60,24 @@ export async function queueImportRun(
     });
   });
 
-  await scheduler.enqueue(PERSON_IMPORT_JOB, {
-    tenantId,
-    sourceId,
-    runId: run.id,
-  } satisfies PersonImportJobPayload);
+  // A failed enqueue is written onto the row, or it would sit in `queued`
+  // for ever with nothing to pick it up and nothing to reap it.
+  await enqueueForRow(
+    PERSON_IMPORT_JOB,
+    () =>
+      scheduler.enqueue(PERSON_IMPORT_JOB, {
+        tenantId,
+        sourceId,
+        runId: run.id,
+      } satisfies PersonImportJobPayload),
+    (message) =>
+      withTenant(tenantId, (tx) =>
+        tx.personImportRun.updateMany({
+          where: { id: run.id, status: 'queued' },
+          data: { status: 'failed', finishedAt: new Date(), error: message },
+        }),
+      ),
+  );
 
   return run;
 }

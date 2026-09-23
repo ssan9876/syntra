@@ -63,7 +63,9 @@ export function createFakeScheduler(
     stop: async () => {},
     enqueue: async (name, data) => {
       enqueued.push({ name, data });
-      return null;
+      // An id, as pg-boss returns for any job it accepts. It returns null only
+      // when it deliberately declines one, which callers treat as a refusal.
+      return `fake-job-${enqueued.length}`;
     },
     schedule: async (name, cron, data, key) => {
       const payload = data as

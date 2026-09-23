@@ -125,18 +125,14 @@ function derivePrimary(contracts: MappedContract[]): string | null {
 function resolveManager(
   contract: MappedContract,
   input: PersonDiffInput,
-): { managerPersonId?: string; note?: string } {
+): { managerPersonId?: string; managerExternalId?: string } {
   if (contract.managerExternalId === null) return {};
   const id = input.managerIdByExternalId.get(contract.managerExternalId);
   if (id === undefined) {
-    // Ordinary on a first run and fixed by the next one. A note on the change,
-    // not a failure -- and not a null write, which would clear a manager
-    // somebody set by hand.
-    return {
-      note:
-        `manager "${contract.managerExternalId}" is not in the register yet; ` +
-        `the field is left as it is and the next run will resolve it`,
-    };
+    // The ingestion boundary has already proved this identity exists in the
+    // same feed. Preserve it until apply, after create_person has established
+    // the durable source link.
+    return { managerExternalId: contract.managerExternalId };
   }
   return { managerPersonId: id };
 }
@@ -161,6 +157,7 @@ function contractCreate(
   };
   for (const field of CONTRACT_SCALARS) after[field] = contract[field];
   if (manager.managerPersonId !== undefined) after.managerPersonId = manager.managerPersonId;
+  if (manager.managerExternalId !== undefined) after.managerExternalId = manager.managerExternalId;
 
   return {
     changeType: 'create_contract',
@@ -170,7 +167,6 @@ function contractCreate(
     before: null,
     after,
     status: 'proposed',
-    ...(manager.note === undefined ? {} : { message: manager.note }),
   };
 }
 
@@ -196,6 +192,9 @@ function contractUpdate(
   ) {
     after.managerPersonId = manager.managerPersonId;
   }
+  if (manager.managerExternalId !== undefined) {
+    after.managerExternalId = manager.managerExternalId;
+  }
 
   const before: Record<string, unknown> = {
     jobTitle: stored.jobTitle,
@@ -214,24 +213,12 @@ function contractUpdate(
       before: { endDate: stored.endDate },
       after: { ...after, endDate: contract.endDate },
       status: 'proposed',
-      ...(manager.note === undefined ? {} : { message: manager.note }),
     };
   }
 
   // An end date being cleared is an ordinary update: the contract came back.
   if (!sameDay(contract.endDate, stored.endDate)) after.endDate = contract.endDate;
 
-  // A note is not news on its own.
-  //
-  // Emitting a change that carries only the unresolvable-manager note gives an
-  // `update_contract` whose `after` is empty: it writes nothing, and because
-  // nothing about it ever changes it is proposed again on every subsequent
-  // run -- forever, if that manager is never imported. Under `autoApply` that
-  // is a no-op write and an audit event every night, per contract.
-  //
-  // Staying quiet costs nothing. When the manager IS imported,
-  // `managerPersonId` genuinely differs from what is stored and a real change
-  // appears then; until it is, the field is left exactly as it was.
   if (Object.keys(after).length === 0) return null;
 
   return {
@@ -242,7 +229,6 @@ function contractUpdate(
     before,
     after,
     status: 'proposed',
-    ...(manager.note === undefined ? {} : { message: manager.note }),
   };
 }
 

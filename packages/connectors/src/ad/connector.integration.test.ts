@@ -12,6 +12,7 @@ import {
   sambaConnection,
 } from './samba-connection.js';
 import type { AdTargetConfig } from './config.js';
+import { certifyTargetConnector } from '../testing/target-connector-certification.js';
 
 const samba = sambaConnection();
 const testOu = `OU=ProvisionTest,${samba.baseDn}`;
@@ -98,6 +99,66 @@ async function addGroup(cn: string, sam: string): Promise<string> {
   await admin.add(dn, { objectClass: ['top', 'group'], sAMAccountName: sam });
   return dn;
 }
+
+describe('shared connector certification', () => {
+  it('certifies Active Directory against disposable Samba infrastructure', async () => {
+    const groupDn = await addGroup('CertificationGroup', 'cert-group');
+    const entitlements = [];
+    for await (const entitlement of adTargetConnector.listEntitlements(config)) {
+      entitlements.push(entitlement);
+    }
+    const entitlement = entitlements.find((candidate) => candidate.dn === groupDn);
+    expect(entitlement).toBeDefined();
+
+    const report = await certifyTargetConnector({
+      name: 'Active Directory',
+      connector: adTargetConnector,
+      config,
+      create: createOp('cert-ad-create', 'connector.certification'),
+      update: (anchor) => ({
+        op: 'update_account',
+        actionId: 'cert-ad-update',
+        anchor,
+        attributes: {
+          displayName: ['Certified Connector'],
+          givenName: ['Connector'],
+          sn: ['Certification'],
+          userPrincipalName: ['connector.certification@syntra.test'],
+          mail: ['connector.certification@syntra.test'],
+          distinguishedName: [`CN=connector.certification,${testOu}`],
+        },
+      }),
+      disable: (anchor) => ({
+        op: 'disable_account',
+        actionId: 'cert-ad-disable',
+        anchor,
+        reason: 'connector certification',
+      }),
+      entitlement: {
+        id: entitlement!.externalId,
+        grant: (anchor) => ({
+          op: 'grant_entitlement',
+          actionId: 'cert-ad-grant',
+          anchor,
+          entitlementId: entitlement!.externalId,
+        }),
+        revoke: (anchor) => ({
+          op: 'revoke_entitlement',
+          actionId: 'cert-ad-revoke',
+          anchor,
+          entitlementId: entitlement!.externalId,
+        }),
+      },
+      missingAnchor: 'AAAAAAAAAAAAAAAAAAAAAA==',
+      assertUpdated: (observed) => {
+        expect(observed.account?.attributes.displayName).toEqual(['Certified Connector']);
+      },
+    });
+
+    expect(report.checks).toContain('idempotent-create');
+    expect(report.checks).toContain('disable-read-back');
+  }, 120_000);
+});
 
 describe('adTargetConnector — test and discovery', () => {
   it('connects and reports what it found', async () => {

@@ -57,19 +57,24 @@ export const patchPersonRequest = z
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
 
-export const createContractRequest = z.object({
-  sequence: z.number().int().positive(),
-  isPrimary: z.boolean().default(false),
-  startDate: z.coerce.date(),
-  endDate: z.coerce.date().optional(),
-  jobTitle: z.string().max(256).optional(),
-  department: z.string().max(256).optional(),
-  costCentre: z.string().max(128).optional(),
-  employer: z.string().max(256).optional(),
-  location: z.string().max(256).optional(),
-  managerPersonId: z.string().uuid().optional(),
-  fte: z.number().min(0).max(2).optional(),
-});
+export const createContractRequest = z
+  .object({
+    sequence: z.number().int().positive(),
+    isPrimary: z.boolean().default(false),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date().optional(),
+    jobTitle: z.string().max(256).optional(),
+    department: z.string().max(256).optional(),
+    costCentre: z.string().max(128).optional(),
+    employer: z.string().max(256).optional(),
+    location: z.string().max(256).optional(),
+    managerPersonId: z.string().uuid().optional(),
+    fte: z.number().min(0).max(2).optional(),
+  })
+  .refine((value) => !value.endDate || value.endDate >= value.startDate, {
+    path: ['endDate'],
+    message: 'endDate must be on or after startDate',
+  });
 
 /**
  * Correcting a contract.

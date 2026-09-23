@@ -81,6 +81,37 @@ function toRecord(
   };
 }
 
+function provenanceValues(
+  item: unknown,
+  selector: NonNullable<ResolvedHttpConnectorDocument['account']['provenance']>,
+): string[] {
+  if (selector.kind === 'scalar') return asValues(readPath(item, selector.path)) ?? [];
+  const collection = readPath(item, selector.path);
+  if (!Array.isArray(collection)) return [];
+  return collection.flatMap((entry) => {
+    if (selector.whereAt !== undefined) {
+      const actual = asValues(readPath(entry, selector.whereAt))?.[0];
+      if (actual !== selector.whereEquals) return [];
+    }
+    return asValues(readPath(entry, selector.valueAt)) ?? [];
+  });
+}
+
+async function findCreateCollision(
+  config: Resolved,
+  correlationKey: string,
+): Promise<unknown | undefined> {
+  const { document, credential } = config;
+  const correlationAt = document.account.correlationAt;
+  if (correlationAt === undefined) return undefined;
+  const wanted = correlationKey.toLocaleLowerCase();
+  for await (const item of paginate(document, credential, document.account.list)) {
+    const correlation = asValues(readPath(item, correlationAt))?.[0];
+    if (correlation?.toLocaleLowerCase() === wanted) return item;
+  }
+  return undefined;
+}
+
 async function runWrite(
   config: Resolved,
   spec: WriteSpec | undefined,
@@ -295,6 +326,36 @@ export const httpTargetConnector: TargetConnector<Config> = {
         };
 
       case 'create_account':
+        if (
+          account.create === undefined ||
+          account.correlationAt === undefined ||
+          account.provenance === undefined
+        ) {
+          return {
+            ok: false,
+            message:
+              'this target cannot safely create an account: its document must declare create, correlationAt, and provenance read-back',
+            failure: 'rejected',
+          };
+        }
+        {
+          const existing = await findCreateCollision(config, op.correlationKey);
+          if (existing !== undefined) {
+            const anchor = asValues(readPath(existing, account.anchorAt))?.[0];
+            if (anchor !== undefined && provenanceValues(existing, account.provenance).includes(op.actionId)) {
+              return {
+                ok: true,
+                message: 'adopted the account this action already created',
+                anchor,
+              };
+            }
+            return {
+              ok: false,
+              message: `an account named ${op.correlationKey} already exists and was not created by this action`,
+              failure: 'conflict',
+            };
+          }
+        }
         return runWrite(
           config,
           account.create,

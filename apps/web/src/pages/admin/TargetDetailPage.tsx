@@ -15,6 +15,10 @@ import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 import { EntraConnectorFields, HttpConnectorFields } from './TargetConnectorFields.js';
 import { CapabilitiesPanel } from './TargetCapabilitiesPanel.js';
+import { TargetMigrationPanel } from './TargetMigrationPanel.js';
+import { TargetHealthPanel } from './TargetHealthPanel.js';
+import { TargetWriteStopPanel } from './TargetWriteStopPanel.js';
+import { TargetMaintenancePanel } from './TargetMaintenancePanel.js';
 import { TestReport, type TestResult } from './TargetTestReport.js';
 import {
   BLANK,
@@ -165,6 +169,7 @@ export function TargetDetailPage() {
             method: 'PATCH',
             body: JSON.stringify({
               preHireDays: n.preHireDays,
+              maxAttempts: n.maxAttempts,
               ladder: {
                 entitlementRevocationDelayDays: n.entitlementRevocationDelayDays,
                 disableGraceDays: n.disableGraceDays,
@@ -207,6 +212,7 @@ export function TargetDetailPage() {
           enabled: form.enabled,
           enforcementMode: form.enforcementMode,
           preHireDays: n.preHireDays,
+          maxAttempts: n.maxAttempts,
           ladder: {
             entitlementRevocationDelayDays: n.entitlementRevocationDelayDays,
             disableGraceDays: n.disableGraceDays,
@@ -448,6 +454,12 @@ export function TargetDetailPage() {
         </Panel>
 
         {!isNew && targetId !== null && <CapabilitiesPanel targetId={targetId} />}
+        {!isNew && data && <TargetWriteStopPanel target={data} onChanged={reload} />}
+        {!isNew && data && <TargetMaintenancePanel target={data} onChanged={reload} />}
+        {!isNew && targetId !== null && <TargetHealthPanel targetId={targetId} />}
+        {!isNew && targetId !== null && data?.type === 'httpJson' && (
+          <TargetMigrationPanel targetId={targetId} onApplied={reload} />
+        )}
 
         {/*
           These three links are the only route into the rest of the target's
@@ -525,6 +537,13 @@ export function TargetDetailPage() {
             checked={form.autoApply}
             onChange={(v) => set('autoApply', v)}
             label="Apply scheduled runs automatically"
+          />
+          <Field
+            label="Maximum attempts per action"
+            value={form.maxAttempts}
+            onChange={(v) => set('maxAttempts', v)}
+            inputMode="numeric"
+            {...mark('maxAttempts')}
           />
         </Panel>
 

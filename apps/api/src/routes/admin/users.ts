@@ -273,6 +273,11 @@ export async function registerAdminUserRoutes(
     { preHandler: requirePermission(PERMISSIONS.IDENTITY_READ) },
     async (request) => {
       return request.db(async (tx) => {
+        const mayReadSensitive = await hasPermission(
+          tx,
+          request.session.userId,
+          PERMISSIONS.IDENTITY_SENSITIVE_READ,
+        );
         const users = await tx.user.findMany({
           where: { personId: null, status: 'active' },
           orderBy: { login: 'asc' },
@@ -289,7 +294,7 @@ export async function registerAdminUserRoutes(
           const match = await matchPersonForAccount(tx, {
             email: user.email,
             displayName: user.displayName,
-          });
+          }, { includePersonalEmail: mayReadSensitive });
           accounts.push({
             ...user,
             topCandidate: match.confident ?? match.candidates[0] ?? null,
@@ -318,10 +323,15 @@ export async function registerAdminUserRoutes(
         if (!user) throw new ProblemError(404, 'not-found', 'User not found');
         if (user.personId) return { candidates: [] };
 
+        const mayReadSensitive = await hasPermission(
+          tx,
+          request.session.userId,
+          PERMISSIONS.IDENTITY_SENSITIVE_READ,
+        );
         const match = await matchPersonForAccount(tx, {
           email: user.email,
           displayName: user.displayName,
-        });
+        }, { includePersonalEmail: mayReadSensitive });
         // Flattened. The screen ranks by `rule` and does not need to know one
         // of them was strong enough to have auto-linked, because by definition
         // it did not — either nothing matched confidently, or the confident
