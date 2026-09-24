@@ -5,9 +5,9 @@
   "main": "./src/index.ts",
   "license": "Apache-2.0",
   "scripts": {
-    "generate": "prisma generate --config ../../prisma.config.ts",
-    "migrate": "prisma migrate deploy --config ../../prisma.config.ts",
-    "migrate:dev": "prisma migrate dev --config ../../prisma.config.ts",
+    "generate": "prisma generate",
+    "migrate": "prisma migrate deploy",
+    "migrate:dev": "prisma migrate dev",
     "seed": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/seed.ts",
     "bootstrap": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/bootstrap.ts",
     "reset": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/reset.ts",
