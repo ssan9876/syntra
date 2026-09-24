@@ -112,7 +112,7 @@ export const entraTargetConfigSchema = z
         includeMailEnabled: z.boolean().default(false),
       })
       .strict()
-      .default({}),
+      .default({ securityEnabledOnly: true, includeMailEnabled: false }),
   })
   .strict()
   .superRefine((config, ctx) => {

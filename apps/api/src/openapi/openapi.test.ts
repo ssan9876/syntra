@@ -296,7 +296,11 @@ describe('toJsonSchema', () => {
         trimmed: z.string().trim().transform((value) => value.toUpperCase()),
       })
       .strict();
-    expect(toJsonSchema(schema)).toEqual({
+    // A subset, not an exact match: Zod 4's native `z.toJSONSchema` adds
+    // accurate extras of its own (a uuid `pattern`, safe-integer bounds, a
+    // `type` beside `const`), and what this test guards is that each construct
+    // a contract uses comes out as the right shape at all.
+    expect(toJsonSchema(schema)).toMatchObject({
       type: 'object',
       additionalProperties: false,
       required: ['id', 'kind', 'note', 'tags', 'either', 'trimmed'],

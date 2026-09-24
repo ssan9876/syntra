@@ -13,7 +13,7 @@
     "@syntra/core": "workspace:*",
     "@xmldom/xmldom": "0.9.12",
     "jose": "6.2.9",
-    "oidc-provider": "9.11.3",
+    "oidc-provider": "9.12.2",
     "openid-client": "6.8.5",
     "xml-crypto": "6.3.0",
     "xml-encryption": "6.0.1",
@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@peculiar/x509": "2.0.0",
-    "@types/oidc-provider": "9.11.1",
+    "@types/oidc-provider": "9.12.1",
     "@types/xml-encryption": "1.2.4",
     "reflect-metadata": "0.2.2"
   }
