@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { TENANT_DELETED_STATUS, withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
+import { STEP_UP_MAX_AGE_MS } from '../auth/session-service.js';
 import { computeTenantDataRevision, countOffboardingInventory } from './offboarding-service.js';
 
 /**
@@ -42,8 +43,11 @@ export const TENANT_DELETION_EXECUTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  * be. Elevation mints a new session, so its creation time is when the
  * administrator last proved who they were -- with a second factor wherever
  * the tenant requires one for administration.
+ *
+ * The same window every step-up action uses, so an administrator learns one
+ * rule rather than one per destructive button.
  */
-export const TENANT_DELETION_STEP_UP_MAX_AGE_MS = 15 * 60 * 1000;
+export const TENANT_DELETION_STEP_UP_MAX_AGE_MS = STEP_UP_MAX_AGE_MS;
 export const TENANT_DELETION_REASON_MIN_LENGTH = 20;
 /** Erasing a large tenant is many DELETEs; Prisma's 5 s default is not enough. */
 const EXECUTION_TIMEOUT_MS = 10 * 60 * 1000;

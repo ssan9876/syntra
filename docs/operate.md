@@ -500,7 +500,7 @@ refuses any step taken out of it:
    open request per tenant.
 4. **Approve.** A *different* administrator — the database rejects an
    approval by the requester, whatever the code above it does — from an
-   administrative session minted in the last 15 minutes (sign in again to
+   administrative session minted in the last 10 minutes (sign in again to
    step up; the tenant's MFA-for-administration rule applies to that sign-in).
    Within 72 hours of the request, or the request expires. The checks in
    step 3 run again.
