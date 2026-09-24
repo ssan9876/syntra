@@ -13,6 +13,7 @@ export * from './entra/config.js';
 export * from './entra/graph.js';
 export * from './entra/capabilities.js';
 export * from './entra/connector.js';
+export * from './entra/credential-expiry.js';
 export * from './registry.js';
 export * from './capabilities.js';
 export * from './metadata.js';

@@ -152,6 +152,19 @@ is retained; merged code alone is not enough.
 34. **Build — Credential lifecycle.** Expiry discovery, advance alerts,
     rotation workflow, dual-secret overlap, verification, revocation, and
     evidence for every connector type.
+    *Built (2026-09-23): a tenant credential inventory (**Settings →
+    Credentials**, `GET /api/admin/credentials`) with expiry source, last
+    rotation and owner for every credential Syntra holds or depends on;
+    optional Entra expiry discovery gated on `Application.Read.All`; declared
+    expiry for the rest; a daily, de-duplicated expiry scan raising
+    `credential.expiring`/`credential.expired` at configurable thresholds by
+    webhook and mail, and an incident on expiry; and a dual-secret rotation
+    workflow (stage, verify, cut over, complete or roll back) for target,
+    directory-source and HR-feed credentials with audited evidence
+    ([Configure](configure.md#credentials-and-security-notifications)).
+    Remaining: revocation at the issuer is still the administrator's step
+    (Syntra holds no permission to delete an Entra secret), upstream client
+    secrets have no rotation workflow, and discovery exists only for Entra.*
 35. **Build — Entitlement risk metadata.** Mark privileged, birthright,
     dynamic, nested, license-bearing, and externally managed access.
 36. **Build — Access review campaigns.** Manager/application-owner review,
@@ -208,9 +221,10 @@ is retained; merged code alone is not enough.
     changed Govern scope), batched generation, envelope-sealed storage with a
     SHA-256 digest, a per-export watermark, a 1–72 hour expiry with a sweep,
     revocation, and an audit event for every step
-    ([Operate, Exports](operate.md#exports)). Remaining: the security
-    notification group for export creation (#52), an external object store for
-    files beyond 64 MiB, and moving the remaining synchronous reports.
+    ([Operate, Exports](operate.md#exports)). The security notification group
+    for export creation is done (#52, the Data exports webhook group).
+    Remaining: an external object store for files beyond 64 MiB, and moving
+    the remaining synchronous reports.
 49. **Operate — Dependency governance.** Automated updates, supported-runtime
     policy, license inventory, vulnerability SLA, exception owner, and expiry.
 50. **Operate — Secure development evidence.** Protected branches, required
@@ -222,6 +236,14 @@ is retained; merged code alone is not enough.
 52. **Build — Security notification policy.** Define customer-visible alerts
     for credential changes, role grants, break-glass use, export creation,
     circuit-breaker changes, and suspicious authentication.
+    *Built (2026-09-23): six categories defined once in code and rendered as
+    the policy table in [Configure](configure.md#the-security-notification-policy);
+    every event is a webhook security event, and a tenant setting (**Settings
+    → Security alerts**) chooses which categories also email `tenant.manage`
+    holders. Gaps closed: `credential.changed`, `signing_key.rotated`, an
+    audited HR-feed credential change, and a Data exports webhook group.
+    Remaining: there is no break-glass account type to alert on (the policy
+    points at `auth.elevate`), and no per-recipient channel beyond mail.*
 
 ## P1 — reliability, recovery, and operability
 
@@ -314,6 +336,13 @@ is retained; merged code alone is not enough.
 67. **Operate — Certificate and domain lifecycle.** Inventory expiry,
     ownership, renewal, validation, and emergency replacement for every public
     endpoint and federation key.
+    *In-product part built (2026-09-23): the credential inventory lists every
+    federation key and certificate a tenant uses — Syntra's SAML/OIDC signing
+    keys, upstream IdP certificates, trusted service-provider certificates —
+    with expiry, owner and advance alerts. Remaining (operational): the public
+    endpoints' TLS certificates and domains live outside Syntra (ingress,
+    load balancer, DNS) and need the deployment's own monitoring, renewal
+    ownership and an emergency-replacement drill.*
 68. **Operate — On-call readiness.** Rotations, escalation, alert routing,
     runbook access, authority boundaries, and quarterly effectiveness review.
 

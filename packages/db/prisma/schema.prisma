@@ -136,6 +136,18 @@ model Tenant {
   /// what makes a change made through one replica visible to every other one
   /// on its very next request, with no broadcast channel to lose a message.
   oidcConfigGeneration   Int      @default(0)
+  /// Which customer-visible security notification categories ALSO email
+  /// every active holder of `tenant.manage` (backlog #52). The categories and
+  /// the audit actions behind each are defined once, in
+  /// `packages/core/src/notify/security-policy.ts`, and documented in
+  /// configure.md. Empty by default: a tenant that never opens the screen
+  /// keeps receiving exactly what it received before -- webhooks for every
+  /// subscribed group, and no new mail.
+  securityEmailCategories String[] @default([])
+  /// Days before a credential's expiry at which the expiry scan raises an
+  /// advance alert (backlog #34). Bounded by a CHECK: one to eight values,
+  /// each 1..365. The expiry itself is always alerted as well.
+  credentialAlertDays     Int[]    @default([30, 14, 7, 1])
   createdAt              DateTime @default(now())
 
   orgUnits                  OrgUnit[]
@@ -211,6 +223,8 @@ model Tenant {
   externalWriteStop         TenantExternalWriteStop?
   tenantDeletionRequests    TenantDeletionRequest[]
   dataExports               DataExport[]
+  credentialRecords         CredentialRecord[]
+  credentialRotations       CredentialRotation[]
   auditSavedViews           AuditSavedView[]
   lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
@@ -4943,4 +4957,95 @@ model AuditSavedView {
   updatedAt DateTime @updatedAt
 
   @@unique([tenantId, userId, name])
+}
+
+/// What Syntra knows ABOUT one credential in the tenant's credential
+/// inventory (backlog #34, #67) -- never the credential itself.
+///
+/// The inventory is computed from the tables that hold or reference each
+/// credential (targets, sources, signing keys, API tokens, webhook endpoints,
+/// upstream identity providers, SAML applications); this row adds what those
+/// tables cannot say: who owns it, an expiry an administrator declared or the
+/// scan discovered, and which advance alert was last raised, so the scan
+/// raises each threshold once per expiry date.
+///
+/// Keyed by `credentialKey` (`<kind>.<subjectId>[.<ref>]`) rather than by a
+/// foreign key, because the subjects live in eight different tables. The scan
+/// deletes a row whose credential no longer exists.
+model CredentialRecord {
+  id                   String    @id @default(uuid()) @db.Uuid
+  tenantId             String    @db.Uuid
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  credentialKey        String
+  kind                 String
+  ownerUserId          String?   @db.Uuid
+  note                 String?
+  /// An expiry an administrator typed, for a credential whose expiry Syntra
+  /// cannot read (an LDAP service account's password policy, an Entra secret
+  /// without Application.Read.All consented).
+  declaredExpiresAt    DateTime?
+  /// An expiry the scan read from the issuer (Entra `passwordCredentials`).
+  discoveredExpiresAt  DateTime?
+  /// 'found' | 'unmatched' | 'not_permitted' | 'failed'
+  discoveryStatus      String?
+  discoveryMessage     String?
+  discoveredAt         DateTime?
+  /// The expiry the inventory resolved at its last scan or metadata write.
+  /// Read by the incident list, so an expired credential is a finding.
+  effectiveExpiresAt   DateTime?
+  /// The expiry the last alert was raised for, and the smallest threshold
+  /// raised for it (0 = the expiry itself). A different expiry resets both.
+  alertedExpiresAt     DateTime?
+  alertedThresholdDays Int?
+  alertedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@unique([tenantId, credentialKey])
+  @@index([tenantId, effectiveExpiresAt])
+}
+
+/// One dual-secret rotation of a connector credential (backlog #34).
+///
+/// staged -> verified | verification_failed -> cut_over -> completed, with
+/// cancelled (before cut-over) and rolled_back (after it) as the other exits.
+/// The new secret is sealed under `stagedSecretName` until cut-over; the old
+/// one under `previousSecretName` from cut-over until completion or rollback,
+/// which is the overlap. Neither name is ever returned by the API. `evidence`
+/// is an append-only list of steps -- who, when, what was tested and what it
+/// answered -- and never a secret, a digest of one, or a bind DN. At most one
+/// open rotation per system, enforced by a partial unique index.
+model CredentialRotation {
+  id                      String    @id @default(uuid()) @db.Uuid
+  tenantId                String    @db.Uuid
+  tenant                  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// 'target' | 'source' | 'person_source'
+  systemKind              String
+  systemId                String    @db.Uuid
+  credentialKey           String
+  status                  String    @default("staged")
+  reason                  String?
+  stagedSecretName        String?
+  previousSecretName      String?
+  newExpiresAt            DateTime?
+  stagedByUserId          String?   @db.Uuid
+  stagedAt                DateTime  @default(now())
+  verifiedAt              DateTime?
+  verifiedByUserId        String?   @db.Uuid
+  verificationOk          Boolean?
+  verificationMessage     String?
+  /// The saved configuration the staged secret was verified against. A
+  /// cut-over is refused when the configuration has changed since.
+  verificationFingerprint String?
+  cutOverAt               DateTime?
+  cutOverByUserId         String?   @db.Uuid
+  completedAt             DateTime?
+  completedByUserId       String?   @db.Uuid
+  closedAt                DateTime?
+  closedByUserId          String?   @db.Uuid
+  evidence                Json      @default("[]")
+  updatedAt               DateTime  @updatedAt
+
+  @@index([tenantId, systemKind, systemId, stagedAt])
+  @@index([tenantId, status])
 }

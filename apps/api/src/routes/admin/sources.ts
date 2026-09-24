@@ -31,6 +31,7 @@ import {
   queueRun,
   SourceDisabledError,
   recordEvent,
+  recordConnectorCredentialChanged,
   removeSourceSchedule,
   setMappings,
   sourceWithPassword,
@@ -442,6 +443,9 @@ export async function registerAdminSourceRoutes(
           // by anyone holding audit.read.
           payload: { fields: Object.keys(body).sort() },
         });
+        if (body.bindPassword !== undefined) {
+          await recordConnectorCredentialChanged(tx, request.session.userId, 'DirectorySource', id, request.ip);
+        }
         return updated;
       });
 

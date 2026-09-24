@@ -49,6 +49,7 @@ import { registerAdminAuditRoutes } from './routes/admin/audit.js';
 import { registerAdminOperationsRoutes } from './routes/admin/operations.js';
 import { registerAdminExportRoutes } from './routes/admin/exports.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
+import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
@@ -452,6 +453,11 @@ export async function buildApp(
     webRoot: config.webRoot ?? undefined,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
+
+  // The credential inventory, rotation workflow and security notification
+  // policy. The key provider seals a staged secret and unseals a live one
+  // for a connection test.
+  await app.register(registerAdminCredentialRoutes, { prefix: '/api/admin', keyProvider });
   await app.register(registerAdminUpdateRoutes, {
     prefix: '/api/admin',
     releaseRepo: config.releaseRepo,

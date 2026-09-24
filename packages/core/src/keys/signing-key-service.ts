@@ -10,6 +10,7 @@ import { calculateJwkThumbprint, exportJWK } from 'jose';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { getSecret, putSecret } from '../vault/vault-service.js';
 import { notifySigningKeysChanged } from './key-change.js';
+import { recordEvent } from '../audit/audit-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 
 x509.cryptoProvider.set(webcrypto as unknown as webcrypto.Crypto);
@@ -304,6 +305,21 @@ export async function rotateKey(
     // Only after the previous row has left 'active' — signing_key_one_active
     // is what makes this ordering load-bearing rather than stylistic.
     await insert(tx, tenantId, kind, generated, provider, 'active');
+    // Audited (backlog #34/#52): the credential inventory reads a signing
+    // key's rotation date from its row, but "who rolled the SAML key, and
+    // when" is a question the audit log has to answer, and a webhook
+    // subscribed to credential changes should hear it. Attributed to nobody:
+    // the monthly OIDC rotation is the scheduler's, and the SAML one is run
+    // by an operator outside any session.
+    await recordEvent(tx, {
+      actorUserId: null,
+      action: 'signing_key.rotated',
+      targetType: 'SigningKey',
+      targetId: null,
+      outcome: 'success',
+      sourceIp: null,
+      payload: { kind, kid: generated.kid, outgoingKid: previous?.kid ?? null },
+    });
     return previous
       ? toPublished({
           ...previous,
