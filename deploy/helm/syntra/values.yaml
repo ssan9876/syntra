@@ -1,9 +1,9 @@
 # Syntra Helm chart values.
 #
 # Every default here is chosen to be SAFE rather than complete: the chart
-# renders nothing secret, runs one API replica (see the README's "Running more
-# than one API replica" before raising it), and applies a NetworkPolicy that
-# limits outbound traffic by port. An install must at minimum name a Secret
+# renders nothing secret, runs two API replicas (all state the replicas must
+# agree on is in Postgres; see the README's "Running more than one API
+# replica"), and applies a NetworkPolicy that limits outbound traffic by port. An install must at minimum name a Secret
 # (`existingSecret`) and set `publicUrl`; `helm install` fails with a message
 # saying so otherwise.
 
@@ -76,11 +76,13 @@ api:
     digest: ""
     pullPolicy: IfNotPresent
 
-  # ONE by default, deliberately. Several replicas work -- pg-boss coordinates
-  # background jobs through Postgres -- but some state is per process; read
-  # the README's "Running more than one API replica" before raising this or
-  # enabling autoscaling.
-  replicas: 1
+  # TWO by default, so a node drain or a crashed pod does not take sign-in
+  # down. Safe at any count: pg-boss coordinates background jobs, sessions and
+  # OIDC artefacts live in Postgres, every replica validates its cached OIDC
+  # provider against the tenant's oidcConfigGeneration on each request, and
+  # rate-limit counters are shared in Postgres. See the README's "Running
+  # more than one API replica".
+  replicas: 2
 
   # Which proxies the API believes about a client's address (TRUST_PROXY).
   # Traffic arrives ingress controller -> web (nginx) -> api, so this must
@@ -90,11 +92,17 @@ api:
   # hop count -- the API refuses both at startup.
   trustProxy: ""
 
-  # Per-address and per-tenant authentication attempt ceilings per minute.
-  # These counters are PER PROCESS (see README); with N replicas behind a
-  # round-robin Service the effective ceiling is up to N times these.
+  # Per-address and per-tenant authentication attempt ceilings per minute,
+  # for the deployment as a whole: the counters are shared by every replica,
+  # so do not divide these by the replica count. Empty uses the API's
+  # defaults (10, and ten times that per tenant).
   authRateLimitMax: ""
   authRateLimitTenantMax: ""
+  # Where rate-limit counters live (RATE_LIMIT_STORE). Empty means the API's
+  # default, "postgres": one shared counter per key for every replica.
+  # "memory" keeps per-process counters and is only correct with exactly one
+  # replica.
+  rateLimitStore: ""
 
   logLevel: info
 
@@ -114,8 +122,9 @@ api:
 
   # /health is liveness (constant, never touches the database); /health/ready
   # is readiness (database, master key, scheduler). /health/ready carries a
-  # 60-per-minute-per-address rate limit, so keep readiness periodSeconds >= 2
-  # per probing kubelet.
+  # 60-per-minute-per-address rate limit shared by every replica, and the
+  # kubelet probes from its node's address, so keep readiness periodSeconds
+  # at least the number of API pods one node can hold (10 s allows 10).
   startupProbe:
     httpGet: { path: /health, port: http }
     periodSeconds: 5
@@ -146,7 +155,6 @@ api:
   priorityClassName: ""
 
   autoscaling:
-    # Read the README's multi-replica section first.
     enabled: false
     minReplicas: 2
     maxReplicas: 4
@@ -396,13 +404,12 @@ backup:
       memory: 512Mi
 
 # -----------------------------------------------------------------------------
-# Scheduled rolling restart of the API. OFF by default. Useful only with more
-# than one API replica: the OIDC provider is cached per process and only the
-# process that rotates a signing key evicts its cache (README, multi-replica
-# section). Rotation runs at 03:00 UTC on the 1st and the outgoing key stays
-# published for seven days, so a restart on the 2nd keeps every replica
-# signing with a published key. Creates a Role allowed to patch exactly one
-# Deployment.
+# Scheduled rolling restart of the API. OFF by default, and optional: it was a
+# workaround for replicas that kept signing with a rotated-out key, and every
+# replica now rebuilds its cached OIDC provider on its next request after a
+# rotation (the tenant's oidcConfigGeneration; README, multi-replica
+# section). Keep it only if you want a regular restart for reasons of your
+# own. Creates a Role allowed to patch exactly one Deployment.
 # -----------------------------------------------------------------------------
 apiRolloutRestart:
   enabled: false

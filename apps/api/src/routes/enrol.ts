@@ -60,7 +60,7 @@ export async function registerEnrolRoutes(
     config: {
       rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
     },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'enrol'),
   };
 
   /**

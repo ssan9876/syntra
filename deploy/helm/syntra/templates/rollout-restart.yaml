@@ -1,10 +1,11 @@
 {{- if .Values.apiRolloutRestart.enabled }}
 {{- $fullname := include "syntra.fullname" . -}}
 {{- $name := printf "%s-rollout-restart" $fullname -}}
-# Monthly rolling restart of the API so that EVERY replica rebuilds its cached
-# OIDC provider after the signing-key rotation (03:00 UTC on the 1st), well
-# inside the seven days the outgoing key stays published. See the README's
-# multi-replica section for why only the rotating replica evicts its cache.
+# Optional monthly rolling restart of the API. It used to be how every replica
+# rebuilt its cached OIDC provider after the signing-key rotation; the
+# tenant's `oidcConfigGeneration` (bumped by trigger, checked per request)
+# does that now, so this is no longer needed for correctness. See the README's
+# multi-replica section.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

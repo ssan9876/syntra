@@ -36,7 +36,7 @@ function passwordRateLimit(app: FastifyInstance, options: AuthRouteOptions) {
         timeWindow: '1 minute',
       },
     },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'password'),
   };
 }
 

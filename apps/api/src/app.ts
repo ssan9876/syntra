@@ -20,6 +20,11 @@ import { registerProblemJson } from './plugins/problem-json.js';
 import { registerWebApp } from './plugins/web-app.js';
 import { registerSecurityHeaders } from './plugins/security-headers.js';
 import { tenantAndIpKey } from './plugins/rate-limit.js';
+import {
+  postgresRateLimitCounter,
+  sharedRateLimitStore,
+  startRateLimitSweeper,
+} from './plugins/rate-limit-store.js';
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerEnrolRoutes } from './routes/enrol.js';
 import { registerPasswordResetRoutes } from './routes/password-reset.js';
@@ -146,10 +151,26 @@ export async function buildApp(
   // traffic — or one tenant's attacker — spend everybody else's allowance.
   // The per-tenant ceiling that has to hold across many addresses is a second
   // limit, applied alongside this one at each credential-presenting route.
+  //
+  // Counted in Postgres by default (RATE_LIMIT_STORE), so every replica spends
+  // the same allowance: the in-memory store granted each replica the whole of
+  // it, which made every limit here N times too generous at N replicas. See
+  // `plugins/rate-limit-store.ts`. A store error fails the request rather
+  // than waving it through -- a limiter that cannot count grants nothing --
+  // except where a route opts out (`/health/ready`, below).
   await app.register(rateLimit, {
     global: false,
     keyGenerator: tenantAndIpKey,
+    ...(config.rateLimitStore === 'postgres'
+      ? { store: sharedRateLimitStore(postgresRateLimitCounter) }
+      : {}),
   });
+  if (config.rateLimitStore === 'postgres') {
+    const stopSweeper = startRateLimitSweeper(postgresRateLimitCounter, (error) =>
+      app.log.warn({ err: error }, 'rate-limit sweep failed'),
+    );
+    app.addHook('onClose', async () => stopSweeper());
+  }
 
   // The built application, where one is configured. Registered FIRST, because
   // both of the plugins below take a piece of it: the not-found handler that
@@ -213,7 +234,12 @@ export async function buildApp(
       // release and again for the rollback, which can land inside the same
       // one-minute window. Keyed per address, so the updater on loopback and
       // a container orchestrator's probe do not share a bucket with anybody.
-      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+      //
+      // `skipOnError`: the limiter's counters live in Postgres, and this is
+      // the route whose job is to REPORT that Postgres is unreachable -- with
+      // a 503 and the failing probe named. Failing closed here would turn that
+      // into a bare 500 from the limiter and hide the diagnosis.
+      config: { rateLimit: { max: 60, timeWindow: '1 minute', skipOnError: true } },
     },
     async (request, reply) => {
       const report = await readiness({
@@ -271,6 +297,12 @@ export async function buildApp(
   // the old key is retired and unpublished, until somebody restarts the
   // process. `@syntra/core` cannot call `invalidateProvider` itself (the
   // package dependency runs the other way), so it announces and this listens.
+  //
+  // That listener only reaches THIS process, and a rotation usually runs in
+  // the worker. What keeps every replica correct is the tenant's
+  // `oidcConfigGeneration`, bumped by a trigger in the rotation's own
+  // transaction and compared on every request (`provider-factory.ts`). The
+  // listener stays as a free local fast path.
   onSigningKeysChanged(invalidateProviderOnKeyChange);
 
   // One transport instance, shared by both routers below: the "a factor was

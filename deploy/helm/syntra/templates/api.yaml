@@ -106,6 +106,9 @@ spec:
             {{- with .Values.api.authRateLimitTenantMax }}
             - { name: AUTH_RATE_LIMIT_TENANT_MAX, value: {{ . | quote }} }
             {{- end }}
+            {{- with .Values.api.rateLimitStore }}
+            - { name: RATE_LIMIT_STORE, value: {{ . | quote }} }
+            {{- end }}
             {{- include "syntra.secretEnv" (dict "name" "DATABASE_URL" "secret" $secret "key" .Values.secretKeys.databaseUrl) | nindent 12 }}
             {{- include "syntra.secretEnv" (dict "name" "SESSION_SECRET" "secret" $secret "key" .Values.secretKeys.sessionSecret) | nindent 12 }}
             {{- include "syntra.secretEnv" (dict "name" "MASTER_KEY" "secret" $secret "key" .Values.secretKeys.masterKey) | nindent 12 }}

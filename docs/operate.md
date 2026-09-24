@@ -155,16 +155,26 @@ is not a step toward it.
 The Helm chart in [`deploy/helm/syntra`](../deploy/helm/syntra/README.md)
 is the Kubernetes path. It runs the migration as a pre-upgrade hook and the
 pods on read-only root filesystems. Ingress, NetworkPolicy, PodDisruptionBudget,
-autoscaling, a ServiceMonitor and a PrometheusRule are optional. Before you
-run more than one API replica, read the chart README's section
-[Running more than one API replica](../deploy/helm/syntra/README.md#running-more-than-one-api-replica).
-In short:
+autoscaling, a ServiceMonitor and a PrometheusRule are optional. The chart
+runs two API replicas by default, and any number is correct. The chart
+README's section
+[Running more than one API replica](../deploy/helm/syntra/README.md#running-more-than-one-api-replica)
+has the details. In short:
 
 - pg-boss, sessions, OIDC artefacts, challenges and lockout are shared
   through Postgres.
-- Each process keeps its own OIDC provider cache, which holds clients,
-  issuer and signing keys.
-- Each process keeps its own rate-limit counters.
+- Each process caches its OIDC providers, but checks each one against the
+  tenant's `oidcConfigGeneration` on every request. Database triggers bump
+  that counter in the same transaction as any OIDC client, OIDC signing-key
+  or tenant-hostname change. A change made on one replica, or by the
+  key-rotation job, therefore reaches every replica on its next request. No
+  restart is needed, and it works behind PgBouncer transaction pooling
+  because it does not use `LISTEN/NOTIFY`.
+- Rate-limit counters are shared in Postgres (`RATE_LIMIT_STORE=postgres`,
+  the default). `AUTH_RATE_LIMIT_MAX` and `AUTH_RATE_LIMIT_TENANT_MAX` are
+  deployment-wide limits whatever the replica count.
+  `RATE_LIMIT_STORE=memory` keeps per-process counters and is only correct
+  for a single process.
 
 Syntra has no state of its own outside Postgres, `MASTER_KEY` and
 `SESSION_SECRET`. Availability therefore depends almost entirely on the

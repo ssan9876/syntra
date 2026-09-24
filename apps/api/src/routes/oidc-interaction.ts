@@ -38,7 +38,7 @@ export async function registerOidcInteractionRoutes(
       // A launch evaluates policy and can mint an attempt, so both dimensions,
       // as at every other authorize() entry point.
       config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'oidc-interaction'),
     },
     async (request, reply) => {
       const provider = await oidcProviderFor(request, options);

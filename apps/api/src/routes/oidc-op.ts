@@ -14,7 +14,8 @@ import {
   readSigningKeyPem,
   resolveClaims,
 } from '@syntra/core';
-import { providerFor } from '@syntra/protocols';
+import { withTenant } from '@syntra/db';
+import { providerFor, type ProviderDeps } from '@syntra/protocols';
 import { assertProtocolHost, tenantProtocolIdentity } from './protocol-identity.js';
 
 export interface OidcRouteOptions {
@@ -125,15 +126,36 @@ export async function oidcProviderFor(
   const identity = tenantProtocolIdentity(tenant, options.publicUrl);
   assertProtocolHost(request, identity);
 
-  const tenantId = request.tenantId;
+  // The generation comes with the tenant row this function reads anyway, so
+  // validating the cache against every other replica's writes costs no query.
+  return providerFor(
+    request.tenantId,
+    identity.issuer,
+    oidcProviderDeps(request.tenantId, options),
+    tenant.oidcConfigGeneration,
+  );
+}
+
+/**
+ * What a tenant's Provider is built from, read straight from the database.
+ *
+ * Separate from `oidcProviderFor` so a test can build a second, independent
+ * Provider cache — a second replica — over exactly the production deps.
+ * Everything here goes through `withTenant` for this tenant, which is what
+ * `request.db` is.
+ */
+export function oidcProviderDeps(
+  tenantId: string,
+  options: Pick<OidcRouteOptions, 'masterKey' | 'sessionSecret'>,
+): ProviderDeps {
   const provider = localMasterKeyProvider(options.masterKey);
 
-  return providerFor(tenantId, identity.issuer, {
+  return {
     findAccount: async (accountId, clientId) => {
       // The user store stays Syntra's. This is the only thing oidc-provider
       // ever learns about a person, and it learns it from the same claim
       // engine SAML uses.
-      const result = await request.db(async (tx) => {
+      const result = await withTenant(tenantId, async (tx) => {
         const user = await tx.user.findUnique({ where: { id: accountId } });
         if (!user || user.status !== 'active') return null;
         const oidcClient = clientId
@@ -232,7 +254,7 @@ export async function oidcProviderFor(
 
     interactionUrl: (uid) => `${OIDC_MOUNT}/interaction/${uid}`,
     cookieKeys: [options.sessionSecret],
-  });
+  };
 }
 
 export async function registerOidcRoutes(

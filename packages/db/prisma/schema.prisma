@@ -122,6 +122,20 @@ model Tenant {
   /// bug.
   brandPrimary           String?
   brandAccent            String?
+  /// A counter that goes up whenever anything a tenant's cached OIDC
+  /// `Provider` was built from changes: a client (`OidcClient` insert, update
+  /// or delete), an OIDC signing key (rotation, retirement), or a hostname
+  /// (`primaryDomain`, `additionalDomains` -- they fix the issuer).
+  ///
+  /// Bumped by database triggers (migration `replica_safe_state`), not by the
+  /// services, so it moves in the same transaction as the change on EVERY
+  /// write path -- the admin route, the catalog, a cascade, a pg-boss job in
+  /// another process, and whatever gets written next. Each API replica keeps
+  /// its own Provider cache and compares this number, which it reads with the
+  /// tenant row it already loads per request, before serving from it. That is
+  /// what makes a change made through one replica visible to every other one
+  /// on its very next request, with no broadcast channel to lose a message.
+  oidcConfigGeneration   Int      @default(0)
   createdAt              DateTime @default(now())
 
   orgUnits                  OrgUnit[]
@@ -4776,4 +4790,30 @@ model SodException {
   @@index([tenantId, status, endsAt])
   @@index([ruleId])
   @@index([violationId])
+}
+
+/// One fixed-window rate-limit counter, shared by every API replica.
+///
+/// `@fastify/rate-limit`'s default store is an in-process LRU, so N replicas
+/// behind a load balancer each granted the full allowance and the effective
+/// limit was N times the configured one -- the per-tenant credential ceiling
+/// included, which is the limit that is supposed to hold however many
+/// addresses (or replicas) the traffic is spread across. Postgres is the one
+/// store every replica already shares; one upsert per limited request is the
+/// whole cost (`apps/api/src/plugins/rate-limit-store.ts`).
+///
+/// Deliberately NOT tenant-scoped and without row-level security: the key
+/// already names the tenant, only the API process reads or writes it, and it
+/// is consulted before a request has proved anything -- including on routes
+/// that resolve no tenant at all (`unscoped`). Nothing in a row is anybody's
+/// data: a key, a count and a reset time.
+model RateLimitBucket {
+  /// `<route or limiter scope>|<the limiter's own key>`.
+  key     String   @id
+  hits    Int
+  /// When this window ends. A hit at or after it starts a new window.
+  resetAt DateTime
+
+  /// For the periodic sweep of windows nobody has hit since they ended.
+  @@index([resetAt])
 }

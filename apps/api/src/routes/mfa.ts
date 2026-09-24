@@ -204,7 +204,7 @@ export async function registerMfaRoutes(
     config: {
       rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
     },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'mfa'),
   };
 
   // ---- The step-up half of a sign-in. No session yet, so no session guard.

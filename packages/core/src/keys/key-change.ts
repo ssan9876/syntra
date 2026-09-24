@@ -25,6 +25,13 @@ const listeners = new Set<SigningKeysChangedListener>();
  * gets the invalidation, rather than the second caller being the one that
  * ships the outage.
  *
+ * IN-PROCESS ONLY. The rotation job normally runs in the worker, and an API
+ * deployment may have several replicas; none of them hears this. What makes
+ * them all rebuild is `Tenant.oidcConfigGeneration`, which a database trigger
+ * on `SigningKey` bumps inside the rotation's own transaction and every
+ * replica compares before serving from its cache. This remains as a local
+ * fast path.
+ *
  * Registered once at startup by `apps/api`. Returns an unregister function so
  * a test can put the registry back.
  */

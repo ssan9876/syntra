@@ -7,7 +7,11 @@ description: >-
 type: application
 # 0.2.0 restructures values (image repository/tag, the secret block); see the
 # README's "Upgrading from 0.1" section before upgrading an existing release.
-version: 0.2.0
+# 0.3.0 defaults to two API replicas. That is only safe with an API image
+# that carries migration 20261027173100_replica_safe_state (shared OIDC
+# provider generation and rate-limit counters); pin api.replicas=1 when
+# deploying an older image with this chart.
+version: 0.3.0
 appVersion: "latest"
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/ssan9876/syntra
