@@ -10,14 +10,12 @@ WORKDIR /app
 COPY . .
 RUN pnpm install --frozen-lockfile && pnpm --filter @syntra/web build
 
-# No USER and no HEALTHCHECK here, deliberately, and for reasons that do not
-# apply to the api image:
-#
-#   - nginx's own entrypoint drops to the unprivileged `nginx` user after
-#     binding port 80; forcing a USER would only break that bind.
-#   - the useful readiness signal for this service is the API's, and
+# The unprivileged nginx image never needs root or NET_BIND_SERVICE. It listens
+# on 8080, which lets the Kubernetes deployment enforce runAsNonRoot and drop
+# every capability. The useful readiness signal for this service is the API's,
+# and
 #     docker-compose.yml already gates `web` on `api`'s health check. A probe
 #     here would report that nginx is up, which it always is.
-FROM nginx:1.27-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
