@@ -19,3 +19,7 @@ RUN pnpm install --frozen-lockfile && pnpm --filter @syntra/web build
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
+
+# The base image already defaults to this unprivileged account, but stating it
+# explicitly makes the runtime invariant auditable by static image scanners.
+USER 101
