@@ -203,7 +203,7 @@ export async function registerFederationRoutes(
 
   const rateLimited = {
     config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'federation'),
   };
   const keyProvider = () => localMasterKeyProvider(options.masterKey);
 

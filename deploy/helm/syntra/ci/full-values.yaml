@@ -11,8 +11,11 @@ api:
     tag: "1.4.0"
   replicas: 3
   trustProxy: 10.244.0.0/16
-  authRateLimitMax: "4"
-  authRateLimitTenantMax: "40"
+  # Deployment-wide values: the counters are shared by every replica
+  # (rateLimitStore: postgres), so these are not divided by the replica count.
+  authRateLimitMax: "10"
+  authRateLimitTenantMax: "100"
+  rateLimitStore: postgres
   env:
     - { name: POLICY_COUNTRY_HEADER, value: cf-ipcountry }
   autoscaling:

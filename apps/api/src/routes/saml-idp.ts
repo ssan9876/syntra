@@ -375,7 +375,7 @@ export async function registerSamlIdpRoutes(
     // `@fastify/rate-limit` with `global: false` and these two routes named no
     // limit of their own.
     config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'saml-idp'),
   };
 
   /**

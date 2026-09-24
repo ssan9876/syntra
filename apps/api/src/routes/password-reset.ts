@@ -38,7 +38,7 @@ export async function registerPasswordResetRoutes(
     config: {
       rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
     },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'password-reset'),
   };
 
   app.post('/request', { ...LIMIT }, async (request, reply) => {

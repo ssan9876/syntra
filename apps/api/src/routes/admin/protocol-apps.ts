@@ -327,8 +327,10 @@ export async function registerAdminProtocolRoutes(
       return saved;
     });
 
-    // The Provider loaded this tenant's clients once, at construction. Without
-    // this the new redirect URI is invisible until the process restarts.
+    // The Provider loaded this tenant's clients once, at construction. The
+    // write above already bumped `oidcConfigGeneration` (a trigger on
+    // `OidcClient`), which is what every OTHER replica rebuilds on; this only
+    // saves this one the comparison.
     invalidateProvider(request.tenantId);
 
     // The secret is in this response and in no other, ever.

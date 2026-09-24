@@ -87,7 +87,7 @@ export async function registerOidcLogoutRoutes(
 ): Promise<void> {
   const rateLimited = {
     config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'oidc-logout'),
   };
 
   app.get('/session/end', rateLimited, async (request, reply) => {

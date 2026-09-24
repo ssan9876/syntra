@@ -60,7 +60,7 @@ export async function registerPortalRoutes(
       config: {
         rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
       },
-      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'portal-launch'),
     },
     async (request) => {
       const { id } = idParam.parse(request.params);

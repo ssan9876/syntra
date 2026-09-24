@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ScimError, SCIM_ERROR_SCHEMA, protocolBase } from '@syntra/core';
 import { resolveBearerPrincipal } from '../../plugins/bearer-token.js';
-import { perTenantRateLimit } from '../../plugins/rate-limit.js';
+import { perTenantRateLimit, tenantAndIpKey } from '../../plugins/rate-limit.js';
 import { registerScimDiscovery } from './discovery.js';
 import { registerScimUserRoutes } from './users.js';
 import { registerScimGroupRoutes } from './groups.js';
@@ -137,11 +137,15 @@ export async function registerScimRoutes(
     app.rateLimit({
       max: options.authRateLimitMax * SCIM_RATE_LIMIT_FACTOR,
       timeWindow: '1 minute',
+      // Scoped, because a limiter made this way has no route to namespace its
+      // counters by in the shared store (`rate-limit-store.ts`); without it
+      // this would share a counter with any other `app.rateLimit()` limiter.
+      keyGenerator: (request) => `scim|${tenantAndIpKey(request)}`,
     }),
   );
   app.addHook(
     'onRequest',
-    perTenantRateLimit(app, options.authRateLimitTenantMax * SCIM_RATE_LIMIT_FACTOR),
+    perTenantRateLimit(app, options.authRateLimitTenantMax * SCIM_RATE_LIMIT_FACTOR, 'scim'),
   );
 
   app.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {

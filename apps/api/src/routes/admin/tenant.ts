@@ -434,6 +434,11 @@ export async function registerAdminTenantRoutes(
       // the provider discards every cached client and re-reads the key set,
       // and this route is saved from for reasons that have nothing to do with
       // the issuer.
+      //
+      // This is the local fast path. Other replicas rebuild because the same
+      // UPDATE bumped `Tenant.oidcConfigGeneration` (a BEFORE trigger on the
+      // hostname columns), and the issuer they compute from the fresh row no
+      // longer matches the one their cached Provider was built with.
       const hostnamesMoved =
         saved.primaryDomain !== hostnamesBefore.primaryDomain ||
         saved.additionalDomains.join(',') !== hostnamesBefore.additionalDomains.join(',');

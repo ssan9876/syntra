@@ -72,6 +72,13 @@ const schema = z.object({
   // gets the other raised with it — an end-to-end suite that needs 200 per
   // address is not also asking to be capped at 10 per tenant.
   AUTH_RATE_LIMIT_TENANT_MAX: z.coerce.number().int().positive().optional(),
+  // Where rate-limit counters live. `postgres`, the default, is one shared
+  // fixed-window counter per key for every API replica, so a limit means the
+  // same thing at one replica or ten. `memory` is the per-process store the
+  // limiter ships with: fine for exactly one replica, and N times the
+  // configured limit at N -- kept for a single-process installation that
+  // wants to avoid the one upsert per limited request.
+  RATE_LIMIT_STORE: z.enum(['postgres', 'memory']).default('postgres'),
   /**
    * Which proxies may be believed about a request's source address.
    *
@@ -213,6 +220,8 @@ export interface Config {
   smtpUrl: string;
   authRateLimitMax: number;
   authRateLimitTenantMax: number;
+  /** See RATE_LIMIT_STORE. */
+  rateLimitStore: 'postgres' | 'memory';
   /** Null when this deployment signs no checkpoints, which is a supported state. */
   governCheckpointKey: Buffer | null;
   governCheckpointKeyId: string;
@@ -281,6 +290,7 @@ export function loadConfig(
     authRateLimitMax: v.AUTH_RATE_LIMIT_MAX,
     authRateLimitTenantMax:
       v.AUTH_RATE_LIMIT_TENANT_MAX ?? v.AUTH_RATE_LIMIT_MAX * 10,
+    rateLimitStore: v.RATE_LIMIT_STORE,
     trustProxy,
     outboundAllowPrivate: v.OUTBOUND_ALLOW_PRIVATE,
     // Resolved here rather than where it is used, so the value the rest of the

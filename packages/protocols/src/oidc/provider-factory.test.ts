@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { exportJWK, generateKeyPair } from 'jose';
-import { invalidateAllProviders, providerFor } from './provider-factory.js';
+import { createProviderCache, invalidateAllProviders, providerFor } from './provider-factory.js';
 import {
   SYNTRA_DECISION_KEY,
   syntraAuthorizePrompt,
@@ -51,6 +51,46 @@ describe('providerFor', () => {
     // And a failed build is not cached, so fixing the configuration works
     // without a restart.
     await expect(providerFor('t3', 'https://ok.test/oidc', d)).resolves.toBeDefined();
+  });
+});
+
+describe('createProviderCache and the configuration generation', () => {
+  it('rebuilds when the generation moves past the cached one, and only then', async () => {
+    const d = await deps();
+    const cache = createProviderCache();
+    const first = await cache.providerFor('t1', 'https://sso.acme.test/oidc', d, 3);
+
+    expect(await cache.providerFor('t1', 'https://sso.acme.test/oidc', d, 3)).toBe(first);
+    // An older number — a request that read the row just before a change —
+    // must not throw away a newer Provider.
+    expect(await cache.providerFor('t1', 'https://sso.acme.test/oidc', d, 2)).toBe(first);
+
+    const next = await cache.providerFor('t1', 'https://sso.acme.test/oidc', d, 4);
+    expect(next).not.toBe(first);
+    expect(await cache.providerFor('t1', 'https://sso.acme.test/oidc', d, 4)).toBe(next);
+  });
+
+  it('rebuilds for a different issuer whatever the generation says', async () => {
+    const d = await deps();
+    const cache = createProviderCache();
+    await cache.providerFor('t1', 'https://sso.acme.test/oidc', d, 1);
+    const moved = await cache.providerFor('t1', 'https://id.acme.example/oidc', d, 1);
+    expect(moved.issuer).toBe('https://id.acme.example/oidc');
+  });
+
+  it('keeps two caches — two replicas — independent of each other', async () => {
+    const d = await deps();
+    const a = createProviderCache();
+    const b = createProviderCache();
+    const fromA = await a.providerFor('t1', 'https://sso.acme.test/oidc', d, 1);
+    const fromB = await b.providerFor('t1', 'https://sso.acme.test/oidc', d, 1);
+    expect(fromB).not.toBe(fromA);
+
+    // Invalidating one reaches only that one, which is exactly why the
+    // generation, not `invalidate`, is what keeps the other correct.
+    a.invalidate('t1');
+    expect(await b.providerFor('t1', 'https://sso.acme.test/oidc', d, 1)).toBe(fromB);
+    expect(await b.providerFor('t1', 'https://sso.acme.test/oidc', d, 2)).not.toBe(fromB);
   });
 });
 

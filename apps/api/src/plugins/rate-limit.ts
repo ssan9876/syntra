@@ -21,6 +21,9 @@ export function tenantAndIpKey(request: FastifyRequest): string {
   return `${request.tenantId || 'unscoped'}|${request.ip}`;
 }
 
+/** Which perTenantRateLimit scopes each built app has handed out. */
+const scopesInUse = new WeakMap<object, Set<string>>();
+
 /**
  * The ceiling on credential attempts for a whole tenant, across every address
  * at once.
@@ -41,15 +44,37 @@ export function tenantAndIpKey(request: FastifyRequest): string {
  * would look present and do nothing. `createRateLimit` hands back the decision
  * instead of enforcing it, which is what lets this stand beside the per-address
  * limit each route already carries.
+ *
+ * `scope` names this limiter's counters. The in-memory store gave every call a
+ * private LRU, so each call site counted on its own; the shared Postgres store
+ * (`rate-limit-store.ts`) has one table, and a `createRateLimit` limiter has
+ * no route to namespace it by, so the scope in the key is what keeps those
+ * call sites apart — identically on every replica, which a registration-order
+ * counter would not promise across a rolling upgrade. A scope used twice in
+ * one app is refused at startup: two limiters silently sharing one counter is
+ * a ceiling that is half what it says.
  */
 export function perTenantRateLimit(
   app: FastifyInstance,
   max: number,
+  scope: string,
 ): onRequestAsyncHookHandler {
+  // Keyed on the decorator, which every encapsulated child context inherits
+  // from the root by reference, so this is one registry per built app.
+  let scopes = scopesInUse.get(app.createRateLimit);
+  if (!scopes) {
+    scopes = new Set();
+    scopesInUse.set(app.createRateLimit, scopes);
+  }
+  if (scopes.has(scope)) {
+    throw new Error(`perTenantRateLimit scope "${scope}" is already in use`);
+  }
+  scopes.add(scope);
+
   const limit = app.createRateLimit({
     max,
     timeWindow: '1 minute',
-    keyGenerator: (request) => `tenant|${request.tenantId || 'unscoped'}`,
+    keyGenerator: (request) => `tenant|${scope}|${request.tenantId || 'unscoped'}`,
   });
 
   return async (request, reply) => {
