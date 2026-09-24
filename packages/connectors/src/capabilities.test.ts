@@ -5,7 +5,7 @@ import { entraIdDocument } from './http/documents/entra-id.js';
 describe('target connector capabilities', () => {
   it('labels current and planned connector support without claiming unavailable integrations', () => {
     expect(targetConnectorCapabilities('activeDirectory')).toMatchObject({ readBack: true, createAccount: true, disableAccount: true });
-    expect(targetConnectorCapabilities('scim2')).toMatchObject({ readBack: true, createAccount: true, manageEntitlements: false });
+    expect(targetConnectorCapabilities('scim2')).toMatchObject({ readBack: true, createAccount: true, manageEntitlements: true });
     expect(targetConnectorCapabilities('entraId')).toMatchObject({ available: true, readBack: true, manageEntitlements: true });
     expect(targetConnectorCapabilities('microsoft365')).toMatchObject({ available: false, readBack: false });
     expect(targetConnectorCapabilities('okta')).toMatchObject({ available: false });

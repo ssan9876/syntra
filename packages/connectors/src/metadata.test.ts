@@ -136,9 +136,12 @@ describe('capability refusal', () => {
   });
 
   it('refuses a certified write the configuration does not advertise', () => {
-    const scim = capabilitiesForTarget('scim2', {});
-    expect(capabilityRefusalReason('scim2', release(), scim, 'grant_entitlement')).toMatch(/does not advertise/);
-    expect(capabilityRefusalReason('scim2', release(), scim, 'disable_account')).toBeNull();
+    // A document declaring a disable and no entitlement operations.
+    const http = capabilitiesForTarget('httpJson', {
+      document: { account: { disable: { method: 'POST', path: '/users/{id}/disable' } } },
+    });
+    expect(capabilityRefusalReason('httpJson', release(), http, 'grant_entitlement')).toMatch(/does not advertise/);
+    expect(capabilityRefusalReason('httpJson', release(), http, 'disable_account')).toBeNull();
   });
 });
 

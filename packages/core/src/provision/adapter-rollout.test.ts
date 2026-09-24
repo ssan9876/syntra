@@ -197,8 +197,13 @@ describe('capability enforcement at plan time', () => {
   });
 
   it('refuses what the configuration does not advertise even when certified', () => {
+    // A document-driven target whose document declares a disable and no
+    // entitlement operations: the release is certified to grant, this
+    // configuration cannot.
     const context = adapterWriteContext({
-      id: 't', type: 'scim2', config: {}, adapterChannel: 'stable', adapterVersionPin: null,
+      id: 't', type: 'httpJson',
+      config: { document: { account: { disable: { method: 'POST', path: '/users/{id}/disable' } } } },
+      adapterChannel: 'stable', adapterVersionPin: null,
       deprecationOverrideVersion: null, deprecationOverrideReason: null, deprecationOverrideExpiresAt: null,
     });
     expect(context.refusalFor('grant_entitlement')).toMatch(/does not advertise the ability to grant entitlements/);

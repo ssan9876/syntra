@@ -42,16 +42,12 @@ lifecycle tables, a non-recomputable export digest, SCIM rejecting
 
 ## Immediate — before the batch-3 changes can merge
 
-1. **Decide — batch-3 push.** GitHub push protection rejects the batch-3
-   branch: a support-bundle test fixture contains a fake `sk_live_…` string
-   (a redaction test input, not a credential). Either allow it through the
-   push-protection link, or approve rewriting the unpushed branch so the
-   literal is built at runtime.
-2. **Decide — SCIM entitlements.** The SCIM capability table says
-   `manageEntitlements: false` although the adapter implements and is
-   certified for grant/revoke. Enforcement (#18) made that flag a gate, so
-   SCIM grants are refused, visibly, until it is set to `true` in
-   `packages/connectors/src/capabilities.ts`.
+1. **Done — batch-3 push.** Push protection flagged a fake `sk_live_…`
+   redaction-test input; the unpushed history was rewritten so the fixture
+   builds it at runtime, and the branch was pushed.
+2. **Done — SCIM entitlements.** `manageEntitlements` for `scim2` now
+   matches the implemented, certified grant/revoke, so enforcement no longer
+   refuses SCIM grants.
 3. **Operate — migrate local and lab databases.** Thirteen new migrations
    (`20261023…` to `20261104…`); run `pnpm db:migrate` with the root
    `DATABASE_URL` and restart the API.

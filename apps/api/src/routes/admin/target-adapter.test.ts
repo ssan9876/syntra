@@ -80,13 +80,13 @@ describe('GET /api/admin/targets/:id/adapter', () => {
     expect(body.capabilities.every((c: { certified: boolean; refusal: string | null }) => c.certified && c.refusal === null)).toBe(true);
   });
 
-  it('shows what a SCIM target refuses and warns about a partially certified adapter', async () => {
+  it('shows what a SCIM target may do and warns about a partially certified adapter', async () => {
     const cookie = await manager();
     const scim = await createTarget(cookie, { name: 'SCIM', type: 'scim2', config: { baseUrl: 'https://scim.acme.test/v2' } });
     const scimReport = (await send('GET', `/api/admin/targets/${scim}/adapter`, cookie)).json();
     const grant = scimReport.capabilities.find((c: { capability: string }) => c.capability === 'grant_entitlement');
-    expect(grant).toMatchObject({ certified: true });
-    expect(grant.refusal).toMatch(/does not advertise the ability to grant entitlements/);
+    // Certified and advertised: SCIM group membership is a supported write.
+    expect(grant).toMatchObject({ certified: true, refusal: null });
     const container = scimReport.capabilities.find((c: { capability: string }) => c.capability === 'create_container');
     expect(container).toMatchObject({ certified: false });
 
