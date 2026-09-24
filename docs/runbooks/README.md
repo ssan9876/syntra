@@ -17,6 +17,7 @@ procedure needs, the runbook says so rather than inventing one.
 | [Secret rotation](secret-rotation.md) | Rotating `SESSION_SECRET`, `METRICS_TOKEN`, target credentials (including an Entra client secret), SMTP, API tokens, webhook signing secrets; rotating the master key and moving it to Vault Transit or AWS KMS with `pnpm rekey` |
 | [Incident response](incident-response.md) | Anything is wrong and it is not yet clear what; severity, first 15 minutes, evidence, communication |
 | [Target rollback](target-rollback.md) | A provisioning target must be stopped, a run must be reviewed or refused, or a bad mover has to be put back |
+| [Queue recovery](queue-recovery.md) | Background work is orphaned, stuck, delayed, duplicated or failing repeatedly; after a node drain or crash; reading the Operations page and applying its repairs |
 | [Tabletop exercises](tabletop-exercises.md) | Rehearsing four incidents on paper: expired Entra secret, Graph outage, an over-broad mover rule, an urgent leaver during an outage |
 
 ## On-call quick reference
@@ -38,6 +39,7 @@ the runbook each one wants:
 | `SyntraReadinessEvidenceStale` | `syntra_target_readiness_age_seconds > 7d` | warning | [Secret rotation](secret-rotation.md): test the connection from the target page |
 | `SyntraSchedulerDown` | `syntra_scheduler_running == 0` for 10m | critical | [Incident response](incident-response.md) |
 | `SyntraUndeliveredLogout` | `syntra_logout_deliveries_abandoned > 0` for 5m | critical | [Incident response](incident-response.md#an-abandoned-delivery): a relying party was never told an account ended |
+| `SyntraJobsOrphaned` / `SyntraJobsStuck` / `SyntraJobsPoisoned` / `SyntraJobsDelayed` / `SyntraJobsDuplicated` / `SyntraJobHealthBlind` | `syntra_job_health_findings{finding=…}`, `syntra_job_queue_readable` | warning | [Queue recovery](queue-recovery.md); each tenant's **Operations** page names the work and offers the safe repair |
 
 The rule file's `runbook` annotations still point at `docs/operate.md`. The
 file is outside `docs/` and was not changed by this set; update the

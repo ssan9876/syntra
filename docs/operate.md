@@ -350,6 +350,8 @@ Process and runtime metrics — heap, CPU, event-loop lag — plus:
 | `syntra_signing_key_expires_in_seconds` | The nearest signing key's expiry |
 | `syntra_audit_events_total{action,outcome}` | Security events, by kind |
 | `syntra_readiness` | The same probe `/health/ready` runs |
+| `syntra_job_health_findings{kind,finding}` | Background work that is orphaned, stuck, duplicated, delayed, poisoned or deferred by saturation — see [Queue recovery](#queue-recovery) |
+| `syntra_job_queue_readable` | 0 when the job queue cannot be read, so orphaned work cannot be detected |
 
 **Four are worth alerting on before the rest.**
 `syntra_logout_deliveries_abandoned` and `syntra_webhook_deliveries_abandoned`
@@ -753,6 +755,82 @@ Two operational notes:
   `cancelled` rather than `failed` or `partially_applied`, after resolving any
   `in_flight` actions against the target.
 
+## Queue recovery
+
+Background work has a row (a sync run, an HR import run, a provisioning run, a
+person's target operation, an export, a lifecycle operation) and a pg-boss job
+that moves it. **Operations → Background work** in the console, and
+`GET /api/admin/job-health` (`audit.read`), compare the two, and the clock,
+for the tenant signed in:
+
+| Finding | When |
+| --- | --- |
+| `orphaned` | A queued or running row with no live job for 10 minutes; a provisioning apply whose heartbeat (restamped every minute) is 15 minutes old |
+| `stuck` | No progress for 6 hours (the provisioning adoption threshold) |
+| `delayed` | A live job waiting more than 15 minutes for a worker |
+| `duplicated` | Two or more live jobs for the same work |
+| `poisoned` | The same payload failed 3 or more times in 24 hours; the finding carries the failure's class, never its message |
+| `saturation_deferred` | A target operation waiting under the tenant's concurrency cap |
+
+Each finding lists the repairs that are safe for it, and
+`POST /api/admin/job-health/repair` (`tenant.manage`,
+`{ kind, subjectId, action, reason }`) applies one:
+
+- **`requeue`** — enqueue the job a queued run, export or target operation is
+  missing. Workers claim rows conditionally, so a requeue racing a late job
+  does nothing twice.
+- **`mark_failed`** — end a row no worker is running, with the reason; a
+  waiting cancellation is honoured instead. The same semantics as the
+  subsystem's own abandoned-run path.
+- **`release_lease`** — close a provisioning apply whose heartbeat stopped as
+  `partially_applied`. Its `in_flight` actions are left for
+  `resolveInFlightActions`, which the next preview runs against the target
+  before planning. **No repair re-runs a connector write.**
+
+Every repair re-derives the finding when it runs and writes through a
+conditional update keyed on what it saw (for a release, on the heartbeat
+value), so a second press answers `outcome: "noop"`. Every attempt is an audit
+event (`job_health.requeue`, `job_health.mark_failed`,
+`job_health.release_lease`) with the reason and the before and after status.
+Lifecycle operations are reported but never repaired here: their retry is
+verification-gated on the operation's own page. Directory sync and HR applies
+carry no heartbeat and are resumed by applying again or cancelled.
+
+pg-boss's table is not under row-level security, so every read of it is
+filtered on the job payload's `tenantId`; a tenant never sees another tenant's
+jobs. When the table cannot be read, nothing is reported orphaned. The alert
+rules are `SyntraJobsOrphaned`, `SyntraJobsStuck`, `SyntraJobsPoisoned`,
+`SyntraJobsDelayed`, `SyntraJobsDuplicated` and `SyntraJobHealthBlind`; the
+procedure is the [queue recovery runbook](runbooks/queue-recovery.md).
+
+## Status reporting
+
+Two status views, split by audience:
+
+- **Tenant status** — `GET /api/admin/status` (`audit.read`) and
+  **Operations → Service status** in the console. The shared components (API,
+  database, background work, key provider, outbound mail) as `operational`,
+  `degraded`, `unavailable` or `unknown`, each with one sentence and never a
+  cause, host or count; then the tenant's own degradation: its tenant-wide and
+  per-target write stops, targets whose readiness evidence is missing,
+  failing, older than a week or taken under a different configuration,
+  connectors whose last readiness check or last run failed in the last day
+  (with the error class), and its background-work finding counts. Nothing in
+  it can move with another tenant's activity — the queue is reported as
+  working or not, never its depth.
+- **Deployment status** — `GET /api/admin/deployment/status`
+  (`deployment.manage`). The release, the readiness probes (causes redacted,
+  as on `/health/ready`), migration state, queue depth, schedules the
+  scheduler asked for that pg-boss does not hold, installation-wide finding
+  counts, and how many tenants have an active write stop or stuck work.
+  Counts only: no tenant is named, because in a shared deployment the holder
+  of `deployment.manage` may be one customer's administrator.
+
+Component checks are cached for 15 seconds per process, so an open status page
+cannot load the KMS or the mail server. Mail is checked with an SMTP `verify`
+(connect and authenticate; nothing is sent); a transport that cannot be
+checked reports `unknown`.
+
 ## Exports
 
 Bulk copies of tenant data leave through one service. An export is requested,
@@ -766,6 +844,7 @@ audit search, **Export as CSV** on a Governance access report.
 | --- | --- | --- | --- |
 | `audit_log` | The audit log, filtered exactly as the search is. | `audit.read` | JSON Lines |
 | `govern_access` | "Who has access to this system", limited to the requester's Govern org-unit scope. | `govern.read` (any scope) and `govern.export` | CSV |
+| `support_bundle` | A redacted operational support bundle for one tenant, covering at most seven days. See below. | `tenant.manage` | JSON Lines |
 
 The API is `POST /api/admin/exports` (`{ kind, params, ttlHours }`, answering
 `202` with the export row), `GET /api/admin/exports` (your own;
@@ -810,6 +889,41 @@ What each step checks:
 - **Revocation.** The requester, or anybody holding `tenant.manage`, can revoke
   a queued, running or ready export. The ciphertext is erased in the same
   transaction and a revoked job never stores what it built (`export.revoke`).
+
+### Support bundles
+
+A support bundle is what a support engineer needs to diagnose a tenant, and
+nothing they should not hold. Request it from **Operations → Support bundle**
+or `POST /api/admin/exports` with
+`{ "kind": "support_bundle", "params": { "from": "…", "to": "…" } }`; both
+bounds are optional (`to` defaults to now, `from` to a day earlier) and the
+window may not exceed **seven days** — the contract refuses a longer one with
+`400`, the service refuses it again, and the window is fixed as explicit
+instants when the request is recorded. It is generated, sealed, watermarked,
+downloaded, expired and audited exactly like any other export.
+
+The file is a watermark record, one record per section, and an end record:
+`software` (version, commit, Node, migration state), `tenant` (status, a
+settings fingerprint, four sign-in policy numbers, record counts),
+`configuration` (per target and source: type, enabled, schedule present,
+adapter channel and a SHA-256 **fingerprint** of the configuration),
+`write_stops` (active, when, and whether a reason was given — not the reason),
+`connector_readiness` (latest check per system: status, time, latency,
+capabilities, whether it matches the current configuration, and an error
+class), `job_health`, `recent_failures` (failed, partial and cancelled runs,
+receipts, exports and lifecycle operations in the window, by id, status, time
+and **error class**), and `audit_counts` (events by action and outcome in the
+window).
+
+It is built by allow-list: identifiers, fingerprints, versions, statuses,
+timestamps, counts and error classes. It never contains credentials, vault
+material, configuration values, target, source, application or person names,
+personal data, audit payloads or error messages — an error message can carry a
+DN, an email address or a credential in a URL, so it is reduced to a class
+from a closed vocabulary (`timeout`, `unauthorized`, `network`, …). Every
+section then passes through the shared log redaction rules as a second layer.
+A test seeds secrets and personal data into every table the bundle reads and
+asserts none survive.
 
 The `DataExport` row outlives its file — with the digest, row count, size,
 download count and who revoked it — as the record of who took what. A database
@@ -1078,6 +1192,8 @@ against the scripts and routes in this repository, live under
   and partial runs, reverting a mover, and what cannot be undone.
 - [Tabletop exercises](runbooks/tabletop-exercises.md) — four rehearsed
   incidents with scorecards.
+- [Queue recovery](runbooks/queue-recovery.md) — orphaned, stuck, delayed,
+  duplicated and poisoned background work, and the Operations page's repairs.
 
 ## Further reading
 
