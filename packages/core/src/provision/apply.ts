@@ -27,6 +27,12 @@ import { targetWithCredential } from './target-service.js';
 import { ExternalWritesPausedError, externalWriteStopActive } from './target-write-stop.js';
 import { MaintenanceWindowClosedError, maintenanceWindowOpen, urgentLeaverOverrideAllowed } from './target-maintenance.js';
 import { applySyntraUserAction } from './syntra-user.js';
+import {
+  cancellationRequested,
+  finishWithCancellationCheck,
+  noActiveRequest,
+} from '../jobs/cancellation.js';
+import { cancellableRuns, honourProvisionCancellation } from './run-cancellation.js';
 
 /**
  * The longest one backoff may be.
@@ -544,8 +550,12 @@ export async function applyProvisionRun(
     // nobody else's holdings. See `grantedEntitlementsFor`.
     const grantedEntitlements = await grantedEntitlementsFor(tx, run.targetSystemId);
 
-    await tx.provisionRun.update({
-      where: { id: runId },
+    // Conditional on the status just checked and on no cancellation waiting.
+    // An unconditional write here raced a cancel: the cancel committed
+    // `cancelled` between the read above and this line, and the apply then
+    // overwrote it and wrote to the target anyway.
+    const { count: entered } = await tx.provisionRun.updateMany({
+      where: { id: runId, status: run.status, ...noActiveRequest() },
       data: {
         status: 'applying',
         // The phase transition, stamped. `startedAt` belongs to the preview
@@ -562,6 +572,10 @@ export async function applyProvisionRun(
         ...(confirmed ? { confirmedByUserId: options.confirmedByUserId } : {}),
       },
     });
+    if (entered === 0) {
+      const now = await tx.provisionRun.findUniqueOrThrow({ where: { id: runId } });
+      throw new ProvisionRunNotAppliableError(runId, now.status);
+    }
     return { run, target, config, profile, remit, grantedEntitlements };
   });
 
@@ -598,8 +612,22 @@ export async function applyProvisionRun(
   let inFlight = 0;
   const deferredIds: string[] = [];
   let heartbeatAt = Date.now();
+  let cancelled = false;
 
   for (const action of actions) {
+    // The cancellation checkpoint, BEFORE the action's first step. An action
+    // is three steps — `in_flight` marker, connector call, outcome — and the
+    // only safe place to stop is outside all three: stopping between the
+    // marker and the answer is precisely the unknown-outcome gap the marker
+    // exists to make visible, and nobody should create one on purpose. One
+    // small read per action, beside a connector round trip per action.
+    if (
+      await withTenant(tenantId, (tx) => cancellationRequested(cancellableRuns(tx), runId))
+    ) {
+      cancelled = true;
+      break;
+    }
+
     if (action.requiresConfirmation && !confirmed) {
       // A rename, a re-enable outside the window, or a re-create of a vanished
       // account. Never auto-applied, and never unlocked by a caller that
@@ -678,16 +706,32 @@ export async function applyProvisionRun(
     });
     // A run reaches `applied` only when every action it proposed reached a
     // terminal state and none failed.
-    const status = remaining === 0 && anyFailed === 0 ? 'applied' : 'partially_applied';
+    let status = remaining === 0 && anyFailed === 0 ? 'applied' : 'partially_applied';
     const skipped = await tx.provisionAction.count({
       where: { runId, status: 'proposed' },
     });
     const deferred = deferredIds.length;
 
-    await tx.provisionRun.update({
-      where: { id: runId },
-      data: { status, finishedAt: new Date() },
-    });
+    if (cancelled) {
+      // Stopped between actions. Every action this apply finished is recorded
+      // with its real outcome, and every one it did not reach is abandoned
+      // with the reason — a partial apply that is honest, and reviewable
+      // action by action on the run's own page.
+      await honourProvisionCancellation(tx, runId, 'apply', {
+        applied,
+        failed,
+        pendingRetry,
+        inFlight,
+      });
+      status = 'cancelled';
+    } else {
+      // A request that arrived after the last checkpoint is recorded as moot
+      // in the same write: the run finished before it could be honoured.
+      await finishWithCancellationCheck(cancellableRuns(tx), runId, {
+        status,
+        finishedAt: new Date(),
+      });
+    }
     // `applied > 0`, and NOT `status === 'applied'` as well.
     //
     // A run that applied nothing reaches `applied` — no action remained and

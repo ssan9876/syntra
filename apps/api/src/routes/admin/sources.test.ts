@@ -701,6 +701,72 @@ describe('runs', () => {
   });
 });
 
+describe('cancelling a run', () => {
+  async function seeded(cookie: string) {
+    const created = await post('/api/admin/sources', cookie, {
+      name: 'Head office',
+      config,
+      bindPassword: 'adminpassword',
+    });
+    return created.json().id as string;
+  }
+
+  it('cancels a queued run at once and audits who asked', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const id = await seeded(cookie);
+    const queued = await post(`/api/admin/sources/${id}/run`, cookie);
+    const runId = queued.json().id as string;
+
+    const res = await post(`/api/admin/sync-runs/${runId}/cancel`, cookie);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      outcome: 'cancelled',
+      previousStatus: 'queued',
+      run: { id: runId, status: 'cancelled', cancelState: 'cancelled' },
+    });
+    // The job the worker eventually picks up finds nothing to do.
+    const run = await previewRun(ctx.tenantId, testProvider, id, runId);
+    expect(run.status).toBe('cancelled');
+
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'sync.run.cancel' } }),
+    );
+    expect(event.targetId).toBe(runId);
+    expect(event.payload).toMatchObject({ outcome: 'cancelled', previousStatus: 'queued' });
+    const detail = await get(`/api/admin/sync-runs/${runId}`, cookie);
+    expect(detail.json().cancelState).toBe('cancelled');
+  });
+
+  it('answers 409 for a run that has already finished, and 409 to applying a cancelled one', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const id = await seeded(cookie);
+    const run = await runNow(id, cookie);
+    const cancelled = await post(`/api/admin/sync-runs/${run.id}/cancel`, cookie);
+    expect(cancelled.json().outcome).toBe('cancelled');
+
+    const again = await post(`/api/admin/sync-runs/${run.id}/cancel`, cookie);
+    expect(again.statusCode).toBe(409);
+    expect(again.json().type).toContain('run-not-cancellable');
+
+    const apply = await post(`/api/admin/sync-runs/${run.id}/apply`, cookie);
+    expect(apply.statusCode).toBe(409);
+    expect(apply.json().type).toContain('run-not-appliable');
+  });
+
+  it('answers 404 for a run that does not exist', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const res = await post('/api/admin/sync-runs/00000000-0000-0000-0000-000000000000/cancel', cookie);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses a caller who may only read runs', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_READ]);
+    const res = await post('/api/admin/sync-runs/00000000-0000-0000-0000-000000000000/cancel', cookie);
+    expect(res.statusCode).toBe(403);
+  });
+});
+
 describe('skipping a change', () => {
   async function seededRun(cookie: string) {
     const created = await post('/api/admin/sources', cookie, {

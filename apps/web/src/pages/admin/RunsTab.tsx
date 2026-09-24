@@ -29,6 +29,10 @@ const TONE: Record<string, Tone> = {
   applied: 'active',
   partially_applied: 'warning',
   failed: 'danger',
+  // Applying is work in progress, like running. Cancelled is a deliberate
+  // outcome, not a fault: neutral, so red keeps meaning "look at this".
+  applying: 'neutral',
+  cancelled: 'neutral',
 };
 
 const LABEL: Record<string, string> = {
@@ -39,6 +43,8 @@ const LABEL: Record<string, string> = {
   applied: 'Applied',
   partially_applied: 'Partially applied',
   failed: 'Failed',
+  applying: 'Applying',
+  cancelled: 'Cancelled',
 };
 
 const when = (iso: string) => new Date(iso).toLocaleString();

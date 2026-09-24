@@ -379,6 +379,55 @@ describe('applying a run', () => {
   });
 });
 
+describe('cancelling an import run', () => {
+  it('discards a previewed run, audits it, and refuses to apply it afterwards', async () => {
+    const cookie = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    const source = (await createSource(cookie)).json();
+    await put(`/api/admin/person-sources/${source.id}/mappings`, cookie, {
+      mappings: [correlation, startDateRule],
+    });
+    connectorFor.mockReturnValue(new FakePersonSource([row('1')]));
+    const run = await previewImportRun(ctx.tenantId, testProvider, source.id);
+
+    const response = await post(`/api/admin/person-import-runs/${run.id}/cancel`, cookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      outcome: 'cancelled',
+      previousStatus: 'previewed',
+      run: { id: run.id, status: 'cancelled', cancelState: 'cancelled' },
+    });
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'person_import.run.cancel' } }),
+    );
+    expect(event.targetId).toBe(run.id);
+
+    const apply = await post(`/api/admin/person-import-runs/${run.id}/apply`, cookie);
+    expect(apply.statusCode).toBe(409);
+    expect(apply.json().type).toMatch(/run-not-appliable/);
+    expect(await withTenant(ctx.tenantId, (tx) => tx.person.count())).toBe(0);
+
+    const again = await post(`/api/admin/person-import-runs/${run.id}/cancel`, cookie);
+    expect(again.statusCode).toBe(409);
+    expect(again.json().type).toMatch(/run-not-cancellable/);
+  });
+
+  it('answers 404 for a run that does not exist', async () => {
+    const MISSING = '00000000-0000-0000-0000-000000000000';
+    const manager = await adminCookie([PERMISSIONS.SYNC_MANAGE, PERMISSIONS.SYNC_READ]);
+    expect((await post(`/api/admin/person-import-runs/${MISSING}/cancel`, manager)).statusCode).toBe(404);
+  });
+
+  it('refuses a caller without sync.manage', async () => {
+    const reader = await adminCookie([PERMISSIONS.SYNC_READ]);
+    const response = await post(
+      '/api/admin/person-import-runs/00000000-0000-0000-0000-000000000000/cancel',
+      reader,
+    );
+    expect(response.statusCode).toBe(403);
+  });
+});
+
 describe('skipping a change', () => {
   /**
    * A skip is "not now", not "never": the change is marked skipped so this

@@ -187,8 +187,31 @@ export const syncRunSummary = z.object({
   requiresConfirmation: z.boolean(),
   blockedReason: z.string().nullable(),
   error: z.string().nullable(),
+  /**
+   * Cooperative cancellation: null, `requested` (waiting for the run's next
+   * checkpoint), `cancelled` (honoured; the status is `cancelled` too) or
+   * `moot` (the run finished before any checkpoint saw it).
+   */
+  cancelState: z.enum(['requested', 'cancelled', 'moot']).nullable(),
+  cancelRequestedAt: z.string().nullable(),
+  cancelResolvedAt: z.string().nullable(),
 });
 export type SyncRunSummary = z.infer<typeof syncRunSummary>;
+
+/**
+ * Asking a sync, HR import or provisioning run to stop. Deliberately empty and
+ * strict: the decision is the request itself, and the audit event records who
+ * made it. A body carrying anything else is a client that thinks this endpoint
+ * does more than it does.
+ */
+export const cancelRunRequest = z.object({}).strict();
+
+/** What a cancel request did, and the run as it now stands. */
+export interface CancelRunResponse<Run = unknown> {
+  outcome: 'cancelled' | 'requested' | 'already_requested';
+  previousStatus: string;
+  run: Run;
+}
 
 /**
  * A connection test for a configuration that may never have been saved.

@@ -5,6 +5,17 @@ import type { SyncRunSummary } from '@syntra/contracts';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
+import {
+  CancelRunButton,
+  CancellationStatus,
+  cancelPending,
+  isCancellable,
+} from './RunCancellation.js';
+
+/** Statuses with something left to cancel, as the server's policy has them. */
+const CANCELLABLE = ['queued', 'running', 'applying', 'previewed', 'blocked', 'partially_applied'];
+/** Statuses in which a worker is active, so a cancel waits for a checkpoint. */
+const WORKING = ['running', 'applying'];
 
 interface Change {
   id: string;
@@ -69,17 +80,29 @@ export function SyncRunDetailPage() {
    * they think to reload — which reads exactly like a run that never started.
    */
   const inFlight = data !== null && (data.status === 'queued' || data.status === 'running');
+
+  const [applying, setApplying] = useState(false);
+  /**
+   * Also followed while an apply is under way — this page's own, whose POST
+   * is still open, or another administrator's — and while a cancellation
+   * waits for its checkpoint. Following the apply is what lets the page show
+   * `applying` and offer Cancel at all: without it the status only changes
+   * when the POST returns, by which time there is nothing left to stop.
+   */
+  const following =
+    inFlight ||
+    applying ||
+    (data !== null && (data.status === 'applying' || cancelPending(data)));
   useEffect(() => {
-    if (!inFlight) return;
+    if (!following) return;
     // Two seconds, and only while in flight. A directory read takes as long as
     // it takes; polling it faster does not make it finish sooner, and polling
     // a settled run forever is a request per viewer per interval for a row
     // that will never change again.
     const timer = setInterval(reload, 2000);
     return () => clearInterval(timer);
-  }, [inFlight, reload]);
+  }, [following, reload]);
 
-  const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   // Deliberately not persisted and not defaulted from anything: the tick is
   // the administrator's, for this run, in this sitting.
@@ -195,6 +218,15 @@ export function SyncRunDetailPage() {
                 {included.length} of {proposed.length} changes selected
               </span>
             )}
+            {isCancellable(data, CANCELLABLE) && (
+              <CancelRunButton
+                path={`/api/admin/sync-runs/${data.id}/cancel`}
+                run={data}
+                working={WORKING}
+                noun="sync run"
+                onChanged={reload}
+              />
+            )}
             <Button
               variant="primary"
               onClick={() => onApply(confirmable, partial ? included : null)}
@@ -221,6 +253,12 @@ export function SyncRunDetailPage() {
       />
 
       <div className="space-y-6">
+        <CancellationStatus run={data} noun="sync run" />
+        {data.status === 'applying' && !cancelPending(data) && (
+          <Alert tone="info" title="Applying changes">
+            Changes are being written one at a time. This page follows it.
+          </Alert>
+        )}
         {inFlight && (
           // Named as a state of the DIRECTORY READ, not of the page. "Queued"
           // and "reading" are different facts — the first says the job has not

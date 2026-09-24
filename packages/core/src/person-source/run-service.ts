@@ -9,6 +9,34 @@ import { diffPersons, type ExistingSourcePerson, type PersonChangeType } from '.
 import { evaluatePersonGuard } from './guard.js';
 import { personMappingsFor, personSourceWithCredential } from './source-service.js';
 import { normalizeIdentityReference } from './reference-data.js';
+import {
+  READ_CHECKPOINT_EVERY,
+  RunCancelledSignal,
+  RunNotAppliableError,
+  cancellationRequested,
+  finishWithCancellationCheck,
+  honouredCancellation,
+  noActiveRequest,
+  requestCancellation,
+  type CancelResult,
+  type CancellableRunDelegate,
+} from '../jobs/cancellation.js';
+
+/** `PersonImportRun` narrowed to the shape `jobs/cancellation.ts` works on. */
+const runs = (tx: TenantClient) => tx.personImportRun as unknown as CancellableRunDelegate;
+
+/**
+ * Statuses a cancel honours on the spot, because nothing is working on the
+ * run: queued, or waiting for a person to apply it (or to finish reviewing
+ * its possible duplicates, which is what most `blocked` imports are).
+ */
+const CANCEL_IMMEDIATELY = ['queued', 'previewed', 'blocked', 'partially_applied'] as const;
+/** Statuses with a worker whose checkpoints will see a request. */
+const CANCEL_COOPERATIVELY = ['running', 'applying'] as const;
+/** Statuses an apply refuses outright. */
+const NOT_APPLIABLE = ['queued', 'running', 'cancelled', 'failed'] as const;
+/** Written on every change a cancellation left unapplied. */
+const CANCELLED_CHANGE_MESSAGE = 'not applied: the run was cancelled';
 
 /**
  * The order changes are applied in.
@@ -96,13 +124,28 @@ export async function previewImportRun(
       // `queued` becomes `running` HERE, not when the job was accepted: the
       // status is about what is happening to the source, and between the two a
       // job can sit in the queue for as long as the queue is busy.
-      return tx.personImportRun.update({
-        where: { id: existingRunId },
+      //
+      // Conditional: a run cancelled while it sat in the queue stays
+      // cancelled when its job finally arrives.
+      await tx.personImportRun.updateMany({
+        where: { id: existingRunId, status: { not: 'cancelled' } },
         data: { status: 'running', startedAt: new Date() },
       });
+      return tx.personImportRun.findUniqueOrThrow({ where: { id: existingRunId } });
     }
     return tx.personImportRun.create({ data: { tenantId: boundTenant, sourceId } });
   });
+  if (run.status === 'cancelled') return run;
+
+  /**
+   * A checkpoint: stop here if somebody asked. Throws to the catch below,
+   * which records `cancelled` — always before phase 6, so a cancelled import
+   * proposes nothing and departs nobody.
+   */
+  const checkpoint = async () => {
+    const asked = await withTenant(tenantId, (tx) => cancellationRequested(runs(tx), run.id));
+    if (asked) throw new RunCancelledSignal(run.id);
+  };
 
   try {
     // Phase 2: read the configuration out, then close the transaction. Plain
@@ -130,9 +173,14 @@ export async function previewImportRun(
     // the run proposes nothing at all.
     const records: PersonSnapshotRecord[] = [];
     const connector = personSourceConnectorFor(prepared.type);
+    //
+    // Checkpointed every READ_CHECKPOINT_EVERY records. Leaving the loop by a
+    // throw returns the connector's iterator, which closes the SFTP session.
     for await (const record of connector.read(prepared.config as never)) {
       records.push(record);
+      if (records.length % READ_CHECKPOINT_EVERY === 0) await checkpoint();
     }
+    await checkpoint();
 
     // Phase 4: map. Failures are counted and excluded -- never absent.
     let mapped: MappedPerson[] = [];
@@ -363,6 +411,16 @@ export async function previewImportRun(
     // no changes at all.
     return await withTenant(tenantId, async (tx) => {
       const boundTenant = await currentTenant(tx);
+      // The last checkpoint, and the one that closes the race: a conditional
+      // write to the run row before anything else. A request committed before
+      // it makes it match nothing and the throw writes no change at all; a
+      // request arriving after it waits on this row lock, then finds a
+      // `previewed` or `blocked` run and cancels that outright instead.
+      const claimed = await tx.personImportRun.updateMany({
+        where: { id: run.id, ...noActiveRequest() },
+        data: { finishedAt: new Date() },
+      });
+      if (claimed.count === 0) throw new RunCancelledSignal(run.id);
       const duplicateCandidatesByEmail = new Map<string, typeof snapshot.duplicateCandidates>();
       for (const candidate of snapshot.duplicateCandidates) {
         const key = candidate.businessEmail?.trim().toLocaleLowerCase();
@@ -434,13 +492,106 @@ export async function previewImportRun(
      * `running` for ever with an empty error column is indistinguishable from
      * one still working.
      */
-    return withTenant(tenantId, (tx) =>
-      tx.personImportRun.update({
-        where: { id: run.id },
-        data: { status: 'failed', finishedAt: new Date(), error: storableCause(cause) },
-      }),
-    );
+    if (cause instanceof RunCancelledSignal) {
+      return withTenant(tenantId, async (tx) => {
+        await honourImportCancellation(tx, run.id, 'preview');
+        return tx.personImportRun.findUniqueOrThrow({ where: { id: run.id } });
+      });
+    }
+    // A pending request that no checkpoint reached is resolved as moot: the
+    // run ended on its own.
+    return withTenant(tenantId, async (tx) => {
+      await finishWithCancellationCheck(runs(tx), run.id, {
+        status: 'failed',
+        finishedAt: new Date(),
+        error: storableCause(cause),
+      });
+      return tx.personImportRun.findUniqueOrThrow({ where: { id: run.id } });
+    });
   }
+}
+
+/**
+ * Resolves a pending request as honoured, says so on every change it left
+ * unapplied, and closes any duplicate review still open on the run — a run
+ * that will never apply has nothing left for a reviewer to decide.
+ *
+ * The audit event names the person who asked as the actor, for the reason
+ * `sync/run-service.ts` gives.
+ */
+async function honourImportCancellation(
+  tx: TenantClient,
+  runId: string,
+  phase: 'preview' | 'apply',
+  counts: Record<string, number> = {},
+): Promise<void> {
+  const { count } = await tx.personImportRun.updateMany({
+    where: { id: runId, cancelState: 'requested' },
+    data: honouredCancellation(),
+  });
+  if (count === 0) return;
+  await abandonUnapplied(tx, runId, null);
+  const run = await tx.personImportRun.findUniqueOrThrow({ where: { id: runId } });
+  await recordEvent(tx, {
+    actorUserId: run.cancelRequestedByUserId,
+    action: 'person_import.run.cancelled',
+    targetType: 'PersonImportRun',
+    targetId: runId,
+    outcome: 'success',
+    sourceIp: null,
+    payload: { phase, ...counts },
+  });
+}
+
+/** What a cancelled run leaves behind: skipped changes and closed reviews. */
+async function abandonUnapplied(
+  tx: TenantClient,
+  runId: string,
+  reviewerUserId: string | null,
+): Promise<void> {
+  await tx.personImportChange.updateMany({
+    where: { runId, status: { in: ['proposed', 'needs_review'] } },
+    data: { status: 'skipped', message: CANCELLED_CHANGE_MESSAGE },
+  });
+  await tx.personDuplicateReview.updateMany({
+    where: { runId, status: 'open' },
+    data: {
+      status: 'resolved',
+      resolution: 'run_cancelled',
+      note: 'The import run was cancelled before this review was decided.',
+      reviewedByUserId: reviewerUserId,
+      reviewedAt: new Date(),
+    },
+  });
+}
+
+/**
+ * Asks an HR import run to stop. Honoured at once for a run nothing is working
+ * on; recorded for the next checkpoint of one that is reading or applying.
+ *
+ * Takes the caller's transaction so the request and its audit event commit
+ * together.
+ */
+export async function requestCancelImportRun(
+  tx: TenantClient,
+  runId: string,
+  actor: { userId: string; sourceIp: string | null },
+): Promise<CancelResult> {
+  const result = await requestCancellation(runs(tx), runId, actor.userId, {
+    immediate: CANCEL_IMMEDIATELY,
+    cooperative: CANCEL_COOPERATIVELY,
+  });
+  if (result.outcome === 'cancelled') await abandonUnapplied(tx, runId, actor.userId);
+  await recordEvent(tx, {
+    actorUserId: actor.userId,
+    action: 'person_import.run.cancel',
+    targetType: 'PersonImportRun',
+    targetId: runId,
+    outcome: 'success',
+    sourceIp: actor.sourceIp,
+    payload: { outcome: result.outcome, previousStatus: result.previousStatus },
+  });
+  return result;
 }
 
 type ChangeRow = {
@@ -599,6 +750,31 @@ export async function applyImportRun(
       `run is blocked and cannot be applied: ${run.blockedReason ?? 'unknown reason'}`,
     );
   }
+  if ((NOT_APPLIABLE as readonly string[]).includes(run.status)) {
+    throw new RunNotAppliableError(runId, run.status);
+  }
+
+  // Into `applying`, conditionally, so the console can show an apply under
+  // way and offer to stop it. A marker, not a lock — see the same step in
+  // `sync/run-service.ts`: a run a dead process left `applying` is resumed by
+  // applying it again, and a request already waiting is honoured here, before
+  // the first change.
+  const started = await withTenant(tenantId, async (tx) => {
+    if (run.cancelState === 'requested') return false;
+    const { count } = await tx.personImportRun.updateMany({
+      where: { id: runId, status: run.status, ...noActiveRequest() },
+      data: { status: 'applying' },
+    });
+    return count === 1;
+  });
+  if (!started) {
+    await withTenant(tenantId, async (tx) => {
+      await honourImportCancellation(tx, runId, 'apply', { applied: 0 });
+      const now = await tx.personImportRun.findUniqueOrThrow({ where: { id: runId } });
+      if (now.status !== 'cancelled') throw new RunNotAppliableError(runId, now.status);
+    });
+    return { applied: 0, failed: 0, cancelled: true };
+  }
 
   const changes = await withTenant(tenantId, (tx) =>
     tx.personImportChange.findMany({
@@ -618,10 +794,15 @@ export async function applyImportRun(
 
   let applied = 0;
   let failed = 0;
+  let cancelled = false;
 
   for (const change of ordered) {
     try {
-      await withTenant(tenantId, async (tx) => {
+      // The checkpoint shares the change's own transaction, so it sits
+      // between changes by construction: a change commits whole — the person
+      // row, its status and its audit event — or not at all.
+      const outcome = await withTenant(tenantId, async (tx) => {
+        if (await cancellationRequested(runs(tx), runId)) return 'cancel' as const;
         await applyOne(tx, run.sourceId, change);
         await tx.personImportChange.update({
           where: { id: change.id },
@@ -636,7 +817,12 @@ export async function applyImportRun(
           sourceIp: null,
           payload: { runId, externalId: change.externalId },
         });
+        return 'applied' as const;
       });
+      if (outcome === 'cancel') {
+        cancelled = true;
+        break;
+      }
       applied += 1;
     } catch (cause) {
       failed += 1;
@@ -657,9 +843,19 @@ export async function applyImportRun(
   );
 
   await withTenant(tenantId, async (tx) => {
-    await tx.personImportRun.update({
-      where: { id: runId },
-      data: {
+    if (cancelled) {
+      // Stopped between changes: what applied stays applied and audited,
+      // what was not reached is skipped with the reason. The confirmation, if
+      // any, is still recorded — it authorised the part that did apply.
+      if (opts.confirmedBy !== undefined) {
+        await tx.personImportRun.update({
+          where: { id: runId },
+          data: { confirmedBy: opts.confirmedBy },
+        });
+      }
+      await honourImportCancellation(tx, runId, 'apply', { applied, failed, notAttempted: remaining });
+    } else {
+      await finishWithCancellationCheck(runs(tx), runId, {
         // `partially_applied` where anything is left or anything failed, as
         // `sync/run-service.ts` does. A run whose every change failed
         // reporting itself as `applied` is a run that lies about the
@@ -668,8 +864,8 @@ export async function applyImportRun(
         status: remaining > 0 || failed > 0 ? 'partially_applied' : 'applied',
         finishedAt: new Date(),
         ...(opts.confirmedBy === undefined ? {} : { confirmedBy: opts.confirmedBy }),
-      },
-    });
+      });
+    }
     await tx.personSource.update({
       where: { id: run.sourceId },
       data: { lastRunAt: new Date() },
@@ -683,11 +879,11 @@ export async function applyImportRun(
       sourceIp: null,
       // The confirmation is recorded where somebody can find it later. An
       // override nobody can find is not a control.
-      payload: { applied, failed, confirmed: opts.confirm === true },
+      payload: { applied, failed, confirmed: opts.confirm === true, cancelled },
     });
   });
 
-  return { applied, failed };
+  return { applied, failed, cancelled };
 }
 
 /** A skip is "not now", not "never": the next run proposes it again. */

@@ -3,6 +3,18 @@ import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Check, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
+import {
+  CancelRunButton,
+  CancellationStatus,
+  cancelPending,
+  isCancellable,
+  type CancelState,
+} from './RunCancellation.js';
+
+/** Statuses with something left to cancel, as the server's policy has them. */
+const CANCELLABLE = ['running', 'previewed', 'blocked', 'applying'];
+/** Statuses in which a worker is active, so a cancel waits for a checkpoint. */
+const WORKING = ['running', 'applying'];
 
 interface Person {
   id: string;
@@ -51,6 +63,9 @@ interface Run {
   requiresConfirmation: boolean;
   personsEvaluated: number;
   personsUnprocessable: number;
+  cancelState?: CancelState;
+  cancelRequestedAt?: string | null;
+  cancelResolvedAt?: string | null;
   actions: Action[];
   exceptions: Exception[];
 }
@@ -252,6 +267,25 @@ export function ProvisionRunDetailPage() {
   };
   useEffect(reload, [id, runId]);
 
+  /**
+   * Followed only while something is moving: a preview still reading, an
+   * apply under way (this page's own POST, or anyone's), or a cancellation
+   * waiting for its checkpoint. Never otherwise — `reload()` re-ticks every
+   * proposed action, and polling a plan somebody is reviewing would undo
+   * their selection every two seconds.
+   */
+  const following =
+    busy ||
+    (run !== null &&
+      (run.status === 'running' || run.status === 'applying' || cancelPending(run)));
+  useEffect(() => {
+    if (!following) return;
+    const timer = setInterval(reload, 2000);
+    return () => clearInterval(timer);
+    // `reload` is recreated each render and closes over the ids only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [following, id, runId]);
+
   async function apply() {
     setBusy(true);
     setProblem(null);
@@ -364,6 +398,17 @@ export function ProvisionRunDetailPage() {
     <>
       <PageHeader
         title="Run detail"
+        actions={
+          isCancellable(run, CANCELLABLE) ? (
+            <CancelRunButton
+              path={`/api/admin/targets/${id}/runs/${run.id}/cancel`}
+              run={run}
+              working={WORKING}
+              noun="provisioning run"
+              onChanged={reload}
+            />
+          ) : undefined
+        }
       />
 
       {/* Both were in the header's sentence, and both are figures. A run's
@@ -377,6 +422,7 @@ export function ProvisionRunDetailPage() {
       />
 
       <div className="space-y-6">
+        <CancellationStatus run={run} noun="provisioning run" />
         {outcome && (
           <Alert tone={applyTone(outcome)} title={applyTitle(outcome)}>
             {/* Every state, every time, including the zeros. A count that is

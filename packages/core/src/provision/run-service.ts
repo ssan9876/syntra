@@ -22,6 +22,15 @@ import { reconcile, unprocessableScope } from './reconcile.js';
 import { conditionSchema } from './condition.js';
 import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
 import { targetWithCredential } from './target-service.js';
+import {
+  READ_CHECKPOINT_EVERY,
+  RunCancelledSignal,
+  cancellationRequested,
+  finishWithCancellationCheck,
+  honouredCancellation,
+  noActiveRequest,
+} from '../jobs/cancellation.js';
+import { cancellableRuns, honourProvisionCancellation } from './run-cancellation.js';
 import type {
   ContractFacts,
   DesiredState,
@@ -122,6 +131,14 @@ async function adoptStaleRunsAndStart(
       select: { id: true, status: true },
     });
 
+    // A preview somebody had asked to stop, left behind by a dead process,
+    // is cancelled rather than failed: the request is what the run's history
+    // should answer to, and it was satisfied — the preview wrote no plan.
+    await tx.provisionRun.updateMany({
+      where: { targetSystemId, status: 'running', cancelState: 'requested' },
+      data: honouredCancellation(),
+    });
+
     await tx.provisionAction.updateMany({
       where: { status: 'proposed', run: { targetSystemId } },
       data: { status: 'superseded' },
@@ -151,16 +168,27 @@ async function adoptStaleRunsAndStart(
   // before anything new is planned.
   if (stale.length > 0) {
     await resolveInFlight(targetSystemId);
-    await withTenant(tenantId, (tx) =>
-      tx.provisionRun.updateMany({
-        where: { id: { in: stale.map((r) => r.id) } },
+    await withTenant(tenantId, async (tx) => {
+      // An interrupted apply that had been asked to stop HAS stopped, and
+      // nothing will resume it: the request is honoured, with the same
+      // explanation on the run. Its in-flight actions were resolved above, so
+      // what it applied is recorded either way.
+      await tx.provisionRun.updateMany({
+        where: { id: { in: stale.map((r) => r.id) }, cancelState: 'requested' },
+        data: {
+          ...honouredCancellation(),
+          error: 'this run was interrupted mid-apply and was adopted by a later run',
+        },
+      });
+      await tx.provisionRun.updateMany({
+        where: { id: { in: stale.map((r) => r.id) }, status: 'applying' },
         data: {
           status: 'partially_applied',
           error: 'this run was interrupted mid-apply and was adopted by a later run',
           finishedAt: new Date(),
         },
-      }),
-    );
+      });
+    });
   }
 
   try {
@@ -436,6 +464,19 @@ export async function previewProvisionRun(
   // Phase 1, and phase 3 inside it.
   const run = await adoptStaleRunsAndStart(tenantId, targetSystemId, resolveInFlight, options.receiptId);
 
+  /**
+   * A checkpoint: stop here if somebody asked. Throws to the catch below,
+   * which records `cancelled`. Placed between the target reads and before
+   * anything is written, so a cancelled preview writes no plan — the same
+   * rule a failed one follows.
+   */
+  const checkpoint = async () => {
+    const asked = await withTenant(tenantId, (tx) =>
+      cancellationRequested(cancellableRuns(tx), run.id),
+    );
+    if (asked) throw new RunCancelledSignal(run.id);
+  };
+
   try {
     // Phase 2.
     const prepared = await withTenant(tenantId, async (tx) => {
@@ -477,6 +518,7 @@ export async function previewProvisionRun(
     for await (const entitlement of connector.listEntitlements(config)) {
       catalog.push(entitlement);
     }
+    await checkpoint();
 
     /**
      * DN (lowercased) to Syntra entitlement id.
@@ -561,6 +603,7 @@ export async function previewProvisionRun(
         unreadableEntitlementIds.add(id);
       }
     }
+    await checkpoint();
 
     const provenanceAttribute =
       (config as { provenanceAttribute?: string }).provenanceAttribute ?? 'info';
@@ -613,7 +656,9 @@ export async function previewProvisionRun(
           .filter((id): id is string => id !== undefined),
         readComplete: record.readFailure === undefined,
       });
+      if (objects.length % READ_CHECKPOINT_EVERY === 0) await checkpoint();
     }
+    await checkpoint();
 
     /**
      * How many accounts at the target hold each entitlement — the denominator
@@ -1213,12 +1258,29 @@ export async function previewProvisionRun(
     // seven times. Before the plan and not after it, so that a run which
     // cannot finish them writes no plan either — the same failure rule phase 7
     // already has, rather than a second one.
+    //
+    // Checkpointed first: a request that arrived during the read or the pure
+    // computation stops the run before it records observations for a plan
+    // that will never exist.
+    await checkpoint();
     await writeDriftFindings(tenantId, targetSystemId, run.id, reconciled.findings);
     await writeHolderCounts(tenantId, targetSystemId, snapshot.entitlements, holdersAtTarget);
 
     // Phase 7. The PLAN, together.
     return await withTenant(tenantId, async (tx) => {
       const bound = await currentTenant(tx);
+
+      // The last checkpoint, and the one that closes the race: a conditional
+      // write to the run row before any of the plan. A request committed
+      // before it makes it match nothing, and the throw rolls back everything
+      // below. A request arriving after it waits on this row lock, then finds
+      // `previewed` or `blocked` and cancels that outright — with the plan's
+      // actions abandoned by `requestCancelProvisionRun`.
+      const claimed = await tx.provisionRun.updateMany({
+        where: { id: run.id, ...noActiveRequest() },
+        data: { lastProgressAt: new Date() },
+      });
+      if (claimed.count === 0) throw new RunCancelledSignal(run.id);
 
       /**
        * The account has a durable identity in Syntra before it has one in the
@@ -1486,6 +1548,14 @@ export async function previewProvisionRun(
       };
     });
   } catch (cause) {
+    if (cause instanceof RunCancelledSignal) {
+      // Honoured at a checkpoint: no plan was written, and the run says
+      // `cancelled` rather than `failed` because nothing went wrong. Returned
+      // rather than rethrown — a scheduled job that sees `cancelled` simply
+      // does not apply.
+      await withTenant(tenantId, (tx) => honourProvisionCancellation(tx, run.id, 'preview'));
+      return { id: run.id, status: 'cancelled', requiresConfirmation: false, blockedReason: null };
+    }
     // A run that fails partway writes no plan at all — the actions, the
     // exceptions and the terminal status are all in phase 7's single
     // transaction, which never ran.
@@ -1496,14 +1566,14 @@ export async function previewProvisionRun(
     // unreachable" with a connection error about the bookkeeping — losing the
     // only piece of information anybody needed. The run stays `running` and
     // the next run adopts it.
+    //
+    // A pending cancellation no checkpoint reached is resolved as moot in the
+    // same write: the run ended on its own.
     await withTenant(tenantId, (tx) =>
-      tx.provisionRun.update({
-        where: { id: run.id },
-        data: {
-          status: 'failed',
-          finishedAt: new Date(),
-          error: storableCause(cause),
-        },
+      finishWithCancellationCheck(cancellableRuns(tx), run.id, {
+        status: 'failed',
+        finishedAt: new Date(),
+        error: storableCause(cause),
       }),
     ).catch(() => undefined);
     throw cause;
