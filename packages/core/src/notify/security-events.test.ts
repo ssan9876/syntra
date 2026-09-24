@@ -7,10 +7,21 @@ import {
 } from './security-events.js';
 
 describe('isSecurityEvent', () => {
-  it('is true for an action in each of the three groups', () => {
+  it('is true for an action in each of the four groups', () => {
     expect(isSecurityEvent('auth.lockout')).toBe(true);
     expect(isSecurityEvent('mfa.removed')).toBe(true);
     expect(isSecurityEvent('policy.rule_added')).toBe(true);
+    expect(isSecurityEvent('provision.tenant.external_writes.pause')).toBe(true);
+  });
+
+  it('announces every emergency-stop transition, at both scopes', () => {
+    // Placing a stop, lifting it, and the clock lifting it are all incident
+    // milestones somebody on call is waiting for.
+    for (const scope of ['tenant', 'target']) {
+      for (const transition of ['pause', 'resume', 'expire']) {
+        expect(isSecurityEvent(`provision.${scope}.external_writes.${transition}`)).toBe(true);
+      }
+    }
   });
 
   it('is false for ordinary traffic', () => {
@@ -27,7 +38,7 @@ describe('isSecurityEvent', () => {
     // group and forgot the allowlist, and the symptom -- a subscription that
     // matches an event nothing fans out -- looks exactly like a broken
     // receiver.
-    for (const key of ['sign-in-security', 'credentials', 'configuration'] as const) {
+    for (const key of ['sign-in-security', 'credentials', 'configuration', 'write-stops'] as const) {
       for (const action of WEBHOOK_EVENT_GROUPS[key].templates as readonly string[]) {
         expect(isSecurityEvent(action), action).toBe(true);
       }

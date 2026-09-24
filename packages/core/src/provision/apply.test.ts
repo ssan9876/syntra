@@ -179,6 +179,29 @@ describe('external-write circuit breaker', () => {
     expect(persisted.status).toBe(run.status);
     expect((await actionsOf(run.id)).every((action) => action.attempts === 0)).toBe(true);
   });
+
+  it('refuses every target while the tenant-wide stop is active, and honours its expiry', async () => {
+    const run = await previewProvisionRun(tenantId, provider, targetId, { now: NOW, connector: target as never });
+    const actor = await seedConfirmingUser();
+    const expiresAt = new Date(NOW.getTime() + 60_000);
+    await withTenant(tenantId, (tx) => tx.tenantExternalWriteStop.create({
+      data: { tenantId, pausedAt: NOW, pausedByUserId: actor, pauseReason: 'Tenant containment', pauseExpiresAt: expiresAt },
+    }));
+    const refusal = await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true, confirmedByUserId: actor, connector: target as never, now: NOW, sleep: noSleep,
+    }).catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(ExternalWritesPausedError);
+    expect(refusal).toMatchObject({ scope: 'tenant', reason: 'Tenant containment' });
+    const persisted = await withTenant(tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: run.id } }));
+    expect(persisted.status).toBe(run.status);
+    expect((await actionsOf(run.id)).every((action) => action.attempts === 0)).toBe(true);
+
+    // At the expiry the same run applies, with no sweep and no resume.
+    const result = await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true, confirmedByUserId: actor, connector: target as never, now: expiresAt, sleep: noSleep,
+    });
+    expect(result.applied).toBeGreaterThan(0);
+  });
 });
 
 describe('target maintenance window', () => {

@@ -12,6 +12,7 @@ import {
   ProvisionRunNotAppliableError,
   ProvisionRunNotConfirmableError,
   MaintenanceWindowClosedError,
+  ExternalWritesPausedError,
   acknowledgeDriftFinding,
   applyProvisionRun,
   enqueuePairedSync,
@@ -275,6 +276,17 @@ export async function registerAdminProvisionRunRoutes(
             'Target maintenance window is closed',
             cause.message,
             { overrideAllowed: cause.overrideAllowed },
+          );
+        }
+        // An emergency stop, tenant-wide or on this target. The run is left
+        // as previewed, so it can be applied unchanged once writes resume.
+        if (cause instanceof ExternalWritesPausedError) {
+          throw new ProblemError(
+            409,
+            'external-writes-paused',
+            'External writes are paused',
+            cause.message,
+            { scope: cause.scope },
           );
         }
         throw cause;

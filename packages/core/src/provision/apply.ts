@@ -24,7 +24,7 @@ import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
 import { escapeDnValue } from './templates.js';
 import { movesContainer } from './guard.js';
 import { targetWithCredential } from './target-service.js';
-import { ExternalWritesPausedError, externalWriteStopActive } from './target-write-stop.js';
+import { assertExternalWritesAllowed } from './tenant-write-stop.js';
 import { MaintenanceWindowClosedError, maintenanceWindowOpen, urgentLeaverOverrideAllowed } from './target-maintenance.js';
 import { applySyntraUserAction } from './syntra-user.js';
 
@@ -498,13 +498,10 @@ export async function applyProvisionRun(
     const target = await tx.targetSystem.findUniqueOrThrow({
       where: { id: run.targetSystemId },
     });
-    if (externalWriteStopActive(target, options.now ?? new Date())) {
-      throw new ExternalWritesPausedError(
-        target.id,
-        target.externalWritesPauseReason ?? 'emergency stop',
-        target.externalWritesPauseExpiresAt,
-      );
-    }
+    // Both emergency stops, tenant first. Inside this transaction and before
+    // the `applying` transition, so a refused run is left exactly as it was
+    // previewed and no action is attempted.
+    await assertExternalWritesAllowed(tx, target, options.now ?? new Date());
     if (!maintenanceWindowOpen(target, options.now ?? new Date())) {
       const selected = await tx.provisionAction.findMany({
         where: {

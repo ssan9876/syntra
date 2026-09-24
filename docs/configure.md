@@ -516,7 +516,7 @@ nobody reads does not discharge the obligation.
 
 ### Getting them out
 
-A webhook endpoint can subscribe to three security groups, alongside the six
+A webhook endpoint can subscribe to four security groups, alongside the six
 Automate and Govern ones:
 
 | Group | What arrives |
@@ -524,6 +524,7 @@ Automate and Govern ones:
 | **Sign-in security** | Lockouts, failed second factors, policy denials, refused protocol signatures, and administrative elevation |
 | **Credentials** | Second factors enrolled or removed, recovery codes issued, passwords changed or renewed, sessions and tokens revoked |
 | **Configuration changes** | Policy rules, roles, tenant settings, protocol and upstream configuration, webhook endpoints, and deployment updates |
+| **Emergency write stops** | A tenant-wide or per-target external-write stop placed, resumed by a second administrator, or expired on its own (`provision.{tenant,target}.external_writes.{pause,resume,expire}`) |
 
 An endpoint subscribed to **Configuration changes** is told when webhook
 endpoints change, **including its own** — somebody quietly repointing an

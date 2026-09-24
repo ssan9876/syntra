@@ -563,6 +563,46 @@ describe('runProvisionJob — the skip, made loud', () => {
     expect(runs).toHaveLength(2);
   });
 
+  it('records an emergency stop on an autoApply run as a skip, leaving the preview reviewable', async () => {
+    await withTenant(tenantId, async (tx) => {
+      await tx.targetSystem.update({ where: { id: targetId }, data: { autoApply: true } });
+      await tx.provisionRun.create({
+        data: { tenantId, targetSystemId: targetId, status: 'applied', finishedAt: new Date() },
+      });
+      const stopper = await tx.user.create({
+        data: { tenantId, login: 'stopper', email: 'stopper@acme.test', displayName: 'Stopper' },
+      });
+      await tx.tenantExternalWriteStop.create({
+        data: { tenantId, pausedAt: new Date(), pausedByUserId: stopper.id, pauseReason: 'Tenant containment' },
+      });
+    });
+    // A stubbed preview, because what is under test is the apply that follows
+    // it: the real `applyProvisionRun` meets the stop before anything else.
+    const preview = (async () =>
+      withTenant(tenantId, (tx) =>
+        tx.provisionRun.create({
+          data: { tenantId, targetSystemId: targetId, status: 'previewed' },
+        }),
+      )) as never;
+    await expect(
+      runProvisionJob(
+        schedulerStub() as never,
+        provider,
+        { tenantId, targetSystemId: targetId },
+        { connector: target as never, preview },
+      ),
+    ).resolves.toBeUndefined();
+    const latest = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findFirstOrThrow({ where: { status: { not: 'applied' } } }),
+    );
+    expect(latest.status).toBe('previewed');
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(row.consecutiveSkippedRuns).toBe(1);
+    expect(row.lastSkipReason).toContain('Tenant containment');
+  });
+
   it('records a loud skip rather than throwing when a run is already in progress', async () => {
     // `ProvisionRunInFlightError` reaches this handler by two routes. The skip
     // check above catches the ordinary one, in its own transaction, and this
