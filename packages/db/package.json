@@ -5,21 +5,22 @@
   "main": "./src/index.ts",
   "license": "Apache-2.0",
   "scripts": {
-    "generate": "prisma generate",
-    "migrate": "prisma migrate deploy",
-    "migrate:dev": "prisma migrate dev",
+    "generate": "prisma generate --config ../../prisma.config.ts",
+    "migrate": "prisma migrate deploy --config ../../prisma.config.ts",
+    "migrate:dev": "prisma migrate dev --config ../../prisma.config.ts",
     "seed": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/seed.ts",
     "bootstrap": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/bootstrap.ts",
     "reset": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/reset.ts",
     "rekey": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/rekey.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.2.0",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
     "@syntra/core": "workspace:*",
     "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/pg": "^8.21.0",
-    "prisma": "^6.2.0"
+    "prisma": "7.10.0"
   }
 }

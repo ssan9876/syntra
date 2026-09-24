@@ -67,11 +67,21 @@ export default async function setup(): Promise<() => Promise<void>> {
     // advisory lock per database, but they all contend for the same server on
     // first run, and a second or two per shard once is not worth the risk of
     // interleaving CREATE DATABASE with a migration.
-    execFileSync(process.execPath, [prismaCli(), 'migrate', 'deploy'], {
-      cwd: resolve(repoRoot, 'packages/db'),
-      env: { ...process.env, DATABASE_URL: config.appUrl },
-      stdio: ['ignore', 'ignore', 'inherit'],
-    });
+    execFileSync(
+      process.execPath,
+      [
+        prismaCli(),
+        'migrate',
+        'deploy',
+        '--config',
+        resolve(repoRoot, 'prisma.config.ts'),
+      ],
+      {
+        cwd: resolve(repoRoot, 'packages/db'),
+        env: { ...process.env, DATABASE_URL: config.appUrl },
+        stdio: ['ignore', 'ignore', 'inherit'],
+      },
+    );
   }
 
   // Vitest calls this after the last worker exits. The lock would go anyway
