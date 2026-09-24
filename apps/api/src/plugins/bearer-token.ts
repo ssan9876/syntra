@@ -27,6 +27,10 @@ import type { RequestPrincipal } from './require-session.js';
  *   `token.manage` would issue a second token, and revoking the first would
  *   leave the second working with nobody having any reason to look for it.
  *   Minting a machine credential is a thing a person does.
+ * - The TENANT DELETION routes -- erasing a tenant is four-eyes and needs a
+ *   freshly stepped-up session as its evidence. A token has no step-up, and
+ *   an integration that could request or approve an erasure would make the
+ *   second pair of eyes a script.
  */
 export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/auth',
@@ -34,6 +38,7 @@ export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/admin/users/:id/password',
   '/api/admin/users/:id/password-setup',
   '/api/admin/users/:id/tokens',
+  '/api/admin/tenant/deletion',
 ];
 
 export function routeRefusesTokens(routePattern: string | undefined): boolean {

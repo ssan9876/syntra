@@ -30,6 +30,9 @@ describe('assessTenantOffboarding', () => {
     expect(assessment.deletionReady).toBe(true);
     expect(assessment.inventory).toMatchObject({ people: 1, contracts: 1, secrets: 1 });
     expect(assessment.digest).toMatch(/^[a-f0-9]{64}$/);
+    // The assessment and an export of unchanged data agree on the revision;
+    // that agreement is what a deletion request is later bound to.
+    expect(assessment.dataRevision).toBe((await createTenantDataExport(tenantId, actorId)).dataRevision);
     const event = await withTenant(tenantId, (tx) => tx.auditEvent.findUniqueOrThrow({ where: { id: assessment.receipt.auditEventId } }));
     expect(event.payload).toMatchObject({ digest: assessment.digest, inventory: { secrets: 1 } });
     expect(JSON.stringify(event.payload)).not.toContain('ciphertext');
@@ -64,12 +67,18 @@ describe('createTenantDataExport', () => {
     });
 
     const artifact = await createTenantDataExport(tenantId, actorId);
-    const { digest, receipt: _receipt, ...document } = artifact;
+    // Verified against the file as downloaded -- JSON, timestamps as strings
+    // -- because that is the only form an operator can recompute it from.
+    const downloaded = JSON.parse(JSON.stringify(artifact)) as typeof artifact;
+    const { digest, receipt: _receipt, dataRevision, ...document } = downloaded;
 
     expect(artifact.schema).toBe('syntra.tenant-export.v1');
     expect(artifact.data.people).toHaveLength(1);
     expect(artifact.data.users).toHaveLength(1);
     expect(digest).toBe(createHash('sha256').update(stableStringify(document)).digest('hex'));
+    expect(dataRevision).toBe(createHash('sha256').update(stableStringify({ tenant: document.tenant, data: document.data })).digest('hex'));
+    // The timestamps are inside the digest, not silently hashed as `{}`.
+    expect(JSON.stringify(document.data.people)).toContain('createdAt');
     expect(JSON.stringify(artifact)).not.toContain('never-export-this');
     expect(JSON.stringify(artifact)).not.toContain('wrapped-key');
     expect(artifact.exclusions).toContain('password hashes and password history');
@@ -78,6 +87,6 @@ describe('createTenantDataExport', () => {
       where: { id: artifact.receipt.auditEventId },
     }));
     expect(event).toMatchObject({ action: 'tenant.offboarding.exported' });
-    expect(event.payload).toMatchObject({ digest, recordCounts: { people: 1, users: 1 } });
+    expect(event.payload).toMatchObject({ digest, dataRevision, recordCounts: { people: 1, users: 1 } });
   });
 });

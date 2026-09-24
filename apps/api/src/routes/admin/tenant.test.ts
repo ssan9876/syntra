@@ -176,6 +176,94 @@ describe('POST /api/admin/tenant/offboarding/export', () => {
   });
 });
 
+describe('tenant deletion routes', () => {
+  const REASON = 'Contract ended; customer signed offboarding form OFF-88';
+
+  /** A second tenant.manage administrator, signed in and elevated. */
+  async function secondAdminCookie() {
+    await withTenant(ctx.tenantId, async (tx) => {
+      const user = await createUser(tx, { login: 'second', email: 'second@acme.test', displayName: 'Second' });
+      await setPasswordHash(tx, user.id, PASSWORD_HASH);
+      const role = await createRole(tx, 'Second approver', [PERMISSIONS.TENANT_MANAGE]);
+      await assignRole(tx, user.id, role.id);
+    });
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/api/auth/login', headers: { host: ctx.host }, payload: { login: 'second', password: PASSWORD },
+    });
+    const portal = res.cookies.find((c) => c.name === 'syntra_session')!.value;
+    const up = await ctx.app.inject({
+      method: 'POST', url: '/api/auth/elevate', headers: { host: ctx.host, cookie: `syntra_session=${portal}` }, payload: { password: PASSWORD },
+    });
+    return `syntra_session=${up.cookies.find((c) => c.name === 'syntra_session')!.value}`;
+  }
+
+  const post = (cookie: string, url: string, payload?: object) =>
+    ctx.app.inject({ method: 'POST', url, headers: { host: ctx.host, cookie }, ...(payload ? { payload } : {}) });
+
+  it('refuses machine tokens on every deletion route', async () => {
+    const { routeRefusesTokens } = await import('../../plugins/bearer-token.js');
+    for (const route of ['/api/admin/tenant/deletion', '/api/admin/tenant/deletion/requests', '/api/admin/tenant/deletion/requests/:id/approve', '/api/admin/tenant/deletion/requests/:id/execute']) {
+      expect(routeRefusesTokens(route)).toBe(true);
+    }
+  });
+
+  it('runs request, four-eyes approval and execution, then stops resolving the tenant', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const requester = await adminCookie();
+    const approver = await secondAdminCookie();
+
+    const assessment = (await post(requester, '/api/admin/tenant/offboarding/assess')).json();
+    const exported = (await post(requester, '/api/admin/tenant/offboarding/export')).json();
+    const requested = await post(requester, '/api/admin/tenant/deletion/requests', {
+      assessmentDigest: assessment.digest, exportDigest: exported.digest, reason: REASON,
+    });
+    expect(requested.statusCode).toBe(200);
+    const id = requested.json().id as string;
+    expect(requested.json()).toMatchObject({ status: 'pending_approval' });
+
+    const selfApproval = await post(requester, `/api/admin/tenant/deletion/requests/${id}/approve`);
+    expect(selfApproval.statusCode).toBe(403);
+    expect(selfApproval.json().type).toMatch(/\/four-eyes-required$/);
+
+    // The approver signing in does not make the evidence stale.
+    const approved = await post(approver, `/api/admin/tenant/deletion/requests/${id}/approve`);
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json()).toMatchObject({ status: 'approved' });
+
+    const early = await post(requester, `/api/admin/tenant/deletion/requests/${id}/execute`);
+    expect(early.statusCode).toBe(409);
+    expect(early.json().type).toMatch(/\/cooling-off$/);
+
+    const state = await ctx.app.inject({ method: 'GET', url: '/api/admin/tenant/deletion', headers: { host: ctx.host, cookie: approver } });
+    expect(state.json()).toMatchObject({ request: { id, status: 'approved' }, policy: { coolingOffHours: 24 } });
+
+    // Stand in for the cooling-off period passing.
+    await withTenant(ctx.tenantId, (tx) => tx.tenantDeletionRequest.update({
+      where: { id }, data: { executeNotBefore: new Date(Date.now() - 1000) },
+    }));
+    const executed = await post(approver, `/api/admin/tenant/deletion/requests/${id}/execute`);
+    expect(executed.statusCode).toBe(200);
+    expect(executed.json()).toMatchObject({
+      schema: 'syntra.tenant-deletion-receipt.v1', assessmentDigest: assessment.digest, exportDigest: exported.digest,
+    });
+
+    const after = await ctx.app.inject({ method: 'GET', url: '/api/admin/tenant', headers: { host: ctx.host, cookie: approver } });
+    expect(after.statusCode).toBeGreaterThanOrEqual(400);
+    expect((await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } })).status).toBe('deleted');
+  });
+
+  it('refuses a request bound to an export that was never taken', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    const assessment = (await post(cookie, '/api/admin/tenant/offboarding/assess')).json();
+    const res = await post(cookie, '/api/admin/tenant/deletion/requests', {
+      assessmentDigest: assessment.digest, exportDigest: 'b'.repeat(64), reason: REASON,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toMatch(/\/export-not-found$/);
+  });
+});
+
 describe('PUT /api/admin/tenant', () => {
   it('turns admin MFA on, and the elevation endpoint acts on it', async () => {
     await seedAdmin([...ALL_PERMISSIONS]);

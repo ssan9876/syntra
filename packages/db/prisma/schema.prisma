@@ -173,6 +173,7 @@ model Tenant {
   lifecyclePolicies         LifecyclePolicy[]
   lifecycleSimulations      LifecycleSimulation[]
   lifecycleLegalHolds       LifecycleLegalHold[]
+  tenantDeletionRequests    TenantDeletionRequest[]
   lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
@@ -2514,6 +2515,54 @@ model LifecycleLegalHold {
 
   @@index([tenantId, subjectType, subjectId, releasedAt])
   @@index([tenantId, reference])
+}
+
+/// A four-eyes request to erase this tenant, bound to the offboarding
+/// assessment and export an administrator actually reviewed.
+///
+/// Deliberately one of the few records that outlive the erasure, beside the
+/// tenant tombstone and the audit record: once `completed` it IS the deletion
+/// receipt. It therefore holds only identifiers, digests, timestamps and
+/// counts. `reason` is free text a person typed and is cleared when the
+/// request completes; the audit event that recorded the request keeps it,
+/// under the audit log's own retention. The actor ids are not foreign keys
+/// because the users they name are among the rows the erasure removes.
+model TenantDeletionRequest {
+  id                     String    @id @default(uuid()) @db.Uuid
+  tenantId               String    @db.Uuid
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// 'pending_approval' | 'approved' | 'executing' | 'completed' |
+  /// 'cancelled' | 'expired' | 'invalidated'
+  status                 String    @default("pending_approval")
+  assessmentDigest       String
+  assessmentAuditEventId String    @db.Uuid
+  exportDigest           String
+  exportAuditEventId     String    @db.Uuid
+  /// SHA-256 of the tenant's exportable data when the request was made.
+  /// Recomputed at approval and at execution; any difference is staleness.
+  dataRevision           String
+  reason                 String?
+  requestedByUserId      String    @db.Uuid
+  requestedAt            DateTime  @default(now())
+  approvalExpiresAt      DateTime
+  approvedByUserId       String?   @db.Uuid
+  approvedAt             DateTime?
+  /// When the approver's administrative session was minted: the step-up
+  /// evidence behind the approval.
+  approverStepUpAt       DateTime?
+  executeNotBefore       DateTime?
+  executeBefore          DateTime?
+  executedByUserId       String?   @db.Uuid
+  executorStepUpAt       DateTime?
+  completedAt            DateTime?
+  cancelledByUserId      String?   @db.Uuid
+  cancelledAt            DateTime?
+  /// Machine-readable code for why an open request closed without running.
+  closedReason           String?
+  /// Per-table row counts and the erased-secret count. Numbers only.
+  receipt                Json?
+
+  @@index([tenantId, status])
 }
 
 /// A no-write rehearsal of a hire, move or departure computed by the same

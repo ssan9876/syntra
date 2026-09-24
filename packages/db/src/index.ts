@@ -1,5 +1,6 @@
 export { prisma } from './client.js';
-export { withTenant } from './with-tenant.js';
+export { withTenant, TenantRetiredError, TENANT_DELETED_STATUS } from './with-tenant.js';
+export type { WithTenantOptions } from './with-tenant.js';
 export { migrationState, migrationNamesOnDisk } from './migration-state.js';
 export type { MigrationState } from './migration-state.js';
 export type { TenantClient } from './with-tenant.js';

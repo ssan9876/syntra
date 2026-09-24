@@ -3,6 +3,7 @@ import { PageHeader } from './PageHeader.js';
 import { SettingsSignInTab } from './SettingsSignInTab.js';
 import { BrandingTab } from './BrandingTab.js';
 import { WebhooksTab } from './WebhooksTab.js';
+import { TenantDeletionTab } from './TenantDeletionTab.js';
 
 /**
  * Settings: how this organization signs in, what it looks like, and where it
@@ -29,6 +30,7 @@ export function TenantSettingsPage() {
           { id: 'sign-in', label: 'Sign-in', content: <SettingsSignInTab /> },
           { id: 'branding', label: 'Branding', content: <BrandingTab /> },
           { id: 'webhooks', label: 'Webhooks', content: <WebhooksTab /> },
+          { id: 'offboarding', label: 'Offboarding', content: <TenantDeletionTab /> },
         ]}
       />
     </>

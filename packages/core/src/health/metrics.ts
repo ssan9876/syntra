@@ -1,4 +1,4 @@
-import { prisma, withTenant } from '@syntra/db';
+import { prisma, TENANT_DELETED_STATUS, withTenant } from '@syntra/db';
 import { WEBHOOK_MAX_ATTEMPTS } from '../notify/webhook-retry.js';
 
 /**
@@ -97,7 +97,11 @@ async function pendingJobs(): Promise<number | null> {
  * The counts are still cardinalities only. No row leaves the transaction.
  */
 export async function collectMetrics(now: Date = new Date()): Promise<MetricsSnapshot> {
-  const tenants = await prisma.tenant.findMany({ select: { id: true } });
+  // Erased tenants are tombstones: nothing to count, and binding is refused.
+  const tenants = await prisma.tenant.findMany({
+    where: { status: { not: TENANT_DELETED_STATUS } },
+    select: { id: true },
+  });
 
   const zero = {
     webhookDeliveriesPending: 0,

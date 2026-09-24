@@ -21,15 +21,16 @@ This shorter queue is the autonomous engineering order; external validation
 and organizational decisions stay in the full register until their evidence
 exists.
 
-1. Add a revision-bound, four-eyes tenant deletion execution path that consumes a current offboarding assessment and refuses stale exports, legal holds, or unresolved lifecycle work.
-2. Add asynchronous, permission-checked, watermarked exports for large reports.
-3. Add job cancellation states and cooperative cancellation checks for long-running imports, syncs, and provisioning runs.
-4. Add cursor pagination for long operation timelines and remaining high-volume audit/governance lists.
-5. Add live-region status updates to every remaining asynchronous admin action.
-6. Run the security workflows in GitHub and resolve real CodeQL, dependency, secret, and container findings.
-7. Complete manual accessibility, onboarding, pilot, and go/no-go validation with the user.
+1. Add asynchronous, permission-checked, watermarked exports for large reports.
+2. Add job cancellation states and cooperative cancellation checks for long-running imports, syncs, and provisioning runs.
+3. Add cursor pagination for long operation timelines and remaining high-volume audit/governance lists.
+4. Add live-region status updates to every remaining asynchronous admin action.
+5. Run the security workflows in GitHub and resolve real CodeQL, dependency, secret, and container findings.
+6. Complete manual accessibility, onboarding, pilot, and go/no-go validation with the user, including a restore drill of a backup that predates a tenant deletion.
 
 ## Completed recently
+
+- Add revision-bound, four-eyes tenant deletion. A `tenant.manage` request names a current offboarding assessment and a later export by digest; both record a new data revision (SHA-256 over exactly the exportable data), and any edit since makes the request refuse as stale. Active legal holds and unresolved lifecycle work refuse at request, approval and execution. A different administrator approves from a session stepped up within 15 minutes (enforced in code and by a database constraint), within 72 hours; execution opens after a 24-hour cooling-off and closes seven days later; any administrator can cancel; machine tokens are refused; every refusal is audited. Execution re-runs every check under an exclusive tenant binding lock that every `withTenant` transaction now takes shared, crypto-erases the vault, removes pg-boss schedules and queued jobs, deletes every `tenantId` table in catalog-derived dependency order (append-only decision rules disabled only inside the transaction), and leaves a scrubbed tombstone, the completed request as a personal-data-free receipt, and the immutable audit chain ending in the completion event. Also fixed: the export digest hashed every timestamp as `{}` and could not be recomputed from the downloaded file, and `LifecycleLegalHold`/`LifecycleCaseEvent` had no row-level security, so one tenant's hold was counted against another. Migration `20261025100000_tenant_deletion_execution`; console flow under Settings → Offboarding; retention, audit and backup-expiry treatment documented in operate.md. Focused core, db, API and web tests, the full TypeScript build, and focused lint pass.
 
 - Add a permission-checked tenant offboarding export artifact. The downloadable, versioned JSON document contains portable identity, organization, role, source, target, account, and entitlement data in stable order; it excludes vault ciphertext, password proofs, MFA and recovery material, tokens, private signing keys, and transient protocol artifacts by construction. A SHA-256 digest is returned both in the document and response header, while a permanent hash-chained audit receipt records the digest, exclusions, and per-section counts without duplicating the exported personal data into the audit log. Thirty-three focused core and API tests, the full TypeScript build, focused lint, and diff validation pass.
 - Add a durable tenant-offboarding preflight. The `tenant.manage`-only API inventories key tenant record classes without decrypting secrets, refuses deletion readiness when an active legal hold or unresolved lifecycle operation exists, binds the exact assessment to a SHA-256 digest, and stores a permanent hash-chained audit receipt. No deletion path exists yet. Thirty focused core and API tests, the full TypeScript build, focused lint, and diff validation pass.

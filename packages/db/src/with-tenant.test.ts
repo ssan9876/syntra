@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from './client.js';
-import { withTenant } from './with-tenant.js';
+import { TENANT_DELETED_STATUS, TenantRetiredError, withTenant } from './with-tenant.js';
 import { resetDatabase } from './test-support.js';
 
 describe('withTenant', () => {
@@ -57,6 +57,45 @@ describe('withTenant', () => {
   it('reads nothing when no tenant is bound', async () => {
     const rows = await prisma.orgUnit.findMany();
     expect(rows).toEqual([]);
+  });
+
+  it('refuses to bind an erased tenant unless reading what was retained', async () => {
+    await prisma.tenant.update({ where: { id: tenantA }, data: { status: TENANT_DELETED_STATUS } });
+    await expect(withTenant(tenantA, (tx) => tx.orgUnit.count())).rejects.toBeInstanceOf(TenantRetiredError);
+    await expect(withTenant(tenantA, (tx) => tx.orgUnit.count(), { allowRetired: true })).resolves.toBe(1);
+    // The other tenant is unaffected.
+    await expect(withTenant(tenantB, (tx) => tx.orgUnit.count())).resolves.toBe(1);
+  });
+
+  it('makes an exclusive binding wait for open transactions, and later ones see its outcome', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let bound!: () => void;
+    const holding = new Promise<void>((resolve) => { bound = resolve; });
+    const order: string[] = [];
+
+    // An ordinary transaction, already bound and still working.
+    const reader = withTenant(tenantA, async (tx) => {
+      bound();
+      await gate;
+      order.push('reader done');
+      return tx.orgUnit.count();
+    }, { timeoutMs: 15_000 });
+    await holding;
+
+    // The erasure's binding: must not proceed while the reader is bound.
+    const eraser = withTenant(tenantA, async () => {
+      order.push('eraser bound');
+      await prisma.tenant.update({ where: { id: tenantA }, data: { status: TENANT_DELETED_STATUS } });
+    }, { exclusive: true, timeoutMs: 15_000 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(order).toEqual([]);
+
+    release();
+    await reader;
+    await eraser;
+    expect(order).toEqual(['reader done', 'eraser bound']);
+    await expect(withTenant(tenantA, (tx) => tx.orgUnit.count())).rejects.toBeInstanceOf(TenantRetiredError);
   });
 
   it('rolls back when the callback throws', async () => {
