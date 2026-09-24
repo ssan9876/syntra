@@ -33,7 +33,13 @@ async function listEmployeeWork(tx: TenantClient, query: z.infer<typeof employee
         CASE WHEN o.status = 'failed' THEN 'failed' WHEN o.kind = 'offboard' THEN 'offboarding' ELSE 'onboarding' END AS kind,
         o.kind AS "lifecycleKind", o."personId", COALESCE(p."givenName" || ' ' || p."familyName", 'No employee assigned') AS "personName",
         o.status, o.priority, (o."dueAt" < now() AND o."acknowledgedAt" IS NULL) OR o."sloDeadlineAt" < now() AS overdue,
-        CASE WHEN o."dueAt" < now() AND o."acknowledgedAt" IS NULL THEN 'Work is overdue' WHEN o."sloDeadlineAt" < now() THEN 'Service-level deadline breached' ELSE NULL END AS "overdueReason",
+        CASE
+          WHEN o."dueAt" < now() AND o."acknowledgedAt" IS NULL AND o."sloDeadlineAt" < now()
+            THEN 'Work is overdue; service-level deadline breached'
+          WHEN o."dueAt" < now() AND o."acknowledgedAt" IS NULL THEN 'Work is overdue'
+          WHEN o."sloDeadlineAt" < now() THEN 'Service-level deadline breached'
+          ELSE NULL
+        END AS "overdueReason",
         o."approvalRequired" AND o."approvedAt" IS NULL AND o."rejectedAt" IS NULL AS "approvalRequired",
         CASE WHEN o.status = 'awaiting_approval' THEN o.kind || ' operation is waiting for a second person to approve it' ELSE o.kind || ' operation is ' || o.status END AS summary,
         o."updatedAt"
