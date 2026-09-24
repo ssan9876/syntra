@@ -11,6 +11,27 @@
  * jsdom, so this is the seam the browser tests replace. One line, one place,
  * and the thing it guards is a failure with no error message anywhere.
  */
+/**
+ * Converts an untrusted return target into a same-origin server path.
+ *
+ * Protocol continuations are relative paths by contract. Parsing first and
+ * comparing origins makes scheme-relative URLs (`//evil.example`) and
+ * executable schemes impossible even if a future caller forgets the earlier
+ * challenge-store validation.
+ */
+export function sameOriginServerPath(url: string, origin = window.location.origin): string {
+  if (!url.startsWith('/') || url.startsWith('//')) {
+    throw new Error('The return target must be a same-origin server path.');
+  }
+
+  const parsed = new URL(url, origin);
+  if (parsed.origin !== origin || parsed.username !== '' || parsed.password !== '') {
+    throw new Error('The return target must stay on this origin.');
+  }
+
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
 export function leaveTo(url: string): void {
-  window.location.assign(url);
+  window.location.assign(sameOriginServerPath(url));
 }

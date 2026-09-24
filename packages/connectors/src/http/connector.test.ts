@@ -665,7 +665,7 @@ describe('auth', () => {
 
     // One token exchange, two reads. A token fetched per request would be
     // three times the traffic and a rate limit nobody expected.
-    const exchanges = calls.filter((c) => c.url.startsWith('https://login.example.com'));
+    const exchanges = calls.filter((c) => new URL(c.url).origin === 'https://login.example.com');
     expect(exchanges).toHaveLength(1);
     expect(calls.at(-1)!.headers.authorization).toBe('Bearer issued-token');
   });

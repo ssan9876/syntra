@@ -243,7 +243,15 @@ describe('upstream SAML federation', () => {
     // names is the one the *signature* covered.
     const events = await eventsOf(ctx.tenantId, 'auth.login');
     expect(events.some((e) => JSON.stringify(e.payload).includes('external'))).toBe(true);
-    expect(events.some((e) => JSON.stringify(e.payload).includes(IDP))).toBe(true);
+    expect(
+      events.some(
+        (e) =>
+          typeof e.payload === 'object' &&
+          e.payload !== null &&
+          !Array.isArray(e.payload) &&
+          e.payload['issuer'] === IDP,
+      ),
+    ).toBe(true);
 
     // The upstream asserted `Domain Admins`. It is recorded and it grants
     // nothing: an upstream group is not a Syntra authorization.

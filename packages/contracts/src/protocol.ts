@@ -62,7 +62,7 @@ function isHostLiteral(hostname: string): boolean {
 /**
  * Exact string equality against a stored allowlist.
  *
- * Deliberately a plain `includes`, and deliberately not a URL comparison.
+ * Deliberately plain equality, and deliberately not a URL comparison.
  * Spec section 7 says redirect URIs are matched exactly against the registered
  * allowlist, with no wildcard or prefix matching, and every documented
  * open-redirect in an identity product comes from a comparison that was
@@ -76,5 +76,5 @@ export function matchesAllowlist(
   candidate: string,
   allowlist: readonly string[],
 ): boolean {
-  return allowlist.includes(candidate);
+  return allowlist.some((allowed) => allowed === candidate);
 }

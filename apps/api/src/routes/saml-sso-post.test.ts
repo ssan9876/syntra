@@ -90,7 +90,9 @@ export const authnRequest = (over: { id?: string; acs?: string | null } = {}) =>
 export const extractResponse = (html: string) => {
   const match = html.match(/name="SAMLResponse" value="([^"]+)"/);
   if (!match) throw new Error('no SAMLResponse in the returned form');
-  return match[1]!.replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+  // Decode the escape character last so `&amp;quot;` remains `&quot;`
+  // instead of being decoded twice into a quote.
+  return match[1]!.replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 };
 
 const postSso = (
