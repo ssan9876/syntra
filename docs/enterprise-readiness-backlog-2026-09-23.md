@@ -253,12 +253,23 @@ is retained; merged code alone is not enough.
     carrying `Authorization` headers, LDAP bind errors with DN and password,
     and person/vault/MFA context through the real logger and a real span
     exporter and assert nothing sensitive survives; metrics labels are pinned
-    to a closed set. Remaining: exports and support bundles are not yet routed
-    through the shared rules (the offboarding export excludes secrets by
-    construction), and client addresses are deliberately kept on request log
-    lines.
+    to a closed set. Support bundles (#64) are routed through the shared
+    rules. Remaining: other exports are not (the offboarding export excludes
+    secrets by construction), and client addresses are deliberately kept on
+    request log lines.
 57. **Build — Queue recovery controls.** Detect orphaned, stuck, duplicated,
     delayed, poisoned, and saturation-deferred jobs; keep repair idempotent.
+    **Implemented:** a tenant-scoped job-health report compares sync, HR
+    import, provisioning, person target operations, exports and lifecycle
+    operations with pg-boss's table and the clock; audited, idempotent
+    `requeue`, `mark_failed` and `release_lease` repairs reuse the existing
+    recovery and cancellation semantics and never re-run a connector write
+    (unknown outcomes stay for `resolveInFlightActions`). Console Operations
+    page, `syntra_job_health_findings{kind,finding}`, six alert rules and a
+    runbook. Remaining: lifecycle operations and sync/HR applies (no
+    heartbeat) are reported but repaired from their own pages; pg-boss jobs
+    themselves are never cancelled or deleted from here; a heartbeat for
+    sync/HR applies would let them be judged like provisioning.
 58. **Build — Cooperative cancellation.** Add explicit cancellation states and
     checkpoints to imports, syncs, simulations, exports, and provisioning runs.
 59. **Build — Graceful deployment behavior.** Drain workers, preserve leases,
@@ -276,9 +287,26 @@ is retained; merged code alone is not enough.
 63. **Build — Customer-safe status reporting.** Separate component health,
     tenant degradation, stale readiness, and connector outages without leaking
     another tenant's activity.
+    **Implemented:** `GET /api/admin/status` (shared API, database, queue, key
+    provider and SMTP health, then this tenant's write stops, stale or
+    failing readiness, connector outages by error class and job findings;
+    no queue depth or other cross-tenant quantity) and an operator-only
+    `GET /api/admin/deployment/status` (`deployment.manage`; counts only, no
+    tenant named), shown on the console's Operations page. Remaining: no
+    public or unauthenticated status page, and no history of past incidents.
 64. **Build — Operational support bundle.** Produce a tenant-scoped, redacted,
     time-bounded evidence package with configuration fingerprints and no
     credentials.
+    **Implemented:** a `support_bundle` kind of the secure export service
+    (`tenant.manage`, window of at most seven days fixed at request, sealed,
+    watermarked, requester-only, audited): versions, migration state,
+    settings and configuration fingerprints, write stops, connector
+    readiness, job health, recent failures by error class and audit event
+    counts, built by allow-list and passed through the shared redaction
+    rules, with a test seeding secrets and personal data. Remaining:
+    installation-level log excerpts are not included (logs stay with the
+    operator), and there is no signed attestation of the bundle beyond its
+    recorded SHA-256.
 65. **Operate — Capacity management.** Forecast database, queue, audit,
     notification, and connector load; define scale thresholds and ownership.
 66. **Operate — Restore verification.** Automatically restore sampled backups,

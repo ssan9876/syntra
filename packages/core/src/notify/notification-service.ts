@@ -10,6 +10,12 @@ export interface OutboundMessage {
 
 export interface Transport {
   send(message: OutboundMessage): Promise<void>;
+  /**
+   * Whether the mail server accepts a connection (and authentication), for
+   * the status page. Optional: a transport that cannot be checked reports
+   * `unknown` rather than a guess. Sends nothing.
+   */
+  verify?(): Promise<void>;
 }
 
 export function smtpTransport(smtpUrl: string): Transport {
@@ -23,6 +29,9 @@ export function smtpTransport(smtpUrl: string): Transport {
         text: message.text,
         html: message.html,
       });
+    },
+    async verify() {
+      await mailer.verify();
     },
   };
 }

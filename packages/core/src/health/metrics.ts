@@ -1,5 +1,6 @@
 import { prisma, TENANT_DELETED_STATUS, withTenant } from '@syntra/db';
 import { WEBHOOK_MAX_ATTEMPTS } from '../notify/webhook-retry.js';
+import type { JobHealthCount } from '../jobs/job-health.js';
 
 /**
  * What one scrape reports about the installation.
@@ -52,6 +53,15 @@ export interface MetricsSnapshot {
   jobsPending: number | null;
   /** Null when no signing key exists yet. */
   signingKeyExpiresInSeconds: number | null;
+  /**
+   * Queue-health findings by kind and finding (backlog #57), across every
+   * tenant. Every (kind, finding) pair is present, zero or not, so a series
+   * that clears goes to 0 rather than vanishing. Both labels come from closed
+   * vocabularies in `job-health.ts`; neither can carry a tenant or a person.
+   */
+  jobHealth: JobHealthCount[];
+  /** Whether pg-boss's table could be read; false disables orphan detection. */
+  jobQueueReadable: boolean;
 }
 
 /**
@@ -299,8 +309,15 @@ export async function collectMetrics(now: Date = new Date()): Promise<MetricsSna
       ] as ({ [P in K]: string } & { quantile: string; seconds: number })[];
     });
 
+  // Imported when used: job health reads the run services, which record audit
+  // events, which count themselves here -- a static import would be a cycle.
+  const { jobHealthCounts } = await import('../jobs/job-health.js');
+  const jobHealth = await jobHealthCounts(tenants.map((tenant) => tenant.id), { now });
+
   return {
     ...totals,
+    jobHealth: jobHealth.counts,
+    jobQueueReadable: jobHealth.queueReadable,
     lifecycleOldestUnresolvedAgeSeconds:
       oldestUnresolved === null ? null : Math.max(0, Math.floor((now.getTime() - oldestUnresolved.getTime()) / 1000)),
     lifecycleRetryRate: resolvedDay === 0 ? null : retriedDay / resolvedDay,

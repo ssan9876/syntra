@@ -170,6 +170,8 @@ describe('request timings', () => {
     );
     const allowed = new Set([
       'method', 'route', 'status', 'le', 'version', 'kind', 'quantile', 'target_type', 'action', 'outcome',
+      // Queue recovery: the finding, from job-health.ts's closed vocabulary.
+      'finding',
       // prom-client's default process/runtime metrics.
       'type', 'space', 'major', 'minor', 'patch', 'gc',
     ]);
@@ -227,6 +229,13 @@ describe('the installation gauges', () => {
     expect(body).toContain('syntra_lifecycle_operations_failed');
     expect(body).toContain('syntra_lifecycle_operations_overdue');
     expect(body).toMatch(/syntra_users_total\{status="active"\}/);
+  });
+
+  it('publishes queue-health findings for every kind and finding, zero or not', async () => {
+    const body = (await scrape()).body;
+    expect(body).toMatch(/syntra_job_health_findings\{kind="sync_run",finding="orphaned"\} 0/);
+    expect(body).toMatch(/syntra_job_health_findings\{kind="person_provision_receipt",finding="saturation_deferred"\} 0/);
+    expect(body).toMatch(/syntra_job_queue_readable [01]/);
   });
 
   it('publishes no key expiry at all when there is no key', async () => {

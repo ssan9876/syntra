@@ -8,6 +8,7 @@ import { governOpenApi } from '../routes/admin/govern.openapi.js';
 import { groupsOpenApi } from '../routes/admin/groups.openapi.js';
 import { incidentsOpenApi } from '../routes/admin/incidents.openapi.js';
 import { lifecycleOperationsOpenApi } from '../routes/admin/lifecycle-operations.openapi.js';
+import { operationsOpenApi } from '../routes/admin/operations.openapi.js';
 import { orgUnitsOpenApi } from '../routes/admin/org-units.openapi.js';
 import { personReceiptsOpenApi } from '../routes/admin/person-receipts.openapi.js';
 import { personSourcesOpenApi } from '../routes/admin/person-sources.openapi.js';
@@ -48,6 +49,7 @@ export const ADMIN_ROUTE_DESCRIPTIONS: readonly DescribedRoute[] = [
   ...groupsOpenApi,
   ...incidentsOpenApi,
   ...lifecycleOperationsOpenApi,
+  ...operationsOpenApi,
   ...orgUnitsOpenApi,
   ...personReceiptsOpenApi,
   ...personSourcesOpenApi,

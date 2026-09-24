@@ -7,14 +7,15 @@ import { describeAdminRoutes } from '../../openapi/describe.js';
  *
  * None of these routes carries a route-level permission guard, so the document
  * lists none: what an export needs depends on its KIND (`audit.read` for the
- * audit log, `govern.read` and `govern.export` for Governance access), and the
+ * audit log, `govern.read` and `govern.export` for Governance access,
+ * `tenant.manage` for a support bundle), and the
  * service checks it at request, at generation and at every download.
  */
 export const exportsOpenApi = describeAdminRoutes('Exports', {
   'POST /exports': {
     summary: 'Request an asynchronous export',
     description:
-      'Answers 202 with the queued export. A background job generates the file in bounded batches, watermarks it with the export id, tenant, requester and time, records its SHA-256 and seals it at rest. The requester must hold the permissions of the kind, and a machine token must also hold them in its own scopes.',
+      'Answers 202 with the queued export. A background job generates the file in bounded batches, watermarks it with the export id, tenant, requester and time, records its SHA-256 and seals it at rest. The requester must hold the permissions of the kind, and a machine token must also hold them in its own scopes. `support_bundle` (needs `tenant.manage`) is a redacted operational bundle -- fingerprints, versions, migration state, job health, connector readiness, recent failures by error class and audit event counts -- for a window of at most seven days (`params.from`/`params.to`, default the last day).',
     body: exportRequestBody,
   },
   'GET /exports': {

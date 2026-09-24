@@ -46,6 +46,7 @@ import { registerEmployeeLifecycleRoutes } from './routes/admin/employee-lifecyc
 import { registerAdminPersonReceiptRoutes } from './routes/admin/person-receipts.js';
 import { registerAdminLifecycleOperationRoutes } from './routes/admin/lifecycle-operations.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
+import { registerAdminOperationsRoutes } from './routes/admin/operations.js';
 import { registerAdminExportRoutes } from './routes/admin/exports.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
@@ -439,6 +440,16 @@ export async function buildApp(
   await app.register(registerAdminExportRoutes, {
     prefix: '/api/admin',
     keyProvider,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+  // Queue recovery and status reporting (backlog #57, #63). The same key
+  // provider, transport and scheduler the rest of the process uses, so the
+  // status page reports on the things that actually carry the work.
+  await app.register(registerAdminOperationsRoutes, {
+    prefix: '/api/admin',
+    keyProvider,
+    transport,
+    webRoot: config.webRoot ?? undefined,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminUpdateRoutes, {

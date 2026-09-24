@@ -27,6 +27,7 @@ const GroupDetailPage = page(() => import('./GroupDetailPage.js'), 'GroupDetailP
 const OnboardPersonPage = page(() => import('./OnboardPersonPage.js'), 'OnboardPersonPage');
 const PersonDetailPage = page(() => import('./PersonDetailPage.js'), 'PersonDetailPage');
 const ActivityPage = page(() => import('./ActivityPage.js'), 'ActivityPage');
+const OperationsPage = page(() => import('./OperationsPage.js'), 'OperationsPage');
 const UpdatesPage = page(() => import('./UpdatesPage.js'), 'UpdatesPage');
 const SourcesPage = page(() => import('./SourcesPage.js'), 'SourcesPage');
 const PersonSourceDetailPage = page(() => import('./PersonSourceDetailPage.js'), 'PersonSourceDetailPage');
@@ -187,6 +188,7 @@ export function AdminApp() {
             <Route path="policy" element={<PoliciesPage />} />
             {/* Attention is the audit log filtered, not a second place. */}
             <Route path="activity" element={<ActivityPage />} />
+            <Route path="operations" element={<OperationsPage />} />
             <Route path="audit" element={<Navigate to="/admin/activity?tab=all" replace />} />
             <Route path="exports" element={<Navigate to="/admin/activity?tab=exports" replace />} />
             <Route path="roles" element={<RolesPage />} />
