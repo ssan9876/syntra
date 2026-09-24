@@ -69,13 +69,9 @@ export default async function setup(): Promise<() => Promise<void>> {
     // interleaving CREATE DATABASE with a migration.
     execFileSync(
       process.execPath,
-      [
-        prismaCli(),
-        'migrate',
-        'deploy',
-        '--config',
-        resolve(repoRoot, 'prisma.config.ts'),
-      ],
+      // No --config: run from packages/db exactly as the updater and the Helm
+      // job do, so the suite exercises the same config discovery they rely on.
+      [prismaCli(), 'migrate', 'deploy'],
       {
         cwd: resolve(repoRoot, 'packages/db'),
         env: { ...process.env, DATABASE_URL: config.appUrl },
