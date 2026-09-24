@@ -202,7 +202,11 @@ export async function registerAdminGroupRoutes(
       const { id, userId } = membershipParams.parse(request.params);
 
       await request.db(async (tx) => {
-        await removeMember(tx, id, userId);
+        // Idempotent (204 either way), but only a removal is an event: a
+        // success naming a user who was never a member -- another tenant's,
+        // which RLS hides -- is a false record. Found by the tenant-isolation
+        // probe.
+        if ((await removeMember(tx, id, userId)) === 0) return;
         await recordEvent(tx, {
           actorUserId: request.session.userId,
           action: 'group.removeMember',

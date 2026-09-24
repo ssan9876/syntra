@@ -57,8 +57,11 @@ export async function revokeRole(
   userId: string,
   roleId: string,
   scopeOrgUnitId?: string,
-): Promise<void> {
-  await tx.roleAssignment.deleteMany({
+): Promise<number> {
+  // The count, so a caller can tell a revocation from a no-op: an audit event
+  // saying "revoked" when nothing was held is a false record, and one naming
+  // another tenant's role (which RLS makes a no-op) is worse.
+  const { count } = await tx.roleAssignment.deleteMany({
     where: {
       userId,
       roleId,
@@ -67,6 +70,7 @@ export async function revokeRole(
         : { scopeOrgUnitId: scopeOrgUnitId ?? null }),
     },
   });
+  return count;
 }
 
 /** Every permission the user holds anywhere, regardless of scope. */

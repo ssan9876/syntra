@@ -393,9 +393,10 @@ export async function updateRule(
  * change evaluation order, but it makes "rule 4" in an audit event mean
  * something different from "the fourth rule on the screen".
  */
-export async function deleteRule(tx: TenantClient, ruleId: string): Promise<void> {
+/** Whether a rule was deleted: false for an id this tenant does not hold. */
+export async function deleteRule(tx: TenantClient, ruleId: string): Promise<boolean> {
   const row = await tx.authPolicyRule.findUnique({ where: { id: ruleId } });
-  if (!row) return;
+  if (!row) return false;
 
   await tx.authPolicyRule.delete({ where: { id: ruleId } });
   const rest = await tx.authPolicyRule.findMany({
@@ -405,6 +406,7 @@ export async function deleteRule(tx: TenantClient, ruleId: string): Promise<void
   // Park them out of the way first: (policyId, position) is unique, so
   // renumbering in place collides with the rows not yet moved.
   await renumber(tx, rest.map((r) => r.id));
+  return true;
 }
 
 export async function reorderRules(tx: TenantClient, ruleIds: string[]): Promise<void> {

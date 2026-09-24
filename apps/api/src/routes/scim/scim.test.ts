@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
   PERMISSIONS,
+  SCIM_ERROR_SCHEMA,
   SCIM_USER_SCHEMA,
   assignRole,
   createRole,
@@ -133,6 +134,50 @@ describe('authentication', () => {
     expect(
       (await scim('POST', '/Users', readOnlyToken, { userName: 'x' })).statusCode,
     ).toBe(403);
+  });
+});
+
+describe('the SCIM media type', () => {
+  // RFC 7644 §3.1: clients send `application/scim+json`, and a service
+  // provider accepts it. It was a 415 on every write, which a conforming IdP
+  // reads as "this server is not SCIM".
+  const asScim = (method: 'POST' | 'PATCH', path: string, payload: unknown) =>
+    ctx.app.inject({
+      method,
+      url: `/scim/v2${path}`,
+      headers: {
+        host: TEST_HOST,
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/scim+json; charset=utf-8',
+      },
+      payload: JSON.stringify(payload),
+    });
+
+  it('accepts a create and a patch sent as application/scim+json', async () => {
+    const created = await asScim('POST', '/Users', {
+      schemas: [SCIM_USER_SCHEMA],
+      userName: 'grace',
+      name: { givenName: 'Grace', familyName: 'Hopper' },
+      emails: [{ value: 'grace@acme.test', primary: true }],
+    });
+    expect(created.statusCode).toBe(201);
+    const patched = await asScim('PATCH', `/Users/${created.json().id}`, {
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
+      Operations: [{ op: 'replace', path: 'displayName', value: 'Rear Admiral Hopper' }],
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().displayName).toBe('Rear Admiral Hopper');
+  });
+
+  it('refuses a malformed application/scim+json body as a 400 in SCIM\'s shape, not a 500', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/scim/v2/Users',
+      headers: { host: TEST_HOST, authorization: `Bearer ${token}`, 'content-type': 'application/scim+json' },
+      payload: '{"schemas": [',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().schemas).toEqual([SCIM_ERROR_SCHEMA]);
   });
 });
 

@@ -211,8 +211,9 @@ export async function removeWebAuthnCredential(
   tx: TenantClient,
   userId: string,
   id: string,
-): Promise<void> {
-  await tx.webAuthnCredential.deleteMany({ where: { id, userId } });
+): Promise<number> {
+  const { count } = await tx.webAuthnCredential.deleteMany({ where: { id, userId } });
+  return count;
 }
 
 function asAssertion(value: unknown): AuthenticationResponseJSON | null {

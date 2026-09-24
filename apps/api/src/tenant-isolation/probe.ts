@@ -46,6 +46,17 @@ export interface StaticParam {
 }
 
 /**
+ * A path parameter that EMBEDS an object's id rather than being one: a
+ * credential key is `<kind>.<subject id>`. The probe fills it with B's (or
+ * A's) object of `kind`, run through `format`; the ghost call's id swap
+ * reaches the embedded uuid like any other.
+ */
+export interface DerivedParam {
+  kind: Kind;
+  format: (id: string) => string;
+}
+
+/**
  * PATH PARAMETER → WHAT IT NAMES.
  *
  * Keyed by the parameter and the literal segment(s) in front of it:
@@ -58,7 +69,10 @@ export interface StaticParam {
  * When a parameter follows another parameter (`sources/:kind/:id`), the key
  * includes both, because the first decides what the second means.
  */
-export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam> = new Map<string, Kind | StaticParam>([
+export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam | DerivedParam> = new Map<
+  string,
+  Kind | StaticParam | DerivedParam
+>([
   // ---- directory --------------------------------------------------------------
   ['users/:id', 'user'],
   ['Users/:id', 'user'],
@@ -159,6 +173,17 @@ export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam> = new Map<stri
     why: 'Which kind of resource (application or group) the :id that follows is.',
   }],
   ['managed-resources/:type/:id', 'group'],
+  // ---- privileged access (change control, break-glass) ------------------------
+  ['change-control/requests/:id', 'privilegedChange'],
+  // Keyed by the emergency account's USER id.
+  ['accounts/:userId', 'breakGlassUser'],
+  ['activations/:id', 'breakGlassActivation'],
+  // ---- credentials ---------------------------------------------------------------
+  ['rotations/:id', 'credentialRotation'],
+  // `target_secret.<target id>`: a credential key names its subject inside it.
+  ['credentials/:key', { kind: 'target', format: (id) => `target_secret.${id}` }],
+  // ---- privacy -------------------------------------------------------------------
+  ['cases/:id', 'privacyCase'],
 ]);
 
 /**
@@ -210,10 +235,7 @@ export const ABSENT_IS_EMPTY: ReadonlyMap<string, string> = new Map<string, stri
     'GET /api/admin/targets/:id/placements/:personId',
     '`{ placement: null }` is the ordinary answer ("this person follows the rule"), by design; see the route.',
   ],
-  ['DELETE /api/auth/mfa/webauthn/:credentialId', IDEMPOTENT],
   ['DELETE /api/admin/roles/:id/assignments/:userId', IDEMPOTENT],
-  ['DELETE /api/admin/users/:id/factors/:type', IDEMPOTENT],
-  ['POST /api/admin/users/:id/sessions/revoke', IDEMPOTENT],
   ['DELETE /api/admin/groups/:id/members/:userId', IDEMPOTENT],
   ['DELETE /api/admin/applications/:id/assignments/:assignmentId', IDEMPOTENT],
   ['DELETE /api/admin/applications/:id/claims/:claimId', IDEMPOTENT],
@@ -261,6 +283,10 @@ export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>(
   ['POST /api/admin/persons/import', 'A CSV body of new people; it names no existing object.'],
   ['POST /api/admin/automate/workflows', 'Creates an approval workflow; stage selectors are words, not ids.'],
   ['POST /api/admin/automate/tasks', 'Creates a delegated task from an action key.'],
+  ['PUT /api/admin/change-control/policy', 'Which change classes this tenant holds for a second administrator; class names, not ids.'],
+  ['PUT /api/admin/break-glass/settings', "This tenant's activation delay, in minutes."],
+  ['POST /api/admin/credentials/scan', "Scans the calling tenant's own credential inventory; takes only a flag."],
+  ['PUT /api/admin/security-notifications', 'Which security categories this tenant mails, and its alert thresholds.'],
   ['POST /api/admin/groups', 'Creates a group from a name and description.'],
   ['POST /api/admin/lifecycle-operations/simulate', 'A pure what-if over the state described in the body; it reads no saved object.'],
   ['POST /api/admin/sources', 'Creates a directory source from a connection description.'],
@@ -373,7 +399,7 @@ const FIELD_KINDS: readonly [RegExp, Kind][] = [
   [/role/i, 'role'],
   [/application|app$/i, 'application'],
   [/claimset/i, 'claimSet'],
-  [/targetsystem|target$/i, 'target'],
+  [/targetsystem|target$|systemid/i, 'target'],
   [/directorysource|sourceid|source$/i, 'source'],
   [/snapshot/i, 'snapshot'],
   [/campaign/i, 'campaign'],
@@ -412,7 +438,9 @@ export function paramsOf(url: string): { name: string; keys: string[] }[] {
   return out;
 }
 
-export type Resolution = { name: string; kind: Kind } | { name: string; fixed: string };
+export type Resolution =
+  | { name: string; kind: Kind; format?: (id: string) => string }
+  | { name: string; fixed: string };
 
 /**
  * What each path parameter of `url` is, or the parameters nobody has
@@ -425,6 +453,7 @@ export function resolveParams(url: string): { resolved: Resolution[]; unknown: s
     const hit = param.keys.map((key) => PARAM_KINDS.get(key)).find((value) => value !== undefined);
     if (hit === undefined) unknown.push(param.keys[1]!);
     else if (typeof hit === 'string') resolved.push({ name: param.name, kind: hit });
+    else if ('format' in hit) resolved.push({ name: param.name, kind: hit.kind, format: hit.format });
     else resolved.push({ name: param.name, fixed: hit.static });
   }
   return { resolved, unknown };

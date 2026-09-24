@@ -30,7 +30,9 @@ export type ReferenceKind =
   | 'application'
   | 'entitlement'
   | 'businessFunction'
-  | 'approvalWorkflow';
+  | 'approvalWorkflow'
+  | 'contract'
+  | 'targetSystem';
 
 export class UnknownReferenceError extends Error {
   constructor(
@@ -52,6 +54,8 @@ const exists: Record<ReferenceKind, (tx: TenantClient, id: string) => Promise<un
   entitlement: (tx, id) => tx.entitlement.findUnique({ where: { id }, select: { id: true } }),
   businessFunction: (tx, id) => tx.businessFunction.findUnique({ where: { id }, select: { id: true } }),
   approvalWorkflow: (tx, id) => tx.approvalWorkflow.findUnique({ where: { id }, select: { id: true } }),
+  contract: (tx, id) => tx.contract.findUnique({ where: { id }, select: { id: true } }),
+  targetSystem: (tx, id) => tx.targetSystem.findUnique({ where: { id }, select: { id: true } }),
 };
 
 /**

@@ -320,7 +320,12 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
       const { scopeOrgUnitId } = roleAssignmentQuery.parse(request.query);
       try {
         await request.db(async (tx) => {
-          await revokeRole(tx, userId, id, scopeOrgUnitId);
+          // Nothing held -- including another tenant's role or user, which
+          // RLS hides -- is still a 204 (the removal is idempotent), but it
+          // is not an event. It was recorded as `rbac.role_revoked`, success,
+          // naming whatever ids the caller sent; the tenant-isolation probe
+          // found B's role ids in A's audit trail and in A's DSAR bundles.
+          if ((await revokeRole(tx, userId, id, scopeOrgUnitId)) === 0) return;
           // Unchanged by the scope, and deliberately: `countHoldersOf` counts
           // UNSCOPED holders only, so withdrawing a tenant-wide grant is
           // refused even where a scoped one survives it. Authority over one

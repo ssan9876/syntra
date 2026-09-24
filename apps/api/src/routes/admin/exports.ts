@@ -16,6 +16,7 @@ import {
   type ExportRefusal,
   type ExportSummary,
   type Scheduler,
+  readableSnapshot,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -81,6 +82,14 @@ export async function queueExportFor(
   body: ExportRequestBody,
 ): Promise<ExportSummary> {
   assertTokenCovers(request, body.kind);
+  // A Govern export names its snapshot; it is looked up (through the one
+  // accessor, so "unreadable" is refused too) before anything is queued. It
+  // was queued with any id -- another tenant's included -- and failed later in
+  // the job, after the caller had been told 202.
+  if (body.kind === 'govern_access') {
+    const snapshotId = (body.params as { snapshotId?: string }).snapshotId;
+    if (snapshotId !== undefined) await request.db((tx) => readableSnapshot(tx, snapshotId));
+  }
   try {
     return await requestExport(scheduler, request.tenantId, {
       kind: body.kind,
