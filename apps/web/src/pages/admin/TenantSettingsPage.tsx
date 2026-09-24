@@ -5,6 +5,8 @@ import { SettingsSessionsTab } from './SettingsSessionsTab.js';
 import { BrandingTab } from './BrandingTab.js';
 import { WebhooksTab } from './WebhooksTab.js';
 import { TenantDeletionTab } from './TenantDeletionTab.js';
+import { ChangeControlTab } from './ChangeControlTab.js';
+import { BreakGlassTab } from './BreakGlassTab.js';
 
 /**
  * Settings: how this organization signs in, what it looks like, and where it
@@ -36,6 +38,9 @@ export function TenantSettingsPage() {
           { id: 'sessions', label: 'Sessions', content: <SettingsSessionsTab /> },
           { id: 'branding', label: 'Branding', content: <BrandingTab /> },
           { id: 'webhooks', label: 'Webhooks', content: <WebhooksTab /> },
+          // Separation of duties for privileged changes, and emergency access.
+          { id: 'change-control', label: 'Change control', content: <ChangeControlTab /> },
+          { id: 'break-glass', label: 'Break-glass', content: <BreakGlassTab /> },
           { id: 'offboarding', label: 'Offboarding', content: <TenantDeletionTab /> },
         ]}
       />

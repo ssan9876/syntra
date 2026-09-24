@@ -140,6 +140,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261029090000_audit_correlation_id',
   '20261030120000_data_exports_audit_search',
   '20261031000000_audit_correlation_index',
+  '20261101143117_privileged_change_break_glass',
 ];
 
 /**

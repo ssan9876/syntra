@@ -13,7 +13,8 @@ export const tokensOpenApi = describeAdminRoutes('API tokens', {
   'POST /users/:id/tokens': {
     summary: 'Issue an API token for a service account',
     description:
-      'The response carries the token secret. It is returned exactly once and cannot be read back; store it immediately.',
+      'The response carries the token secret. It is returned exactly once and cannot be read back; store it immediately.' +
+      ' Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.',
     body: issueApiTokenRequest,
     params: idParam,
     status: 201,

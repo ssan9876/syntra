@@ -36,6 +36,9 @@ import type { RequestPrincipal } from './require-session.js';
  *   freshly stepped-up session as its evidence. A token has no step-up, and
  *   an integration that could request or approve an erasure would make the
  *   second pair of eyes a script.
+ * - SEPARATION OF DUTIES and BREAK-GLASS -- deciding a held privileged
+ *   change needs a stepped-up session, and so does every emergency-access
+ *   decision; a second pair of eyes that could be an integration is not one.
  */
 export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/auth',
@@ -45,6 +48,8 @@ export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/admin/users/:id/tokens',
   '/api/admin/sessions/revoke',
   '/api/admin/tenant/deletion',
+  '/api/admin/change-control',
+  '/api/admin/break-glass',
 ];
 
 export function routeRefusesTokens(routePattern: string | undefined): boolean {

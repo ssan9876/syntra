@@ -24,11 +24,13 @@ import {
   registerWebhookJobs,
   registerLifecycleJobs,
   registerWriteStopJobs,
+  registerPrivilegedAccessJobs,
   registerExportJobs,
   scheduleExportSweep,
   scheduleKeyRotation,
   scheduleLifecycleMaintenance,
   scheduleWriteStopExpiry,
+  schedulePrivilegedAccessSweep,
   smtpTransport,
   type Config,
   type Scheduler,
@@ -152,6 +154,19 @@ export async function scheduleBackgroundWork(
     } catch (cause) {
       failure('write stop expiry');
       logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule write stop expiry');
+    }
+  }
+
+  for (const tenant of tenants) {
+    try {
+      // Held privileged changes expiring, and break-glass activations taking
+      // effect after their delay or ending at their expiry. Enforcement reads
+      // the clock itself; this records the transitions and sends the mail.
+      attempt('privileged access sweep');
+      await schedulePrivilegedAccessSweep(scheduler, tenant.id);
+    } catch (cause) {
+      failure('privileged access sweep');
+      logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule privileged access sweep');
     }
   }
 
@@ -449,6 +464,9 @@ export async function startSyncScheduler(
     registerProvisionJobs(scheduler, provider, transport);
     registerLifecycleJobs(scheduler, { publicUrl: config.publicUrl });
     registerWriteStopJobs(scheduler);
+    // The transport is NOT optional: a break-glass activation that takes
+    // effect after its delay is mailed to every tenant.manage holder.
+    registerPrivilegedAccessJobs(scheduler, transport);
     // The provider is NOT optional: the generator seals every file under it,
     // and the API's download route opens it with the same master key.
     registerExportJobs(scheduler, provider);

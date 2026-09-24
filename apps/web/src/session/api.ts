@@ -75,7 +75,63 @@ export function onSessionExpired(handler: () => void): () => void {
   };
 }
 
+/**
+ * A privileged change the server held for a second administrator instead of
+ * applying (`202` carrying `changeRequest`).
+ *
+ * Thrown rather than returned, deliberately: every caller of a held route
+ * expects the applied result — a token, a saved endpoint — and would render
+ * `undefined` as one. As an error it lands in the caller's existing failure
+ * path, which already shows `problem.detail`, and a caller that wants to say
+ * something kinder checks for this class.
+ */
+export class ChangeHeldError extends ApiError {
+  constructor(readonly changeRequest: { id: string; summary: string; changeClass: string }) {
+    super({
+      type: 'https://syntra.dev/problems/change-held',
+      title: 'Sent for approval',
+      status: 202,
+      detail: `Held for a second administrator: ${changeRequest.summary}. Nothing has changed yet; it is applied when another administrator approves it under Settings → Change control.`,
+    });
+    this.name = 'ChangeHeldError';
+  }
+}
+
+/** The header a held change's reason travels in. See `privileged-changes.ts`. */
+export const CHANGE_REASON_HEADER = 'x-syntra-change-reason';
+
+type HeldChangePrompt = (problem: Problem) => Promise<string | null>;
+let heldChangePrompt: HeldChangePrompt | null = null;
+
+/**
+ * Registers how the console asks for the reason a held privileged change
+ * needs. When a request is answered `409 change-approval-required`, `api()`
+ * asks this for a reason and, given one, sends the same request again with
+ * it — so no form in the console has to know which of its changes a tenant
+ * holds. Returns an unsubscribe.
+ */
+export function onChangeApprovalRequired(prompt: HeldChangePrompt): () => void {
+  heldChangePrompt = prompt;
+  return () => {
+    if (heldChangePrompt === prompt) heldChangePrompt = null;
+  };
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  try {
+    return await send<T>(path, init);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.kind !== 'change-approval-required' || !heldChangePrompt) throw error;
+    const reason = await heldChangePrompt(error.problem);
+    if (reason === null) throw error;
+    return send<T>(path, {
+      ...init,
+      headers: { ...(init.headers ?? {}), [CHANGE_REASON_HEADER]: encodeURIComponent(reason) },
+    });
+  }
+}
+
+async function send<T>(path: string, init: RequestInit): Promise<T> {
   // Only declare a JSON body when there is one. Sending
   // `content-type: application/json` with an empty body is rejected outright
   // by the server, which silently broke sign-out: the request never arrived
@@ -114,5 +170,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  const body = (await response.json()) as T;
+  if (response.status === 202 && body && typeof body === 'object' && 'changeRequest' in body &&
+      (body as { status?: unknown }).status === 'pending_approval') {
+    throw new ChangeHeldError((body as unknown as { changeRequest: ChangeHeldError['changeRequest'] }).changeRequest);
+  }
+  return body;
 }

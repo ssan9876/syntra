@@ -252,6 +252,21 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nThe {{operationKind}} operation for {{personName}} completed: every required step reached its observed state or was resolved by hand.\n\n{{operationUrl}}',
     html: '<p>Hello {{displayName}},</p><p>The <strong>{{operationKind}}</strong> operation for {{personName}} completed: every required step reached its observed state or was resolved by hand.</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
   },
+  /**
+   * Break-glass. Sent to every holder of `tenant.manage` the moment emergency
+   * access is ASKED for, so the delay before it takes effect is time somebody
+   * knows about. Names the account and the reason, never the credential.
+   */
+  'break-glass-requested': {
+    subject: 'Emergency access requested for {{accountName}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nEmergency (break-glass) console access was requested for {{accountName}} ({{login}}) from {{sourceIp}}.\n\nReason given: {{reason}}\n\nIt takes effect at {{activatesAt}} unless an administrator cancels it before then, and lasts {{durationMinutes}} minutes. If you do not recognise this, cancel it now under Settings → Break-glass in the console and treat the sealed credential as compromised.',
+    html: '<p>Hello {{displayName}},</p><p>Emergency (break-glass) console access was requested for <strong>{{accountName}}</strong> ({{login}}) from {{sourceIp}}.</p><p>Reason given: {{reason}}</p><p>It takes effect at <strong>{{activatesAt}}</strong> unless an administrator cancels it before then, and lasts {{durationMinutes}} minutes. If you do not recognise this, cancel it now under Settings → Break-glass in the console and treat the sealed credential as compromised.</p>',
+  },
+  'break-glass-activated': {
+    subject: 'Emergency access is active for {{accountName}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nEmergency (break-glass) console access for {{accountName}} ({{login}}) is now active ({{activatedBy}}) until {{expiresAt}}.\n\nReason given: {{reason}}\n\nAny administrator can end it early under Settings → Break-glass. When it ends, a different administrator must complete the post-event review.',
+    html: '<p>Hello {{displayName}},</p><p>Emergency (break-glass) console access for <strong>{{accountName}}</strong> ({{login}}) is now active ({{activatedBy}}) until <strong>{{expiresAt}}</strong>.</p><p>Reason given: {{reason}}</p><p>Any administrator can end it early under Settings → Break-glass. When it ends, a different administrator must complete the post-event review.</p>',
+  },
 } satisfies Record<string, Template>;
 
 export type TemplateName = keyof typeof TEMPLATES;

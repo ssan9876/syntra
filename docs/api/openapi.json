@@ -42,6 +42,12 @@
       "name": "Automate"
     },
     {
+      "name": "Break-glass"
+    },
+    {
+      "name": "Change control"
+    },
+    {
       "name": "Deployment updates"
     },
     {
@@ -5092,6 +5098,533 @@
         }
       }
     },
+    "/api/admin/break-glass": {
+      "get": {
+        "operationId": "getBreakGlass",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Get emergency accounts, recent activations and the activation delay",
+        "description": "Requires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/accounts": {
+      "post": {
+        "operationId": "postBreakGlassAccounts",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Designate an emergency (break-glass) account",
+        "description": "Never your own account, and only one that signs in with a local password. The response carries the sealed recovery credential, returned once and stored only as a digest: keep it offline. Needs a stepped-up session.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "required": [
+                  "userId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/accounts/{userId}": {
+      "delete": {
+        "operationId": "deleteBreakGlassAccountsByUserId",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Stop an account being an emergency account",
+        "description": "Requires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/accounts/{userId}/rotate": {
+      "post": {
+        "operationId": "postBreakGlassAccountsByUserIdRotate",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Issue a new sealed credential for an emergency account",
+        "description": "The previous credential stops working at once. Refused while an activation is open, and for your own account.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/activations/{id}/approve": {
+      "post": {
+        "operationId": "postBreakGlassActivationsByIdApprove",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Approve a pending emergency activation early",
+        "description": "Four-eyes: never the emergency account itself, from a stepped-up session. Takes effect at once and mails every tenant.manage holder.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/activations/{id}/end": {
+      "post": {
+        "operationId": "postBreakGlassActivationsByIdEnd",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Cancel a pending emergency activation, or end an active one",
+        "description": "Ending an active one ends its sessions at their next request and makes the post-event review due.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/activations/{id}/review": {
+      "post": {
+        "operationId": "postBreakGlassActivationsByIdReview",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Complete the post-event review of an emergency activation",
+        "description": "Never by the emergency account itself, with written findings, from a stepped-up session.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "notes": {
+                    "type": "string",
+                    "minLength": 20,
+                    "maxLength": 4000
+                  }
+                },
+                "required": [
+                  "notes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/settings": {
+      "put": {
+        "operationId": "putBreakGlassSettings",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Set how long an emergency activation waits before taking effect",
+        "description": "Fifteen minutes to 24 hours. Needs a console session stepped up in the last ten minutes.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "activationDelayMinutes": {
+                    "type": "integer",
+                    "minimum": 15,
+                    "maximum": 1440
+                  }
+                },
+                "required": [
+                  "activationDelayMinutes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/status": {
+      "get": {
+        "operationId": "getBreakGlassStatus",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Get the break-glass state every console banner shows",
+        "description": "Pending and active emergency activations and the number of post-event reviews outstanding. Open to every administrative session.\n\nRequires an administrative session; no further permission. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/catalog": {
       "get": {
         "operationId": "getCatalog",
@@ -5129,6 +5662,356 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control": {
+      "get": {
+        "operationId": "getChangeControl",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Get the privileged change policy and the queue of held changes",
+        "description": "Lists which privileged change classes the tenant holds for a second administrator, the class catalogue, and recent change requests (pending ones past their 72-hour window are closed as expired first).\n\nRequires `tenant.manage` and `rbac.manage` and `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage",
+          "rbac.manage",
+          "token.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control/policy": {
+      "put": {
+        "operationId": "putChangeControlPolicy",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Set which privileged change classes are held for a second administrator",
+        "description": "Turning a class on applies at once. Turning one off is itself held: the response is `202` with the change request, and needs a reason in the `X-Syntra-Change-Reason` header (URI-encoded) — without one the answer is `409 change-approval-required`.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "classes": {
+                    "maxItems": 4,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "role_grant",
+                        "admin_token",
+                        "auth_policy",
+                        "webhook_endpoint"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "classes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control/requests/{id}/approve": {
+      "post": {
+        "operationId": "postChangeControlRequestsByIdApprove",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Approve and apply a held privileged change",
+        "description": "Four-eyes: never the requester, and only an administrator holding the permission the change class needs, from a console session stepped up in the last ten minutes. Refused as `stale` (and the request invalidated) if the object it changes was modified after the request. The change is applied in the same transaction; for a token or a new webhook endpoint the response carries its secret, returned once.\n\nRequires `tenant.manage` and `rbac.manage` and `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage",
+          "rbac.manage",
+          "token.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 1000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control/requests/{id}/reject": {
+      "post": {
+        "operationId": "postChangeControlRequestsByIdReject",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Reject a held privileged change",
+        "description": "Never the requester, who may withdraw instead.\n\nRequires `tenant.manage` and `rbac.manage` and `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage",
+          "rbac.manage",
+          "token.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 1000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control/requests/{id}/withdraw": {
+      "post": {
+        "operationId": "postChangeControlRequestsByIdWithdraw",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Withdraw your own held privileged change",
+        "description": "Requires `tenant.manage` and `rbac.manage` and `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage",
+          "rbac.manage",
+          "token.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -18585,7 +19468,7 @@
           "Roles"
         ],
         "summary": "Update a role",
-        "description": "Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`.\n\nRequires `rbac.manage`.",
+        "description": "Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`. Adding a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `rbac.manage`.",
         "x-syntra-permission": [
           "rbac.manage"
         ],
@@ -18734,7 +19617,7 @@
           "Roles"
         ],
         "summary": "Assign a role to a user",
-        "description": "Requires `rbac.manage`.",
+        "description": "Assigning a role that carries a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `rbac.manage`.",
         "x-syntra-permission": [
           "rbac.manage"
         ],
@@ -24726,7 +25609,7 @@
           "Tenant"
         ],
         "summary": "Replace the tenant's settings",
-        "description": "Includes session lifetimes and whether console access demands a security key; enabling that is refused unless the caller's own session was established with one.\n\nRequires `tenant.manage`.",
+        "description": "Includes session lifetimes and whether console access demands a security key; enabling that is refused unless the caller's own session was established with one. A body that relaxes any sign-in setting is an authentication-policy change. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `tenant.manage`.",
         "x-syntra-permission": [
           "tenant.manage"
         ],
@@ -27085,7 +27968,7 @@
           "API tokens"
         ],
         "summary": "Issue an API token for a service account",
-        "description": "The response carries the token secret. It is returned exactly once and cannot be read back; store it immediately.\n\nRequires `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "description": "The response carries the token secret. It is returned exactly once and cannot be read back; store it immediately. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
         "x-syntra-permission": [
           "token.manage"
         ],
@@ -27475,7 +28358,7 @@
           "Webhooks"
         ],
         "summary": "Create a webhook endpoint",
-        "description": "The response carries the signing secret. It is shown once and cannot be read back.\n\nRequires `tenant.manage`.",
+        "description": "The response carries the signing secret. It is shown once and cannot be read back. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one. On approval the secret goes to the approver.\n\nRequires `tenant.manage`.",
         "x-syntra-permission": [
           "tenant.manage"
         ],
@@ -27635,7 +28518,7 @@
           "Webhooks"
         ],
         "summary": "Update a webhook endpoint",
-        "description": "Requires `tenant.manage`.",
+        "description": "Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `tenant.manage`.",
         "x-syntra-permission": [
           "tenant.manage"
         ],

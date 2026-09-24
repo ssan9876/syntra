@@ -9,6 +9,7 @@ import type {
   PolicyOutcome,
 } from '../policy/types.js';
 import { isAdministrator } from '../rbac/rbac-service.js';
+import { breakGlassStanding } from '../privileged/break-glass.js';
 import {
   consumeAttempt,
   findAttempt,
@@ -198,6 +199,13 @@ export type AuthorizeResult =
       /** Carried from the request, or from the attempt on a step-up. */
       scope: SessionScope;
       satisfiedFactor: FactorPresentationType | null;
+      /**
+       * Set only when this administrative session exists because of an
+       * active break-glass activation. The session records it and is live
+       * only while the activation is. Optional so every allowance that is
+       * not break-glass reads exactly as it did.
+       */
+      breakGlassActivationId?: string | undefined;
     }
   | {
       /** Present a factor you already hold. */
@@ -633,8 +641,34 @@ async function decide(
     // administrative session (elevation, a completed factor, a completed
     // enrolment or renewal) re-enters `decide()`, so this is the one place a
     // requirement cannot be forgotten by a caller that did not know about it.
+    // BREAK-GLASS. A designated emergency account is inert outside an
+    // activation: it is refused administrative scope outright, and so is any
+    // machine token acting as it. Inside an activation, and only then, the
+    // security-key requirement below is lifted for that account -- the one
+    // sanctioned way past it, and the reason the activation is announced,
+    // delayed, time-bound and reviewed (see `privileged/break-glass.ts`).
+    // Everything else -- the password, the policy, the admin-MFA floor --
+    // still applies.
+    const breakGlass =
+      input.scope === 'admin'
+        ? await breakGlassStanding(tx, input.userId, input.now)
+        : { designated: false, activationId: null };
+    if (breakGlass.designated && (input.machine || breakGlass.activationId === null)) {
+      await audit(tx, {
+        userId: input.userId,
+        action: 'auth.break_glass_refused',
+        outcome: 'failure',
+        sourceIp: input.sourceIp,
+        payload: { reason: input.machine ? 'token_for_emergency_account' : 'no_active_activation' },
+      });
+      return { status: 'deny', reason: 'policy_denied' };
+    }
+
     const adminWebauthn =
-      tenant.adminWebauthnRequired && input.scope === 'admin' && !input.machine;
+      tenant.adminWebauthnRequired &&
+      input.scope === 'admin' &&
+      !input.machine &&
+      breakGlass.activationId === null;
 
     const decision = applyAdminWebauthn(
       applyFloor(
@@ -701,6 +735,7 @@ async function decide(
         applicationId: input.applicationId,
         scope: input.scope,
         satisfiedFactor: input.satisfied,
+        ...(breakGlass.activationId === null ? {} : { breakGlassActivationId: breakGlass.activationId }),
       };
     };
 

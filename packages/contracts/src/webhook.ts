@@ -24,6 +24,7 @@ export const webhookEventGroups = [
   "credentials",
   "configuration",
   "write-stops",
+  "privileged-access",
 ] as const;
 
 /**

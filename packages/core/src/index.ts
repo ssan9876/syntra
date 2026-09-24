@@ -414,3 +414,10 @@ export type {
   GuardVerdict as GovernGuardVerdict,
   GuardThresholds as GovernGuardThresholds,
 } from './govern/revocation-guard.js';
+
+// Separation of duties for privileged administrative changes, and break-glass.
+export * from './privileged/change-control.js';
+export * from './privileged/rbac-handlers.js';
+export * from './privileged/auth-policy.js';
+export * from './privileged/break-glass.js';
+export * from './privileged/jobs.js';

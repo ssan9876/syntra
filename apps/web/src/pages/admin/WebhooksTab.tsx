@@ -77,6 +77,10 @@ const GROUPS = [
     key: 'write-stops',
     label: 'Emergency write stops',
   },
+  {
+    key: 'privileged-access',
+    label: 'Privileged access',
+  },
 ] as const;
 
 const LABELS = new Map(GROUPS.map((g) => [g.key as string, g.label]));

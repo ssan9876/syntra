@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { TenantClient } from '@syntra/db';
 import type { AuthorizeResult } from './authorize.js';
 import { currentTenant } from '../tenant-context.js';
+import { breakGlassActivationLive } from '../privileged/break-glass.js';
 
 export type SessionScope = 'portal' | 'admin';
 
@@ -148,6 +149,11 @@ export interface ResolvedSession {
    * expired.
    */
   createdAt: Date;
+  /**
+   * The break-glass activation this session exists under, if any. The
+   * console reads it to say so; liveness already ends the session with it.
+   */
+  breakGlassActivationId?: string | null;
 }
 
 /**
@@ -228,6 +234,7 @@ export async function createSession(
       scope,
       satisfiedFactor,
       absoluteExpiresAt,
+      breakGlassActivationId: decision.breakGlassActivationId ?? null,
       ip: origin.ip,
       userAgent: origin.userAgent?.slice(0, USER_AGENT_MAX) ?? null,
     },
@@ -246,6 +253,7 @@ interface SessionRow {
   lastSeenAt: Date;
   absoluteExpiresAt: Date;
   revokedAt: Date | null;
+  breakGlassActivationId: string | null;
 }
 
 /**
@@ -285,7 +293,16 @@ async function isLive(
   // authorises nothing the policy is protecting. `authorize()` refuses to
   // MINT such a session while the policy is on; this ends the ones minted
   // before it was switched on.
-  if (
+  //
+  // The one exception is a session minted under a break-glass activation:
+  // that activation is the sanctioned way past the requirement, and the
+  // session lives exactly as long as the activation does -- ended early,
+  // expired or cancelled, the session stops at its next request.
+  if (row.breakGlassActivationId !== null) {
+    if (!(await breakGlassActivationLive(tx, row.breakGlassActivationId, new Date(now)))) {
+      return false;
+    }
+  } else if (
     scope === 'admin' &&
     policy.adminWebauthnRequired &&
     row.satisfiedFactor !== 'webauthn'
@@ -305,6 +322,7 @@ const toResolved = (row: SessionRow): ResolvedSession => ({
   scope: row.scope as SessionScope,
   satisfiedFactor: row.satisfiedFactor,
   createdAt: row.createdAt,
+  breakGlassActivationId: row.breakGlassActivationId,
 });
 
 /**
