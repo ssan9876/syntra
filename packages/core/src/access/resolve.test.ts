@@ -295,7 +295,7 @@ describe('assignments', () => {
       await assignApplication(tx, crm.id, { type: 'group', id: g.id });
       return listAssignments(tx, crm.id);
     });
-    await withTenant(tenantId, (tx) => unassignApplication(tx, rows[0]!.id));
+    await withTenant(tenantId, (tx) => unassignApplication(tx, crm.id, rows[0]!.id));
     expect(await withTenant(tenantId, (tx) => listAssignments(tx, crm.id))).toHaveLength(1);
   });
 });

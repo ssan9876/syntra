@@ -303,7 +303,10 @@ export async function registerAdminApplicationRoutes(
       const { id, assignmentId } = assignmentParams.parse(request.params);
 
       await request.db(async (tx) => {
-        await unassignApplication(tx, assignmentId);
+        // Nothing removed -- no such assignment, or one of a different
+        // application than :id -- is still 204 (the call is idempotent), but
+        // it is not an event: there is nothing to attribute to :id.
+        if ((await unassignApplication(tx, id, assignmentId)) === 0) return;
         await recordEvent(tx, {
           actorUserId: request.session.userId,
           action: 'application.unassign',

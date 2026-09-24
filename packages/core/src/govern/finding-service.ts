@@ -1,5 +1,6 @@
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
+import { assertReferenceInTenant } from '../tenant-reference.js';
 import type { ClassifiedSource } from './freshness.js';
 import {
   AUDIT_CHAIN_REF,
@@ -524,6 +525,8 @@ export async function assignFinding(
   dueAt: Date,
 ): Promise<void> {
   await withTenant(tenantId, async (tx) => {
+    // The owner is a person OF THIS TENANT. See tenant-reference.ts.
+    await assertReferenceInTenant(tx, 'person', ownerPersonId, 'ownerPersonId');
     await tx.governFinding.update({
       where: { id: findingId },
       data: { ownerPersonId, dueAt, status: 'acknowledged' },

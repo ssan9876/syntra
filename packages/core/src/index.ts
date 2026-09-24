@@ -5,6 +5,7 @@ export * from './storable-text.js';
 export * from './net/outbound.js';
 export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
+export * from './tenant-reference.js';
 export * from './tenant/tenant-service.js';
 export * from './tenant/brand-service.js';
 export * from './tenant/offboarding-service.js';

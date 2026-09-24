@@ -1,5 +1,6 @@
 import { withTenant, type TenantClient } from "@syntra/db";
 import { recordEvent } from "../audit/audit-service.js";
+import { assertReferenceInTenant, UnknownReferenceError } from "../tenant-reference.js";
 // `reconcileFindings`, not `upsertFindings`: `detectSodViolations` is
 // authoritative for the three SoD kinds and must close the ones that have gone.
 // A whole-tenant sweep from here would close every standing finding the
@@ -49,6 +50,7 @@ export async function upsertBusinessFunction(
   }
 
   return withTenant(tenantId, async (tx) => {
+    await assertReferenceInTenant(tx, 'person', input.ownerPersonId, 'ownerPersonId');
     const fn =
       input.id === undefined
         ? await tx.businessFunction.create({
@@ -115,6 +117,12 @@ export async function upsertSodRule(
 
   const { id, ...fields } = input;
   return withTenant(tenantId, async (tx) => {
+    // Both sides, and the exception workflow, are looked up in THIS tenant: a
+    // rule over another tenant's functions would be written, and then
+    // evaluate to nothing forever. See tenant-reference.ts.
+    await assertReferenceInTenant(tx, 'businessFunction', input.functionAId, 'functionAId');
+    await assertReferenceInTenant(tx, 'businessFunction', input.functionBId, 'functionBId');
+    await assertReferenceInTenant(tx, 'approvalWorkflow', input.exceptionWorkflowId, 'exceptionWorkflowId');
     const rule =
       id === undefined
         ? await tx.sodRule.create({ data: { tenantId, ...fields } })
@@ -440,8 +448,9 @@ export async function previewSodRuleImpact(
     });
     const a = functions.find((f) => f.id === input.functionAId);
     const b = functions.find((f) => f.id === input.functionBId);
-    if (a === undefined || b === undefined)
-      throw new Error("both business functions must exist");
+    // A 404, not a 500: under RLS another tenant's function is simply absent.
+    if (a === undefined) throw new UnknownReferenceError("functionAId", "businessFunction");
+    if (b === undefined) throw new UnknownReferenceError("functionBId", "businessFunction");
 
     const toFn = (f: (typeof functions)[number]) => ({
       functionId: f.id,

@@ -3,6 +3,7 @@
 // not declaring it is what makes `new PrismaClient()` unresolvable here, and
 // therefore what makes `withTenant` the only route to the database.
 import { Prisma, withTenant, type Product, type TenantClient } from '@syntra/db';
+import { assertReferenceInTenant } from '../tenant-reference.js';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { activeContracts } from '../identity/contract-service.js';
@@ -849,6 +850,12 @@ export async function upsertResourceOwner(
   },
 ): Promise<void> {
   await withTenant(tenantId, async (tx) => {
+    // The resource and its owner are both looked up in THIS tenant: the pair
+    // is polymorphic, so no foreign key stands behind `resourceId` at all.
+    // See tenant-reference.ts.
+    await assertReferenceInTenant(tx, input.resourceType, input.resourceId, 'resourceId');
+    await assertReferenceInTenant(tx, 'person', input.ownerPersonId, 'ownerPersonId');
+    await assertReferenceInTenant(tx, 'group', input.ownerGroupId, 'ownerGroupId');
     await tx.resourceOwner.upsert({
       where: {
         tenantId_resourceType_resourceId: {

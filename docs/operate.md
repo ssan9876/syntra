@@ -1215,6 +1215,58 @@ same URL, Vite is listening on IPv6 only: `localhost` resolves to `::1` on
 recent Node, while Chromium maps `*.localhost` to `127.0.0.1`. Start the web
 server with `vite --host 127.0.0.1`.
 
+### The tenant-isolation probe
+
+`apps/api/src/tenant-isolation/` is a generated, exhaustive cross-tenant test.
+Run it on its own with:
+
+```bash
+SYNTRA_TEST_WORKERS=2 pnpm exec vitest run apps/api/src/tenant-isolation
+```
+
+It seeds two tenants with one real row of every major kind of object
+(`world.ts`: users, groups, org units, people, contracts, applications,
+sources, runs, targets, roles, tokens, webhooks, exports, campaigns, SoD
+rules, Automate requests and more, 55 kinds in all). It then acts as tenant
+A's administrator, with every permission, an elevated session and a machine
+token for SCIM, and walks the running route table (`app.routeCatalog`):
+
+- **Every route that takes an object id** is called with tenant B's ids. The
+  route's parameters are resolved to kinds of object by `PARAM_KINDS` in
+  `probe.ts`. Routes with several parameters are also called with one foreign
+  parameter at a time and A's own ids for the rest. The answer must be a
+  refusal (403 or 404, or a 400/409/422 that the route reached after looking).
+  It must also be the same status as a "ghost" call with ids that never
+  existed, so that the answer cannot tell anyone whether an id exists in
+  another tenant. The routes allowed to answer an absent parent with an empty
+  success are listed in `ABSENT_IS_EMPTY`. Each still has to give exactly the
+  ghost's answer.
+- **Every id-shaped body and query field** is pointed at B. Request bodies
+  are generated from the published OpenAPI schemas, sent with the optional id
+  fields and again without them. The portal and SCIM routes have no published
+  schema, so `BODY_OVERRIDES` provides theirs.
+- **Every list route** is called bare and with its id filters set to B's ids.
+- **Every background job** the production scheduler registers is run with A's
+  tenant and B's ids in its payload.
+
+After every call, the response must not contain B's tag or any B id that the
+request did not itself carry. After every write, B's rows must be
+byte-for-byte what they were (a per-table digest taken as B). A refused write
+must not have changed A's rows either (audit, session and token timestamps
+excepted). No row of A may hold one of B's ids in any id, text or array
+column. That last check is the one row-level security cannot give on its own:
+PostgreSQL checks a foreign key without applying RLS to the referenced table,
+so A's row can point at B's unless the code looked the id up first.
+
+Structural tests fail when a route is added that the probe cannot classify:
+a path parameter with no `PARAM_KINDS` entry, or a parameterless write whose
+body has no id field and that is not listed in `NO_ID_INPUT` with a reason.
+They also fail for a job queue without a tenant-B payload, and for any
+allow-list entry that no longer names a registered route. Set
+`PROBE_LOG=<file>` to get every call and its status, for example to see which
+body probes validation stopped before the lookup. A run takes about 40
+seconds.
+
 ### Provisioning integration tests need a privileged Docker host
 
 The Active Directory target connector is tested against a real Samba domain

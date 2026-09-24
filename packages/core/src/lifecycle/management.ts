@@ -25,6 +25,7 @@ import {
 } from '../provision/desired-state-loader.js';
 import { enqueueOutbox, usersWithPermission, type OutboxDraft } from '../automate/notify.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
+import { assertReferenceInTenant } from '../tenant-reference.js';
 import type { Scheduler } from '../jobs/scheduler.js';
 
 function canonical(value: unknown): string {
@@ -178,6 +179,10 @@ export async function previewMover(
   const now = options.now ?? new Date();
   const { contract, policy, managerBefore, managerAfter } = await withTenant(tenantId, async (tx) => {
     const contract = await tx.contract.findFirstOrThrow({ where: { personId, sequence: contractSequence } });
+    // The preview is what apply writes, so a manager from another tenant is
+    // refused here rather than shown as a bare id and then written. See
+    // tenant-reference.ts.
+    await assertReferenceInTenant(tx, 'person', requested.managerPersonId, 'changes.managerPersonId');
     return {
       contract,
       policy: await readLifecyclePolicy(tx),

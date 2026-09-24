@@ -198,9 +198,39 @@ is retained; merged code alone is not enough.
 39. **Build — Tenant-isolation test suite.** Generate cross-tenant identifiers
     for every API and background job path and prove reads and writes fail
     closed.
+    **Implemented:** `apps/api/src/tenant-isolation/`. The suite seeds two
+    tenants with a real row of each of 55 kinds and walks the running route
+    table. It calls every id-bearing route under `/api/admin`, `/api/portal`,
+    `/scim/v2` and `/saml` with the other tenant's ids: all parameters
+    foreign, then one at a time. Every id-shaped body and query field is
+    pointed at the other tenant; bodies are generated from the OpenAPI schemas.
+    Every list route is called, and all 23 pg-boss handlers run with a foreign
+    payload. It asserts a refusal that matches the status for an id that never
+    existed. It also asserts that no foreign data appears in any response, that
+    the other tenant's rows are byte-identical afterwards, and that no row
+    points across tenants. Structural tests fail when a route or job is added
+    unclassified. The probe and an audit of the same pattern found and fixed
+    ten cross-tenant reference writes, three
+    routes that ignored a path parameter, a refresh that queued jobs for
+    foreign ids, and about 30 foreign-id 500s; see the continuous-improvement
+    loop's Completed list. Remaining: protocol endpoints beyond the
+    application-id routes are covered by their own suites, not the probe.
 40. **Build — Database isolation defense.** Evaluate PostgreSQL row-level
     security or an equivalent independently enforced boundary for all tenant
     data.
+    **Already enforced for reads and writes:** every tenant table is `ENABLE`
+    and `FORCE ROW LEVEL SECURITY`, with a `tenantId` policy on both `USING`
+    and `WITH CHECK`. The application connects as `NOSUPERUSER NOBYPASSRLS`,
+    and `withTenant` binds the tenant per transaction. The #39 probe confirms
+    no route or job reads or modifies another tenant's rows. **Gap it
+    exposed:** RLS does not cover *references*, because a foreign key is
+    checked without the referenced table's policies. A tenant's row can
+    therefore point at another tenant's row unless code looks the id up first.
+    That is now done in code (`assertReferenceInTenant`) on every path the
+    probe reached. The independent database-level control is still open: a
+    same-tenant constraint trigger on every foreign key between tenant tables,
+    or composite `(tenantId, id)` foreign keys. It should be measured against
+    the Govern snapshot and sync bulk-insert paths before it ships.
 41. **Build — Field-level authorization.** Restrict sensitive HR, identity,
     recovery, and connector-secret metadata independently of page access.
 42. **Build — Support-access controls.** Just-in-time, tenant-approved,
