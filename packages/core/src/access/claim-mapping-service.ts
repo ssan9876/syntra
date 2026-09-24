@@ -56,11 +56,19 @@ export async function createClaimMapping(
   return toSpec(row);
 }
 
+/**
+ * Removes one mapping OF THIS APPLICATION and says how many went (0 or 1).
+ * Scoped by the application as well as the id, which it was not: the route's
+ * `:id` was only ever written into the audit event, so any application's path
+ * removed any mapping. Found by the tenant-isolation probe.
+ */
 export async function deleteClaimMapping(
   tx: TenantClient,
+  applicationId: string,
   id: string,
-): Promise<void> {
-  await tx.claimMapping.deleteMany({ where: { id } });
+): Promise<number> {
+  const { count } = await tx.claimMapping.deleteMany({ where: { id, applicationId } });
+  return count;
 }
 
 /**

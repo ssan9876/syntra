@@ -623,6 +623,13 @@ export async function registerAdminSourceRoutes(
       // connection open for the length of it, which is the shape that outlasts
       // a proxy timeout — the browser is told it failed while the run carries
       // on, and the operator's next move is to press the button again.
+      // Looked up first, so an id that is not this tenant's source -- another
+      // tenant's, which RLS hides, or none -- is a 404 and not the 500 the
+      // run service's "no such source" became.
+      const source = await request.db((tx) =>
+        tx.directorySource.findUnique({ where: { id }, select: { id: true } }),
+      );
+      if (!source) throw new ProblemError(404, 'not-found', 'Source not found');
       try {
         const run = await queueRun(scheduler, request.tenantId, id);
         return reply.status(202).send(run);

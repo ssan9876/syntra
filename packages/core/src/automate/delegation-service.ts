@@ -2,6 +2,7 @@
 // declare `@prisma/client`, and not declaring it is what makes
 // `new PrismaClient()` unresolvable here.
 import { Prisma, withTenant, type TenantClient } from '@syntra/db';
+import { assertReferenceInTenant } from '../tenant-reference.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { hasPermission } from '../rbac/rbac-service.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
@@ -287,6 +288,12 @@ export async function upsertResourceDelegation(
         'A target entitlement cannot be delegated. It is granted through a catalog product and a Provision run, so that the approval and the target write stay in one place; delegate the application or the local group instead.',
       );
     }
+    // The resource and the delegate are this tenant's, looked up rather than
+    // trusted: `resourceId` has no foreign key, and the delegate's does not
+    // see RLS. See tenant-reference.ts.
+    await assertReferenceInTenant(tx, input.resourceType, input.resourceId, 'resourceId');
+    await assertReferenceInTenant(tx, 'person', input.delegatePersonId, 'delegatePersonId');
+    await assertReferenceInTenant(tx, 'group', input.delegateGroupId, 'delegateGroupId');
     // Scope is per resource, never per type. There is no "manage all groups"
     // delegation; that is a role, and roles live in the console.
     const data = {

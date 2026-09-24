@@ -1,5 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
+import { assertReferenceInTenant } from '../tenant-reference.js';
 
 export interface CreateContractInput {
   sequence: number;
@@ -36,6 +37,9 @@ export async function createContract(
 ) {
   const tenantId = await currentTenant(tx);
   assertValidContractDates(input.startDate, input.endDate);
+  // A manager is another person IN THIS TENANT; the foreign key alone would
+  // accept one from any tenant. See tenant-reference.ts.
+  await assertReferenceInTenant(tx, 'person', input.managerPersonId, 'managerPersonId');
   return tx.contract.create({
     data: {
       tenantId,

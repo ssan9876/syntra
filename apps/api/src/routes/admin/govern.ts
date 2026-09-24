@@ -382,6 +382,15 @@ export async function registerAdminGovernRoutes(
           'Nothing was enqueued. Govern never reads a source itself, so there is no fallback.',
         );
       }
+      // The source is looked up in THIS tenant before a job is queued for it.
+      // It was not: another tenant's id queued a job (which then found
+      // nothing, under RLS) and the caller was told it had been enqueued.
+      const exists = await request.db((tx) =>
+        kind === 'directorySource'
+          ? tx.directorySource.findUnique({ where: { id }, select: { id: true } })
+          : tx.targetSystem.findUnique({ where: { id }, select: { id: true } }),
+      );
+      if (!exists) throw new ProblemError(404, 'not-found', 'Source not found');
       if (kind === 'directorySource') {
         await scheduler.enqueue(SYNC_JOB, syncJobPayload(request.tenantId, id));
         return { enqueued: SYNC_JOB, owner: 'Directory Sync' };

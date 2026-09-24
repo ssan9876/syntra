@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
+import { SnapshotNotReadableError, UnknownReferenceError } from '@syntra/core';
 
 const BASE = 'https://syntra.dev/problems/';
 
@@ -67,6 +68,61 @@ export function registerProblemJson(
           path: i.path.join('.'),
           message: i.message,
         })),
+      });
+    }
+
+    /**
+     * A body field naming a row this tenant does not have. RLS makes another
+     * tenant's row and a row that never existed the same answer here, which
+     * is the point: the refusal says nothing about where else the id might
+     * exist. See `tenant-reference.ts` in core for why the lookup is needed.
+     */
+    if (error instanceof UnknownReferenceError) {
+      return reply.status(404).type('application/problem+json').send({
+        type: `${BASE}not-found`,
+        title: 'Not Found',
+        status: 404,
+        detail: `no such ${error.kind}`,
+        errors: [{ path: error.field, message: `no such ${error.kind}` }],
+      });
+    }
+
+    /**
+     * "The record this operation needs was not found": Prisma's P2025, from
+     * an `update`, `delete` or `findUniqueOrThrow` whose `where` matched
+     * nothing.
+     *
+     * Under row-level security that is exactly what another tenant's id looks
+     * like, and the tenant-isolation probe found some thirty routes answering
+     * one with a 500 -- failing closed, but reporting a caller's wrong id as a
+     * server bug and paging whoever watches the 500 rate. Mapped here, once,
+     * rather than in each of those handlers, so the next route written the
+     * same way is right too. Keyed on P2025 ALONE, for the reason the P2028
+     * branch below gives: a unique violation (P2002) is a different story and
+     * keeps its 500.
+     */
+    if ((error as { code?: string }).code === 'P2025') {
+      return reply.status(404).type('application/problem+json').send({
+        type: `${BASE}not-found`,
+        title: 'Not Found',
+        status: 404,
+      });
+    }
+
+    /**
+     * Govern's one accessor refusing a snapshot. `not_found` -- including
+     * another tenant's snapshot id, which RLS makes indistinguishable -- is a
+     * 404; a snapshot that exists but is building, failed or read no source is
+     * a 409 whose detail says which, since that is a state the caller can wait
+     * out or fix. Both were a 500.
+     */
+    if (error instanceof SnapshotNotReadableError) {
+      const missing = error.reason === 'not_found';
+      return reply.status(missing ? 404 : 409).type('application/problem+json').send({
+        type: `${BASE}${missing ? 'not-found' : 'snapshot-not-readable'}`,
+        title: missing ? 'Not Found' : 'Snapshot not readable',
+        status: missing ? 404 : 409,
+        detail: error.message,
       });
     }
 

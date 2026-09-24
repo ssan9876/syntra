@@ -1,6 +1,7 @@
 import type { TenantClient } from '@syntra/db';
 import { endSessions } from '../auth/end-sessions.js';
 import { currentTenant } from '../tenant-context.js';
+import { assertReferenceInTenant } from '../tenant-reference.js';
 import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
 
 export type UserStatus = 'active' | 'inactive';
@@ -48,6 +49,9 @@ export async function createUser(tx: TenantClient, input: CreateUserInput) {
   }
 
   const tenantId = await currentTenant(tx);
+  // Onboarding passes an org unit straight from its request body. See
+  // tenant-reference.ts for why the foreign key is not enough.
+  await assertReferenceInTenant(tx, 'orgUnit', input.orgUnitId, 'orgUnitId');
   return tx.user.create({
     data: {
       tenantId,

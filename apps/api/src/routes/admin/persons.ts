@@ -13,6 +13,7 @@ import {
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
+  assertReferenceInTenant,
   createContract,
   createPerson,
   deactivatePerson,
@@ -503,6 +504,9 @@ export async function registerAdminPersonRoutes(
           }
         }
 
+        // Looked up in this tenant first: the foreign key alone accepts another
+        // tenant's org unit. See tenant-reference.ts in core.
+        await assertReferenceInTenant(tx, 'orgUnit', body.orgUnitId, 'orgUnitId');
         const updated = await tx.person.update({
           where: { id },
           data: {

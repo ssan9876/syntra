@@ -317,6 +317,13 @@ export async function registerAdminTargetRoutes(
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
       const { id } = idParam.parse(request.params);
+      // A target this tenant does not have is a 404 before anything is
+      // dialled; it was a 502 "target unreachable", which told an operator to
+      // go and look at a directory that was never the problem.
+      const target = await request.db((tx) =>
+        tx.targetSystem.findUnique({ where: { id }, select: { id: true } }),
+      );
+      if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
       const containers = await targetContainers(request.tenantId, provider, id).catch(
         (cause: unknown) => {
           throw new ProblemError(
@@ -364,6 +371,16 @@ export async function registerAdminTargetRoutes(
     async (request) => {
       const { id, personId } = placementParams.parse(request.params);
       const body = movePlacementRequest.parse(request.body);
+      // Both halves of the path are looked up in this tenant before the move
+      // opens a connection: another tenant's target or person was a 500 ("no
+      // such target", or a credential error from THIS tenant's target when
+      // only the person was foreign).
+      const found = await request.db(async (tx) => ({
+        target: await tx.targetSystem.findUnique({ where: { id }, select: { id: true } }),
+        person: await tx.person.findUnique({ where: { id: personId }, select: { id: true } }),
+      }));
+      if (!found.target) throw new ProblemError(404, 'not-found', 'Target not found');
+      if (!found.person) throw new ProblemError(404, 'not-found', 'Person not found');
 
       const result = await moveAccount(request.tenantId, provider, {
         personId,

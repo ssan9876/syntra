@@ -1,5 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
+import { assertReferenceInTenant } from '../tenant-reference.js';
 import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
 import { assertValidContractDates } from './contract-service.js';
 
@@ -26,6 +27,8 @@ export async function createPerson(
   input: CreatePersonInput,
 ) {
   const tenantId = await currentTenant(tx);
+  // Looked up first: a foreign key does not see RLS. See tenant-reference.ts.
+  await assertReferenceInTenant(tx, 'orgUnit', input.orgUnitId, 'orgUnitId');
   return tx.person.create({
     data: {
       tenantId,
@@ -147,6 +150,7 @@ export async function updateContract(
 ) {
   const existing = await tx.contract.findFirst({ where: { personId, sequence } });
   if (!existing) return null;
+  await assertReferenceInTenant(tx, 'person', data.managerPersonId, 'managerPersonId');
 
   assertValidContractDates(
     data.startDate ?? existing.startDate,

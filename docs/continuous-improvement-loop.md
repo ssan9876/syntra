@@ -29,6 +29,25 @@ exists.
 
 ## Completed recently
 
+- Build the tenant-isolation test suite (backlog #39): a generated cross-tenant probe over every route and background job, which found and fixed real defects.
+  - **The probe.** `apps/api/src/tenant-isolation/` seeds two tenants with one row of each of 55 kinds of object. Acting as tenant A's all-permission administrator, it walks `app.routeCatalog`: 366 routes (all 305 `/api/admin`, the portal, SCIM, and the SAML routes that take an application id). Each run makes 219 all-foreign id probes, 95 mixed probes (one foreign parameter at a time, or A's path with a foreign body), 43 body probes with bodies generated from the published OpenAPI schemas, and 79 list probes. It also runs all 23 registered pg-boss handlers with A's tenant and B's ids. The checks are: a refusal matching the status for an id that never existed; no B tag or id in any response; B's rows byte-identical after every write; a refused write leaves A unchanged; and no A row holds a B id. Structural tests fail on an unclassified path parameter, an undecided parameterless write, a job without a payload, or a stale allow-list entry.
+  - **Isolation defects fixed.** Row-level security does not cover foreign-key references, because PostgreSQL checks a foreign key without the referenced table's policies. Ten write paths could store another tenant's id. The probe caught most of them directly. An audit of the same pattern found the rest: `User.orgUnitId` through onboarding, contract create, and the mover.
+    - `Person.orgUnitId` (create and PATCH)
+    - `Contract.managerPersonId` (create, PATCH and the mover)
+    - `User.orgUnitId`
+    - `AppAssignment` subject
+    - `BusinessFunction.ownerPersonId`
+    - `SodRule.functionA/BId` and the exception workflow
+    - `Campaign.ownerPersonId`
+    - `GovernFinding.ownerPersonId` (assign)
+    - `ResourceOwner` resource and owner
+    - `ResourceDelegation` resource and delegate
+
+    Each now goes through `assertReferenceInTenant` in core (`tenant-reference.ts`), an RLS-scoped lookup whose failure is a 404 that names the field.
+  - **Routes that ignored a path parameter.** Three routes ignored one of their own path parameters. `DELETE /applications/:id/assignments/:assignmentId` and `DELETE /applications/:id/claims/:claimId` deleted the child under any application's path and audited the wrong application. `POST /person-import-runs/:runId/changes/:id/skip` never read `:runId`. All three are now scoped by their parent. `POST /govern/sources/:kind/:id/refresh` queued a job for any id and reported it enqueued; it now answers 404.
+  - **Wrong answers that still failed closed.** About 30 routes answered another tenant's id with a 500: Prisma `P2025`, Govern's `SnapshotNotReadableError`, the sync and HR run services' "no such source", a 502 from target containers, and placement moves. `problem-json` now maps `P2025` to 404 and `SnapshotNotReadableError` to 404 or 409, and the remaining routes look the id up first.
+  - **Verification.** `tsc -b` and `pnpm lint` pass. The probe and `problem-json.test.ts` pass, as do the focused suites over the touched services and routes.
+  - **Not covered.** Protocol endpoints other than the application-id routes, and the oidc-provider catch-all, are left to their own suites. Some body probes still stop at validation before the lookup (22 × 400 in a run); `PROBE_LOG` lists them. A database-level same-tenant reference check is proposed under #40.
 - Make the API correct at more than one replica, closing the two per-process defects the Helm multi-replica audit found (chart 0.3.0, default `api.replicas: 2`).
   - **OIDC provider cache.** `Tenant.oidcConfigGeneration` is bumped by database triggers in the same transaction as every change a cached `oidc-provider` instance is built from: `OidcClient` insert/update/delete (the admin route, catalog installs, which previously invalidated nothing, and cascades), OIDC `SigningKey` rotation and retirement (the worker's job included), and tenant hostname changes. SAML key changes and unrelated tenant settings do not bump it. Each process's cache records the generation it was built at and rebuilds when the tenant row, which every OIDC request already reads, is newer, or when the issuer differs. That gives zero staleness, no extra query, and no `LISTEN/NOTIFY`, so it is PgBouncer-safe. `invalidateProvider` and the key-change listener remain as local fast paths only.
   - **Rate limits.** A Postgres store for `@fastify/rate-limit` (`RateLimitBucket`, one `INSERT … ON CONFLICT … RETURNING` per limited request, using the database clock, plus a bounded sweep every minute) is the default (`RATE_LIMIT_STORE=postgres`; `memory` is kept for single-process installs). It keeps the default store's fixed-window semantics, `continueExceeding`, and separate counters per route and per limiter. `perTenantRateLimit` takes an explicit scope, and a duplicate scope is refused at startup. `/health/ready` fails open on store errors so it can still report a database outage as 503. Other limited routes fail closed.
