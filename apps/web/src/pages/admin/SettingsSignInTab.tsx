@@ -17,8 +17,28 @@ interface TenantView {
   passwordMaxAgeDays: number;
   passwordHistoryDepth: number;
   emailOtpEnabled: boolean;
+  portalSessionIdleMinutes: number;
+  portalSessionAbsoluteMinutes: number;
+  adminSessionIdleMinutes: number;
+  adminSessionAbsoluteMinutes: number;
+  adminWebauthnRequired: boolean;
   webauthnAvailable: boolean;
 }
+
+/**
+ * The platform bounds the four lifetime fields are held to, in minutes.
+ *
+ * Repeated from `SESSION_POLICY_BOUNDS` in the contracts package rather than
+ * imported: the web bundle does not depend on it, and these only set the
+ * inputs' `min`/`max`. The server is the authority and answers a number
+ * outside them with a 400 naming the field.
+ */
+const LIFETIME_BOUNDS = {
+  portalIdle: { min: 5, max: 1440 },
+  portalAbsolute: { min: 60, max: 43200 },
+  adminIdle: { min: 5, max: 60 },
+  adminAbsolute: { min: 15, max: 720 },
+} as const;
 
 /**
  * What the toggle turns lockout on to.
@@ -53,6 +73,11 @@ export function SettingsSignInTab() {
   const [maxAge, setMaxAge] = useState('90');
   const [historyDepth, setHistoryDepth] = useState('0');
   const [emailOtp, setEmailOtp] = useState(false);
+  const [adminWebauthn, setAdminWebauthn] = useState(false);
+  const [portalIdle, setPortalIdle] = useState('60');
+  const [portalAbsolute, setPortalAbsolute] = useState('720');
+  const [adminIdle, setAdminIdle] = useState('15');
+  const [adminAbsolute, setAdminAbsolute] = useState('120');
   const [domain, setDomain] = useState('');
   /**
    * One per line, because that is how somebody pastes a list of hostnames.
@@ -90,6 +115,11 @@ export function SettingsSignInTab() {
     setMaxAge(String(data.passwordMaxAgeDays > 0 ? data.passwordMaxAgeDays : 90));
     setHistoryDepth(String(data.passwordHistoryDepth));
     setEmailOtp(data.emailOtpEnabled);
+    setAdminWebauthn(data.adminWebauthnRequired);
+    setPortalIdle(String(data.portalSessionIdleMinutes));
+    setPortalAbsolute(String(data.portalSessionAbsoluteMinutes));
+    setAdminIdle(String(data.adminSessionIdleMinutes));
+    setAdminAbsolute(String(data.adminSessionAbsoluteMinutes));
     setDomain(data.primaryDomain ?? '');
     setExtraDomains(data.additionalDomains.join('\n'));
   }, [data]);
@@ -112,6 +142,11 @@ export function SettingsSignInTab() {
           passwordMaxAgeDays: expiryOn ? Number(maxAge) : 0,
           passwordHistoryDepth: Number(historyDepth),
           emailOtpEnabled: emailOtp,
+          adminWebauthnRequired: adminWebauthn,
+          portalSessionIdleMinutes: Number(portalIdle),
+          portalSessionAbsoluteMinutes: Number(portalAbsolute),
+          adminSessionIdleMinutes: Number(adminIdle),
+          adminSessionAbsoluteMinutes: Number(adminAbsolute),
           // Empty clears it, which turns WebAuthn off rather than leaving the
           // old value behind.
           primaryDomain: domain.trim() === '' ? null : domain.trim(),
@@ -189,11 +224,101 @@ export function SettingsSignInTab() {
             // administrator turning this on should know what it is worth.
           />
 
+          <Check
+            checked={adminWebauthn}
+            onChange={setAdminWebauthn}
+            label="Require a security key for the console"
+            // Never disabled while on: an administrator must always be able
+            // to turn a requirement off, even one the server would now refuse
+            // to turn on.
+            disabled={!data.webauthnAvailable && !adminWebauthn}
+            warning={
+              // Conditional, like the one above: a state the tenant is in,
+              // not a description of the checkbox.
+              data.webauthnAvailable
+                ? undefined
+                : 'No primary domain is set, so no security key can be registered and this cannot be turned on.'
+            }
+          />
+
+          {adminWebauthn && !data.adminWebauthnRequired && (
+            // Shown only on the transition, which is the moment it applies.
+            // The server refuses the save unless this console session was
+            // itself started with a key, so the one person certain to be
+            // affected is also the one proven able to get back in.
+            <Alert tone="warning" title="Console sessions started without a key end">
+              Every administrator who elevated with an authenticator code,
+              an emailed code or a recovery code is signed out of the console
+              at their next click, and nobody can register a key while
+              elevating. Save from a session you started with your own key.
+            </Alert>
+          )}
+
           {adminMfaRequired && !selfEnrolmentEnabled && (
             <Alert tone="warning" title="Nobody can enrol their way in">
               Together, these two refuse every administrator who does not
               already hold a factor. Make sure yours is set up, and everyone
               else&apos;s.
+            </Alert>
+          )}
+        </Panel>
+
+        <Panel title="Sessions" bodyClassName="space-y-5 p-4">
+          <div className="flex flex-wrap gap-4">
+            <Field
+              label="Portal idle timeout (minutes)"
+              type="number"
+              inputMode="numeric"
+              min={LIFETIME_BOUNDS.portalIdle.min}
+              max={LIFETIME_BOUNDS.portalIdle.max}
+              value={portalIdle}
+              onChange={setPortalIdle}
+              className="max-w-[15rem]"
+            />
+            <Field
+              label="Portal session lasts (minutes)"
+              type="number"
+              inputMode="numeric"
+              min={LIFETIME_BOUNDS.portalAbsolute.min}
+              max={LIFETIME_BOUNDS.portalAbsolute.max}
+              value={portalAbsolute}
+              onChange={setPortalAbsolute}
+              className="max-w-[15rem]"
+            />
+          </div>
+          <div className="flex flex-wrap gap-4">
+            <Field
+              label="Console idle timeout (minutes)"
+              type="number"
+              inputMode="numeric"
+              min={LIFETIME_BOUNDS.adminIdle.min}
+              max={LIFETIME_BOUNDS.adminIdle.max}
+              value={adminIdle}
+              onChange={setAdminIdle}
+              className="max-w-[15rem]"
+            />
+            <Field
+              label="Console session lasts (minutes)"
+              type="number"
+              inputMode="numeric"
+              min={LIFETIME_BOUNDS.adminAbsolute.min}
+              max={LIFETIME_BOUNDS.adminAbsolute.max}
+              value={adminAbsolute}
+              onChange={setAdminAbsolute}
+              className="max-w-[15rem]"
+            />
+          </div>
+
+          {(Number(portalAbsolute) < data.portalSessionAbsoluteMinutes ||
+            Number(portalIdle) < data.portalSessionIdleMinutes ||
+            Number(adminAbsolute) < data.adminSessionAbsoluteMinutes ||
+            Number(adminIdle) < data.adminSessionIdleMinutes) && (
+            // Only while a value is being LOWERED — the one direction with a
+            // consequence nobody would guess: it reaches back into sessions
+            // already issued. Raising a value does not extend them.
+            <Alert tone="warning" title="Shorter limits apply to everyone signed in now">
+              Sessions already older or idler than the new limit end at their
+              next request.
             </Alert>
           )}
         </Panel>

@@ -5,7 +5,7 @@ import { createUser, deactivateUser } from '../directory/user-service.js';
 import { createApplication } from '../access/application-service.js';
 import { upsertOidcClient } from '../access/oidc-client-service.js';
 import { createSession, listSessionsForUser, type SessionAllowance } from './session-service.js';
-import { endSessions } from './end-sessions.js';
+import { endSessions, revokeTenantSessions } from './end-sessions.js';
 
 let tenantId: string;
 let userId: string;
@@ -195,5 +195,162 @@ describe('every path that takes access away propagates it', () => {
     await withTenant(tenantId, (tx) => deactivateUser(tx, userId, 'left'));
 
     expect(await queuedLogouts()).toBe(1);
+  });
+
+  it('a tenant-wide revoke tells them too', async () => {
+    await seedRelyingParty();
+    await withTenant(tenantId, (tx) => createSession(tx, allowed(), NO_ORIGIN));
+
+    await revokeTenantSessions(tenantId, {
+      scope: 'all',
+      actorUserId: userId,
+      sourceIp: null,
+      reason: 'suspected compromise',
+    });
+
+    expect(await queuedLogouts()).toBe(1);
+    expect(await withTenant(tenantId, (tx) => tx.oidcArtifact.count())).toBe(0);
+  });
+});
+
+describe('revokeTenantSessions', () => {
+  let otherId: string;
+  let adminId: string;
+
+  const sessionFor = (who: string, scope: 'portal' | 'admin') =>
+    withTenant(tenantId, (tx) =>
+      createSession(tx, { ...allowed(scope), userId: who }, NO_ORIGIN),
+    );
+  const liveFor = (who: string) =>
+    withTenant(tenantId, (tx) => listSessionsForUser(tx, who));
+
+  beforeEach(async () => {
+    const [other, admin] = await withTenant(tenantId, async (tx) => [
+      await createUser(tx, { login: 'other', email: 'o@acme.test', displayName: 'O' }),
+      await createUser(tx, { login: 'admin', email: 'a@acme.test', displayName: 'A' }),
+    ]);
+    otherId = other!.id;
+    adminId = admin!.id;
+  });
+
+  it('ends every session in the tenant and records why', async () => {
+    await sessionFor(userId, 'portal');
+    await sessionFor(otherId, 'portal');
+    await sessionFor(otherId, 'admin');
+
+    const result = await revokeTenantSessions(tenantId, {
+      scope: 'all',
+      actorUserId: adminId,
+      sourceIp: '203.0.113.9',
+      reason: 'phishing campaign reported',
+    });
+
+    expect(result).toMatchObject({ usersAffected: 2, sessionsRevoked: 3 });
+    expect(await liveFor(userId)).toEqual([]);
+    expect(await liveFor(otherId)).toEqual([]);
+
+    const summary = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'session.mass_revoked' } }),
+    );
+    expect(summary.actorUserId).toBe(adminId);
+    expect(summary.outcome).toBe('success');
+    expect(summary.payload).toMatchObject({
+      scope: 'all',
+      reason: 'phishing campaign reported',
+      usersAffected: 2,
+      sessionsRevoked: 3,
+    });
+    // And each user's own revocation is visible per user, by cause.
+    const perUser = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'session.revoked' } }),
+    );
+    expect(perUser).toHaveLength(2);
+    for (const e of perUser) {
+      expect((e.payload as Record<string, unknown>).trigger).toBe('mass_revoke');
+    }
+  });
+
+  it('spares only the session making the request', async () => {
+    await sessionFor(adminId, 'admin');
+    await sessionFor(adminId, 'admin');
+    await sessionFor(userId, 'portal');
+    const keep = (await liveFor(adminId))[0]!.id;
+
+    await revokeTenantSessions(tenantId, {
+      scope: 'all',
+      actorUserId: adminId,
+      exceptSessionId: keep,
+      sourceIp: null,
+      reason: 'rotating after an incident',
+    });
+
+    expect((await liveFor(adminId)).map((s) => s.id)).toEqual([keep]);
+    expect(await liveFor(userId)).toEqual([]);
+  });
+
+  it('ends only administrative sessions when narrowed to them', async () => {
+    await sessionFor(userId, 'portal');
+    await sessionFor(otherId, 'portal');
+    await sessionFor(otherId, 'admin');
+
+    const result = await revokeTenantSessions(tenantId, {
+      scope: 'admin',
+      actorUserId: adminId,
+      sourceIp: null,
+      reason: 'administrator credential leak',
+    });
+
+    expect(result).toMatchObject({ usersAffected: 1, sessionsRevoked: 1 });
+    expect(await liveFor(userId)).toHaveLength(1);
+    expect((await liveFor(otherId)).map((s) => s.scope)).toEqual(['portal']);
+  });
+
+  it('reaches a refresh token whose session is already gone', async () => {
+    // A refresh token outlives the session that minted it. "Revoke every
+    // session" that left one alive would not be what was asked for.
+    await withTenant(tenantId, (tx) =>
+      tx.refreshToken.create({
+        data: {
+          tenantId,
+          userId: otherId,
+          tokenHash: 'refresh-hash',
+          absoluteExpiresAt: new Date(Date.now() + 3_600_000),
+        },
+      }),
+    );
+
+    const result = await revokeTenantSessions(tenantId, {
+      scope: 'all',
+      actorUserId: adminId,
+      sourceIp: null,
+      reason: 'suspected token theft',
+    });
+
+    expect(result.usersAffected).toBe(1);
+    const token = await withTenant(tenantId, (tx) =>
+      tx.refreshToken.findFirstOrThrow(),
+    );
+    expect(token.revokedAt).not.toBeNull();
+  });
+
+  it('does not reach into another tenant', async () => {
+    const other = await prisma.tenant.create({ data: { name: 'Other', slug: 'other' } });
+    const stranger = await withTenant(other.id, (tx) =>
+      createUser(tx, { login: 'x', email: 'x@other.test', displayName: 'X' }),
+    );
+    await withTenant(other.id, (tx) =>
+      createSession(tx, { ...allowed(), userId: stranger.id }, NO_ORIGIN),
+    );
+
+    await revokeTenantSessions(tenantId, {
+      scope: 'all',
+      actorUserId: adminId,
+      sourceIp: null,
+      reason: 'suspected compromise',
+    });
+
+    expect(
+      await withTenant(other.id, (tx) => listSessionsForUser(tx, stranger.id)),
+    ).toHaveLength(1);
   });
 });

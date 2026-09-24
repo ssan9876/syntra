@@ -41,8 +41,12 @@ export * from './auth/password-reset.js';
 // exists to make unwritable.
 export {
   createSession,
+  isRecentElevation,
   listSessionsForUser,
   readSession,
+  readSessionPolicy,
+  STEP_UP_MAX_AGE_MS,
+  type SessionPolicy,
   resolveSession,
   revokeSession,
   revokeSessionById,

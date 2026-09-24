@@ -132,6 +132,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261021000000_identity_reference_values',
   '20261022000000_profile_sensitive_mapping_approval',
   '20261023120000_tenant_external_write_stop',
+  '20261024043000_tenant_session_policy',
 ];
 
 /**
