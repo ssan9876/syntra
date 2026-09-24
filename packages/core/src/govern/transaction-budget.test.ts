@@ -844,8 +844,14 @@ describe('the transaction budget — slice 2', () => {
    * assertion. 8,000 items is roughly 7.4 s by that measurement -- past the
    * budget and past Prisma's own 5,000 ms ceiling, which is the form the defect
    * actually takes in production.
+   *
+   * RE-MEASURED UNDER PRISMA 7, and doubled. The driver adapter took the
+   * Rust engine out of every query, and the same 8,000 items then measured
+   * 4,446 ms unaborted against CI's 4,500 -- a mutant that breached on one run
+   * and not the next. 16,000 puts it back well past both lines. The knob stays
+   * the campaign, not the assertion, for the reason above.
    */
-  const REBASE_UNBOUNDED_PER_SUBJECT = 40;
+  const REBASE_UNBOUNDED_PER_SUBJECT = 80;
 
   it('FAILS when the re-base is unbounded — the mutation this case exists for', async () => {
     // EXECUTED, not documented. §8 rule 2 makes this the trap rather than the
