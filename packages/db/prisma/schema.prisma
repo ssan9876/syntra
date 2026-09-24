@@ -212,6 +212,7 @@ model Tenant {
   tenantDeletionRequests    TenantDeletionRequest[]
   dataExports               DataExport[]
   auditSavedViews           AuditSavedView[]
+  privacyCases              PrivacyCase[]
   lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
@@ -488,6 +489,20 @@ model Person {
   /// import knows only that a row was missing, and writing the override would
   /// let a truncated export outrank the contract table permanently.
   statusReason String?
+
+  /// Processing restriction (a data-subject request, GDPR art. 18). While set,
+  /// provisioning withholds every action that would write this person's data
+  /// or widen their access (disable, archive and revoke still run: a
+  /// restriction never keeps access alive), and HR imports and directory sync
+  /// skip changes to this person and their accounts, naming the case.
+  processingRestrictedAt     DateTime?
+  processingRestrictedCaseId String?       @db.Uuid
+  /// Set when a data-subject erasure pseudonymised this row in place. The row
+  /// is kept ("deactivate, never delete"): everything that references it
+  /// still resolves, and nothing that identified the person remains on it.
+  erasedAt                   DateTime?
+  erasedCaseId               String?       @db.Uuid
+  privacyCases               PrivacyCase[]
 
   @@unique([tenantId, externalId])
   @@index([orgUnitId])
@@ -4888,13 +4903,13 @@ model DataExport {
   id                   String    @id @default(uuid()) @db.Uuid
   tenantId             String    @db.Uuid
   tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  /// 'audit_log' | 'govern_access'
+  /// 'audit_log' | 'govern_access' | 'dsar_bundle'
   kind                 String
   /// 'queued' | 'running' | 'ready' | 'failed' | 'revoked' | 'expired'
   status               String    @default("queued")
   /// The validated filters the file was requested with.
   params               Json
-  /// 'jsonl' | 'csv'
+  /// 'jsonl' | 'csv' | 'json'
   format               String
   requestedByUserId    String    @db.Uuid
   requestedViaToken    Boolean   @default(false)
@@ -4943,4 +4958,68 @@ model AuditSavedView {
   updatedAt DateTime @updatedAt
 
   @@unique([tenantId, userId, name])
+}
+
+/// A data-subject request (DSAR) about one person: who asked, how their
+/// identity was verified, when it is due, and what was done about it.
+///
+/// The case's timeline is the audit log: every act on a case is an audit event
+/// whose target is the case, so the record of what was done is the one the
+/// audit chain already protects. The row holds the state the console and the
+/// server's checks need.
+///
+/// `reason`, `verificationAttestation` and `closureNote` are free text an
+/// administrator typed about the request. They are kept after an erasure,
+/// deliberately: the controller must be able to show how it handled the
+/// request (GDPR art. 5(2)), and the console asks the administrator not to
+/// paste the subject's personal data into them.
+model PrivacyCase {
+  id                       String    @id @default(uuid()) @db.Uuid
+  tenantId                 String    @db.Uuid
+  tenant                   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Restrict: a person is never deleted, and a case must not lose its subject.
+  personId                 String    @db.Uuid
+  person                   Person    @relation(fields: [personId], references: [id], onDelete: Restrict)
+  /// Human-readable, unique per tenant, e.g. DSAR-2026-0007.
+  reference                String
+  /// 'open' | 'closed'
+  status                   String    @default("open")
+  /// What the subject asked for: any of 'access' | 'rectification' |
+  /// 'restriction' | 'erasure'.
+  requestTypes             String[]
+  reason                   String
+  receivedAt               DateTime
+  dueAt                    DateTime
+  /// How the requester's identity was verified: 'in_person' | 'known_channel'
+  /// | 'document' | 'authenticated_session' | 'other'.
+  verificationMethod       String
+  verificationAttestation  String
+  verifiedByUserId         String    @db.Uuid
+  openedByUserId           String    @db.Uuid
+  openedAt                 DateTime  @default(now())
+  /// The newest access bundle queued for this case.
+  accessExportId           String?   @db.Uuid
+  /// null | 'pending_approval' | 'completed' | 'cancelled'
+  erasureStatus            String?
+  erasureRequestedByUserId String?   @db.Uuid
+  erasureRequestedAt       DateTime?
+  erasureApprovedByUserId  String?   @db.Uuid
+  erasureApprovedAt        DateTime?
+  /// When the approver's administrative session was minted: the step-up
+  /// evidence behind the approval.
+  erasureApproverStepUpAt  DateTime?
+  erasureCompletedAt       DateTime?
+  erasureCancelledByUserId String?   @db.Uuid
+  erasureCancelledAt       DateTime?
+  /// Per-table counts of what was pseudonymised, cleared and deleted, and the
+  /// receipt's digest. Numbers and identifiers only.
+  erasureReceipt           Json?
+  closedAt                 DateTime?
+  closedByUserId           String?   @db.Uuid
+  closureNote              String?
+  updatedAt                DateTime  @updatedAt
+
+  @@unique([tenantId, reference])
+  @@index([tenantId, status, dueAt])
+  @@index([tenantId, personId])
 }

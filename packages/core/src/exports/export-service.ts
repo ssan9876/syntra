@@ -6,6 +6,7 @@ import { governAccessCsv } from '../govern/export-service.js';
 import { governReadScope, holdsGovernPermission, type GovernScope } from '../govern/scope.js';
 import { enqueueForRow } from '../jobs/enqueue-for-row.js';
 import type { Scheduler } from '../jobs/scheduler.js';
+import { writeSubjectBundle, type BundleParams } from '../privacy/bundle.js';
 import { PERMISSIONS, type Permission } from '../rbac/permissions.js';
 import { hasPermission } from '../rbac/rbac-service.js';
 import { createEnvelopeSealer, openEnvelope } from '../vault/vault-service.js';
@@ -39,7 +40,12 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
  *     The row stays, as the record of who took what.
  */
 
-export const EXPORT_KINDS = ['audit_log', 'govern_access'] as const;
+/**
+ * `dsar_bundle` is a data-subject access bundle (backlog #70). It is requested
+ * only through a privacy case (`requestPrivacyAccessBundle`), which supplies
+ * the case and person; the generic request body does not offer it.
+ */
+export const EXPORT_KINDS = ['audit_log', 'govern_access', 'dsar_bundle'] as const;
 export type ExportKind = (typeof EXPORT_KINDS)[number];
 
 export type ExportStatus = 'queued' | 'running' | 'ready' | 'failed' | 'revoked' | 'expired';
@@ -62,9 +68,10 @@ export const EXPORT_BATCH_ROWS = 1000;
 /** A queued or running export older than this was abandoned by its worker. */
 export const EXPORT_ABANDONED_AFTER_MS = 2 * 60 * 60 * 1000;
 
-const FORMAT: Record<ExportKind, { format: 'jsonl' | 'csv'; contentType: string; stem: string }> = {
+const FORMAT: Record<ExportKind, { format: 'jsonl' | 'csv' | 'json'; contentType: string; stem: string }> = {
   audit_log: { format: 'jsonl', contentType: 'application/x-ndjson; charset=utf-8', stem: 'audit-log' },
   govern_access: { format: 'csv', contentType: 'text/csv; charset=utf-8', stem: 'govern-access' },
+  dsar_bundle: { format: 'json', contentType: 'application/json; charset=utf-8', stem: 'dsar-bundle' },
 };
 
 /**
@@ -73,9 +80,9 @@ const FORMAT: Record<ExportKind, { format: 'jsonl' | 'csv'; contentType: string;
  * account's authority and the token's, as every other route is.
  */
 export function exportPermissions(kind: ExportKind): Permission[] {
-  return kind === 'audit_log'
-    ? [PERMISSIONS.AUDIT_READ]
-    : [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT];
+  if (kind === 'audit_log') return [PERMISSIONS.AUDIT_READ];
+  if (kind === 'dsar_bundle') return [PERMISSIONS.PRIVACY_MANAGE];
+  return [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT];
 }
 
 export type ExportRefusal =
@@ -127,8 +134,8 @@ export async function exportAuthority(
   userId: string,
   kind: ExportKind,
 ): Promise<ExportAuthority> {
-  if (kind === 'audit_log') {
-    const allowed = await hasPermission(tx, userId, PERMISSIONS.AUDIT_READ);
+  if (kind === 'audit_log' || kind === 'dsar_bundle') {
+    const allowed = await hasPermission(tx, userId, exportPermissions(kind)[0]!);
     return { allowed, fingerprint: allowed ? 'tenant' : null };
   }
   const scope = await governReadScope(tx, userId);
@@ -426,6 +433,8 @@ export async function runExportJob(
   try {
     if (kind === 'audit_log') {
       rowCount = await writeAuditLog(tenantId, exportId, row, watermark, write);
+    } else if (kind === 'dsar_bundle') {
+      rowCount = await writeSubjectBundle(tenantId, row.params as unknown as BundleParams, watermark, write);
     } else {
       const params = row.params as { snapshotId?: string; systemId: string; resourceId?: string };
       const result = await governAccessCsv(

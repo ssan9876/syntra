@@ -46,6 +46,10 @@ const GROUPS: NavGroup[] = [
       { to: '/admin/users', label: 'Users', permission: 'directory.read' },
       { to: '/admin/groups', label: 'Groups', permission: 'directory.read' },
       { to: '/admin/org-units', label: 'Org units', permission: 'directory.read' },
+      // Data-subject requests: about people, so beside them. Its own
+      // permission, because a privacy officer is routinely not a directory
+      // administrator.
+      { to: '/admin/privacy', label: 'Privacy requests', permission: 'privacy.manage' },
     ],
   },
   {

@@ -47,6 +47,7 @@ import { registerAdminPersonReceiptRoutes } from './routes/admin/person-receipts
 import { registerAdminLifecycleOperationRoutes } from './routes/admin/lifecycle-operations.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
 import { registerAdminExportRoutes } from './routes/admin/exports.js';
+import { registerAdminPrivacyRoutes } from './routes/admin/privacy.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
@@ -439,6 +440,12 @@ export async function buildApp(
   await app.register(registerAdminExportRoutes, {
     prefix: '/api/admin',
     keyProvider,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+  // Data-subject request cases. The scheduler queues the access bundle,
+  // which the export center above then serves.
+  await app.register(registerAdminPrivacyRoutes, {
+    prefix: '/api/admin',
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminUpdateRoutes, {

@@ -293,9 +293,19 @@ is retained; merged code alone is not enough.
 
 69. **Build — Data inventory.** Map each personal, credential, operational,
     and audit field to purpose, source, processor, residency, retention, and
-    access roles.
+    access roles. *Engineering slice done:* every column classified in code
+    (`packages/core/src/privacy/inventory.ts`), a structural test that fails
+    on an unclassified column, and the generated
+    [data inventory](privacy/data-inventory.md). Legal bases are placeholders
+    awaiting the controller's decision (#13, #79).
 70. **Build — Data-subject workflows.** Search, export, correction, restriction,
     and deletion with identity verification, legal-hold refusal, and evidence.
+    *Engineering slice done:* privacy cases with verification attestation and
+    due dates, inventory-driven search and sealed access bundle, rectification
+    through the normal edit paths, restriction honoured by provisioning,
+    imports and sync, and a four-eyes, hold-refusing erasure that pseudonymises
+    in place with a receipt ([Operate, Data-subject requests](operate.md#data-subject-requests)).
+    Legal review of what is retained (the audit record) remains.
 71. **Build — Tenant export and deletion.** Full portable export, two-person
     destructive approval, dependency preview, cryptographic erasure strategy,
     completion proof, and backup-expiry treatment. *Engineering slice done:*

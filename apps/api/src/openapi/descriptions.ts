@@ -12,6 +12,7 @@ import { orgUnitsOpenApi } from '../routes/admin/org-units.openapi.js';
 import { personReceiptsOpenApi } from '../routes/admin/person-receipts.openapi.js';
 import { personSourcesOpenApi } from '../routes/admin/person-sources.openapi.js';
 import { personsOpenApi } from '../routes/admin/persons.openapi.js';
+import { privacyOpenApi } from '../routes/admin/privacy.openapi.js';
 import { policiesOpenApi } from '../routes/admin/policies.openapi.js';
 import { profilesOpenApi } from '../routes/admin/profiles.openapi.js';
 import { protocolAppsOpenApi } from '../routes/admin/protocol-apps.openapi.js';
@@ -52,6 +53,7 @@ export const ADMIN_ROUTE_DESCRIPTIONS: readonly DescribedRoute[] = [
   ...personReceiptsOpenApi,
   ...personSourcesOpenApi,
   ...personsOpenApi,
+  ...privacyOpenApi,
   ...policiesOpenApi,
   ...profilesOpenApi,
   ...protocolAppsOpenApi,

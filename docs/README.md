@@ -6,6 +6,9 @@
   hostnames, directory sources, SSO and federation configuration.
 - [Operate](operate.md) — upgrades, backups, deactivate-never-delete, CI,
   tests, troubleshooting.
+- [privacy/](privacy/data-inventory.md) — the data inventory: every column
+  Syntra stores, classified, with purpose, source, retention and exactly what
+  a data-subject erasure does to it (generated from code).
 - [api/](api/README.md) — the administration API's published OpenAPI 3.1
   description, and its versioning, deprecation, error, idempotency and
   rate-limit conventions.

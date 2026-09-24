@@ -45,6 +45,8 @@ export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/admin/users/:id/tokens',
   '/api/admin/sessions/revoke',
   '/api/admin/tenant/deletion',
+  // Erasing a person is decided by two people, each signed in (backlog #70).
+  '/api/admin/privacy/cases/:id/erasure',
 ];
 
 export function routeRefusesTokens(routePattern: string | undefined): boolean {

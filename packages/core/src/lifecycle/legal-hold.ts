@@ -1,7 +1,12 @@
 import { withTenant } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 
-export type LegalHoldSubjectType = 'lifecycle_operation' | 'lifecycle_simulation';
+/**
+ * `person` holds everything about one person: a data-subject erasure is
+ * refused while one is active, and the retention job keeps the person's
+ * lifecycle evidence as it keeps a held operation's.
+ */
+export type LegalHoldSubjectType = 'lifecycle_operation' | 'lifecycle_simulation' | 'person';
 
 export async function placeLifecycleLegalHold(
   tenantId: string,
@@ -10,7 +15,9 @@ export async function placeLifecycleLegalHold(
   return withTenant(tenantId, async (tx) => {
     const subjectExists = input.subjectType === 'lifecycle_operation'
       ? await tx.lifecycleOperation.count({ where: { id: input.subjectId } })
-      : await tx.lifecycleSimulation.count({ where: { id: input.subjectId } });
+      : input.subjectType === 'person'
+        ? await tx.person.count({ where: { id: input.subjectId } })
+        : await tx.lifecycleSimulation.count({ where: { id: input.subjectId } });
     if (subjectExists === 0) throw new Error('Legal-hold subject not found');
     const existing = await tx.lifecycleLegalHold.findFirst({
       where: { subjectType: input.subjectType, subjectId: input.subjectId, reference: input.reference, releasedAt: null },
