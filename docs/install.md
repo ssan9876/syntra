@@ -214,6 +214,17 @@ Either way, keep `MASTER_KEY` and the `syntra-data` volume in your backups:
 the first encrypts every stored credential, the second is the database. See
 [Operating Syntra](operate.md#backups) for what that means in practice.
 
+## Kubernetes
+
+The Helm chart in [`deploy/helm/syntra`](../deploy/helm/syntra/README.md)
+runs the same two images. It adds a pre-upgrade migration Job, hardened pods
+with read-only root filesystems, and optional Ingress, NetworkPolicy,
+autoscaling, Prometheus Operator monitoring and a backup CronJob. It needs an
+existing Secret and `publicUrl`, and it refuses to render without them. Read
+the chart README's multi-replica section before you run more than one API
+pod. Postgres HA, PgBouncer and connection sizing are covered in
+[Operating Syntra](operate.md#kubernetes-and-high-availability).
+
 ## The single-process alternative to the container path
 
 The container path is nginx plus a Node process plus Postgres, each in its

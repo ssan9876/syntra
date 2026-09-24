@@ -4,8 +4,11 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser } from '../directory/user-service.js';
 import {
   createSession,
+  isRecentElevation,
   listSessionsForUser,
+  readSessionPolicy,
   resolveSession,
+  STEP_UP_MAX_AGE_MS,
   revokeAllForUser,
   revokeSession,
   revokeSessionById,
@@ -301,5 +304,142 @@ describe('revokeSessionById', () => {
       expect(await revokeSessionById(tx, only!.id)).toBe(true);
       expect(await revokeSessionById(tx, only!.id)).toBe(false);
     });
+  });
+});
+
+describe('the tenant session policy', () => {
+  const MINUTE = 60 * 1000;
+  const setPolicy = (data: Record<string, number | boolean>) =>
+    prisma.tenant.update({ where: { id: tenantId }, data });
+
+  it('defaults to the lifetimes that used to be hardcoded', async () => {
+    // A tenant that never opens the form must behave exactly as before.
+    const policy = await withTenant(tenantId, (tx) => readSessionPolicy(tx));
+    expect(policy).toEqual({
+      idleMs: { portal: 60 * MINUTE, admin: 15 * MINUTE },
+      absoluteMs: { portal: 12 * 60 * MINUTE, admin: 2 * 60 * MINUTE },
+      adminWebauthnRequired: false,
+    });
+  });
+
+  it('issues a session with the tenant-configured absolute lifetime', async () => {
+    await setPolicy({ adminSessionAbsoluteMinutes: 30 });
+    const started = Date.now();
+    const { expiresAt } = await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('admin', 'totp'), { ip: null, userAgent: null }),
+    );
+    const lifetime = expiresAt.getTime() - started;
+    expect(lifetime).toBeGreaterThan(29 * MINUTE);
+    expect(lifetime).toBeLessThanOrEqual(30 * MINUTE + 1000);
+  });
+
+  it('ends a session already issued when the absolute lifetime is shortened', async () => {
+    // The row was stamped with two hours. An administrator shortening the
+    // policy after an incident needs the old, longer sessions to stop now,
+    // not in two hours.
+    const { token } = await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('admin'), { ip: null, userAgent: null }),
+    );
+    await withTenant(tenantId, (tx) =>
+      tx.session.updateMany({
+        data: { createdAt: new Date(Date.now() - 40 * MINUTE) },
+      }),
+    );
+    expect(await withTenant(tenantId, (tx) => resolveSession(tx, token))).not.toBeNull();
+
+    await setPolicy({ adminSessionAbsoluteMinutes: 30 });
+    expect(await withTenant(tenantId, (tx) => resolveSession(tx, token))).toBeNull();
+  });
+
+  it('does not extend a session already issued when the lifetime is lengthened', async () => {
+    const { token } = await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
+    );
+    // Stamped expiry in the past; policy says it could have lived a month.
+    await withTenant(tenantId, (tx) =>
+      tx.session.updateMany({ data: { absoluteExpiresAt: new Date(Date.now() - 1000) } }),
+    );
+    await setPolicy({ portalSessionAbsoluteMinutes: 43200 });
+    expect(await withTenant(tenantId, (tx) => resolveSession(tx, token))).toBeNull();
+  });
+
+  it('applies the tenant-configured idle timeout to sessions already issued', async () => {
+    const { token } = await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
+    );
+    await withTenant(tenantId, (tx) =>
+      tx.session.updateMany({ data: { lastSeenAt: new Date(Date.now() - 20 * MINUTE) } }),
+    );
+    // Twenty minutes idle is fine under the default hour...
+    expect(await withTenant(tenantId, (tx) => resolveSession(tx, token))).not.toBeNull();
+
+    await withTenant(tenantId, (tx) =>
+      tx.session.updateMany({ data: { lastSeenAt: new Date(Date.now() - 20 * MINUTE) } }),
+    );
+    await setPolicy({ portalSessionIdleMinutes: 10 });
+    // ...and not under ten.
+    expect(await withTenant(tenantId, (tx) => resolveSession(tx, token))).toBeNull();
+  });
+
+  it('lists the expiry that will actually apply, not the one stamped at issue', async () => {
+    await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('portal'), { ip: null, userAgent: null }),
+    );
+    await setPolicy({ portalSessionAbsoluteMinutes: 180 });
+    const [listed] = await withTenant(tenantId, (tx) => listSessionsForUser(tx, userId));
+    const row = await withTenant(tenantId, (tx) => tx.session.findFirstOrThrow());
+    expect(listed!.absoluteExpiresAt.getTime()).toBe(row.createdAt.getTime() + 180 * MINUTE);
+    expect(listed!.absoluteExpiresAt.getTime()).toBeLessThan(row.absoluteExpiresAt.getTime());
+  });
+
+  it('refuses lifetimes outside the platform bounds at the database', async () => {
+    // The contract refuses these too; the CHECK is for every writer that
+    // does not pass through it.
+    await expect(setPolicy({ adminSessionIdleMinutes: 90 })).rejects.toThrow();
+    await expect(setPolicy({ adminSessionAbsoluteMinutes: 13 * 60 })).rejects.toThrow();
+    await expect(setPolicy({ portalSessionAbsoluteMinutes: 31 * 24 * 60 })).rejects.toThrow();
+    await expect(setPolicy({ portalSessionIdleMinutes: 2 })).rejects.toThrow();
+    // Idle longer than absolute, and admin outliving portal.
+    await expect(
+      setPolicy({ adminSessionIdleMinutes: 30, adminSessionAbsoluteMinutes: 20 }),
+    ).rejects.toThrow();
+    await expect(
+      setPolicy({ portalSessionAbsoluteMinutes: 60, adminSessionAbsoluteMinutes: 120 }),
+    ).rejects.toThrow();
+  });
+});
+
+describe('the phishing-resistant console requirement on live sessions', () => {
+  it('ends administrative sessions a key did not establish', async () => {
+    const totp = await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('admin', 'totp'), { ip: null, userAgent: null }),
+    );
+    const key = await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('admin', 'webauthn'), { ip: null, userAgent: null }),
+    );
+    const portal = await withTenant(tenantId, (tx) =>
+      createSession(tx, allowed('portal', 'totp'), { ip: null, userAgent: null }),
+    );
+
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { adminWebauthnRequired: true },
+    });
+
+    expect(await withTenant(tenantId, (tx) => resolveSession(tx, totp.token))).toBeNull();
+    expect(await withTenant(tenantId, (tx) => resolveSession(tx, key.token))).not.toBeNull();
+    // The portal is not what the requirement protects.
+    expect(await withTenant(tenantId, (tx) => resolveSession(tx, portal.token))).not.toBeNull();
+  });
+});
+
+describe('isRecentElevation', () => {
+  it('is true only for an administrative session inside the step-up window', () => {
+    const now = Date.now();
+    const fresh = new Date(now - STEP_UP_MAX_AGE_MS + 1000);
+    const stale = new Date(now - STEP_UP_MAX_AGE_MS - 1000);
+    expect(isRecentElevation({ scope: 'admin', createdAt: fresh }, now)).toBe(true);
+    expect(isRecentElevation({ scope: 'admin', createdAt: stale }, now)).toBe(false);
+    expect(isRecentElevation({ scope: 'portal', createdAt: fresh }, now)).toBe(false);
   });
 });

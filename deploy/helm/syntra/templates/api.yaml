@@ -1,87 +1,165 @@
+{{- include "syntra.validate" . -}}
+{{- $secret := include "syntra.secretName" . -}}
+{{- $fullname := include "syntra.fullname" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-api
+  name: {{ $fullname }}-api
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
 spec:
+  {{- if not .Values.api.autoscaling.enabled }}
   replicas: {{ .Values.api.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Surge first, never go below the current count: with the default single
+      # replica, maxUnavailable 0 is what keeps sign-in available during a
+      # rollout.
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
-    matchLabels: { app.kubernetes.io/name: syntra, app.kubernetes.io/component: api, app.kubernetes.io/instance: {{ .Release.Name }} }
+    matchLabels:
+      {{- include "syntra.selectorLabels" (dict "ctx" $ "component" "api") | nindent 6 }}
   template:
     metadata:
-      labels: { app.kubernetes.io/name: syntra, app.kubernetes.io/component: api, app.kubernetes.io/instance: {{ .Release.Name }} }
-    spec:
-      automountServiceAccountToken: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-        seccompProfile:
-          type: RuntimeDefault
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      labels:
+        {{- include "syntra.labels" (dict "ctx" $ "component" "api") | nindent 8 }}
+        {{- with .Values.api.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- $annotations := deepCopy .Values.api.podAnnotations }}
+      {{- if and .Values.secret.create (not .Values.existingSecret) }}
+      {{- $_ := set $annotations "checksum/secret" (toYaml .Values.secret.data | sha256sum) }}
       {{- end }}
+      {{- with $annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "syntra.serviceAccountName" . }}
+      # Syntra never talks to the Kubernetes API. No token in the pod means an
+      # RCE in a parser cannot pivot into the cluster with it.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.api.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext.api | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        {{- include "syntra.topologySpread" (dict "ctx" $ "component" "api" "override" .Values.api.topologySpreadConstraints) | nindent 8 }}
       containers:
         - name: api
-          image: {{ .Values.api.image | quote }}
+          image: {{ include "syntra.image" (dict "image" .Values.api.image "ctx" $) | quote }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          # NOT the image's CMD, which runs `prisma migrate deploy` before
+          # serving. Here the pre-upgrade hook Job owns migrations, so N pods
+          # starting together do not each attempt them, and the API needs no
+          # pnpm/corepack (which want a writable home) at runtime. This is the
+          # same invocation as apps/api's `start` script.
+          workingDir: /app/apps/api
+          command: ["node", "--import", "tsx", "src/server.ts"]
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-            runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
-          ports: [{ name: http, containerPort: 3000 }]
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
           env:
             - { name: PORT, value: "3000" }
             - { name: NODE_ENV, value: production }
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret }}
-                  key: {{ .Values.secretKeys.databaseUrl }}
-            - name: PUBLIC_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret }}
-                  key: {{ .Values.secretKeys.publicUrl }}
-            - name: SESSION_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret }}
-                  key: {{ .Values.secretKeys.sessionSecret }}
-            - name: MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret }}
-                  key: {{ .Values.secretKeys.masterKey }}
-            - name: SMTP_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret }}
-                  key: {{ .Values.secretKeys.smtpUrl }}
-            - name: METRICS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret }}
-                  key: {{ .Values.secretKeys.metricsToken }}
-          readinessProbe: { httpGet: { path: /health/ready, port: http }, initialDelaySeconds: 10, periodSeconds: 5 }
-          livenessProbe: { httpGet: { path: /health, port: http }, initialDelaySeconds: 30, periodSeconds: 10 }
+            # Read-only root filesystem: anything that wants a home directory
+            # or a cache gets the /tmp emptyDir.
+            - { name: HOME, value: /tmp }
+            - { name: LOG_LEVEL, value: {{ .Values.api.logLevel | quote }} }
+            {{- if .Values.publicUrl }}
+            - { name: PUBLIC_URL, value: {{ .Values.publicUrl | quote }} }
+            {{- else }}
+            {{- include "syntra.secretEnv" (dict "name" "PUBLIC_URL" "secret" $secret "key" .Values.secretKeys.publicUrl) | nindent 12 }}
+            {{- end }}
+            {{- with .Values.api.trustProxy }}
+            - { name: TRUST_PROXY, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.api.authRateLimitMax }}
+            - { name: AUTH_RATE_LIMIT_MAX, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.api.authRateLimitTenantMax }}
+            - { name: AUTH_RATE_LIMIT_TENANT_MAX, value: {{ . | quote }} }
+            {{- end }}
+            {{- include "syntra.secretEnv" (dict "name" "DATABASE_URL" "secret" $secret "key" .Values.secretKeys.databaseUrl) | nindent 12 }}
+            {{- include "syntra.secretEnv" (dict "name" "SESSION_SECRET" "secret" $secret "key" .Values.secretKeys.sessionSecret) | nindent 12 }}
+            {{- include "syntra.secretEnv" (dict "name" "MASTER_KEY" "secret" $secret "key" .Values.secretKeys.masterKey) | nindent 12 }}
+            {{- include "syntra.secretEnv" (dict "name" "SMTP_URL" "secret" $secret "key" .Values.secretKeys.smtpUrl) | nindent 12 }}
+            {{- with .Values.secretKeys.metricsToken }}
+            {{- include "syntra.secretEnv" (dict "name" "METRICS_TOKEN" "secret" $secret "key" . "optional" true) | nindent 12 }}
+            {{- end }}
+            {{- with .Values.secretKeys.governCheckpointKey }}
+            {{- include "syntra.secretEnv" (dict "name" "GOVERN_CHECKPOINT_KEY" "secret" $secret "key" . "optional" true) | nindent 12 }}
+            {{- end }}
+            {{- with .Values.api.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.api.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.api.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.api.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.api.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
-{{ toYaml .Values.resources | nindent 12 }}
+            {{- toYaml .Values.api.resources | nindent 12 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 256Mi
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: api }
+metadata:
+  # Exactly `api`: the web image's nginx proxies to http://api:3000. This is
+  # why one release per namespace is a hard requirement, not a preference.
+  name: api
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
 spec:
-  # The production web image proxies to the DNS name "api". Install each
-  # release into its own namespace so this stable alias cannot collide.
-  selector: { app.kubernetes.io/name: syntra, app.kubernetes.io/component: api, app.kubernetes.io/instance: {{ .Release.Name }} }
-  ports: [{ name: http, port: {{ .Values.api.servicePort }}, targetPort: http }]
+  type: ClusterIP
+  selector:
+    {{- include "syntra.selectorLabels" (dict "ctx" $ "component" "api") | nindent 4 }}
+  ports:
+    - name: http
+      # Fixed for the same reason as the name.
+      port: 3000
+      targetPort: http
+      protocol: TCP

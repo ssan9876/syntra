@@ -1,8 +1,10 @@
 import { Tabs } from '../../components/Tabs.js';
 import { PageHeader } from './PageHeader.js';
 import { SettingsSignInTab } from './SettingsSignInTab.js';
+import { SettingsSessionsTab } from './SettingsSessionsTab.js';
 import { BrandingTab } from './BrandingTab.js';
 import { WebhooksTab } from './WebhooksTab.js';
+import { TenantDeletionTab } from './TenantDeletionTab.js';
 
 /**
  * Settings: how this organization signs in, what it looks like, and where it
@@ -27,8 +29,14 @@ export function TenantSettingsPage() {
         label="Settings"
         tabs={[
           { id: 'sign-in', label: 'Sign-in', content: <SettingsSignInTab /> },
+          // The tenant-wide revoke lives here rather than on the Accounts
+          // page: it acts on the organization, is gated on the same
+          // `tenant.manage` as everything else on this page, and a button that
+          // signs everyone out does not belong beside a list of individuals.
+          { id: 'sessions', label: 'Sessions', content: <SettingsSessionsTab /> },
           { id: 'branding', label: 'Branding', content: <BrandingTab /> },
           { id: 'webhooks', label: 'Webhooks', content: <WebhooksTab /> },
+          { id: 'offboarding', label: 'Offboarding', content: <TenantDeletionTab /> },
         ]}
       />
     </>

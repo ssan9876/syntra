@@ -1,10 +1,14 @@
 import type { FastifyInstance } from 'fastify';
-import { applyRunRequest, idParam } from '@syntra/contracts';
+import { applyRunRequest, cancelRunRequest, idParam } from '@syntra/contracts';
 import {
   PERMISSIONS,
+  RunNotAppliableError,
+  RunNotCancellableError,
+  RunNotFoundError,
   applyRun,
   listRuns,
   recordEvent,
+  requestCancelSyncRun,
   skipChange,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -69,6 +73,10 @@ export async function registerAdminSyncRunRoutes(
           ...(body.confirm ? { confirm: true } : {}),
         });
       } catch (cause) {
+        if (cause instanceof RunNotAppliableError) {
+          // Queued, still reading, or cancelled. The state is the answer.
+          throw new ProblemError(409, 'run-not-appliable', 'This run cannot be applied', cause.message);
+        }
         if (cause instanceof Error && /blocked/i.test(cause.message)) {
           throw new ProblemError(
             409,
@@ -95,6 +103,42 @@ export async function registerAdminSyncRunRoutes(
       });
 
       return run;
+    },
+  );
+
+  /**
+   * Asks a run to stop. SYNC_MANAGE, the permission that starts and applies
+   * one: stopping a run is a decision about the directory of the same weight.
+   *
+   * A queued run, or one waiting for somebody to apply it, is cancelled on
+   * the spot. A run reading the directory or applying changes is asked, and
+   * stops at its next checkpoint — between two changes, never inside one — so
+   * the answer can be `requested` and the page follows it from there.
+   */
+  app.post(
+    '/sync-runs/:id/cancel',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      cancelRunRequest.parse(request.body ?? {});
+      try {
+        return await request.db(async (tx) => {
+          const result = await requestCancelSyncRun(tx, id, {
+            userId: request.session.userId,
+            sourceIp: request.ip,
+          });
+          const run = await tx.syncRun.findUniqueOrThrow({ where: { id } });
+          return { ...result, run };
+        });
+      } catch (cause) {
+        if (cause instanceof RunNotFoundError) {
+          throw new ProblemError(404, 'not-found', 'Run not found');
+        }
+        if (cause instanceof RunNotCancellableError) {
+          throw new ProblemError(409, 'run-not-cancellable', 'This run has already finished', cause.message);
+        }
+        throw cause;
+      }
     },
   );
 

@@ -10,6 +10,7 @@ import {
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { TenantWriteStopPanel } from './TenantWriteStopPanel.js';
 import { StatCard, StatGrid } from '../../components/StatCards.js';
 
 interface TargetRow {
@@ -227,6 +228,11 @@ export function TargetsPage() {
           quietWhenZero
         />
       </StatGrid>
+
+      {/* Above the list, because while it is active nothing below it writes. */}
+      <div className="mb-5">
+        <TenantWriteStopPanel />
+      </div>
 
       {error && <Alert tone="danger">{error}</Alert>}
 

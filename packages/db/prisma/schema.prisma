@@ -81,6 +81,27 @@ model Tenant {
   /// where mail is itself behind strong authentication, and it is those
   /// organizations that should be the ones turning it on.
   emailOtpEnabled        Boolean  @default(false)
+  /// Session lifetimes, per scope, in minutes. The defaults are exactly the
+  /// values `session-service.ts` hardcoded before they were configurable, so
+  /// a tenant that never opens the form behaves as it always did. Bounded by
+  /// CHECK constraints as well as the request schema; the bounds and their
+  /// reasons live in `SESSION_POLICY_BOUNDS`, `packages/contracts/src/tenant.ts`.
+  ///
+  /// Evaluated against the CURRENT values on every request, not only at
+  /// issue: shortening a lifetime ends sessions that are already past it at
+  /// their next request, which is what an administrator tightening the policy
+  /// after an incident needs it to do.
+  portalSessionIdleMinutes     Int     @default(60)
+  portalSessionAbsoluteMinutes Int     @default(720)
+  adminSessionIdleMinutes      Int     @default(15)
+  adminSessionAbsoluteMinutes  Int     @default(120)
+  /// Console elevation must be completed with a WebAuthn credential — not an
+  /// authenticator-app code, an emailed code or a recovery code. Enforced in
+  /// `authorize()` for the admin scope, and on every request for admin
+  /// sessions already issued. Off by default: switching it on is refused
+  /// unless the administrator doing it is holding a session their own
+  /// security key established, which is the lockout prevention.
+  adminWebauthnRequired        Boolean @default(false)
   /// What this tenant calls the sign-in surfaces their staff see. Null means
   /// Syntra's own name, which is the right default for a tenant that has not
   /// thought about it — an empty header is worse than somebody else's brand.
@@ -173,6 +194,8 @@ model Tenant {
   lifecyclePolicies         LifecyclePolicy[]
   lifecycleSimulations      LifecycleSimulation[]
   lifecycleLegalHolds       LifecycleLegalHold[]
+  externalWriteStop         TenantExternalWriteStop?
+  tenantDeletionRequests    TenantDeletionRequest[]
   lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
@@ -794,6 +817,20 @@ model SyncRun {
   /// page comes with something an administrator can act on.
   mappingFailureReasons String[]        @default([])
 
+  /// Cooperative cancellation. Null until somebody asks; then `requested`
+  /// while the run is still working, and finally `cancelled` (a checkpoint
+  /// between items honoured it, or the run had not started) or `moot` (the
+  /// run finished before any checkpoint saw the request, so it ended
+  /// normally and the request changed nothing). A column of its own rather
+  /// than a status, because a run asked to stop is still RUNNING until it
+  /// reaches a checkpoint -- overwriting the status would hide what the
+  /// worker is actually doing. The terminal status of an honoured request is
+  /// `cancelled`. See `jobs/cancellation.ts`.
+  cancelState             String?
+  cancelRequestedAt       DateTime?
+  cancelRequestedByUserId String?   @db.Uuid
+  cancelResolvedAt        DateTime?
+
   changes SyncChange[]
 
   @@index([tenantId, startedAt])
@@ -903,6 +940,20 @@ model PersonImportRun {
   /// Who confirmed a guarded run. An override nobody can find later is not a
   /// control.
   confirmedBy           String?      @db.Uuid
+
+  /// Cooperative cancellation. Null until somebody asks; then `requested`
+  /// while the run is still working, and finally `cancelled` (a checkpoint
+  /// between items honoured it, or the run had not started) or `moot` (the
+  /// run finished before any checkpoint saw the request, so it ended
+  /// normally and the request changed nothing). A column of its own rather
+  /// than a status, because a run asked to stop is still RUNNING until it
+  /// reaches a checkpoint -- overwriting the status would hide what the
+  /// worker is actually doing. The terminal status of an honoured request is
+  /// `cancelled`. See `jobs/cancellation.ts`.
+  cancelState             String?
+  cancelRequestedAt       DateTime?
+  cancelRequestedByUserId String?   @db.Uuid
+  cancelResolvedAt        DateTime?
 
   changes PersonImportChange[]
   duplicateReviews PersonDuplicateReview[]
@@ -2516,6 +2567,79 @@ model LifecycleLegalHold {
   @@index([tenantId, reference])
 }
 
+/// The tenant-wide emergency stop for connector writes: one row per tenant,
+/// created the first time somebody places a stop and kept afterwards so the
+/// last resume stays visible beside the controls.
+///
+/// A row rather than columns on `Tenant`, because `Tenant` is read before any
+/// tenant context exists (host resolution, sign-in) and is deliberately not
+/// under row-level security. The stop is tenant data like any other and gets
+/// the same FORCE RLS isolation as every table an administrator writes.
+///
+/// The column set mirrors `TargetSystem.externalWrites*` exactly, so the two
+/// scopes share one notion of "active" (`pausedAt` set and `expiresAt` null or
+/// in the future) and one resume rule (a different administrator).
+model TenantExternalWriteStop {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @unique @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pausedAt          DateTime?
+  pausedByUserId    String?   @db.Uuid
+  pauseReason       String?
+  pauseExpiresAt    DateTime?
+  resumedAt         DateTime?
+  resumedByUserId   String?   @db.Uuid
+  updatedAt         DateTime  @updatedAt
+}
+
+/// A four-eyes request to erase this tenant, bound to the offboarding
+/// assessment and export an administrator actually reviewed.
+///
+/// Deliberately one of the few records that outlive the erasure, beside the
+/// tenant tombstone and the audit record: once `completed` it IS the deletion
+/// receipt. It therefore holds only identifiers, digests, timestamps and
+/// counts. `reason` is free text a person typed and is cleared when the
+/// request completes; the audit event that recorded the request keeps it,
+/// under the audit log's own retention. The actor ids are not foreign keys
+/// because the users they name are among the rows the erasure removes.
+model TenantDeletionRequest {
+  id                     String    @id @default(uuid()) @db.Uuid
+  tenantId               String    @db.Uuid
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// 'pending_approval' | 'approved' | 'executing' | 'completed' |
+  /// 'cancelled' | 'expired' | 'invalidated'
+  status                 String    @default("pending_approval")
+  assessmentDigest       String
+  assessmentAuditEventId String    @db.Uuid
+  exportDigest           String
+  exportAuditEventId     String    @db.Uuid
+  /// SHA-256 of the tenant's exportable data when the request was made.
+  /// Recomputed at approval and at execution; any difference is staleness.
+  dataRevision           String
+  reason                 String?
+  requestedByUserId      String    @db.Uuid
+  requestedAt            DateTime  @default(now())
+  approvalExpiresAt      DateTime
+  approvedByUserId       String?   @db.Uuid
+  approvedAt             DateTime?
+  /// When the approver's administrative session was minted: the step-up
+  /// evidence behind the approval.
+  approverStepUpAt       DateTime?
+  executeNotBefore       DateTime?
+  executeBefore          DateTime?
+  executedByUserId       String?   @db.Uuid
+  executorStepUpAt       DateTime?
+  completedAt            DateTime?
+  cancelledByUserId      String?   @db.Uuid
+  cancelledAt            DateTime?
+  /// Machine-readable code for why an open request closed without running.
+  closedReason           String?
+  /// Per-table row counts and the erased-secret count. Numbers only.
+  receipt                Json?
+
+  @@index([tenantId, status])
+}
+
 /// A no-write rehearsal of a hire, move or departure computed by the same
 /// planner a run uses. Kept so a reviewer can sign off on what was shown,
 /// and expired by the retention job because a simulation ages badly.
@@ -2603,6 +2727,20 @@ model ProvisionRun {
   blockedReason        String?
   confirmedByUserId    String? @db.Uuid
   error                String?
+
+  /// Cooperative cancellation. Null until somebody asks; then `requested`
+  /// while the run is still working, and finally `cancelled` (a checkpoint
+  /// between items honoured it, or the run had not started) or `moot` (the
+  /// run finished before any checkpoint saw the request, so it ended
+  /// normally and the request changed nothing). A column of its own rather
+  /// than a status, because a run asked to stop is still RUNNING until it
+  /// reaches a checkpoint -- overwriting the status would hide what the
+  /// worker is actually doing. The terminal status of an honoured request is
+  /// `cancelled`. See `jobs/cancellation.ts`.
+  cancelState             String?
+  cancelRequestedAt       DateTime?
+  cancelRequestedByUserId String?   @db.Uuid
+  cancelResolvedAt        DateTime?
 
   actions    ProvisionAction[]
   exceptions ProvisionException[]

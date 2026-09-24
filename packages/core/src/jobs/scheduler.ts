@@ -1,4 +1,5 @@
 import { PgBoss } from 'pg-boss';
+import { TenantRetiredError } from '@syntra/db';
 import { missingFrom, trackIntents, type ScheduleRef } from './reconcile.js';
 
 export type JobHandler<T> = (data: T) => Promise<void>;
@@ -78,8 +79,18 @@ export function createScheduler(
         } as Parameters<typeof boss.createQueue>[1]);
         await boss.work(name, async (jobs) => {
           for (const job of jobs) {
-            // A throw is what tells pg-boss to retry. Never swallow it.
-            await handler(job.data);
+            // A throw is what tells pg-boss to retry. Never swallow it --
+            // with one exception. A job for a tenant that has since been
+            // erased can never succeed and has nothing left to do; the
+            // erasure removed its schedule and queued copies, and this is the
+            // copy that was already in flight. Retrying it would turn a
+            // completed deletion into three failures and an alert.
+            try {
+              await handler(job.data);
+            } catch (error) {
+              if (error instanceof TenantRetiredError) continue;
+              throw error;
+            }
           }
         });
       }

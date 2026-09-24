@@ -6,6 +6,7 @@ import { storableCause } from '../storable-text.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { targetWithCredential } from './target-service.js';
 import { placeAt } from './apply.js';
+import { assertExternalWritesAllowed } from './tenant-write-stop.js';
 
 /**
  * Moving one person's account to a container somebody chose.
@@ -285,12 +286,24 @@ export async function moveAccount(
     throw new NoCorrelationKeyError();
   }
 
-  const target = await withTenant(tenantId, (tx) =>
-    tx.targetSystem.findUniqueOrThrow({
+  // The manual move is a connector write too, so it answers to the same
+  // emergency stops as a run. Refused AFTER the placement is recorded, which is
+  // the outcome the comment above already argues for: the decision stands, and
+  // the next run proposes the move once writes are allowed again.
+  const target = await withTenant(tenantId, async (tx) => {
+    const row = await tx.targetSystem.findUniqueOrThrow({
       where: { id: input.targetSystemId },
-      select: { type: true },
-    }),
-  );
+      select: {
+        id: true,
+        type: true,
+        externalWritesPausedAt: true,
+        externalWritesPauseReason: true,
+        externalWritesPauseExpiresAt: true,
+      },
+    });
+    await assertExternalWritesAllowed(tx, row);
+    return row;
+  });
   const config = await withTenant(tenantId, (tx) =>
     targetWithCredential(tx, provider, input.targetSystemId),
   );

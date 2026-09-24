@@ -1,0 +1,78 @@
+# Every optional feature switched on, as a production install might set it.
+# Rendered by CI; also a worked example for operators.
+existingSecret: syntra-runtime
+publicUrl: https://idm.example.com
+
+secretKeys:
+  migrationDatabaseUrl: MIGRATION_DATABASE_URL
+
+api:
+  image:
+    tag: "1.4.0"
+  replicas: 3
+  trustProxy: 10.244.0.0/16
+  authRateLimitMax: "4"
+  authRateLimitTenantMax: "40"
+  env:
+    - { name: POLICY_COUNTRY_HEADER, value: cf-ipcountry }
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 6
+    targetMemoryUtilizationPercentage: 80
+
+web:
+  image:
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  autoscaling:
+    enabled: true
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 2m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    cert-manager.io/cluster-issuer: letsencrypt
+  hosts:
+    - host: idm.example.com
+      paths: [{ path: /, pathType: Prefix }]
+    - host: acme.idm.example.com
+      paths: [{ path: /, pathType: Prefix }]
+  tls:
+    - secretName: syntra-tls
+      hosts: [idm.example.com, acme.idm.example.com]
+
+networkPolicy:
+  postgres:
+    cidrs: [10.20.0.0/24]
+    ports: [5432]
+  smtp:
+    cidrs: [10.30.0.25/32]
+    ports: [587]
+  connectorEgress:
+    # Active Directory domain controllers (LDAPS).
+    - cidrs: [10.40.0.10/32, 10.40.0.11/32]
+      ports: [636]
+    # Microsoft Graph / SCIM targets / webhooks over HTTPS, anywhere public.
+    - cidrs: [0.0.0.0/0]
+      ports: [443]
+    # The HR feed's SFTP server.
+    - cidrs: [203.0.113.7/32]
+      ports: [22]
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    labels: { release: kube-prometheus-stack }
+  prometheusRule:
+    enabled: true
+    labels: { release: kube-prometheus-stack }
+
+backup:
+  enabled: true
+  persistence:
+    storageClass: encrypted-ssd
+
+apiRolloutRestart:
+  enabled: true

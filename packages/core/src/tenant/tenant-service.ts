@@ -93,6 +93,48 @@ export interface TenantSettings {
    * browser arriving by another name will not offer it.
    */
   additionalDomains: string[];
+  /**
+   * Session lifetimes in minutes, per scope, within `SESSION_POLICY_BOUNDS`.
+   * Applied to sessions already issued as well as new ones — shortening one
+   * ends every session past the new limit at its next request.
+   */
+  portalSessionIdleMinutes: number;
+  portalSessionAbsoluteMinutes: number;
+  adminSessionIdleMinutes: number;
+  adminSessionAbsoluteMinutes: number;
+  /**
+   * The console requires a WebAuthn credential to elevate, and administrative
+   * sessions a key did not establish stop working. Enforced in `authorize()`
+   * and `session-service.ts`; switching it on is guarded by the route.
+   */
+  adminWebauthnRequired: boolean;
+}
+
+/**
+ * Why a merged set of session lifetimes is refused, or null if it is not.
+ *
+ * The relations the request schema cannot check, because it sees one body and
+ * these are about pairs — a PUT that lowers only the portal absolute lifetime
+ * must be judged against the admin value already stored. The database refuses
+ * the same combinations with CHECK constraints; checking here first is what
+ * turns a constraint violation into a sentence an administrator can act on.
+ */
+export function sessionLifetimeProblem(settings: {
+  portalSessionIdleMinutes: number;
+  portalSessionAbsoluteMinutes: number;
+  adminSessionIdleMinutes: number;
+  adminSessionAbsoluteMinutes: number;
+}): string | null {
+  if (settings.portalSessionIdleMinutes > settings.portalSessionAbsoluteMinutes) {
+    return 'The portal idle timeout cannot be longer than the portal session lifetime.';
+  }
+  if (settings.adminSessionIdleMinutes > settings.adminSessionAbsoluteMinutes) {
+    return 'The console idle timeout cannot be longer than the console session lifetime.';
+  }
+  if (settings.adminSessionAbsoluteMinutes > settings.portalSessionAbsoluteMinutes) {
+    return 'A console session cannot last longer than a portal session.';
+  }
+  return null;
 }
 
 /** What the settings screen reads, plus the one field it must not write. */
@@ -125,6 +167,11 @@ export async function readTenant(tx: TenantClient): Promise<TenantView> {
     passwordMaxAgeDays: tenant.passwordMaxAgeDays,
     passwordHistoryDepth: tenant.passwordHistoryDepth,
     emailOtpEnabled: tenant.emailOtpEnabled,
+    portalSessionIdleMinutes: tenant.portalSessionIdleMinutes,
+    portalSessionAbsoluteMinutes: tenant.portalSessionAbsoluteMinutes,
+    adminSessionIdleMinutes: tenant.adminSessionIdleMinutes,
+    adminSessionAbsoluteMinutes: tenant.adminSessionAbsoluteMinutes,
+    adminWebauthnRequired: tenant.adminWebauthnRequired,
     webauthnAvailable: tenant.primaryDomain !== null,
   };
 }
@@ -193,6 +240,21 @@ export async function updateTenant(
       ...(input.additionalDomains === undefined
         ? {}
         : { additionalDomains: input.additionalDomains }),
+      ...(input.portalSessionIdleMinutes === undefined
+        ? {}
+        : { portalSessionIdleMinutes: input.portalSessionIdleMinutes }),
+      ...(input.portalSessionAbsoluteMinutes === undefined
+        ? {}
+        : { portalSessionAbsoluteMinutes: input.portalSessionAbsoluteMinutes }),
+      ...(input.adminSessionIdleMinutes === undefined
+        ? {}
+        : { adminSessionIdleMinutes: input.adminSessionIdleMinutes }),
+      ...(input.adminSessionAbsoluteMinutes === undefined
+        ? {}
+        : { adminSessionAbsoluteMinutes: input.adminSessionAbsoluteMinutes }),
+      ...(input.adminWebauthnRequired === undefined
+        ? {}
+        : { adminWebauthnRequired: input.adminWebauthnRequired }),
     },
   });
   return readTenant(tx);

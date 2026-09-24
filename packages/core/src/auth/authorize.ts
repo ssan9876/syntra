@@ -258,6 +258,43 @@ function applyFloor(
 }
 
 /**
+ * The name the phishing-resistance requirement goes by in audit events, where
+ * a policy rule's name would otherwise be.
+ */
+export const ADMIN_WEBAUTHN_RULE_NAME = 'tenant: phishing-resistant console access';
+
+/**
+ * The tenant's "console needs a security key" setting, applied to a decision.
+ *
+ * Applied AFTER the floor and the policy, and it can only strengthen, like
+ * the floor: a deny stays a deny. Anything short of a deny becomes "present
+ * WebAuthn specifically" — not any second factor. An authenticator-app code,
+ * an emailed code and a recovery code are all things a convincing fake sign-in
+ * page can ask for and relay; a WebAuthn assertion is bound to the origin the
+ * browser is really on, so a relay produces a signature for the wrong site.
+ * That is the whole property this setting buys, and it is lost the moment a
+ * weaker factor is accepted as a substitute — which is why a rule asking for
+ * TOTP on the console is overridden here rather than honoured alongside.
+ *
+ * Only the admin scope and only people. A portal session authorises nothing
+ * this protects. A machine token cannot present any factor at all, and is
+ * refused a challenge further down regardless; tokens are issued from an
+ * administrative session, which under this setting a key established.
+ */
+function applyAdminWebauthn(
+  decision: PolicyDecision,
+  required: boolean,
+): PolicyDecision {
+  if (!required || decision.outcome === 'deny') return decision;
+  return {
+    outcome: 'require_factor',
+    factorType: 'webauthn',
+    ruleId: null,
+    ruleName: ADMIN_WEBAUTHN_RULE_NAME,
+  };
+}
+
+/**
  * Whether a factor that has already been presented or enrolled during this
  * flow satisfies what the policy is asking for.
  *
@@ -590,9 +627,21 @@ async function decide(
       now: input.now,
     });
 
-    const decision = applyFloor(
-      evaluatePolicy(policy.rules, policy.fallback, context),
-      input.floor,
+    // Decided here, inside the chokepoint, from the tenant row read in this
+    // same transaction — not by the elevation route as a floor. A floor is
+    // something a caller remembers to pass; every path that can produce an
+    // administrative session (elevation, a completed factor, a completed
+    // enrolment or renewal) re-enters `decide()`, so this is the one place a
+    // requirement cannot be forgotten by a caller that did not know about it.
+    const adminWebauthn =
+      tenant.adminWebauthnRequired && input.scope === 'admin' && !input.machine;
+
+    const decision = applyAdminWebauthn(
+      applyFloor(
+        evaluatePolicy(policy.rules, policy.fallback, context),
+        input.floor,
+      ),
+      adminWebauthn,
     );
 
     if (decision.outcome === 'deny') {
@@ -774,6 +823,33 @@ async function decide(
       }
       return true;
     });
+
+    // NO FORCED ENROLMENT INTO THE CONSOLE UNDER THE PHISHING-RESISTANT
+    // SETTING. The trade accepted above — a stolen password buys the ability
+    // to enrol a factor — is exactly the attack this setting exists to stop:
+    // somebody who relayed a password (and, for the portal, a code) through a
+    // fake page would otherwise be offered "register a security key" and
+    // register their own. So an administrator without a key is refused, and
+    // registers one from the Security page of a portal session instead, where
+    // the enrolment is its own audited act rather than a step inside an
+    // elevation. Lockout is prevented at the other end: the setting cannot be
+    // switched on by anyone not holding a key-established session.
+    if (adminWebauthn) {
+      await audit(tx, {
+        userId: input.userId,
+        action: 'auth.mfa_unavailable',
+        outcome: 'failure',
+        sourceIp: input.sourceIp,
+        payload: {
+          reason: 'factor_not_enrolled',
+          required: decision.outcome,
+          requiredFactor: decision.factorType,
+          ruleName: decision.ruleName,
+          adminWebauthnRequired: true,
+        },
+      });
+      return { status: 'deny', reason: 'factor_not_enrolled' };
+    }
 
     if (tenant.selfEnrolmentEnabled && offerable.length > 0) {
       const attempt = await issueAttempt(tx, {

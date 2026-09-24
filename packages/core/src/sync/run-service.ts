@@ -25,6 +25,39 @@ import {
 } from './diff.js';
 import { evaluateGuard } from './guard.js';
 import { applyChange } from './apply.js';
+import { recordEvent } from '../audit/audit-service.js';
+import {
+  noActiveRequest,
+  READ_CHECKPOINT_EVERY,
+  RunCancelledSignal,
+  RunNotAppliableError,
+  cancellationRequested,
+  finishWithCancellationCheck,
+  honouredCancellation,
+  requestCancellation,
+  type CancelResult,
+  type CancellableRunDelegate,
+} from '../jobs/cancellation.js';
+
+/**
+ * `SyncRun` through the shape `jobs/cancellation.ts` works on. The cast is the
+ * one place the generated delegate is narrowed to the columns the three
+ * cancellable run tables share; see `CancellableRunDelegate`.
+ */
+const runs = (tx: TenantClient) => tx.syncRun as unknown as CancellableRunDelegate;
+
+/**
+ * Statuses a cancel honours on the spot: nothing is working on the run.
+ * `previewed`, `blocked` and `partially_applied` are waiting for a person, and
+ * cancelling them discards what is still proposed.
+ */
+const CANCEL_IMMEDIATELY = ['queued', 'previewed', 'blocked', 'partially_applied'] as const;
+/** Statuses with a worker whose checkpoints will see a request. */
+const CANCEL_COOPERATIVELY = ['running', 'applying'] as const;
+/** Written on every change a cancellation left unapplied. */
+const CANCELLED_CHANGE_MESSAGE = 'not applied: the run was cancelled';
+/** Statuses an apply refuses outright. */
+const NOT_APPLIABLE = ['queued', 'running', 'cancelled', 'failed'] as const;
 
 /**
  * Reads the source, computes the whole diff, and stops.
@@ -90,13 +123,29 @@ export async function previewRun(
       // `queued` becomes `running` HERE, not when the job was accepted. The
       // status is about what is happening to the directory, and between the
       // two a job can sit in the queue for as long as the queue is busy.
-      return tx.syncRun.update({
-        where: { id: existingRunId },
+      //
+      // Conditional, because that wait is exactly when somebody cancels: a run
+      // cancelled while queued must stay cancelled when its job arrives, not
+      // be resurrected as `running` with a resolved cancellation on it.
+      await tx.syncRun.updateMany({
+        where: { id: existingRunId, status: { not: 'cancelled' } },
         data: { status: 'running', startedAt: new Date() },
       });
+      return tx.syncRun.findUniqueOrThrow({ where: { id: existingRunId } });
     }
     return tx.syncRun.create({ data: { tenantId: boundTenant, sourceId } });
   });
+  if (run.status === 'cancelled') return run;
+
+  /**
+   * A checkpoint: stop here if somebody asked. Throws to the catch below,
+   * which records `cancelled`. Never inside a transaction and always before
+   * the plan is written, so a cancelled preview proposes nothing.
+   */
+  const checkpoint = async () => {
+    const asked = await withTenant(tenantId, (tx) => cancellationRequested(runs(tx), run.id));
+    if (asked) throw new RunCancelledSignal(run.id);
+  };
 
   try {
     // Phase 2: read the configuration out, then close the transaction. Plain
@@ -118,10 +167,16 @@ export async function previewRun(
 
     // Phase 3: the directory read, outside any transaction. This is the slow,
     // network-bound part, and it holds no database connection while it runs.
+    //
+    // Checkpointed every READ_CHECKPOINT_EVERY records, because this is the
+    // phase that can run for most of an hour. Leaving the loop by a throw
+    // returns the connector's iterator, which closes the LDAP connection.
     const records: SourceRecord[] = [];
     for await (const record of ldapConnector.read(prepared.config)) {
       records.push(record);
+      if (records.length % READ_CHECKPOINT_EVERY === 0) await checkpoint();
     }
+    await checkpoint();
 
     // Phase 4: one short transaction for the whole database-side snapshot the
     // diff is computed against. `loadExisting` returns each row's current
@@ -146,23 +201,14 @@ export async function previewRun(
     return await withTenant(tenantId, async (tx) => {
       const tenant = await currentTenant(tx);
 
-      await tx.syncChange.createMany({
-        data: computed.changes.map((c) => ({
-          tenantId: tenant,
-          runId: run.id,
-          changeType: c.changeType,
-          targetType: c.targetType,
-          targetId: c.targetId,
-          sourceAnchor: c.sourceAnchor,
-          before: (c.before ?? undefined) as never,
-          after: (c.after ?? undefined) as never,
-          status: c.status,
-          message: c.message ?? null,
-        })),
-      });
-
-      return tx.syncRun.update({
-        where: { id: run.id },
+      // The last checkpoint, and the one that closes the race. The terminal
+      // status is written FIRST and conditionally: a request that committed
+      // before this statement makes it match nothing, and the throw rolls the
+      // transaction back with no change written. A request arriving after it
+      // waits on this row lock, then finds `previewed` and cancels that
+      // outright — also with nothing applied.
+      const terminal = await tx.syncRun.updateMany({
+        where: { id: run.id, ...noActiveRequest() },
         data: {
           status: computed.verdict.blocked ? 'blocked' : 'previewed',
           blockedReason: computed.verdict.blocked ? computed.verdict.reason : null,
@@ -179,21 +225,121 @@ export async function previewRun(
           finishedAt: new Date(),
         },
       });
+      if (terminal.count === 0) throw new RunCancelledSignal(run.id);
+
+      await tx.syncChange.createMany({
+        data: computed.changes.map((c) => ({
+          tenantId: tenant,
+          runId: run.id,
+          changeType: c.changeType,
+          targetType: c.targetType,
+          targetId: c.targetId,
+          sourceAnchor: c.sourceAnchor,
+          before: (c.before ?? undefined) as never,
+          after: (c.after ?? undefined) as never,
+          status: c.status,
+          message: c.message ?? null,
+        })),
+      });
+
+      return tx.syncRun.findUniqueOrThrow({ where: { id: run.id } });
     });
   } catch (cause) {
+    if (cause instanceof RunCancelledSignal) {
+      // Honoured at a checkpoint. Nothing was proposed, so there is nothing
+      // to review: the run says `cancelled` and when.
+      return withTenant(tenantId, async (tx) => {
+        await honourSyncCancellation(tx, run.id, 'preview');
+        return tx.syncRun.findUniqueOrThrow({ where: { id: run.id } });
+      });
+    }
     // Covers phases 2 through 6. Its own transaction, because the one that
     // failed is already aborted and cannot accept this update.
-    return withTenant(tenantId, (tx) =>
-      tx.syncRun.update({
-        where: { id: run.id },
-        data: {
-          status: 'failed',
-          error: storableCause(cause) || 'run failed',
-          finishedAt: new Date(),
-        },
-      }),
-    );
+    //
+    // Through `finishWithCancellationCheck`: a run that failed before any
+    // checkpoint saw a pending request ended on its own, and the request is
+    // recorded as moot rather than left `requested` on a finished run.
+    return withTenant(tenantId, async (tx) => {
+      await finishWithCancellationCheck(runs(tx), run.id, {
+        status: 'failed',
+        error: storableCause(cause) || 'run failed',
+        finishedAt: new Date(),
+      });
+      return tx.syncRun.findUniqueOrThrow({ where: { id: run.id } });
+    });
   }
+}
+
+/**
+ * Resolves a pending request as honoured and writes the evidence.
+ *
+ * The audit event names the person who ASKED as the actor: the checkpoint is
+ * where their decision took effect, and a system-actor row would make "who
+ * stopped this run" a two-query question.
+ */
+async function honourSyncCancellation(
+  tx: TenantClient,
+  runId: string,
+  phase: 'preview' | 'apply',
+  counts: Record<string, number> = {},
+): Promise<void> {
+  const { count } = await tx.syncRun.updateMany({
+    where: { id: runId, cancelState: 'requested' },
+    data: honouredCancellation(),
+  });
+  if (count === 0) return;
+  // What the apply never reached is said on the changes themselves, which is
+  // where the run's page shows them. A change left `proposed` on a finished
+  // run reads as one nobody got to — true, but not WHY.
+  await tx.syncChange.updateMany({
+    where: { runId, status: 'proposed' },
+    data: { status: 'skipped', message: CANCELLED_CHANGE_MESSAGE },
+  });
+  const run = await tx.syncRun.findUniqueOrThrow({ where: { id: runId } });
+  await recordEvent(tx, {
+    actorUserId: run.cancelRequestedByUserId,
+    action: 'sync.run.cancelled',
+    targetType: 'SyncRun',
+    targetId: runId,
+    outcome: 'success',
+    sourceIp: null,
+    payload: { phase, ...counts },
+  });
+}
+
+/**
+ * Asks a sync run to stop. Honoured at once for a run nothing is working on;
+ * recorded for the next checkpoint of one that is reading or applying.
+ *
+ * Takes the caller's transaction so the request and its audit event commit
+ * together. A pending run's still-proposed changes are marked `skipped` with
+ * the reason, so the run's own page says why they never applied.
+ */
+export async function requestCancelSyncRun(
+  tx: TenantClient,
+  runId: string,
+  actor: { userId: string; sourceIp: string | null },
+): Promise<CancelResult> {
+  const result = await requestCancellation(runs(tx), runId, actor.userId, {
+    immediate: CANCEL_IMMEDIATELY,
+    cooperative: CANCEL_COOPERATIVELY,
+  });
+  if (result.outcome === 'cancelled') {
+    await tx.syncChange.updateMany({
+      where: { runId, status: 'proposed' },
+      data: { status: 'skipped', message: CANCELLED_CHANGE_MESSAGE },
+    });
+  }
+  await recordEvent(tx, {
+    actorUserId: actor.userId,
+    action: 'sync.run.cancel',
+    targetType: 'SyncRun',
+    targetId: runId,
+    outcome: 'success',
+    sourceIp: actor.sourceIp,
+    payload: { outcome: result.outcome, previousStatus: result.previousStatus },
+  });
+  return result;
 }
 
 /** Everything the diff correlates against, snapshotted in one transaction. */
@@ -609,6 +755,38 @@ export async function applyRun(
       `run is blocked and cannot be applied: ${run.blockedReason ?? 'unknown reason'}`,
     );
   }
+  if ((NOT_APPLIABLE as readonly string[]).includes(run.status)) {
+    throw new RunNotAppliableError(runId, run.status);
+  }
+
+  // Into `applying`, conditionally, so the console can show that an apply is
+  // under way and offer to stop it. A marker and not a lock: Directory Sync
+  // has no heartbeat or adoption, so a process that dies mid-apply leaves the
+  // run `applying`, and applying it again must still resume it exactly as it
+  // resumed a `previewed` run before this state existed.
+  //
+  // A request already waiting is honoured here, before the first change: the
+  // resumed apply's first checkpoint, and the way a request against a run
+  // whose worker died gets resolved at all.
+  const started = await withTenant(tenantId, async (tx) => {
+    if (run.cancelState === 'requested') return false;
+    const { count } = await tx.syncRun.updateMany({
+      where: { id: runId, status: run.status, ...noActiveRequest() },
+      data: { status: 'applying' },
+    });
+    return count === 1;
+  });
+  if (!started) {
+    return withTenant(tenantId, async (tx) => {
+      await honourSyncCancellation(tx, runId, 'apply', { applied: 0 });
+      const now = await tx.syncRun.findUniqueOrThrow({ where: { id: runId } });
+      // Not a cancellation after all: the run moved between the read above and
+      // the transition (a second apply finished, or somebody cancelled it
+      // outright). Refused with the state it is actually in.
+      if (now.status !== 'cancelled') throw new RunNotAppliableError(runId, now.status);
+      return now;
+    });
+  }
 
   const changes = await withTenant(tenantId, (tx) =>
     tx.syncChange.findMany({
@@ -667,9 +845,24 @@ export async function applyRun(
     ...changes.filter((c) => c.changeType.endsWith('_member')),
   ];
 
+  let applied = 0;
+  let cancelled = false;
   for (const change of ordered) {
     try {
-      await withTenant(tenantId, (tx) => applyChange(tx, change, run.sourceId, runId));
+      // The checkpoint shares the change's own transaction: it costs no extra
+      // round trip, and it sits BETWEEN changes by construction — a change
+      // either commits whole with its `SyncChange` status or not at all, so
+      // there is no mid-write to stop in.
+      const outcome = await withTenant(tenantId, async (tx) => {
+        if (await cancellationRequested(runs(tx), runId)) return 'cancel' as const;
+        await applyChange(tx, change, run.sourceId, runId);
+        return 'applied' as const;
+      });
+      if (outcome === 'cancel') {
+        cancelled = true;
+        break;
+      }
+      applied += 1;
     } catch (cause) {
       // A fresh transaction: the one applyChange ran in is already aborted
       // and cannot accept this update.
@@ -692,15 +885,21 @@ export async function applyRun(
     tx.syncChange.count({ where: { runId, status: 'failed' } }),
   );
 
-  return withTenant(tenantId, (tx) =>
-    tx.syncRun.update({
-      where: { id: runId },
-      data: {
+  return withTenant(tenantId, async (tx) => {
+    if (cancelled) {
+      // Stopped between changes. Everything applied so far stays recorded as
+      // applied; everything not reached is `skipped` with the reason, on a run
+      // that can no longer apply it, and the next run re-proposes whatever is
+      // still true. Honest, and reviewable change by change.
+      await honourSyncCancellation(tx, runId, 'apply', { applied, failed, notAttempted: remaining });
+    } else {
+      await finishWithCancellationCheck(runs(tx), runId, {
         status: remaining > 0 || failed > 0 ? 'partially_applied' : 'applied',
         finishedAt: new Date(),
-      },
-    }),
-  );
+      });
+    }
+    return tx.syncRun.findUniqueOrThrow({ where: { id: runId } });
+  });
 }
 
 /**

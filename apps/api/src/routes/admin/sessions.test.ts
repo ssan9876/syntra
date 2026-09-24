@@ -7,6 +7,7 @@ import {
   createSession,
   createUser,
   hashPassword,
+  issueApiToken,
   setPasswordHash,
   type Permission,
   type SessionAllowance,
@@ -211,6 +212,139 @@ describe('who may do this', () => {
     const target = await seedTargetWithSessions(1);
 
     const res = await listSessions(target.id, cookie);
+
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('revoking sessions across the tenant', () => {
+  const revokeAll = (
+    cookie: string,
+    payload: Record<string, unknown> = { reason: 'suspected credential theft' },
+  ) =>
+    ctx.app.inject({
+      method: 'POST',
+      url: '/api/admin/sessions/revoke',
+      headers: { host: ctx.host, cookie },
+      payload,
+    });
+
+  /** Ages the caller's console session past the step-up window. */
+  const ageAdminSessions = (minutes: number) =>
+    withTenant(ctx.tenantId, (tx) =>
+      tx.session.updateMany({
+        where: { scope: 'admin' },
+        data: { createdAt: new Date(Date.now() - minutes * 60 * 1000) },
+      }),
+    );
+
+  it('ends everybody else and keeps the session that asked', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE, PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+    const target = await seedTargetWithSessions(2);
+
+    const res = await revokeAll(cookie);
+
+    expect(res.statusCode).toBe(200);
+    // The target's two, and the admin's own portal session from sign-in.
+    expect(res.json()).toMatchObject({ usersAffected: 2, sessionsRevoked: 3 });
+    // Still signed in: the caller's own console session was spared.
+    const after = await listSessions(target.id, cookie);
+    expect(after.statusCode).toBe(200);
+    expect(after.json().sessions).toEqual([]);
+
+    const summary = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'session.mass_revoked' } }),
+    );
+    expect(summary.payload).toMatchObject({
+      scope: 'all',
+      reason: 'suspected credential theft',
+      keptCurrentSession: true,
+    });
+  });
+
+  it('can end the caller too when asked', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE, PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const res = await revokeAll(cookie, {
+      reason: 'suspected credential theft',
+      keepCurrentSession: false,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/admin/tenant',
+      headers: { host: ctx.host, cookie },
+    });
+    expect(after.statusCode).toBe(401);
+  });
+
+  it('can be narrowed to console sessions', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE, PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+    const target = await seedTargetWithSessions(2);
+    await withTenant(ctx.tenantId, (tx) =>
+      createSession(tx, allowed(target.id, 'admin'), { ip: null, userAgent: null }),
+    );
+
+    const res = await revokeAll(cookie, {
+      reason: 'administrator credential leaked',
+      scope: 'admin',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ sessionsRevoked: 1 });
+    const left = (await listSessions(target.id, cookie)).json().sessions;
+    expect(left.map((s: { scope: string }) => s.scope)).toEqual(['portal', 'portal']);
+  });
+
+  it('demands a fresh elevation', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE, PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+    const target = await seedTargetWithSessions(1);
+    await ageAdminSessions(11);
+
+    const res = await revokeAll(cookie);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().type).toMatch(/step-up-required$/);
+    expect((await listSessions(target.id, cookie)).json().sessions).toHaveLength(1);
+  });
+
+  it('refuses without the tenant permission, whatever else is held', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+
+    expect((await revokeAll(cookie)).statusCode).toBe(403);
+  });
+
+  it('refuses a reason too short to mean anything', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await authCookie('admin');
+
+    expect((await revokeAll(cookie, { reason: 'x' })).statusCode).toBe(400);
+  });
+
+  it('refuses a bearer token even with the permission', async () => {
+    const admin = await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const { token } = await withTenant(ctx.tenantId, (tx) =>
+      issueApiToken(tx, {
+        userId: admin.id,
+        name: 'automation',
+        scopes: [],
+        expiresAt: null,
+        createdBy: null,
+      }),
+    );
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/admin/sessions/revoke',
+      headers: { host: ctx.host, authorization: `Bearer ${token}` },
+      payload: { reason: 'suspected credential theft' },
+    });
 
     expect(res.statusCode).toBe(403);
   });

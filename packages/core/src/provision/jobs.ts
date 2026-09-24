@@ -5,6 +5,7 @@ import type { Transport } from '../notify/notification-service.js';
 import type { Scheduler } from '../jobs/scheduler.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { applyProvisionRun } from './apply.js';
+import { ExternalWritesPausedError } from './target-write-stop.js';
 import { ProvisionRunInFlightError, previewProvisionRun } from './run-service.js';
 import { claimSyntraUsers, enqueuePairedSync } from './syntra-user.js';
 import { PERSON_PROVISION_JOB, runPersonProvision, type PersonProvisionPayload } from './person-receipts.js';
@@ -406,10 +407,27 @@ export async function runProvisionJob(
   }
 
   if (decision.autoApply && run.status === 'previewed') {
-    const result = await apply(payload.tenantId, provider, run.id, {
-      ...connectorOption,
-      ...(options.transport === undefined ? {} : { transport: options.transport }),
-    });
+    let result;
+    try {
+      result = await apply(payload.tenantId, provider, run.id, {
+        ...connectorOption,
+        ...(options.transport === undefined ? {} : { transport: options.transport }),
+      });
+    } catch (cause) {
+      // An emergency stop is the system working, not a job failure. Retrying
+      // it would only hit the same stop, and an error in the job log is not
+      // where anybody looks for "writes are paused". Recorded as a skip, which
+      // is the visible, counted signal the target console already shows; the
+      // preview stays reviewable.
+      if (cause instanceof ExternalWritesPausedError) {
+        await recordSkip(payload.tenantId, payload.targetSystemId, cause.message, {
+          runId: run.id,
+          stopScope: cause.scope,
+        });
+        return;
+      }
+      throw cause;
+    }
     // Ruling P4, on the one path where nobody is watching. An unattended run
     // cannot confirm anything, so every action that requires confirmation —
     // a rename, a re-enable outside the window, a re-create of a vanished

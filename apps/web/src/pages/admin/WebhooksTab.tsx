@@ -73,6 +73,10 @@ const GROUPS = [
     key: 'configuration',
     label: 'Configuration changes',
   },
+  {
+    key: 'write-stops',
+    label: 'Emergency write stops',
+  },
 ] as const;
 
 const LABELS = new Map(GROUPS.map((g) => [g.key as string, g.label]));

@@ -1,7 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { idParam } from '@syntra/contracts';
-import { PERMISSIONS, endSessions, listSessionsForUser } from '@syntra/core';
+import { idParam, revokeTenantSessionsRequest } from '@syntra/contracts';
+import {
+  PERMISSIONS,
+  STEP_UP_MAX_AGE_MS,
+  endSessions,
+  isRecentElevation,
+  listSessionsForUser,
+  revokeTenantSessions,
+} from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -80,6 +87,52 @@ export async function registerAdminSessionRoutes(app: FastifyInstance): Promise<
           sourceIp: request.ip,
         });
         return { sessionsRevoked };
+      });
+    },
+  );
+
+  /**
+   * Every session in the tenant, or every administrative one, at once.
+   *
+   * Unlike the per-user routes above, this one DOES demand step-up, and the
+   * argument that exempts them does not carry over. Ending one person's
+   * sessions grants nothing and harms nobody but the person; ending everyone's
+   * is an outage for the whole organization, and a stolen console session
+   * that could press it would be a denial of service on demand. So: the
+   * tenant-level permission rather than `directory.write`, no bearer tokens
+   * (see `TOKEN_DENIED_ROUTES`), and an administrative session established in
+   * the last `STEP_UP_MAX_AGE_MS` — a fresh elevation, which re-ran the
+   * password and every factor the tenant demands.
+   *
+   * Everything below the checks is `revokeTenantSessions`, which sends every
+   * affected user through `endSessions`: refresh tokens and back-channel
+   * logout go with the sessions, exactly as they do for one user.
+   */
+  app.post(
+    '/sessions/revoke',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const body = revokeTenantSessionsRequest.parse(request.body);
+
+      // Belt to `TOKEN_DENIED_ROUTES`' braces: a principal that got here by a
+      // token has no elevation to be recent.
+      if (request.session.viaToken || !isRecentElevation(request.session)) {
+        throw new ProblemError(
+          403,
+          'step-up-required',
+          'Confirm it is you first',
+          `Revoking sessions across the organization needs a console session started in the last ${STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then retry.`,
+        );
+      }
+
+      return revokeTenantSessions(request.tenantId, {
+        scope: body.scope,
+        actorUserId: request.session.userId,
+        exceptSessionId: body.keepCurrentSession
+          ? request.session.sessionId
+          : undefined,
+        sourceIp: request.ip,
+        reason: body.reason,
       });
     },
   );

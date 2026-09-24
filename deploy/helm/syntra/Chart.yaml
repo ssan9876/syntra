@@ -1,6 +1,20 @@
 apiVersion: v2
 name: syntra
-description: Secure single-replica Syntra deployment for Kubernetes
+description: >-
+  Syntra identity and access management: API, web console, schema migration
+  hook, and optional ingress, autoscaling, network policy, monitoring and
+  backup resources.
 type: application
-version: 0.1.0
+# 0.2.0 restructures values (image repository/tag, the secret block); see the
+# README's "Upgrading from 0.1" section before upgrading an existing release.
+version: 0.2.0
 appVersion: "latest"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/ssan9876/syntra
+sources:
+  - https://github.com/ssan9876/syntra
+keywords:
+  - iam
+  - identity
+  - sso
+  - scim

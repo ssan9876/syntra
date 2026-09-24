@@ -13,11 +13,25 @@ import {
   readBrand,
   readTenant,
   recordEvent,
+  sessionLifetimeProblem,
   setBrand,
   updateTenant,
   assessTenantOffboarding,
   createTenantDataExport,
+  approveTenantDeletion,
+  cancelTenantDeletion,
+  executeTenantDeletion,
+  getTenantDeletionState,
+  requestTenantDeletion,
+  TenantDeletionRefusedError,
+  TENANT_DELETION_APPROVAL_WINDOW_MS,
+  TENANT_DELETION_COOLING_OFF_MS,
+  TENANT_DELETION_EXECUTION_WINDOW_MS,
+  TENANT_DELETION_REASON_MIN_LENGTH,
+  TENANT_DELETION_STEP_UP_MAX_AGE_MS,
+  type TenantDeletionRequestRow,
 } from '@syntra/core';
+import { z } from 'zod';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -59,6 +73,70 @@ export async function registerAdminTenantRoutes(
         .header('content-disposition', `attachment; filename="syntra-tenant-${request.tenantId}.json"`)
         .header('x-syntra-export-digest', artifact.digest)
         .send(artifact);
+    },
+  );
+
+  // ---- Tenant deletion: request, four-eyes approval, execution. ----------
+  //
+  // Every step is `tenant.manage`, and none accepts a machine token (see
+  // TOKEN_DENIED_ROUTES): erasing a tenant is a thing people decide. Approval
+  // and execution also need a FRESH administrative session -- its creation
+  // time is the step-up evidence core checks and records.
+
+  app.get(
+    '/tenant/deletion',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => ({
+      request: presentDeletion(await getTenantDeletionState(request.tenantId)),
+      viewerUserId: request.session.userId,
+      policy: DELETION_POLICY,
+    }),
+  );
+
+  app.post(
+    '/tenant/deletion/requests',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const body = deletionRequestBody.parse(request.body);
+      return presentDeletion(await refusalsAsProblems(() => requestTenantDeletion(request.tenantId, {
+        actorUserId: request.session.userId, ...body,
+      })));
+    },
+  );
+
+  app.post(
+    '/tenant/deletion/requests/:id/approve',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const { id } = deletionIdParam.parse(request.params);
+      return presentDeletion(await refusalsAsProblems(() => approveTenantDeletion(request.tenantId, id, {
+        actorUserId: request.session.userId, stepUpAt: request.session.createdAt,
+      })));
+    },
+  );
+
+  app.post(
+    '/tenant/deletion/requests/:id/cancel',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const { id } = deletionIdParam.parse(request.params);
+      return presentDeletion(await refusalsAsProblems(() => cancelTenantDeletion(request.tenantId, id, request.session.userId)));
+    },
+  );
+
+  /**
+   * The irreversible one. On success the tenant no longer resolves, this
+   * session is among the rows erased, and the response is the only copy of
+   * the receipt the caller will be handed -- so it is returned whole.
+   */
+  app.post(
+    '/tenant/deletion/requests/:id/execute',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const { id } = deletionIdParam.parse(request.params);
+      return refusalsAsProblems(() => executeTenantDeletion(request.tenantId, id, {
+        actorUserId: request.session.userId, stepUpAt: request.session.createdAt,
+      }));
     },
   );
 
@@ -165,6 +243,98 @@ export async function registerAdminTenantRoutes(
         // with the count acknowledged.
         const { ackPasskeys, ...settings } = body;
 
+        // Pairs of lifetimes are judged on the MERGED settings. The schema has
+        // already held each number to its platform bound; what it cannot see
+        // is a body lowering the portal lifetime below the admin one already
+        // stored.
+        const lifetimeProblem = sessionLifetimeProblem({
+          portalSessionIdleMinutes:
+            settings.portalSessionIdleMinutes ?? before.portalSessionIdleMinutes,
+          portalSessionAbsoluteMinutes:
+            settings.portalSessionAbsoluteMinutes ?? before.portalSessionAbsoluteMinutes,
+          adminSessionIdleMinutes:
+            settings.adminSessionIdleMinutes ?? before.adminSessionIdleMinutes,
+          adminSessionAbsoluteMinutes:
+            settings.adminSessionAbsoluteMinutes ?? before.adminSessionAbsoluteMinutes,
+        });
+        if (lifetimeProblem) {
+          throw new ProblemError(
+            422,
+            'invalid-session-policy',
+            'Those session lifetimes do not fit together',
+            lifetimeProblem,
+          );
+        }
+
+        // THE PHISHING-RESISTANT CONSOLE SETTING, AND THE THREE WAYS IT LOCKS
+        // THE TENANT OUT OF ITS OWN CONSOLE.
+        //
+        // With it on, an administrative session needs a WebAuthn assertion to
+        // exist and to stay alive (see `authorize.ts` and `session-service.ts`)
+        // and no forced enrolment is offered at elevation. So each of these is
+        // refused rather than warned about:
+        const webauthnRequiredAfter =
+          settings.adminWebauthnRequired ?? before.adminWebauthnRequired;
+        const primaryDomainAfter =
+          settings.primaryDomain === undefined
+            ? before.primaryDomain
+            : settings.primaryDomain;
+        if (webauthnRequiredAfter) {
+          // 1. No primary domain means no relying party, and no key can sign
+          //    anything. Covers both switching it on without one and clearing
+          //    the domain while it is on.
+          if (primaryDomainAfter === null) {
+            throw new ProblemError(
+              409,
+              'security-keys-unavailable',
+              'Security keys need a primary domain',
+              'Requiring a security key for the console with no primary domain set would refuse every administrator. Set the domain first.',
+            );
+          }
+          // 2. Moving the domain while it is on invalidates every key at once,
+          //    including every administrator's. The passkey acknowledgement
+          //    below is the right conversation for staff; for the console it
+          //    is a lockout, so the setting has to come off first.
+          if (
+            before.adminWebauthnRequired &&
+            settings.primaryDomain !== undefined &&
+            settings.primaryDomain !== before.primaryDomain
+          ) {
+            throw new ProblemError(
+              409,
+              'security-key-policy-pins-domain',
+              'Turn off the security-key requirement before moving the domain',
+              'Moving the primary domain invalidates every registered security key, including every administrator’s, and the console would then refuse all of them.',
+            );
+          }
+          // 3. Switching it on from a session a key did not establish. The
+          //    caller must PROVE, in this request, that they can satisfy the
+          //    rule they are imposing — holding a registered key is not proof
+          //    that it works on this domain, and a session a key established
+          //    is. Checked only on the transition, so a tenant already under
+          //    the setting can save unrelated changes from any live session
+          //    (which, under the setting, a key established anyway).
+          if (!before.adminWebauthnRequired) {
+            const held = await enrolledFactorTypes(tx, request.session.userId);
+            if (!held.includes('webauthn')) {
+              throw new ProblemError(
+                409,
+                'would-lock-you-out',
+                'Register a security key first',
+                'Requiring a security key for the console refuses anyone who does not hold one — including you. Register one from the Security page, elevate with it, then save this again.',
+              );
+            }
+            if (request.session.satisfiedFactor !== 'webauthn') {
+              throw new ProblemError(
+                409,
+                'security-key-session-required',
+                'Elevate with your security key first',
+                'Your current console session was not established with a security key, and turning this on would end it. Leave the console, elevate again using your key, then save this again.',
+              );
+            }
+          }
+        }
+
         // Before anything is written. `resolveTenantId` returns the FIRST
         // match, so two tenants claiming one hostname is not an error at
         // request time — it is whichever row the database happened to return,
@@ -221,8 +391,31 @@ export async function registerAdminTenantRoutes(
             // On the event whether or not any broke, so "who moved the domain,
             // when, and what did it cost" is answerable from the log alone.
             passkeysInvalidated: atRisk,
+            portalSessionIdleMinutes: saved.portalSessionIdleMinutes,
+            portalSessionAbsoluteMinutes: saved.portalSessionAbsoluteMinutes,
+            adminSessionIdleMinutes: saved.adminSessionIdleMinutes,
+            adminSessionAbsoluteMinutes: saved.adminSessionAbsoluteMinutes,
+            adminWebauthnRequired: saved.adminWebauthnRequired,
           },
         });
+
+        // Its own event as well, only when it flips. Weakening or
+        // strengthening how the console is protected is the kind of change a
+        // security notification policy alerts on, and an alert keyed on a
+        // dedicated action is one nobody has to write a payload filter for.
+        if (saved.adminWebauthnRequired !== before.adminWebauthnRequired) {
+          await recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: saved.adminWebauthnRequired
+              ? 'tenant.admin_webauthn_required'
+              : 'tenant.admin_webauthn_relaxed',
+            targetType: 'Tenant',
+            targetId: request.tenantId,
+            outcome: 'success',
+            sourceIp: request.ip,
+            payload: { adminWebauthnRequired: saved.adminWebauthnRequired },
+          });
+        }
         return saved;
       });
 
@@ -249,4 +442,48 @@ export async function registerAdminTenantRoutes(
       return saved;
     },
   );
+}
+
+const DIGEST = z.string().regex(/^[a-f0-9]{64}$/, 'a SHA-256 digest in lowercase hex');
+
+const deletionRequestBody = z.object({
+  assessmentDigest: DIGEST,
+  exportDigest: DIGEST,
+  reason: z.string().trim().min(TENANT_DELETION_REASON_MIN_LENGTH).max(2000),
+});
+
+const deletionIdParam = z.object({ id: z.string().uuid() });
+
+/** The windows the console explains; the server enforces them regardless. */
+const DELETION_POLICY = {
+  approvalWindowHours: TENANT_DELETION_APPROVAL_WINDOW_MS / 3_600_000,
+  coolingOffHours: TENANT_DELETION_COOLING_OFF_MS / 3_600_000,
+  executionWindowHours: TENANT_DELETION_EXECUTION_WINDOW_MS / 3_600_000,
+  stepUpMaxAgeMinutes: TENANT_DELETION_STEP_UP_MAX_AGE_MS / 60_000,
+  reasonMinLength: TENANT_DELETION_REASON_MIN_LENGTH,
+};
+
+/** The request as the console shows it. The stored receipt stays server-side. */
+function presentDeletion(row: TenantDeletionRequestRow | null) {
+  if (row === null) return null;
+  const { receipt: _receipt, tenantId: _tenantId, ...rest } = row;
+  return rest;
+}
+
+/**
+ * Refusals are the expected outcome of most calls here -- a hold, a stale
+ * export, the same administrator approving -- so each keeps its own code for
+ * the console to explain.
+ */
+async function refusalsAsProblems<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!(error instanceof TenantDeletionRefusedError)) throw error;
+    const status = error.code === 'not-found' ? 404
+      : error.code === 'four-eyes-required' || error.code === 'step-up-required' ? 403
+        : error.code === 'reason-required' ? 400
+          : 409;
+    throw new ProblemError(status, error.code, 'Tenant deletion refused', error.message);
+  }
 }

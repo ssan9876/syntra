@@ -8,6 +8,7 @@ export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
 export * from './tenant/brand-service.js';
 export * from './tenant/offboarding-service.js';
+export * from './tenant/deletion-service.js';
 export * from './health/readiness.js';
 export * from './health/incidents.js';
 export * from './update/update-service.js';
@@ -41,8 +42,12 @@ export * from './auth/password-reset.js';
 // exists to make unwritable.
 export {
   createSession,
+  isRecentElevation,
   listSessionsForUser,
   readSession,
+  readSessionPolicy,
+  STEP_UP_MAX_AGE_MS,
+  type SessionPolicy,
   resolveSession,
   revokeSession,
   revokeSessionById,
@@ -103,6 +108,7 @@ export * from './notify/webhook-service.js';
 export * from './notify/webhook-signature.js';
 export * from './jobs/scheduler.js';
 export * from './jobs/enqueue-for-row.js';
+export * from './jobs/cancellation.js';
 export * from './sync/mapping.js';
 export * from './sync/correlate.js';
 export * from './sync/diff.js';
@@ -231,6 +237,8 @@ export * from './provision/target-service.js';
 export * from './provision/target-migration.js';
 export * from './provision/target-health.js';
 export * from './provision/target-write-stop.js';
+export * from './provision/tenant-write-stop.js';
+export * from './provision/write-stop-expiry.js';
 export * from './provision/target-maintenance.js';
 export * from './provision/placement-service.js';
 export * from './provision/adoption-service.js';
@@ -242,6 +250,7 @@ export * from './provision/entitlement-service.js';
 // modules choosing the SAME name, and under TS2308 the barrel then exports
 // neither.
 export * from './provision/run-service.js';
+export * from './provision/run-cancellation.js';
 // Grepped, as the three lines above were: none of `claimSyntraUsers`,
 // `applySyntraUserAction`, `enqueuePairedSync`, `ClaimSummary`,
 // `SYNTRA_USER_LINK_SUBJECT` or the five error classes appears anywhere else

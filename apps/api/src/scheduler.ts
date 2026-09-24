@@ -1,5 +1,5 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { prisma, withTenant } from '@syntra/db';
+import { prisma, TENANT_DELETED_STATUS, withTenant } from '@syntra/db';
 import {
   applyAutomateSchedules,
   applyGovernSchedules,
@@ -23,8 +23,10 @@ import {
   registerLogoutJobs,
   registerWebhookJobs,
   registerLifecycleJobs,
+  registerWriteStopJobs,
   scheduleKeyRotation,
   scheduleLifecycleMaintenance,
+  scheduleWriteStopExpiry,
   smtpTransport,
   type Config,
   type Scheduler,
@@ -100,7 +102,9 @@ export async function scheduleBackgroundWork(
 
   let tenants;
   try {
-    tenants = await prisma.tenant.findMany();
+    // Not the tombstones of erased tenants: binding to one is refused, and a
+    // schedule registered for one would fire against nothing, forever.
+    tenants = await prisma.tenant.findMany({ where: { status: { not: TENANT_DELETED_STATUS } } });
   } catch (cause) {
     logger.error(
       { err: cause },
@@ -133,6 +137,19 @@ export async function scheduleBackgroundWork(
     } catch (cause) {
       failure('lifecycle maintenance');
       logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule lifecycle maintenance');
+    }
+  }
+
+  for (const tenant of tenants) {
+    try {
+      // Enforcement does not depend on this -- an expired stop stops refusing
+      // at the apply boundary on its own. This is what CLOSES it and sends the
+      // notification that writes are flowing again.
+      attempt('write stop expiry');
+      await scheduleWriteStopExpiry(scheduler, tenant.id);
+    } catch (cause) {
+      failure('write stop expiry');
+      logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule write stop expiry');
     }
   }
 
@@ -415,6 +432,7 @@ export async function startSyncScheduler(
     registerKeyRotationJob(scheduler, provider);
     registerProvisionJobs(scheduler, provider, transport);
     registerLifecycleJobs(scheduler, { publicUrl: config.publicUrl });
+    registerWriteStopJobs(scheduler);
     // The transport is NOT optional here. Ruling P16 made this point about
     // Provision's initial passwords: without one, an unattended path produces
     // something and delivers it to nobody. In Automate the whole notification

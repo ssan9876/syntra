@@ -100,9 +100,11 @@ is retained; merged code alone is not enough.
     urgent leavers through an explicitly approved exception path.
 22. **Build — External-write circuit breaker.** Add tenant and target stops,
     reviewed resume, reason, expiry, notifications, and immutable audit trail.
-    **Implemented at target scope:** the apply boundary enforces an audited
-    stop with reason and optional expiry; resume requires a different
-    administrator. Tenant-wide stop and notification delivery remain.
+    **Implemented:** tenant and target stops share one apply-boundary guard
+    with an audited reason, optional expiry of at most 30 days, and four-eyes
+    resume; a minute-level sweep closes expired stops, and every pause,
+    resume, and expiry is a security event delivered to endpoints subscribed
+    to the Emergency write stops webhook group.
 23. **Build — Dead-letter case management.** Add owner, severity, due date,
     acknowledgement, notes, escalation history, evidence, and resolution code.
     **Implemented:** lifecycle operations now retain assignment,
@@ -244,7 +246,11 @@ is retained; merged code alone is not enough.
     and deletion with identity verification, legal-hold refusal, and evidence.
 71. **Build — Tenant export and deletion.** Full portable export, two-person
     destructive approval, dependency preview, cryptographic erasure strategy,
-    completion proof, and backup-expiry treatment.
+    completion proof, and backup-expiry treatment. *Engineering slice done:*
+    revision-bound, four-eyes, cooling-off deletion with crypto-erasure,
+    tombstone and receipt ([Operate, Tenant deletion](operate.md#tenant-deletion)).
+    External validation (restore drill against a deleted tenant, legal review
+    of the retained audit record) remains.
 72. **Build — Audit-integrity monitoring.** Schedule chain/checkpoint
     verification, alert on gaps or mutation, and document independent evidence
     retention.

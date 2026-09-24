@@ -146,9 +146,159 @@ client already do it better than a shell script bolted onto this one would.
 Each backup is a self-contained directory with a stable, sortable name; point
 something at `/opt/syntra/backups` and it will do the right thing.
 
-There is no point-in-time recovery here — that is WAL archiving, a different
-feature with different operational requirements, and `pg_dump` is not a step
-toward it.
+There is no point-in-time recovery here. That needs WAL archiving, which is
+a different feature with different operational requirements, and `pg_dump`
+is not a step toward it.
+
+## Kubernetes and high availability
+
+The Helm chart in [`deploy/helm/syntra`](../deploy/helm/syntra/README.md)
+is the Kubernetes path. It runs the migration as a pre-upgrade hook and the
+pods on read-only root filesystems. Ingress, NetworkPolicy, PodDisruptionBudget,
+autoscaling, a ServiceMonitor and a PrometheusRule are optional. Before you
+run more than one API replica, read the chart README's section
+[Running more than one API replica](../deploy/helm/syntra/README.md#running-more-than-one-api-replica).
+In short:
+
+- pg-boss, sessions, OIDC artefacts, challenges and lockout are shared
+  through Postgres.
+- Each process keeps its own OIDC provider cache, which holds clients,
+  issuer and signing keys.
+- Each process keeps its own rate-limit counters.
+
+Syntra has no state of its own outside Postgres, `MASTER_KEY` and
+`SESSION_SECRET`. Availability therefore depends almost entirely on the
+database.
+
+### Postgres for production
+
+- **Use managed or replicated Postgres** with automatic failover: RDS/Aurora,
+  Cloud SQL, Azure Flexible Server, or an operator such as CloudNativePG,
+  Crunchy PGO or Zalando with synchronous or quorum replication. Syntra
+  needs no extensions and nothing beyond PostgreSQL 16 semantics.
+- **Connect to the primary through its failover endpoint** (the cloud
+  writer endpoint, or the operator's `-rw` Service). **Never point Syntra at
+  a read replica.** Every request writes: sessions, audit and lockout.
+- **Keep the role model.** Syntra connects as a `NOSUPERUSER NOBYPASSRLS`
+  role that owns the tables. That is what makes `FORCE ROW LEVEL SECURITY`
+  bind it. Recreate `infra/initdb/01-app-role.sh`'s grants on the managed
+  instance, including `CREATE` on the database, which pg-boss needs for its
+  own schema. On services that grant new roles extra privileges by default,
+  check the role with `\du`. Many managed "admin" roles carry `BYPASSRLS`,
+  and a connection as one of them silently disables tenant isolation.
+- **Failover behaviour.** During a failover, `/health/ready` returns 503 and
+  Kubernetes stops sending traffic, but liveness (`/health`) keeps passing,
+  so pods are not restarted into a crash loop. Prisma and pg-boss reconnect
+  on their own. An interactive transaction in flight at that moment fails
+  and the client sees a 5xx. A pg-boss job in flight is retried: queues are
+  created with `retryLimit: 3` and backoff.
+
+### PgBouncer and transaction pooling
+
+Transaction pooling works with how Syntra sets tenant context. This was
+checked in the code and against a real PgBouncer:
+
+- `withTenant` (`packages/db/src/with-tenant.ts`) opens a transaction and
+  runs `SELECT set_config('app.current_tenant', $1, true)`. The `true` means
+  *is_local*: the setting lasts only for that transaction, the same as
+  `SET LOCAL`, and never leaks to the next client of a pooled server
+  connection. A session-level `SET` or `set_config(..., false)` would be
+  unsafe under transaction pooling. **Nothing in the codebase does that.**
+  Keep it that way.
+- The lockout and audit-chain locks are `pg_advisory_xact_lock`, which are
+  also transaction-scoped.
+- **Prepared statements are the one real requirement.** Prisma uses named
+  prepared statements. Tested against PgBouncer 1.25.2 in `pool_mode =
+  transaction`:
+  - With `max_prepared_statements = 200` (the protocol-level prepared
+    statement support added in PgBouncer 1.21), sign-in, the RLS-scoped
+    reads, `/health/ready` and the pg-boss scheduler all worked unchanged.
+  - With `max_prepared_statements = 0`, every tenant-scoped query failed
+    with `prepared statement "s1" does not exist`, and `/health/ready`
+    correctly returned 503.
+  - With `max_prepared_statements = 0` and `?pgbouncer=true` added to
+    `DATABASE_URL`, everything worked again. That flag makes Prisma stop
+    using named statements. pg-boss (node-postgres) ignores the parameter
+    and ran normally.
+
+  So: on PgBouncer 1.21 or later, set `max_prepared_statements` above zero.
+  On anything older, or on a pooler you cannot configure, append
+  `pgbouncer=true`.
+- **Migrations and backups must bypass the pooler.** `prisma migrate
+  deploy` holds a session-level advisory lock, and `pg_dump` needs a
+  consistent session snapshot. Put a direct connection URL in the Secret and
+  name it with `secretKeys.migrationDatabaseUrl` (and `BACKUP_DATABASE_URL`
+  for backups).
+- pg-boss polls and claims jobs with `SELECT … FOR UPDATE SKIP LOCKED` inside
+  transactions, so it pools like the application does. pg-boss 12 can also
+  use `LISTEN/NOTIFY`, which would break behind a transaction pooler, but
+  only when `useListenNotify` is set. It defaults to off, and
+  `packages/core/src/jobs/scheduler.ts` does not turn it on. If it is ever
+  enabled, give pg-boss a direct connection.
+
+### Connection-pool sizing
+
+Each API process opens two pools against `DATABASE_URL`:
+
+| Pool | Default size | Set with |
+|---|---|---|
+| Prisma | `physical CPUs × 2 + 1`. The CPUs are the ones the query engine detects, which is usually the **node's** count, not the pod's CPU limit. A pod on a 32-core node can open up to 65 connections. | `?connection_limit=N` in `DATABASE_URL` (and `pool_timeout=S`) |
+| pg-boss | 10 (node-postgres `Pool` default; connections show `application_name = pgboss`) | not configurable today |
+
+Set `connection_limit` explicitly. 10 is a sensible start for a 2-CPU pod.
+Then size the server's `max_connections` (or PgBouncer's
+`default_pool_size`) for the worst case:
+
+```
+(maxReplicas + 1 surge pod) × (connection_limit + 10)
+  + 2 (migration Job) + 1 (backup Job) + monitoring/admin headroom
+```
+
+With 3 replicas and `connection_limit=10`, that is 4 × 20 + 3 = 83, plus
+headroom. Behind PgBouncer those are client connections. The server-side
+count is the pool size you give PgBouncer, and interactive transactions are
+short. Syntra's own budget is under Prisma's 5 s transaction ceiling. More
+than 100 server connections is rarely needed.
+
+### Backups in Kubernetes
+
+`syntra-backup` drives `docker exec` on a host, so it does not run in a
+cluster. Choose one of these:
+
+1. **Managed Postgres PITR** (preferred). Point-in-time recovery with
+   cross-region snapshot copies covers what `pg_dump` cannot. It still does
+   not cover `MASTER_KEY`, so keep that in your secret manager, backed up
+   separately.
+2. **The chart's backup CronJob** (`backup.enabled=true`). It applies the
+   same checks as `syntra-backup create`: `.partial` then atomic rename,
+   `0600`, `PGDMP` plus a non-empty TABLE DATA check, the salted master-key
+   fingerprint, and retention. It writes the same layout to a
+   PersistentVolume. See the chart README. It needs a role that bypasses RLS,
+   supplied as `BACKUP_DATABASE_URL`. As `syntra_app`, `pg_dump` fails with
+   "query would be affected by row-level security policy" and the job fails.
+   Copy the PVC off-cluster yourself.
+
+To restore from a CronJob backup:
+
+1. Scale the API to zero: `kubectl scale deploy/<release>-api --replicas=0`.
+2. Start a pod with the `postgres` image, mounting the backup PVC and the
+   Secret.
+3. Compare the manifest's `masterKeyFingerprint` with the running key, as
+   `syntra-backup restore` does, and stop if they differ.
+4. Drop and recreate `public`. A `pg_restore --clean` alone leaves tables
+   created by newer migrations in place.
+5. Run `pg_restore --no-owner -d "$BACKUP_DATABASE_URL" database.dump`.
+6. Check that rows arrived (`SELECT sum(n_live_tup) FROM pg_stat_user_tables`
+   after `ANALYZE`).
+7. Run `helm upgrade` so the migration hook brings the schema forward, then
+   scale the API back up.
+
+Rehearse this before you need it. `syntra-backup verify` shows the shape of
+a restore into a scratch database.
+
+A backup is also the one place an erased tenant survives. How long, and what
+to do before restoring one older than a deletion, is in
+[Deleted tenants and backups](#deleted-tenants-and-backups).
 
 ## Metrics
 
@@ -311,6 +461,14 @@ Two deliberate exceptions:
   the same reason, and because a cascade could not be undone by reactivating
   the parent.
 
+And one deliberate exception to the rule itself:
+
+- **A whole tenant can be erased.** A customer who leaves is owed the
+  opposite of a deactivation: their data gone, and proof that it went. That
+  is the one path in the product that deletes directory objects wholesale,
+  and it is built to be hard to reach — see [Tenant deletion](#tenant-deletion).
+  Nothing inside a tenant that is staying gains a Delete from it.
+
 Rows owned by a directory source cannot be deactivated or edited here at all.
 The next sync run reads them as present and puts them back, so the console
 says who owns them rather than offering a control that silently reverts.
@@ -321,11 +479,184 @@ request, so deactivating an account, from the console or from a directory
 sync, ends every session it holds at once. Everything else about policy
 timing is in [Configure, "What this slice does not do"](configure.md#what-this-slice-does-not-do).
 
+## Tenant deletion
+
+**Settings → Offboarding**, `tenant.manage` only, in this order — the server
+refuses any step taken out of it:
+
+1. **Assess.** A read-only preflight: record counts, active legal holds,
+   unresolved lifecycle operations, and the tenant's *data revision* — a
+   SHA-256 over exactly what an export contains. The result is digest-bound
+   and stored as a permanent audit receipt.
+2. **Export.** The portable JSON artifact (no credential material). Its
+   digest covers the file as downloaded, timestamps included, so it can be
+   recomputed from the file; its receipt records the same data revision.
+3. **Request.** Names the assessment and the export by digest, with a reason
+   of at least 20 characters. Refused if the assessment reported blockers, if
+   a legal hold is active or lifecycle work unresolved *now*, if the export was
+   not taken after the assessment, or if the tenant's data no longer hashes to
+   the revision both recorded — somebody edited a person, a group, a mapping,
+   so the export is no longer a complete copy. Reassess and export again. One
+   open request per tenant.
+4. **Approve.** A *different* administrator — the database rejects an
+   approval by the requester, whatever the code above it does — from an
+   administrative session minted in the last 10 minutes (sign in again to
+   step up; the tenant's MFA-for-administration rule applies to that sign-in).
+   Within 72 hours of the request, or the request expires. The checks in
+   step 3 run again.
+5. **Cooling off, 24 hours.** Long enough for somebody who did not know — the
+   customer's contact, a colleague watching the audit feed — to see the
+   approval and cancel it. Anyone with `tenant.manage` can cancel an open
+   request, the requester included; stopping needs no second pair of eyes.
+6. **Execute.** Within seven days after cooling off, from a fresh session,
+   typing `DELETE`. Every check runs a third time inside the same transaction
+   that erases, so nothing can change between the last check and the first
+   DELETE. A request whose data went stale is *invalidated* and one past its
+   window *expired*; neither can be revived.
+
+Machine tokens are refused on every route of this flow. Every refusal is
+itself an audit event.
+
+### What execution does
+
+In one transaction, holding the tenant's binding lock **exclusively** — it
+waits for every transaction already working in the tenant and holds off every
+new one; afterwards they find the tombstone and are refused
+(`TenantRetiredError`):
+
+- **Crypto-erases the vault.** Each secret's wrapped data key, nonce, tag and
+  ciphertext are overwritten with random bytes, then the row is deleted.
+- **Removes the tenant's pg-boss schedules and queued jobs**, whose payloads
+  name the tenant. A job already running is refused at binding and finishes
+  quietly rather than retrying.
+- **Deletes every row in every table with a `tenantId`**, children before
+  parents. The table list and order are read from the database catalog at
+  execution time, so a table added later is erased without anybody updating a
+  list. The two append-only decision tables (`ApprovalDecision`,
+  `CampaignDecision`) have their no-delete rules disabled inside the
+  transaction and re-enabled before it commits; while it runs, every tenant's
+  approval and review decisions wait on that lock.
+- **Leaves a tombstone.** The `Tenant` row keeps its id (so it is never
+  reused), becomes `Deleted tenant` / `deleted-<id>`, status `deleted`, with
+  its hostnames released and branding removed. It no longer resolves.
+- **Returns the receipt**: tenant id, request id, assessment and export
+  digests, data revision, requester, approver and executor ids, timestamps,
+  per-table row counts, secrets erased, schedules and jobs removed. No names,
+  no addresses, no reason text. Download it from the console at once: the
+  tenant no longer serves the page that showed it.
+
+### What is retained, and why
+
+| Kept | Why |
+| --- | --- |
+| `Tenant` tombstone | Holds the id against reuse; the rows below reference it. |
+| The completed `TenantDeletionRequest` | It *is* the receipt. Its `reason` is cleared on completion; earlier cancelled or expired requests are erased. |
+| `AuditEvent`, `AuditCheckpoint`, `AuditChainCheck`, `AuditAnchor` | The audit record. |
+
+The audit record is kept on purpose, and consistently with retention.
+`audit_no_delete` makes audit events immutable to the application, and the
+retention job only ever *counts* eligible events: they leave through the
+database-owner archive-and-prune procedure, at or before a verified
+checkpoint, once the tenant's audit retention period ends. Tenant deletion
+follows that rule instead of inventing a second way to delete audit history —
+an application path that could erase a tenant's audit log is the first thing
+an intruder holding the application's credentials would use. The completion
+event is the last link in the tenant's chain, which still verifies. Audit
+payloads can name people (a login in an event, the request's reason), so the
+retained record is personal data until that archive-and-prune runs: set the
+audit retention period to what your obligations require and run the procedure
+for deleted tenants when it elapses. An operator can read the stored receipt
+with `readTenantDeletionReceipt(tenantId)`.
+
+### Deleted tenants and backups
+
+Erasure reaches the live database only. Every backup taken before it still
+holds the tenant in full, including wrapped data keys that `MASTER_KEY` can
+still open. The residual exposure therefore ends when the **last backup taken
+before the deletion expires**: with the default `SYNTRA_BACKUP_KEEP=7` daily
+backups that is seven days, plus however long your off-host copies are kept —
+that retention, not this tool's, is usually the binding one. Record the
+completion date against your backup register and confirm the off-host copies
+age out.
+
+**Restoring a backup older than a deletion brings the tenant back**, active,
+with its data. Before putting such a restore into service, check the receipts
+of deletions completed after the backup was taken and run the deletion again
+for each tenant (the full assess → export → request → approve → execute path;
+the restored tenant has no record of the earlier one). Keep the downloaded
+receipts outside the backup set so they survive the restore that needs them.
+
+## Cancelling a long-running run
+
+Directory sync runs, HR person imports and provisioning runs can be stopped
+from their run pages with **Cancel run**, which asks for confirmation first.
+The API is `POST /api/admin/sync-runs/:id/cancel`,
+`POST /api/admin/person-import-runs/:id/cancel` and
+`POST /api/admin/targets/:id/runs/:runId/cancel`, each with an empty JSON
+body. They need the same permission that applies the run —
+`sync.manage` for the first two, `provision.manage` for provisioning — and
+every request writes an audit event (`sync.run.cancel`,
+`person_import.run.cancel`, `provision.run.cancel`) naming who asked, from
+where, and what the run was doing at the time.
+
+Cancellation is **cooperative**. Nothing kills a worker. The request is
+recorded on the run (`cancelState: requested`) and the worker reads it at
+checkpoints of its own: every 500 records of a directory or file read, after
+each read of a target, immediately before a plan is written, and before each
+item of an apply. An apply therefore stops *between* two items — for
+provisioning, never between an action's `in_flight` marker and the target's
+answer — so the run it leaves is an honest partial state:
+
+- items already applied stay applied, with their audit events;
+- items it did not reach are marked with the reason (`skipped` for sync and HR
+  changes, `superseded` for provisioning actions, message *not applied: the
+  run was cancelled*), and a revocation order a provisioning action was
+  carrying is re-opened so the next run proposes it again;
+- the run's status is `cancelled` and `cancelState` is `cancelled`; an
+  `*.run.cancelled` audit event records the phase and the counts, with the
+  requester as actor.
+
+What happens depends on what the run was doing:
+
+| Run was | Result |
+| --- | --- |
+| `queued`, or `previewed` / `blocked` / `partially_applied` (waiting for a person) | Cancelled at once. Nothing was working on it. A queued job that is later picked up does nothing. An HR run waiting on duplicate review has those reviews closed as `run_cancelled`. |
+| `running` (reading or planning) | Request recorded; the next checkpoint stops it with **no plan written**, exactly as a failed preview writes none. |
+| `applying` | Request recorded; the next checkpoint stops it between items. |
+| finished (`applied`, `failed`, `cancelled`...) | Refused with `409 run-not-cancellable`. |
+
+A run that finishes before any checkpoint sees the request ends normally and
+records the request as `moot`, so "I pressed cancel and it applied anyway" has
+an answer on the run itself. A cancelled run cannot be applied
+(`409 run-not-appliable`); start a new run, which re-proposes whatever is still
+needed.
+
+Two operational notes:
+
+- **Directory sync and HR imports now show `applying`** while an apply is in
+  progress. It is a progress marker, not a lock: these two subsystems have no
+  heartbeat, so if the API process dies mid-apply the run stays `applying`.
+  Pressing **Apply** again resumes it (as it resumed a `previewed` run
+  before), and if a cancellation was waiting, that apply honours it before
+  touching anything.
+- **Provisioning runs abandoned by a dead process** are adopted by the next run
+  as before; if a cancellation was waiting on one, adoption records it as
+  `cancelled` rather than `failed` or `partially_applied`, after resolving any
+  `in_flight` actions against the target.
+
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs two jobs on every push and pull request: the
-unit and integration suite against a real PostgreSQL, OpenLDAP and Samba
-domain controller, and the browser suite against a running, seeded stack.
+`.github/workflows/ci.yml` runs on every push and pull request. Its two main
+jobs are the unit and integration suite, against a real PostgreSQL, OpenLDAP
+and Samba domain controller, and the browser suite, against a running, seeded
+stack. Two smaller jobs also run:
+
+- `docker build` builds both images.
+- `helm chart` runs `helm lint --strict` and `helm template` over
+  `deploy/helm/syntra/ci/*.yaml` and validates the output with kubeconform.
+  It also checks that the chart refuses to render without a Secret, that the
+  backup script parses, and that the chart's copy of the alert rules matches
+  `ops/prometheus-alerts.yml`.
 
 Both bring the infrastructure up with `infra/docker-compose.yml` rather than
 GitHub's `services:`. The OpenLDAP container needs its bootstrap LDIF and TLS

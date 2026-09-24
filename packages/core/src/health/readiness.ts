@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { migrationState, prisma, withTenant } from '@syntra/db';
+import { migrationState, prisma, TENANT_DELETED_STATUS, withTenant } from '@syntra/db';
 import { getSecret } from '../vault/vault-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 
@@ -163,7 +163,11 @@ async function probeMigrations(): Promise<Probe> {
  */
 async function probeVault(provider: MasterKeyProvider): Promise<Probe> {
   try {
-    const tenants = await prisma.tenant.findMany({ select: { id: true } });
+    // An erased tenant's tombstone has no secrets and refuses binding.
+    const tenants = await prisma.tenant.findMany({
+      where: { status: { not: TENANT_DELETED_STATUS } },
+      select: { id: true },
+    });
     if (tenants.length === 0) return skip('vault', 'no tenants yet');
 
     // An empty tenant must not hide a bad master key in an established one.

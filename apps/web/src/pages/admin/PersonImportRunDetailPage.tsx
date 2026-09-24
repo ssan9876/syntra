@@ -3,6 +3,13 @@ import { useParams } from 'react-router-dom';
 import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
 import { api } from '../../session/api.js';
 import { PageHeader } from './PageHeader.js';
+import {
+  CancelRunButton,
+  CancellationStatus,
+  cancelPending,
+  isCancellable,
+  type CancelState,
+} from './RunCancellation.js';
 
 interface ImportRun {
   id: string;
@@ -15,6 +22,9 @@ interface ImportRun {
   requiresConfirmation: boolean;
   blockedReason: string | null;
   error: string | null;
+  cancelState?: CancelState;
+  cancelRequestedAt?: string | null;
+  cancelResolvedAt?: string | null;
 }
 
 interface ImportChange {
@@ -43,7 +53,11 @@ const LABELS: Record<string, string> = {
 };
 
 /** The run is still moving, so the page keeps asking. */
-const RUNNING = new Set(['queued', 'running']);
+const RUNNING = new Set(['queued', 'running', 'applying']);
+/** Statuses with something left to cancel, as the server's policy has them. */
+const CANCELLABLE = ['queued', 'running', 'applying', 'previewed', 'blocked', 'partially_applied'];
+/** Statuses in which a worker is active, so a cancel waits for a checkpoint. */
+const WORKING = ['running', 'applying'];
 
 export function PersonImportRunDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -64,11 +78,14 @@ export function PersonImportRunDetailPage() {
     void load();
   }, [load]);
 
+  // Followed while this page's own apply POST is open, too: that is when the
+  // run reads `applying`, and when Cancel is worth offering.
   useEffect(() => {
-    if (!payload || !RUNNING.has(payload.run.status)) return;
+    if (!payload) return;
+    if (!busy && !RUNNING.has(payload.run.status) && !cancelPending(payload.run)) return;
     const timer = setInterval(() => void load(), 2000);
     return () => clearInterval(timer);
-  }, [payload, load]);
+  }, [payload, load, busy]);
 
   async function apply(confirm: boolean) {
     if (!id) return;
@@ -115,7 +132,22 @@ export function PersonImportRunDetailPage() {
 
   return (
     <>
-      <PageHeader title="Import run" />
+      <PageHeader
+        title="Import run"
+        actions={
+          isCancellable(run, CANCELLABLE) ? (
+            <CancelRunButton
+              path={`/api/admin/person-import-runs/${run.id}/cancel`}
+              run={run}
+              working={WORKING}
+              noun="import run"
+              onChanged={() => void load()}
+            />
+          ) : undefined
+        }
+      />
+
+      <CancellationStatus run={run} noun="import run" />
 
       <Panel title="What this run read">
         <p>

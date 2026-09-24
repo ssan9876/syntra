@@ -9,6 +9,7 @@ import {
   PERMISSIONS,
   assignRole,
   createRole,
+  createSession,
   createUser,
   generateRecoveryCodes,
   hashPassword,
@@ -173,6 +174,94 @@ describe('POST /api/admin/tenant/offboarding/export', () => {
       where: { id: artifact.receipt.auditEventId as string },
     }));
     expect(event.action).toBe('tenant.offboarding.exported');
+  });
+});
+
+describe('tenant deletion routes', () => {
+  const REASON = 'Contract ended; customer signed offboarding form OFF-88';
+
+  /** A second tenant.manage administrator, signed in and elevated. */
+  async function secondAdminCookie() {
+    await withTenant(ctx.tenantId, async (tx) => {
+      const user = await createUser(tx, { login: 'second', email: 'second@acme.test', displayName: 'Second' });
+      await setPasswordHash(tx, user.id, PASSWORD_HASH);
+      const role = await createRole(tx, 'Second approver', [PERMISSIONS.TENANT_MANAGE]);
+      await assignRole(tx, user.id, role.id);
+    });
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/api/auth/login', headers: { host: ctx.host }, payload: { login: 'second', password: PASSWORD },
+    });
+    const portal = res.cookies.find((c) => c.name === 'syntra_session')!.value;
+    const up = await ctx.app.inject({
+      method: 'POST', url: '/api/auth/elevate', headers: { host: ctx.host, cookie: `syntra_session=${portal}` }, payload: { password: PASSWORD },
+    });
+    return `syntra_session=${up.cookies.find((c) => c.name === 'syntra_session')!.value}`;
+  }
+
+  const post = (cookie: string, url: string, payload?: object) =>
+    ctx.app.inject({ method: 'POST', url, headers: { host: ctx.host, cookie }, ...(payload ? { payload } : {}) });
+
+  it('refuses machine tokens on every deletion route', async () => {
+    const { routeRefusesTokens } = await import('../../plugins/bearer-token.js');
+    for (const route of ['/api/admin/tenant/deletion', '/api/admin/tenant/deletion/requests', '/api/admin/tenant/deletion/requests/:id/approve', '/api/admin/tenant/deletion/requests/:id/execute']) {
+      expect(routeRefusesTokens(route)).toBe(true);
+    }
+  });
+
+  it('runs request, four-eyes approval and execution, then stops resolving the tenant', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const requester = await adminCookie();
+    const approver = await secondAdminCookie();
+
+    const assessment = (await post(requester, '/api/admin/tenant/offboarding/assess')).json();
+    const exported = (await post(requester, '/api/admin/tenant/offboarding/export')).json();
+    const requested = await post(requester, '/api/admin/tenant/deletion/requests', {
+      assessmentDigest: assessment.digest, exportDigest: exported.digest, reason: REASON,
+    });
+    expect(requested.statusCode).toBe(200);
+    const id = requested.json().id as string;
+    expect(requested.json()).toMatchObject({ status: 'pending_approval' });
+
+    const selfApproval = await post(requester, `/api/admin/tenant/deletion/requests/${id}/approve`);
+    expect(selfApproval.statusCode).toBe(403);
+    expect(selfApproval.json().type).toMatch(/\/four-eyes-required$/);
+
+    // The approver signing in does not make the evidence stale.
+    const approved = await post(approver, `/api/admin/tenant/deletion/requests/${id}/approve`);
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json()).toMatchObject({ status: 'approved' });
+
+    const early = await post(requester, `/api/admin/tenant/deletion/requests/${id}/execute`);
+    expect(early.statusCode).toBe(409);
+    expect(early.json().type).toMatch(/\/cooling-off$/);
+
+    const state = await ctx.app.inject({ method: 'GET', url: '/api/admin/tenant/deletion', headers: { host: ctx.host, cookie: approver } });
+    expect(state.json()).toMatchObject({ request: { id, status: 'approved' }, policy: { coolingOffHours: 24 } });
+
+    // Stand in for the cooling-off period passing.
+    await withTenant(ctx.tenantId, (tx) => tx.tenantDeletionRequest.update({
+      where: { id }, data: { executeNotBefore: new Date(Date.now() - 1000) },
+    }));
+    const executed = await post(approver, `/api/admin/tenant/deletion/requests/${id}/execute`);
+    expect(executed.statusCode).toBe(200);
+    expect(executed.json()).toMatchObject({
+      schema: 'syntra.tenant-deletion-receipt.v1', assessmentDigest: assessment.digest, exportDigest: exported.digest,
+    });
+
+    const after = await ctx.app.inject({ method: 'GET', url: '/api/admin/tenant', headers: { host: ctx.host, cookie: approver } });
+    expect(after.statusCode).toBeGreaterThanOrEqual(400);
+    expect((await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } })).status).toBe('deleted');
+  });
+
+  it('refuses a request bound to an export that was never taken', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    const assessment = (await post(cookie, '/api/admin/tenant/offboarding/assess')).json();
+    const res = await post(cookie, '/api/admin/tenant/deletion/requests', {
+      assessmentDigest: assessment.digest, exportDigest: 'b'.repeat(64), reason: REASON,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toMatch(/\/export-not-found$/);
   });
 });
 
@@ -467,6 +556,222 @@ describe('PUT /api/admin/tenant and the password policy', () => {
 
   it('refuses a lockout threshold of one', async () => {
     expect((await put(cookie, { lockoutThreshold: 1 })).statusCode).toBe(400);
+  });
+});
+
+describe('PUT /api/admin/tenant and session lifetimes', () => {
+  let cookie: string;
+  beforeEach(async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    cookie = await adminCookie();
+  });
+
+  it('reads back today\'s lifetimes for a tenant that never set them', async () => {
+    expect((await get(cookie)).json()).toMatchObject({
+      portalSessionIdleMinutes: 60,
+      portalSessionAbsoluteMinutes: 720,
+      adminSessionIdleMinutes: 15,
+      adminSessionAbsoluteMinutes: 120,
+      adminWebauthnRequired: false,
+    });
+  });
+
+  it('persists them and records the change', async () => {
+    const res = await put(cookie, {
+      portalSessionIdleMinutes: 30,
+      portalSessionAbsoluteMinutes: 480,
+      adminSessionIdleMinutes: 10,
+      adminSessionAbsoluteMinutes: 60,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const saved = await prisma.tenant.findUniqueOrThrow({ where: { id: ctx.tenantId } });
+    expect(saved).toMatchObject({
+      portalSessionIdleMinutes: 30,
+      portalSessionAbsoluteMinutes: 480,
+      adminSessionIdleMinutes: 10,
+      adminSessionAbsoluteMinutes: 60,
+    });
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({
+        where: { action: 'tenant.settings_updated' },
+        orderBy: { sequence: 'desc' },
+      }),
+    );
+    expect(event.payload).toMatchObject({
+      adminSessionIdleMinutes: 10,
+      adminSessionAbsoluteMinutes: 60,
+    });
+  });
+
+  it('refuses a number outside the platform bounds', async () => {
+    expect((await put(cookie, { adminSessionIdleMinutes: 61 })).statusCode).toBe(400);
+    expect((await put(cookie, { adminSessionAbsoluteMinutes: 721 })).statusCode).toBe(400);
+    expect((await put(cookie, { portalSessionIdleMinutes: 1441 })).statusCode).toBe(400);
+    expect((await put(cookie, { portalSessionAbsoluteMinutes: 43201 })).statusCode).toBe(400);
+    expect((await put(cookie, { adminSessionIdleMinutes: 4 })).statusCode).toBe(400);
+  });
+
+  it('judges a pair against the value already stored', async () => {
+    // Only the portal lifetime is sent; it would fall below the stored admin
+    // lifetime of 120 minutes.
+    const res = await put(cookie, { portalSessionAbsoluteMinutes: 90 });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().type).toMatch(/invalid-session-policy$/);
+
+    const idle = await put(cookie, { adminSessionIdleMinutes: 45, adminSessionAbsoluteMinutes: 30 });
+    expect(idle.statusCode).toBe(422);
+  });
+
+  it('ends a console session the shortened lifetime no longer covers', async () => {
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.session.updateMany({
+        where: { scope: 'admin' },
+        data: { createdAt: new Date(Date.now() - 45 * 60 * 1000) },
+      }),
+    );
+    // Saved from the session it ends: the response is the last thing it does.
+    expect((await put(cookie, { adminSessionAbsoluteMinutes: 30 })).statusCode).toBe(200);
+    expect((await get(cookie)).statusCode).toBe(401);
+  });
+});
+
+describe('PUT /api/admin/tenant and the security-key requirement for the console', () => {
+  const DOMAIN = 'acme.example.com';
+
+  const registerKey = () =>
+    withTenant(ctx.tenantId, async (tx) => {
+      const user = await tx.user.findFirstOrThrow({ where: { login: 'admin' } });
+      await tx.webAuthnCredential.create({
+        data: {
+          tenantId: ctx.tenantId,
+          userId: user.id,
+          credentialId: `key-${ctx.tenantId}`,
+          publicKey: Buffer.from([0]),
+          counter: 0,
+          rpId: DOMAIN,
+          label: 'YubiKey',
+        },
+      });
+      return user;
+    });
+
+  /**
+   * A console session a key established. Minted directly, because the test
+   * app has no browser to sign an assertion with; the WebAuthn round trip
+   * itself is covered in core against a key that really signs.
+   */
+  const keyCookie = (userId: string) =>
+    withTenant(ctx.tenantId, async (tx) => {
+      const { token } = await createSession(
+        tx,
+        {
+          status: 'allow',
+          userId,
+          mayElevate: true,
+          applicationId: null,
+          scope: 'admin',
+          satisfiedFactor: 'webauthn',
+        },
+        { ip: null, userAgent: null },
+      );
+      return `syntra_session=${token}`;
+    });
+
+  beforeEach(async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { primaryDomain: DOMAIN },
+    });
+  });
+
+  it('refuses an administrator who holds no key', async () => {
+    const res = await put(await adminCookie(), { adminWebauthnRequired: true });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toMatch(/would-lock-you-out$/);
+  });
+
+  it('refuses a key-holder whose own session a key did not establish', async () => {
+    // Turning it on would end the very session making the change.
+    await registerKey();
+    const res = await put(await adminCookie(), { adminWebauthnRequired: true });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toMatch(/security-key-session-required$/);
+  });
+
+  it('turns on from a key-established session, audited as its own event', async () => {
+    const admin = await registerKey();
+    const cookie = await keyCookie(admin.id);
+
+    const res = await put(cookie, { adminWebauthnRequired: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().adminWebauthnRequired).toBe(true);
+
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'tenant.admin_webauthn_required' } }),
+    );
+    expect(event.actorUserId).toBe(admin.id);
+    // And the session that did it is still good.
+    expect((await get(cookie)).statusCode).toBe(200);
+  });
+
+  it('ends the console sessions a code established, and refuses the code at elevation', async () => {
+    const admin = await registerKey();
+    const codeCookie = await adminCookie();
+    const cookie = await keyCookie(admin.id);
+    expect((await put(cookie, { adminWebauthnRequired: true })).statusCode).toBe(200);
+
+    expect((await get(codeCookie)).statusCode).toBe(401);
+  });
+
+  it('explains the refusal to an administrator elevating without a key', async () => {
+    const admin = await registerKey();
+    expect((await put(await keyCookie(admin.id), { adminWebauthnRequired: true })).statusCode).toBe(200);
+    await withTenant(ctx.tenantId, (tx) => tx.webAuthnCredential.deleteMany());
+
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { host: ctx.host },
+      payload: { login: 'admin', password: PASSWORD },
+    });
+    const portal = login.cookies.find((c) => c.name === 'syntra_session')!.value;
+    const up = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/elevate',
+      headers: { host: ctx.host, cookie: `syntra_session=${portal}` },
+      payload: { password: PASSWORD },
+    });
+
+    expect(up.statusCode).toBe(403);
+    expect(up.json().type).toMatch(/security-key-required$/);
+  });
+
+  it('refuses to clear or move the domain while it is on', async () => {
+    const admin = await registerKey();
+    const cookie = await keyCookie(admin.id);
+    expect((await put(cookie, { adminWebauthnRequired: true })).statusCode).toBe(200);
+
+    const cleared = await put(cookie, { primaryDomain: null });
+    expect(cleared.statusCode).toBe(409);
+    expect(cleared.json().type).toMatch(/security-keys-unavailable$/);
+
+    const moved = await put(cookie, { primaryDomain: 'elsewhere.example.com', ackPasskeys: 1 });
+    expect(moved.statusCode).toBe(409);
+    expect(moved.json().type).toMatch(/security-key-policy-pins-domain$/);
+  });
+
+  it('can always be turned off, and says so in the log', async () => {
+    const admin = await registerKey();
+    const cookie = await keyCookie(admin.id);
+    expect((await put(cookie, { adminWebauthnRequired: true })).statusCode).toBe(200);
+
+    expect((await put(cookie, { adminWebauthnRequired: false })).statusCode).toBe(200);
+    const relaxed = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirst({ where: { action: 'tenant.admin_webauthn_relaxed' } }),
+    );
+    expect(relaxed).not.toBeNull();
   });
 });
 

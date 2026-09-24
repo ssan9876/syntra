@@ -15,6 +15,11 @@ const settings = {
   lockoutThreshold: 0,
   lockoutWindowMinutes: 15,
   lockoutDurationMinutes: 15,
+  portalSessionIdleMinutes: 60,
+  portalSessionAbsoluteMinutes: 720,
+  adminSessionIdleMinutes: 15,
+  adminSessionAbsoluteMinutes: 120,
+  adminWebauthnRequired: false,
   webauthnAvailable: true,
 };
 
@@ -256,6 +261,132 @@ describe('the primary domain, and the passkeys it would break', () => {
       String(calls.find((c) => c.init?.method === 'PUT')!.init!.body),
     );
     expect(sent.primaryDomain).toBeNull();
+  });
+});
+
+describe('SettingsSignInTab and session lifetimes', () => {
+  const bodyOf = (init?: RequestInit) =>
+    JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+
+  it('shows the lifetimes in force and saves them as numbers', async () => {
+    stub();
+    renderPage();
+
+    const adminIdle = (await screen.findByLabelText(
+      /console idle timeout/i,
+    )) as HTMLInputElement;
+    await waitFor(() => expect(adminIdle.value).toBe('15'));
+    expect(screen.getByLabelText(/portal session lasts/i)).toHaveValue(720);
+
+    fireEvent.change(adminIdle, { target: { value: '10' } });
+    await userEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+    await waitFor(() => {
+      const put = calls.find((c) => c.init?.method === 'PUT');
+      expect(put).toBeDefined();
+      expect(bodyOf(put!.init)).toMatchObject({
+        adminSessionIdleMinutes: 10,
+        adminSessionAbsoluteMinutes: 120,
+        portalSessionIdleMinutes: 60,
+        portalSessionAbsoluteMinutes: 720,
+      });
+    });
+  });
+
+  it('warns that shortening reaches sessions already signed in, only while shortening', async () => {
+    stub();
+    renderPage();
+
+    const field = (await screen.findByLabelText(
+      /console session lasts/i,
+    )) as HTMLInputElement;
+    await waitFor(() => expect(field.value).toBe('120'));
+    expect(screen.queryByText(/apply to everyone signed in now/i)).toBeNull();
+
+    fireEvent.change(field, { target: { value: '60' } });
+    expect(await screen.findByText(/apply to everyone signed in now/i)).toBeInTheDocument();
+
+    fireEvent.change(field, { target: { value: '240' } });
+    await waitFor(() =>
+      expect(screen.queryByText(/apply to everyone signed in now/i)).toBeNull(),
+    );
+  });
+});
+
+describe('SettingsSignInTab and the security-key requirement', () => {
+  const bodyOf = (init?: RequestInit) =>
+    JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+
+  it('warns about the sessions it ends before it is switched on, and sends it', async () => {
+    stub();
+    renderPage();
+
+    const box = await screen.findByRole('checkbox', {
+      name: /security key for the console/i,
+    });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByText(/sessions started without a key end/i)).toBeNull();
+
+    await userEvent.click(box);
+    expect(
+      await screen.findByText(/sessions started without a key end/i),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /save settings/i }));
+    await waitFor(() => {
+      const put = calls.find((c) => c.init?.method === 'PUT');
+      expect(bodyOf(put!.init).adminWebauthnRequired).toBe(true);
+    });
+  });
+
+  it('shows the lockout refusal in the server\'s words', async () => {
+    stub((url, init) =>
+      init?.method === 'PUT'
+        ? json(
+            {
+              type: 'https://syntra.dev/problems/security-key-session-required',
+              title: 'Elevate with your security key first',
+              status: 409,
+              detail: 'Leave the console, elevate again using your key, then save this again.',
+            },
+            409,
+          )
+        : json(settings),
+    );
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('checkbox', { name: /security key for the console/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: /save settings/i }));
+
+    expect(
+      await screen.findByText(/elevate again using your key/i),
+    ).toBeInTheDocument();
+  });
+
+  it('cannot be switched on without a domain, but can always be switched off', async () => {
+    stub(() => json({ ...settings, primaryDomain: null, webauthnAvailable: false }));
+    const { unmount } = renderPage();
+    expect(
+      await screen.findByRole('checkbox', { name: /security key for the console/i }),
+    ).toBeDisabled();
+    unmount();
+
+    stub(() =>
+      json({
+        ...settings,
+        primaryDomain: null,
+        webauthnAvailable: false,
+        adminWebauthnRequired: true,
+      }),
+    );
+    renderPage();
+    const box = await screen.findByRole('checkbox', {
+      name: /security key for the console/i,
+    });
+    await waitFor(() => expect(box).toBeChecked());
+    expect(box).toBeEnabled();
   });
 });
 
