@@ -18,7 +18,7 @@
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
     "@opentelemetry/resources": "^2.11.0",
     "@opentelemetry/sdk-trace-node": "^2.11.0",
-    "@prisma/instrumentation": "6.19.3",
+    "@prisma/instrumentation": "7.10.0",
     "@prometheus-io/client": "^0.16.1",
     "@syntra/connectors": "workspace:*",
     "@syntra/contracts": "workspace:*",
