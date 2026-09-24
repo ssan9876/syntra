@@ -2,6 +2,7 @@ import type { TenantClient } from '@syntra/db';
 import { withTenant } from '@syntra/db';
 import {
   ldapConnector,
+  traceConnector,
   type ObjectType,
   type SourceRecord,
 } from '@syntra/connectors';
@@ -172,7 +173,7 @@ export async function previewRun(
     // phase that can run for most of an hour. Leaving the loop by a throw
     // returns the connector's iterator, which closes the LDAP connection.
     const records: SourceRecord[] = [];
-    for await (const record of ldapConnector.read(prepared.config)) {
+    for await (const record of traceConnector('ldap', ldapConnector).read(prepared.config)) {
       records.push(record);
       if (records.length % READ_CHECKPOINT_EVERY === 0) await checkpoint();
     }

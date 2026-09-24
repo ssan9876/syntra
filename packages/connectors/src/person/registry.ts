@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { SourceConnector } from './types.js';
+import { traceConnector } from '../observability/tracing.js';
 import { sftpDelimitedConnector } from './sftp/connector.js';
 import { sftpDelimitedConfigSchema } from './sftp/config.js';
 
@@ -43,7 +44,8 @@ function isKnownType(type: string): type is PersonSourceType {
 
 export function personSourceConnectorFor(type: string): SourceConnector<never> {
   if (!isKnownType(type)) throw new UnknownPersonSourceTypeError(type);
-  return CONNECTORS[type];
+  // Spanned per operation when tracing is on; the connector itself when off.
+  return traceConnector(type, CONNECTORS[type]);
 }
 
 export function personSourceConfigSchemaFor(type: string): z.ZodTypeAny {

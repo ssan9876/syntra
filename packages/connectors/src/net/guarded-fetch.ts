@@ -2,6 +2,7 @@ import { lookup } from 'node:dns/promises';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { classifyAddress } from './outbound.js';
+import { traceFetch } from '../observability/tracing.js';
 
 export interface GuardedFetchOptions {
   /** Lifts the private-address refusal. From `OUTBOUND_ALLOW_PRIVATE`. */
@@ -83,7 +84,9 @@ export function guardedFetch(options: GuardedFetchOptions = {}): GuardedFetch {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  return async (input, init) => {
+  // A CLIENT span per request when tracing is on (method, host and status
+  // only -- see `traceFetch`); a direct call when it is off.
+  return traceFetch(async (input, init) => {
     // Normalising through `Request` means a string body, a `URLSearchParams`,
     // a `Uint8Array` and a stream all arrive here as bytes, and header casing
     // is settled once.
@@ -201,7 +204,7 @@ export function guardedFetch(options: GuardedFetchOptions = {}): GuardedFetch {
       req.on('error', reject);
       req.end(body);
     });
-  };
+  });
 }
 
 function responseHeaders(raw: IncomingHttpHeaders): Headers {

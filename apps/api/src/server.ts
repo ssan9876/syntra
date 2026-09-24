@@ -1,11 +1,22 @@
 import { prisma } from '@syntra/db';
-import { loadConfig } from '@syntra/core';
+import { buildInfo, loadConfig } from '@syntra/core';
+import { startTelemetry } from './telemetry.js';
 import { buildApp } from './app.js';
 import { startSyncScheduler } from './scheduler.js';
 import { shutdownHandler } from './shutdown.js';
 import { schedulerRecovery } from './scheduler-recovery.js';
 
 const config = loadConfig(process.env);
+
+// Before `buildApp`, because the HTTP hooks decide at registration whether to
+// open spans and Prisma instrumentation must precede the first query. A no-op
+// -- nothing imported, nothing registered -- unless OTEL_EXPORTER_OTLP_ENDPOINT
+// is set. See telemetry.ts.
+const telemetry = await startTelemetry(process.env, {
+  version: buildInfo().version,
+  // The app's logger does not exist yet; this one line goes to stderr.
+  log: (message) => process.stderr.write(`${message}\n`),
+});
 
 // Bound late, and deliberately. The source routes need the scheduler so that
 // creating, changing or deleting a source is reflected there and then rather
@@ -20,6 +31,11 @@ const app = await buildApp(config, { scheduler: () => recovery?.current() ?? nul
 // unscheduled must not keep people from signing in.
 const recovery = schedulerRecovery(() => startSyncScheduler(config, app.log), app.log);
 app.addHook('onClose', async () => { await recovery?.stop(); });
+// Last of the close work in registration order, so the spans of the drain
+// itself are flushed. Failing to flush must not fail the shutdown.
+app.addHook('onClose', async () => {
+  await telemetry.shutdown().catch((err: unknown) => app.log.warn({ err }, 'could not flush traces'));
+});
 
 // Registered BEFORE `listen`, so a container that is killed seconds after it
 // starts still shuts down through this path. Node's default action for either

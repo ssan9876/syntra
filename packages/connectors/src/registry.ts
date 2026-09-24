@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { TargetConnector } from './types.js';
+import { traceConnector } from './observability/tracing.js';
 import { adTargetConnector } from './ad/connector.js';
 import { adTargetConfigSchema } from './ad/config.js';
 import { scimTargetConnector } from './scim/connector.js';
@@ -65,7 +66,9 @@ function isKnownType(type: string): type is TargetConnectorType {
 
 export function targetConnectorFor(type: string): TargetConnector<never> {
   if (!isKnownType(type)) throw new UnknownTargetConnectorTypeError(type);
-  return CONNECTORS[type];
+  // Spanned per operation when tracing is on (family and method only, never
+  // the arguments); the connector itself when off.
+  return traceConnector(type, CONNECTORS[type]);
 }
 
 export function targetConfigSchemaFor(type: string): z.ZodTypeAny {

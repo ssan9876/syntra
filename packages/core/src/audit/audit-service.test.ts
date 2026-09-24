@@ -4,7 +4,8 @@ import {
   asDatabaseSuperuser,
   resetDatabase,
 } from '@syntra/db/src/test-support.js';
-import { listEvents, recordEvent, verifyChain } from './audit-service.js';
+import { newCorrelationId, withCorrelation } from '@syntra/connectors';
+import { auditEventHash, listEvents, recordEvent, verifyChain } from './audit-service.js';
 
 let tenantId: string;
 
@@ -49,6 +50,39 @@ describe('recordEvent', () => {
     );
     expect(otherFirst.sequence).toBe(1);
     expect(otherFirst.prevHash).toBe('0'.repeat(64));
+  });
+});
+
+describe('correlation id', () => {
+  it('records the id of the request or job in scope, outside the hash, and filters by it', async () => {
+    const id = newCorrelationId();
+    const inScope = await withCorrelation(id, () =>
+      withTenant(tenantId, (tx) => recordEvent(tx, event('user.create'))),
+    );
+    const outside = await withTenant(tenantId, (tx) => recordEvent(tx, event('user.update')));
+
+    expect(inScope.correlationId).toBe(id);
+    expect(outside.correlationId).toBeNull();
+    // Outside the hash: the digest is exactly what it would be without it,
+    // so every chain written before the column existed still verifies.
+    const { correlationId: _ignored, id: _id, hash, ...hashable } = inScope;
+    expect(auditEventHash({ ...hashable, payload: hashable.payload as Record<string, unknown>, outcome: 'success' })).toBe(hash);
+    expect(await withTenant(tenantId, (tx) => verifyChain(tx))).toEqual({ valid: true });
+
+    const found = await withTenant(tenantId, (tx) => listEvents(tx, { correlationId: id }));
+    expect(found.map((e) => e.sequence)).toEqual([inScope.sequence]);
+  });
+
+  it('is refused by the database when it is not a correlation id', async () => {
+    // The CHECK is the guarantee that no free text reaches the audit table
+    // through this column, whatever a future writer does.
+    await expect(
+      asDatabaseSuperuser(
+        `INSERT INTO "AuditEvent" ("id", "tenantId", "sequence", "action", "targetType", "outcome", "payload", "prevHash", "hash", "correlationId")
+         VALUES (gen_random_uuid(), $1::uuid, 999, 'x', 'User', 'success', '{}', '0', '0', 'jane.doe@acme.test')`,
+        [tenantId],
+      ),
+    ).rejects.toThrow(/AuditEvent_correlationId_format/);
   });
 });
 

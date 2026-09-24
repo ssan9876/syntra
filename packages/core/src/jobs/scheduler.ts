@@ -1,5 +1,16 @@
 import { PgBoss } from 'pg-boss';
 import { TenantRetiredError } from '@syntra/db';
+import {
+  extractContext,
+  isCorrelationId,
+  jobTraceCarrier,
+  JOB_TRACE_KEY,
+  newCorrelationId,
+  SpanKind,
+  splitJobPayload,
+  withCorrelation,
+  withSpan,
+} from '@syntra/connectors';
 import { missingFrom, trackIntents, type ScheduleRef } from './reconcile.js';
 
 export type JobHandler<T> = (data: T) => Promise<void>;
@@ -29,6 +40,70 @@ export interface Scheduler {
    * `reconcile.ts` for what it cost to learn that.
    */
   missingSchedules(): Promise<ScheduleRef[]>;
+}
+
+/**
+ * The payload as it is stored: the caller's data plus, under
+ * `JOB_TRACE_KEY`, the correlation id of the request or job that enqueued it
+ * and -- when tracing is on -- its W3C trace context.
+ *
+ * This is how "an HR import caused a provisioning run which called a
+ * connector" stays one story across three processes' worth of queue hops:
+ * each enqueue carries the id forward and `runJob` re-establishes it, so the
+ * audit events, log lines and spans of every step share it.
+ *
+ * Only plain-object payloads are annotated; anything else is sent unchanged,
+ * as is a payload enqueued outside any request or job (nothing to carry).
+ */
+export function withJobTrace<T>(data: T): T {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return data;
+  const carrier = jobTraceCarrier();
+  if (!carrier) return data;
+  return { ...data, [JOB_TRACE_KEY]: carrier } as T;
+}
+
+/**
+ * Run one job under its correlation id and, when tracing is on, a CONSUMER
+ * span parented on the enqueuer's trace. The handler receives the payload
+ * WITHOUT the trace field, so no handler schema has to know it exists.
+ *
+ * A job with no carrier -- a cron-scheduled one, or one enqueued before this
+ * existed -- starts a fresh correlation id rather than running without one.
+ *
+ * Span attributes: queue name, job id, retry count and the tenant id when the
+ * payload has one. Never the rest of the payload.
+ */
+export async function runJob<T>(
+  name: string,
+  job: { id: string; data: T; retryCount?: number },
+  handler: JobHandler<T>,
+): Promise<void> {
+  const { data, carrier } = splitJobPayload(job.data);
+  const tenantId = (data as { tenantId?: unknown } | null)?.tenantId;
+  const parent = carrier?.traceparent
+    ? extractContext({ traceparent: carrier.traceparent, ...(carrier.tracestate ? { tracestate: carrier.tracestate } : {}) })
+    : undefined;
+  await withSpan(
+    `job ${name}`,
+    {
+      kind: SpanKind.CONSUMER,
+      ...(parent ? { parent } : {}),
+      attributes: {
+        'messaging.system': 'pg-boss',
+        'messaging.destination.name': name,
+        'messaging.message.id': job.id,
+        'syntra.job.retry_count': job.retryCount,
+        'syntra.tenant_id': typeof tenantId === 'string' ? tenantId : undefined,
+      },
+    },
+    async (span) => {
+      // With tracing on and no carrier the span's own trace id becomes the
+      // correlation id, so the two agree; otherwise the carried id wins.
+      const traceId = span?.spanContext().traceId;
+      const correlationId = carrier?.correlationId ?? (isCorrelationId(traceId) ? traceId : newCorrelationId());
+      await withCorrelation(correlationId, () => handler(data));
+    },
+  );
 }
 
 /**
@@ -86,7 +161,7 @@ export function createScheduler(
             // copy that was already in flight. Retrying it would turn a
             // completed deletion into three failures and an alert.
             try {
-              await handler(job.data);
+              await runJob(name, job, handler);
             } catch (error) {
               if (error instanceof TenantRetiredError) continue;
               throw error;
@@ -108,7 +183,7 @@ export function createScheduler(
       assertRegistered(name);
       return boss.send(
         name,
-        data as object,
+        withJobTrace(data) as object,
         options?.startAfterSeconds === undefined ? {} : { startAfter: options.startAfterSeconds },
       );
     },

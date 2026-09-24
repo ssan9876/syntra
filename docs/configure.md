@@ -45,7 +45,7 @@ supported, working configuration.
 | `SAMBA_BASE_DN` | `DC=syntra,DC=test` | See above. |
 | `SAMBA_BIND_DN` | `CN=Administrator,CN=Users,DC=syntra,DC=test` | See above. |
 | `SAMBA_BIND_PASSWORD` | `Syntra!Passw0rd` | See above, matches the samba service's `DOMAINPASS`. |
-| `LOG_LEVEL` | `info` | Fastify's own logger level: `error`, `warn`, `info`, `debug`, `trace`, `silent`. |
+| `LOG_LEVEL` | `info` | Fastify's own logger level: `error`, `warn`, `info`, `debug`, `trace`, `silent`. Every level goes through the same redaction; `debug` does not relax it. See [Observability](operate.md#observability). |
 | `POLICY_COUNTRY_HEADER` | unset | The header naming the caller's country, for the policy engine's country conditions — Cloudflare sends `cf-ipcountry`; most other proxies need configuring by hand. Unset leaves every country condition unevaluable, which is right for a deployment with no proxy that sets one: guessing a header name would let an untrusted client claim its own country. |
 | `WEB_ROOT` | unset | Where the built single-page application lives. Unset, the API serves itself alone — right for the test suite and `pnpm dev`, where Vite is the origin. Set it after `pnpm build` to serve the whole deployment from one process, one origin, one port; see [Install](install.md#running-the-built-application-as-one-process). |
 | `GOVERN_CHECKPOINT_KEY` | unset | 32 bytes, base64-encoded. Signs Govern's audit checkpoints. A deployment with none configured is honest about it: `checkpointTrust` returns `unsigned_no_signer_configured` and the console says so, rather than claiming protection that isn't there. |
@@ -137,6 +137,27 @@ registered and the path answers 404 rather than 403 — a route that answered 40
 would confirm its own existence. See
 [Operating Syntra](operate.md#metrics) for what is exposed, and why there are
 no per-tenant labels.
+
+### Tracing (OpenTelemetry)
+
+Optional, and **off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set**. Off means
+the SDK is never loaded and every instrumented call site checks one flag and
+calls straight through. Correlation ids (below) work either way.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | The OTLP/HTTP collector base URL, for example `http://otel-collector:4318`. Setting it turns tracing on; traces are sent to `<endpoint>/v1/traces`. Only the host is ever logged. |
+| `OTEL_SDK_DISABLED` | unset | `true` keeps tracing off even with an endpoint set — the switch for turning it off without editing the endpoint out. |
+| `OTEL_SERVICE_NAME` | `syntra-api` | The `service.name` resource attribute. |
+| `OTEL_RESOURCE_ATTRIBUTES` | unset | Extra resource attributes, `key=value,key=value` — `deployment.environment=production`, say. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | unset | Headers sent with every export, typically a vendor's API key: `x-honeycomb-team=…`. Treated as a secret; never logged. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | derived | Overrides the full traces URL when a collector does not use the standard `/v1/traces` path. |
+| `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | Standard sampling. `parentbased_traceidratio` with `0.1` keeps a tenth of traces, and follows the caller's decision when a request arrives with `traceparent`. |
+| `SYNTRA_OTEL_DATABASE` | unset | `true` also records a span for every Prisma operation. Off by default because it multiplies span volume many times over. The spans carry parameterised SQL, never parameter values. pg-boss's own polling queries are not traced. |
+
+What is instrumented, what a span may carry, and how to follow one import
+through to a connector call is in
+[Operating Syntra](operate.md#observability).
 
 ## Tenants and hostnames
 
