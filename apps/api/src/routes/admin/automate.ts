@@ -91,7 +91,7 @@ function asProblem(cause: unknown): never {
  * The status list is checked against core's `RequestStatus` so a state added
  * there cannot be silently unfilterable here.
  */
-const requestListQuery = z
+export const requestListQuery = z
   .object({
     status: z
       .enum([

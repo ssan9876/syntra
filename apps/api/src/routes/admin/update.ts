@@ -21,7 +21,7 @@ export interface UpdateRouteOptions {
   readyUrl: string;
 }
 
-const startRequest = z.object({
+export const startRequest = z.object({
   /** Named explicitly, so a race with a newer release cannot install a
    *  version the operator never saw the notes for. */
   version: z.string().trim().min(1).max(64),

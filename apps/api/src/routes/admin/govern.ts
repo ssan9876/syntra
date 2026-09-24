@@ -91,7 +91,7 @@ import {
   type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
-import { requirePermission } from '../../plugins/require-permission.js';
+import { declareGuardPermissions, requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
 
 /**
@@ -107,7 +107,7 @@ import { requireSession } from '../../plugins/require-session.js';
  * respected on EVERY READ PATH, not only on the list.
  */
 function requireGovernRead(alsoRequire?: Permission) {
-  return async function guard(request: FastifyRequest): Promise<void> {
+  const guard = async function guard(request: FastifyRequest): Promise<void> {
     const scope = await request.db((tx) => governReadScope(tx, request.session.userId));
     if (scope.kind === 'none') {
       throw new ProblemError(403, 'forbidden', 'Forbidden', 'Requires govern.read');
@@ -132,6 +132,12 @@ function requireGovernRead(alsoRequire?: Permission) {
     }
     Reflect.set(request, 'governScope', scope);
   };
+  // What the published OpenAPI description reports for these routes. See
+  // `declareGuardPermissions`: this guard is not `requirePermission`, so the
+  // route catalog cannot read it off otherwise.
+  return alsoRequire === undefined
+    ? declareGuardPermissions(guard, PERMISSIONS.GOVERN_READ)
+    : declareGuardPermissions(guard, PERMISSIONS.GOVERN_READ, alsoRequire);
 }
 
 /**

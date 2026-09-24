@@ -10,8 +10,45 @@ import { ProblemError } from './problem-json.js';
  * navigation the caller cannot use, but hiding a link is presentation, not a
  * control — this is the control.
  */
+/**
+ * Which permissions each guard enforces.
+ *
+ * Read by the OpenAPI route catalog (`openapi/route-catalog.ts`), which walks
+ * every registered route's `preHandler` list and asks this map what each guard
+ * demands. That is what puts `x-syntra-permission` in the published document
+ * WITHOUT a second, hand-written copy of it: the permission a client is told
+ * an operation needs is, by construction, the permission the running server
+ * checks. A hand-maintained table would be right on the day it was written and
+ * wrong the first time somebody changed a guard and not the table.
+ *
+ * A WeakMap rather than a property on the function, so the guard stays a plain
+ * function Fastify's types accept.
+ */
+const guardPermissions = new WeakMap<object, readonly Permission[]>();
+
+/** The permissions a guard enforces; empty for a function that is not one. */
+export function permissionsOfGuard(fn: unknown): readonly Permission[] {
+  return typeof fn === 'function' ? (guardPermissions.get(fn) ?? []) : [];
+}
+
+/**
+ * Records what a guard that is NOT built by `requirePermission` enforces.
+ *
+ * For the few bespoke guards — Govern's org-unit-scoped read is the one that
+ * exists — so their routes are described with the permission they check
+ * rather than with none. The declaration sits beside the check it describes,
+ * which is the closest this can get to being the check.
+ */
+export function declareGuardPermissions<T extends object>(
+  guard: T,
+  ...permissions: Permission[]
+): T {
+  guardPermissions.set(guard, permissions);
+  return guard;
+}
+
 export function requirePermission(permission: Permission) {
-  return async function guard(request: FastifyRequest): Promise<void> {
+  const guard = async function guard(request: FastifyRequest): Promise<void> {
     const allowed = await request.db((tx) =>
       hasPermission(tx, request.session.userId, permission),
     );
@@ -51,4 +88,5 @@ export function requirePermission(permission: Permission) {
       );
     }
   };
+  return declareGuardPermissions(guard, permission);
 }

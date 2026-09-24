@@ -10,6 +10,7 @@ import {
   cancelLifecycleOperation,
   resumeLifecycleOperation,
   onboardPerson,
+  IdempotencyKeyReusedError,
   applyMover,
   previewMover,
   simulateLifecycle,
@@ -52,20 +53,20 @@ import { requirePermission } from '../../plugins/require-permission.js';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { pageQuery } from './list-query.js';
 
-const idParams = z.object({ id: z.string().uuid() });
-const legalHoldRequest = z.object({
+export const idParams = z.object({ id: z.string().uuid() });
+export const legalHoldRequest = z.object({
   subjectType: z.enum(['lifecycle_operation', 'lifecycle_simulation']),
   subjectId: z.string().uuid(),
   reference: z.string().trim().min(1).max(200),
   reason: z.string().trim().min(1).max(2000),
 }).strict();
-const legalHoldQuery = z.object({
+export const legalHoldQuery = z.object({
   active: z.enum(['true', 'false']).default('true'),
   subjectType: z.enum(['lifecycle_operation', 'lifecycle_simulation']).optional(),
   subjectId: z.string().uuid().optional(),
 }).refine((value) => !value.subjectId || value.subjectType, { message: 'subjectType is required with subjectId' });
 const optionalText = z.string().trim().min(1).max(255).optional();
-const onboardingRequest = z.object({
+export const onboardingRequest = z.object({
   idempotencyKey: z.string().trim().min(1).max(200),
   person: z.object({
     givenName: z.string().trim().min(1).max(100),
@@ -113,14 +114,14 @@ const moverChanges = z
   .transform((value) =>
     Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as MoverChanges,
   );
-const moverPreviewRequest = z.object({
+export const moverPreviewRequest = z.object({
   contractSequence: z.number().int().positive(),
   changes: moverChanges,
 });
 // Only what the server needs to re-derive the plan. Presentation fields
 // (`access`, `approval`, `manager`) a browser sends back are ignored: the
 // server recomputes them at apply time from the persisted state.
-const moverApplyRequest = z
+export const moverApplyRequest = z
   .object({
     tenantId: z.string().uuid(),
     personId: z.string().uuid(),
@@ -136,7 +137,7 @@ const moverApplyRequest = z
     ),
   })
   .passthrough();
-const simulationRequest = z.object({
+export const simulationRequest = z.object({
   kind: z.enum(['hire', 'move', 'leaver']),
   current: z.object({
     accountPresent: z.boolean(),
@@ -145,7 +146,7 @@ const simulationRequest = z.object({
   }),
   desiredEntitlements: z.array(z.string()).default([]),
 });
-const plannedSimulationRequest = z
+export const plannedSimulationRequest = z
   .object({
     kind: z.enum(['hire', 'move', 'leaver']),
     personId: z.string().uuid().optional(),
@@ -156,29 +157,29 @@ const plannedSimulationRequest = z
   .refine((value) => (value.personId ? 1 : 0) + (value.department ? 1 : 0) === 1, {
     message: 'Name exactly one of personId or department',
   });
-const assignmentRequest = z.object({
+export const assignmentRequest = z.object({
   ownerUserId: z.string().uuid(),
   priority: z.enum(['low', 'normal', 'high', 'critical']),
   dueAt: z.coerce.date().nullable().default(null),
 });
-const caseNoteRequest = z.object({ message: z.string().trim().min(1).max(4000) }).strict();
-const caseResolutionRequest = z.object({
+export const caseNoteRequest = z.object({ message: z.string().trim().min(1).max(4000) }).strict();
+export const caseResolutionRequest = z.object({
   code: z.enum(lifecycleResolutionCodes),
   summary: z.string().trim().min(1).max(4000),
 }).strict();
-const caseReopenRequest = z.object({ reason: z.string().trim().min(1).max(4000) }).strict();
-const bulkLifecycleRequest = z.object({
+export const caseReopenRequest = z.object({ reason: z.string().trim().min(1).max(4000) }).strict();
+export const bulkLifecycleRequest = z.object({
   operationIds: z.array(z.string().uuid()).min(1).max(100),
   action: z.enum(['acknowledge', 'retry']),
 });
-const decisionRequest = z.object({ reason: z.string().trim().min(1).max(1000) });
+export const decisionRequest = z.object({ reason: z.string().trim().min(1).max(1000) });
 const targetState = z.object({
   accountPresent: z.boolean(),
   enabled: z.boolean(),
   attributes: z.record(z.string(), z.array(z.string())).default({}),
   entitlements: z.array(z.string()).default([]),
 });
-const observationRequest = z.object({
+export const observationRequest = z.object({
   stepKey: z.string().trim().min(1).max(100),
   targetSystemId: z.string().uuid().optional(),
   expected: targetState,
@@ -186,7 +187,7 @@ const observationRequest = z.object({
   /** An operator who looked at the target and confirms the state by hand. */
   manualConfirmation: z.boolean().default(false),
 });
-const listQuery = pageQuery.extend({
+export const listQuery = pageQuery.extend({
   status: z
     .enum(['queued', 'awaiting_approval', 'running', 'waiting', 'completed', 'failed', 'rejected', 'cancelled', 'open'])
     .optional(),
@@ -850,6 +851,20 @@ export async function registerAdminLifecycleOperationRoutes(
         requestedByUserId: request.session.userId,
         priority: body.priority,
         ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
+      }).catch((cause: unknown) => {
+        // The same key with different input is the CLIENT's error -- a replay
+        // must never resume an operation for somebody else -- and it is
+        // refused before anything is written. 409, with a stable type, rather
+        // than the bare 500 an untranslated error becomes.
+        if (cause instanceof IdempotencyKeyReusedError) {
+          throw new ProblemError(
+            409,
+            'idempotency-key-reused',
+            'Idempotency key already used',
+            'This idempotencyKey was already used with different input. Use a new key for a new request.',
+          );
+        }
+        throw cause;
       });
       reply.code(existed ? 200 : 201);
       return result;

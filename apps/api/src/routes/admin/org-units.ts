@@ -30,7 +30,7 @@ export interface AdminOrgUnitRouteOptions {
   masterKey: Buffer;
 }
 
-const targetParam = z.object({ targetSystemId: z.string().uuid() });
+export const targetParam = z.object({ targetSystemId: z.string().uuid() });
 
 export async function registerAdminOrgUnitRoutes(
   app: FastifyInstance,
