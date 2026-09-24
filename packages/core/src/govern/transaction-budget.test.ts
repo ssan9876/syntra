@@ -305,8 +305,13 @@ describe('the transaction budget — slice 2', () => {
    * seed, because writing rows in bulk is what a database is fast at. Reviewer
    * resolution does per-item work, which is the loop Global Constraint 4 is
    * about and the one `REVIEWER_BATCH` exists for.
+   *
+   * Doubled from 10 under Prisma 7. Without the Rust engine the unbounded
+   * reviewer loop at 2,000 items landed right on Prisma's 5,000 ms ceiling --
+   * aborted on one run, finished unaborted under CI's 4,500 ms budget on the
+   * next. At 4,000 it is well past both; the bounded half measured 599 ms.
    */
-  const UNBOUNDED_PER_SUBJECT = 10;
+  const UNBOUNDED_PER_SUBJECT = 20;
   /**
    * How many dispatch rows the CONFIRM and REFLECT cases carry.
    *
