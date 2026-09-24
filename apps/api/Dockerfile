@@ -12,7 +12,10 @@
 # to 24 instead would need the whole suite re-validated on it first, and
 # nothing here requires a 24-only feature.
 FROM node:22-alpine AS base
-RUN corepack enable
+ENV COREPACK_HOME=/opt/corepack
+RUN corepack enable \
+  && corepack prepare pnpm@9.12.0 --activate \
+  && chmod -R a+rX /opt/corepack
 WORKDIR /app
 
 FROM base AS deps
