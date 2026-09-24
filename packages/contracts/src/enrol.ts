@@ -14,7 +14,7 @@ export type EnrolTotpConfirmRequest = z.infer<typeof enrolTotpConfirmRequest>;
 export const enrolWebauthnFinishRequest = z.object({
   attemptToken: z.string().min(1).max(256),
   label: z.string().min(1).max(64).default('Security key'),
-  response: z.record(z.unknown()),
+  response: z.record(z.string(), z.unknown()),
 });
 export type EnrolWebauthnFinishRequest = z.input<typeof enrolWebauthnFinishRequest>;
 

@@ -17,7 +17,7 @@ export const createPersonSourceRequest = z
     type: z.string().min(1),
     /** No default. The caller states it or the request fails. */
     feedMode,
-    config: z.record(z.unknown()),
+    config: z.record(z.string(), z.unknown()),
     credential: z.string().min(1),
     schedule: z.string().min(1).optional(),
     autoApply: z.boolean().optional(),
@@ -29,7 +29,7 @@ export const createPersonSourceRequest = z
 export const updatePersonSourceRequest = z
   .object({
     name: z.string().min(1),
-    config: z.record(z.unknown()),
+    config: z.record(z.string(), z.unknown()),
     credential: z.string().min(1),
     feedMode,
     schedule: z.string().min(1).nullable(),

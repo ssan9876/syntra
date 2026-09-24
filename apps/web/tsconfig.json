@@ -11,6 +11,7 @@
     "rootDir": "src",
     "types": [
       "vite/client",
+      "@testing-library/jest-dom/vitest",
       // EXPLICIT, because it used to arrive by accident. Five test files under
       // `src` read the source tree off disk to assert on it -- the navigation
       // labels, the merged routes, the no-prose rule -- so `node:fs` and

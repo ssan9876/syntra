@@ -15,7 +15,7 @@
     "jose": "6.2.9",
     "oidc-provider": "9.11.3",
     "openid-client": "6.8.5",
-    "xml-crypto": "6.1.2",
+    "xml-crypto": "6.3.0",
     "xml-encryption": "6.0.1",
     "xpath": "0.0.34"
   },

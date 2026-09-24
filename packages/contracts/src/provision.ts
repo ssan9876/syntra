@@ -95,7 +95,7 @@ export const scim2TargetConfigSchema = z
  * document itself, against the one definition of it that exists.
  */
 export const httpTargetConfigSchema = z
-  .object({ document: z.record(z.unknown()) })
+  .object({ document: z.record(z.string(), z.unknown()) })
   .strict();
 
 /**
@@ -317,7 +317,7 @@ const unboundedConditionRequestSchema: z.ZodType<unknown> = z.lazy(() =>
     z.object({ all: z.array(unboundedConditionRequestSchema) }).strict(),
     z.object({ any: z.array(unboundedConditionRequestSchema) }).strict(),
     z.object({ not: unboundedConditionRequestSchema }).strict(),
-    z.record(z.unknown()),
+    z.record(z.string(), z.unknown()),
   ]),
 );
 
@@ -382,8 +382,8 @@ export const accountProfileRequestSchema = z
     maxUniquenessAttempts: z.number().int().positive().max(200),
     containerTemplate: z.string().min(1),
     fallbackContainer: z.string().min(1),
-    attributeTemplates: z.record(z.string()),
-    initialPasswordPolicy: z.record(z.unknown()),
+    attributeTemplates: z.record(z.string(), z.string()),
+    initialPasswordPolicy: z.record(z.string(), z.unknown()),
     initialPasswordDelivery: z.enum(['manager', 'personalEmail', 'vaultOnly']),
     sensitiveApprovalReason: z.string().trim().min(20).max(1000).optional(),
   })
@@ -446,7 +446,7 @@ export const adoptAccountRequest = z
 export const adoptionCandidateResponse = z.object({
   anchor: z.string(),
   dn: z.string(),
-  attributes: z.record(z.array(z.string())),
+  attributes: z.record(z.string(), z.array(z.string())),
 });
 
 export type AdoptAccountRequest = z.input<typeof adoptAccountRequest>;
