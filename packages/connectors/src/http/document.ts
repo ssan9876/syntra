@@ -129,7 +129,7 @@ const listSpec = z.object({
 });
 
 /** Writes something. */
-const writeSpec = (method: z.ZodTypeAny) =>
+const writeSpec = <T extends z.ZodType<string>>(method: T) =>
   z.object({
     method,
     path: requestPath,
@@ -277,7 +277,12 @@ const failureMap = z
     conflict: z.array(z.number().int()).default([409]),
     throttled: z.array(z.number().int()).default([429]),
   })
-  .default({});
+  .default({
+    unauthorized: [401, 403],
+    notFound: [404],
+    conflict: [409],
+    throttled: [429],
+  });
 
 export const httpConnectorDocument = z
   .object({
