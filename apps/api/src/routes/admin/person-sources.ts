@@ -3,6 +3,7 @@ import { z, ZodError } from 'zod';
 import {
   acceptHostKeyRequest,
   applyImportRunRequest,
+  cancelRunRequest,
   createPersonSourceRequest,
   idParam,
   setPersonMappingsRequest,
@@ -19,6 +20,10 @@ import {
   PersonSourceOwnsPersonsError,
   UnassignableFieldError,
   applyImportRun,
+  requestCancelImportRun,
+  RunNotAppliableError,
+  RunNotCancellableError,
+  RunNotFoundError,
   applyPersonSourceSchedule,
   createPersonSource,
   deletePersonSource,
@@ -515,6 +520,9 @@ export async function registerAdminPersonSourceRoutes(
         if (!(cause instanceof Error)) throw cause;
         // The service refuses a blocked run by throwing. That is a conflict
         // the console can act on -- by confirming -- not a server error.
+        if (cause instanceof RunNotAppliableError) {
+          throw new ProblemError(409, 'run-not-appliable', 'This run cannot be applied', cause.message);
+        }
         if (cause.message.includes('blocked')) {
           throw new ProblemError(409, 'run-blocked', 'This run is blocked', cause.message);
         }
@@ -523,6 +531,39 @@ export async function registerAdminPersonSourceRoutes(
         // and look at the logs for a request that was simply wrong.
         if (cause.message.startsWith('no such import run')) {
           throw new ProblemError(404, 'not-found', 'Import run not found');
+        }
+        throw cause;
+      }
+    },
+  );
+
+  /**
+   * Asks an import run to stop, under SYNC_MANAGE — the permission that runs
+   * and applies one. Cancelled at once when queued or waiting for review; a
+   * run reading the file or applying changes stops at its next checkpoint,
+   * between two changes. Open duplicate reviews on a cancelled run are closed.
+   */
+  app.post(
+    '/person-import-runs/:id/cancel',
+    { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      cancelRunRequest.parse(request.body ?? {});
+      try {
+        return await request.db(async (tx) => {
+          const result = await requestCancelImportRun(tx, id, {
+            userId: request.session.userId,
+            sourceIp: request.ip,
+          });
+          const run = await tx.personImportRun.findUniqueOrThrow({ where: { id } });
+          return { ...result, run };
+        });
+      } catch (cause) {
+        if (cause instanceof RunNotFoundError) {
+          throw new ProblemError(404, 'not-found', 'Import run not found');
+        }
+        if (cause instanceof RunNotCancellableError) {
+          throw new ProblemError(409, 'run-not-cancellable', 'This run has already finished', cause.message);
         }
         throw cause;
       }

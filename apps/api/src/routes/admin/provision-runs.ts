@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   acknowledgeDriftRequestSchema,
   applyRunRequestSchema,
+  cancelRunRequest,
   idParam,
 } from '@syntra/contracts';
 import {
@@ -13,7 +14,10 @@ import {
   ProvisionRunNotConfirmableError,
   MaintenanceWindowClosedError,
   ExternalWritesPausedError,
+  RunNotCancellableError,
+  RunNotFoundError,
   acknowledgeDriftFinding,
+  requestCancelProvisionRun,
   applyProvisionRun,
   enqueuePairedSync,
   localMasterKeyProvider,
@@ -304,6 +308,49 @@ export async function registerAdminProvisionRunRoutes(
         if (scheduler) await enqueuePairedSync(scheduler, request.tenantId, id);
       }
       return result;
+    },
+  );
+
+  /**
+   * Asks a provisioning run to stop, under PROVISION_MANAGE — the permission
+   * that starts and applies one.
+   *
+   * A `previewed` or `blocked` plan is cancelled on the spot and its actions
+   * abandoned (and any revocation order they carried re-opened for the next
+   * run). A preview still reading the target, or an apply writing to it, is
+   * asked, and stops at its next checkpoint: an apply between two actions,
+   * never between an action's `in_flight` marker and the target's answer.
+   */
+  app.post(
+    '/targets/:id/runs/:runId/cancel',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id, runId } = runParams.parse(request.params);
+      cancelRunRequest.parse(request.body ?? {});
+      try {
+        return await request.db(async (tx) => {
+          // Named through this target or not at all, as every run route here.
+          const existing = await tx.provisionRun.findUnique({
+            where: { id: runId },
+            select: { targetSystemId: true },
+          });
+          if (!existing || existing.targetSystemId !== id) throw new RunNotFoundError(runId);
+          const result = await requestCancelProvisionRun(tx, runId, {
+            userId: request.session.userId,
+            sourceIp: request.ip,
+          });
+          const run = await tx.provisionRun.findUniqueOrThrow({ where: { id: runId } });
+          return { ...result, run };
+        });
+      } catch (cause) {
+        if (cause instanceof RunNotFoundError) {
+          throw new ProblemError(404, 'not-found', 'Run not found');
+        }
+        if (cause instanceof RunNotCancellableError) {
+          throw new ProblemError(409, 'run-not-cancellable', 'This run has already finished', cause.message);
+        }
+        throw cause;
+      }
     },
   );
 

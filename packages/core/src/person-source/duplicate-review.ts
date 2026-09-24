@@ -120,8 +120,12 @@ export function resolveDuplicateReview(
     }
     const remaining = await tx.personDuplicateReview.count({ where: { runId: review.runId, status: 'open' } });
     if (remaining === 0) {
-      await tx.personImportRun.update({
-        where: { id: review.runId },
+      // Only a run still `blocked` on its reviews is restored. A run
+      // cancelled while this review was being decided stays cancelled:
+      // restoring its pre-review status would resurrect a plan somebody
+      // deliberately discarded.
+      await tx.personImportRun.updateMany({
+        where: { id: review.runId, status: 'blocked' },
         data: {
           status: review.restoreStatus,
           blockedReason: review.restoreBlockedReason,

@@ -586,6 +586,64 @@ for each tenant (the full assess → export → request → approve → execute 
 the restored tenant has no record of the earlier one). Keep the downloaded
 receipts outside the backup set so they survive the restore that needs them.
 
+## Cancelling a long-running run
+
+Directory sync runs, HR person imports and provisioning runs can be stopped
+from their run pages with **Cancel run**, which asks for confirmation first.
+The API is `POST /api/admin/sync-runs/:id/cancel`,
+`POST /api/admin/person-import-runs/:id/cancel` and
+`POST /api/admin/targets/:id/runs/:runId/cancel`, each with an empty JSON
+body. They need the same permission that applies the run —
+`sync.manage` for the first two, `provision.manage` for provisioning — and
+every request writes an audit event (`sync.run.cancel`,
+`person_import.run.cancel`, `provision.run.cancel`) naming who asked, from
+where, and what the run was doing at the time.
+
+Cancellation is **cooperative**. Nothing kills a worker. The request is
+recorded on the run (`cancelState: requested`) and the worker reads it at
+checkpoints of its own: every 500 records of a directory or file read, after
+each read of a target, immediately before a plan is written, and before each
+item of an apply. An apply therefore stops *between* two items — for
+provisioning, never between an action's `in_flight` marker and the target's
+answer — so the run it leaves is an honest partial state:
+
+- items already applied stay applied, with their audit events;
+- items it did not reach are marked with the reason (`skipped` for sync and HR
+  changes, `superseded` for provisioning actions, message *not applied: the
+  run was cancelled*), and a revocation order a provisioning action was
+  carrying is re-opened so the next run proposes it again;
+- the run's status is `cancelled` and `cancelState` is `cancelled`; an
+  `*.run.cancelled` audit event records the phase and the counts, with the
+  requester as actor.
+
+What happens depends on what the run was doing:
+
+| Run was | Result |
+| --- | --- |
+| `queued`, or `previewed` / `blocked` / `partially_applied` (waiting for a person) | Cancelled at once. Nothing was working on it. A queued job that is later picked up does nothing. An HR run waiting on duplicate review has those reviews closed as `run_cancelled`. |
+| `running` (reading or planning) | Request recorded; the next checkpoint stops it with **no plan written**, exactly as a failed preview writes none. |
+| `applying` | Request recorded; the next checkpoint stops it between items. |
+| finished (`applied`, `failed`, `cancelled`...) | Refused with `409 run-not-cancellable`. |
+
+A run that finishes before any checkpoint sees the request ends normally and
+records the request as `moot`, so "I pressed cancel and it applied anyway" has
+an answer on the run itself. A cancelled run cannot be applied
+(`409 run-not-appliable`); start a new run, which re-proposes whatever is still
+needed.
+
+Two operational notes:
+
+- **Directory sync and HR imports now show `applying`** while an apply is in
+  progress. It is a progress marker, not a lock: these two subsystems have no
+  heartbeat, so if the API process dies mid-apply the run stays `applying`.
+  Pressing **Apply** again resumes it (as it resumed a `previewed` run
+  before), and if a cancellation was waiting, that apply honours it before
+  touching anything.
+- **Provisioning runs abandoned by a dead process** are adopted by the next run
+  as before; if a cancellation was waiting on one, adoption records it as
+  `cancelled` rather than `failed` or `partially_applied`, after resolving any
+  `in_flight` actions against the target.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push and pull request. Its two main

@@ -1035,6 +1035,84 @@ describe('the tenant-wide external-write stop', () => {
   });
 });
 
+describe('POST /api/admin/targets/:id/runs/:runId/cancel', () => {
+  const seedRun = async (over: Record<string, unknown>) =>
+    withTenant(ctx.tenantId, async (tx) =>
+      (
+        await tx.provisionRun.create({
+          data: { tenantId: ctx.tenantId, targetSystemId: targetId, ...over },
+        })
+      ).id,
+    );
+
+  it('cancels a previewed plan at once and audits it', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const runId = await seedRun({ status: 'previewed' });
+
+    const response = await post(`/api/admin/targets/${targetId}/runs/${runId}/cancel`, cookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      outcome: 'cancelled',
+      previousStatus: 'previewed',
+      run: { id: runId, status: 'cancelled', cancelState: 'cancelled' },
+    });
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'provision.run.cancel' } }),
+    );
+    expect(event.targetId).toBe(runId);
+    expect(event.sourceIp).not.toBeNull();
+
+    // And it is no longer a plan anybody can apply.
+    const apply = await post(`/api/admin/targets/${targetId}/runs/${runId}/apply`, cookie, { confirm: true });
+    expect(apply.statusCode).toBe(409);
+  });
+
+  it('records a request against an applying run for its next checkpoint', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const runId = await seedRun({ status: 'applying', lastProgressAt: new Date() });
+
+    const first = await post(`/api/admin/targets/${targetId}/runs/${runId}/cancel`, cookie);
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({
+      outcome: 'requested',
+      run: { status: 'applying', cancelState: 'requested' },
+    });
+    // Idempotent while it waits: pressing again says so, and changes nothing.
+    const second = await post(`/api/admin/targets/${targetId}/runs/${runId}/cancel`, cookie);
+    expect(second.json().outcome).toBe('already_requested');
+  });
+
+  it('answers 409 for a finished run, 404 through another target, and 403 without provision.manage', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const finished = await seedRun({ status: 'applied' });
+    const conflict = await post(`/api/admin/targets/${targetId}/runs/${finished}/cancel`, cookie);
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().type).toContain('run-not-cancellable');
+
+    const pending = await seedRun({ status: 'running' });
+    const otherTargetId = (
+      await post('/api/admin/targets', cookie, {
+        name: 'Other AD',
+        type: 'activeDirectory',
+        config,
+        bindPassword: 'super-secret-bind',
+      })
+    ).json().id;
+    expect(
+      (await post(`/api/admin/targets/${otherTargetId}/runs/${pending}/cancel`, cookie)).statusCode,
+    ).toBe(404);
+
+    const reader = await adminCookie([PERMISSIONS.PROVISION_READ]);
+    expect(
+      (await post(`/api/admin/targets/${targetId}/runs/${pending}/cancel`, reader)).statusCode,
+    ).toBe(403);
+  });
+});
+
 describe('run detail and drift', () => {
   it('returns the actions in sequence order, each naming its person', async () => {
     const cookie = await manager();

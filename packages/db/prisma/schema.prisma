@@ -817,6 +817,20 @@ model SyncRun {
   /// page comes with something an administrator can act on.
   mappingFailureReasons String[]        @default([])
 
+  /// Cooperative cancellation. Null until somebody asks; then `requested`
+  /// while the run is still working, and finally `cancelled` (a checkpoint
+  /// between items honoured it, or the run had not started) or `moot` (the
+  /// run finished before any checkpoint saw the request, so it ended
+  /// normally and the request changed nothing). A column of its own rather
+  /// than a status, because a run asked to stop is still RUNNING until it
+  /// reaches a checkpoint -- overwriting the status would hide what the
+  /// worker is actually doing. The terminal status of an honoured request is
+  /// `cancelled`. See `jobs/cancellation.ts`.
+  cancelState             String?
+  cancelRequestedAt       DateTime?
+  cancelRequestedByUserId String?   @db.Uuid
+  cancelResolvedAt        DateTime?
+
   changes SyncChange[]
 
   @@index([tenantId, startedAt])
@@ -926,6 +940,20 @@ model PersonImportRun {
   /// Who confirmed a guarded run. An override nobody can find later is not a
   /// control.
   confirmedBy           String?      @db.Uuid
+
+  /// Cooperative cancellation. Null until somebody asks; then `requested`
+  /// while the run is still working, and finally `cancelled` (a checkpoint
+  /// between items honoured it, or the run had not started) or `moot` (the
+  /// run finished before any checkpoint saw the request, so it ended
+  /// normally and the request changed nothing). A column of its own rather
+  /// than a status, because a run asked to stop is still RUNNING until it
+  /// reaches a checkpoint -- overwriting the status would hide what the
+  /// worker is actually doing. The terminal status of an honoured request is
+  /// `cancelled`. See `jobs/cancellation.ts`.
+  cancelState             String?
+  cancelRequestedAt       DateTime?
+  cancelRequestedByUserId String?   @db.Uuid
+  cancelResolvedAt        DateTime?
 
   changes PersonImportChange[]
   duplicateReviews PersonDuplicateReview[]
@@ -2699,6 +2727,20 @@ model ProvisionRun {
   blockedReason        String?
   confirmedByUserId    String? @db.Uuid
   error                String?
+
+  /// Cooperative cancellation. Null until somebody asks; then `requested`
+  /// while the run is still working, and finally `cancelled` (a checkpoint
+  /// between items honoured it, or the run had not started) or `moot` (the
+  /// run finished before any checkpoint saw the request, so it ended
+  /// normally and the request changed nothing). A column of its own rather
+  /// than a status, because a run asked to stop is still RUNNING until it
+  /// reaches a checkpoint -- overwriting the status would hide what the
+  /// worker is actually doing. The terminal status of an honoured request is
+  /// `cancelled`. See `jobs/cancellation.ts`.
+  cancelState             String?
+  cancelRequestedAt       DateTime?
+  cancelRequestedByUserId String?   @db.Uuid
+  cancelResolvedAt        DateTime?
 
   actions    ProvisionAction[]
   exceptions ProvisionException[]

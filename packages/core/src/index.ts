@@ -108,6 +108,7 @@ export * from './notify/webhook-service.js';
 export * from './notify/webhook-signature.js';
 export * from './jobs/scheduler.js';
 export * from './jobs/enqueue-for-row.js';
+export * from './jobs/cancellation.js';
 export * from './sync/mapping.js';
 export * from './sync/correlate.js';
 export * from './sync/diff.js';
@@ -249,6 +250,7 @@ export * from './provision/entitlement-service.js';
 // modules choosing the SAME name, and under TS2308 the barrel then exports
 // neither.
 export * from './provision/run-service.js';
+export * from './provision/run-cancellation.js';
 // Grepped, as the three lines above were: none of `claimSyntraUsers`,
 // `applySyntraUserAction`, `enqueuePairedSync`, `ClaimSummary`,
 // `SYNTRA_USER_LINK_SUBJECT` or the five error classes appears anywhere else

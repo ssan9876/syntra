@@ -565,7 +565,7 @@ describe('applyImportRun', () => {
     // Apply the contract alone: its person does not exist yet, so it fails.
     const result = await applyImportRun(tenantId, run.id, { only: [contract!.id] });
 
-    expect(result).toEqual({ applied: 0, failed: 1 });
+    expect(result).toEqual({ applied: 0, failed: 1, cancelled: false });
     const after = await changesOf(run.id);
     expect(after.find((c) => c.id === contract!.id)?.status).toBe('failed');
   });
