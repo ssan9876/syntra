@@ -44,7 +44,7 @@ import type {
   FactorPresentationType,
   FactorVerifier,
 } from './mfa/types.js';
-import { authorize } from './authorize.js';
+import { ADMIN_WEBAUTHN_RULE_NAME, authorize } from './authorize.js';
 import * as OTPAuth from 'otpauth';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import {
@@ -1726,5 +1726,148 @@ describe('authorize — a machine token', () => {
     const events = await auditActions();
     expect(JSON.stringify(events)).not.toContain(token);
     expect(JSON.stringify(events)).not.toContain('syntra_pat_wrong');
+  });
+
+  it('is not held to the security-key requirement for the console', async () => {
+    // A machine can present no factor at all. The requirement is about how a
+    // PERSON reaches the console; a token was issued from a console session
+    // that, under the requirement, a key established.
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { primaryDomain: 'acme.syntra.test', adminWebauthnRequired: true },
+    });
+    const { token } = await mint();
+    expect(await present(token)).toMatchObject({ status: 'allow', scope: 'admin' });
+  });
+});
+
+describe('authorize — a security key required for the console', () => {
+  beforeEach(async () => {
+    held.clear();
+    registerFactorVerifier(stubVerifier('totp'));
+    registerFactorVerifier(stubVerifier('webauthn'));
+    registerFactorVerifier(stubVerifier('recovery_code'));
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { primaryDomain: 'acme.syntra.test', adminWebauthnRequired: true },
+    });
+  });
+
+  /** Elevation, as `/api/auth/elevate` asks for it. */
+  const elevate = (floor?: 'require_mfa') =>
+    authorize(tenantId, {
+      kind: 'primary',
+      principal: { kind: 'password', login: 'jdoe', password: PASSWORD },
+      applicationId: null,
+      sourceIp: '10.1.2.3',
+      relyingParty: RP,
+      scope: 'admin',
+      ...(floor ? { floor } : {}),
+      now: NOW,
+    });
+
+  const present = (attemptToken: string, type: 'totp' | 'webauthn') =>
+    authorize(tenantId, {
+      kind: 'continue',
+      attemptToken,
+      factor:
+        type === 'webauthn'
+          ? { type: 'webauthn', assertion: goodCode }
+          : { type: 'totp', code: goodCode },
+      sourceIp: '10.1.2.3',
+      relyingParty: RP,
+      now: NOW,
+    });
+
+  it('asks for the key and nothing else, even from someone holding a code', async () => {
+    held.add('totp');
+    held.add('webauthn');
+    held.add('recovery_code');
+
+    const result = await elevate('require_mfa');
+    expect(result).toMatchObject({
+      status: 'challenge',
+      acceptableFactors: ['webauthn'],
+    });
+
+    const challenged = (await auditActions()).find(
+      (e) => e.action === 'auth.mfa_challenged',
+    );
+    expect(challenged?.payload).toMatchObject({
+      required: 'require_factor',
+      requiredFactor: 'webauthn',
+      ruleName: ADMIN_WEBAUTHN_RULE_NAME,
+    });
+  });
+
+  it('applies with no policy rule and no floor at all', async () => {
+    // The chokepoint enforces it, not the caller. A path that forgot to pass
+    // a floor still cannot mint an administrative session without a key.
+    held.add('webauthn');
+    expect(await elevate()).toMatchObject({
+      status: 'challenge',
+      acceptableFactors: ['webauthn'],
+    });
+  });
+
+  it('refuses an authenticator code presented against the challenge', async () => {
+    held.add('totp');
+    held.add('webauthn');
+    const challenge = (await elevate()) as { attemptToken: string };
+
+    expect(await present(challenge.attemptToken, 'totp')).toEqual({
+      status: 'deny',
+      reason: 'factor_invalid',
+    });
+  });
+
+  it('allows an administrative session on the key, and records that it was the key', async () => {
+    held.add('webauthn');
+    const challenge = (await elevate()) as { attemptToken: string };
+
+    expect(await present(challenge.attemptToken, 'webauthn')).toMatchObject({
+      status: 'allow',
+      scope: 'admin',
+      satisfiedFactor: 'webauthn',
+    });
+  });
+
+  it('refuses rather than offering enrolment to an administrator with no key', async () => {
+    // Forced enrolment would let whoever relayed the password register their
+    // own key mid-elevation — the attack this setting exists to stop.
+    held.add('totp');
+    held.add('recovery_code');
+
+    expect(await elevate()).toEqual({
+      status: 'deny',
+      reason: 'factor_not_enrolled',
+    });
+    const refused = (await auditActions()).at(-1);
+    expect(refused).toMatchObject({
+      action: 'auth.mfa_unavailable',
+      payload: { adminWebauthnRequired: true, requiredFactor: 'webauthn' },
+    });
+  });
+
+  it('leaves the portal alone', async () => {
+    held.add('totp');
+    expect(await signIn()).toMatchObject({ status: 'allow', scope: 'portal' });
+  });
+
+  it('never turns a policy deny into a challenge', async () => {
+    held.add('webauthn');
+    await withTenant(tenantId, (tx) =>
+      setPolicyDefault(tx, { outcome: 'deny', factorType: null }),
+    );
+    expect(await elevate()).toEqual({ status: 'deny', reason: 'policy_denied' });
+  });
+
+  it('does nothing while the setting is off', async () => {
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: { adminWebauthnRequired: false },
+    });
+    held.add('totp');
+    expect(await elevate()).toMatchObject({ status: 'allow', scope: 'admin' });
   });
 });

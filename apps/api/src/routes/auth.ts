@@ -189,6 +189,25 @@ export async function registerAuthRoutes(
         ...(tenant.adminMfaRequired ? { floor: 'require_mfa' as const } : {}),
       });
 
+      // One refusal is explained: an administrator with the right password
+      // and no security key, under the tenant's security-key requirement for
+      // the console. Safe to distinguish for the same reason the lockout is at
+      // `/login` — `factor_not_enrolled` is only reached after the password
+      // was accepted, and this caller already holds a portal session as the
+      // same person. Collapsing it into "invalid credentials" would send an
+      // administrator to retype a password that is correct.
+      if (
+        decision.status === 'deny' &&
+        decision.reason === 'factor_not_enrolled' &&
+        tenant.adminWebauthnRequired
+      ) {
+        throw new ProblemError(
+          403,
+          'security-key-required',
+          'A security key is required for the console',
+          'Register a security key from the Security page, then elevate again.',
+        );
+      }
       if (decision.status === 'deny') {
         throw new ProblemError(
           401,

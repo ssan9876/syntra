@@ -80,6 +80,13 @@ export function Elevate() {
         setError(
           'This account holds no administrative roles. Ask an administrator to grant you one.',
         );
+      } else if (cause instanceof ApiError && cause.kind === 'security-key-required') {
+        // The password was right; the tenant requires a security key for the
+        // console and this account has none. "Incorrect password" here would
+        // send them to retype one that is correct.
+        setError(
+          'This organization requires a security key for administration. Register one on the Security page, then try again.',
+        );
       } else if (isRateLimited(cause)) {
         setError(t('common.rate_limited'));
       } else {

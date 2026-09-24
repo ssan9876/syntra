@@ -337,6 +337,106 @@ off refuses every administrator who does not already hold one, so the screen
 refuses to save that pair until the administrator making the change holds a
 factor themselves.
 
+### Session lifetimes
+
+**Each tenant sets its own idle and absolute session lifetimes**, per scope,
+under **Settings → Sign-in → Sessions** (`PUT /api/admin/tenant`,
+`tenant.manage`, audited as `tenant.settings_updated` with the resulting
+values). The defaults are the values that used to be hardcoded, so a tenant
+that never opens the form behaves exactly as before.
+
+| Setting | Default | Allowed |
+| --- | --- | --- |
+| `portalSessionIdleMinutes` | 60 | 5 – 1,440 (24 hours) |
+| `portalSessionAbsoluteMinutes` | 720 (12 hours) | 60 – 43,200 (30 days) |
+| `adminSessionIdleMinutes` | 15 | 5 – 60 |
+| `adminSessionAbsoluteMinutes` | 120 (2 hours) | 15 – 720 (12 hours) |
+
+Two relations hold as well: an idle timeout may not exceed the absolute
+lifetime of its scope, and a console session may not outlive a portal one. The
+bounds are the platform's, not the tenant's — an elevation is meant to be a
+fresh authentication, so it cannot be made to survive overnight, and a portal
+credential older than a month is one nobody remembers issuing. They are
+enforced by the request schema (`SESSION_POLICY_BOUNDS` in
+`packages/contracts/src/tenant.ts`) and again by database CHECK constraints.
+
+**Lifetimes are evaluated against the current policy on every request, not
+only at sign-in.** Shortening one ends every session already past the new
+limit at its next request, which is what an administrator tightening the
+policy after an incident needs. Lengthening one does not extend a session
+already issued — its cookie was written with the old expiry — so the new
+value applies to sessions established afterwards. The session inventory on an
+account shows the expiry that will actually apply.
+
+### Revoking every session
+
+**Settings → Sessions ends sessions across the whole tenant at once**
+(`POST /api/admin/sessions/revoke`): every session, or only console sessions,
+optionally sparing the session making the request. It needs `tenant.manage`, a
+reason of at least ten characters, and **step-up**: the caller's console
+session must have been established in the last ten minutes. Elevation re-runs
+the password and every factor the tenant demands, so a fresh elevation is a
+fresh strong authentication; a console left open after lunch cannot sign the
+organization out. A refusal answers `step-up-required` and the screen offers to
+elevate again. Bearer tokens are refused outright.
+
+Every affected person goes through the same revocation as a single-user
+revoke: their sessions, refresh tokens and OIDC grants end together and every
+relying party with a back-channel logout URI is told. For "every session", that
+includes people who hold only a refresh token or grant, since those outlive the
+session that minted them. Each person gets a `session.revoked` event with
+trigger `mass_revoke`; the run gets one `session.mass_revoked` event carrying
+the scope, reason and counts. The work is done in batches, one transaction per
+batch — a partial failure is recorded as `session.mass_revoked` with outcome
+`failure` and the counts that committed, and pressing the button again
+finishes the job.
+
+### Phishing-resistant console access
+
+**`Tenant.adminWebauthnRequired` requires a security key (WebAuthn) for the
+console.** An authenticator-app code, an emailed code or a recovery code can be
+relayed through a convincing fake sign-in page; a WebAuthn assertion is bound to
+the origin the browser is really on, so a relayed one fails. With the setting
+on:
+
+- `authorize()` demands WebAuthn for every administrative-scope decision,
+  whatever the policy rules or the admin-MFA floor say. It only strengthens: a
+  rule that denies still denies. It is enforced inside the chokepoint, so no
+  caller can forget to ask for it.
+- **No enrolment is offered during elevation.** Forced enrolment would let
+  whoever relayed the password register their own key. An administrator
+  without a key is refused (`security-key-required`) and registers one from the
+  Security page of their portal session, which is its own audited, mailed act.
+- **Existing console sessions a key did not establish stop working** at their
+  next request.
+- The portal is unaffected, and so are API tokens — a machine presents no
+  factor at all, and tokens are issued from a console session, which under this
+  setting a key established.
+
+**Lockout prevention.** Turning it on is refused unless the administrator doing
+it holds a registered security key *and* is using a console session that key
+established — proving, in the same request, that the rule can be satisfied on
+this domain. It is also refused with no primary domain, and while it is on the
+primary domain cannot be cleared or moved (moving it invalidates every key,
+including every administrator's). It can always be turned off. Both changes are
+audited as `tenant.admin_webauthn_required` / `tenant.admin_webauthn_relaxed`,
+alongside `tenant.settings_updated`.
+
+**Break-glass.** If every administrator loses their key, there is no console
+path back in, by design — a path that skipped the key would be the path an
+attacker uses. Recovery is an operator action against the database, done under
+change control and followed by a review of the audit log:
+
+```sql
+-- Turn the requirement off for one tenant. The next elevation falls back to the
+-- tenant's ordinary policy and admin-MFA floor.
+UPDATE "Tenant" SET "adminWebauthnRequired" = false WHERE slug = '<tenant-slug>';
+```
+
+Keep at least two administrators with registered keys, ideally one of them a
+key held offline as the tenant's own break-glass credential, so that this is
+never needed.
+
 ### Signing in to applications
 
 Syntra is a SAML 2.0 identity provider and an OpenID Connect provider, and it
@@ -507,7 +607,10 @@ list. This slice adds:
 | `access.claim_mapping_changed` | A claim or attribute released to an application was added or removed |
 | `access.upstream_configured` | An upstream identity provider was registered or changed. **Never the client secret, and never its vault name** |
 | `policy.rule_added` / `policy.rule_updated` / `policy.rule_deleted` / `policy.rules_reordered` / `policy.default_set` | The policy changed, and who changed it |
-| `tenant.settings_updated` | Admin MFA, self-enrolment or the password floor changed |
+| `tenant.settings_updated` | Admin MFA, self-enrolment, the password floor or the session lifetimes changed |
+| `tenant.admin_webauthn_required` / `tenant.admin_webauthn_relaxed` | The security-key requirement for the console was switched on or off. **Alert on the second** |
+| `session.revoked` | One person's sessions ended, with the trigger (`admin`, `self`, `logout`, `password_reset`, `password_change`, `deactivation`, `mass_revoke`) |
+| `session.mass_revoked` | Sessions ended across the tenant, with scope, reason and counts; outcome `failure` means a partial run |
 | `auth.password_reset_requested` / `auth.password_reset_factor_failed` / `auth.password_reset_completed` | A self-service reset was asked for, refused at the factor, or applied |
 
 The forced-enrolment trade above is defensible *because* the enrolment is

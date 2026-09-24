@@ -81,6 +81,27 @@ model Tenant {
   /// where mail is itself behind strong authentication, and it is those
   /// organizations that should be the ones turning it on.
   emailOtpEnabled        Boolean  @default(false)
+  /// Session lifetimes, per scope, in minutes. The defaults are exactly the
+  /// values `session-service.ts` hardcoded before they were configurable, so
+  /// a tenant that never opens the form behaves as it always did. Bounded by
+  /// CHECK constraints as well as the request schema; the bounds and their
+  /// reasons live in `SESSION_POLICY_BOUNDS`, `packages/contracts/src/tenant.ts`.
+  ///
+  /// Evaluated against the CURRENT values on every request, not only at
+  /// issue: shortening a lifetime ends sessions that are already past it at
+  /// their next request, which is what an administrator tightening the policy
+  /// after an incident needs it to do.
+  portalSessionIdleMinutes     Int     @default(60)
+  portalSessionAbsoluteMinutes Int     @default(720)
+  adminSessionIdleMinutes      Int     @default(15)
+  adminSessionAbsoluteMinutes  Int     @default(120)
+  /// Console elevation must be completed with a WebAuthn credential — not an
+  /// authenticator-app code, an emailed code or a recovery code. Enforced in
+  /// `authorize()` for the admin scope, and on every request for admin
+  /// sessions already issued. Off by default: switching it on is refused
+  /// unless the administrator doing it is holding a session their own
+  /// security key established, which is the lockout prevention.
+  adminWebauthnRequired        Boolean @default(false)
   /// What this tenant calls the sign-in surfaces their staff see. Null means
   /// Syntra's own name, which is the right default for a tenant that has not
   /// thought about it — an empty header is worse than somebody else's brand.

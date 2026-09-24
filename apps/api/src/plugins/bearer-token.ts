@@ -27,6 +27,11 @@ import type { RequestPrincipal } from './require-session.js';
  *   `token.manage` would issue a second token, and revoking the first would
  *   leave the second working with nobody having any reason to look for it.
  *   Minting a machine credential is a thing a person does.
+ * - The TENANT-WIDE session revoke — it demands step-up, a freshly elevated
+ *   administrative session, and a token cannot elevate. Letting one through
+ *   would make a single leaked bearer credential a button that signs every
+ *   person in the organization out, which is a denial of service on demand
+ *   rather than an incident-response tool.
  */
 export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/auth',
@@ -34,6 +39,7 @@ export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/admin/users/:id/password',
   '/api/admin/users/:id/password-setup',
   '/api/admin/users/:id/tokens',
+  '/api/admin/sessions/revoke',
 ];
 
 export function routeRefusesTokens(routePattern: string | undefined): boolean {

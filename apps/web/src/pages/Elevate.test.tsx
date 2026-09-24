@@ -177,6 +177,19 @@ describe('Elevate', () => {
     );
   });
 
+  it('says a security key is required rather than that the password was wrong', async () => {
+    // The password was right. "Incorrect password" would send an
+    // administrator to retype one that is correct.
+    arrange(problem('security-key-required', 403));
+    renderElevate();
+    await screen.findByText('portal:directory.read');
+    await submit();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/requires a security key/i);
+    expect(alert).not.toHaveTextContent(/incorrect/i);
+  });
+
   it('sends the password to the elevate endpoint', async () => {
     const fetchMock = arrange(json(ADMIN));
     renderElevate();

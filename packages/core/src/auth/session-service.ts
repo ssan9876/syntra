@@ -5,20 +5,115 @@ import { currentTenant } from '../tenant-context.js';
 
 export type SessionScope = 'portal' | 'admin';
 
+const MINUTE_MS = 60 * 1000;
+
 /**
+ * How long a session of each scope may live, and what else it must satisfy,
+ * as the tenant has configured it.
+ *
  * Administrative sessions expire sooner in both senses. This is the
  * server-side half of running one web application for two audiences: an
- * elevated session is short-lived by construction, not by convention.
+ * elevated session is short-lived by construction, not by convention. The
+ * numbers used to be constants here; they are now the tenant's, within the
+ * platform bounds `SESSION_POLICY_BOUNDS` sets and the database's CHECK
+ * constraints repeat, and their defaults are the constants they replaced —
+ * portal 60 minutes idle / 12 hours absolute, admin 15 minutes / 2 hours.
  */
-const ABSOLUTE_LIFETIME_MS: Record<SessionScope, number> = {
-  portal: 12 * 60 * 60 * 1000,
-  admin: 2 * 60 * 60 * 1000,
-};
+export interface SessionPolicy {
+  idleMs: Record<SessionScope, number>;
+  absoluteMs: Record<SessionScope, number>;
+  /**
+   * An administrative session is only live if WebAuthn established it.
+   *
+   * Read on every request, not only at elevation. Turning the requirement on
+   * after an incident is precisely when an administrator needs the sessions
+   * that were minted with an authenticator-app code to stop working, and
+   * "the next elevation will need a key" is two hours too late for that.
+   */
+  adminWebauthnRequired: boolean;
+}
 
-const IDLE_TIMEOUT_MS: Record<SessionScope, number> = {
-  portal: 60 * 60 * 1000,
-  admin: 15 * 60 * 1000,
-};
+/**
+ * The tenant's session policy, read from the tenant row.
+ *
+ * One indexed primary-key read. Every reader below pays it once per call —
+ * `listSessionsForUser` once for the whole list, not per row.
+ */
+export async function readSessionPolicy(tx: TenantClient): Promise<SessionPolicy> {
+  const tenantId = await currentTenant(tx);
+  const tenant = await tx.tenant.findUniqueOrThrow({
+    where: { id: tenantId },
+    select: {
+      portalSessionIdleMinutes: true,
+      portalSessionAbsoluteMinutes: true,
+      adminSessionIdleMinutes: true,
+      adminSessionAbsoluteMinutes: true,
+      adminWebauthnRequired: true,
+    },
+  });
+  return {
+    idleMs: {
+      portal: tenant.portalSessionIdleMinutes * MINUTE_MS,
+      admin: tenant.adminSessionIdleMinutes * MINUTE_MS,
+    },
+    absoluteMs: {
+      portal: tenant.portalSessionAbsoluteMinutes * MINUTE_MS,
+      admin: tenant.adminSessionAbsoluteMinutes * MINUTE_MS,
+    },
+    adminWebauthnRequired: tenant.adminWebauthnRequired,
+  };
+}
+
+/**
+ * How recently an administrative session must have been established for an
+ * action that demands step-up.
+ *
+ * Step-up here is recency of a full elevation, the model sometimes called
+ * "sudo mode": elevation re-enters `authorize()` with the password and every
+ * factor the tenant's floor, policy and phishing-resistance setting demand,
+ * so a session minted in the last ten minutes IS a fresh strong
+ * authentication. Re-verifying a factor inline would need a second, parallel
+ * route to an allow — the thing this codebase has spent a long time removing
+ * — and would still not re-check the password.
+ *
+ * Ten minutes: long enough to elevate, read what you are about to do and do
+ * it; short enough that a console left open after lunch cannot sign the whole
+ * tenant out.
+ */
+export const STEP_UP_MAX_AGE_MS = 10 * MINUTE_MS;
+
+/** Whether this session counts as a fresh step-up. */
+export function isRecentElevation(
+  session: { scope: SessionScope; createdAt: Date },
+  now: number = Date.now(),
+): boolean {
+  return (
+    session.scope === 'admin' &&
+    now - session.createdAt.getTime() <= STEP_UP_MAX_AGE_MS
+  );
+}
+
+/**
+ * The moment a session stops being good on age alone, under the CURRENT
+ * policy.
+ *
+ * The earlier of two instants: the expiry stamped on the row at issue, and
+ * issue time plus today's absolute lifetime. The first means lengthening the
+ * policy never extends a session already issued — its cookie was written with
+ * the old expiry and will not come back after it anyway, and a session that
+ * quietly outlived the lifetime it was granted under would be a surprise to
+ * whoever granted it. The second means SHORTENING takes effect at once: a
+ * tenant that drops admin sessions from two hours to thirty minutes has not
+ * got ninety minutes of old, longer sessions still running.
+ */
+function effectiveExpiry(
+  row: { scope: string; createdAt: Date; absoluteExpiresAt: Date },
+  policy: SessionPolicy,
+): Date {
+  const scope = row.scope as SessionScope;
+  const byPolicy = row.createdAt.getTime() + policy.absoluteMs[scope];
+  return new Date(Math.min(row.absoluteExpiresAt.getTime(), byPolicy));
+}
 
 /**
  * Only the digest is stored. A leaked database gives an attacker hashes, not
@@ -122,7 +217,8 @@ export async function createSession(
   const tenantId = await currentTenant(tx);
   const token = randomBytes(32).toString('base64url');
   const { userId, scope, satisfiedFactor } = decision;
-  const absoluteExpiresAt = new Date(Date.now() + ABSOLUTE_LIFETIME_MS[scope]);
+  const policy = await readSessionPolicy(tx);
+  const absoluteExpiresAt = new Date(Date.now() + policy.absoluteMs[scope]);
 
   await tx.session.create({
     data: {
@@ -167,17 +263,35 @@ interface SessionRow {
  * User. One extra indexed lookup per authenticated request is the price of
  * offboarding taking effect at the next request instead of at the next
  * expiry.
+ *
+ * The lifetimes and the phishing-resistance requirement are the tenant's
+ * CURRENT policy, passed in, not whatever applied when the row was written —
+ * see `effectiveExpiry` for why that is the direction that matters.
  */
 async function isLive(
   tx: TenantClient,
   row: SessionRow,
   now: number,
+  policy: SessionPolicy,
 ): Promise<boolean> {
   if (row.revokedAt) return false;
-  if (row.absoluteExpiresAt.getTime() <= now) return false;
+  if (effectiveExpiry(row, policy).getTime() <= now) return false;
 
   const scope = row.scope as SessionScope;
-  if (now - row.lastSeenAt.getTime() > IDLE_TIMEOUT_MS[scope]) return false;
+  if (now - row.lastSeenAt.getTime() > policy.idleMs[scope]) return false;
+
+  // An administrative session that a code, not a key, established. Only the
+  // admin scope: the requirement is about the console, and a portal session
+  // authorises nothing the policy is protecting. `authorize()` refuses to
+  // MINT such a session while the policy is on; this ends the ones minted
+  // before it was switched on.
+  if (
+    scope === 'admin' &&
+    policy.adminWebauthnRequired &&
+    row.satisfiedFactor !== 'webauthn'
+  ) {
+    return false;
+  }
 
   const user = await tx.user.findUnique({ where: { id: row.userId } });
   if (!user || user.status !== 'active') return false;
@@ -209,7 +323,7 @@ export async function resolveSession(
   if (!row) return null;
 
   const now = Date.now();
-  if (!(await isLive(tx, row, now))) return null;
+  if (!(await isLive(tx, row, now, await readSessionPolicy(tx)))) return null;
 
   await tx.session.update({
     where: { id: row.id },
@@ -235,7 +349,9 @@ export async function readSession(
 ): Promise<ResolvedSession | null> {
   const row = await tx.session.findUnique({ where: { id: sessionId } });
   if (!row) return null;
-  if (!(await isLive(tx, row, Date.now()))) return null;
+  if (!(await isLive(tx, row, Date.now(), await readSessionPolicy(tx)))) {
+    return null;
+  }
   return toResolved(row);
 }
 
@@ -276,6 +392,7 @@ export async function listSessionsForUser(
   userId: string,
 ): Promise<SessionSummary[]> {
   const now = Date.now();
+  const policy = await readSessionPolicy(tx);
   const rows = await tx.session.findMany({
     where: { userId, revokedAt: null },
     orderBy: { createdAt: 'desc' },
@@ -283,7 +400,7 @@ export async function listSessionsForUser(
 
   const live: SessionSummary[] = [];
   for (const row of rows) {
-    if (!(await isLive(tx, row, now))) continue;
+    if (!(await isLive(tx, row, now, policy))) continue;
     live.push({
       id: row.id,
       scope: row.scope as SessionScope,
@@ -292,7 +409,11 @@ export async function listSessionsForUser(
       userAgent: row.userAgent,
       createdAt: row.createdAt,
       lastSeenAt: row.lastSeenAt,
-      absoluteExpiresAt: row.absoluteExpiresAt,
+      // The expiry that will actually apply, not the one stamped at issue. A
+      // list that said "expires in 9 hours" about a session the shortened
+      // policy will end in one would be the inventory lying about the thing
+      // it exists to show.
+      absoluteExpiresAt: effectiveExpiry(row, policy),
     });
   }
   return live;
@@ -381,6 +502,34 @@ export async function revokeAllForUserExcept(
 ): Promise<number> {
   const { count } = await tx.session.updateMany({
     where: { userId, revokedAt: null, id: { not: sessionId } },
+    data: { revokedAt: new Date() },
+  });
+  return count;
+}
+
+/**
+ * Every session of ONE scope for this user, optionally sparing one. Used by
+ * the tenant-wide revoke when it is narrowed to administrative sessions.
+ *
+ * A sibling rather than a flag on the two above. Their docstrings are about
+ * a caller ending the wrong set, and a function whose name says which set it
+ * ends is harder to misuse than one whose options do.
+ *
+ * Not exported from the package either. See `revokeAllForUser` above.
+ */
+export async function revokeScopeForUser(
+  tx: TenantClient,
+  userId: string,
+  scope: SessionScope,
+  exceptSessionId?: string,
+): Promise<number> {
+  const { count } = await tx.session.updateMany({
+    where: {
+      userId,
+      scope,
+      revokedAt: null,
+      ...(exceptSessionId ? { id: { not: exceptSessionId } } : {}),
+    },
     data: { revokedAt: new Date() },
   });
   return count;
