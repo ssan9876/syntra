@@ -67,7 +67,7 @@ export const evidencePackBody = z.object({
   kind: z.enum(['campaign', 'report', 'period']),
   snapshotId: z.string().uuid().optional(),
   campaignId: z.string().uuid().optional(),
-  scope: z.record(z.unknown()).default({}),
+  scope: z.record(z.string(), z.unknown()).default({}),
 });
 
 export const findingQuery = z.object({
@@ -200,9 +200,9 @@ export const createCampaignBody = z.object({
   description: z.string().nullable().default(null),
   scope: campaignScopeInput,
   reviewerSelector: z.string().min(1),
-  reviewerConfig: z.record(z.unknown()).default({}),
+  reviewerConfig: z.record(z.string(), z.unknown()).default({}),
   fallbackSelector: z.string().min(1),
-  fallbackConfig: z.record(z.unknown()).default({}),
+  fallbackConfig: z.record(z.string(), z.unknown()).default({}),
   ownerPersonId: z.string().uuid(),
   opensAt: z.coerce.date(),
   dueAt: z.coerce.date(),
@@ -219,9 +219,9 @@ export const previewScopeBody = z.object({
 export const previewReviewersBody = z.object({
   scope: campaignScopeInput,
   reviewerSelector: z.string().min(1),
-  reviewerConfig: z.record(z.unknown()).default({}),
+  reviewerConfig: z.record(z.string(), z.unknown()).default({}),
   fallbackSelector: z.string().min(1),
-  fallbackConfig: z.record(z.unknown()).default({}),
+  fallbackConfig: z.record(z.string(), z.unknown()).default({}),
   snapshotId: z.string().uuid().optional(),
 });
 

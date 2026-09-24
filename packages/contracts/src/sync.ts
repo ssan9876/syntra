@@ -57,7 +57,7 @@ export const cronExpression = z
 export const createSourceRequest = z
   .object({
     name: z.string().min(1).max(256),
-    config: z.record(z.unknown()),
+    config: z.record(z.string(), z.unknown()),
     bindPassword: z.string().min(1).max(1024),
     schedule: cronExpression.optional(),
     autoApply: z.boolean().optional(),
@@ -99,7 +99,7 @@ export const createSourceRequest = z
 export const updateSourceRequest = z
   .object({
     name: z.string().min(1).max(256).optional(),
-    config: z.record(z.unknown()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
     bindPassword: z.string().min(1).max(1024).optional(),
     schedule: cronExpression.nullable().optional(),
     autoApply: z.boolean().optional(),
@@ -203,7 +203,7 @@ export type SyncRunSummary = z.infer<typeof syncRunSummary>;
  */
 export const testConnectionRequest = z
   .object({
-    config: z.record(z.unknown()),
+    config: z.record(z.string(), z.unknown()),
     bindPassword: z.string().min(1).max(1024).optional(),
     sourceId: z.string().uuid().optional(),
   })

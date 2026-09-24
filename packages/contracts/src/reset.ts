@@ -20,7 +20,7 @@ export const resetCompleteRequest = z.object({
       }),
       z.object({
         type: z.literal("webauthn"),
-        assertion: z.record(z.unknown()),
+        assertion: z.record(z.string(), z.unknown()),
       }),
     ])
     .optional(),
