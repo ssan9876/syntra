@@ -1,5 +1,5 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { prisma, withTenant } from '@syntra/db';
+import { prisma, TENANT_DELETED_STATUS, withTenant } from '@syntra/db';
 import {
   applyAutomateSchedules,
   applyGovernSchedules,
@@ -102,7 +102,9 @@ export async function scheduleBackgroundWork(
 
   let tenants;
   try {
-    tenants = await prisma.tenant.findMany();
+    // Not the tombstones of erased tenants: binding to one is refused, and a
+    // schedule registered for one would fire against nothing, forever.
+    tenants = await prisma.tenant.findMany({ where: { status: { not: TENANT_DELETED_STATUS } } });
   } catch (cause) {
     logger.error(
       { err: cause },

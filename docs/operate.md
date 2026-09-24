@@ -296,6 +296,10 @@ To restore from a CronJob backup:
 Rehearse this before you need it. `syntra-backup verify` shows the shape of
 a restore into a scratch database.
 
+A backup is also the one place an erased tenant survives. How long, and what
+to do before restoring one older than a deletion, is in
+[Deleted tenants and backups](#deleted-tenants-and-backups).
+
 ## Metrics
 
 `GET /metrics`, in Prometheus text exposition, authenticated by a bearer token.
@@ -457,6 +461,14 @@ Two deliberate exceptions:
   the same reason, and because a cascade could not be undone by reactivating
   the parent.
 
+And one deliberate exception to the rule itself:
+
+- **A whole tenant can be erased.** A customer who leaves is owed the
+  opposite of a deactivation: their data gone, and proof that it went. That
+  is the one path in the product that deletes directory objects wholesale,
+  and it is built to be hard to reach — see [Tenant deletion](#tenant-deletion).
+  Nothing inside a tenant that is staying gains a Delete from it.
+
 Rows owned by a directory source cannot be deactivated or edited here at all.
 The next sync run reads them as present and puts them back, so the console
 says who owns them rather than offering a control that silently reverts.
@@ -466,6 +478,113 @@ waiting for a session to expire — a user's status is re-read on every
 request, so deactivating an account, from the console or from a directory
 sync, ends every session it holds at once. Everything else about policy
 timing is in [Configure, "What this slice does not do"](configure.md#what-this-slice-does-not-do).
+
+## Tenant deletion
+
+**Settings → Offboarding**, `tenant.manage` only, in this order — the server
+refuses any step taken out of it:
+
+1. **Assess.** A read-only preflight: record counts, active legal holds,
+   unresolved lifecycle operations, and the tenant's *data revision* — a
+   SHA-256 over exactly what an export contains. The result is digest-bound
+   and stored as a permanent audit receipt.
+2. **Export.** The portable JSON artifact (no credential material). Its
+   digest covers the file as downloaded, timestamps included, so it can be
+   recomputed from the file; its receipt records the same data revision.
+3. **Request.** Names the assessment and the export by digest, with a reason
+   of at least 20 characters. Refused if the assessment reported blockers, if
+   a legal hold is active or lifecycle work unresolved *now*, if the export was
+   not taken after the assessment, or if the tenant's data no longer hashes to
+   the revision both recorded — somebody edited a person, a group, a mapping,
+   so the export is no longer a complete copy. Reassess and export again. One
+   open request per tenant.
+4. **Approve.** A *different* administrator — the database rejects an
+   approval by the requester, whatever the code above it does — from an
+   administrative session minted in the last 15 minutes (sign in again to
+   step up; the tenant's MFA-for-administration rule applies to that sign-in).
+   Within 72 hours of the request, or the request expires. The checks in
+   step 3 run again.
+5. **Cooling off, 24 hours.** Long enough for somebody who did not know — the
+   customer's contact, a colleague watching the audit feed — to see the
+   approval and cancel it. Anyone with `tenant.manage` can cancel an open
+   request, the requester included; stopping needs no second pair of eyes.
+6. **Execute.** Within seven days after cooling off, from a fresh session,
+   typing `DELETE`. Every check runs a third time inside the same transaction
+   that erases, so nothing can change between the last check and the first
+   DELETE. A request whose data went stale is *invalidated* and one past its
+   window *expired*; neither can be revived.
+
+Machine tokens are refused on every route of this flow. Every refusal is
+itself an audit event.
+
+### What execution does
+
+In one transaction, holding the tenant's binding lock **exclusively** — it
+waits for every transaction already working in the tenant and holds off every
+new one; afterwards they find the tombstone and are refused
+(`TenantRetiredError`):
+
+- **Crypto-erases the vault.** Each secret's wrapped data key, nonce, tag and
+  ciphertext are overwritten with random bytes, then the row is deleted.
+- **Removes the tenant's pg-boss schedules and queued jobs**, whose payloads
+  name the tenant. A job already running is refused at binding and finishes
+  quietly rather than retrying.
+- **Deletes every row in every table with a `tenantId`**, children before
+  parents. The table list and order are read from the database catalog at
+  execution time, so a table added later is erased without anybody updating a
+  list. The two append-only decision tables (`ApprovalDecision`,
+  `CampaignDecision`) have their no-delete rules disabled inside the
+  transaction and re-enabled before it commits; while it runs, every tenant's
+  approval and review decisions wait on that lock.
+- **Leaves a tombstone.** The `Tenant` row keeps its id (so it is never
+  reused), becomes `Deleted tenant` / `deleted-<id>`, status `deleted`, with
+  its hostnames released and branding removed. It no longer resolves.
+- **Returns the receipt**: tenant id, request id, assessment and export
+  digests, data revision, requester, approver and executor ids, timestamps,
+  per-table row counts, secrets erased, schedules and jobs removed. No names,
+  no addresses, no reason text. Download it from the console at once: the
+  tenant no longer serves the page that showed it.
+
+### What is retained, and why
+
+| Kept | Why |
+| --- | --- |
+| `Tenant` tombstone | Holds the id against reuse; the rows below reference it. |
+| The completed `TenantDeletionRequest` | It *is* the receipt. Its `reason` is cleared on completion; earlier cancelled or expired requests are erased. |
+| `AuditEvent`, `AuditCheckpoint`, `AuditChainCheck`, `AuditAnchor` | The audit record. |
+
+The audit record is kept on purpose, and consistently with retention.
+`audit_no_delete` makes audit events immutable to the application, and the
+retention job only ever *counts* eligible events: they leave through the
+database-owner archive-and-prune procedure, at or before a verified
+checkpoint, once the tenant's audit retention period ends. Tenant deletion
+follows that rule instead of inventing a second way to delete audit history —
+an application path that could erase a tenant's audit log is the first thing
+an intruder holding the application's credentials would use. The completion
+event is the last link in the tenant's chain, which still verifies. Audit
+payloads can name people (a login in an event, the request's reason), so the
+retained record is personal data until that archive-and-prune runs: set the
+audit retention period to what your obligations require and run the procedure
+for deleted tenants when it elapses. An operator can read the stored receipt
+with `readTenantDeletionReceipt(tenantId)`.
+
+### Deleted tenants and backups
+
+Erasure reaches the live database only. Every backup taken before it still
+holds the tenant in full, including wrapped data keys that `MASTER_KEY` can
+still open. The residual exposure therefore ends when the **last backup taken
+before the deletion expires**: with the default `SYNTRA_BACKUP_KEEP=7` daily
+backups that is seven days, plus however long your off-host copies are kept —
+that retention, not this tool's, is usually the binding one. Record the
+completion date against your backup register and confirm the off-host copies
+age out.
+
+**Restoring a backup older than a deletion brings the tenant back**, active,
+with its data. Before putting such a restore into service, check the receipts
+of deletions completed after the backup was taken and run the deletion again
+for each tenant (the full assess → export → request → approve → execute path;
+the restored tenant has no record of the earlier one). Keep the downloaded
+receipts outside the backup set so they survive the restore that needs them.
 
 ## Continuous integration
 

@@ -18,7 +18,20 @@ import {
   updateTenant,
   assessTenantOffboarding,
   createTenantDataExport,
+  approveTenantDeletion,
+  cancelTenantDeletion,
+  executeTenantDeletion,
+  getTenantDeletionState,
+  requestTenantDeletion,
+  TenantDeletionRefusedError,
+  TENANT_DELETION_APPROVAL_WINDOW_MS,
+  TENANT_DELETION_COOLING_OFF_MS,
+  TENANT_DELETION_EXECUTION_WINDOW_MS,
+  TENANT_DELETION_REASON_MIN_LENGTH,
+  TENANT_DELETION_STEP_UP_MAX_AGE_MS,
+  type TenantDeletionRequestRow,
 } from '@syntra/core';
+import { z } from 'zod';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -60,6 +73,70 @@ export async function registerAdminTenantRoutes(
         .header('content-disposition', `attachment; filename="syntra-tenant-${request.tenantId}.json"`)
         .header('x-syntra-export-digest', artifact.digest)
         .send(artifact);
+    },
+  );
+
+  // ---- Tenant deletion: request, four-eyes approval, execution. ----------
+  //
+  // Every step is `tenant.manage`, and none accepts a machine token (see
+  // TOKEN_DENIED_ROUTES): erasing a tenant is a thing people decide. Approval
+  // and execution also need a FRESH administrative session -- its creation
+  // time is the step-up evidence core checks and records.
+
+  app.get(
+    '/tenant/deletion',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => ({
+      request: presentDeletion(await getTenantDeletionState(request.tenantId)),
+      viewerUserId: request.session.userId,
+      policy: DELETION_POLICY,
+    }),
+  );
+
+  app.post(
+    '/tenant/deletion/requests',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const body = deletionRequestBody.parse(request.body);
+      return presentDeletion(await refusalsAsProblems(() => requestTenantDeletion(request.tenantId, {
+        actorUserId: request.session.userId, ...body,
+      })));
+    },
+  );
+
+  app.post(
+    '/tenant/deletion/requests/:id/approve',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const { id } = deletionIdParam.parse(request.params);
+      return presentDeletion(await refusalsAsProblems(() => approveTenantDeletion(request.tenantId, id, {
+        actorUserId: request.session.userId, stepUpAt: request.session.createdAt,
+      })));
+    },
+  );
+
+  app.post(
+    '/tenant/deletion/requests/:id/cancel',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const { id } = deletionIdParam.parse(request.params);
+      return presentDeletion(await refusalsAsProblems(() => cancelTenantDeletion(request.tenantId, id, request.session.userId)));
+    },
+  );
+
+  /**
+   * The irreversible one. On success the tenant no longer resolves, this
+   * session is among the rows erased, and the response is the only copy of
+   * the receipt the caller will be handed -- so it is returned whole.
+   */
+  app.post(
+    '/tenant/deletion/requests/:id/execute',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => {
+      const { id } = deletionIdParam.parse(request.params);
+      return refusalsAsProblems(() => executeTenantDeletion(request.tenantId, id, {
+        actorUserId: request.session.userId, stepUpAt: request.session.createdAt,
+      }));
     },
   );
 
@@ -365,4 +442,48 @@ export async function registerAdminTenantRoutes(
       return saved;
     },
   );
+}
+
+const DIGEST = z.string().regex(/^[a-f0-9]{64}$/, 'a SHA-256 digest in lowercase hex');
+
+const deletionRequestBody = z.object({
+  assessmentDigest: DIGEST,
+  exportDigest: DIGEST,
+  reason: z.string().trim().min(TENANT_DELETION_REASON_MIN_LENGTH).max(2000),
+});
+
+const deletionIdParam = z.object({ id: z.string().uuid() });
+
+/** The windows the console explains; the server enforces them regardless. */
+const DELETION_POLICY = {
+  approvalWindowHours: TENANT_DELETION_APPROVAL_WINDOW_MS / 3_600_000,
+  coolingOffHours: TENANT_DELETION_COOLING_OFF_MS / 3_600_000,
+  executionWindowHours: TENANT_DELETION_EXECUTION_WINDOW_MS / 3_600_000,
+  stepUpMaxAgeMinutes: TENANT_DELETION_STEP_UP_MAX_AGE_MS / 60_000,
+  reasonMinLength: TENANT_DELETION_REASON_MIN_LENGTH,
+};
+
+/** The request as the console shows it. The stored receipt stays server-side. */
+function presentDeletion(row: TenantDeletionRequestRow | null) {
+  if (row === null) return null;
+  const { receipt: _receipt, tenantId: _tenantId, ...rest } = row;
+  return rest;
+}
+
+/**
+ * Refusals are the expected outcome of most calls here -- a hold, a stale
+ * export, the same administrator approving -- so each keeps its own code for
+ * the console to explain.
+ */
+async function refusalsAsProblems<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!(error instanceof TenantDeletionRefusedError)) throw error;
+    const status = error.code === 'not-found' ? 404
+      : error.code === 'four-eyes-required' || error.code === 'step-up-required' ? 403
+        : error.code === 'reason-required' ? 400
+          : 409;
+    throw new ProblemError(status, error.code, 'Tenant deletion refused', error.message);
+  }
 }

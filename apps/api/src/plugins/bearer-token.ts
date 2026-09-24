@@ -32,6 +32,10 @@ import type { RequestPrincipal } from './require-session.js';
  *   would make a single leaked bearer credential a button that signs every
  *   person in the organization out, which is a denial of service on demand
  *   rather than an incident-response tool.
+ * - The TENANT DELETION routes -- erasing a tenant is four-eyes and needs a
+ *   freshly stepped-up session as its evidence. A token has no step-up, and
+ *   an integration that could request or approve an erasure would make the
+ *   second pair of eyes a script.
  */
 export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/auth',
@@ -40,6 +44,7 @@ export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/admin/users/:id/password-setup',
   '/api/admin/users/:id/tokens',
   '/api/admin/sessions/revoke',
+  '/api/admin/tenant/deletion',
 ];
 
 export function routeRefusesTokens(routePattern: string | undefined): boolean {

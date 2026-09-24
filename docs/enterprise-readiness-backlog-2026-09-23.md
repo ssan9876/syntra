@@ -246,7 +246,11 @@ is retained; merged code alone is not enough.
     and deletion with identity verification, legal-hold refusal, and evidence.
 71. **Build — Tenant export and deletion.** Full portable export, two-person
     destructive approval, dependency preview, cryptographic erasure strategy,
-    completion proof, and backup-expiry treatment.
+    completion proof, and backup-expiry treatment. *Engineering slice done:*
+    revision-bound, four-eyes, cooling-off deletion with crypto-erasure,
+    tombstone and receipt ([Operate, Tenant deletion](operate.md#tenant-deletion)).
+    External validation (restore drill against a deleted tenant, legal review
+    of the retained audit record) remains.
 72. **Build — Audit-integrity monitoring.** Schedule chain/checkpoint
     verification, alert on gaps or mutation, and document independent evidence
     retention.

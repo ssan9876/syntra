@@ -8,6 +8,7 @@ export * from './tenant-context.js';
 export * from './tenant/tenant-service.js';
 export * from './tenant/brand-service.js';
 export * from './tenant/offboarding-service.js';
+export * from './tenant/deletion-service.js';
 export * from './health/readiness.js';
 export * from './health/incidents.js';
 export * from './update/update-service.js';
