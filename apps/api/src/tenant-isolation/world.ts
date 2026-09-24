@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { prisma, withTenant, type TenantClient } from '@syntra/db';
+import { hashBreakGlassCredential } from '@syntra/core';
 
 /**
  * ONE OF EVERYTHING, IN ONE TENANT.
@@ -85,6 +86,13 @@ export const KINDS = [
   'sweep',
   'approvalDelegation',
   'grant',
+  'privilegedChange',
+  'breakGlassUser',
+  'breakGlassActivation',
+  'credentialRotation',
+  'privacyCase',
+  'supportBundle',
+  'dsarBundle',
 ] as const;
 
 export type Kind = (typeof KINDS)[number];
@@ -94,7 +102,16 @@ export interface World {
   /** Lower-case, unique to the tenant, and inside every name the tenant owns. */
   tag: string;
   ids: Record<Kind, string>;
+  /**
+   * The emergency credential of `breakGlassUser`, whose login is
+   * `<tag>-breakglass`. Held so the probe can present one tenant's valid
+   * credential at the other tenant's host.
+   */
+  breakGlassCredential: string;
 }
+
+/** The break-glass credential seeded for a tenant: deterministic, never real. */
+export const breakGlassCredentialFor = (tag: string) => `syntra_bg_${tag}-probe-credential-0000000000000000`;
 
 const DAY = 86_400_000;
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -107,7 +124,7 @@ export async function createTenant(name: string, slug: string): Promise<string> 
 
 export async function seedWorld(tenantId: string, tag: string): Promise<World> {
   const ids = await withTenant(tenantId, (tx) => seed(tx, tenantId, tag), { timeoutMs: 60_000 });
-  return { tenantId, tag, ids };
+  return { tenantId, tag, ids, breakGlassCredential: breakGlassCredentialFor(tag) };
 }
 
 async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Record<Kind, string>> {
@@ -511,7 +528,95 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
     },
   });
 
+  // ---- privileged access, credentials, privacy -----------------------------------
+  const privilegedChange = await tx.privilegedChangeRequest.create({
+    data: {
+      tenantId,
+      changeClass: 'webhook_endpoint',
+      operation: 'webhook.update',
+      targetType: 'WebhookEndpoint',
+      targetId: webhook.id,
+      summary: `${tag} held change`,
+      proposed: { name: `${tag} proposed` },
+      baseRevision: digest(`${tag}-revision-change`),
+      reason: `${tag} needs this changed`,
+      requestedByUserId: user.id,
+      expiresAt: later,
+    },
+  });
+  // An emergency account needs a designator who is not itself.
+  const designator = await tx.user.create({
+    data: { tenantId, login: `${tag}-designator`, email: `${tag}-designator@${tag}.test`, displayName: `${tag} designator` },
+  });
+  const breakGlassUser = await tx.user.create({
+    data: { tenantId, login: `${tag}-breakglass`, email: `${tag}-breakglass@${tag}.test`, displayName: `${tag} emergency` },
+  });
+  await tx.breakGlassAccount.create({
+    data: {
+      tenantId,
+      userId: breakGlassUser.id,
+      credentialHash: hashBreakGlassCredential(breakGlassCredentialFor(tag)),
+      designatedByUserId: designator.id,
+    },
+  });
+  const activation = await tx.breakGlassActivation.create({
+    data: {
+      tenantId,
+      userId: breakGlassUser.id,
+      reason: `${tag} the directory is down and nobody can sign in`,
+      durationMinutes: 60,
+      activatesAt: later,
+    },
+  });
+  await tx.credentialRecord.create({
+    data: { tenantId, credentialKey: `target_secret.${target.id}`, kind: 'target_secret', note: `${tag} credential note` },
+  });
+  const rotation = await tx.credentialRotation.create({
+    data: {
+      tenantId,
+      systemKind: 'target',
+      systemId: target.id,
+      credentialKey: `target_secret.${target.id}`,
+      reason: `${tag} rotation`,
+    },
+  });
+  const privacyCase = await tx.privacyCase.create({
+    data: {
+      tenantId,
+      personId: person.id,
+      reference: `${tag}-dsar`,
+      requestTypes: ['access'],
+      reason: `${tag} asked for their data`,
+      receivedAt: now,
+      dueAt: later,
+      verificationMethod: 'document',
+      verificationAttestation: `${tag} passport checked`,
+      verifiedByUserId: user.id,
+      openedByUserId: user.id,
+    },
+  });
+  const supportBundle = await tx.dataExport.create({
+    data: { tenantId, kind: 'support_bundle', params: {}, format: 'json', requestedByUserId: user.id, ttlHours: 24 },
+  });
+  const dsarBundle = await tx.dataExport.create({
+    data: {
+      tenantId,
+      kind: 'dsar_bundle',
+      params: { caseId: privacyCase.id, personId: person.id },
+      format: 'json',
+      requestedByUserId: user.id,
+      ttlHours: 24,
+    },
+  });
+
   return {
+    privilegedChange: privilegedChange.id,
+    breakGlassUser: breakGlassUser.id,
+    breakGlassActivation: activation.id,
+    credentialRotation: rotation.id,
+    privacyCase: privacyCase.id,
+    supportBundle: supportBundle.id,
+    dsarBundle: dsarBundle.id,
     orgUnit: orgUnit.id,
     user: user.id,
     group: group.id,

@@ -100,8 +100,11 @@ export async function removeMember(
   tx: TenantClient,
   groupId: string,
   userId: string,
-): Promise<void> {
-  await tx.groupMembership.deleteMany({ where: { groupId, userId } });
+): Promise<number> {
+  // The count, so a caller can tell a removal from a no-op and audit only the
+  // first. See `revokeRole`.
+  const { count } = await tx.groupMembership.deleteMany({ where: { groupId, userId } });
+  return count;
 }
 
 export async function listMembers(tx: TenantClient, groupId: string) {

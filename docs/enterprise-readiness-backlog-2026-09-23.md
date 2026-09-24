@@ -199,7 +199,7 @@ is retained; merged code alone is not enough.
     for every API and background job path and prove reads and writes fail
     closed.
     **Implemented:** `apps/api/src/tenant-isolation/`. The suite seeds two
-    tenants with a real row of each of 55 kinds and walks the running route
+    tenants with a real row of each of 62 kinds and walks the running route
     table. It calls every id-bearing route under `/api/admin`, `/api/portal`,
     `/scim/v2` and `/saml` with the other tenant's ids: all parameters
     foreign, then one at a time. Every id-shaped body and query field is

@@ -119,6 +119,18 @@ export async function registerScimRoutes(
     });
   });
 
+  // `application/scim+json` IS THE SCIM MEDIA TYPE, and RFC 7644 §3.1 says a
+  // client sends it and a service provider accepts it. Fastify parses only
+  // `application/json` out of the box, so a conforming client -- Okta, Entra
+  // and OneLogin all send this -- was answered 415 on every create, replace
+  // and patch. Registered in this plugin's scope only, with Fastify's own JSON
+  // parser (the same prototype-poisoning protection as every other body).
+  app.addContentTypeParser(
+    'application/scim+json',
+    { parseAs: 'string' },
+    app.getDefaultJsonParser('error', 'error'),
+  );
+
   app.setNotFoundHandler((_request, reply) =>
     reply.code(404).type('application/scim+json').send({
       schemas: [SCIM_ERROR_SCHEMA],

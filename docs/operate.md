@@ -1227,7 +1227,9 @@ SYNTRA_TEST_WORKERS=2 pnpm exec vitest run apps/api/src/tenant-isolation
 It seeds two tenants with one real row of every major kind of object
 (`world.ts`: users, groups, org units, people, contracts, applications,
 sources, runs, targets, roles, tokens, webhooks, exports, campaigns, SoD
-rules, Automate requests and more, 55 kinds in all). It then acts as tenant
+rules, Automate requests, held privileged changes, break-glass accounts and
+activations, credential rotations, privacy cases, support and DSAR bundles
+and more, 62 kinds in all). It then acts as tenant
 A's administrator, with every permission, an elevated session and a machine
 token for SCIM, and walks the running route table (`app.routeCatalog`):
 
@@ -1248,13 +1250,22 @@ token for SCIM, and walks the running route table (`app.routeCatalog`):
 - **Every list route** is called bare and with its id filters set to B's ids.
 - **Every background job** the production scheduler registers is run with A's
   tenant and B's ids in its payload.
+- **Credentials and downloads.** A's session and token are refused at B's
+  host; B's user cannot sign in, and B's emergency (break-glass) account
+  cannot be activated, at A's host with B's correct secrets. A support bundle
+  and a DSAR access bundle are generated for A by the production export job,
+  downloaded, and searched for B.
+- **SCIM** requests are sent as `application/scim+json`, as a conforming IdP
+  sends them.
 
 After every call, the response must not contain B's tag or any B id that the
 request did not itself carry. After every write, B's rows must be
 byte-for-byte what they were (a per-table digest taken as B). A refused write
 must not have changed A's rows either (audit, session and token timestamps
-excepted). No row of A may hold one of B's ids in any id, text or array
-column. That last check is the one row-level security cannot give on its own:
+excepted), and must not have recorded a *success* audit event naming one of
+B's ids: a no-op that audits "removed" puts a false record in A's trail and,
+through it, B's ids into A's DSAR bundles. No row of A may hold one of B's ids
+in any id, text, array or JSON column. That last check is the one row-level security cannot give on its own:
 PostgreSQL checks a foreign key without applying RLS to the referenced table,
 so A's row can point at B's unless the code looked the id up first.
 

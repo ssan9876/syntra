@@ -507,7 +507,12 @@ export async function registerMfaRoutes(
         request.params,
       );
       const revoked = await request.db(async (tx) => {
-        await removeWebAuthnCredential(tx, request.session.userId, credentialId);
+        // A key that is not the caller's -- or not in this tenant -- is a 404.
+        // It was a 200 that audited `mfa.removed` and MAILED the caller that
+        // a security key had been removed, naming an id that was never theirs.
+        if ((await removeWebAuthnCredential(tx, request.session.userId, credentialId)) === 0) {
+          throw new ProblemError(404, 'not-found', 'No such security key');
+        }
         // Removing the last real factor takes the recovery codes with it. They
         // are the way back in when a factor is lost, which is why holding one
         // is a precondition of issuing them; leaving them behind here would

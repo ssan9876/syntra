@@ -74,6 +74,7 @@ let cookie: string;
 let bearer: string;
 let document: { paths: Record<string, Record<string, OpenApiOperation>> };
 const handlers = new Map<string, JobHandler<unknown>>();
+const fakeScheduler = createFakeScheduler();
 /** The last error a handler threw, so a 500 in the failure list says why. */
 let lastError: string | null = null;
 
@@ -84,7 +85,8 @@ interface OpenApiOperation {
 
 beforeAll(async () => {
   ctx = await buildTestApp({
-    scheduler: () => createFakeScheduler(),
+    // ONE fake, kept: the bundle tests read what the export routes enqueued.
+    scheduler: () => fakeScheduler,
     // The probe logs in a handful of times and makes several hundred calls.
     // Auth limits are the only ones a single caller could plausibly reach.
     env: { AUTH_RATE_LIMIT_MAX: '1000', AUTH_RATE_LIMIT_TENANT_MAX: '10000' },
@@ -217,15 +219,35 @@ const ECHO_TABLES = new Set(['AuditEvent']);
  */
 const OPAQUE_COLUMNS: ReadonlyMap<string, string> = new Map([
   [
-    'PersonProvisionReceipt.requestKey',
-    "The caller's idempotency key for a provisioning request: any uuid it likes, unique per person and target, never resolved to a row.",
-  ],
-  [
     'ResourceClassification.systemId',
     "A classification LABEL keyed by free text (a system may be Syntra itself). It only ever matches this tenant's own holdings, which cannot carry another tenant's ids.",
   ],
   ['ResourceClassification.resourceId', 'See ResourceClassification.systemId.'],
+  [
+    'DataExport.params',
+    "An export's request, kept verbatim as its record. An audit_log export's actor and target are SEARCH TERMS, matched under RLS, so another tenant's id matches nothing; a govern_access export's snapshotId is looked up before queueing (queueExportFor).",
+  ],
 ]);
+
+/**
+ * How many of A's audit events record a SUCCESS and mention one of B's ids.
+ *
+ * The audit table is excluded from the reference scan because a REFUSAL is
+ * audited with whatever id the caller sent. A success is different: it says
+ * something was done to that object. A refused or no-op call that audits a
+ * success naming B's role puts a false record in A's trail -- and, since the
+ * trail is part of a data-subject access bundle, ships B's ids in A's DSAR
+ * export. That is how the probe found `DELETE /roles/:id/assignments/:userId`.
+ */
+async function successAuditsNamingB(): Promise<number> {
+  const [row] = await withTenant(A.tenantId, (tx) =>
+    tx.$queryRawUnsafe<{ n: bigint }[]>(
+      `SELECT count(*) AS n FROM "AuditEvent" x WHERE x.outcome = 'success' AND x::text ~ $1`,
+      Object.values(B.ids).join('|'),
+    ),
+  );
+  return Number(row!.n);
+}
 
 let referenceSql: string | null = null;
 /**
@@ -240,13 +262,18 @@ async function referencesToB(): Promise<string[]> {
       SELECT table_name, column_name, data_type, udt_name FROM information_schema.columns
       WHERE table_schema = 'public'
         AND column_name NOT IN ('id', 'tenantId')
-        AND (data_type IN ('uuid', 'text', 'character varying')
+        AND (data_type IN ('uuid', 'text', 'character varying', 'jsonb')
              OR (data_type = 'ARRAY' AND udt_name IN ('_uuid', '_text')))`;
     referenceSql = cols
       .filter((c) => names.has(c.table_name) && !ECHO_TABLES.has(c.table_name))
       .filter((c) => !OPAQUE_COLUMNS.has(`${c.table_name}.${c.column_name}`))
       .map((c) =>
-        c.data_type === 'ARRAY'
+        c.data_type === 'jsonb'
+          ? // JSON has no foreign key at all -- `SodException.basisContractIds`
+            // held another tenant's contracts until the probe looked here. An
+            // id anywhere in the document counts.
+            `SELECT '${c.table_name}.${c.column_name} row ' || x."id"::text AS hit FROM "${c.table_name}" x WHERE x."${c.column_name}"::text ~ $2`
+          : c.data_type === 'ARRAY'
           ? `SELECT '${c.table_name}.${c.column_name} row ' || x."id"::text AS hit FROM "${c.table_name}" x WHERE x."${c.column_name}"::text[] && $1::text[]`
           : `SELECT '${c.table_name}.${c.column_name} row ' || x."id"::text AS hit FROM "${c.table_name}" x WHERE x."${c.column_name}"::text = ANY($1::text[])`,
       )
@@ -254,7 +281,7 @@ async function referencesToB(): Promise<string[]> {
   }
   const bIds = Object.values(B.ids);
   const rows = await withTenant(A.tenantId, (tx) =>
-    tx.$queryRawUnsafe<{ hit: string }[]>(referenceSql!, bIds),
+    tx.$queryRawUnsafe<{ hit: string }[]>(referenceSql!, bIds, bIds.join('|')),
   );
   return [...new Set(rows.map((row) => row.hit))];
 }
@@ -293,7 +320,8 @@ async function send(call: Call) {
     headers: {
       host: call.host ?? ctx.host,
       ...(scim ? { authorization: `Bearer ${bearer}` } : { cookie }),
-      ...(call.payload === undefined ? {} : { 'content-type': 'application/json' }),
+      // SCIM's own media type, as a conforming IdP sends it (RFC 7644 §3.1).
+      ...(call.payload === undefined ? {} : { 'content-type': scim ? 'application/scim+json' : 'application/json' }),
     },
     ...(call.payload === undefined ? {} : { payload: JSON.stringify(call.payload) }),
   });
@@ -309,7 +337,7 @@ function bodyFor(route: CatalogRoute, id: IdOf, own: IdOf, optionalIds = true): 
   if (override) return override(id, own);
   const schema = operationOf(route)?.requestBody?.content?.['application/json']?.schema;
   if (schema === undefined) return route.method === 'GET' || route.method === 'DELETE' ? undefined : {};
-  return sample(schema, (field) => id(kindOfField(field)), schema, '', 0, optionalIds);
+  return sample(schema, (field) => idForField(field, id), schema, '', 0, optionalIds);
 }
 
 /** The body with optional ids, and -- when it differs -- the body without them. */
@@ -319,12 +347,22 @@ function bodyVariants(route: CatalogRoute, id: IdOf, own: IdOf): unknown[] {
   return JSON.stringify(withIds) === JSON.stringify(without) ? [withIds] : [withIds, without];
 }
 
+/**
+ * The id a uuid field gets. An idempotency key is a uuid the CALLER invents
+ * and nothing resolves, so it gets a fresh one: B's id there would be B's id
+ * as a word, echoed into A's receipts and DSAR bundles, and would prove
+ * nothing about isolation.
+ */
+function idForField(field: string, id: IdOf): string {
+  return /requestKey|idempotencyKey/i.test(field) ? randomUUID() : id(kindOfField(field));
+}
+
 function queryFor(route: CatalogRoute, id: IdOf): Record<string, string> {
   const out: Record<string, string> = {};
   for (const parameter of operationOf(route)?.parameters ?? []) {
     if (parameter.in !== 'query') continue;
     if (!parameter.required && !hasUuid(parameter.schema)) continue;
-    const value = sample(parameter.schema, (field) => id(kindOfField(field)), parameter.schema, parameter.name);
+    const value = sample(parameter.schema, (field) => idForField(field, id), parameter.schema, parameter.name);
     if (value !== undefined && value !== null) out[parameter.name] = String(value);
   }
   return out;
@@ -344,7 +382,11 @@ const aId: IdOf = (kind) => A.ids[kind];
 function valuesFor(resolved: Resolution[], pick: (r: Resolution, index: number) => IdOf) {
   const values: Record<string, string> = {};
   resolved.forEach((r, index) => {
-    values[r.name] = 'fixed' in r ? r.fixed : pick(r, index)(r.kind);
+    if ('fixed' in r) values[r.name] = r.fixed;
+    else {
+      const id = pick(r, index)(r.kind);
+      values[r.name] = r.format ? r.format(id) : id;
+    }
   });
   return values;
 }
@@ -412,6 +454,7 @@ describe('tenant isolation: every route, tenant A calling with tenant B', () => 
       const ghostly = expectRefusal ? ghostOf(call) : null;
       const ghost = ghostly ? await send(ghostly.call) : null;
       const aBefore = expectRefusal && call.route.method !== 'GET' ? await fingerprintA() : null;
+      const auditBefore = aBefore === null ? 0 : await successAuditsNamingB();
       lastError = null;
       const res = await send(call);
       const status = res.statusCode;
@@ -440,6 +483,9 @@ describe('tenant isolation: every route, tenant A calling with tenant B', () => 
       if (aBefore !== null) {
         const changedA = diff(aBefore, await fingerprintA());
         if (changedA.length > 0) failures.push(`${label}: was refused but changed tenant A's ${changedA.join(', ')}`);
+        if ((await successAuditsNamingB()) > auditBefore) {
+          failures.push(`${label}: did nothing, but audited a SUCCESS naming one of B's ids`);
+        }
       }
       if (call.route.method !== 'GET') {
         const after = await fingerprintB();
@@ -528,6 +574,64 @@ describe('tenant isolation: every route, tenant A calling with tenant B', () => 
   }, 600_000);
 });
 
+describe('tenant isolation: what a tenant can download is only its own', () => {
+  /**
+   * The support bundle and the DSAR access bundle are the two artifacts that
+   * gather a great deal in one place, the first from operational state that is
+   * partly installation-wide. Each is generated for tenant A by the production
+   * job handler and then downloaded, and the plaintext must not contain B.
+   */
+  /** Every JSON path whose value mentions tenant B, with the row around it -- the failure says where. */
+  function whereB(value: unknown, path = '$', row: unknown = value): string[] {
+    if (typeof value === 'string') {
+      const hit = leaks(value, new Set());
+      return hit.length === 0 ? [] : [`${path}: ${hit.join(', ')} in ${JSON.stringify(row).slice(0, 400)}`];
+    }
+    if (value === null || typeof value !== 'object') return [];
+    const nextRow = Array.isArray(value) ? row : value;
+    return Object.entries(value).flatMap(([k, v]) => whereB(v, `${path}.${k}`, nextRow));
+  }
+
+  async function generateAndDownload(exportId: string): Promise<string> {
+    const generate = handlers.get('exports.generate');
+    if (generate === undefined) throw new Error('exports.generate is not registered');
+    await generate({ tenantId: A.tenantId, exportId });
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/admin/exports/${exportId}/download`,
+      headers: { host: ctx.host, cookie },
+    });
+    expect(res.statusCode, res.payload.slice(0, 300)).toBe(200);
+    return res.payload;
+  }
+
+  it('a support bundle carries nothing of another tenant', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/admin/exports',
+      headers: { host: ctx.host, cookie },
+      payload: { kind: 'support_bundle', params: {} },
+    });
+    expect(res.statusCode, res.payload).toBe(202);
+    const body = await generateAndDownload(res.json().export.id);
+    expect(body.length).toBeGreaterThan(0);
+    expect(leaks(body, new Set())).toEqual([]);
+  });
+
+  it('a data-subject access bundle carries nothing of another tenant', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/admin/privacy/cases/${A.ids.privacyCase}/access-bundle`,
+      headers: { host: ctx.host, cookie },
+      payload: {},
+    });
+    expect(res.statusCode, res.payload).toBe(202);
+    const body = await generateAndDownload(res.json().export.id);
+    expect(body).toContain(A.tag);
+    expect(whereB(JSON.parse(body))).toEqual([]);
+  });
+});
+
 describe('tenant isolation: the credential is bound to the tenant that issued it', () => {
   it('refuses A\'s administrative session at B\'s host', async () => {
     const res = await ctx.app.inject({ method: 'GET', url: '/api/admin/users', headers: { host: B_HOST, cookie } });
@@ -541,6 +645,37 @@ describe('tenant isolation: the credential is bound to the tenant that issued it
       expect(res.statusCode, url).toBe(401);
       expect(leaks(res.payload, new Set()), url).toEqual([]);
     }
+  });
+
+  it('does not activate B\'s emergency account at A\'s host, with B\'s correct credential', async () => {
+    const before = await fingerprintB();
+    const activate = (tag: string, credential: string) =>
+      ctx.app.inject({
+        method: 'POST',
+        url: '/api/auth/break-glass/activate',
+        headers: { host: ctx.host },
+        payload: {
+          login: `${tag}-breakglass`,
+          credential,
+          reason: 'probing whether an emergency credential crosses tenants',
+          durationMinutes: 30,
+        },
+      });
+    const res = await activate(B.tag, B.breakGlassCredential);
+    // The same refusal as an unknown login: A's host resolves A's tenant, and
+    // B's account does not exist there.
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBeLessThan(500);
+    expect(leaks(res.payload, new Set())).toEqual([]);
+    expect(diff(before, await fingerprintB())).toEqual([]);
+    // The control: A's own emergency credential IS accepted at A's host, so
+    // the refusal above is about the tenant and not a broken endpoint.
+    // (The seeded activation is still pending, so "already open" is the
+    // answer that proves the credential was recognised.)
+    const own = await activate(A.tag, A.breakGlassCredential);
+    expect(own.statusCode, own.payload).toBe(409);
+    expect(own.json().type).toMatch(/activation-open$/);
+    expect(res.json().type).not.toMatch(/activation-open$/);
   });
 
   it('does not sign B\'s user in at A\'s host, with B\'s correct password', async () => {
@@ -626,6 +761,34 @@ describe('tenant isolation: the defects this suite found stay fixed', () => {
     expect(kept.claim).not.toBeNull();
   });
 
+  it('refuses an onboarding that names another tenant\'s target before recording any operation', async () => {
+    const idempotencyKey = `probe-${randomUUID()}`;
+    const res = await as('POST', '/api/admin/lifecycle-operations/onboard', {
+      idempotencyKey,
+      person: { givenName: 'New', familyName: 'Starter' },
+      contract: { startDate: new Date().toISOString() },
+      targetIds: [B.ids.target],
+    });
+    expect(res.statusCode).toBe(404);
+    const recorded = await withTenant(A.tenantId, (tx) =>
+      tx.lifecycleOperation.findFirst({ where: { idempotencyKey } }),
+    );
+    // It used to be recorded first, with B's target in its input, and B's
+    // target then silently dropped from an onboarding reported as started.
+    expect(recorded).toBeNull();
+  });
+
+  it('does not audit, or mail, a removal that removed nothing', async () => {
+    const mailsBefore = ctx.mail.sent.length;
+    const auditsBefore = await successAuditsNamingB();
+    const res = await as('DELETE', `/api/auth/mfa/webauthn/${B.ids.webauthnCredential}`);
+    // It was a 200 that audited `mfa.removed` and mailed the caller that a
+    // security key had been removed -- naming B's key id.
+    expect(res.statusCode).toBe(404);
+    expect(ctx.mail.sent.length).toBe(mailsBefore);
+    expect(await successAuditsNamingB()).toBe(auditsBefore);
+  });
+
   it('skips an import change only under the run it belongs to', async () => {
     const res = await as('POST', `/api/admin/person-import-runs/${B.ids.personImportRun}/changes/${A.ids.personImportChange}/skip`);
     expect(res.statusCode).toBe(404);
@@ -705,6 +868,8 @@ const JOB_PAYLOADS: ReadonlyMap<string, () => Record<string, unknown>> = new Map
   ['govern.campaign.remind', () => ({ tenantId: A.tenantId })],
   ['govern.campaign.close', () => ({ tenantId: A.tenantId })],
   ['govern.exception.sweep', () => ({ tenantId: A.tenantId })],
+  ['privileged.access_sweep', () => ({ tenantId: A.tenantId })],
+  ['credentials.expiry_scan', () => ({ tenantId: A.tenantId })],
 ]);
 
 describe('tenant isolation: every background job, A\'s context with B\'s ids', () => {
