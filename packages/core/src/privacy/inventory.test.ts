@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { Prisma } from '@syntra/db';
+import { Prisma, prisma } from '@syntra/db';
 import { DATA_INVENTORY, type LinkKind } from './inventory.js';
 import { renderDataInventory } from './inventory-doc.js';
 
@@ -56,7 +56,18 @@ describe('the data inventory', () => {
     expect(problems).toEqual([]);
   });
 
-  it('gives treatments only on pseudonymised tables, only to personal fields of a type they fit', () => {
+  it('gives treatments only on pseudonymised tables, only to personal fields of a type they fit', async () => {
+    // Array columns from the catalog: Prisma 7's runtime DMMF no longer says
+    // `isList`, so reading it there made the list check below never fire.
+    const arrays = new Set(
+      (
+        await prisma.$queryRaw<{ table_name: string; column_name: string }[]>`
+          SELECT table_name, column_name FROM information_schema.columns
+          WHERE table_schema = current_schema() AND data_type = 'ARRAY'`
+      ).map((r) => `${r.table_name}.${r.column_name}`),
+    );
+    // The check below has teeth only while there are list columns to find.
+    expect(arrays.size).toBeGreaterThan(0);
     const problems: string[] = [];
     for (const model of models) {
       const entry = DATA_INVENTORY[model.name]!;
@@ -73,7 +84,7 @@ describe('the data inventory', () => {
         if ((kind === 'pseudonym' || kind === 'pseudonym-email' || kind === 'literal') && column.type !== 'String') {
           problems.push(`${model.name}.${field.name}: ${kind} on a ${column.type} column`);
         }
-        if (kind !== 'clear' && column.isList) problems.push(`${model.name}.${field.name}: only a list can be cleared`);
+        if (kind !== 'clear' && arrays.has(`${model.name}.${field.name}`)) problems.push(`${model.name}.${field.name}: only a list can be cleared`);
       }
     }
     expect(problems).toEqual([]);

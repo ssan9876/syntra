@@ -1,4 +1,4 @@
-import { Prisma, type TenantClient } from '@syntra/db';
+import type { TenantClient } from '@syntra/db';
 import { OUTBOX_MAX_ATTEMPTS } from '../automate/jobs.js';
 import { subjectLinkedTables, type ErasureTreatment, type TableEntry } from './inventory.js';
 import { delegateFor, subjectWhere, type SubjectIds } from './subject-data.js';
@@ -155,14 +155,26 @@ export interface ErasureCounts {
   bundlesErased: number;
 }
 
-type ColumnMeta = { type: string; isRequired: boolean; isList: boolean };
+/**
+ * Nullability and array-ness of one table's columns, read from the database.
+ *
+ * Not from Prisma's runtime DMMF: Prisma 7 trimmed it to name, kind and type,
+ * so `isRequired` and `isList` read as undefined and every column looked
+ * optional -- clearing a required JSON column then wrote NULL and failed its
+ * NOT NULL constraint. The catalog is the authority on what the column
+ * accepts, whichever ORM version wrote the schema.
+ */
+type ColumnMeta = { nullable: boolean; isArray: boolean; dataType: string };
 
-const COLUMN_META: Map<string, Map<string, ColumnMeta>> = new Map(
-  Prisma.dmmf.datamodel.models.map((model) => [
-    model.name,
-    new Map(model.fields.filter((f) => f.kind !== 'object').map((f) => [f.name, { type: f.type, isRequired: f.isRequired, isList: f.isList }])),
-  ]),
-);
+async function columnMeta(tx: TenantClient, model: string): Promise<Map<string, ColumnMeta>> {
+  const rows = await tx.$queryRaw<{ column_name: string; is_nullable: string; data_type: string }[]>`
+    SELECT column_name, is_nullable, data_type
+    FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = ${model}`;
+  return new Map(
+    rows.map((r) => [r.column_name, { nullable: r.is_nullable === 'YES', isArray: r.data_type === 'ARRAY', dataType: r.data_type }]),
+  );
+}
 
 const quoteIdent = (name: string) => {
   if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name)) throw new Error(`refusing to quote identifier ${name}`);
@@ -174,8 +186,14 @@ const quoteIdent = (name: string) => {
  * identifiers from the Prisma schema are interpolated, and only after
  * `quoteIdent` has checked them.
  */
-function assignment(model: string, field: string, treatment: ErasureTreatment, params: unknown[]): string {
-  const meta = COLUMN_META.get(model)?.get(field);
+function assignment(
+  model: string,
+  field: string,
+  treatment: ErasureTreatment,
+  params: unknown[],
+  columns: Map<string, ColumnMeta>,
+): string {
+  const meta = columns.get(field);
   if (meta === undefined) throw new Error(`${model}.${field} is not a column`);
   const column = quoteIdent(field);
   switch (treatment.kind) {
@@ -187,20 +205,20 @@ function assignment(model: string, field: string, treatment: ErasureTreatment, p
       params.push(treatment.value);
       return `${column} = $${params.length}`;
     case 'clear':
-      if (!meta.isRequired || meta.isList) {
-        return meta.isList ? `${column} = '{}'` : `${column} = NULL`;
-      }
-      if (meta.type === 'Json') return `${column} = '{}'::jsonb`;
-      if (meta.type === 'String') return `${column} = ''`;
-      throw new Error(`${model}.${field}: a required ${meta.type} cannot be cleared`);
+      if (meta.isArray) return `${column} = '{}'`;
+      if (meta.nullable) return `${column} = NULL`;
+      if (meta.dataType === 'jsonb' || meta.dataType === 'json') return `${column} = '{}'::jsonb`;
+      if (meta.dataType === 'text' || meta.dataType === 'character varying') return `${column} = ''`;
+      throw new Error(`${model}.${field}: a required ${meta.dataType} cannot be cleared`);
   }
 }
 
 async function pseudonymizeRows(tx: TenantClient, entry: TableEntry, rowIds: string[]): Promise<number> {
   const params: unknown[] = [rowIds];
+  const columns = await columnMeta(tx, entry.model);
   const sets = entry.fields
     .filter((f) => f.treatment !== null)
-    .map((f) => assignment(entry.model, f.name, f.treatment!, params));
+    .map((f) => assignment(entry.model, f.name, f.treatment!, params, columns));
   const sql = `UPDATE ${quoteIdent(entry.model)} SET ${sets.join(', ')} WHERE "id" = ANY($1::uuid[])`;
   return tx.$executeRawUnsafe(sql, ...params);
 }
