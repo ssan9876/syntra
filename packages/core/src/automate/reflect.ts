@@ -62,6 +62,10 @@ export const TERMINAL_ACTION_STATUSES: readonly string[] = [
   'failed',
   'skipped',
   'conflict',
+  // Never attempted: the adapter release is not certified for the write, or
+  // the target does not advertise it. The item fails with that reason as its
+  // message, and a later run converges once the capability exists.
+  'refused',
 ];
 
 const NON_TERMINAL_RUN_STATUSES = ['running', 'previewed', 'blocked', 'applying'];

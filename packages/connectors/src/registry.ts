@@ -68,6 +68,46 @@ export function targetConnectorFor(type: string): TargetConnector<never> {
   return CONNECTORS[type];
 }
 
+/**
+ * The adapter versions this BUILD implements, per type.
+ *
+ * The lifecycle catalog (`metadata.ts`) says which releases exist and what
+ * each is certified for; this says which of them the running code can
+ * actually execute. Today each type has one implementation. When a new
+ * adapter version ships beside the old one -- so it can be canaried on
+ * selected targets while the rest stay on the certified release -- it is one
+ * more entry here, and rolling a target back selects the old entry again.
+ */
+const IMPLEMENTATIONS: Record<TargetConnectorType, Record<string, TargetConnector<never>>> = {
+  activeDirectory: { '1.0.0': CONNECTORS.activeDirectory },
+  scim2: { '1.0.0': CONNECTORS.scim2 },
+  httpJson: { '1.0.0': CONNECTORS.httpJson },
+  entraId: { '1.0.0': CONNECTORS.entraId },
+};
+
+export class AdapterVersionNotImplementedError extends Error {
+  constructor(
+    readonly type: string,
+    readonly adapterVersion: string,
+  ) {
+    super(`this build does not include ${type} adapter ${adapterVersion}`);
+    this.name = 'AdapterVersionNotImplementedError';
+  }
+}
+
+export function implementedAdapterVersions(type: string): string[] {
+  if (!isKnownType(type)) return [];
+  return Object.keys(IMPLEMENTATIONS[type]);
+}
+
+/** The implementation of one exact adapter release. */
+export function targetConnectorForRelease(type: string, adapterVersion: string): TargetConnector<never> {
+  if (!isKnownType(type)) throw new UnknownTargetConnectorTypeError(type);
+  const implementation = IMPLEMENTATIONS[type][adapterVersion];
+  if (!implementation) throw new AdapterVersionNotImplementedError(type, adapterVersion);
+  return implementation;
+}
+
 export function targetConfigSchemaFor(type: string): z.ZodTypeAny {
   if (!isKnownType(type)) throw new UnknownTargetConnectorTypeError(type);
   return CONFIG_SCHEMAS[type];

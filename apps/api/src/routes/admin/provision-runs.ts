@@ -14,6 +14,8 @@ import {
   ProvisionRunNotConfirmableError,
   MaintenanceWindowClosedError,
   ExternalWritesPausedError,
+  AdapterVersionChangedError,
+  AdapterWritesBlockedError,
   RunNotCancellableError,
   RunNotFoundError,
   acknowledgeDriftFinding,
@@ -292,6 +294,17 @@ export async function registerAdminProvisionRunRoutes(
             cause.message,
             { scope: cause.scope },
           );
+        }
+        // The adapter gates. Nothing was attempted and the run is left as it
+        // was previewed; the detail says what to do instead.
+        if (cause instanceof AdapterWritesBlockedError) {
+          throw new ProblemError(409, 'adapter-writes-blocked', 'The adapter may not write', cause.message);
+        }
+        if (cause instanceof AdapterVersionChangedError) {
+          throw new ProblemError(409, 'adapter-version-changed', 'The plan is for a different adapter release', cause.message, {
+            plannedVersion: cause.plannedVersion,
+            currentVersion: cause.currentVersion,
+          });
         }
         throw cause;
       }

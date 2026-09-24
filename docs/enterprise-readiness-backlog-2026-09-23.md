@@ -84,6 +84,12 @@ is retained; merged code alone is not enough.
     identities.
 18. **Build — Capability enforcement.** Refuse plans that request capabilities
     not certified for the exact adapter version and target configuration.
+    **Implemented:** catalog releases carry a per-version certified-capability
+    list; every planned connector action is checked against it and against the
+    target's advertised capabilities at preview and again at apply. Refused
+    actions stay visible in the plan with status `refused` and a reason, the
+    run records the adapter version and a refusal summary, and nothing refused
+    is attempted. See `docs/connectors/certification-and-rollout.md`.
 19. **Build — Connector health history.** Chart authentication failures,
     throttling, latency, retries, ambiguous writes, and read-back completeness
     per target and adapter version.
@@ -135,6 +141,14 @@ is retained; merged code alone is not enough.
     post-event review.
 33. **Build — Certification-aware rollout.** Canary new connector versions by
     target and support immediate rollback without changing stored intent.
+    **Implemented:** per-target channel (`stable`/`canary`) and exact-version
+    pin, a recorded certified rollback point, and an audited, permission-checked
+    rollback that changes only the adapter selection; a run previewed under a
+    different release refuses to apply. Deprecated or uncertified releases are
+    readiness warnings; past the deprecation date new writes stop unless an
+    audited, version-bound override of at most 30 days is active. Target-page
+    console panel. Only one release per adapter ships today, so a real canary
+    still needs a second implementation registered in the connector registry.
 34. **Build — Credential lifecycle.** Expiry discovery, advance alerts,
     rotation workflow, dual-secret overlap, verification, revocation, and
     evidence for every connector type.

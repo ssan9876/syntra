@@ -2,9 +2,12 @@ import { randomInt } from 'node:crypto';
 import { withTenant, type TenantClient } from '@syntra/db';
 import {
   targetConnectorFor,
+  targetConnectorForRelease,
+  CONNECTOR_ACTION_TYPES,
   isRetryable,
   provenanceActionId,
   SYNTRA_ONLY_ACTION_TYPES,
+  type ConnectorReleaseCatalog,
   type SourceRecord,
   type TargetConnector,
   type WriteOperation,
@@ -27,6 +30,12 @@ import { targetWithCredential } from './target-service.js';
 import { assertExternalWritesAllowed } from './tenant-write-stop.js';
 import { MaintenanceWindowClosedError, maintenanceWindowOpen, urgentLeaverOverrideAllowed } from './target-maintenance.js';
 import { applySyntraUserAction } from './syntra-user.js';
+import {
+  AdapterVersionChangedError,
+  AdapterWritesBlockedError,
+  adapterWriteContext,
+  summariseRefusals,
+} from './adapter-rollout.js';
 import {
   cancellationRequested,
   finishWithCancellationCheck,
@@ -195,6 +204,8 @@ export interface ApplyOptions {
   /** Non-blank justification for a confirmed, leaver-only apply outside the configured window. */
   maintenanceOverrideReason?: string;
   connector?: TargetConnector<never>;
+  /** The connector lifecycle catalog; the shipped one unless a test supplies another. */
+  releaseCatalog?: ConnectorReleaseCatalog;
   /**
    * How the initial password is delivered. Absent, the password is still
    * sealed into the vault and an audit event records that delivery could not
@@ -469,6 +480,12 @@ export async function applyProvisionRun(
    * computed, returned and discarded.
    */
   deferred: number;
+  /**
+   * Actions this apply refused because the adapter release is not certified
+   * for them or the target no longer advertises them. Written `refused` with
+   * the reason; never attempted.
+   */
+  refused: number;
   skipped: number;
 }> {
   const sleep = options.sleep ?? defaultSleep;
@@ -508,6 +525,35 @@ export async function applyProvisionRun(
     // the `applying` transition, so a refused run is left exactly as it was
     // previewed and no action is attempted.
     await assertExternalWritesAllowed(tx, target, options.now ?? new Date());
+    /**
+     * The adapter gate, beside the emergency stops and for the same reason:
+     * before the `applying` transition, so a refused run stays exactly as it
+     * was previewed.
+     *
+     * The plan names the release it was checked against. A target that has
+     * moved since -- canary promoted, or rolled back -- would otherwise
+     * execute the plan through code its capability checks never saw. And a
+     * release past its deprecation date writes nothing without an active,
+     * version-bound override; the date can pass between preview and apply.
+     */
+    const adapter = adapterWriteContext(target, {
+      now: options.now ?? new Date(),
+      ...(options.releaseCatalog === undefined ? {} : { catalog: options.releaseCatalog }),
+    });
+    if (run.adapterVersion !== null && run.adapterVersion !== adapter.release.adapterVersion) {
+      throw new AdapterVersionChangedError(runId, run.adapterVersion, adapter.release.adapterVersion);
+    }
+    if (adapter.writesBlockedReason !== null) {
+      const connectorWrites = await tx.provisionAction.count({
+        where: {
+          runId,
+          status: { in: ['proposed', 'pending_retry'] },
+          actionType: { in: [...CONNECTOR_ACTION_TYPES] },
+          ...(options.only === undefined ? {} : { id: { in: options.only } }),
+        },
+      });
+      if (connectorWrites > 0) throw new AdapterWritesBlockedError(target.id, adapter.writesBlockedReason);
+    }
     if (!maintenanceWindowOpen(target, options.now ?? new Date())) {
       const selected = await tx.provisionAction.findMany({
         where: {
@@ -573,11 +619,14 @@ export async function applyProvisionRun(
       const now = await tx.provisionRun.findUniqueOrThrow({ where: { id: runId } });
       throw new ProvisionRunNotAppliableError(runId, now.status);
     }
-    return { run, target, config, profile, remit, grantedEntitlements };
+    return { run, target, config, profile, remit, grantedEntitlements, adapter };
   });
 
   const connector = (options.connector ??
-    targetConnectorFor(prepared.target.type)) as unknown as TargetConnector<unknown>;
+    targetConnectorForRelease(
+      prepared.target.type,
+      prepared.adapter.release.adapterVersion,
+    )) as unknown as TargetConnector<unknown>;
 
   const actions = await withTenant(tenantId, (tx) =>
     tx.provisionAction.findMany({
@@ -608,6 +657,7 @@ export async function applyProvisionRun(
   let pendingRetry = 0;
   let inFlight = 0;
   const deferredIds: string[] = [];
+  const refusedNow: { id: string; reason: string }[] = [];
   let heartbeatAt = Date.now();
   let cancelled = false;
 
@@ -623,6 +673,16 @@ export async function applyProvisionRun(
     ) {
       cancelled = true;
       break;
+    }
+
+    // Re-checked here, not trusted from the preview: the release is the same
+    // (checked above), but the target's configuration may have stopped
+    // advertising a capability since -- a document edited to drop its grant
+    // operation. Refused, recorded, and never attempted.
+    const refusal = prepared.adapter.refusalFor(action.actionType);
+    if (refusal !== null) {
+      refusedNow.push({ id: action.id, reason: refusal });
+      continue;
     }
 
     if (action.requiresConfirmation && !confirmed) {
@@ -695,11 +755,35 @@ export async function applyProvisionRun(
       });
     }
 
+    for (const refusal of refusedNow) {
+      await tx.provisionAction.updateMany({
+        where: { runId, id: refusal.id, status: { in: ['proposed', 'pending_retry'] } },
+        data: { status: 'refused', message: refusal.reason },
+      });
+    }
+    if (refusedNow.length > 0) {
+      // The run's summary covers every refusal it carries, the preview's and
+      // this apply's, so the run page states one consistent reason list.
+      const refusedRows = await tx.provisionAction.findMany({
+        where: { runId, status: 'refused' },
+        select: { message: true },
+      });
+      await tx.provisionRun.update({
+        where: { id: runId },
+        data: {
+          capabilityRefusedCount: refusedRows.length,
+          capabilityRefusal: summariseRefusals(refusedRows.map((row) => row.message ?? 'refused')),
+        },
+      });
+    }
+
     const remaining = await tx.provisionAction.count({
       where: { runId, status: { in: ['proposed', 'pending_retry', 'in_flight'] } },
     });
+    // `refused` counts against a clean finish: the run did not do everything
+    // its plan asked for, and `applied` would say it had.
     const anyFailed = await tx.provisionAction.count({
-      where: { runId, status: { in: ['failed', 'conflict'] } },
+      where: { runId, status: { in: ['failed', 'conflict', 'refused'] } },
     });
     // A run reaches `applied` only when every action it proposed reached a
     // terminal state and none failed.
@@ -753,10 +837,20 @@ export async function applyProvisionRun(
       targetId: runId,
       outcome: status === 'applied' ? 'success' : 'failure',
       sourceIp: null,
-      payload: { status, applied, failed, pendingRetry, inFlight, deferred, skipped },
+      payload: {
+        status,
+        applied,
+        failed,
+        pendingRetry,
+        inFlight,
+        deferred,
+        refused: refusedNow.length,
+        skipped,
+        adapterVersion: prepared.adapter.release.adapterVersion,
+      },
     });
 
-    return { status, applied, failed, pendingRetry, inFlight, deferred, skipped };
+    return { status, applied, failed, pendingRetry, inFlight, deferred, refused: refusedNow.length, skipped };
   });
 }
 

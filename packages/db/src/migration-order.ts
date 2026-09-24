@@ -136,6 +136,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261025100000_tenant_deletion_execution',
   '20261026004500_run_cooperative_cancellation',
   '20261027173100_replica_safe_state',
+  '20261028091500_adapter_capability_rollout',
 ];
 
 /**
