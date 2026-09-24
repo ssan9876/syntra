@@ -61,6 +61,19 @@ class VaultError extends Error {
 }
 
 /**
+ * Strips leading and/or trailing slashes by walking the string rather than
+ * with a regex: an anchored `/+` alternation is quadratic on a value made of
+ * many slashes, and these values come from configuration.
+ */
+function trimSlashes(value: string, side: 'end' | 'both'): string {
+  let start = 0;
+  let end = value.length;
+  if (side === 'both') while (start < end && value[start] === '/') start += 1;
+  while (end > start && value[end - 1] === '/') end -= 1;
+  return value.slice(start, end);
+}
+
+/**
  * HashiCorp Vault / OpenBao Transit as the master key.
  *
  * The master key never leaves Vault: `wrap` sends a data key to
@@ -84,8 +97,8 @@ class VaultError extends Error {
 export function vaultTransitProvider(options: VaultTransitOptions): MasterKeyProvider {
   const doFetch = options.fetch ?? globalThis.fetch;
   const now = options.now ?? Date.now;
-  const base = options.address.replace(/\/+$/, '');
-  const mount = options.mountPath.replace(/^\/+|\/+$/g, '');
+  const base = trimSlashes(options.address, 'end');
+  const mount = trimSlashes(options.mountPath, 'both');
   const key = encodeURIComponent(options.keyName);
 
   let token: string | null = options.auth.method === 'token' ? options.auth.token : null;
@@ -144,7 +157,7 @@ export function vaultTransitProvider(options: VaultTransitOptions): MasterKeyPro
     login ??= (async () => {
       try {
         const answer = await request(
-          `auth/${auth.mountPath.replace(/^\/+|\/+$/g, '')}/login`,
+          `auth/${trimSlashes(auth.mountPath, 'both')}/login`,
           { role_id: auth.roleId, secret_id: auth.secretId },
           null,
         );

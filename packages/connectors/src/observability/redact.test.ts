@@ -212,7 +212,10 @@ describe('key classification', () => {
     // fast-redact rejects anything beyond dotted/bracketed literals with a
     // single leading wildcard; a bad path would fail logger construction.
     for (const path of LOG_REDACT_PATHS) {
-      expect(path).toMatch(/^(\*\.|\*)?[\w$[\]".-]+(\.[\w$[\]".-]+)*$/);
+      // Segment by segment rather than one nested-quantifier pattern, which
+      // backtracks exponentially on a malformed path.
+      const segments = path.replace(/^\*\.?/, '').split('.');
+      for (const segment of segments) expect(segment).toMatch(/^[\w$[\]"-]+$/);
     }
   });
 });
