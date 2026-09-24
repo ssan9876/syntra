@@ -46,6 +46,7 @@ import { registerEmployeeLifecycleRoutes } from './routes/admin/employee-lifecyc
 import { registerAdminPersonReceiptRoutes } from './routes/admin/person-receipts.js';
 import { registerAdminLifecycleOperationRoutes } from './routes/admin/lifecycle-operations.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
+import { registerAdminExportRoutes } from './routes/admin/exports.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
@@ -433,6 +434,13 @@ export async function buildApp(
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminAuditRoutes, { prefix: '/api/admin' });
+  // The export center. The key provider opens what the export job sealed
+  // with it; the scheduler is how a request becomes a background job.
+  await app.register(registerAdminExportRoutes, {
+    prefix: '/api/admin',
+    keyProvider,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
   await app.register(registerAdminUpdateRoutes, {
     prefix: '/api/admin',
     releaseRepo: config.releaseRepo,

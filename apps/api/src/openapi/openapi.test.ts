@@ -137,8 +137,21 @@ describe('the document', () => {
   });
 
   it('names the permission of every operation, derived from the guard that checks it', () => {
+    // Routes with no route-level guard, named one at a time. The export
+    // center's permission depends on the export's KIND (audit.read for the
+    // audit log, govern.read + govern.export for Governance access), so the
+    // service checks it at request, generation and every download, and a
+    // caller only ever sees their own exports unless they hold tenant.manage.
+    const unguarded = new Set([
+      'post /api/admin/exports',
+      'get /api/admin/exports',
+      'get /api/admin/exports/{id}',
+      'get /api/admin/exports/{id}/download',
+      'post /api/admin/exports/{id}/revoke',
+    ]);
     for (const [path, methods] of Object.entries(document.paths)) {
       for (const [method, operation] of Object.entries(methods)) {
+        if (unguarded.has(`${method} ${path}`)) continue;
         const permissions = operation['x-syntra-permission'] as string[];
         expect(permissions.length, `${method} ${path}`).toBeGreaterThan(0);
         for (const permission of permissions) expect(permission).toMatch(/^[a-z]+(\.[a-z_]+)+$/);

@@ -210,6 +210,8 @@ model Tenant {
   lifecycleLegalHolds       LifecycleLegalHold[]
   externalWriteStop         TenantExternalWriteStop?
   tenantDeletionRequests    TenantDeletionRequest[]
+  dataExports               DataExport[]
+  auditSavedViews           AuditSavedView[]
   lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
@@ -553,6 +555,15 @@ model AuditEvent {
 
   @@unique([tenantId, sequence])
   @@index([tenantId, occurredAt])
+  /// Audit search (migration `20261030120000_data_exports_audit_search`):
+  /// who did it, what it was done to, and the failures, newest first. The
+  /// action-prefix index uses `text_pattern_ops`, which Prisma cannot express
+  /// for a B-tree, so it lives in that migration only, as
+  /// `AuditEvent_tenantId_action_prefix_idx`.
+  @@index([tenantId, actorUserId, sequence(sort: Desc)])
+  @@index([tenantId, correlationId, sequence(sort: Desc)])
+  @@index([tenantId, targetId, sequence(sort: Desc)])
+  @@index([tenantId, outcome, sequence(sort: Desc)])
 }
 
 /// Envelope encryption: the value is sealed under a per-secret data key, which
@@ -4856,4 +4867,80 @@ model RateLimitBucket {
 
   /// For the periodic sweep of windows nobody has hit since they ended.
   @@index([resetAt])
+}
+
+/// An asynchronous, permission-checked, watermarked export.
+///
+/// The request is a row; a pg-boss job generates the file in bounded batches,
+/// seals it under a fresh data key wrapped by the deployment's master key (the
+/// vault's envelope scheme), and records the SHA-256 of the plaintext. The
+/// requester's authority is checked when the request is made, again when the
+/// job runs, and again at every download; a different authority at download
+/// than at generation refuses. The artifact expires (`expiresAt`, 1-72 hours
+/// after it is ready), can be revoked, and the ciphertext is erased at either
+/// -- the row itself stays as the history of who took what, beside the audit
+/// events that record each step.
+///
+/// `authorityFingerprint` is what the generation was allowed to see: `tenant`,
+/// or a digest of the Govern org-unit scope that filtered it. The download
+/// recomputes it; any difference is a refusal.
+model DataExport {
+  id                   String    @id @default(uuid()) @db.Uuid
+  tenantId             String    @db.Uuid
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// 'audit_log' | 'govern_access'
+  kind                 String
+  /// 'queued' | 'running' | 'ready' | 'failed' | 'revoked' | 'expired'
+  status               String    @default("queued")
+  /// The validated filters the file was requested with.
+  params               Json
+  /// 'jsonl' | 'csv'
+  format               String
+  requestedByUserId    String    @db.Uuid
+  requestedViaToken    Boolean   @default(false)
+  requestedAt          DateTime  @default(now())
+  ttlHours             Int
+  startedAt            DateTime?
+  completedAt          DateTime?
+  expiresAt            DateTime?
+  authorityFingerprint String?
+  rowCount             Int?
+  byteLength           Int?
+  /// Hex SHA-256 of the PLAINTEXT file, exactly as downloaded.
+  sha256               String?
+  filename             String?
+  contentType          String?
+  error                String?
+  ciphertext           Bytes?
+  iv                   Bytes?
+  tag                  Bytes?
+  wrappedDek           Bytes?
+  dekIv                Bytes?
+  dekTag               Bytes?
+  revokedAt            DateTime?
+  revokedByUserId      String?   @db.Uuid
+  /// When the ciphertext was erased (revocation, expiry, or failure).
+  purgedAt             DateTime?
+  downloadCount        Int       @default(0)
+  lastDownloadedAt     DateTime?
+  updatedAt            DateTime  @updatedAt
+
+  @@index([tenantId, requestedByUserId, requestedAt(sort: Desc)])
+  @@index([tenantId, status, expiresAt])
+}
+
+/// A named set of audit-search filters, private to the administrator who
+/// saved it. Filters only -- never results -- so a saved view re-runs under
+/// the reader's authority at the moment it is opened.
+model AuditSavedView {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String   @db.Uuid
+  name      String
+  filters   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, userId, name])
 }

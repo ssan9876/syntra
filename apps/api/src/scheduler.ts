@@ -24,6 +24,8 @@ import {
   registerWebhookJobs,
   registerLifecycleJobs,
   registerWriteStopJobs,
+  registerExportJobs,
+  scheduleExportSweep,
   scheduleKeyRotation,
   scheduleLifecycleMaintenance,
   scheduleWriteStopExpiry,
@@ -314,6 +316,20 @@ export async function scheduleBackgroundWork(
     }
   }
 
+  // Export expiry. Appended last for the reason the loops above record --
+  // `scheduler.test.ts` counts transactions -- and it opens none: the cadence
+  // is fixed. Downloads refuse an expired export on their own; this is what
+  // erases the ciphertext and records that it happened.
+  for (const tenant of tenants) {
+    try {
+      attempt('export expiry');
+      await scheduleExportSweep(scheduler, tenant.id);
+    } catch (cause) {
+      failure('export expiry');
+      logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule export expiry');
+    }
+  }
+
   // --- did any of that actually take? -------------------------------------
   //
   // Everything above logs its own failures per tenant and carries on, which is
@@ -433,6 +449,9 @@ export async function startSyncScheduler(
     registerProvisionJobs(scheduler, provider, transport);
     registerLifecycleJobs(scheduler, { publicUrl: config.publicUrl });
     registerWriteStopJobs(scheduler);
+    // The provider is NOT optional: the generator seals every file under it,
+    // and the API's download route opens it with the same master key.
+    registerExportJobs(scheduler, provider);
     // The transport is NOT optional here. Ruling P16 made this point about
     // Provision's initial passwords: without one, an unattended path produces
     // something and delivers it to nobody. In Automate the whole notification

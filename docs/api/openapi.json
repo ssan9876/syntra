@@ -54,6 +54,9 @@
       "name": "Employee lifecycle"
     },
     {
+      "name": "Exports"
+    },
+    {
       "name": "Govern"
     },
     {
@@ -1706,8 +1709,8 @@
         "tags": [
           "Audit"
         ],
-        "summary": "List audit events, newest first, with the hash-chain verdict",
-        "description": "Keyset-paged by sequence number: pass the lowest `sequence` of one page as `before` to read the next. `subject` may be repeated to filter to events about particular records. `chainValid` reports whether the tamper-evident hash chain verifies, and `brokenAtSequence` where it does not.\n\nRequires `audit.read`.",
+        "summary": "Search audit events, newest first, with the hash-chain verdict",
+        "description": "Every filter is applied on the server. Keyset-paged by sequence number: pass the response's `nextBefore` as `before` to read the next (older) page; it is null on the last page. `subject` may be repeated to filter to events done by or to particular records, and `correlation` returns everything one request or job recorded (the `x-correlation-id` of its response). `chainValid` reports whether the tamper-evident hash chain verifies, and `brokenAtSequence` where it does not. To export the results, `POST /exports` with kind `audit_log` and the same filters.\n\nRequires `audit.read`.",
         "x-syntra-permission": [
           "audit.read"
         ],
@@ -1721,6 +1724,85 @@
           }
         ],
         "parameters": [
+          {
+            "name": "actor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "targetType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "correlation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          },
           {
             "name": "limit",
             "in": "query",
@@ -1750,16 +1832,8 @@
               "items": {
                 "type": "string",
                 "format": "uuid"
-              }
-            }
-          },
-          {
-            "name": "correlation",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{32}$"
+              },
+              "maxItems": 50
             }
           }
         ],
@@ -1780,6 +1854,226 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/views": {
+      "get": {
+        "operationId": "getAuditViews",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "List your saved audit searches",
+        "description": "Requires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putAuditViews",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Save an audit search under a name",
+        "description": "Filters only, private to the administrator who saves them. Saving an existing name replaces it.\n\nRequires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "filters": {
+                    "type": "object",
+                    "properties": {
+                      "actor": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "action": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^[A-Za-z0-9_.:-]+$"
+                      },
+                      "target": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "targetType": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80,
+                        "pattern": "^[A-Za-z0-9_]+$"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "success",
+                          "failure"
+                        ]
+                      },
+                      "from": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "to": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "correlation": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{32}$"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "name",
+                  "filters"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/views/{id}": {
+      "delete": {
+        "operationId": "deleteAuditViewsById",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Delete one of your saved audit searches",
+        "description": "Requires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -5243,6 +5537,401 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/exports": {
+      "get": {
+        "operationId": "getExports",
+        "tags": [
+          "Exports"
+        ],
+        "summary": "List exports",
+        "description": "`scope=all` lists every administrator's exports and needs `tenant.manage`; otherwise your own.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mine",
+                "all"
+              ],
+              "default": "mine"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postExports",
+        "tags": [
+          "Exports"
+        ],
+        "summary": "Request an asynchronous export",
+        "description": "Answers 202 with the queued export. A background job generates the file in bounded batches, watermarks it with the export id, tenant, requester and time, records its SHA-256 and seals it at rest. The requester must hold the permissions of the kind, and a machine token must also hold them in its own scopes.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "audit_log"
+                      },
+                      "params": {
+                        "type": "object",
+                        "properties": {
+                          "actor": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "action": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120,
+                            "pattern": "^[A-Za-z0-9_.:-]+$"
+                          },
+                          "target": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "targetType": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "pattern": "^[A-Za-z0-9_]+$"
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "enum": [
+                              "success",
+                              "failure"
+                            ]
+                          },
+                          "from": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "to": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "correlation": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "default": {}
+                      },
+                      "ttlHours": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 72,
+                        "default": 24
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "govern_access"
+                      },
+                      "params": {
+                        "type": "object",
+                        "properties": {
+                          "snapshotId": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "systemId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "resourceId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "systemId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "ttlHours": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 72,
+                        "default": 24
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "params"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/exports/{id}": {
+      "get": {
+        "operationId": "getExportsById",
+        "tags": [
+          "Exports"
+        ],
+        "summary": "Read one export's status",
+        "description": "Requires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/exports/{id}/download": {
+      "get": {
+        "operationId": "getExportsByIdDownload",
+        "tags": [
+          "Exports"
+        ],
+        "summary": "Download a ready export",
+        "description": "Only the requester, only while it is ready and unexpired, and only while they still hold the permission it was generated under; a changed Governance scope refuses. The digest is re-checked after decryption and returned in a header. Every download is audited.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/exports/{id}/revoke": {
+      "post": {
+        "operationId": "postExportsByIdRevoke",
+        "tags": [
+          "Exports"
+        ],
+        "summary": "Revoke an export and erase its file",
+        "description": "By the requester, or by an administrator holding `tenant.manage`.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
