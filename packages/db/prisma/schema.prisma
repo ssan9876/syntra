@@ -102,6 +102,13 @@ model Tenant {
   /// unless the administrator doing it is holding a session their own
   /// security key established, which is the lockout prevention.
   adminWebauthnRequired        Boolean @default(false)
+  /// The privileged change classes this tenant puts behind a second
+  /// administrator (see `packages/core/src/privileged/change-control.ts`).
+  /// Empty is off. Constrained to the implemented classes by a CHECK.
+  privilegedChangeClasses      String[] @default([])
+  /// How long a break-glass activation waits, announced, before it takes
+  /// effect on its own. 15 minutes to 24 hours (CHECK).
+  breakGlassActivationDelayMinutes Int  @default(60)
   /// What this tenant calls the sign-in surfaces their staff see. Null means
   /// Syntra's own name, which is the right default for a tenant that has not
   /// thought about it — an empty header is worse than somebody else's brand.
@@ -222,6 +229,9 @@ model Tenant {
   lifecycleLegalHolds       LifecycleLegalHold[]
   externalWriteStop         TenantExternalWriteStop?
   tenantDeletionRequests    TenantDeletionRequest[]
+  privilegedChangeRequests  PrivilegedChangeRequest[]
+  breakGlassAccounts        BreakGlassAccount[]
+  breakGlassActivations     BreakGlassActivation[]
   dataExports               DataExport[]
   credentialRecords         CredentialRecord[]
   credentialRotations       CredentialRotation[]
@@ -704,6 +714,10 @@ model Session {
   lastSeenAt        DateTime  @default(now())
   absoluteExpiresAt DateTime
   revokedAt         DateTime?
+  /// Set when this administrative session exists only because of a
+  /// break-glass activation. The session is live only while that activation
+  /// is, whatever its own lifetime says.
+  breakGlassActivationId String? @db.Uuid
 
   @@index([tenantId])
   @@index([userId])
@@ -2704,6 +2718,91 @@ model TenantDeletionRequest {
   receipt                Json?
 
   @@index([tenantId, status])
+}
+
+/// A privileged administrative change held for a second administrator.
+///
+/// The proposed change is stored whole (never a secret: token plaintext and
+/// webhook signing secrets are generated at apply time and returned only to
+/// the approver) together with a revision of the object it changes. Approval
+/// recomputes the revision and refuses when it differs.
+model PrivilegedChangeRequest {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  changeClass       String
+  operation         String
+  targetType        String
+  targetId          String?
+  summary           String
+  proposed          Json
+  baseRevision      String
+  reason            String
+  /// 'pending' | 'applied' | 'rejected' | 'withdrawn' | 'expired' | 'invalidated'
+  status            String    @default("pending")
+  requestedByUserId String    @db.Uuid
+  requestedAt       DateTime  @default(now())
+  expiresAt         DateTime
+  decidedByUserId   String?   @db.Uuid
+  decidedAt         DateTime?
+  deciderStepUpAt   DateTime?
+  decisionNote      String?
+  closedReason      String?
+  /// Identifiers the applied change produced. Never a secret.
+  result            Json?
+
+  @@index([tenantId, status])
+  @@index([tenantId, requestedAt])
+}
+
+/// An account designated for emergency access, and the digest of its sealed
+/// recovery credential. The credential itself is shown once and kept offline.
+model BreakGlassAccount {
+  id                   String   @id @default(uuid()) @db.Uuid
+  tenantId             String   @db.Uuid
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId               String   @db.Uuid
+  credentialHash       String
+  designatedByUserId   String   @db.Uuid
+  designatedAt         DateTime @default(now())
+  credentialIssuedAt   DateTime @default(now())
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+}
+
+/// One use of a break-glass account: requested with the sealed credential,
+/// announced, effective after the delay (or a second administrator's
+/// approval), time-bound, and reviewed afterwards by somebody else.
+model BreakGlassActivation {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @db.Uuid
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId             String    @db.Uuid
+  /// 'pending' | 'active' | 'ended' | 'expired' | 'cancelled'
+  status             String    @default("pending")
+  reason             String
+  durationMinutes    Int
+  requestedAt        DateTime  @default(now())
+  requestedFromIp    String?
+  activatesAt        DateTime
+  activatedAt        DateTime?
+  /// 'delay' | 'approval'
+  activatedBy        String?
+  approvedByUserId   String?   @db.Uuid
+  approverStepUpAt   DateTime?
+  expiresAt          DateTime?
+  endedAt            DateTime?
+  endedByUserId      String?   @db.Uuid
+  /// 'not_due' | 'pending' | 'completed'
+  reviewStatus       String    @default("not_due")
+  reviewedByUserId   String?   @db.Uuid
+  reviewedAt         DateTime?
+  reviewerStepUpAt   DateTime?
+  reviewNotes        String?
+
+  @@index([tenantId, status])
+  @@index([tenantId, userId])
 }
 
 /// A no-write rehearsal of a hire, move or departure computed by the same

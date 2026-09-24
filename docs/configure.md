@@ -610,10 +610,17 @@ including every administrator's). It can always be turned off. Both changes are
 audited as `tenant.admin_webauthn_required` / `tenant.admin_webauthn_relaxed`,
 alongside `tenant.settings_updated`.
 
-**Break-glass.** If every administrator loses their key, there is no console
-path back in, by design — a path that skipped the key would be the path an
-attacker uses. Recovery is an operator action against the database, done under
-change control and followed by a review of the audit log:
+**Break-glass.** If every administrator loses their key, the sanctioned way
+back in is a designated emergency account and its sealed recovery credential —
+see [Break-glass (emergency access)](#break-glass-emergency-access) below. It is
+the one path past this requirement, and it is announced, delayed, time-bound and
+reviewed. Keep at least two administrators with registered keys *and* one
+designated emergency account, so that neither the break-glass path nor the
+operator fallback below is routinely needed.
+
+If no emergency account was designated beforehand, recovery is an operator
+action against the database, done under change control and followed by a
+review of the audit log:
 
 ```sql
 -- Turn the requirement off for one tenant. The next elevation falls back to the
@@ -621,9 +628,145 @@ change control and followed by a review of the audit log:
 UPDATE "Tenant" SET "adminWebauthnRequired" = false WHERE slug = '<tenant-slug>';
 ```
 
-Keep at least two administrators with registered keys, ideally one of them a
-key held offline as the tenant's own break-glass credential, so that this is
-never needed.
+### Separation of duties for privileged changes
+
+**A tenant can hold classes of privileged administrative change for a second
+administrator** (Settings → Change control, `PUT /api/admin/change-control/policy`,
+`tenant.manage`). A held change is not applied: it is stored as a *change
+request*, and a different administrator applies it. This is about
+*administration* — one administrator should not be able to request, approve,
+execute and close the same privileged change. Govern's SoD rules are a
+different control, about *business access* two entitlements one person should
+not hold together.
+
+Classes implemented end to end:
+
+| Class | What is held | Approver needs |
+| --- | --- | --- |
+| **Privileged role grants** (`role_grant`) | Assigning a role that carries a privileged permission (`rbac.manage`, `tenant.manage`, `token.manage`, `policy.manage`, `secrets.write`, `deployment.manage`, `access.manage`), and adding a privileged permission to an existing role — otherwise assigning a harmless role and then widening it would walk round the hold | `rbac.manage` |
+| **Admin-scoped API tokens** (`admin_token`) | Minting a token whose scopes include a privileged permission, or whose empty scope list means "the account's full authority" on an account that holds one | `token.manage` |
+| **Authentication policy relaxation** (`auth_policy`) | A `PUT /api/admin/tenant` that *weakens* any sign-in setting: admin MFA or the console security key switched off, emailed codes switched on, a shorter minimum password or shallower history, lockout switched off / a higher threshold / a shorter window or lock, password expiry off or longer, any session lifetime longer. Tightening is never held | `tenant.manage` |
+| **Webhook endpoints** (`webhook_endpoint`) | Creating an endpoint, or changing where one sends, what it receives, or whether it is enabled | `tenant.manage` |
+
+Not yet covered, and able to adopt the same mechanism by adding a class and a
+handler (`packages/core/src/privileged/change-control.ts`): SSO and federation
+configuration (SAML/OIDC applications, upstream identity providers) and target
+credential changes.
+
+**The rules**, the same idioms as tenant deletion and the tenant write stop:
+
+- **The requester never decides.** They may *withdraw* a pending request,
+  which applies nothing; they cannot approve, reject or apply it. The database
+  refuses a decider who is the requester (`PrivilegedChangeRequest_four_eyes`).
+- **Approval needs step-up**: a console session elevated in the last ten
+  minutes (`STEP_UP_MAX_AGE_MS`), recorded as evidence and checked again by a
+  database constraint.
+- **Approval is execution.** The stored change is applied in the approver's
+  transaction, by the same code the direct route runs, under the approver's
+  authority (the tenant-settings lockout guards are judged against the
+  approver). There is no approved-but-unapplied state for a third party to run
+  later. For a token or a new webhook endpoint the secret is returned to the
+  **approver**, once, and stored nowhere — hand it over through your usual
+  secure channel.
+- **Revision-bound.** The request stores a SHA-256 over the current state of
+  what it changes (the role and the grantee's holdings; the token's account and
+  its roles; the endpoint; the tenant settings; the policy itself). If that has
+  moved since, approval is refused as `stale` and the request is invalidated.
+- **Expiry.** A request not decided within 72 hours expires; a minute sweep
+  closes it with an audit event.
+- **Switching a class off is itself held**, so the first move of a lone
+  administrator cannot be to turn the control off. Switching one on applies at
+  once.
+- **Machine tokens** cannot reach the change-control routes at all; a token
+  whose own call is held creates a request like anyone else.
+
+**How a requester supplies the reason.** A held route answers the first
+attempt `409 change-approval-required` (carrying `changeClass` and `summary`)
+and writes nothing. The same request sent again with a reason of at least ten
+characters in the `X-Syntra-Change-Reason` header (URI-encoded) answers `202`
+with `{ status: "pending_approval", changeRequest }`. The console does this for
+every form: it asks for the reason in a dialog and resends.
+
+Every step is audited and is a security event in the **Privileged access**
+webhook group: `change_request.created`, `.approved`, `.rejected`,
+`.withdrawn`, `.expired`, `.approve_refused`, and
+`change_control.policy_updated`. The applied change also writes its own usual
+event (`rbac.role_assigned`, `api_token.issued`, …) carrying the
+`changeRequestId` that authorised it.
+
+### Break-glass (emergency access)
+
+With the console security-key requirement on, losing every administrator's
+key means nobody can reach the console — by design, because any path that
+skips the key is the path an attacker uses. Break-glass is that path made
+deliberate: narrow, slow, loud, time-bound and reviewed (Settings → Break-glass;
+`packages/core/src/privileged/break-glass.ts`).
+
+**Designation.** A `tenant.manage` administrator designates an emergency
+account (never their own; only an account with a password Syntra holds, since
+an upstream provider may be what is down), from a session stepped up in the
+last ten minutes. Designation returns a **sealed recovery credential** once —
+256 random bits, stored only as a SHA-256 digest. Print it, seal it and keep it
+offline, ideally split between two custodians; it can be rotated (the old one
+stops at once) and the designation removed, both refused while an activation
+is open. Give the account whatever role it will need in an emergency
+(normally an owner role) in advance.
+
+**Outside an activation the account is inert.** `authorize()` refuses it an
+administrative session outright (`auth.break_glass_refused`), whatever roles
+it holds, and refuses any machine token acting as it at all times.
+
+**Activation.**
+
+1. Somebody holding the credential requests activation without a session at
+   `/break-glass` in the web app (`POST /api/auth/break-glass/activate`: login,
+   credential, a reason of at least 20 characters, 15–240 minutes). Every way
+   of not being an emergency account — unknown login, undesignated account,
+   wrong credential — is one `invalid-credentials` answer, rate limited like the
+   password endpoints; the audit log records which.
+2. **Immediately**, every active `tenant.manage` holder is emailed
+   (`break-glass-requested`: account, reason, source address, when it takes
+   effect) and `break_glass.activation_requested` goes to every endpoint
+   subscribed to the Privileged access group.
+3. It takes effect after the tenant's **activation delay** (15 minutes to
+   24 hours, default 60; `PUT /api/admin/break-glass/settings`, stepped up).
+   During the delay **any administrator can cancel it**. A *different*
+   administrator with a working console may instead **approve it early**
+   (four-eyes, stepped up) — the fast path when only some keys are lost.
+   Either way `break_glass.activated` is recorded and holders are emailed
+   (`break-glass-activated`).
+4. The account then signs in and elevates **through `authorize()` as usual** —
+   password, policy rules and the admin-MFA floor all still apply. The only
+   thing lifted is the security-key requirement, for that account alone. The
+   session records the activation and is live only while it is.
+5. It **ends automatically** at its expiry (`break_glass.expired`), or earlier
+   when any administrator — or the account itself — ends it
+   (`break_glass.ended`). Its sessions stop at their next request.
+6. A **post-event review** is then owed. Only a different administrator can
+   complete it, stepped up, with written findings of at least 20 characters;
+   the event records how many audited actions the account took in the window
+   (`break_glass.reviewed`). The database refuses the emergency account as its
+   own approver or reviewer.
+
+Every console page shows a **banner** to every administrator while an
+activation is pending or active and while a review is outstanding.
+
+**Threat model.**
+
+| Attacker holds | What they get |
+| --- | --- |
+| The account's password only | Nothing: no activation, no console |
+| The sealed credential only | An activation request that every `tenant.manage` holder and every Privileged access webhook hears about at once, that waits out the delay and can be cancelled by anyone, and that still needs the password (and whatever the policy demands) to use |
+| Both | At worst a console session everybody was told about when it was asked for, that could have been cancelled for the whole delay, that ends on its own within four hours, and that somebody else must review |
+| An insider administrator | Cannot designate themselves, approve their own activation or review their own use (database constraints); every designation, rotation and delay change is a security event |
+
+What it does *not* defend against: an attacker who holds the credential and
+password **and** suppresses every notification channel (mail and webhook
+receivers) for the whole delay. Choose the delay against how quickly your
+administrators and on-call receivers would notice, and keep the credential
+where stealing it is itself noticed. If *no* administrator can reach the
+console and nobody objects, the delay path is designed to succeed — that is
+the recovery it exists for.
 
 ### Signing in to applications
 
@@ -797,6 +940,11 @@ list. This slice adds:
 | `policy.rule_added` / `policy.rule_updated` / `policy.rule_deleted` / `policy.rules_reordered` / `policy.default_set` | The policy changed, and who changed it |
 | `tenant.settings_updated` | Admin MFA, self-enrolment, the password floor or the session lifetimes changed |
 | `tenant.admin_webauthn_required` / `tenant.admin_webauthn_relaxed` | The security-key requirement for the console was switched on or off. **Alert on the second** |
+| `change_request.created` / `.approved` / `.rejected` / `.withdrawn` / `.expired` / `.approve_refused` | A privileged change was held for a second administrator, and what became of it |
+| `change_control.policy_updated` | The classes of change held for a second administrator changed |
+| `break_glass.activation_requested` / `.activated` / `.ended` / `.expired` / `.reviewed` | Emergency console access was asked for, took effect, ended and was reviewed. **Alert on the first** |
+| `break_glass.account_designated` / `.account_revoked` / `.credential_rotated` / `.delay_updated` / `.activation_refused` / `.activation_cancelled` | Emergency accounts and their credentials changed, or an activation was refused or cancelled |
+| `auth.break_glass_refused` | An emergency account tried to reach the console outside an activation, or a token acting as one was presented |
 | `session.revoked` | One person's sessions ended, with the trigger (`admin`, `self`, `logout`, `password_reset`, `password_change`, `deactivation`, `mass_revoke`) |
 | `session.mass_revoked` | Sessions ended across the tenant, with scope, reason and counts; outcome `failure` means a partial run |
 | `auth.password_reset_requested` / `auth.password_reset_factor_failed` / `auth.password_reset_completed` | A self-service reset was asked for, refused at the factor, or applied |
@@ -817,6 +965,7 @@ Automate and Govern ones:
 | **Data exports** | A bulk export of tenant data requested, downloaded or revoked (`export.request`, `export.download`, `export.revoke`) |
 | **Configuration changes** | Policy rules, roles, tenant settings, protocol and upstream configuration, webhook endpoints, and deployment updates |
 | **Emergency write stops** | A tenant-wide or per-target external-write stop placed, resumed by a second administrator, or expired on its own (`provision.{tenant,target}.external_writes.{pause,resume,expire}`) |
+| **Privileged access** | A privileged change held for, approved, rejected, withdrawn or expired before a second administrator, the change-control policy changed, and every break-glass step — designation, credential rotation, delay change, activation requested / refused / cancelled / active / ended / expired, review completed, and a refused elevation by an inactive emergency account (`change_request.*`, `change_control.policy_updated`, `break_glass.*`, `auth.break_glass_refused`) |
 
 An endpoint subscribed to **Configuration changes** is told when webhook
 endpoints change, **including its own** — somebody quietly repointing an

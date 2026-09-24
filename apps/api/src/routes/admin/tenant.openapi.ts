@@ -45,7 +45,7 @@ export const tenantOpenApi = describeAdminRoutes('Tenant', {
   'PUT /tenant/brand': { summary: 'Replace the tenant\'s branding', body: brandRequest },
   'PUT /tenant': {
     summary: 'Replace the tenant\'s settings',
-    description: 'Includes session lifetimes and whether console access demands a security key; enabling that is refused unless the caller\'s own session was established with one.',
+    description: 'Includes session lifetimes and whether console access demands a security key; enabling that is refused unless the caller\'s own session was established with one. A body that relaxes any sign-in setting is an authentication-policy change. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.',
     body: tenantSettingsRequest,
   },
 });

@@ -136,9 +136,25 @@ is retained; merged code alone is not enough.
     approval for sensitive target mappings, and report unnecessary disclosure.
 31. **Build — Separation-of-duties rules.** Prevent users from requesting,
     approving, executing, and closing the same privileged change.
+    **Implemented (first classes):** a tenant-configurable policy holds
+    privileged role grants, admin-scoped token minting, authentication-policy
+    relaxation and webhook endpoint changes as revision-bound change requests;
+    a different, stepped-up administrator approves and approval applies; the
+    requester can only withdraw; 72-hour expiry; every step audited and in the
+    Privileged access webhook group. Federation configuration and target
+    credentials are not yet covered (configure.md).
 32. **Build — Emergency-access lifecycle.** Time-bound elevation, explicit
     reason, second-person review, continuous alerting, automatic expiry, and
     post-event review.
+    **Implemented:** designated emergency accounts with a sealed offline
+    recovery credential; session-less activation with a mandatory reason,
+    announced at once by mail to every `tenant.manage` holder and by the
+    Privileged access webhook group, effective after a tenant delay unless
+    cancelled or on a second administrator's stepped-up approval; sign-in still
+    through `authorize()` with only the WebAuthn-console requirement lifted;
+    15–240 minute automatic expiry; a post-event review a different
+    administrator must complete; a console banner while active. Threat model
+    in configure.md. Needs a tabletop drill with the user.
 33. **Build — Certification-aware rollout.** Canary new connector versions by
     target and support immediate rollback without changing stored intent.
     **Implemented:** per-target channel (`stable`/`canary`) and exact-version

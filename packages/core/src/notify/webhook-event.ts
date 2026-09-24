@@ -249,6 +249,41 @@ export const WEBHOOK_EVENT_GROUPS = {
     description: 'A bulk export of tenant data was requested, downloaded or revoked.',
     templates: ['export.request', 'export.download', 'export.revoke'],
   },
+  /**
+   * Privileged administrative changes held for a second administrator, and
+   * emergency (break-glass) access. One group, because both are the moment
+   * somebody's administrative authority is being extended past the normal
+   * path, and whoever watches for that wants both. Every transition of a
+   * break-glass activation is here, the request above all: it is announced
+   * the moment it is asked for, so the delay before it takes effect is time
+   * a receiver can act in.
+   */
+  'privileged-access': {
+    label: 'Privileged access',
+    source: 'audit',
+    description: 'A privileged change awaits or received a second administrator, or emergency access was requested, used or reviewed.',
+    templates: [
+      'change_request.created',
+      'change_request.approved',
+      'change_request.rejected',
+      'change_request.withdrawn',
+      'change_request.expired',
+      'change_request.approve_refused',
+      'change_control.policy_updated',
+      'break_glass.account_designated',
+      'break_glass.account_revoked',
+      'break_glass.credential_rotated',
+      'break_glass.delay_updated',
+      'break_glass.activation_requested',
+      'break_glass.activation_refused',
+      'break_glass.activation_cancelled',
+      'break_glass.activated',
+      'break_glass.ended',
+      'break_glass.expired',
+      'break_glass.reviewed',
+      'auth.break_glass_refused',
+    ],
+  },
 } as const;
 
 export type WebhookEventGroup = keyof typeof WEBHOOK_EVENT_GROUPS;

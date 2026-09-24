@@ -10,6 +10,7 @@ import { Security } from './pages/Security.js';
 import { ForgotPassword } from './pages/ForgotPassword.js';
 import { RenewPassword } from './pages/RenewPassword.js';
 import { ResetPassword } from './pages/ResetPassword.js';
+import { BreakGlass } from './pages/BreakGlass.js';
 import { CatalogPage } from './pages/automate/CatalogPage.js';
 import { RequestFormPage } from './pages/automate/RequestFormPage.js';
 import { MyRequestsPage } from './pages/automate/MyRequestsPage.js';
@@ -94,6 +95,11 @@ export function AppRoutes() {
       */}
       <Route path="/renew-password" element={<RenewPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      {/*
+        Outside RequireSession: emergency access is requested precisely when
+        nobody can sign in to the console. It grants nothing by itself.
+      */}
+      <Route path="/break-glass" element={<BreakGlass />} />
       <Route
         path="/security"
         element={

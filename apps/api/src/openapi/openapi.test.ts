@@ -157,6 +157,9 @@ describe('the document', () => {
       'post /api/admin/credentials/rotations/{id}/complete',
       'post /api/admin/credentials/rotations/{id}/rollback',
       'post /api/admin/credentials/rotations/{id}/cancel',
+      // The break-glass banner: every administrator's console shows an
+      // emergency activation, whatever permissions they hold.
+      'get /api/admin/break-glass/status',
     ]);
     for (const [path, methods] of Object.entries(document.paths)) {
       for (const [method, operation] of Object.entries(methods)) {

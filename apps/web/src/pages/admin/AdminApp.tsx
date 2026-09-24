@@ -2,6 +2,8 @@ import { lazy, Suspense, type ComponentType } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell.js';
 import { AdminNav } from './AdminNav.js';
+import { BreakGlassBanner } from './BreakGlassBanner.js';
+import { HeldChangePrompt } from './HeldChangePrompt.js';
 
 /**
  * Every console page is its own chunk.
@@ -82,6 +84,10 @@ export function AdminApp() {
           over the outer one and silently undo it, which is how the console
           ended up narrow and hugging its rail on a wide monitor. */}
       <div className="w-full">
+          {/* Above every page: emergency access nobody can miss, and the
+              reason prompt every held privileged change goes through. */}
+          <BreakGlassBanner />
+          <HeldChangePrompt />
           <Suspense fallback={<PageLoading />}>
           <Routes>
             <Route path="users" element={<UsersPage />} />

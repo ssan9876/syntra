@@ -15,6 +15,7 @@ const SECURITY_GROUPS = [
   'configuration',
   'write-stops',
   'data-exports',
+  'privileged-access',
 ] as const;
 
 const SECURITY_ACTIONS: ReadonlySet<string> = new Set(

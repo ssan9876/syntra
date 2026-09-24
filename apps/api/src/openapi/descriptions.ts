@@ -1,6 +1,8 @@
 import type { DescribedRoute } from './describe.js';
 import { applicationsOpenApi } from '../routes/admin/applications.openapi.js';
 import { auditOpenApi } from '../routes/admin/audit.openapi.js';
+import { breakGlassOpenApi } from '../routes/admin/break-glass.openapi.js';
+import { changeControlOpenApi } from '../routes/admin/change-control.openapi.js';
 import { exportsOpenApi } from '../routes/admin/exports.openapi.js';
 import { credentialsOpenApi } from '../routes/admin/credentials.openapi.js';
 import { automateOpenApi } from '../routes/admin/automate.openapi.js';
@@ -43,6 +45,8 @@ import { webhooksOpenApi } from '../routes/admin/webhooks.openapi.js';
 export const ADMIN_ROUTE_DESCRIPTIONS: readonly DescribedRoute[] = [
   ...applicationsOpenApi,
   ...auditOpenApi,
+  ...breakGlassOpenApi,
+  ...changeControlOpenApi,
   ...exportsOpenApi,
   ...credentialsOpenApi,
   ...automateOpenApi,

@@ -56,7 +56,7 @@ describe('isSecurityEvent', () => {
     // group and forgot the allowlist, and the symptom -- a subscription that
     // matches an event nothing fans out -- looks exactly like a broken
     // receiver.
-    for (const key of ['sign-in-security', 'credentials', 'configuration', 'write-stops', 'data-exports'] as const) {
+    for (const key of ['sign-in-security', 'credentials', 'configuration', 'write-stops', 'data-exports', 'privileged-access'] as const) {
       for (const action of WEBHOOK_EVENT_GROUPS[key].templates as readonly string[]) {
         expect(isSecurityEvent(action), action).toBe(true);
       }

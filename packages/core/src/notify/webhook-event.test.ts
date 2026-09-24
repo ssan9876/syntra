@@ -167,7 +167,7 @@ describe('the security groups', () => {
   });
 
   it('names every security group with a label somebody could choose from', () => {
-    for (const key of ['sign-in-security', 'credentials', 'configuration', 'write-stops'] as const) {
+    for (const key of ['sign-in-security', 'credentials', 'configuration', 'write-stops', 'privileged-access'] as const) {
       expect(WEBHOOK_EVENT_GROUPS[key].label).toMatch(/\S/);
       expect(WEBHOOK_EVENT_GROUPS[key].templates.length).toBeGreaterThan(0);
     }

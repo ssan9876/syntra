@@ -35,13 +35,16 @@ export interface SecurityNotificationCategory {
 /**
  * Permissions whose grant is a privilege escalation worth telling people about.
  *
+ * Broader than change control's `PRIVILEGED_PERMISSIONS`: a grant of
+ * `provision.manage` is worth an email without being worth a second approver.
+ *
  * Authority over authority (`rbac.manage`, `tenant.manage`), over credentials
  * (`secrets.write`, `token.manage`), over the installation (`deployment.manage`),
  * over who may sign in and how (`policy.manage`, `access.manage`), over writes
  * into connected systems (`provision.manage`, `sync.manage`), and the two
  * that remove or accept what cannot be walked back.
  */
-export const PRIVILEGED_PERMISSIONS: readonly Permission[] = [
+export const NOTIFIABLE_PRIVILEGED_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.TENANT_MANAGE,
   PERMISSIONS.RBAC_MANAGE,
   PERMISSIONS.SECRETS_WRITE,
@@ -259,7 +262,7 @@ async function qualifies(tx: TenantClient, event: MailableEvent): Promise<boolea
       if (event.outcome !== 'success') return false;
       if (typeof roleId !== 'string') return false;
       const role = await tx.role.findUnique({ where: { id: roleId }, select: { permissions: true } });
-      return role?.permissions.some((p) => (PRIVILEGED_PERMISSIONS as readonly string[]).includes(p)) ?? false;
+      return role?.permissions.some((p) => (NOTIFIABLE_PRIVILEGED_PERMISSIONS as readonly string[]).includes(p)) ?? false;
     }
     case 'mfa.removed':
       return event.payload.by === 'administrator';
