@@ -389,6 +389,105 @@ They are cached for ten seconds, so a scrape every fifteen seconds pays for
 them once and a misconfigured scraper cannot multiply the load on the database
 it is trying to observe.
 
+## Observability
+
+Three channels leave the process: **logs** (JSON on stdout), **traces**
+(optional OpenTelemetry, see [configuration](configure.md#tracing-opentelemetry))
+and **metrics** (above). One **correlation id** ties them to the audit log.
+
+### Correlation ids
+
+Every HTTP request and every background job runs under a 32-character hex
+correlation id. It is:
+
+- returned on every response as `x-correlation-id` — the thing to ask a user
+  for when they report an error;
+- on every log line written during that request or job, as `correlationId`;
+- on every audit event recorded during it, in the `correlationId` column, and
+  searchable with `GET /api/admin/audit?correlation=<id>`;
+- carried through pg-boss job payloads (under `_syntraTrace`, stripped before
+  a handler sees the payload), so work a request queues — and work *that*
+  job queues — shares the id. An HR import, the provisioning run it causes
+  and the connector calls that run makes are one id end to end.
+
+A job with no originating request (a cron-scheduled sync or import) starts a
+fresh id. With tracing on, the correlation id **is** the trace id, so an id
+from an audit event or a log line pastes straight into the tracing backend.
+
+The audit column is a join key, not evidence: it is outside the hash chain
+(so every chain written before it existed still verifies), immutable after
+insert like the rest of the row, and held to the 32-hex format by a database
+constraint. With tracing on, a caller may choose its own trace id by sending
+`traceparent` — standard behaviour, and harmless for a join key; with tracing
+off the id is always minted by the server.
+
+### Following one import through
+
+1. Take the `x-correlation-id` from the response that started it, or the
+   `correlationId` of its `person_import.*` audit event.
+2. `GET /api/admin/audit?correlation=<id>` lists every audit event of the
+   import, the provisioning run it enqueued and that run's actions.
+3. `grep '"correlationId":"<id>"'` over the logs shows the same work,
+   including errors that were logged but not audited.
+4. With tracing on, search the trace id in the backend: the request span,
+   `job personSource.run`, `job provision.person` or `job provision.run`,
+   `connector.<type>.<method>`
+   and `HTTP POST` spans form one tree.
+
+### What is traced (when enabled)
+
+| Span | Carries |
+|---|---|
+| `METHOD /route/:pattern` (server) | method, route **pattern**, status, tenant id |
+| `job <queue>` (consumer) | queue, job id, retry count, tenant id; parent is whatever enqueued it |
+| `connector.<type>.<method>` (client) | connector family and operation, records read for a streaming read |
+| `HTTP <METHOD>` (client, every `guardedFetch` call) | method, scheme, host, port, status |
+| `prisma:*` (only with `SYNTRA_OTEL_DATABASE=true`) | model, operation, parameterised SQL |
+
+Never on a span: URLs' paths or queries (a SCIM filter or a Graph path names
+the person), headers, bodies, client addresses, user agents, connector
+arguments (configs carry credentials, records carry people), or raw exception
+messages and stacks. A failure is recorded as its type, its code and a
+scrubbed message; `recordException` is not used. `traceparent` is **not**
+forwarded to connector targets — they are third parties, and the span tree
+already provides the correlation. pg-boss's own polling queries and raw `pg`
+calls are not traced.
+
+### What logs never contain
+
+One logger configuration serves the API and every background job
+(`apps/api/src/logging.ts`), and one rule set
+(`packages/connectors/src/observability/redact.ts`) decides what is a secret
+and what is personal, for logs and span attributes alike:
+
+- **Errors** keep type, code, status, a scrubbed message and stack, and the
+  cause chain. The request an HTTP client error carries (`config`,
+  `request`, `response`) is reduced to method, URL without query, and status
+  — so `Authorization`, cookies and request bodies never reach the output.
+- **Secret keys** — passwords, tokens, cookies, authorization headers, client
+  secrets, private keys, SAML assertions, vault plaintext, TOTP secrets,
+  recovery codes — are replaced wherever they appear, whatever the casing.
+- **Personal keys** — email, names, UPN, phone, DN, employee id, account
+  names, whole person records and attribute bags — are replaced too.
+- **Free text** is scrubbed of bearer tokens, JWTs, PEM blocks, SAML XML, URL
+  credentials, query strings, `password=`-style pairs, DN values and email
+  addresses.
+- **Size** is bounded: depth 6, 50 entries per object or array, 1,000
+  characters per string (4,000 for a stack).
+
+Kept deliberately: tenant ids and other UUIDs (an incident cannot be scoped
+without them), hosts and ports, error codes, and the client address on
+request log lines — it is the evidence a credential-stuffing investigation
+starts from, and the audit log records it for the same reason. Log retention
+is therefore the deployment's personal-data retention for client addresses;
+set it accordingly.
+
+Metrics labels carry no redaction pass at all, so their safety is
+structural: a closed set of label names (`method`, `route`, `status`,
+`kind`, `quantile`, `target_type`, `action`, `outcome`, `version`), each
+holding a bounded vocabulary, enforced by a test that fails when a new label
+appears.
+
 ## What a session records about a person
 
 A session row carries the address it was established from and the browser's

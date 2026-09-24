@@ -545,6 +545,11 @@ model AuditEvent {
   payload     Json
   prevHash    String
   hash        String
+  /// The request or job this event happened in: the OpenTelemetry trace id when
+  /// tracing is on, otherwise a random id in the same format. A JOIN KEY into
+  /// logs and traces, not evidence -- deliberately outside `hash`, so older
+  /// events verify unchanged and a verifier needs no knowledge of it.
+  correlationId String?
 
   @@unique([tenantId, sequence])
   @@index([tenantId, occurredAt])

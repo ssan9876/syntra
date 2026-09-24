@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '@syntra/db';
+import { currentCorrelationId, newCorrelationId, withCorrelation } from '@syntra/connectors';
 import { syncScheduleKey } from '../sync/jobs.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
 import { applyPersonSourceSchedule, PERSON_IMPORT_JOB, personSourceScheduleKey } from '../person-source/jobs.js';
@@ -77,6 +78,36 @@ describe('scheduler', () => {
 
     await waitFor(() => seen.length === 1);
     expect(seen).toEqual(['tenant-abc']);
+  });
+
+  it('carries the correlation id through a chain of jobs, and hides the carrier from handlers', async () => {
+    // The HR import -> provisioning run -> connector call chain in miniature:
+    // a request enqueues job A, A enqueues B. Both must run under the
+    // request's id, and neither handler may see the carrier field.
+    const seen: Array<{ job: string; data: unknown; correlationId: string | null }> = [];
+    scheduler.register<{ step: string }>('test.chain.a', async (data) => {
+      seen.push({ job: 'a', data, correlationId: currentCorrelationId() });
+      await scheduler.enqueue('test.chain.b', { step: 'b' });
+    });
+    scheduler.register<{ step: string }>('test.chain.b', async (data) => {
+      seen.push({ job: 'b', data, correlationId: currentCorrelationId() });
+    });
+    scheduler.register('test.chain.fresh', async () => {
+      seen.push({ job: 'fresh', data: null, correlationId: currentCorrelationId() });
+    });
+    await scheduler.start();
+
+    const requestId = newCorrelationId();
+    await withCorrelation(requestId, () => scheduler.enqueue('test.chain.a', { step: 'a' }));
+    // Enqueued outside any request: a fresh id, never none.
+    await scheduler.enqueue('test.chain.fresh', {});
+
+    await waitFor(() => seen.length === 3);
+    const byJob = Object.fromEntries(seen.map((entry) => [entry.job, entry]));
+    expect(byJob.a).toEqual({ job: 'a', data: { step: 'a' }, correlationId: requestId });
+    expect(byJob.b).toEqual({ job: 'b', data: { step: 'b' }, correlationId: requestId });
+    expect(byJob.fresh!.correlationId).toMatch(/^[0-9a-f]{32}$/);
+    expect(byJob.fresh!.correlationId).not.toBe(requestId);
   });
 
   it('retries a handler that throws', async () => {

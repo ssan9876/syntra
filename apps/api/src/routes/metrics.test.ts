@@ -150,6 +150,34 @@ describe('request timings', () => {
     expect(body).toContain('/api/admin/users/:id/sessions');
   });
 
+  it('uses only a closed set of label names, none of which can carry a person or a correlation id', async () => {
+    // Backlog #56: metrics labels are the one telemetry channel with no
+    // redaction pass at all, so the guarantee is structural -- a closed list
+    // of label NAMES, each of which only ever holds a bounded vocabulary.
+    // Adding a label means adding it here, deliberately.
+    const response = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/admin/users?email=jane.doe@acme.test',
+      headers: { host: TEST_HOST },
+    });
+    const correlationId = response.headers['x-correlation-id'] as string;
+
+    const body = (await scrape()).body;
+    const labelNames = new Set(
+      [...body.matchAll(/\{([^}]*)\}/g)].flatMap((match) =>
+        [...match[1]!.matchAll(/(\w+)="/g)].map((label) => label[1]!),
+      ),
+    );
+    const allowed = new Set([
+      'method', 'route', 'status', 'le', 'version', 'kind', 'quantile', 'target_type', 'action', 'outcome',
+      // prom-client's default process/runtime metrics.
+      'type', 'space', 'major', 'minor', 'patch', 'gc',
+    ]);
+    for (const name of labelNames) expect(allowed.has(name), `unexpected label ${name}`).toBe(true);
+    expect(body).not.toContain('jane.doe');
+    expect(body).not.toContain(correlationId);
+  });
+
   it('puts no tenant hostname in any label', async () => {
     await ctx.app.inject({
       method: 'GET',

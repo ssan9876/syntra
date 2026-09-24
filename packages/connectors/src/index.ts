@@ -32,3 +32,5 @@ export * from './ad/config.js';
 export * from './ad/provenance.js';
 export * from './ad/sid.js';
 export * from './ad/connector.js';
+export * from './observability/redact.js';
+export * from './observability/tracing.js';

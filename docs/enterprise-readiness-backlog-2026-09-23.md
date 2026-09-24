@@ -216,9 +216,30 @@ is retained; merged code alone is not enough.
 55. **Build — End-to-end tracing.** Correlate HR event, operation, job,
     connector request, observation, notification, and audit event without
     logging secrets or excess personal data.
+    **Implemented:** every request and job runs under a correlation id that is
+    returned as `x-correlation-id`, stamped on every log line, carried through
+    pg-boss payloads across job hops, and recorded on audit events
+    (`AuditEvent.correlationId`, outside the hash chain, format-constrained,
+    filterable). Optional OpenTelemetry (off unless
+    `OTEL_EXPORTER_OTLP_ENDPOINT` is set; not loaded when off) traces HTTP
+    requests, job execution parented on the enqueuer, connector operations,
+    outbound `guardedFetch` calls and, opt-in, Prisma; span attributes pass
+    the same redaction rules. Remaining: webhook/notification delivery is
+    correlated through its job but has no dedicated span, and raw `pg` and
+    pg-boss polling queries are not traced.
 56. **Build — Structured redaction.** Centralize safe error serialization and
     test logs, traces, metrics labels, exports, and support bundles for secret
     and personal-data leakage.
+    **Implemented for logs, traces and metrics labels:** one rule set and one
+    application logger (safe error serializer, redacting formatter, message
+    scrubbing, pino `redact` paths) with tests that push connector errors
+    carrying `Authorization` headers, LDAP bind errors with DN and password,
+    and person/vault/MFA context through the real logger and a real span
+    exporter and assert nothing sensitive survives; metrics labels are pinned
+    to a closed set. Remaining: exports and support bundles are not yet routed
+    through the shared rules (the offboarding export excludes secrets by
+    construction), and client addresses are deliberately kept on request log
+    lines.
 57. **Build — Queue recovery controls.** Detect orphaned, stuck, duplicated,
     delayed, poisoned, and saturation-deferred jobs; keep repair idempotent.
 58. **Build — Cooperative cancellation.** Add explicit cancellation states and

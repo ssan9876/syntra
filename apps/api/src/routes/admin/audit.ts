@@ -24,6 +24,13 @@ export const auditQuery = z.object({
       z.array(z.string().uuid()),
     )
     .optional(),
+  /**
+   * Every event recorded in one request or job: the id every log line and
+   * (when tracing is on) every span of that request or job carries, and that
+   * every response returns in `x-correlation-id`. The same 32-hex format the
+   * column's CHECK enforces, so a malformed value is a 400 and not a scan.
+   */
+  correlation: z.string().regex(/^[0-9a-f]{32}$/).optional(),
 });
 
 export async function registerAdminAuditRoutes(
@@ -35,12 +42,13 @@ export async function registerAdminAuditRoutes(
     '/audit',
     { preHandler: requirePermission(PERMISSIONS.AUDIT_READ) },
     async (request) => {
-      const { limit, before, subject } = auditQuery.parse(request.query);
+      const { limit, before, subject, correlation } = auditQuery.parse(request.query);
 
       return request.db(async (tx) => {
         const events = await listEvents(tx, {
           limit,
           before,
+          ...(correlation ? { correlationId: correlation } : {}),
           ...(subject ? { subjectIds: subject } : {}),
         });
 

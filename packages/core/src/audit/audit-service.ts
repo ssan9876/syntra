@@ -4,6 +4,12 @@ import { currentTenant } from '../tenant-context.js';
 import { isSecurityEvent, securityProjection } from '../notify/security-events.js';
 import { enqueueWebhooks } from '../notify/webhook-service.js';
 import { countSecurityEvent } from '../health/metrics.js';
+import { currentCorrelationId, isCorrelationId } from '@syntra/connectors';
+
+function auditCorrelationId(): string | null {
+  const id = currentCorrelationId();
+  return isCorrelationId(id) ? id : null;
+}
 
 export const GENESIS_HASH = '0'.repeat(64);
 
@@ -158,6 +164,11 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
       payload: payload as never,
       prevHash,
       hash,
+      // Outside the hash on purpose -- see the column's migration. Null outside
+      // a request or job, and when the id in scope is not well formed (the
+      // database CHECK would refuse it, and an audit write must not fail for
+      // the sake of a telemetry join key).
+      correlationId: auditCorrelationId(),
     },
   });
 
@@ -284,10 +295,13 @@ export async function listEvents(
     limit?: number | undefined;
     before?: number | undefined;
     subjectIds?: string[] | undefined;
+    /** Every event recorded in one request or job -- see `correlationId`. */
+    correlationId?: string | undefined;
   } = {},
 ) {
   const where: Record<string, unknown> = {};
   if (opts.before) where['sequence'] = { lt: opts.before };
+  if (opts.correlationId) where['correlationId'] = opts.correlationId;
   if (opts.subjectIds) {
     where['OR'] = [
       { targetId: { in: opts.subjectIds } },

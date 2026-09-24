@@ -72,7 +72,6 @@ import { registerOidcTokenRoutes } from './routes/oidc-token.js';
 import { registerOidcLogoutRoutes } from './routes/oidc-logout.js';
 import { registerFederationRoutes } from './routes/federation.js';
 import { invalidateProvider } from '@syntra/protocols';
-import { serializeRequest } from './request-logging.js';
 import { captureRouteCatalog, type CatalogRoute } from './openapi/route-catalog.js';
 import { registerOpenApiRoute } from './openapi/route.js';
 
@@ -82,6 +81,9 @@ declare module 'fastify' {
     routeCatalog: CatalogRoute[];
   }
 }
+
+import { loggerOptions, type LogStream } from './logging.js';
+import { registerTracing } from './plugins/tracing.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -105,6 +107,11 @@ export interface AppOptions {
    * relying on MailDev happening to be the thing listening on port 1025.
    */
   transport?: Transport;
+  /**
+   * Where log lines are written. Defaults to stdout; the redaction tests pass
+   * a collector so they assert on what the REAL application logger emits.
+   */
+  logStream?: LogStream;
 }
 
 /**
@@ -119,10 +126,9 @@ export async function buildApp(
   options: AppOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: options.logger === false ? false : {
-      level: process.env.LOG_LEVEL ?? 'info',
-      serializers: { req: serializeRequest },
-    },
+    // One logger configuration for the process -- redaction, the error
+    // serializer and the correlation mixin all live in `logging.ts`.
+    logger: options.logger === false ? false : loggerOptions({ stream: options.logStream }),
     // Which proxies may be believed about a request's source address. Off
     // unless TRUST_PROXY says otherwise, and never a bare `true` — see the
     // variable's own documentation in config.ts. request.ip feeds both the
@@ -155,6 +161,10 @@ export async function buildApp(
   // route cannot exist without the document at least knowing it does.
   const routeCatalog = captureRouteCatalog(app);
   app.decorate('routeCatalog', routeCatalog);
+
+  // First, so every later hook and handler runs with a correlation id and,
+  // when tracing is on, inside the request's span.
+  registerTracing(app);
 
   // Read once, from configuration, and available wherever a cookie is written.
   app.decorate('cookieSecure', config.cookieSecure);
