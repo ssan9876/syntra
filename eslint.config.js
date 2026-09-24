@@ -56,6 +56,7 @@ export default tseslint.config(
             'vitest.global-setup.ts',
             'vitest.setup-worker.ts',
             'playwright.config.ts',
+            'prisma.config.ts',
             'eslint.config.js',
             'apps/web/vite.config.ts',
             'apps/web/vitest.config.ts',
