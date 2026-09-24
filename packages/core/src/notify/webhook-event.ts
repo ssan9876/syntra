@@ -145,6 +145,22 @@ export const WEBHOOK_EVENT_GROUPS = {
       'api_token.issued',
       'api_token.revoked',
       'auth.token_denied',
+      // What Syntra itself signs in WITH (backlog #34). A connector credential
+      // replaced in place, each step of a dual-secret rotation, an advance
+      // warning and the expiry itself, a new pinned SFTP host key, an owner or
+      // declared expiry changed, and a signing key rolled over.
+      'credential.changed',
+      'credential.metadata_updated',
+      'credential.rotation_staged',
+      'credential.rotation_verified',
+      'credential.rotation_cut_over',
+      'credential.rotation_completed',
+      'credential.rotation_rolled_back',
+      'credential.rotation_cancelled',
+      'credential.expiring',
+      'credential.expired',
+      'person_source.host_key_accepted',
+      'signing_key.rotated',
     ],
   },
   configuration: {
@@ -158,6 +174,8 @@ export const WEBHOOK_EVENT_GROUPS = {
       'policy.rules_reordered',
       'policy.default_set',
       'tenant.settings_updated',
+      // Who is emailed about which of these, and when a credential warns.
+      'tenant.security_notifications_updated',
       'rbac.role_created',
       'rbac.role_updated',
       'rbac.role_deleted',
@@ -217,6 +235,19 @@ export const WEBHOOK_EVENT_GROUPS = {
       'provision.target.external_writes.resume',
       'provision.target.external_writes.expire',
     ],
+  },
+  /**
+   * Bulk copies of tenant data leaving through the export service (backlog
+   * #48, #52). A group of its own because the people who watch data leaving
+   * -- a DLP or SIEM integration -- are not the people who watch sign-in or
+   * configuration, and should be able to subscribe to exactly this. Creation,
+   * each download and revocation; generation and expiry are bookkeeping.
+   */
+  'data-exports': {
+    label: 'Data exports',
+    source: 'audit',
+    description: 'A bulk export of tenant data was requested, downloaded or revoked.',
+    templates: ['export.request', 'export.download', 'export.revoke'],
   },
 } as const;
 

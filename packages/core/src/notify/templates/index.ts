@@ -252,6 +252,33 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nThe {{operationKind}} operation for {{personName}} completed: every required step reached its observed state or was resolved by hand.\n\n{{operationUrl}}',
     html: '<p>Hello {{displayName}},</p><p>The <strong>{{operationKind}}</strong> operation for {{personName}} completed: every required step reached its observed state or was resolved by hand.</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
   },
+  /**
+   * Customer-visible security notifications (backlog #52) and credential
+   * expiry alerts (backlog #34).
+   *
+   * Written into the outbox directly by `notify/security-policy.ts` and
+   * `credentials/expiry-scan.ts`, never through `enqueueOutbox`: the audit
+   * event behind each one has already been fanned out to webhook subscribers
+   * by `recordEvent`, and a second delivery under a template name would reach
+   * an all-events endpoint twice. Like a webhook body, none of these carries
+   * the audit payload -- the reader is sent to the audit log, behind a
+   * sign-in, for the detail.
+   */
+  'security-event': {
+    subject: 'Security notification: {{eventLabel}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\n{{eventLabel}} ({{action}}, {{outcome}}) at {{occurredAt}}.\n\nCategory: {{categoryLabel}}. Audit sequence {{sequence}}.\n\nReview it in the audit log: {{auditUrl}}\n\nYou receive this because you hold tenant.manage and this category is set to email administrators.',
+    html: '<p>Hello {{displayName}},</p><p><strong>{{eventLabel}}</strong> ({{action}}, {{outcome}}) at {{occurredAt}}.</p><p>Category: {{categoryLabel}}. Audit sequence {{sequence}}.</p><p><a href="{{auditUrl}}">Review it in the audit log</a></p><p>You receive this because you hold tenant.manage and this category is set to email administrators.</p>',
+  },
+  'security-credential-expiring': {
+    subject: 'A credential expires in {{daysRemaining}} days — {{credentialLabel}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{credentialLabel}} for {{subjectName}} expires on {{expiresAt}} ({{daysRemaining}} days). Expiry source: {{expirySource}}.\n\nRotate it before then: {{inventoryUrl}}\n\nYou will be told again at each remaining threshold and when it expires.',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{credentialLabel}}</strong> for {{subjectName}} expires on {{expiresAt}} ({{daysRemaining}} days). Expiry source: {{expirySource}}.</p><p><a href="{{inventoryUrl}}">Rotate it before then</a></p><p>You will be told again at each remaining threshold and when it expires.</p>',
+  },
+  'security-credential-expired': {
+    subject: 'A credential has expired — {{credentialLabel}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{credentialLabel}} for {{subjectName}} expired on {{expiresAt}}. Anything that depends on it is failing now or will fail at its next use.\n\n{{inventoryUrl}}',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{credentialLabel}}</strong> for {{subjectName}} expired on {{expiresAt}}. Anything that depends on it is failing now or will fail at its next use.</p><p><a href="{{inventoryUrl}}">{{inventoryUrl}}</a></p>',
+  },
 } satisfies Record<string, Template>;
 
 export type TemplateName = keyof typeof TEMPLATES;

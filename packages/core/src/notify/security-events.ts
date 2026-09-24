@@ -9,7 +9,13 @@ import { WEBHOOK_EVENT_GROUPS } from './webhook-event.js';
  * subscription that matches an event nothing ever fans out, which is
  * indistinguishable from a broken receiver.
  */
-const SECURITY_GROUPS = ['sign-in-security', 'credentials', 'configuration', 'write-stops'] as const;
+const SECURITY_GROUPS = [
+  'sign-in-security',
+  'credentials',
+  'configuration',
+  'write-stops',
+  'data-exports',
+] as const;
 
 const SECURITY_ACTIONS: ReadonlySet<string> = new Set(
   SECURITY_GROUPS.flatMap((key) => [...WEBHOOK_EVENT_GROUPS[key].templates]),

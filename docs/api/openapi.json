@@ -42,6 +42,9 @@
       "name": "Automate"
     },
     {
+      "name": "Credentials"
+    },
+    {
       "name": "Deployment updates"
     },
     {
@@ -5410,6 +5413,775 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials": {
+      "get": {
+        "operationId": "getCredentials",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "List the credential inventory",
+        "description": "Every credential Syntra holds, issues or depends on: connector secrets, pinned SFTP host keys, upstream identity provider secrets and certificates, service-provider certificates, signing keys, API tokens, webhook signing secrets and OIDC client secrets. Each entry carries its expiry and where that came from (`certificate`, `issued`, `discovered`, `declared`, `none` or `unknown`), when it was last rotated, its owner, a status against the tenant's alert thresholds, and any open rotation. Never a secret.\n\nRequires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/{key}": {
+      "patch": {
+        "operationId": "patchCredentialsByKey",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Set a credential's owner, declared expiry or note",
+        "description": "A declared expiry is accepted only for connector and upstream client secrets, whose expiry the issuer does not publish to Syntra; a certificate, signing key or token carries its own. Audited as `credential.metadata_updated`.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 160,
+              "pattern": "^[a-z_]+\\.[0-9a-f-]{36}(\\.[0-9a-f]{16,64})?$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ownerUserId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "declaredExpiresAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations": {
+      "get": {
+        "operationId": "getCredentialsRotations",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "List credential rotations",
+        "description": "Requires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "systemKind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "target",
+                "source",
+                "person_source"
+              ]
+            }
+          },
+          {
+            "name": "systemId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "open",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postCredentialsRotations",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Stage a new connector secret for rotation",
+        "description": "Seals the new secret beside the live one; nothing uses it until cut-over. One open rotation per system. Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "systemKind": {
+                    "type": "string",
+                    "enum": [
+                      "target",
+                      "source",
+                      "person_source"
+                    ]
+                  },
+                  "systemId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "secret": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16384
+                  },
+                  "newExpiresAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "systemKind",
+                  "systemId",
+                  "secret"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}": {
+      "get": {
+        "operationId": "getCredentialsRotationsById",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Read one credential rotation and its evidence",
+        "description": "Requires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/cancel": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdCancel",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Abandon a rotation before cut-over",
+        "description": "Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/complete": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdComplete",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Test the live secret again and erase the old one",
+        "description": "A failed check is recorded and answered 422, and the old secret is kept so the rotation can still be rolled back. Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/cutover": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdCutover",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Make the staged secret live and keep the old one for rollback",
+        "description": "Refused unless the last test passed, is under a day old, and was made against the configuration as it is saved now. Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/rollback": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdRollback",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Restore the previous secret after a cut-over",
+        "description": "Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/verify": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdVerify",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Test the staged secret against the saved configuration",
+        "description": "Runs the connector's own connection test with the staged secret. Pass or fail, the result is recorded as evidence. Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/scan": {
+      "post": {
+        "operationId": "postCredentialsScan",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Run the credential expiry scan now",
+        "description": "Discovers Entra client-secret expiry where the app registration may read itself (optional `Application.Read.All`; a refusal is remembered for a week unless `forceDiscovery`), then raises each advance alert or expiry alert not yet raised. The same scan runs daily.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "forceDiscovery": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -19049,6 +19821,136 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/security-notifications": {
+      "get": {
+        "operationId": "getSecurityNotifications",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Read the security notification policy",
+        "description": "The customer-visible security event categories, the audit actions in each, which ones also email `tenant.manage` holders, and the credential expiry alert thresholds.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putSecurityNotifications",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Choose which security categories email administrators",
+        "description": "Also sets the credential expiry thresholds, in days. Audited as `tenant.security_notifications_updated`.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "emailCategories": {
+                    "maxItems": 6,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "credential_changes",
+                        "privileged_role_grants",
+                        "data_exports",
+                        "write_stops",
+                        "suspicious_authentication",
+                        "credential_expiry"
+                      ]
+                    }
+                  },
+                  "alertDays": {
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 365
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"

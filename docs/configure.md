@@ -807,13 +807,14 @@ nobody reads does not discharge the obligation.
 
 ### Getting them out
 
-A webhook endpoint can subscribe to four security groups, alongside the six
+A webhook endpoint can subscribe to five security groups, alongside the six
 Automate and Govern ones:
 
 | Group | What arrives |
 |---|---|
 | **Sign-in security** | Lockouts, failed second factors, policy denials, refused protocol signatures, and administrative elevation |
-| **Credentials** | Second factors enrolled or removed, recovery codes issued, passwords changed or renewed, sessions and tokens revoked |
+| **Credentials** | Second factors enrolled or removed, recovery codes issued, passwords changed or renewed, sessions and tokens revoked; connector and upstream credentials replaced (`credential.changed`), each step of a credential rotation, credential expiry warnings and expiries, an SFTP host key pinned, a signing key rolled over |
+| **Data exports** | A bulk export of tenant data requested, downloaded or revoked (`export.request`, `export.download`, `export.revoke`) |
 | **Configuration changes** | Policy rules, roles, tenant settings, protocol and upstream configuration, webhook endpoints, and deployment updates |
 | **Emergency write stops** | A tenant-wide or per-target external-write stop placed, resumed by a second administrator, or expired on its own (`provision.{tenant,target}.external_writes.{pause,resume,expire}`) |
 
@@ -954,6 +955,112 @@ unsigned — it is served over TLS from the tenant's own host, which
 no per-launch consent screen. `sweepExpiredArtifacts` exists and expiry is
 enforced on read, but nothing runs it on a schedule; the table grows until
 somebody does.
+
+## Credentials and security notifications
+
+**Settings → Credentials** is one inventory of every credential this tenant's
+Syntra holds, issues or depends on, soonest to expire first. **Settings →
+Security alerts** is the security notification policy. Both are also API
+routes: `GET /api/admin/credentials` and `/api/admin/security-notifications`.
+
+### The credential inventory
+
+| Credential | Expiry comes from | Last rotated | Rotation |
+|---|---|---|---|
+| Provisioning target credential (AD bind password, SCIM token, HTTP credential, Entra client secret) | Entra: **discovered** from Microsoft Graph when the app registration may read itself (below); otherwise **declared** by an administrator, or unknown | when the vault entry was last written | dual-secret workflow |
+| Directory source bind password | declared, or unknown | vault entry written | dual-secret workflow |
+| HR feed (SFTP) password or private key | declared, or unknown | vault entry written | dual-secret workflow |
+| Pinned SFTP host key | never expires | last `person_source.host_key_accepted` | re-pin on the source |
+| Upstream identity provider client secret | declared, or unknown | vault entry written | `POST /api/admin/upstreams` |
+| Upstream identity provider signing certificates | the certificate | the certificate's `notBefore` | re-import metadata |
+| Service-provider signing and encryption certificates Syntra trusts | the certificate | the certificate's `notBefore` | the application's SAML settings |
+| Syntra's SAML and OIDC signing keys | the key's `notAfter` (an outgoing key's overlap end is shown, never alerted) | the key's creation | OIDC monthly and automatic; SAML by an operator |
+| API tokens (revoked ones, and ones expired over 30 days ago, are left out) | the token's `expiresAt`, or never | issue time | issue, install, revoke |
+| Webhook signing secrets | never expires | vault entry written | `POST /api/admin/webhooks/:id/secret` |
+| OIDC client secrets Syntra issued | never expires | not recorded | the application's OIDC settings |
+
+No entry carries a secret, a vault name, or a digest of either; certificates
+are identified by their public SHA-256 fingerprint. Each entry can be given an
+**owner** (who is mailed about it), a **note**, and — for the four credentials
+whose issuer does not tell Syntra — a **declared expiry**. A declared expiry is
+refused for anything that carries its own. Deployment secrets
+(`SESSION_SECRET`, the master key, `METRICS_TOKEN`, SMTP) are not tenant data
+and are not listed; see the [secret-rotation runbook](runbooks/secret-rotation.md).
+
+**Entra expiry discovery is optional and never required.** Granting the app
+registration `Application.Read.All` (the `readCredentialExpiry` entry in the
+capability matrix) lets the daily scan read the registration's own
+`passwordCredentials` and match the secret Syntra holds by its three-character
+hint. Without it Graph answers 403, the entry says so, the expiry stays
+declared or unknown, and the scan does not ask again for a week (**Scan now**
+asks immediately). Nothing about provisioning changes either way.
+
+### Expiry alerts
+
+A scan runs daily at 06:20 UTC for each tenant, and on **Scan now**
+(`POST /api/admin/credentials/scan`). For each credential with an expiry it
+raises the most urgent threshold crossed — the defaults are 30, 14, 7 and 1
+days, and **Security alerts** changes them — and then the expiry itself. Each
+is raised **once per expiry date**: the record keeps the expiry and the
+threshold last alerted, a second replica's concurrent scan cannot raise it
+again, and a new expiry (a rotation, a new declaration) starts the ladder over.
+
+Each alert is an audit event (`credential.expiring` or `credential.expired`,
+in the **Credentials** webhook group) and a mail to the credential's owner. The
+`tenant.manage` holders are mailed too when **Credential expiry** is switched on
+under Security alerts, or when the credential has no active owner — somebody is
+always told. An expired credential is also a critical entry on **Activity →
+Needs attention** until it is rotated or removed.
+
+### Rotating a connector credential
+
+Targets, directory sources and HR feeds have a dual-secret rotation, from the
+**Rotate** action on the inventory or `POST /api/admin/credentials/rotations`.
+It needs `provision.manage` for a target and `sync.manage` for a source.
+
+1. **Create the new secret at the issuer without deleting the old one.**
+2. **Stage** it. It is sealed beside the live one and nothing uses it.
+3. **Test** it. The connector's own connection test runs with the staged
+   secret against the saved configuration; pass or fail is recorded.
+4. **Cut over**, only after a passed test under a day old, and only if the
+   connection settings have not changed since. The staged secret becomes live,
+   the old one is kept sealed, and cached access tokens are dropped.
+5. **Complete**: the live secret is tested again and, only if it passes, the
+   old one is erased and a readiness check is recorded. Then revoke the old
+   secret at the issuer. Or **roll back**, which puts the old secret back.
+
+Every step is a `credential.rotation_*` audit event and an entry in the
+rotation's evidence (who, when, the test result and the configuration
+fingerprint it ran against). One rotation per system may be open at a time.
+Replacing a credential in place from the connector screen still works and is
+now announced as `credential.changed`.
+
+### The security notification policy
+
+These are the customer-visible security events. Every one of them is audited
+and delivered to any webhook endpoint subscribed to its group; the **Email**
+column is what **Security alerts** can additionally send, by mail, to every
+active holder of `tenant.manage`. All categories are off by default. A mail
+carries the event's name, outcome, time and audit sequence — never the audit
+payload — and is never held for a daily digest.
+
+| Category | Events | Webhook group | Email |
+|---|---|---|---|
+| Credential changes | `credential.changed`, `credential.rotation_cut_over`, `credential.rotation_completed`, `credential.rotation_rolled_back`, `api_token.issued`, `api_token.revoked`, `notify.webhook_secret_rotated`, `person_source.host_key_accepted`, `signing_key.rotated` (mailed for SAML only; the OIDC key rolls monthly) | Credentials | opt-in |
+| Privileged role grants | `rbac.role_assigned`, mailed only when the role carries `tenant.manage`, `rbac.manage`, `secrets.write`, `token.manage`, `deployment.manage`, `policy.manage`, `access.manage`, `provision.manage`, `sync.manage`, `directory.delete` or `govern.accept_risk` | Configuration changes | opt-in |
+| Data exports | `export.request` (download and revocation reach webhooks only) | Data exports | opt-in |
+| Emergency write stops | `provision.{tenant,target}.external_writes.{pause,resume,expire}` | Emergency write stops | opt-in |
+| Suspicious authentication | `auth.lockout`, `auth.lockout_cleared`, `mfa.removed` (mailed only when an administrator removed it), `oidc.decision_missing` | Sign-in security, Credentials | opt-in |
+| Credential expiry | `credential.expiring`, `credential.expired` | Credentials | owner always; administrators opt-in, or when there is no owner |
+
+**Break-glass use.** Syntra has no break-glass account type. The closest
+controls are administrative elevation (`auth.elevate`, Sign-in security) and
+the emergency write stops above; an organisation that keeps a break-glass
+administrator should subscribe an endpoint to Sign-in security and alert on
+that account's `auth.elevate`.
+
+Changing the policy is audited as `tenant.security_notifications_updated` in
+the Configuration changes group.
 
 ## Machine access
 

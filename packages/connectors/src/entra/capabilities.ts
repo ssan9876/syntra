@@ -40,6 +40,7 @@ export const ENTRA_CAPABILITY_NAMES = [
   'nestedGroups',
   'dynamicGroups',
   'deleteAccount',
+  'readCredentialExpiry',
 ] as const;
 
 export type EntraCapabilityName = (typeof ENTRA_CAPABILITY_NAMES)[number];
@@ -135,6 +136,12 @@ export const ENTRA_CAPABILITY_MATRIX: EntraCapabilityMatrix = {
       validation: 'automated',
       requiredPermissions: [],
       note: 'No code path issues DELETE /users. Disable, never delete: every action Provision proposes has to be one that four thousand instances of can be walked back.',
+    },
+    readCredentialExpiry: {
+      status: 'available',
+      validation: 'automated',
+      requiredPermissions: ['Application.Read.All'],
+      note: "OPTIONAL and never required. The credential expiry scan reads the app registration's own passwordCredentials and matches the secret Syntra holds by its three-character hint. Without this consent Graph answers 403, the expiry is shown as unknown, and nothing else changes.",
     },
   },
 };

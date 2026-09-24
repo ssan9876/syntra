@@ -37,6 +37,7 @@ import {
   JobNotQueuedError,
   queueImportRun,
   recordEvent,
+  recordConnectorCredentialChanged,
   removePersonSourceSchedule,
   setPersonMappings,
   skipImportChange,
@@ -310,7 +311,15 @@ export async function registerAdminPersonSourceRoutes(
       const { id } = idParam.parse(request.params);
       const body = updatePersonSourceRequest.parse(request.body);
       const source = await request
-        .db((tx) => updatePersonSource(tx, provider, id, body))
+        .db(async (tx) => {
+          const updated = await updatePersonSource(tx, provider, id, body);
+          // The credential was replaced with no audit trace at all until this
+          // (backlog #52): an SFTP password or key is a credential change.
+          if (updated && body.credential !== undefined) {
+            await recordConnectorCredentialChanged(tx, request.session.userId, 'PersonSource', id, request.ip ?? null);
+          }
+          return updated;
+        })
         .catch(asProblem);
       if (!source) throw new ProblemError(404, 'not-found', 'Person source not found');
       await reschedule(request, source);

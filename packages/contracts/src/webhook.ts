@@ -9,7 +9,7 @@ import { z } from "zod";
  * drift silently -- and it did its job when the three security groups were
  * added, failing before anything shipped.
  *
- * The first six carry notification templates; the last four carry audit
+ * The first six carry notification templates; the last five carry audit
  * action names. `source` on the core map is what records the difference; here
  * they are simply the values the console may write.
  */
@@ -24,6 +24,7 @@ export const webhookEventGroups = [
   "credentials",
   "configuration",
   "write-stops",
+  "data-exports",
 ] as const;
 
 /**

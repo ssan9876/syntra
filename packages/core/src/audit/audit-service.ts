@@ -3,6 +3,7 @@ import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
 import { isSecurityEvent, securityProjection } from '../notify/security-events.js';
 import { enqueueWebhooks } from '../notify/webhook-service.js';
+import { enqueueSecurityNotification } from '../notify/security-policy.js';
 import { countSecurityEvent } from '../health/metrics.js';
 import { currentCorrelationId, isCorrelationId } from '@syntra/connectors';
 
@@ -222,6 +223,20 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
       ],
       occurredAt,
     );
+
+    // The opt-in mail channel of the security notification policy (backlog
+    // #52): the same event, to `tenant.manage` holders, when the tenant has
+    // switched its category on. Same transaction, for the same reason as the
+    // webhooks above.
+    await enqueueSecurityNotification(tx, {
+      action: input.action,
+      outcome: input.outcome,
+      occurredAt,
+      sequence,
+      actorUserId: input.actorUserId,
+      targetId: input.targetId,
+      payload,
+    });
   }
 
   return event;

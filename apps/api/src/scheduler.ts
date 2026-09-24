@@ -25,6 +25,8 @@ import {
   registerLifecycleJobs,
   registerWriteStopJobs,
   registerExportJobs,
+  registerCredentialJobs,
+  scheduleCredentialScan,
   scheduleExportSweep,
   scheduleKeyRotation,
   scheduleLifecycleMaintenance,
@@ -330,6 +332,19 @@ export async function scheduleBackgroundWork(
     }
   }
 
+  // Credential expiry scan (backlog #34). Appended last for the same reason
+  // as the export sweep: it opens no transaction, and `scheduler.test.ts`
+  // counts them.
+  for (const tenant of tenants) {
+    try {
+      attempt('credential expiry scan');
+      await scheduleCredentialScan(scheduler, tenant.id);
+    } catch (cause) {
+      failure('credential expiry scan');
+      logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule the credential expiry scan');
+    }
+  }
+
   // --- did any of that actually take? -------------------------------------
   //
   // Everything above logs its own failures per tenant and carries on, which is
@@ -452,6 +467,9 @@ export async function startSyncScheduler(
     // The provider is NOT optional: the generator seals every file under it,
     // and the API's download route opens it with the same master key.
     registerExportJobs(scheduler, provider);
+    // The provider is NOT optional: Entra expiry discovery unseals each
+    // target's client secret to ask Graph about it.
+    registerCredentialJobs(scheduler, provider);
     // The transport is NOT optional here. Ruling P16 made this point about
     // Provision's initial passwords: without one, an unattended path produces
     // something and delivers it to nobody. In Automate the whole notification

@@ -24,6 +24,24 @@ describe('isSecurityEvent', () => {
     }
   });
 
+  it('announces credential lifecycle events and export creation (backlog #34, #52)', () => {
+    for (const action of [
+      'credential.changed',
+      'credential.rotation_cut_over',
+      'credential.expiring',
+      'credential.expired',
+      'signing_key.rotated',
+      'person_source.host_key_accepted',
+      'export.request',
+      'export.download',
+    ]) {
+      expect(isSecurityEvent(action), action).toBe(true);
+    }
+    // Generation and expiry are bookkeeping, not something to be told about.
+    expect(isSecurityEvent('export.ready')).toBe(false);
+    expect(isSecurityEvent('export.expire')).toBe(false);
+  });
+
   it('is false for ordinary traffic', () => {
     expect(isSecurityEvent('application.launch')).toBe(false);
     expect(isSecurityEvent('person.update')).toBe(false);
@@ -38,7 +56,7 @@ describe('isSecurityEvent', () => {
     // group and forgot the allowlist, and the symptom -- a subscription that
     // matches an event nothing fans out -- looks exactly like a broken
     // receiver.
-    for (const key of ['sign-in-security', 'credentials', 'configuration', 'write-stops'] as const) {
+    for (const key of ['sign-in-security', 'credentials', 'configuration', 'write-stops', 'data-exports'] as const) {
       for (const action of WEBHOOK_EVENT_GROUPS[key].templates as readonly string[]) {
         expect(isSecurityEvent(action), action).toBe(true);
       }
