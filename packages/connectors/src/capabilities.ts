@@ -31,7 +31,11 @@ const capabilities: Record<string, ConnectorCapabilities> = {
     createAccount: true,
     updateAccount: true,
     disableAccount: true,
-    manageEntitlements: false,
+    // Group membership by PATCH on `members`, read back from the group, and
+    // certified by the shared lifecycle runner. The flag said `false` while it
+    // was display-only; once capability enforcement made it a gate, that stale
+    // value refused every SCIM grant that had worked the day before.
+    manageEntitlements: true,
   },
   /**
    * The ceiling for a document-driven target, not a promise about any one

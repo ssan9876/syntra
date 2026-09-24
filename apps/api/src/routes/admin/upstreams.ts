@@ -5,6 +5,7 @@ import {
   listUpstreams,
   type MasterKeyProvider,
   recordEvent,
+  recordConnectorCredentialChanged,
   upsertUpstream,
 } from '@syntra/core';
 import { requirePermission } from '../../plugins/require-permission.js';
@@ -81,6 +82,9 @@ export async function registerAdminUpstreamRoutes(
             secretWritten: body.clientSecret !== undefined,
           },
         });
+        if (body.clientSecret !== undefined) {
+          await recordConnectorCredentialChanged(tx, request.session.userId, 'UpstreamIdp', saved.id, request.ip);
+        }
         return saved;
       });
 

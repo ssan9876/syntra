@@ -808,6 +808,11 @@ export async function registerAdminUserRoutes(
       const { id, type } = adminFactorParams.parse(request.params);
 
       const orphanedCodes = await request.db(async (tx) => {
+        // Looked up first: another tenant's user (which RLS hides) was a 200
+        // that audited `mfa.removed`, success, against an id nobody here holds.
+        if (!(await tx.user.findUnique({ where: { id }, select: { id: true } }))) {
+          throw new ProblemError(404, 'not-found', 'User not found');
+        }
         if (type === 'totp') await removeTotp(tx, id);
         else if (type === 'recovery_code') await removeRecoveryCodes(tx, id);
         else await tx.webAuthnCredential.deleteMany({ where: { userId: id } });

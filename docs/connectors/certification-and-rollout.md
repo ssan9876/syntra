@@ -66,10 +66,11 @@ manual account move is an `update_account` and is subject to the same checks.
 Refusal is per action, not per run: one uncertified capability does not hold
 up a leaver's disable on the same target.
 
-Note: the shipped `scim2` capability table does not advertise entitlement
-management, so SCIM grants and revocations are refused even though the
-adapter's certification covers them. Changing that is a product decision
-about the SCIM table, not something enforcement works around.
+Note: the `scim2` capability table advertises entitlement management,
+matching what the adapter implements (group membership by PATCH, read back
+from the group) and what its certification covers. Before enforcement the
+flag was display-only and said `false`; enforcing that stale value refused
+every SCIM grant, so it was corrected rather than worked around.
 
 ## Rollout: canary, pin and rollback
 

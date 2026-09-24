@@ -5,6 +5,10 @@ import { SettingsSessionsTab } from './SettingsSessionsTab.js';
 import { BrandingTab } from './BrandingTab.js';
 import { WebhooksTab } from './WebhooksTab.js';
 import { TenantDeletionTab } from './TenantDeletionTab.js';
+import { CredentialsTab } from './CredentialsTab.js';
+import { SecurityAlertsTab } from './SecurityAlertsTab.js';
+import { ChangeControlTab } from './ChangeControlTab.js';
+import { BreakGlassTab } from './BreakGlassTab.js';
 
 /**
  * Settings: how this organization signs in, what it looks like, and where it
@@ -36,6 +40,14 @@ export function TenantSettingsPage() {
           { id: 'sessions', label: 'Sessions', content: <SettingsSessionsTab /> },
           { id: 'branding', label: 'Branding', content: <BrandingTab /> },
           { id: 'webhooks', label: 'Webhooks', content: <WebhooksTab /> },
+          // What Syntra signs in with and what it trusts, with expiry and
+          // rotation (backlog #34, #67); and who is mailed about security
+          // events (backlog #52). The expiry alert mails link here.
+          { id: 'credentials', label: 'Credentials', content: <CredentialsTab /> },
+          { id: 'security-alerts', label: 'Security alerts', content: <SecurityAlertsTab /> },
+          // Separation of duties for privileged changes, and emergency access.
+          { id: 'change-control', label: 'Change control', content: <ChangeControlTab /> },
+          { id: 'break-glass', label: 'Break-glass', content: <BreakGlassTab /> },
           { id: 'offboarding', label: 'Offboarding', content: <TenantDeletionTab /> },
         ]}
       />

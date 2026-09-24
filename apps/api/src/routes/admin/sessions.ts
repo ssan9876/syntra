@@ -81,6 +81,11 @@ export async function registerAdminSessionRoutes(app: FastifyInstance): Promise<
       const { id } = idParam.parse(request.params);
 
       return request.db(async (tx) => {
+        // Looked up first, as every other `/users/:id` route does: another
+        // tenant's user was a 200 that audited a success against their id.
+        if (!(await tx.user.findUnique({ where: { id }, select: { id: true } }))) {
+          throw new ProblemError(404, 'not-found', 'User not found');
+        }
         const { sessionsRevoked } = await endSessions(tx, id, {
           trigger: 'admin',
           actorUserId: request.session.userId,

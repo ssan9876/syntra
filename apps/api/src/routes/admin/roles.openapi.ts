@@ -15,7 +15,7 @@ export const rolesOpenApi = describeAdminRoutes('Roles', {
   'POST /roles': { summary: 'Create a role', body: roleBody, status: 201 },
   'PATCH /roles/:id': {
     summary: 'Update a role',
-    description: 'Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`.',
+    description: 'Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`. Adding a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.',
     body: patchRoleBody,
     params: idParam,
     status: 204,
@@ -28,6 +28,7 @@ export const rolesOpenApi = describeAdminRoutes('Roles', {
   },
   'POST /roles/:id/assignments': {
     summary: 'Assign a role to a user',
+    description: 'Assigning a role that carries a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.',
     body: roleAssignmentBody,
     params: idParam,
     status: 204,

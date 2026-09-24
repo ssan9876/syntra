@@ -60,10 +60,12 @@ describe('removeMember', () => {
     expect(user).not.toBeNull();
   });
 
-  it('is silent when the membership does not exist', async () => {
+  it('is silent when the membership does not exist, and says it removed nothing', async () => {
+    // Zero rather than a throw: removal is idempotent. The count is what lets
+    // the route audit only a removal that happened.
     await expect(
       withTenant(tenantId, (tx) => removeMember(tx, groupId, userId)),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(0);
   });
 });
 

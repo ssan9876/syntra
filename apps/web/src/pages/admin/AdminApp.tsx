@@ -2,6 +2,8 @@ import { lazy, Suspense, type ComponentType } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell.js';
 import { AdminNav } from './AdminNav.js';
+import { BreakGlassBanner } from './BreakGlassBanner.js';
+import { HeldChangePrompt } from './HeldChangePrompt.js';
 
 /**
  * Every console page is its own chunk.
@@ -27,6 +29,7 @@ const GroupDetailPage = page(() => import('./GroupDetailPage.js'), 'GroupDetailP
 const OnboardPersonPage = page(() => import('./OnboardPersonPage.js'), 'OnboardPersonPage');
 const PersonDetailPage = page(() => import('./PersonDetailPage.js'), 'PersonDetailPage');
 const ActivityPage = page(() => import('./ActivityPage.js'), 'ActivityPage');
+const OperationsPage = page(() => import('./OperationsPage.js'), 'OperationsPage');
 const UpdatesPage = page(() => import('./UpdatesPage.js'), 'UpdatesPage');
 const SourcesPage = page(() => import('./SourcesPage.js'), 'SourcesPage');
 const PersonSourceDetailPage = page(() => import('./PersonSourceDetailPage.js'), 'PersonSourceDetailPage');
@@ -62,6 +65,8 @@ const GuidedOnboardingPage = page(() => import('./GuidedOnboardingPage.js'), 'Gu
 const LifecycleOperationPage = page(() => import('./LifecycleOperationPage.js'), 'LifecycleOperationPage');
 const LifecycleSimulationPage = page(() => import('./LifecycleSimulationPage.js'), 'LifecycleSimulationPage');
 const LifecyclePolicyPage = page(() => import('./LifecyclePolicyPage.js'), 'LifecyclePolicyPage');
+const PrivacyPage = page(() => import('./PrivacyPage.js'), 'PrivacyPage');
+const PrivacyCasePage = page(() => import('./PrivacyCasePage.js'), 'PrivacyCasePage');
 
 /** Quiet, like the boot screen: most pages arrive before it is noticed. */
 function PageLoading() {
@@ -81,6 +86,10 @@ export function AdminApp() {
           over the outer one and silently undo it, which is how the console
           ended up narrow and hugging its rail on a wide monitor. */}
       <div className="w-full">
+          {/* Above every page: emergency access nobody can miss, and the
+              reason prompt every held privileged change goes through. */}
+          <BreakGlassBanner />
+          <HeldChangePrompt />
           <Suspense fallback={<PageLoading />}>
           <Routes>
             <Route path="users" element={<UsersPage />} />
@@ -187,6 +196,9 @@ export function AdminApp() {
             <Route path="policy" element={<PoliciesPage />} />
             {/* Attention is the audit log filtered, not a second place. */}
             <Route path="activity" element={<ActivityPage />} />
+            <Route path="operations" element={<OperationsPage />} />
+            <Route path="privacy" element={<PrivacyPage />} />
+            <Route path="privacy/:id" element={<PrivacyCasePage />} />
             <Route path="audit" element={<Navigate to="/admin/activity?tab=all" replace />} />
             <Route path="exports" element={<Navigate to="/admin/activity?tab=exports" replace />} />
             <Route path="roles" element={<RolesPage />} />

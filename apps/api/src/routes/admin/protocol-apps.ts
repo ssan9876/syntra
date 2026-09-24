@@ -444,7 +444,9 @@ export async function registerAdminProtocolRoutes(
     const { id, claimId } = claimParams.parse(request.params);
 
     await request.db(async (tx) => {
-      await deleteClaimMapping(tx, claimId);
+      // Scoped by the application in the path, and only an event when a row
+      // went: a claim of a different application than :id is not removed.
+      if ((await deleteClaimMapping(tx, id, claimId)) === 0) return;
       await recordEvent(tx, {
         actorUserId: request.session.userId,
         action: 'access.claim_mapping_changed',

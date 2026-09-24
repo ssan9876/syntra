@@ -25,7 +25,8 @@ export type IncidentKind =
   | 'target_never_completed'
   | 'provision_run_failed'
   | 'sync_run_failed'
-  | 'task_failing';
+  | 'task_failing'
+  | 'credential_expired';
 
 export type IncidentSeverity = 'critical' | 'warning';
 
@@ -235,6 +236,28 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
       count: n,
       lastAt: failedTasks._max.createdAt,
       href: '/admin/automate/tasks',
+    });
+  }
+
+  // --- Credentials past their expiry -------------------------------------
+  // Written by the credential expiry scan (`effectiveExpiresAt`), which also
+  // raised the warnings before this. An expired credential is not a warning
+  // about later: whatever depends on it fails at its next use.
+  const expiredCredentials = await tx.credentialRecord.aggregate({
+    where: { effectiveExpiresAt: { lte: now } },
+    _count: { _all: true },
+    _max: { effectiveExpiresAt: true },
+  });
+  if (expiredCredentials._count._all > 0) {
+    const n = expiredCredentials._count._all;
+    incidents.push({
+      kind: 'credential_expired',
+      severity: 'critical',
+      title: `${n} ${plural(n, 'credential has', 'credentials have')} expired`,
+      detail: 'A connector, federation partner or integration that depends on it fails at its next use.',
+      count: n,
+      lastAt: expiredCredentials._max.effectiveExpiresAt,
+      href: '/admin/settings?tab=credentials',
     });
   }
 

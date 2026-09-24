@@ -64,13 +64,22 @@ export async function runLifecycleRetention(
     const activeHolds = await tx.lifecycleLegalHold.findMany({
       where: { releasedAt: null }, select: { subjectType: true, subjectId: true },
     });
-    const heldOperationIds = activeHolds.filter((hold) => hold.subjectType === 'lifecycle_operation').map((hold) => hold.subjectId);
+    // A hold on a PERSON holds every lifecycle operation about them.
+    const heldPersonIds = activeHolds.filter((hold) => hold.subjectType === 'person').map((hold) => hold.subjectId);
+    const heldPersonOperationIds = heldPersonIds.length === 0
+      ? []
+      : (await tx.lifecycleOperation.findMany({ where: { personId: { in: heldPersonIds } }, select: { id: true } })).map((op) => op.id);
+    const heldOperationIds = [
+      ...activeHolds.filter((hold) => hold.subjectType === 'lifecycle_operation').map((hold) => hold.subjectId),
+      ...heldPersonOperationIds,
+    ];
     const heldSimulationIds = activeHolds.filter((hold) => hold.subjectType === 'lifecycle_simulation').map((hold) => hold.subjectId);
 
     const receiptWhere = {
       updatedAt: { lt: cutoff(now, policy.receiptRetentionDays) },
       status: { in: ['applied', 'no_match'] },
       ...(heldOperationIds.length ? { requestKey: { notIn: heldOperationIds } } : {}),
+      ...(heldPersonIds.length ? { personId: { notIn: heldPersonIds } } : {}),
     };
     const observationWhere = {
       observedAt: { lt: cutoff(now, policy.observationRetentionDays) },
@@ -88,6 +97,9 @@ export async function runLifecycleRetention(
         { expiresAt: { lt: now } },
       ],
       ...(heldSimulationIds.length ? { id: { notIn: heldSimulationIds } } : {}),
+      // NOT IN over a nullable column would also keep every simulation that
+      // names nobody, so the person condition allows NULL explicitly.
+      ...(heldPersonIds.length ? { AND: [{ OR: [{ personId: null }, { personId: { notIn: heldPersonIds } }] }] } : {}),
     };
     // Deleting this row releases its tenant-scoped idempotency key. That is
     // allowed only for resolved work past the separately visible policy; an

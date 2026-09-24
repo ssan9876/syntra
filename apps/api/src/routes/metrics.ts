@@ -192,6 +192,19 @@ function buildRegistry(): MetricsHandles {
     KEY_EXPIRY,
     'Seconds until the nearest signing key expires. Absent where none exists.',
   );
+  // Queue recovery (backlog #57). Both labels are closed vocabularies from
+  // `job-health.ts`: the kind of work and the finding. Never a tenant, a
+  // queue payload or an id.
+  const jobHealth = new Gauge({
+    name: 'syntra_job_health_findings',
+    help: 'Background work that is orphaned, stuck, duplicated, delayed, poisoned or deferred by saturation, by kind of work.',
+    labelNames: ['kind', 'finding'] as const,
+    registers: [registry],
+  });
+  const jobQueueReadable = gauge(
+    'syntra_job_queue_readable',
+    '1 when the job queue could be read for health checks; 0 means orphaned work cannot be detected.',
+  );
   const usersTotal = new Gauge({
     name: 'syntra_users_total',
     help: 'Accounts by status.',
@@ -243,6 +256,10 @@ function buildRegistry(): MetricsHandles {
     for (const row of snapshot.targetOperationDurationSeconds) {
       targetDuration.set({ target_type: row.targetType, quantile: row.quantile }, row.seconds);
     }
+    for (const row of snapshot.jobHealth) {
+      jobHealth.set({ kind: row.kind, finding: row.finding }, row.count);
+    }
+    jobQueueReadable.set(snapshot.jobQueueReadable ? 1 : 0);
     usersTotal.set({ status: 'active' }, snapshot.usersActive);
     usersTotal.set({ status: 'inactive' }, snapshot.usersInactive);
 

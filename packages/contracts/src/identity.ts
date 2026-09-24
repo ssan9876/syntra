@@ -53,9 +53,15 @@ export const patchPersonRequest = z
      * remaining route back to the template would be deleting the unit.
      */
     orgUnitId: z.string().uuid().nullable().optional(),
+    /**
+     * The data-subject request this edit rectifies (backlog #70). The edit
+     * is the ordinary one; the case must be open and about this person, and
+     * the case records which fields changed.
+     */
+    privacyCaseId: z.string().uuid().optional(),
   })
   .strict()
-  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
+  .refine((v) => Object.keys(v).some((key) => key !== 'privacyCaseId'), { message: 'Nothing to change' });
 
 export const createContractRequest = z
   .object({
@@ -101,9 +107,11 @@ export const patchContractRequest = z
     location: z.string().max(256).nullable().optional(),
     managerPersonId: z.string().uuid().nullable().optional(),
     fte: z.number().min(0).max(2).nullable().optional(),
+    /** The data-subject request this correction rectifies; see `patchPersonRequest`. */
+    privacyCaseId: z.string().uuid().optional(),
   })
   .strict()
-  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to change' });
+  .refine((v) => Object.keys(v).some((key) => key !== 'privacyCaseId'), { message: 'Nothing to change' });
 
 /**
  * A contract is addressed by the sequence its person holds it at, rather than

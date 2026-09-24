@@ -46,6 +46,10 @@ const GROUPS: NavGroup[] = [
       { to: '/admin/users', label: 'Users', permission: 'directory.read' },
       { to: '/admin/groups', label: 'Groups', permission: 'directory.read' },
       { to: '/admin/org-units', label: 'Org units', permission: 'directory.read' },
+      // Data-subject requests: about people, so beside them. Its own
+      // permission, because a privacy officer is routinely not a directory
+      // administrator.
+      { to: '/admin/privacy', label: 'Privacy requests', permission: 'privacy.manage' },
     ],
   },
   {
@@ -86,6 +90,9 @@ const GROUPS: NavGroup[] = [
       // "Incidents" would not have explained itself. As a pair of tabs,
       // Attention beside All events, the filter shows what it is.
       { to: '/admin/activity', label: 'Activity', permission: 'audit.read' },
+      // Service status, stuck background work and the support bundle. The
+      // same permission as Activity: it gathers what is visible elsewhere.
+      { to: '/admin/operations', label: 'Operations', permission: 'audit.read' },
       // Sign-in, branding and webhooks: three links all gated on
       // `tenant.manage`, all configuring the same tenant.
       { to: '/admin/settings', label: 'Settings', permission: 'tenant.manage' },

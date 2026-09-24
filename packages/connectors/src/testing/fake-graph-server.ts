@@ -71,6 +71,19 @@ export interface FakeGraphServerOptions {
   groups?: FakeGraphGroup[];
   /** The server's page cap, applied even when `$top` asks for more. */
   pageSize?: number;
+  /**
+   * App registrations readable at `/applications(appId='...')`. Absent means
+   * the registration was never granted Application.Read.All, so the read is
+   * refused with 403 -- the ordinary case, and the one credential expiry
+   * discovery must survive.
+   */
+  applications?: FakeGraphApplication[];
+}
+
+export interface FakeGraphApplication {
+  appId: string;
+  passwordCredentials: { hint: string; displayName?: string; endDateTime: string; startDateTime?: string }[];
+  keyCredentials?: { displayName?: string; endDateTime: string; startDateTime?: string }[];
 }
 
 export interface FakeGraphServer {
@@ -296,6 +309,22 @@ export async function startFakeGraphServer(
               : injection.status === 401
                 ? graphError('InvalidAuthenticationToken', 'Access token validation failure.')
                 : graphError('ServiceUnavailable', 'The service is unavailable.'),
+      };
+    }
+
+    // ---- applications (credential expiry discovery) --------------------
+    const application = /^applications\(appId='([^']*)'\)$/.exec(decodeURIComponent(segments[0] ?? ''));
+    if (application && segments.length === 1 && method === 'GET') {
+      if (options.applications === undefined) {
+        return { status: 403, body: graphError('Authorization_RequestDenied', 'Insufficient privileges to complete the operation.') };
+      }
+      const found = options.applications.find((a) => a.appId === application[1]);
+      if (!found) {
+        return { status: 404, body: graphError('Request_ResourceNotFound', `Resource '${application[1]}' does not exist.`) };
+      }
+      return {
+        status: 200,
+        body: { id: randomUUID(), passwordCredentials: found.passwordCredentials, keyCredentials: found.keyCredentials ?? [] },
       };
     }
 

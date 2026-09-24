@@ -9,7 +9,9 @@ import {
 import {
   PERMISSIONS,
   WEBHOOK_MAX_ATTEMPTS,
+  assertOutboundUrl,
   createEndpoint,
+  isChangeClassHeld,
   deleteEndpoint,
   listEndpoints,
   type MasterKeyProvider,
@@ -21,6 +23,14 @@ import {
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
+import {
+  WEBHOOK_CREATE_OPERATION,
+  WEBHOOK_UPDATE_OPERATION,
+  heldReply,
+  holdPrivilegedChange,
+  webhookCreateRevision,
+  webhookUpdateRevision,
+} from '../../privileged-changes.js';
 
 export interface WebhookRouteOptions {
   keyProvider: MasterKeyProvider;
@@ -116,6 +126,25 @@ export async function registerAdminWebhookRoutes(
   app.post('/webhooks', manage, async (request, reply) => {
     const body = webhookCreateRequest.parse(request.body);
 
+    // SEPARATION OF DUTIES: where webhook endpoints are held for a second
+    // administrator, the address is checked now -- so the requester hears
+    // about an unusable one at once -- and the endpoint is created on
+    // approval, with its secret handed to the approver.
+    const held = await request.db(async (tx) => {
+      if (!(await isChangeClassHeld(tx, 'webhook_endpoint'))) return null;
+      await assertOutboundUrl(body.url, { allowPrivateAddresses: options.outboundAllowPrivate }).catch(asProblem);
+      return holdPrivilegedChange(request, tx, {
+        changeClass: 'webhook_endpoint',
+        operation: WEBHOOK_CREATE_OPERATION,
+        targetType: 'WebhookEndpoint',
+        targetId: null,
+        summary: `Create webhook "${body.name}" sending to ${body.url}`,
+        proposed: body,
+        baseRevision: await webhookCreateRevision(tx, body),
+      });
+    });
+    if (held) return heldReply(reply, held);
+
     const created = await request
       .db((tx) => createEndpoint(tx, provider, body, guard))
       .catch(asProblem);
@@ -144,9 +173,29 @@ export async function registerAdminWebhookRoutes(
     );
   });
 
-  app.put('/webhooks/:id', manage, async (request) => {
+  app.put('/webhooks/:id', manage, async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = webhookUpdateRequest.parse(request.body);
+
+    const held = await request.db(async (tx) => {
+      if (!(await isChangeClassHeld(tx, 'webhook_endpoint'))) return null;
+      const current = await tx.webhookEndpoint.findUnique({ where: { id }, select: { name: true } });
+      if (!current) throw new ProblemError(404, 'not-found', 'Webhook endpoint not found');
+      if (body.url !== undefined) {
+        await assertOutboundUrl(body.url, { allowPrivateAddresses: options.outboundAllowPrivate }).catch(asProblem);
+      }
+      const proposal = { id, patch: body };
+      return holdPrivilegedChange(request, tx, {
+        changeClass: 'webhook_endpoint',
+        operation: WEBHOOK_UPDATE_OPERATION,
+        targetType: 'WebhookEndpoint',
+        targetId: id,
+        summary: `Change webhook "${current.name}": ${Object.keys(body).join(', ')}`,
+        proposed: proposal,
+        baseRevision: await webhookUpdateRevision(tx, proposal),
+      });
+    });
+    if (held) return heldReply(reply, held);
 
     const saved = await request
       .db((tx) => updateEndpoint(tx, provider, id, body, guard))

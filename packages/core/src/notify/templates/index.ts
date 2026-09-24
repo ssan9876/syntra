@@ -252,6 +252,48 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nThe {{operationKind}} operation for {{personName}} completed: every required step reached its observed state or was resolved by hand.\n\n{{operationUrl}}',
     html: '<p>Hello {{displayName}},</p><p>The <strong>{{operationKind}}</strong> operation for {{personName}} completed: every required step reached its observed state or was resolved by hand.</p><p><a href="{{operationUrl}}">{{operationUrl}}</a></p>',
   },
+  /**
+   * Customer-visible security notifications (backlog #52) and credential
+   * expiry alerts (backlog #34).
+   *
+   * Written into the outbox directly by `notify/security-policy.ts` and
+   * `credentials/expiry-scan.ts`, never through `enqueueOutbox`: the audit
+   * event behind each one has already been fanned out to webhook subscribers
+   * by `recordEvent`, and a second delivery under a template name would reach
+   * an all-events endpoint twice. Like a webhook body, none of these carries
+   * the audit payload -- the reader is sent to the audit log, behind a
+   * sign-in, for the detail.
+   */
+  'security-event': {
+    subject: 'Security notification: {{eventLabel}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\n{{eventLabel}} ({{action}}, {{outcome}}) at {{occurredAt}}.\n\nCategory: {{categoryLabel}}. Audit sequence {{sequence}}.\n\nReview it in the audit log: {{auditUrl}}\n\nYou receive this because you hold tenant.manage and this category is set to email administrators.',
+    html: '<p>Hello {{displayName}},</p><p><strong>{{eventLabel}}</strong> ({{action}}, {{outcome}}) at {{occurredAt}}.</p><p>Category: {{categoryLabel}}. Audit sequence {{sequence}}.</p><p><a href="{{auditUrl}}">Review it in the audit log</a></p><p>You receive this because you hold tenant.manage and this category is set to email administrators.</p>',
+  },
+  'security-credential-expiring': {
+    subject: 'A credential expires in {{daysRemaining}} days — {{credentialLabel}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{credentialLabel}} for {{subjectName}} expires on {{expiresAt}} ({{daysRemaining}} days). Expiry source: {{expirySource}}.\n\nRotate it before then: {{inventoryUrl}}\n\nYou will be told again at each remaining threshold and when it expires.',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{credentialLabel}}</strong> for {{subjectName}} expires on {{expiresAt}} ({{daysRemaining}} days). Expiry source: {{expirySource}}.</p><p><a href="{{inventoryUrl}}">Rotate it before then</a></p><p>You will be told again at each remaining threshold and when it expires.</p>',
+  },
+  'security-credential-expired': {
+    subject: 'A credential has expired — {{credentialLabel}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThe {{credentialLabel}} for {{subjectName}} expired on {{expiresAt}}. Anything that depends on it is failing now or will fail at its next use.\n\n{{inventoryUrl}}',
+    html: '<p>Hello {{displayName}},</p><p>The <strong>{{credentialLabel}}</strong> for {{subjectName}} expired on {{expiresAt}}. Anything that depends on it is failing now or will fail at its next use.</p><p><a href="{{inventoryUrl}}">{{inventoryUrl}}</a></p>',
+  },
+  /**
+   * Break-glass. Sent to every holder of `tenant.manage` the moment emergency
+   * access is ASKED for, so the delay before it takes effect is time somebody
+   * knows about. Names the account and the reason, never the credential.
+   */
+  'break-glass-requested': {
+    subject: 'Emergency access requested for {{accountName}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nEmergency (break-glass) console access was requested for {{accountName}} ({{login}}) from {{sourceIp}}.\n\nReason given: {{reason}}\n\nIt takes effect at {{activatesAt}} unless an administrator cancels it before then, and lasts {{durationMinutes}} minutes. If you do not recognise this, cancel it now under Settings → Break-glass in the console and treat the sealed credential as compromised.',
+    html: '<p>Hello {{displayName}},</p><p>Emergency (break-glass) console access was requested for <strong>{{accountName}}</strong> ({{login}}) from {{sourceIp}}.</p><p>Reason given: {{reason}}</p><p>It takes effect at <strong>{{activatesAt}}</strong> unless an administrator cancels it before then, and lasts {{durationMinutes}} minutes. If you do not recognise this, cancel it now under Settings → Break-glass in the console and treat the sealed credential as compromised.</p>',
+  },
+  'break-glass-activated': {
+    subject: 'Emergency access is active for {{accountName}} — {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nEmergency (break-glass) console access for {{accountName}} ({{login}}) is now active ({{activatedBy}}) until {{expiresAt}}.\n\nReason given: {{reason}}\n\nAny administrator can end it early under Settings → Break-glass. When it ends, a different administrator must complete the post-event review.',
+    html: '<p>Hello {{displayName}},</p><p>Emergency (break-glass) console access for <strong>{{accountName}}</strong> ({{login}}) is now active ({{activatedBy}}) until <strong>{{expiresAt}}</strong>.</p><p>Reason given: {{reason}}</p><p>Any administrator can end it early under Settings → Break-glass. When it ends, a different administrator must complete the post-event review.</p>',
+  },
 } satisfies Record<string, Template>;
 
 export type TemplateName = keyof typeof TEMPLATES;

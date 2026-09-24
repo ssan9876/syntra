@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
+import { assertReferenceInTenant } from '../tenant-reference.js';
 import {
   conditionSchema,
   evaluateCondition,
@@ -405,6 +406,9 @@ export async function createCampaign(
   const scope = campaignScopeSchema.parse(input.scope);
 
   return withTenant(tenantId, async (tx) => {
+    // The owner is who a campaign's unassignable items fall back to; one from
+    // another tenant is nobody here. See tenant-reference.ts.
+    await assertReferenceInTenant(tx, 'person', input.ownerPersonId, 'ownerPersonId');
     const snapshot = await readableSnapshot(tx, input.snapshotId);
     const campaign = await tx.campaign.create({
       data: {

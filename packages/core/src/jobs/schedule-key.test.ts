@@ -6,6 +6,7 @@ import { webhookScheduleKey } from '../notify/webhook-jobs.js';
 import { provisionScheduleKey } from '../provision/jobs.js';
 import { syncScheduleKey } from '../sync/jobs.js';
 import { personSourceScheduleKey } from '../person-source/jobs.js';
+import { credentialScanScheduleKey } from '../credentials/expiry-scan.js';
 
 /**
  * Every schedule key pg-boss will accept.
@@ -47,6 +48,7 @@ const keys: [string, string][] = [
   ['provision', provisionScheduleKey(TENANT, 'a-target-id')],
   ['sync', syncScheduleKey(TENANT, 'a-source-id')],
   ['person-source', personSourceScheduleKey(TENANT, 'an-hr-source-id')],
+  ['credential-expiry', credentialScanScheduleKey(TENANT)],
 ];
 
 describe('schedule keys', () => {

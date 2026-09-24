@@ -6,9 +6,11 @@ import { governAccessCsv } from '../govern/export-service.js';
 import { governReadScope, holdsGovernPermission, type GovernScope } from '../govern/scope.js';
 import { enqueueForRow } from '../jobs/enqueue-for-row.js';
 import type { Scheduler } from '../jobs/scheduler.js';
+import { writeSubjectBundle, type BundleParams } from '../privacy/bundle.js';
 import { PERMISSIONS, type Permission } from '../rbac/permissions.js';
 import { hasPermission } from '../rbac/rbac-service.js';
 import { createEnvelopeSealer, openEnvelope } from '../vault/vault-service.js';
+import { SupportBundleWindowError, supportBundleWindow } from './support-bundle-window.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 
 /**
@@ -39,7 +41,12 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
  *     The row stays, as the record of who took what.
  */
 
-export const EXPORT_KINDS = ['audit_log', 'govern_access'] as const;
+/**
+ * `dsar_bundle` is a data-subject access bundle (backlog #70). It is requested
+ * only through a privacy case (`requestPrivacyAccessBundle`), which supplies
+ * the case and person; the generic request body does not offer it.
+ */
+export const EXPORT_KINDS = ['audit_log', 'govern_access', 'support_bundle', 'dsar_bundle'] as const;
 export type ExportKind = (typeof EXPORT_KINDS)[number];
 
 export type ExportStatus = 'queued' | 'running' | 'ready' | 'failed' | 'revoked' | 'expired';
@@ -62,9 +69,11 @@ export const EXPORT_BATCH_ROWS = 1000;
 /** A queued or running export older than this was abandoned by its worker. */
 export const EXPORT_ABANDONED_AFTER_MS = 2 * 60 * 60 * 1000;
 
-const FORMAT: Record<ExportKind, { format: 'jsonl' | 'csv'; contentType: string; stem: string }> = {
+const FORMAT: Record<ExportKind, { format: 'jsonl' | 'csv' | 'json'; contentType: string; stem: string }> = {
   audit_log: { format: 'jsonl', contentType: 'application/x-ndjson; charset=utf-8', stem: 'audit-log' },
   govern_access: { format: 'csv', contentType: 'text/csv; charset=utf-8', stem: 'govern-access' },
+  support_bundle: { format: 'jsonl', contentType: 'application/x-ndjson; charset=utf-8', stem: 'support-bundle' },
+  dsar_bundle: { format: 'json', contentType: 'application/json; charset=utf-8', stem: 'dsar-bundle' },
 };
 
 /**
@@ -73,9 +82,12 @@ const FORMAT: Record<ExportKind, { format: 'jsonl' | 'csv'; contentType: string;
  * account's authority and the token's, as every other route is.
  */
 export function exportPermissions(kind: ExportKind): Permission[] {
-  return kind === 'audit_log'
-    ? [PERMISSIONS.AUDIT_READ]
-    : [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT];
+  if (kind === 'audit_log') return [PERMISSIONS.AUDIT_READ];
+  // The support bundle describes the whole tenant's configuration and
+  // operations, so it needs authority over the whole tenant.
+  if (kind === 'support_bundle') return [PERMISSIONS.TENANT_MANAGE];
+  if (kind === 'dsar_bundle') return [PERMISSIONS.PRIVACY_MANAGE];
+  return [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT];
 }
 
 export type ExportRefusal =
@@ -127,8 +139,8 @@ export async function exportAuthority(
   userId: string,
   kind: ExportKind,
 ): Promise<ExportAuthority> {
-  if (kind === 'audit_log') {
-    const allowed = await hasPermission(tx, userId, PERMISSIONS.AUDIT_READ);
+  if (kind === 'audit_log' || kind === 'support_bundle' || kind === 'dsar_bundle') {
+    const allowed = await hasPermission(tx, userId, exportPermissions(kind)[0]!);
     return { allowed, fingerprint: allowed ? 'tenant' : null };
   }
   const scope = await governReadScope(tx, userId);
@@ -252,6 +264,19 @@ export async function requestExport(
   const ttlHours = input.ttlHours ?? EXPORT_TTL_DEFAULT_HOURS;
   if (!Number.isInteger(ttlHours) || ttlHours < 1 || ttlHours > EXPORT_TTL_MAX_HOURS) {
     throw new ExportRefusedError('state', `an export lives between 1 and ${EXPORT_TTL_MAX_HOURS} hours`);
+  }
+
+  // A support bundle's window is fixed HERE, at request, as explicit instants:
+  // a request for "the last day" means the day before it was asked for, not
+  // the day before a delayed job happened to run. At most seven days.
+  if (input.kind === 'support_bundle') {
+    try {
+      const window = supportBundleWindow(input.params);
+      input = { ...input, params: { from: window.from.toISOString(), to: window.to.toISOString() } };
+    } catch (cause) {
+      if (cause instanceof SupportBundleWindowError) throw new ExportRefusedError('state', cause.message);
+      throw cause;
+    }
   }
 
   const created = await withTenant(tenantId, async (tx) => {
@@ -426,6 +451,10 @@ export async function runExportJob(
   try {
     if (kind === 'audit_log') {
       rowCount = await writeAuditLog(tenantId, exportId, row, watermark, write);
+    } else if (kind === 'support_bundle') {
+      rowCount = await writeSupportBundle(tenantId, row, watermark, write);
+    } else if (kind === 'dsar_bundle') {
+      rowCount = await writeSubjectBundle(tenantId, row.params as unknown as BundleParams, watermark, write);
     } else {
       const params = row.params as { snapshotId?: string; systemId: string; resourceId?: string };
       const result = await governAccessCsv(
@@ -597,6 +626,44 @@ async function writeAuditLog(
 
   write(`${JSON.stringify({ type: 'syntra-export-end', export_id: exportId, event_count: count })}\n`);
   return count;
+}
+
+/**
+ * The support bundle as JSON Lines: the watermark, one record per section,
+ * and an end record with the section count. The sections are built and
+ * redacted by `support-bundle.ts`; see it for what they may contain.
+ *
+ * Imported when used rather than at the top: the bundle reads job health,
+ * which names this module's job, and a static import would be a cycle.
+ */
+async function writeSupportBundle(
+  tenantId: string,
+  row: ExportSummary,
+  watermark: Record<string, string>,
+  write: (text: string) => void,
+): Promise<number> {
+  const { buildSupportBundle } = await import('./support-bundle.js');
+  const params = (row.params ?? {}) as { from?: string; to?: string };
+  const window = supportBundleWindow(params, new Date());
+  const sections = await buildSupportBundle(tenantId, window);
+  write(
+    `${JSON.stringify({
+      type: 'syntra-export-watermark',
+      ...watermark,
+      kind: 'support_bundle',
+      window: { from: window.from.toISOString(), to: window.to.toISOString() },
+      statement:
+        'A redacted operational support bundle for the tenant named above: fingerprints, versions, statuses, counts and error classes only.',
+    })}
+`,
+  );
+  for (const section of sections) {
+    write(`${JSON.stringify({ type: 'section', name: section.name, data: section.data })}
+`);
+  }
+  write(`${JSON.stringify({ type: 'syntra-export-end', export_id: watermark.export_id, section_count: sections.length })}
+`);
+  return sections.length;
 }
 
 // ---- download --------------------------------------------------------------

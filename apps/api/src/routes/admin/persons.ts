@@ -13,6 +13,7 @@ import {
 } from '@syntra/contracts';
 import {
   PERMISSIONS,
+  assertReferenceInTenant,
   createContract,
   createPerson,
   deactivatePerson,
@@ -28,10 +29,40 @@ import {
   usersForPerson,
   hasPermission,
   projectPersonFields,
+  assertRectificationCase,
+  recordRectification,
+  PrivacyCaseRefusedError,
 } from '@syntra/core';
+import type { TenantClient } from '@syntra/db';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
+
+/**
+ * Rectification under a data-subject request (backlog #70) is the ordinary
+ * edit with the case named. Citing a case needs `privacy.manage` -- the case
+ * register is that permission's -- and the case must be open and about this
+ * person. Returns nothing; throws the problem to answer with.
+ */
+async function assertCitedCase(
+  tx: TenantClient,
+  userId: string,
+  caseId: string | undefined,
+  personId: string,
+): Promise<void> {
+  if (caseId === undefined) return;
+  if (!(await hasPermission(tx, userId, PERMISSIONS.PRIVACY_MANAGE))) {
+    throw new ProblemError(403, 'forbidden', 'Forbidden', `Citing a privacy case requires ${PERMISSIONS.PRIVACY_MANAGE}`);
+  }
+  try {
+    await assertRectificationCase(tx, caseId, personId);
+  } catch (cause) {
+    if (cause instanceof PrivacyCaseRefusedError) {
+      throw new ProblemError(cause.code === 'not-found' ? 404 : 409, `privacy-${cause.code}`, 'Privacy case refused', cause.message);
+    }
+    throw cause;
+  }
+}
 
 export async function registerAdminPersonRoutes(
   app: FastifyInstance,
@@ -450,6 +481,7 @@ export async function registerAdminPersonRoutes(
       return request.db(async (tx) => {
         const existing = await tx.person.findUnique({ where: { id } });
         if (!existing) throw new ProblemError(404, 'not-found', 'Person not found');
+        await assertCitedCase(tx, request.session.userId, body.privacyCaseId, id);
 
         if (existing.sourceId !== null) {
           const owned = await tx.personFieldMapping.findMany({
@@ -503,6 +535,9 @@ export async function registerAdminPersonRoutes(
           }
         }
 
+        // Looked up in this tenant first: the foreign key alone accepts another
+        // tenant's org unit. See tenant-reference.ts in core.
+        await assertReferenceInTenant(tx, 'orgUnit', body.orgUnitId, 'orgUnitId');
         const updated = await tx.person.update({
           where: { id },
           data: {
@@ -527,8 +562,18 @@ export async function registerAdminPersonRoutes(
           payload: {
             from: { givenName: existing.givenName, familyName: existing.familyName },
             to: { givenName: updated.givenName, familyName: updated.familyName },
+            ...(body.privacyCaseId === undefined ? {} : { privacyCaseId: body.privacyCaseId }),
           },
         });
+        if (body.privacyCaseId !== undefined) {
+          await recordRectification(tx, body.privacyCaseId, {
+            actorUserId: request.session.userId,
+            record: 'person',
+            recordId: id,
+            fields: Object.keys(body).filter((key) => key !== 'privacyCaseId'),
+            sourceIp: request.ip,
+          });
+        }
         return updated;
       });
     },
@@ -558,6 +603,7 @@ export async function registerAdminPersonRoutes(
       return request.db(async (tx) => {
         const person = await tx.person.findUnique({ where: { id } });
         if (!person) throw new ProblemError(404, 'not-found', 'Person not found');
+        await assertCitedCase(tx, request.session.userId, body.privacyCaseId, id);
 
         const before = await tx.contract.findFirst({
           where: { personId: id, sequence },
@@ -597,8 +643,18 @@ export async function registerAdminPersonRoutes(
               department: updated.department,
               isPrimary: updated.isPrimary,
             },
+            ...(body.privacyCaseId === undefined ? {} : { privacyCaseId: body.privacyCaseId }),
           },
         });
+        if (body.privacyCaseId !== undefined) {
+          await recordRectification(tx, body.privacyCaseId, {
+            actorUserId: request.session.userId,
+            record: 'contract',
+            recordId: updated.id,
+            fields: Object.keys(body).filter((key) => key !== 'privacyCaseId'),
+            sourceIp: request.ip,
+          });
+        }
         return updated;
       });
     },

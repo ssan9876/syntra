@@ -192,7 +192,8 @@ export async function registerAdminPolicyRoutes(
     async (request, reply) => {
       const { ruleId } = ruleParams.parse(request.params);
       await request.db(async (tx) => {
-        await deleteRule(tx, ruleId);
+        // Idempotent, but a rule this tenant does not hold is not an event.
+        if (!(await deleteRule(tx, ruleId))) return;
         await recordEvent(tx, {
           actorUserId: request.session.userId,
           action: 'policy.rule_deleted',

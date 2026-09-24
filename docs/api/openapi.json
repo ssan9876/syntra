@@ -42,6 +42,15 @@
       "name": "Automate"
     },
     {
+      "name": "Break-glass"
+    },
+    {
+      "name": "Change control"
+    },
+    {
+      "name": "Credentials"
+    },
+    {
       "name": "Deployment updates"
     },
     {
@@ -72,6 +81,9 @@
       "name": "Lifecycle operations"
     },
     {
+      "name": "Operations"
+    },
+    {
       "name": "Organizational units"
     },
     {
@@ -79,6 +91,9 @@
     },
     {
       "name": "Persons"
+    },
+    {
+      "name": "Privacy"
     },
     {
       "name": "Protocol applications"
@@ -5092,6 +5107,533 @@
         }
       }
     },
+    "/api/admin/break-glass": {
+      "get": {
+        "operationId": "getBreakGlass",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Get emergency accounts, recent activations and the activation delay",
+        "description": "Requires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/accounts": {
+      "post": {
+        "operationId": "postBreakGlassAccounts",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Designate an emergency (break-glass) account",
+        "description": "Never your own account, and only one that signs in with a local password. The response carries the sealed recovery credential, returned once and stored only as a digest: keep it offline. Needs a stepped-up session.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "required": [
+                  "userId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/accounts/{userId}": {
+      "delete": {
+        "operationId": "deleteBreakGlassAccountsByUserId",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Stop an account being an emergency account",
+        "description": "Requires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/accounts/{userId}/rotate": {
+      "post": {
+        "operationId": "postBreakGlassAccountsByUserIdRotate",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Issue a new sealed credential for an emergency account",
+        "description": "The previous credential stops working at once. Refused while an activation is open, and for your own account.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/activations/{id}/approve": {
+      "post": {
+        "operationId": "postBreakGlassActivationsByIdApprove",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Approve a pending emergency activation early",
+        "description": "Four-eyes: never the emergency account itself, from a stepped-up session. Takes effect at once and mails every tenant.manage holder.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/activations/{id}/end": {
+      "post": {
+        "operationId": "postBreakGlassActivationsByIdEnd",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Cancel a pending emergency activation, or end an active one",
+        "description": "Ending an active one ends its sessions at their next request and makes the post-event review due.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/activations/{id}/review": {
+      "post": {
+        "operationId": "postBreakGlassActivationsByIdReview",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Complete the post-event review of an emergency activation",
+        "description": "Never by the emergency account itself, with written findings, from a stepped-up session.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "notes": {
+                    "type": "string",
+                    "minLength": 20,
+                    "maxLength": 4000
+                  }
+                },
+                "required": [
+                  "notes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/settings": {
+      "put": {
+        "operationId": "putBreakGlassSettings",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Set how long an emergency activation waits before taking effect",
+        "description": "Fifteen minutes to 24 hours. Needs a console session stepped up in the last ten minutes.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "activationDelayMinutes": {
+                    "type": "integer",
+                    "minimum": 15,
+                    "maximum": 1440
+                  }
+                },
+                "required": [
+                  "activationDelayMinutes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/break-glass/status": {
+      "get": {
+        "operationId": "getBreakGlassStatus",
+        "tags": [
+          "Break-glass"
+        ],
+        "summary": "Get the break-glass state every console banner shows",
+        "description": "Pending and active emergency activations and the number of post-event reviews outstanding. Open to every administrative session.\n\nRequires an administrative session; no further permission. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/catalog": {
       "get": {
         "operationId": "getCatalog",
@@ -5129,6 +5671,356 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control": {
+      "get": {
+        "operationId": "getChangeControl",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Get the privileged change policy and the queue of held changes",
+        "description": "Lists which privileged change classes the tenant holds for a second administrator, the class catalogue, and recent change requests (pending ones past their 72-hour window are closed as expired first).\n\nRequires `tenant.manage` and `rbac.manage` and `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage",
+          "rbac.manage",
+          "token.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control/policy": {
+      "put": {
+        "operationId": "putChangeControlPolicy",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Set which privileged change classes are held for a second administrator",
+        "description": "Turning a class on applies at once. Turning one off is itself held: the response is `202` with the change request, and needs a reason in the `X-Syntra-Change-Reason` header (URI-encoded) — without one the answer is `409 change-approval-required`.\n\nRequires `tenant.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "classes": {
+                    "maxItems": 4,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "role_grant",
+                        "admin_token",
+                        "auth_policy",
+                        "webhook_endpoint"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "classes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control/requests/{id}/approve": {
+      "post": {
+        "operationId": "postChangeControlRequestsByIdApprove",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Approve and apply a held privileged change",
+        "description": "Four-eyes: never the requester, and only an administrator holding the permission the change class needs, from a console session stepped up in the last ten minutes. Refused as `stale` (and the request invalidated) if the object it changes was modified after the request. The change is applied in the same transaction; for a token or a new webhook endpoint the response carries its secret, returned once.\n\nRequires `tenant.manage` and `rbac.manage` and `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage",
+          "rbac.manage",
+          "token.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 1000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control/requests/{id}/reject": {
+      "post": {
+        "operationId": "postChangeControlRequestsByIdReject",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Reject a held privileged change",
+        "description": "Never the requester, who may withdraw instead.\n\nRequires `tenant.manage` and `rbac.manage` and `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage",
+          "rbac.manage",
+          "token.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 1000
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/change-control/requests/{id}/withdraw": {
+      "post": {
+        "operationId": "postChangeControlRequestsByIdWithdraw",
+        "tags": [
+          "Change control"
+        ],
+        "summary": "Withdraw your own held privileged change",
+        "description": "Requires `tenant.manage` and `rbac.manage` and `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "tenant.manage",
+          "rbac.manage",
+          "token.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -5410,6 +6302,822 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials": {
+      "get": {
+        "operationId": "getCredentials",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "List the credential inventory",
+        "description": "Every credential Syntra holds, issues or depends on: connector secrets, pinned SFTP host keys, upstream identity provider secrets and certificates, service-provider certificates, signing keys, API tokens, webhook signing secrets and OIDC client secrets. Each entry carries its expiry and where that came from (`certificate`, `issued`, `discovered`, `declared`, `none` or `unknown`), when it was last rotated, its owner, a status against the tenant's alert thresholds, and any open rotation. Never a secret.\n\nRequires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/{key}": {
+      "patch": {
+        "operationId": "patchCredentialsByKey",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Set a credential's owner, declared expiry or note",
+        "description": "A declared expiry is accepted only for connector and upstream client secrets, whose expiry the issuer does not publish to Syntra; a certificate, signing key or token carries its own. Audited as `credential.metadata_updated`.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 160,
+              "pattern": "^[a-z_]+\\.[0-9a-f-]{36}(\\.[0-9a-f]{16,64})?$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ownerUserId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "declaredExpiresAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations": {
+      "get": {
+        "operationId": "getCredentialsRotations",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "List credential rotations",
+        "description": "Requires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "systemKind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "target",
+                "source",
+                "person_source"
+              ]
+            }
+          },
+          {
+            "name": "systemId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "open",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postCredentialsRotations",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Stage a new connector secret for rotation",
+        "description": "Seals the new secret beside the live one; nothing uses it until cut-over. One open rotation per system. Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "systemKind": {
+                    "type": "string",
+                    "enum": [
+                      "target",
+                      "source",
+                      "person_source"
+                    ]
+                  },
+                  "systemId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "secret": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16384
+                  },
+                  "newExpiresAt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "systemKind",
+                  "systemId",
+                  "secret"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}": {
+      "get": {
+        "operationId": "getCredentialsRotationsById",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Read one credential rotation and its evidence",
+        "description": "Requires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/cancel": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdCancel",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Abandon a rotation before cut-over",
+        "description": "Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/complete": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdComplete",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Test the live secret again and erase the old one",
+        "description": "A failed check is recorded and answered 422, and the old secret is kept so the rotation can still be rolled back. Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/cutover": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdCutover",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Make the staged secret live and keep the old one for rollback",
+        "description": "Refused unless the last test passed, is under a day old, and was made against the configuration as it is saved now. Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/rollback": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdRollback",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Restore the previous secret after a cut-over",
+        "description": "Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/rotations/{id}/verify": {
+      "post": {
+        "operationId": "postCredentialsRotationsByIdVerify",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Test the staged secret against the saved configuration",
+        "description": "Runs the connector's own connection test with the staged secret. Pass or fail, the result is recorded as evidence. Requires `provision.manage` for a target and `sync.manage` for a directory source or HR feed, checked against the system the rotation belongs to.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/credentials/scan": {
+      "post": {
+        "operationId": "postCredentialsScan",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Run the credential expiry scan now",
+        "description": "Discovers Entra client-secret expiry where the app registration may read itself (optional `Application.Read.All`; a refusal is remembered for a week unless `forceDiscovery`), then raises each advance alert or expiry alert not yet raised. The same scan runs daily.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "forceDiscovery": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/deployment/status": {
+      "get": {
+        "operationId": "getDeploymentStatus",
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Read the installation status for the deployment operator",
+        "description": "The release, the readiness probes (causes redacted), migration state, queue depth, missing schedules and installation-wide counts of background-work findings and of degraded tenants. Counts only: no tenant is named.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -5710,7 +7418,7 @@
           "Exports"
         ],
         "summary": "Request an asynchronous export",
-        "description": "Answers 202 with the queued export. A background job generates the file in bounded batches, watermarks it with the export id, tenant, requester and time, records its SHA-256 and seals it at rest. The requester must hold the permissions of the kind, and a machine token must also hold them in its own scopes.\n\nRequires an administrative session; no further permission.",
+        "description": "Answers 202 with the queued export. A background job generates the file in bounded batches, watermarks it with the export id, tenant, requester and time, records its SHA-256 and seals it at rest. The requester must hold the permissions of the kind, and a machine token must also hold them in its own scopes. `support_bundle` (needs `tenant.manage`) is a redacted operational bundle -- fingerprints, versions, migration state, job health, connector readiness, recent failures by error class and audit event counts -- for a window of at most seven days (`params.from`/`params.to`, default the last day).\n\nRequires an administrative session; no further permission.",
         "x-syntra-permission": [],
         "x-syntra-token-allowed": true,
         "security": [
@@ -5835,6 +7543,42 @@
                     "required": [
                       "kind",
                       "params"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "support_bundle"
+                      },
+                      "params": {
+                        "default": {},
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "to": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "ttlHours": {
+                        "default": 24,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 72
+                      }
+                    },
+                    "required": [
+                      "kind"
                     ],
                     "additionalProperties": false
                   }
@@ -10913,6 +12657,149 @@
         }
       }
     },
+    "/api/admin/job-health": {
+      "get": {
+        "operationId": "getJobHealth",
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Report this tenant's orphaned, stuck, delayed or poisoned background work",
+        "description": "Compares every non-terminal run, receipt, export and lifecycle operation with the job queue and the clock, and reports what is `orphaned`, `stuck`, `duplicated`, `delayed`, `poisoned` or `saturation_deferred`. Each finding names the row, when the condition started, one sentence of explanation, and the repairs that are safe for it. When the queue cannot be read (`queueReadable: false`) nothing is reported orphaned. Only this tenant's rows and jobs are read.\n\nRequires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/job-health/repair": {
+      "post": {
+        "operationId": "postJobHealthRepair",
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Apply one idempotent, audited repair to a piece of background work",
+        "description": "`requeue` enqueues the job a queued run, export or receipt is missing; `mark_failed` ends a row no worker is running, with the reason; `release_lease` closes a provisioning apply whose heartbeat stopped as partially applied, leaving actions with an unknown outcome for verification against the target before the next run plans. The finding is re-derived when the repair runs: a repair of something already healthy answers `outcome: \"noop\"`, and a repair that is not safe for the current finding is refused with `409 repair-not-allowed`. Lifecycle operations are refused: retry them from their own page. Every attempt is an audit event (`job_health.<action>`).\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "sync_run",
+                      "person_import_run",
+                      "provision_run",
+                      "person_provision_receipt",
+                      "data_export",
+                      "lifecycle_operation",
+                      "scheduled_job"
+                    ]
+                  },
+                  "subjectId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "requeue",
+                      "mark_failed",
+                      "release_lease"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "kind",
+                  "subjectId",
+                  "action",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/lifecycle-legal-holds": {
       "get": {
         "operationId": "getLifecycleLegalHolds",
@@ -10955,7 +12842,8 @@
               "type": "string",
               "enum": [
                 "lifecycle_operation",
-                "lifecycle_simulation"
+                "lifecycle_simulation",
+                "person"
               ]
             }
           },
@@ -11026,7 +12914,8 @@
                     "type": "string",
                     "enum": [
                       "lifecycle_operation",
-                      "lifecycle_simulation"
+                      "lifecycle_simulation",
+                      "person"
                     ]
                   },
                   "subjectId": {
@@ -15797,6 +17686,11 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "privacyCaseId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
                 "additionalProperties": false
@@ -16154,6 +18048,11 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "privacyCaseId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                   }
                 },
                 "additionalProperties": false
@@ -18254,6 +20153,773 @@
         }
       }
     },
+    "/api/admin/privacy/cases": {
+      "get": {
+        "operationId": "getPrivacyCases",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "List data-subject request cases",
+        "description": "Open cases first, soonest due first; each carries the person's current (possibly pseudonymised) name and whether it is overdue.\n\nRequires `privacy.manage`.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed"
+              ]
+            }
+          },
+          {
+            "name": "personId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postPrivacyCases",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Open a data-subject request case",
+        "description": "For one person: what they asked for (access, rectification, restriction, erasure), the reason, how the requester's identity was verified, and when it was received. Due 30 days after receipt unless `dueInDays` says otherwise (at most 90). Allocates a reference such as DSAR-2026-0007. Audited as `privacy.case.open`.\n\nRequires `privacy.manage`.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "personId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "requestTypes": {
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "access",
+                        "rectification",
+                        "restriction",
+                        "erasure"
+                      ]
+                    }
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 2000
+                  },
+                  "verificationMethod": {
+                    "type": "string",
+                    "enum": [
+                      "in_person",
+                      "known_channel",
+                      "document",
+                      "authenticated_session",
+                      "other"
+                    ]
+                  },
+                  "verificationAttestation": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 2000
+                  },
+                  "receivedAt": {},
+                  "dueInDays": {
+                    "default": 30,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 90
+                  }
+                },
+                "required": [
+                  "personId",
+                  "requestTypes",
+                  "reason",
+                  "verificationMethod",
+                  "verificationAttestation"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}": {
+      "get": {
+        "operationId": "getPrivacyCasesById",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Read a case, its timeline and what the tenant holds about the person",
+        "description": "The timeline is the audit log: every event whose target is the case, plus the export service's events for the access bundles it queued. `holdings` counts rows per table the data inventory links to the person; `erasureBlockers` lists what would refuse an erasure now.\n\nRequires `privacy.manage`.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}/access-bundle": {
+      "post": {
+        "operationId": "postPrivacyCasesByIdAccessBundle",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Queue the person's access bundle",
+        "description": "Answers 202 with the queued export (kind `dsar_bundle`). A background job builds one JSON document from the data inventory -- each table's rows with its purpose, source, retention and legal basis -- watermarks it with the export, case, requester and time, seals it at rest and hands it only to the requester through `GET /exports/:id/download`.\n\nRequires `privacy.manage`.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ttlHours": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 72
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}/close": {
+      "post": {
+        "operationId": "postPrivacyCasesByIdClose",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Close a case",
+        "description": "Refused while an erasure awaits approval.\n\nRequires `privacy.manage`.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "default": "",
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}/erasure/approve": {
+      "post": {
+        "operationId": "postPrivacyCasesByIdErasureApprove",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Approve and perform the erasure",
+        "description": "Four-eyes: a different administrator than the requester, from a recently stepped-up session. Every blocker is re-checked in the transaction that erases. Personal fields are pseudonymised in place, credential material deleted and the audit log retained, exactly as the data inventory says; the response and the case carry the receipt.\n\nRequires `privacy.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}/erasure/cancel": {
+      "post": {
+        "operationId": "postPrivacyCasesByIdErasureCancel",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Cancel a pending erasure",
+        "description": "Requires `privacy.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}/erasure/request": {
+      "post": {
+        "operationId": "postPrivacyCasesByIdErasureRequest",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Request erasure of the person",
+        "description": "Refused while a legal hold covers the person or their lifecycle work, while lifecycle work or provisioning is unresolved, while the person is active, or while any account or access grant is live; the refusal lists each blocker. One erasure awaiting approval per person.\n\nRequires `privacy.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}/restriction": {
+      "post": {
+        "operationId": "postPrivacyCasesByIdRestriction",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Restrict processing of the person",
+        "description": "While restricted, provisioning withholds every action that writes the person's data or widens their access (visible on the plan as refused, naming the case), and HR imports and directory sync skip such changes. Disable, archive, revoke and deactivate still run.\n\nRequires `privacy.manage`.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}/restriction/lift": {
+      "post": {
+        "operationId": "postPrivacyCasesByIdRestrictionLift",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Lift the restriction",
+        "description": "Refused for an erased person, who stays restricted so a source that still holds them cannot write them back.\n\nRequires `privacy.manage`.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/privacy/cases/{id}/subject-data": {
+      "get": {
+        "operationId": "getPrivacyCasesByIdSubjectData",
+        "tags": [
+          "Privacy"
+        ],
+        "summary": "Search everything linked to the person",
+        "description": "Every table the data inventory links to people, found through the columns it names: the person, contracts, accounts, credentials (metadata only), sessions, target accounts, entitlements, requests and approvals, lifecycle work, run history and audit events by or about them. Returns a page of rows per table with the full count. Credential material is never returned. Audited as `privacy.case.search`.\n\nRequires `privacy.manage`.",
+        "x-syntra-permission": [
+          "privacy.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/provision/external-write-resume": {
       "post": {
         "operationId": "postProvisionExternalWriteResume",
@@ -18585,7 +21251,7 @@
           "Roles"
         ],
         "summary": "Update a role",
-        "description": "Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`.\n\nRequires `rbac.manage`.",
+        "description": "Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`. Adding a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `rbac.manage`.",
         "x-syntra-permission": [
           "rbac.manage"
         ],
@@ -18734,7 +21400,7 @@
           "Roles"
         ],
         "summary": "Assign a role to a user",
-        "description": "Requires `rbac.manage`.",
+        "description": "Assigning a role that carries a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `rbac.manage`.",
         "x-syntra-permission": [
           "rbac.manage"
         ],
@@ -19049,6 +21715,136 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/security-notifications": {
+      "get": {
+        "operationId": "getSecurityNotifications",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Read the security notification policy",
+        "description": "The customer-visible security event categories, the audit actions in each, which ones also email `tenant.manage` holders, and the credential expiry alert thresholds.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putSecurityNotifications",
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Choose which security categories email administrators",
+        "description": "Also sets the credential expiry thresholds, in days. Audited as `tenant.security_notifications_updated`.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "emailCategories": {
+                    "maxItems": 6,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "credential_changes",
+                        "privileged_role_grants",
+                        "data_exports",
+                        "write_stops",
+                        "suspicious_authentication",
+                        "credential_expiry"
+                      ]
+                    }
+                  },
+                  "alertDays": {
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 365
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -19977,6 +22773,53 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/status": {
+      "get": {
+        "operationId": "getStatus",
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Read this tenant's service status",
+        "description": "The shared components (API, database, job queue, key provider, mail) as working or not, and this tenant's own degradation: write stops, stale or failing connector readiness, connector outages and background-work findings. Reports nothing about any other tenant's activity -- not even the queue's depth.\n\nRequires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success.",
@@ -24726,7 +27569,7 @@
           "Tenant"
         ],
         "summary": "Replace the tenant's settings",
-        "description": "Includes session lifetimes and whether console access demands a security key; enabling that is refused unless the caller's own session was established with one.\n\nRequires `tenant.manage`.",
+        "description": "Includes session lifetimes and whether console access demands a security key; enabling that is refused unless the caller's own session was established with one. A body that relaxes any sign-in setting is an authentication-policy change. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `tenant.manage`.",
         "x-syntra-permission": [
           "tenant.manage"
         ],
@@ -27085,7 +29928,7 @@
           "API tokens"
         ],
         "summary": "Issue an API token for a service account",
-        "description": "The response carries the token secret. It is returned exactly once and cannot be read back; store it immediately.\n\nRequires `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "description": "The response carries the token secret. It is returned exactly once and cannot be read back; store it immediately. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `token.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
         "x-syntra-permission": [
           "token.manage"
         ],
@@ -27475,7 +30318,7 @@
           "Webhooks"
         ],
         "summary": "Create a webhook endpoint",
-        "description": "The response carries the signing secret. It is shown once and cannot be read back.\n\nRequires `tenant.manage`.",
+        "description": "The response carries the signing secret. It is shown once and cannot be read back. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one. On approval the secret goes to the approver.\n\nRequires `tenant.manage`.",
         "x-syntra-permission": [
           "tenant.manage"
         ],
@@ -27635,7 +30478,7 @@
           "Webhooks"
         ],
         "summary": "Update a webhook endpoint",
-        "description": "Requires `tenant.manage`.",
+        "description": "Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `tenant.manage`.",
         "x-syntra-permission": [
           "tenant.manage"
         ],

@@ -115,6 +115,18 @@ export const PERMISSIONS = {
    * different consequences, and only one of them is a copy.
    */
   GOVERN_EXPORT: 'govern.export',
+  /**
+   * Handling data-subject requests: opening a case, searching everything
+   * linked to the person, taking their access bundle, restricting processing,
+   * and requesting or approving an erasure.
+   *
+   * Separate from `identity.write` and `tenant.manage` because the person who
+   * answers a subject's request -- a privacy officer -- is routinely neither
+   * an HR administrator nor a tenant owner, and because the search it grants
+   * reaches across every module (accounts, requests, audit) in a way no other
+   * single permission does. Erasure still needs a SECOND holder to approve.
+   */
+  PRIVACY_MANAGE: 'privacy.manage',
   /*
    * There is deliberately no `govern.review`. Review authority comes from
    * resolution, as approval authority does in Automate. A tenant-wide "may

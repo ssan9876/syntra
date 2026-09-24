@@ -129,3 +129,51 @@ groups:
         annotations:
           summary: More than five hundred background jobs are waiting; the scheduler is not keeping up
           runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+      - alert: SyntraJobsOrphaned
+        expr: sum(syntra_job_health_findings{finding="orphaned"}) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Background work is waiting on a job that does not exist, or a provisioning apply lost its heartbeat; nothing will move it without a repair
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+      - alert: SyntraJobsStuck
+        expr: sum(syntra_job_health_findings{finding="stuck"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Background work has shown no progress for more than six hours
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+      - alert: SyntraJobsPoisoned
+        expr: sum(syntra_job_health_findings{finding="poisoned"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A background job failed repeatedly on the same payload and exhausted its retries
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+      - alert: SyntraJobsDelayed
+        expr: sum(syntra_job_health_findings{finding="delayed"}) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Queued work has waited more than fifteen minutes for a worker; the queue is not keeping up
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+      - alert: SyntraJobsDuplicated
+        expr: sum(syntra_job_health_findings{finding="duplicated"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than one live job exists for the same work; harmless by design, but evidence of a double enqueue
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+      - alert: SyntraJobHealthBlind
+        expr: syntra_job_queue_readable == 0 and on() syntra_scheduler_running == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The scheduler is running but its queue cannot be read, so orphaned work cannot be detected
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md

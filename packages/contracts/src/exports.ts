@@ -95,6 +95,25 @@ export const auditSearchQuery = z
 /** Hours an export stays downloadable once ready. The database enforces 1-72. */
 export const exportTtlHours = z.number().int().min(1).max(72).default(24);
 
+/**
+ * The window of an operational support bundle (backlog #64). Both optional:
+ * `to` defaults to now and `from` to a day before `to`. At most seven days --
+ * the service checks it again, and fixes the window as explicit instants when
+ * the request is recorded.
+ */
+export const SUPPORT_BUNDLE_MAX_WINDOW_DAYS = 7;
+export const supportBundleParams = z
+  .object({ from: isoInstant.optional(), to: isoInstant.optional() })
+  .strict()
+  .refine(orderedWindow, windowMessage)
+  .refine(
+    (v) =>
+      v.from === undefined ||
+      (v.to === undefined ? Date.now() : Date.parse(v.to)) - Date.parse(v.from) <=
+        SUPPORT_BUNDLE_MAX_WINDOW_DAYS * 86_400_000,
+    { message: 'a support bundle covers at most seven days', path: ['from'] },
+  );
+
 export const exportRequestBody = z.discriminatedUnion('kind', [
   z
     .object({
@@ -107,6 +126,13 @@ export const exportRequestBody = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('govern_access'),
       params: systemReportQuery.strict(),
+      ttlHours: exportTtlHours,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('support_bundle'),
+      params: supportBundleParams.default({}),
       ttlHours: exportTtlHours,
     })
     .strict(),

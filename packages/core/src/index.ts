@@ -5,6 +5,7 @@ export * from './storable-text.js';
 export * from './net/outbound.js';
 export * from './net/guarded-fetch.js';
 export * from './tenant-context.js';
+export * from './tenant-reference.js';
 export * from './tenant/tenant-service.js';
 export * from './tenant/brand-service.js';
 export * from './tenant/offboarding-service.js';
@@ -14,6 +15,8 @@ export * from './health/incidents.js';
 export * from './update/update-service.js';
 export * from './health/version.js';
 export * from './health/metrics.js';
+export * from './health/error-class.js';
+export * from './health/status.js';
 export * from './directory/user-service.js';
 export * from './directory/directory-writeback.js';
 export * from './directory/group-service.js';
@@ -22,6 +25,16 @@ export * from './audit/audit-service.js';
 export * from './audit/audit-search.js';
 export * from './audit/saved-views.js';
 export * from './exports/export-service.js';
+export * from './exports/support-bundle.js';
+// Privacy: the data inventory (#69) and data-subject request cases (#70).
+// Grepped workspace-wide before adding: none of these names is exported
+// elsewhere in this package.
+export * from './privacy/inventory.js';
+export * from './privacy/inventory-doc.js';
+export * from './privacy/subject-data.js';
+export * from './privacy/erasure.js';
+export * from './privacy/bundle.js';
+export * from './privacy/dsar-service.js';
 export * from './vault/master-key.js';
 export * from './vault/vault-service.js';
 export * from './vault/key-cache.js';
@@ -109,6 +122,9 @@ export * from './notify/delivery.js';
 export * from './notify/templates/index.js';
 export * from './notify/webhook-event.js';
 export * from './notify/security-events.js';
+export * from './notify/security-policy.js';
+export * from './audit/credential-events.js';
+export * from './credentials/index.js';
 export * from './notify/webhook-jobs.js';
 export * from './notify/webhook-retry.js';
 export * from './notify/webhook-service.js';
@@ -116,6 +132,7 @@ export * from './notify/webhook-signature.js';
 export * from './jobs/scheduler.js';
 export * from './jobs/enqueue-for-row.js';
 export * from './jobs/cancellation.js';
+export * from './jobs/job-health.js';
 export * from './sync/mapping.js';
 export * from './sync/correlate.js';
 export * from './sync/diff.js';
@@ -414,3 +431,10 @@ export type {
   GuardVerdict as GovernGuardVerdict,
   GuardThresholds as GovernGuardThresholds,
 } from './govern/revocation-guard.js';
+
+// Separation of duties for privileged administrative changes, and break-glass.
+export * from './privileged/change-control.js';
+export * from './privileged/rbac-handlers.js';
+export * from './privileged/auth-policy.js';
+export * from './privileged/break-glass.js';
+export * from './privileged/jobs.js';

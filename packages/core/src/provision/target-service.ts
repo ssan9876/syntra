@@ -16,6 +16,7 @@ import {
 } from '@syntra/contracts';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
+import { recordConnectorCredentialChanged } from '../audit/credential-events.js';
 import { deleteSecret, getSecret, putSecret } from '../vault/vault-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import type { Scheduler } from '../jobs/scheduler.js';
@@ -604,6 +605,12 @@ export async function updateTarget(
         ...(maintenanceWindow === undefined ? {} : { maintenanceWindow }),
       },
     });
+    if (scalars.bindPassword !== undefined) {
+      // Its own security event as well as the flag above (backlog #52): the
+      // update event is configuration and is not in any webhook group, so a
+      // credential replaced in place was invisible to every subscriber.
+      await recordConnectorCredentialChanged(tx, actorUserId, 'TargetSystem', targetId);
+    }
 
     // Read AFTER the update, and from the row rather than from the request
     // body: an update that only sets `enabled: false` says nothing about the

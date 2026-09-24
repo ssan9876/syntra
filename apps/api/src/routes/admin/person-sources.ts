@@ -37,6 +37,7 @@ import {
   JobNotQueuedError,
   queueImportRun,
   recordEvent,
+  recordConnectorCredentialChanged,
   removePersonSourceSchedule,
   setPersonMappings,
   skipImportChange,
@@ -310,7 +311,15 @@ export async function registerAdminPersonSourceRoutes(
       const { id } = idParam.parse(request.params);
       const body = updatePersonSourceRequest.parse(request.body);
       const source = await request
-        .db((tx) => updatePersonSource(tx, provider, id, body))
+        .db(async (tx) => {
+          const updated = await updatePersonSource(tx, provider, id, body);
+          // The credential was replaced with no audit trace at all until this
+          // (backlog #52): an SFTP password or key is a credential change.
+          if (updated && body.credential !== undefined) {
+            await recordConnectorCredentialChanged(tx, request.session.userId, 'PersonSource', id, request.ip ?? null);
+          }
+          return updated;
+        })
         .catch(asProblem);
       if (!source) throw new ProblemError(404, 'not-found', 'Person source not found');
       await reschedule(request, source);
@@ -491,6 +500,12 @@ export async function registerAdminPersonSourceRoutes(
           'a run is a background job, and the queue this installation uses is not up',
         );
       }
+      // Looked up first: another tenant's source, which RLS hides, is a 404
+      // rather than the run service's "no such person source" as a 500.
+      const source = await request.db((tx) =>
+        tx.personSource.findUnique({ where: { id }, select: { id: true } }),
+      );
+      if (!source) throw new ProblemError(404, 'not-found', 'Person source not found');
       const run = await queueImportRun(scheduler, request.tenantId, id).catch(asProblem);
       return reply.code(202).send(run);
     },
@@ -595,12 +610,14 @@ export async function registerAdminPersonSourceRoutes(
     '/person-import-runs/:runId/changes/:id/skip',
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request) => {
-      const { id } = idParam.parse(request.params);
+      const { runId, id } = z.object({ runId: z.string().uuid(), id: z.string().uuid() }).parse(request.params);
       return request.db(async (tx) => {
         // Checked rather than left to Prisma's update, whose "record not
         // found" surfaces as a 500 -- which sends an operator to the logs for
-        // a request that was simply wrong.
-        const change = await tx.personImportChange.findUnique({ where: { id } });
+        // a request that was simply wrong. And checked against the RUN in the
+        // path: the tenant-isolation probe found `:runId` was never read, so
+        // any run's path -- another tenant's included -- skipped this change.
+        const change = await tx.personImportChange.findFirst({ where: { id, runId } });
         if (!change) throw new ProblemError(404, 'not-found', 'Change not found');
         return skipImportChange(tx, id);
       });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildTestApp } from '../test-support.js';
 import { loginRequest } from '@syntra/contracts';
+import { SnapshotNotReadableError, UnknownReferenceError } from '@syntra/core';
 import { ProblemError } from './problem-json.js';
 
 describe('problem+json', () => {
@@ -95,6 +96,52 @@ describe('problem+json', () => {
 
     expect(res.statusCode).toBe(500);
     expect(res.json()).toMatchObject({ status: 500 });
+  });
+
+  it('renders "the record this needs was not found" (P2025) as a 404 that says nothing else', async () => {
+    const { app, host } = await buildTestApp();
+    app.get('/gone', async () => {
+      // What `update`/`delete`/`findUniqueOrThrow` throw for an id their
+      // `where` cannot see -- including, under RLS, another tenant's.
+      throw Object.assign(new Error('Record to update not found. where: { id: "secret-id" }'), {
+        code: 'P2025',
+        name: 'PrismaClientKnownRequestError',
+      });
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/gone', headers: { host } });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ type: 'https://syntra.dev/problems/not-found', title: 'Not Found', status: 404 });
+    expect(res.body).not.toContain('secret-id');
+  });
+
+  it('renders a reference to a row this tenant does not have as a 404 naming the field', async () => {
+    const { app, host } = await buildTestApp();
+    app.get('/dangling', async () => {
+      throw new UnknownReferenceError('managerPersonId', 'person');
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/dangling', headers: { host } });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ status: 404, errors: [{ path: 'managerPersonId', message: 'no such person' }] });
+  });
+
+  it('renders an unreadable Govern snapshot as 404 when absent and 409 when not yet usable', async () => {
+    const { app, host } = await buildTestApp();
+    app.get('/snapshot/:reason', async (request) => {
+      throw new SnapshotNotReadableError((request.params as { reason: 'not_found' | 'building' }).reason);
+    });
+    await app.ready();
+
+    const absent = await app.inject({ method: 'GET', url: '/snapshot/not_found', headers: { host } });
+    expect(absent.statusCode).toBe(404);
+    const building = await app.inject({ method: 'GET', url: '/snapshot/building', headers: { host } });
+    expect(building.statusCode).toBe(409);
+    expect(building.json()).toMatchObject({ type: 'https://syntra.dev/problems/snapshot-not-readable' });
   });
 
   it('renders an unknown route as a 404 problem document', async () => {

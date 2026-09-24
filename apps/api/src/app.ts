@@ -38,6 +38,8 @@ import { registerAdminUserRoutes } from './routes/admin/users.js';
 import { registerAdminSessionRoutes } from './routes/admin/sessions.js';
 import { registerMetricsRoutes } from './routes/metrics.js';
 import { registerAdminTokenRoutes } from './routes/admin/tokens.js';
+import { registerAdminChangeControlRoutes } from './routes/admin/change-control.js';
+import { registerAdminBreakGlassRoutes } from './routes/admin/break-glass.js';
 import { registerScimRoutes } from './routes/scim/index.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
@@ -46,8 +48,11 @@ import { registerEmployeeLifecycleRoutes } from './routes/admin/employee-lifecyc
 import { registerAdminPersonReceiptRoutes } from './routes/admin/person-receipts.js';
 import { registerAdminLifecycleOperationRoutes } from './routes/admin/lifecycle-operations.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
+import { registerAdminOperationsRoutes } from './routes/admin/operations.js';
 import { registerAdminExportRoutes } from './routes/admin/exports.js';
+import { registerAdminPrivacyRoutes } from './routes/admin/privacy.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
+import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
@@ -307,12 +312,17 @@ export async function buildApp(
   // sign-in page reads in order to render itself.
   await app.register(registerBrandingRoutes, { prefix: '/api/branding' });
 
+  // The one mail transport every route and job in this process shares.
+  const transport = options.transport ?? smtpTransport(config.smtpUrl);
+
   await app.register(registerAuthRoutes, {
     prefix: '/api/auth',
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
     publicUrl: config.publicUrl,
     keyProvider,
+    // Break-glass activation mails every tenant.manage holder at once.
+    transport,
   });
 
   // Factor verifiers are installed once per process, before any route can ask
@@ -345,10 +355,10 @@ export async function buildApp(
   // listener stays as a free local fast path.
   onSigningKeysChanged(invalidateProviderOnKeyChange);
 
-  // One transport instance, shared by both routers below: the "a factor was
-  // added" mail is the same control whether the enrolment happened from a
-  // live session or under a forced-enrolment attempt.
-  const transport = options.transport ?? smtpTransport(config.smtpUrl);
+  // One transport instance (created above, before the auth routes), shared
+  // by both routers below: the "a factor was added" mail is the same control
+  // whether the enrolment happened from a live session or under a
+  // forced-enrolment attempt.
 
   await app.register(registerMfaRoutes, {
     prefix: '/api/auth/mfa',
@@ -402,6 +412,17 @@ export async function buildApp(
   });
   await app.register(registerAdminSessionRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminTokenRoutes, { prefix: '/api/admin' });
+  // Separation of duties for privileged changes: the policy and the queue.
+  // The key provider and outbound policy are what a held webhook change is
+  // applied with on approval.
+  await app.register(registerAdminChangeControlRoutes, {
+    prefix: '/api/admin',
+    keyProvider,
+    outboundAllowPrivate: config.outboundAllowPrivate,
+  });
+  // Emergency access administration. Early approval mails every
+  // tenant.manage holder that emergency access is now active.
+  await app.register(registerAdminBreakGlassRoutes, { prefix: '/api/admin', transport });
   // Not under /api: SCIM clients are configured with a base URL and expect
   // /scim/v2 to be it, and putting it elsewhere is a support conversation on
   // every single setup.
@@ -439,6 +460,28 @@ export async function buildApp(
   await app.register(registerAdminExportRoutes, {
     prefix: '/api/admin',
     keyProvider,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+  // Queue recovery and status reporting (backlog #57, #63). The same key
+  // provider, transport and scheduler the rest of the process uses, so the
+  // status page reports on the things that actually carry the work.
+  await app.register(registerAdminOperationsRoutes, {
+    prefix: '/api/admin',
+    keyProvider,
+    transport,
+    webRoot: config.webRoot ?? undefined,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+
+  // The credential inventory, rotation workflow and security notification
+  // policy. The key provider seals a staged secret and unseals a live one
+  // for a connection test.
+  await app.register(registerAdminCredentialRoutes, { prefix: '/api/admin', keyProvider });
+
+  // Data-subject request cases. The scheduler queues the access bundle,
+  // which the export center above then serves.
+  await app.register(registerAdminPrivacyRoutes, {
+    prefix: '/api/admin',
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminUpdateRoutes, {

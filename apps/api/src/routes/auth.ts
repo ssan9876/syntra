@@ -5,9 +5,14 @@ import {
   loginRequest,
   renewPasswordRequest,
 } from '@syntra/contracts';
+import { z } from 'zod';
 import {
+  BREAK_GLASS_DURATION_BOUNDS,
   changeOwnPassword,
   authorize,
+  mailBreakGlassNotice,
+  requestBreakGlassActivation,
+  type Transport,
   renewExpiredPassword,
   isAdministrator,
   type MasterKeyProvider,
@@ -21,6 +26,20 @@ import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
 import { issueSession, sessionBody, renewReply } from './session-reply.js';
 import { clientFacts } from '../plugins/client-facts.js';
+import { breakGlassRefusals } from './admin/break-glass.js';
+
+/**
+ * Asking for emergency console access with a sealed break-glass credential.
+ * `login` and `credential` identify; `reason` and `durationMinutes` are
+ * recorded and bound the activation.
+ */
+export const breakGlassActivateRequest = z.object({
+  login: z.string().trim().min(1).max(256),
+  credential: z.string().trim().min(1).max(256),
+  reason: z.string().trim().min(1).max(2000),
+  durationMinutes: z.number().int().min(BREAK_GLASS_DURATION_BOUNDS.min).max(BREAK_GLASS_DURATION_BOUNDS.max)
+    .default(BREAK_GLASS_DURATION_BOUNDS.default),
+}).strict();
 
 /**
  * Password endpoints are limited far more tightly than ordinary reads, and in
@@ -57,6 +76,11 @@ export interface AuthRouteOptions {
    * change on a write-back source can reach the directory.
    */
   keyProvider: MasterKeyProvider;
+  /**
+   * Break-glass activation mails every `tenant.manage` holder the moment it
+   * is requested. The same transport every other mailing path uses.
+   */
+  transport: Transport;
 }
 
 export async function registerAuthRoutes(
@@ -259,6 +283,40 @@ export async function registerAuthRoutes(
       return issueSession(request, reply, decision);
     },
   );
+
+  /**
+   * Requests break-glass activation with the sealed recovery credential.
+   *
+   * UNAUTHENTICATED BY NATURE: this is the path for when administrators
+   * cannot sign in to the console at all. It grants nothing by itself. It
+   * opens an activation that waits out the tenant's delay (or a second
+   * administrator's approval), and announces it at once -- to every
+   * `tenant.manage` holder by mail, and to every endpoint subscribed to the
+   * Privileged access webhook group through the audit event. Signing in
+   * afterwards still goes through `authorize()` with the account's password.
+   *
+   * Rate limited as the password endpoints are, and every failure to
+   * identify answers one `invalid-credentials`, so it is no oracle for which
+   * accounts are designated.
+   */
+  app.post('/break-glass/activate', { ...PASSWORD_RATE_LIMIT }, async (request, reply) => {
+    const body = breakGlassActivateRequest.parse(request.body);
+    const notice = await breakGlassRefusals(() => requestBreakGlassActivation(request.tenantId, {
+      login: body.login,
+      credential: body.credential,
+      reason: body.reason,
+      durationMinutes: body.durationMinutes,
+      sourceIp: request.ip,
+    }));
+    await mailBreakGlassNotice(options.transport, request.tenantId, notice, 'requested', (error, purpose) =>
+      request.log.error({ err: error, purpose }, 'notification not delivered'));
+    return reply.status(202).send({
+      status: 'pending',
+      activationId: notice.activation.id,
+      activatesAt: notice.activation.activatesAt.toISOString(),
+      durationMinutes: notice.activation.durationMinutes,
+    });
+  });
 
   /**
    * Self-service password change.

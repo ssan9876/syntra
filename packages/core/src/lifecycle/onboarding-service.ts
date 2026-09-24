@@ -5,6 +5,7 @@ import { createContract, type CreateContractInput } from '../identity/contract-s
 import { createPerson, linkUserToPerson, type CreatePersonInput } from '../identity/person-service.js';
 import { enqueueOutbox, usersWithPermission } from '../automate/notify.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
+import { assertReferenceInTenant, UnknownReferenceError } from '../tenant-reference.js';
 import {
   approvalGateOpen,
   createLifecycleOperation,
@@ -53,6 +54,23 @@ function jsonInput(input: OnboardPersonInput): Prisma.InputJsonValue {
  * still saved -- they are HR's fact -- and the target step waits.
  */
 export async function onboardPerson(input: OnboardPersonInput) {
+  // EVERY REFERENCE IN THE REQUEST, CHECKED BEFORE THE OPERATION IS RECORDED.
+  // The operation row keeps the request as its input, and it is written first
+  // so a retry can resume it; a reference to another tenant's org unit,
+  // manager or target used to be caught only by the local step, after the
+  // operation -- carrying those foreign ids -- had already been committed.
+  // Targets were worse: another tenant's was silently dropped and the
+  // onboarding "succeeded" with less than was asked. See tenant-reference.ts.
+  await withTenant(input.tenantId, async (tx) => {
+    await assertReferenceInTenant(tx, 'orgUnit', input.person.orgUnitId, 'person.orgUnitId');
+    await assertReferenceInTenant(tx, 'person', input.contract.managerPersonId, 'contract.managerPersonId');
+    await assertReferenceInTenant(tx, 'orgUnit', input.login?.orgUnitId, 'login.orgUnitId');
+    const targetIds = [...new Set(input.targetIds ?? [])];
+    if (targetIds.length > 0) {
+      const found = await tx.targetSystem.count({ where: { id: { in: targetIds } } });
+      if (found !== targetIds.length) throw new UnknownReferenceError('targetIds', 'targetSystem');
+    }
+  });
   const policy = await withTenant(input.tenantId, readLifecyclePolicy);
   const priority = input.priority ?? 'normal';
   const approval = approvalDecision(policy, {

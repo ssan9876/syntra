@@ -136,9 +136,25 @@ is retained; merged code alone is not enough.
     approval for sensitive target mappings, and report unnecessary disclosure.
 31. **Build — Separation-of-duties rules.** Prevent users from requesting,
     approving, executing, and closing the same privileged change.
+    **Implemented (first classes):** a tenant-configurable policy holds
+    privileged role grants, admin-scoped token minting, authentication-policy
+    relaxation and webhook endpoint changes as revision-bound change requests;
+    a different, stepped-up administrator approves and approval applies; the
+    requester can only withdraw; 72-hour expiry; every step audited and in the
+    Privileged access webhook group. Federation configuration and target
+    credentials are not yet covered (configure.md).
 32. **Build — Emergency-access lifecycle.** Time-bound elevation, explicit
     reason, second-person review, continuous alerting, automatic expiry, and
     post-event review.
+    **Implemented:** designated emergency accounts with a sealed offline
+    recovery credential; session-less activation with a mandatory reason,
+    announced at once by mail to every `tenant.manage` holder and by the
+    Privileged access webhook group, effective after a tenant delay unless
+    cancelled or on a second administrator's stepped-up approval; sign-in still
+    through `authorize()` with only the WebAuthn-console requirement lifted;
+    15–240 minute automatic expiry; a post-event review a different
+    administrator must complete; a console banner while active. Threat model
+    in configure.md. Needs a tabletop drill with the user.
 33. **Build — Certification-aware rollout.** Canary new connector versions by
     target and support immediate rollback without changing stored intent.
     **Implemented:** per-target channel (`stable`/`canary`) and exact-version
@@ -152,6 +168,19 @@ is retained; merged code alone is not enough.
 34. **Build — Credential lifecycle.** Expiry discovery, advance alerts,
     rotation workflow, dual-secret overlap, verification, revocation, and
     evidence for every connector type.
+    *Built (2026-09-23): a tenant credential inventory (**Settings →
+    Credentials**, `GET /api/admin/credentials`) with expiry source, last
+    rotation and owner for every credential Syntra holds or depends on;
+    optional Entra expiry discovery gated on `Application.Read.All`; declared
+    expiry for the rest; a daily, de-duplicated expiry scan raising
+    `credential.expiring`/`credential.expired` at configurable thresholds by
+    webhook and mail, and an incident on expiry; and a dual-secret rotation
+    workflow (stage, verify, cut over, complete or roll back) for target,
+    directory-source and HR-feed credentials with audited evidence
+    ([Configure](configure.md#credentials-and-security-notifications)).
+    Remaining: revocation at the issuer is still the administrator's step
+    (Syntra holds no permission to delete an Entra secret), upstream client
+    secrets have no rotation workflow, and discovery exists only for Entra.*
 35. **Build — Entitlement risk metadata.** Mark privileged, birthright,
     dynamic, nested, license-bearing, and externally managed access.
 36. **Build — Access review campaigns.** Manager/application-owner review,
@@ -169,9 +198,39 @@ is retained; merged code alone is not enough.
 39. **Build — Tenant-isolation test suite.** Generate cross-tenant identifiers
     for every API and background job path and prove reads and writes fail
     closed.
+    **Implemented:** `apps/api/src/tenant-isolation/`. The suite seeds two
+    tenants with a real row of each of 62 kinds and walks the running route
+    table. It calls every id-bearing route under `/api/admin`, `/api/portal`,
+    `/scim/v2` and `/saml` with the other tenant's ids: all parameters
+    foreign, then one at a time. Every id-shaped body and query field is
+    pointed at the other tenant; bodies are generated from the OpenAPI schemas.
+    Every list route is called, and all 23 pg-boss handlers run with a foreign
+    payload. It asserts a refusal that matches the status for an id that never
+    existed. It also asserts that no foreign data appears in any response, that
+    the other tenant's rows are byte-identical afterwards, and that no row
+    points across tenants. Structural tests fail when a route or job is added
+    unclassified. The probe and an audit of the same pattern found and fixed
+    ten cross-tenant reference writes, three
+    routes that ignored a path parameter, a refresh that queued jobs for
+    foreign ids, and about 30 foreign-id 500s; see the continuous-improvement
+    loop's Completed list. Remaining: protocol endpoints beyond the
+    application-id routes are covered by their own suites, not the probe.
 40. **Build — Database isolation defense.** Evaluate PostgreSQL row-level
     security or an equivalent independently enforced boundary for all tenant
     data.
+    **Already enforced for reads and writes:** every tenant table is `ENABLE`
+    and `FORCE ROW LEVEL SECURITY`, with a `tenantId` policy on both `USING`
+    and `WITH CHECK`. The application connects as `NOSUPERUSER NOBYPASSRLS`,
+    and `withTenant` binds the tenant per transaction. The #39 probe confirms
+    no route or job reads or modifies another tenant's rows. **Gap it
+    exposed:** RLS does not cover *references*, because a foreign key is
+    checked without the referenced table's policies. A tenant's row can
+    therefore point at another tenant's row unless code looks the id up first.
+    That is now done in code (`assertReferenceInTenant`) on every path the
+    probe reached. The independent database-level control is still open: a
+    same-tenant constraint trigger on every foreign key between tenant tables,
+    or composite `(tenantId, id)` foreign keys. It should be measured against
+    the Govern snapshot and sync bulk-insert paths before it ships.
 41. **Build — Field-level authorization.** Restrict sensitive HR, identity,
     recovery, and connector-secret metadata independently of page access.
 42. **Build — Support-access controls.** Just-in-time, tenant-approved,
@@ -208,9 +267,10 @@ is retained; merged code alone is not enough.
     changed Govern scope), batched generation, envelope-sealed storage with a
     SHA-256 digest, a per-export watermark, a 1–72 hour expiry with a sweep,
     revocation, and an audit event for every step
-    ([Operate, Exports](operate.md#exports)). Remaining: the security
-    notification group for export creation (#52), an external object store for
-    files beyond 64 MiB, and moving the remaining synchronous reports.
+    ([Operate, Exports](operate.md#exports)). The security notification group
+    for export creation is done (#52, the Data exports webhook group).
+    Remaining: an external object store for files beyond 64 MiB, and moving
+    the remaining synchronous reports.
 49. **Operate — Dependency governance.** Automated updates, supported-runtime
     policy, license inventory, vulnerability SLA, exception owner, and expiry.
 50. **Operate — Secure development evidence.** Protected branches, required
@@ -222,6 +282,14 @@ is retained; merged code alone is not enough.
 52. **Build — Security notification policy.** Define customer-visible alerts
     for credential changes, role grants, break-glass use, export creation,
     circuit-breaker changes, and suspicious authentication.
+    *Built (2026-09-23): six categories defined once in code and rendered as
+    the policy table in [Configure](configure.md#the-security-notification-policy);
+    every event is a webhook security event, and a tenant setting (**Settings
+    → Security alerts**) chooses which categories also email `tenant.manage`
+    holders. Gaps closed: `credential.changed`, `signing_key.rotated`, an
+    audited HR-feed credential change, and a Data exports webhook group.
+    Remaining: there is no break-glass account type to alert on (the policy
+    points at `auth.elevate`), and no per-recipient channel beyond mail.*
 
 ## P1 — reliability, recovery, and operability
 
@@ -253,12 +321,23 @@ is retained; merged code alone is not enough.
     carrying `Authorization` headers, LDAP bind errors with DN and password,
     and person/vault/MFA context through the real logger and a real span
     exporter and assert nothing sensitive survives; metrics labels are pinned
-    to a closed set. Remaining: exports and support bundles are not yet routed
-    through the shared rules (the offboarding export excludes secrets by
-    construction), and client addresses are deliberately kept on request log
-    lines.
+    to a closed set. Support bundles (#64) are routed through the shared
+    rules. Remaining: other exports are not (the offboarding export excludes
+    secrets by construction), and client addresses are deliberately kept on
+    request log lines.
 57. **Build — Queue recovery controls.** Detect orphaned, stuck, duplicated,
     delayed, poisoned, and saturation-deferred jobs; keep repair idempotent.
+    **Implemented:** a tenant-scoped job-health report compares sync, HR
+    import, provisioning, person target operations, exports and lifecycle
+    operations with pg-boss's table and the clock; audited, idempotent
+    `requeue`, `mark_failed` and `release_lease` repairs reuse the existing
+    recovery and cancellation semantics and never re-run a connector write
+    (unknown outcomes stay for `resolveInFlightActions`). Console Operations
+    page, `syntra_job_health_findings{kind,finding}`, six alert rules and a
+    runbook. Remaining: lifecycle operations and sync/HR applies (no
+    heartbeat) are reported but repaired from their own pages; pg-boss jobs
+    themselves are never cancelled or deleted from here; a heartbeat for
+    sync/HR applies would let them be judged like provisioning.
 58. **Build — Cooperative cancellation.** Add explicit cancellation states and
     checkpoints to imports, syncs, simulations, exports, and provisioning runs.
 59. **Build — Graceful deployment behavior.** Drain workers, preserve leases,
@@ -276,9 +355,26 @@ is retained; merged code alone is not enough.
 63. **Build — Customer-safe status reporting.** Separate component health,
     tenant degradation, stale readiness, and connector outages without leaking
     another tenant's activity.
+    **Implemented:** `GET /api/admin/status` (shared API, database, queue, key
+    provider and SMTP health, then this tenant's write stops, stale or
+    failing readiness, connector outages by error class and job findings;
+    no queue depth or other cross-tenant quantity) and an operator-only
+    `GET /api/admin/deployment/status` (`deployment.manage`; counts only, no
+    tenant named), shown on the console's Operations page. Remaining: no
+    public or unauthenticated status page, and no history of past incidents.
 64. **Build — Operational support bundle.** Produce a tenant-scoped, redacted,
     time-bounded evidence package with configuration fingerprints and no
     credentials.
+    **Implemented:** a `support_bundle` kind of the secure export service
+    (`tenant.manage`, window of at most seven days fixed at request, sealed,
+    watermarked, requester-only, audited): versions, migration state,
+    settings and configuration fingerprints, write stops, connector
+    readiness, job health, recent failures by error class and audit event
+    counts, built by allow-list and passed through the shared redaction
+    rules, with a test seeding secrets and personal data. Remaining:
+    installation-level log excerpts are not included (logs stay with the
+    operator), and there is no signed attestation of the bundle beyond its
+    recorded SHA-256.
 65. **Operate — Capacity management.** Forecast database, queue, audit,
     notification, and connector load; define scale thresholds and ownership.
 66. **Operate — Restore verification.** Automatically restore sampled backups,
@@ -286,6 +382,13 @@ is retained; merged code alone is not enough.
 67. **Operate — Certificate and domain lifecycle.** Inventory expiry,
     ownership, renewal, validation, and emergency replacement for every public
     endpoint and federation key.
+    *In-product part built (2026-09-23): the credential inventory lists every
+    federation key and certificate a tenant uses — Syntra's SAML/OIDC signing
+    keys, upstream IdP certificates, trusted service-provider certificates —
+    with expiry, owner and advance alerts. Remaining (operational): the public
+    endpoints' TLS certificates and domains live outside Syntra (ingress,
+    load balancer, DNS) and need the deployment's own monitoring, renewal
+    ownership and an emergency-replacement drill.*
 68. **Operate — On-call readiness.** Rotations, escalation, alert routing,
     runbook access, authority boundaries, and quarterly effectiveness review.
 
@@ -293,9 +396,19 @@ is retained; merged code alone is not enough.
 
 69. **Build — Data inventory.** Map each personal, credential, operational,
     and audit field to purpose, source, processor, residency, retention, and
-    access roles.
+    access roles. *Engineering slice done:* every column classified in code
+    (`packages/core/src/privacy/inventory.ts`), a structural test that fails
+    on an unclassified column, and the generated
+    [data inventory](privacy/data-inventory.md). Legal bases are placeholders
+    awaiting the controller's decision (#13, #79).
 70. **Build — Data-subject workflows.** Search, export, correction, restriction,
     and deletion with identity verification, legal-hold refusal, and evidence.
+    *Engineering slice done:* privacy cases with verification attestation and
+    due dates, inventory-driven search and sealed access bundle, rectification
+    through the normal edit paths, restriction honoured by provisioning,
+    imports and sync, and a four-eyes, hold-refusing erasure that pseudonymises
+    in place with a receipt ([Operate, Data-subject requests](operate.md#data-subject-requests)).
+    Legal review of what is retained (the audit record) remains.
 71. **Build — Tenant export and deletion.** Full portable export, two-person
     destructive approval, dependency preview, cryptographic erasure strategy,
     completion proof, and backup-expiry treatment. *Engineering slice done:*

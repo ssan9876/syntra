@@ -1,4 +1,5 @@
 import { withTenant, type TenantClient } from "@syntra/db";
+import { UnknownReferenceError } from "../tenant-reference.js";
 import { recordEvent } from "../audit/audit-service.js";
 import {
   resolveStageApprovers,
@@ -175,6 +176,16 @@ export async function requestSodException(
       );
     }
 
+    // The basis is contracts OF THIS PERSON, in this tenant. It is JSON, so no
+    // foreign key stands behind it at all; the tenant-isolation probe stored
+    // another tenant's ids here, and the lapse sweep then ended the exception
+    // at once because it could not see them.
+    const basis = [...new Set(input.basisContractIds ?? [])];
+    if (basis.length > 0) {
+      const held = await tx.contract.count({ where: { id: { in: basis }, personId: input.personId } });
+      if (held !== basis.length) throw new UnknownReferenceError("basisContractIds", "contract");
+    }
+
     const acceptors = await resolveAcceptors(
       tx,
       rule,
@@ -190,7 +201,7 @@ export async function requestSodException(
         violationId: input.violationId,
         justification: input.justification,
         compensatingControl: input.compensatingControl,
-        basisContractIds: (input.basisContractIds ?? []) as never,
+        basisContractIds: basis as never,
         startsAt: input.startsAt,
         endsAt: input.endsAt,
         // BLOCKED, not silently pending forever, and not approved by the

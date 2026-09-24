@@ -4,14 +4,19 @@ import { idParam, issueApiTokenRequest } from '@syntra/contracts';
 import {
   ALL_PERMISSIONS,
   PERMISSIONS,
+  TOKEN_ISSUE_OPERATION,
+  isChangeClassHeld,
   issueApiToken,
   listApiTokens,
   recordEvent,
   revokeApiToken,
+  tokenIsAdminScoped,
+  tokenIssueRevision,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
+import { heldReply, holdPrivilegedChange } from '../../privileged-changes.js';
 
 export const tokenParams = z.object({
   id: z.string().uuid(),
@@ -64,8 +69,27 @@ export async function registerAdminTokenRoutes(app: FastifyInstance): Promise<vo
       }
 
       const issued = await request.db(async (tx) => {
-        const account = await tx.user.findUnique({ where: { id }, select: { id: true } });
+        const account = await tx.user.findUnique({ where: { id }, select: { id: true, login: true } });
         if (!account) throw new ProblemError(404, 'not-found', 'User not found');
+
+        // SEPARATION OF DUTIES: a token that can exercise a privileged
+        // permission -- by naming one, or by naming none on an account that
+        // holds one -- is minted by a second administrator where the tenant
+        // says so. The plaintext then goes to that approver, once.
+        if ((await isChangeClassHeld(tx, 'admin_token')) && (await tokenIsAdminScoped(tx, id, body.scopes))) {
+          const proposal = { userId: id, name: body.name, scopes: body.scopes, expiresAt: body.expiresAt };
+          return {
+            held: await holdPrivilegedChange(request, tx, {
+              changeClass: 'admin_token',
+              operation: TOKEN_ISSUE_OPERATION,
+              targetType: 'User',
+              targetId: id,
+              summary: `Mint API token "${body.name}" for ${account.login} (${body.scopes.length === 0 ? 'full account authority' : body.scopes.join(', ')})`,
+              proposed: proposal,
+              baseRevision: await tokenIssueRevision(tx, proposal),
+            }),
+          };
+        }
 
         const result = await issueApiToken(tx, {
           userId: id,
@@ -94,6 +118,7 @@ export async function registerAdminTokenRoutes(app: FastifyInstance): Promise<vo
 
         return result;
       });
+      if ('held' in issued) return heldReply(reply, issued.held);
 
       // The one and only time this value is returned. There is no route that
       // reads it back, and no column it could be read back from.

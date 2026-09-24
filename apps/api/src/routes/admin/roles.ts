@@ -18,14 +18,22 @@ import {
   createRoleFromPreset,
   ROLE_PRESETS,
   deleteRole,
+  isChangeClassHeld,
   listRolesWithAssignmentCounts,
+  privilegedPermissionsIn,
   recordEvent,
   revokeRole,
+  roleAssignRevision,
+  roleIsPrivileged,
+  roleUpdateRevision,
+  ROLE_ASSIGN_OPERATION,
+  ROLE_UPDATE_OPERATION,
   updateRole,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
+import { heldReply, holdPrivilegedChange } from '../../privileged-changes.js';
 
 /**
  * The role surface, which did not exist at all.
@@ -166,7 +174,30 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
       const { id } = idParam.parse(request.params);
       const body = patchRoleBody.parse(request.body);
       try {
-        await request.db(async (tx) => {
+        const held = await request.db(async (tx) => {
+          // SEPARATION OF DUTIES. Adding a privileged permission to a role is
+          // a grant to everybody who holds it -- and to whoever is assigned it
+          // next -- so where the tenant holds privileged role grants for a
+          // second administrator, it is held too. Otherwise assigning a
+          // harmless role and then widening it would walk round the hold.
+          if (body.permissions !== undefined && (await isChangeClassHeld(tx, 'role_grant'))) {
+            const role = await tx.role.findUnique({ where: { id }, select: { name: true, permissions: true } });
+            if (!role) throw new ProblemError(404, 'not-found', 'Role not found');
+            const added = privilegedPermissionsIn(assertPermissionNames(body.permissions))
+              .filter((permission) => !role.permissions.includes(permission));
+            if (added.length > 0) {
+              const proposal = { roleId: id, patch: body };
+              return holdPrivilegedChange(request, tx, {
+                changeClass: 'role_grant',
+                operation: ROLE_UPDATE_OPERATION,
+                targetType: 'Role',
+                targetId: id,
+                summary: `Add ${added.join(', ')} to role "${role.name}"`,
+                proposed: proposal,
+                baseRevision: await roleUpdateRevision(tx, proposal),
+              });
+            }
+          }
           await updateRole(tx, id, body);
           await guardRbac(tx);
           await recordEvent(tx, {
@@ -180,7 +211,9 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
             // later. Same rule the tenant settings route follows.
             payload: { changed: Object.keys(body), ...body },
           });
+          return null;
         });
+        if (held) return heldReply(reply, held);
       } catch (cause) {
         asProblem(cause);
       }
@@ -221,7 +254,7 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
     async (request, reply) => {
       const { id } = idParam.parse(request.params);
       const body = roleAssignmentBody.parse(request.body);
-      await request.db(async (tx) => {
+      const held = await request.db(async (tx) => {
         // `findUnique` and an explicit refusal, not `findUniqueOrThrow`.
         // `problem-json` deliberately does not relabel a Prisma error, so the
         // throwing form answered 500 for a well-formed id that names nothing —
@@ -237,6 +270,23 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
         });
         if (!user) throw new ProblemError(404, 'not-found', 'User not found');
 
+        // SEPARATION OF DUTIES: a role carrying a privileged permission is
+        // granted by a second administrator where the tenant says so.
+        if ((await isChangeClassHeld(tx, 'role_grant')) && (await roleIsPrivileged(tx, id))) {
+          const proposal = { roleId: id, userId: body.userId, scopeOrgUnitId: body.scopeOrgUnitId ?? null };
+          const roleRow = await tx.role.findUniqueOrThrow({ where: { id }, select: { name: true } });
+          const userRow = await tx.user.findUniqueOrThrow({ where: { id: body.userId }, select: { login: true } });
+          return holdPrivilegedChange(request, tx, {
+            changeClass: 'role_grant',
+            operation: ROLE_ASSIGN_OPERATION,
+            targetType: 'User',
+            targetId: body.userId,
+            summary: `Grant role "${roleRow.name}" to ${userRow.login}${proposal.scopeOrgUnitId ? ' (scoped)' : ''}`,
+            proposed: proposal,
+            baseRevision: await roleAssignRevision(tx, proposal),
+          });
+        }
+
         await assignRole(tx, body.userId, id, body.scopeOrgUnitId ?? undefined);
         await recordEvent(tx, {
           actorUserId: request.session.userId,
@@ -247,7 +297,9 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
           sourceIp: request.ip,
           payload: { roleId: id, scopeOrgUnitId: body.scopeOrgUnitId },
         });
+        return null;
       });
+      if (held) return heldReply(reply, held);
       return reply.status(204).send();
     },
   );
@@ -268,7 +320,12 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
       const { scopeOrgUnitId } = roleAssignmentQuery.parse(request.query);
       try {
         await request.db(async (tx) => {
-          await revokeRole(tx, userId, id, scopeOrgUnitId);
+          // Nothing held -- including another tenant's role or user, which
+          // RLS hides -- is still a 204 (the removal is idempotent), but it
+          // is not an event. It was recorded as `rbac.role_revoked`, success,
+          // naming whatever ids the caller sent; the tenant-isolation probe
+          // found B's role ids in A's audit trail and in A's DSAR bundles.
+          if ((await revokeRole(tx, userId, id, scopeOrgUnitId)) === 0) return;
           // Unchanged by the scope, and deliberately: `countHoldersOf` counts
           // UNSCOPED holders only, so withdrawing a tenant-wide grant is
           // refused even where a scoped one survives it. Authority over one

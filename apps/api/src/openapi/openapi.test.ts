@@ -148,6 +148,18 @@ describe('the document', () => {
       'get /api/admin/exports/{id}',
       'get /api/admin/exports/{id}/download',
       'post /api/admin/exports/{id}/revoke',
+      // A credential rotation needs provision.manage for a target and
+      // sync.manage for a source, checked in the handler against the system
+      // the rotation belongs to.
+      'post /api/admin/credentials/rotations',
+      'post /api/admin/credentials/rotations/{id}/verify',
+      'post /api/admin/credentials/rotations/{id}/cutover',
+      'post /api/admin/credentials/rotations/{id}/complete',
+      'post /api/admin/credentials/rotations/{id}/rollback',
+      'post /api/admin/credentials/rotations/{id}/cancel',
+      // The break-glass banner: every administrator's console shows an
+      // emergency activation, whatever permissions they hold.
+      'get /api/admin/break-glass/status',
     ]);
     for (const [path, methods] of Object.entries(document.paths)) {
       for (const [method, operation] of Object.entries(methods)) {

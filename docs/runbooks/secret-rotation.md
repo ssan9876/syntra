@@ -44,9 +44,9 @@ supported, the page says so.
 | `GOVERN_CHECKPOINT_KEY` / `_ID` | environment | new value and new id, restart | See caveat below |
 | `RELEASE_TOKEN` | environment (`shared/.env`) | revoke in GitHub, new token, no restart needed for the next update | Updates fail with an auth error until replaced |
 | Postgres passwords (`POSTGRES_PASSWORD`, `SYNTRA_APP_PASSWORD`) | environment + database role | `ALTER ROLE`, then environment, restart | Readiness `database` probe fails until both agree |
-| Provisioning target credential (AD bind password, SCIM bearer token, Entra client secret) | vault (`Secret` row) | console or `PATCH /api/admin/targets/:id` | Next run uses it; see the Entra token-cache note |
-| Directory source bind password | vault | console or `PATCH /api/admin/sources/:id` | Next sync uses it |
-| Person (HR feed) source credential | vault | console or `PATCH /api/admin/person-sources/:id` | Next import uses it |
+| Provisioning target credential (AD bind password, SCIM bearer token, Entra client secret) | vault (`Secret` row) | **Settings → Credentials → Rotate** (dual-secret, Procedure E), or `PATCH /api/admin/targets/:id` | Next run uses it; cached tokens are dropped |
+| Directory source bind password | vault | **Settings → Credentials → Rotate**, or `PATCH /api/admin/sources/:id` | Next sync uses it |
+| Person (HR feed) source credential | vault | **Settings → Credentials → Rotate**, or `PATCH /api/admin/person-sources/:id` | Next import uses it |
 | Upstream IdP client secret | vault | API only; no console screen | Sign-ins through that upstream use the new value immediately |
 | API tokens (including the SCIM machine token) | hashed in `ApiToken` | issue a new one, install it at the caller, revoke the old | Old token refused from the moment of revocation |
 | Webhook signing secret | vault | `POST /api/admin/webhooks/:id/secret` | Deliveries after the call are signed with the new secret |
@@ -208,7 +208,35 @@ Removing the variable altogether unregisters the route; the path then answers
 
 ## Procedure E: a provisioning target credential, including an Entra client secret
 
-Applies to all three target types (`activeDirectory`, `scim2`, `httpJson`).
+**Preferred: the dual-secret rotation workflow** (targets, directory sources and
+HR feeds; [Configure, "Rotating a connector credential"](../configure.md#rotating-a-connector-credential)).
+
+1. Create the new credential at the issuer. **Keep the old one valid.**
+2. **Settings → Credentials**, the entry, **Rotate**: paste the new secret,
+   optionally its expiry at the issuer, and **Stage new secret**
+   (`POST /api/admin/credentials/rotations`).
+3. **Test staged secret** (`.../rotations/:id/verify`). A failure is recorded;
+   fix it at the issuer and test again, or **Cancel rotation**.
+4. **Cut over** (`.../cutover`). Refused unless the test passed within a day
+   against the configuration as it is saved now. The old secret is kept.
+5. **Run once by hand** (step 5 below) if you want a full read under the new
+   secret before retiring the old one.
+6. **Complete and erase old secret** (`.../complete`). The live secret is
+   tested again; on success the kept secret is erased and a readiness check
+   is recorded. On failure nothing is erased: **Roll back** (`.../rollback`)
+   restores the old secret.
+7. Revoke the old credential at the issuer.
+
+The rotation's evidence (`GET /api/admin/credentials/rotations/:id`) and the
+`credential.rotation_*` audit events are the change record. The declared
+expiry given at staging becomes the inventory's expiry for the new secret, so
+the next advance warning is already scheduled.
+
+**Direct replacement**, below, still works and is audited as
+`credential.changed`; it has no overlap and no pre-test of the saved
+configuration.
+
+Applies to all four target types (`activeDirectory`, `scim2`, `httpJson`, `entraId`).
 The credential is one vault row per target, named in `TargetSystem.secretName`,
 and every connector receives it as `bindPassword`
 (`packages/core/src/provision/target-service.ts`). For Entra ID it is the app
@@ -306,7 +334,9 @@ deliveries are re-signed at send time.
   `packages/core/src/keys/signing-key-service.ts` is the only way, there is no
   console button or CLI for it, and every service provider that pasted the
   certificate must be re-configured afterwards. Plan it as a change with
-  every SP owner.
+  every SP owner. The credential inventory warns at each alert threshold
+  before the active SAML key's `notAfter`, and every rotation is audited as
+  `signing_key.rotated`.
 
 ## Procedure J: `GOVERN_CHECKPOINT_KEY`
 
@@ -352,5 +382,9 @@ be un-revoked; issue another.
 - **Moving directly between Vault Transit and AWS KMS**; go through a local key.
 - **Dual-key windows** for `SESSION_SECRET`, `METRICS_TOKEN` or webhook
   secrets; each has one value at a time.
-- **Automatic detection of an expiring Entra client secret.** Nothing reads
-  the secret's expiry from Microsoft; the first signal is a run that fails.
+- **Automatic detection of an expiring Entra client secret, without consent.**
+  The daily credential scan reads the secret's expiry from Microsoft Graph
+  only when the app registration was granted the optional
+  `Application.Read.All`. Without it, declare the expiry on **Settings →
+  Credentials**; otherwise the first signal is a run that fails. Every other
+  connector credential's expiry is whatever was declared.

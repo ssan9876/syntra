@@ -19,6 +19,7 @@ import { PersonProvisionReceipts } from './PersonProvisionReceipts.js';
 import { EmployeeMover } from './EmployeeMover.js';
 import { SubjectLog } from './SubjectLog.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
+import { useCan } from '../../session/SessionProvider.js';
 
 interface Contract {
   id: string;
@@ -72,6 +73,7 @@ const day = (iso: string | null) =>
 export function PersonDetailPage() {
   const { id } = useParams();
   const [editing, setEditing] = useState(false);
+  const can = useCan();
   /**
    * Which contract is being corrected, held as its sequence.
    *
@@ -128,6 +130,11 @@ export function PersonDetailPage() {
         title={`${data.givenName} ${data.familyName}`}
         actions={
           <>
+            {can('privacy.manage') && (
+              <Link className="text-sm font-medium text-primary" to={`/admin/privacy?person=${data.id}`}>
+                Privacy request
+              </Link>
+            )}
             {!editing && (
               <Button variant="secondary" onClick={() => setEditing(true)}>
                 Edit
