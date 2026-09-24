@@ -13,7 +13,7 @@ export const webauthnRegisterRequest = z.object({
   // The browser's RegistrationResponseJSON. Its shape is the WebAuthn
   // specification's, not ours, and @simplewebauthn/server validates it far more
   // thoroughly than a zod object could; re-declaring it here would only drift.
-  response: z.record(z.unknown()),
+  response: z.record(z.string(), z.unknown()),
 });
 export type WebauthnRegisterRequest = z.input<typeof webauthnRegisterRequest>;
 
@@ -40,7 +40,7 @@ export const mfaVerifyRequest = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('webauthn'),
     attemptToken: z.string().min(1).max(256),
-    assertion: z.record(z.unknown()),
+    assertion: z.record(z.string(), z.unknown()),
   }),
 ]);
 export type MfaVerifyRequest = z.infer<typeof mfaVerifyRequest>;
