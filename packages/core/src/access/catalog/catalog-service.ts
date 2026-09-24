@@ -72,12 +72,26 @@ export function listCatalog(): CatalogEntry[] {
  * administrator has to resolve by inventing a name.
  */
 async function freeSlug(tx: TenantClient, base: string): Promise<string> {
-  const root =
-    base
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 48) || 'application';
+  let root = '';
+  let separatorPending = false;
+  for (const character of base.toLowerCase()) {
+    const isAsciiLetter = character >= 'a' && character <= 'z';
+    const isDigit = character >= '0' && character <= '9';
+    if (!isAsciiLetter && !isDigit) {
+      separatorPending = root.length > 0;
+      continue;
+    }
+    if (separatorPending) {
+      // Leave room for both the separator and the character. This also means
+      // truncation can never leave a trailing hyphen.
+      if (root.length >= 47) break;
+      root += '-';
+      separatorPending = false;
+    }
+    if (root.length >= 48) break;
+    root += character;
+  }
+  root ||= 'application';
 
   const taken = new Set(
     (await tx.application.findMany({ select: { slug: true } })).map((a) => a.slug),

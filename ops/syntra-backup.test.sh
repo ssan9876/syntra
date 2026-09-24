@@ -225,11 +225,11 @@ cat > "$SHARED/.env" <<'ENV'
 MASTER_KEY_PROVIDER=vault-transit
 VAULT_ADDR=https://vault.internal:8200
 VAULT_TRANSIT_KEY=syntra
-MASTER_KEY=bGVmdG92ZXItZGVjcnlwdC1vbmx5LWtleS0zMmJ5dGVzIQ==
+MASTER_KEY=unused-test-key
 ENV
 ok "a Transit deployment's reference names address, default mount and key" \
    "$(external_key_reference vault-transit)" "vault-transit:https://vault.internal:8200:transit:syntra"
-MASTER_KEY=bGVmdG92ZXItZGVjcnlwdC1vbmx5LWtleS0zMmJ5dGVzIQ==
+MASTER_KEY=unused-test-key
 KEY_REFERENCE=$(external_key_reference vault-transit)
 ok "and it, not the leftover MASTER_KEY, is what is fingerprinted" \
    "$(running_fingerprint)" "$(fingerprint_of 'vault-transit:https://vault.internal:8200:transit:syntra')"
