@@ -299,8 +299,8 @@ importers:
         specifier: 6.3.0
         version: 6.3.0
       xml-encryption:
-        specifier: 6.0.0
-        version: 6.0.0
+        specifier: 6.0.1
+        version: 6.0.1
       xpath:
         specifier: 0.0.34
         version: 0.0.34
@@ -3137,8 +3137,8 @@ packages:
   xml-encryption@3.1.0:
     resolution: {integrity: sha512-PV7qnYpoAMXbf1kvQkqMScLeQpjCMixddAKq9PtqVrho8HnYbBOWNfG0kA4R7zxQDo7w9kiYAyzS/ullAyO55Q==}
 
-  xml-encryption@6.0.0:
-    resolution: {integrity: sha512-H1g837VnPwvSSXTNAUirXbYQp5jgAuKerKYmrJOycJ8S+3PZdMXc+Ut6odnVcO/yGAvXuEf+H/ntKt4Qi7MmOw==}
+  xml-encryption@6.0.1:
+    resolution: {integrity: sha512-hQSkWsiOKXxYB8FbSJhe/BRwobEt/lVcxzV699CdH7KLNv2nLEtNvkGkw5UTxYUkPQ3XQs65BvXtRfujJ/1OFA==}
 
   xml-name-validator@5.0.0:
     resolution: {integrity: sha512-EvGK8EJ3DhaHfbRlETOWAS5pO9MZITeauHKJyb8wyajUfQUenkIg2MvLDTZ4T/TgIcm3HU0TFBgWWboAZ30UHg==}
@@ -5839,11 +5839,10 @@ snapshots:
       escape-html: 1.0.3
       xpath: 0.0.32
 
-  xml-encryption@6.0.0:
+  xml-encryption@6.0.1:
     dependencies:
       '@xmldom/xmldom': 0.8.15
       escape-html: 1.0.3
-      xpath: 0.0.32
 
   xml-name-validator@5.0.0: {}
 
