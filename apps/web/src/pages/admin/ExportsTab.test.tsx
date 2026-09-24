@@ -86,8 +86,14 @@ describe('ExportsTab', () => {
     renderTab();
     expect(await screen.findByText('Generating')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('Ready')).toBeInTheDocument(), { timeout: 5000 });
-    const status = screen.getAllByRole('status').find((el) => el.textContent?.includes('Audit log export: ready'));
-    expect(status).toBeDefined();
+    // Waited for, not read at once: the row turns Ready in the render that
+    // follows the poll, and the live region is written in the effect after
+    // it, which a slow runner reaches measurably later.
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole('status').some((el) => el.textContent?.includes('Audit log export: ready')),
+      ).toBe(true),
+    );
   });
 
   it('revokes, and says the file was erased', async () => {
