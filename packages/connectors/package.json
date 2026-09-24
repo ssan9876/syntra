@@ -12,7 +12,7 @@
     "ipaddr.js": "^2.2.0",
     "ldapts": "^9.0.0",
     "ssh2": "^1.16.0",
-    "zod": "^3.24.0"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/ssh2": "^1.15.1",

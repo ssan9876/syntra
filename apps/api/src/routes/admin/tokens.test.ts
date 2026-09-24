@@ -142,7 +142,7 @@ describe('issuing', () => {
 
     const res = await call(
       'POST',
-      '/api/admin/users/00000000-0000-0000-0000-000000000001/tokens',
+      '/api/admin/users/00000000-0000-4000-8000-000000000001/tokens',
       cookie,
       { name: 'x' },
     );
