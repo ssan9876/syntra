@@ -39,7 +39,7 @@ function TargetChecklist({ target }: { target: Target }) {
   const [profileError, setProfileError] = useState('');
   const rules = useApiResource<{ rules: { enabled: boolean; grantsAccount: boolean; entitlements: unknown[] }[] }>(`/api/admin/targets/${target.id}/rules`);
   const runs = useApiResource<{ runs: Run[] }>(`/api/admin/targets/${target.id}/runs`);
-  const readiness = useApiResource<{ current: boolean; status: string; checkedAt?: string; capabilities?: string[] }>(`/api/admin/targets/${target.id}/readiness`);
+  const readiness = useApiResource<{ current: boolean; status: string; checkedAt?: string; capabilities?: string[]; adapterWarnings?: string[] }>(`/api/admin/targets/${target.id}/readiness`);
   useEffect(() => {
     let cancelled = false;
     void api(`/api/admin/targets/${target.id}/profile`).then(() => {
@@ -57,6 +57,8 @@ function TargetChecklist({ target }: { target: Target }) {
   const href = `/admin/targets/${target.id}`;
   return <>
     {(rules.error || runs.error || profile === 'error') && <Alert tone="danger">Some target evidence is unavailable. {rules.error} {runs.error} {profileError} Refresh or open the relevant editor.</Alert>}
+    {/* A connection test proves the connection, not the adapter behind it. */}
+    {(readiness.data?.adapterWarnings?.length ?? 0) > 0 && <Alert tone="warning" title="Adapter readiness warning"><ul className="list-disc pl-5">{readiness.data!.adapterWarnings!.map((warning) => <li key={warning}>{warning}</li>)}</ul></Alert>}
     <ol>
       <Step title="4. Connect target" evidence={readiness.data?.current === true && readiness.data.status === 'passed'} href={href} action="Test target connection">{readiness.data?.current && readiness.data.status === 'passed' ? `Current readiness recorded${readiness.data.checkedAt ? ` ${new Date(readiness.data.checkedAt).toLocaleString()}` : ''}.` : target.enabled ? 'Target saved. Test its current connection and permissions.' : 'Target is disabled. Review its connection before enabling.'}</Step>
       <Step title="5. Configure naming and placement" evidence={profile === 'saved'} href={`${href}/profile`} action="Configure naming and placement">{profile === 'saved' ? 'Account profile saved. Preview a sample employee to check names, uniqueness and placement.' : profile === 'missing' ? 'No account profile saved.' : 'Profile could not be verified.'}</Step>

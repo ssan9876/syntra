@@ -1,9 +1,11 @@
 import { withTenant } from '@syntra/db';
 import {
   observedEnabled,
-  targetConnectorFor,
+  targetConnectorForRelease,
   first,
   isEnabled,
+  isConnectorCapability,
+  type ConnectorReleaseCatalog,
   type DiscoveredEntitlement,
   type TargetConnector,
 } from '@syntra/connectors';
@@ -22,6 +24,7 @@ import { reconcile, unprocessableScope } from './reconcile.js';
 import { conditionSchema } from './condition.js';
 import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
 import { targetWithCredential } from './target-service.js';
+import { adapterWriteContext, summariseRefusals } from './adapter-rollout.js';
 import {
   READ_CHECKPOINT_EVERY,
   RunCancelledSignal,
@@ -397,6 +400,8 @@ export interface PreviewProvisionRunOptions {
   connector?: TargetConnector<never>;
   /** Task 14 supplies `resolveInFlightActions` here. */
   resolveInFlight?: (targetSystemId: string) => Promise<number>;
+  /** The connector lifecycle catalog; the shipped one unless a test supplies another. */
+  releaseCatalog?: ConnectorReleaseCatalog;
 }
 
 export interface ProvisionRunSummary {
@@ -504,8 +509,25 @@ export async function previewProvisionRun(
       return { target, config, profile, remit, grantedEntitlements, entitlementRows };
     });
 
+    /**
+     * The adapter release this plan is computed for, and what it may write.
+     *
+     * Resolved from the target's rollout selection BEFORE anything is read,
+     * so the reads, the plan and the capability verdicts all come from the
+     * same release -- and the release is written onto the run, so an apply
+     * after a canary promotion or a rollback can tell the plan is stale. A
+     * pin this build cannot resolve throws here and the run fails naming it.
+     */
+    const adapter = adapterWriteContext(prepared.target, {
+      now,
+      ...(options.releaseCatalog === undefined ? {} : { catalog: options.releaseCatalog }),
+    });
+
     const connector = (options.connector ??
-      targetConnectorFor(prepared.target.type)) as unknown as TargetConnector<unknown>;
+      targetConnectorForRelease(
+        prepared.target.type,
+        adapter.release.adapterVersion,
+      )) as unknown as TargetConnector<unknown>;
 
     // Phase 4. The slow, network-bound part, holding no database connection.
     const config = prepared.config;
@@ -1068,7 +1090,7 @@ export async function previewProvisionRun(
       else linked.push(facts);
     }
 
-    const actions = planActions({
+    const plannedActions = planActions({
       desired,
       actual: reconciled.actual,
       containersToCreate: reconciled.containersToCreate,
@@ -1086,6 +1108,26 @@ export async function previewProvisionRun(
       },
       now,
     });
+
+    /**
+     * Capability enforcement (backlog 18). Every connector write the plan
+     * proposes is checked against the exact adapter release and the target's
+     * own advertised capabilities. A refused action is KEPT -- written with
+     * status `refused` and the reason, so the preview shows what would have
+     * happened and why it will not -- but it is taken out of everything that
+     * would act on it: the guard's arithmetic, the counts of what will be
+     * written, and the revocation orders this plan consumes.
+     *
+     * Refusal is per action, not per run. One uncertified capability must
+     * not hold up a leaver's disable on the same target.
+     */
+    const refusalByIndex = new Map<number, string>();
+    plannedActions.forEach((action, index) => {
+      const refusal = adapter.refusalFor(action.actionType);
+      if (refusal !== null) refusalByIndex.set(index, refusal);
+    });
+    const actions = plannedActions.filter((_, index) => !refusalByIndex.has(index));
+    const capabilityRefusal = summariseRefusals([...refusalByIndex.values()]);
 
     const personsWithActiveContract = snapshot.persons.filter((p) =>
       p.contracts.some(
@@ -1207,7 +1249,7 @@ export async function previewProvisionRun(
           [...new Set(named.slice(0, 5).map((i) => i.ruleName))].join(', '),
       );
     }
-    const verdict: GuardVerdict =
+    const sodVerdict: GuardVerdict =
       sodReasons.length === 0
         ? guardVerdict
         : guardVerdict.blocked
@@ -1220,6 +1262,22 @@ export async function previewProvisionRun(
               reasons: [...guardVerdict.reasons, ...sodReasons],
             }
           : { blocked: true, requiresConfirmation: true, reasons: sodReasons };
+
+    /**
+     * A release past its deprecation date with no active override writes
+     * nothing. A refusal outright -- `requiresConfirmation: false` -- because
+     * the remedy is a different release or an audited, time-bounded
+     * override, never a tick on this run.
+     */
+    const verdict: GuardVerdict =
+      adapter.writesBlockedReason === null ||
+      !plannedActions.some((a) => isConnectorCapability(a.actionType))
+        ? sodVerdict
+        : {
+            blocked: true,
+            requiresConfirmation: false,
+            reasons: [...(sodVerdict.blocked ? sodVerdict.reasons : []), adapter.writesBlockedReason],
+          };
 
     const exceptions = [
       ...desired
@@ -1380,7 +1438,7 @@ export async function previewProvisionRun(
       }
 
       await tx.provisionAction.createMany({
-        data: actions.map((a, index) => ({
+        data: plannedActions.map((a, index) => ({
           tenantId: bound,
           runId: run.id,
           actionType: a.actionType,
@@ -1406,7 +1464,12 @@ export async function previewProvisionRun(
           // The Govern order this action executes, so the audit event at
           // apply time can name the human, the campaign and the decision.
           revocationOrderId: a.revocationOrderId,
-          message: a.message,
+          // A refused action carries the refusal as its message and a status
+          // the apply never selects. Written in sequence with the rest, so the
+          // preview shows it exactly where it would have run.
+          ...(refusalByIndex.has(index)
+            ? { status: 'refused', message: refusalByIndex.get(index)! }
+            : { message: a.message }),
           // `planActions` already returned these sorted by ACTION_ORDER, and
           // this is what preserves that through the write. `createdAt` cannot:
           // PostgreSQL's `now()` is transaction start time, so every row this
@@ -1502,6 +1565,9 @@ export async function previewProvisionRun(
           revokeEntitlementCount: counts('revoke_entitlement'),
           deactivateSyntraUserCount: counts('deactivate_syntra_user'),
           reactivateSyntraUserCount: counts('reactivate_syntra_user'),
+          adapterVersion: adapter.release.adapterVersion,
+          capabilityRefusedCount: refusalByIndex.size,
+          capabilityRefusal,
         },
       });
 
@@ -1537,6 +1603,10 @@ export async function previewProvisionRun(
           exceptions: exceptions.length,
           drift: reconciled.findings.length,
           blockedReason,
+          adapterVersion: adapter.release.adapterVersion,
+          adapterSource: adapter.resolved.source,
+          refused: refusalByIndex.size,
+          capabilityRefusal,
         },
       });
 

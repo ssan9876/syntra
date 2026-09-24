@@ -1961,6 +1961,28 @@ model TargetSystem {
   maintenanceWindowStartMinute Int?
   maintenanceWindowDurationMinutes Int?
 
+  /// Certification-aware rollout. Which adapter release this target runs:
+  /// 'stable' (the catalog's default) or 'canary' (the newest canary
+  /// release), unless `adapterVersionPin` names an exact release. Changing
+  /// these never touches configuration, profile, rules or accounts -- the
+  /// stored intent -- only which certified code executes it.
+  adapterChannel                  String    @default("stable")
+  adapterVersionPin               String?
+  /// The last certified release this target ran before its selection last
+  /// changed; what a rollback returns to.
+  adapterRollbackVersion          String?
+  adapterSelectionChangedAt       DateTime?
+  adapterSelectionChangedByUserId String?   @db.Uuid
+  adapterSelectionReason          String?
+  /// A time-bounded, audited permission to keep writing through ONE release
+  /// past its deprecation date. Bound to the version so it cannot carry over
+  /// to another; at most 30 days, enforced by the database.
+  deprecationOverrideVersion      String?
+  deprecationOverrideReason       String?
+  deprecationOverrideAt           DateTime?
+  deprecationOverrideExpiresAt    DateTime?
+  deprecationOverrideByUserId     String?   @db.Uuid
+
   /// 'additive' | 'authoritative'. Additive is the default because an engine
   /// that silently strips what it did not grant gets switched off. Drift is
   /// reported under BOTH modes (Ruling P2).
@@ -2742,6 +2764,17 @@ model ProvisionRun {
   cancelRequestedByUserId String?   @db.Uuid
   cancelResolvedAt        DateTime?
 
+  /// The adapter release this plan was computed for. An apply refuses when
+  /// the target has since moved to a different release (a canary promotion or
+  /// a rollback): the plan's capability checks were made against this one.
+  /// Null on runs written before capability enforcement existed.
+  adapterVersion         String?
+  /// Actions the plan contains but refused -- status `refused` -- because the
+  /// exact adapter release is not certified for them or the target's
+  /// configuration does not advertise them, and the operator-readable summary.
+  capabilityRefusedCount Int     @default(0)
+  capabilityRefusal      String?
+
   actions    ProvisionAction[]
   exceptions ProvisionException[]
   drift      DriftFinding[]
@@ -2799,7 +2832,9 @@ model ProvisionAction {
   /// in production.
   sequence             Int          @default(0)
   /// 'proposed' | 'in_flight' | 'applied' | 'skipped' | 'failed'
-  /// | 'pending_retry' | 'conflict' | 'superseded'
+  /// | 'pending_retry' | 'conflict' | 'superseded' | 'refused'
+  /// (`refused`: never attempted, because the adapter release is not
+  /// certified for it or the target does not advertise it; `message` says which)
   status               String       @default("proposed")
   attempts             Int          @default(0)
   nextAttemptAt        DateTime?

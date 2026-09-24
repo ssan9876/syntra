@@ -1,5 +1,5 @@
 import { withTenant, type TenantClient } from '@syntra/db';
-import { targetConnectorFor } from '@syntra/connectors';
+import { targetConnectorFor, targetConnectorForRelease } from '@syntra/connectors';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { storableCause } from '../storable-text.js';
@@ -7,6 +7,7 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
 import { targetWithCredential } from './target-service.js';
 import { placeAt } from './apply.js';
 import { assertExternalWritesAllowed } from './tenant-write-stop.js';
+import { AdapterWritesBlockedError, adapterWriteContext } from './adapter-rollout.js';
 
 /**
  * Moving one person's account to a container somebody chose.
@@ -296,13 +297,28 @@ export async function moveAccount(
       select: {
         id: true,
         type: true,
+        config: true,
         externalWritesPausedAt: true,
         externalWritesPauseReason: true,
         externalWritesPauseExpiresAt: true,
+        adapterChannel: true,
+        adapterVersionPin: true,
+        deprecationOverrideVersion: true,
+        deprecationOverrideReason: true,
+        deprecationOverrideExpiresAt: true,
       },
     });
     await assertExternalWritesAllowed(tx, row);
-    return row;
+    // And to the same adapter gates: a move is an `update_account`, so it
+    // needs a release certified for that write, a configuration that
+    // advertises it, and a release not past its deprecation date.
+    const adapter = adapterWriteContext(row);
+    if (adapter.writesBlockedReason !== null) {
+      throw new AdapterWritesBlockedError(row.id, adapter.writesBlockedReason);
+    }
+    const refusal = adapter.refusalFor('update_account');
+    if (refusal !== null) throw new AdapterWritesBlockedError(row.id, refusal);
+    return { ...row, adapterVersion: adapter.release.adapterVersion };
   });
   const config = await withTenant(tenantId, (tx) =>
     targetWithCredential(tx, provider, input.targetSystemId),
@@ -323,7 +339,7 @@ export async function moveAccount(
   // mid-call throws — and letting that propagate would mean the one move
   // nobody can account for afterwards is the one that went wrong. The
   // placement is already written either way, so the next run retries it.
-  const result = await targetConnectorFor(target.type)
+  const result = await targetConnectorForRelease(target.type, target.adapterVersion)
     .write(config as never, {
       op: 'update_account',
       // No `ProvisionAction` behind this one. A human named the object; there

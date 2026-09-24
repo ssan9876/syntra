@@ -135,6 +135,32 @@ describe('ProvisionRunDetailPage', () => {
     expect(body).toMatchObject({ confirm: true, maintenanceOverrideReason: 'Immediate termination' });
   });
 
+  it('shows actions refused by capability enforcement instead of dropping them', async () => {
+    mockFetch(
+      run({
+        adapterVersion: '1.0.0',
+        capabilityRefusedCount: 1,
+        capabilityRefusal: "1 action refused: this target's configuration does not advertise the ability to grant entitlements",
+        actions: [
+          action(),
+          action({
+            id: '22222222-2222-4222-8222-222222222222',
+            actionType: 'grant_entitlement',
+            status: 'refused',
+            message: "refused: this target's configuration does not advertise the ability to grant entitlements",
+            sequence: 1,
+          }),
+        ],
+      }),
+    );
+    renderPage();
+    const banner = await noticeHeaded('1 action refused by capability enforcement');
+    expect(banner).toHaveTextContent('Planned for adapter 1.0.0.');
+    expect(screen.getByText('refused')).toBeVisible();
+    // A refused action cannot be selected for apply.
+    expect(screen.getByLabelText('Apply grant_entitlement for Anna Novak')).toBeDisabled();
+  });
+
   it('offers a way past a block that can be confirmed', async () => {
     mockFetch(
       run({

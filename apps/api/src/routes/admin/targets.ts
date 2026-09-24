@@ -63,6 +63,16 @@ import {
   tenantExternalWriteStop,
   TenantWriteStopStateError,
   TenantWriteStopSeparationError,
+  AdapterRolloutNotFoundError,
+  AdapterSelectionError,
+  AdapterWritesBlockedError,
+  adapterWriteContext,
+  targetAdapterReport,
+  setTargetAdapterSelection,
+  rollbackTargetAdapter,
+  grantDeprecationOverride,
+  clearDeprecationOverride,
+  MAX_DEPRECATION_OVERRIDE_MS,
   type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -170,6 +180,31 @@ const writeStopRequest = z.object({
   expiresAt: z.coerce.date().nullable().default(null),
 }).strict();
 const writeResumeRequest = z.object({ reason: z.string().trim().min(1).max(2000) }).strict();
+
+/**
+ * Adapter rollout bodies. Every change carries a reason of substance: these
+ * are the records somebody reads after a canary misbehaved.
+ */
+const adapterReason = z.string().trim().min(10).max(2000);
+const adapterSelectionRequest = z.object({
+  channel: z.enum(['stable', 'canary']),
+  version: z.string().regex(/^\d+\.\d+\.\d+$/).nullable().default(null),
+  reason: adapterReason,
+}).strict();
+const adapterReasonRequest = z.object({ reason: adapterReason }).strict();
+const deprecationOverrideRequest = z.object({
+  reason: adapterReason,
+  expiresAt: z.coerce.date(),
+}).strict();
+
+/** The adapter rollout refusals, as problems. Anything else is rethrown. */
+function adapterProblem(error: unknown): never {
+  if (error instanceof AdapterRolloutNotFoundError) throw new ProblemError(404, 'not-found', 'Target not found');
+  if (error instanceof AdapterSelectionError) {
+    throw new ProblemError(409, 'adapter-selection-refused', 'The adapter change was refused', error.message);
+  }
+  throw error;
+}
 
 /** Both ids, so a route cannot read one and forget to validate the other. */
 const placementParams = z.object({
@@ -354,6 +389,14 @@ export async function registerAdminTargetRoutes(
             'External writes are paused',
             `${cause.message}. The placement is recorded and the next run proposes the move once writes resume.`,
             { scope: cause.scope },
+          );
+        }
+        if (cause instanceof AdapterWritesBlockedError) {
+          throw new ProblemError(
+            409,
+            'adapter-write-refused',
+            'The adapter may not make this write',
+            `${cause.message}. The placement is recorded.`,
           );
         }
         throw cause;
@@ -618,10 +661,80 @@ export async function registerAdminTargetRoutes(
       if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
       return {
         type: target.type,
+        // The catalog's DEFAULT release for the type. What this particular
+        // target runs -- after a canary or a pin -- is `/targets/:id/adapter`.
         metadata: connectorLifecycleMetadata(target.type),
         matrix: target.type === 'entraId' ? ENTRA_CAPABILITY_MATRIX : null,
         capabilities: capabilitiesForTarget(target.type, target.config),
       };
+    },
+  );
+
+  /**
+   * Which adapter release this target runs, what that release is certified
+   * for, which writes its configuration refuses, and any readiness warning
+   * (deprecated, past deprecation, or uncertified).
+   */
+  app.get(
+    '/targets/:id/adapter',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      return targetAdapterReport(request.tenantId, id).catch(adapterProblem);
+    },
+  );
+
+  /** Move the target between channels, or pin an exact certified release. */
+  app.put(
+    '/targets/:id/adapter',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = adapterSelectionRequest.parse(request.body);
+      await setTargetAdapterSelection(request.tenantId, request.session.userId, id, body).catch(adapterProblem);
+      return targetAdapterReport(request.tenantId, id);
+    },
+  );
+
+  /**
+   * Back to the last certified release, now. Only the selection changes:
+   * configuration, profile, rules and accounts are untouched, and a run
+   * previewed under the abandoned release refuses to apply.
+   */
+  app.post(
+    '/targets/:id/adapter/rollback',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { reason } = adapterReasonRequest.parse(request.body);
+      await rollbackTargetAdapter(request.tenantId, request.session.userId, id, reason).catch(adapterProblem);
+      return targetAdapterReport(request.tenantId, id);
+    },
+  );
+
+  app.post(
+    '/targets/:id/adapter/deprecation-override',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = deprecationOverrideRequest.parse(request.body);
+      const now = new Date();
+      if (body.expiresAt.getTime() - now.getTime() > MAX_DEPRECATION_OVERRIDE_MS) {
+        throw new ProblemError(400, 'invalid-expiry', 'Override expiry is too far away', 'A deprecation override may last at most 30 days.');
+      }
+      await grantDeprecationOverride(request.tenantId, request.session.userId, id, body, { now }).catch(adapterProblem);
+      return targetAdapterReport(request.tenantId, id);
+    },
+  );
+
+  app.post(
+    '/targets/:id/adapter/deprecation-override/clear',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { reason } = adapterReasonRequest.parse(request.body);
+      await clearDeprecationOverride(request.tenantId, request.session.userId, id, reason).catch(adapterProblem);
+      return targetAdapterReport(request.tenantId, id);
     },
   );
 
@@ -823,9 +936,24 @@ export async function registerAdminTargetRoutes(
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      const target = await request.db((tx) => tx.targetSystem.findUnique({ where: { id }, select: { id: true, config: true } }));
+      const target = await request.db((tx) => tx.targetSystem.findUnique({
+        where: { id },
+        select: {
+          id: true, type: true, config: true, adapterChannel: true, adapterVersionPin: true,
+          deprecationOverrideVersion: true, deprecationOverrideReason: true, deprecationOverrideExpiresAt: true,
+        },
+      }));
       if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
-      return currentReadiness(request.tenantId, 'target', target.id, target.config);
+      const readiness = await currentReadiness(request.tenantId, 'target', target.id, target.config);
+      // A connection test proves the connection, not the adapter. A deprecated
+      // or uncertified release is a readiness warning beside that evidence.
+      let adapterWarnings: string[];
+      try {
+        adapterWarnings = adapterWriteContext(target).warnings;
+      } catch (cause) {
+        adapterWarnings = [cause instanceof Error ? cause.message : String(cause)];
+      }
+      return { ...readiness, adapterWarnings };
     },
   );
 

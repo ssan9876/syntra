@@ -186,6 +186,13 @@ export const WEBHOOK_EVENT_GROUPS = {
       'scim.group_updated',
       'scim.member_added',
       'scim.member_removed',
+      // Which certified adapter release writes to a target, and any override
+      // that lets a deprecated one keep writing. A canary that misbehaves is
+      // rolled back here, and whoever watches configuration should see both.
+      'provision.target.adapter.select',
+      'provision.target.adapter.rollback',
+      'provision.target.adapter.deprecation_override.grant',
+      'provision.target.adapter.deprecation_override.clear',
     ],
   },
   /**
