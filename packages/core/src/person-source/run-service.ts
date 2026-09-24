@@ -603,6 +603,41 @@ type ChangeRow = {
   after: unknown;
 };
 
+/**
+ * The privacy case restricting the person this change would write, or null.
+ *
+ * Only changes that write the person's data or bring them back are withheld.
+ * A departure and a contract end still apply: they narrow access, and a
+ * restriction must never keep a leaver's access alive. A new person cannot be
+ * restricted yet, so `create_person` never is.
+ */
+const RESTRICTION_WITHHELD_IMPORT_CHANGES = new Set(['update_person', 'reactivate_person', 'create_contract', 'update_contract']);
+
+async function importRestriction(tx: TenantClient, sourceId: string, change: ChangeRow): Promise<string | null> {
+  if (!RESTRICTION_WITHHELD_IMPORT_CHANGES.has(change.changeType)) return null;
+  let personId: string | null = null;
+  if (change.recordType === 'person') {
+    personId = change.targetId;
+  } else if (change.changeType === 'create_contract') {
+    if (change.externalId !== null) {
+      const link = await tx.personSourceLink.findUnique({
+        where: { sourceId_externalId: { sourceId, externalId: change.externalId } },
+        select: { personId: true },
+      });
+      personId = link?.personId ?? null;
+    }
+  } else if (change.targetId !== null) {
+    const contract = await tx.contract.findUnique({ where: { id: change.targetId }, select: { personId: true } });
+    personId = contract?.personId ?? null;
+  }
+  if (personId === null) return null;
+  const person = await tx.person.findUnique({
+    where: { id: personId },
+    select: { processingRestrictedAt: true, processingRestrictedCaseId: true },
+  });
+  return person?.processingRestrictedAt ? (person.processingRestrictedCaseId ?? 'unknown') : null;
+}
+
 async function applyOne(tx: TenantClient, sourceId: string, change: ChangeRow) {
   const after = (change.after ?? {}) as Record<string, unknown>;
   const tenantId = await currentTenant(tx);
@@ -794,6 +829,7 @@ export async function applyImportRun(
 
   let applied = 0;
   let failed = 0;
+  let withheld = 0;
   let cancelled = false;
 
   for (const change of ordered) {
@@ -803,6 +839,28 @@ export async function applyImportRun(
       // row, its status and its audit event — or not at all.
       const outcome = await withTenant(tenantId, async (tx) => {
         if (await cancellationRequested(runs(tx), runId)) return 'cancel' as const;
+        const restrictedBy = await importRestriction(tx, run.sourceId, change);
+        if (restrictedBy !== null) {
+          // Skipped, not failed: a skip is "not now", and the next run
+          // proposes it again once the restriction is lifted.
+          await tx.personImportChange.update({
+            where: { id: change.id },
+            data: {
+              status: 'skipped',
+              message: `not applied: processing of this person is restricted by privacy case ${restrictedBy}`,
+            },
+          });
+          await recordEvent(tx, {
+            actorUserId: opts.confirmedBy ?? null,
+            action: 'person_import.change_withheld',
+            targetType: change.recordType === 'person' ? 'Person' : 'Contract',
+            targetId: change.targetId,
+            outcome: 'success',
+            sourceIp: null,
+            payload: { runId, changeType: change.changeType, privacyCaseId: restrictedBy },
+          });
+          return 'withheld' as const;
+        }
         await applyOne(tx, run.sourceId, change);
         await tx.personImportChange.update({
           where: { id: change.id },
@@ -822,6 +880,10 @@ export async function applyImportRun(
       if (outcome === 'cancel') {
         cancelled = true;
         break;
+      }
+      if (outcome === 'withheld') {
+        withheld += 1;
+        continue;
       }
       applied += 1;
     } catch (cause) {
@@ -879,7 +941,7 @@ export async function applyImportRun(
       sourceIp: null,
       // The confirmation is recorded where somebody can find it later. An
       // override nobody can find is not a control.
-      payload: { applied, failed, confirmed: opts.confirm === true, cancelled },
+      payload: { applied, failed, withheld, confirmed: opts.confirm === true, cancelled },
     });
   });
 

@@ -50,6 +50,7 @@ import { registerAdminLifecycleOperationRoutes } from './routes/admin/lifecycle-
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
 import { registerAdminOperationsRoutes } from './routes/admin/operations.js';
 import { registerAdminExportRoutes } from './routes/admin/exports.js';
+import { registerAdminPrivacyRoutes } from './routes/admin/privacy.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
 import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
@@ -476,6 +477,13 @@ export async function buildApp(
   // policy. The key provider seals a staged secret and unseals a live one
   // for a connection test.
   await app.register(registerAdminCredentialRoutes, { prefix: '/api/admin', keyProvider });
+
+  // Data-subject request cases. The scheduler queues the access bundle,
+  // which the export center above then serves.
+  await app.register(registerAdminPrivacyRoutes, {
+    prefix: '/api/admin',
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
   await app.register(registerAdminUpdateRoutes, {
     prefix: '/api/admin',
     releaseRepo: config.releaseRepo,

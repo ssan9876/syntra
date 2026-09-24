@@ -6,6 +6,7 @@ import { governAccessCsv } from '../govern/export-service.js';
 import { governReadScope, holdsGovernPermission, type GovernScope } from '../govern/scope.js';
 import { enqueueForRow } from '../jobs/enqueue-for-row.js';
 import type { Scheduler } from '../jobs/scheduler.js';
+import { writeSubjectBundle, type BundleParams } from '../privacy/bundle.js';
 import { PERMISSIONS, type Permission } from '../rbac/permissions.js';
 import { hasPermission } from '../rbac/rbac-service.js';
 import { createEnvelopeSealer, openEnvelope } from '../vault/vault-service.js';
@@ -40,7 +41,12 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
  *     The row stays, as the record of who took what.
  */
 
-export const EXPORT_KINDS = ['audit_log', 'govern_access', 'support_bundle'] as const;
+/**
+ * `dsar_bundle` is a data-subject access bundle (backlog #70). It is requested
+ * only through a privacy case (`requestPrivacyAccessBundle`), which supplies
+ * the case and person; the generic request body does not offer it.
+ */
+export const EXPORT_KINDS = ['audit_log', 'govern_access', 'support_bundle', 'dsar_bundle'] as const;
 export type ExportKind = (typeof EXPORT_KINDS)[number];
 
 export type ExportStatus = 'queued' | 'running' | 'ready' | 'failed' | 'revoked' | 'expired';
@@ -63,10 +69,11 @@ export const EXPORT_BATCH_ROWS = 1000;
 /** A queued or running export older than this was abandoned by its worker. */
 export const EXPORT_ABANDONED_AFTER_MS = 2 * 60 * 60 * 1000;
 
-const FORMAT: Record<ExportKind, { format: 'jsonl' | 'csv'; contentType: string; stem: string }> = {
+const FORMAT: Record<ExportKind, { format: 'jsonl' | 'csv' | 'json'; contentType: string; stem: string }> = {
   audit_log: { format: 'jsonl', contentType: 'application/x-ndjson; charset=utf-8', stem: 'audit-log' },
   govern_access: { format: 'csv', contentType: 'text/csv; charset=utf-8', stem: 'govern-access' },
   support_bundle: { format: 'jsonl', contentType: 'application/x-ndjson; charset=utf-8', stem: 'support-bundle' },
+  dsar_bundle: { format: 'json', contentType: 'application/json; charset=utf-8', stem: 'dsar-bundle' },
 };
 
 /**
@@ -79,6 +86,7 @@ export function exportPermissions(kind: ExportKind): Permission[] {
   // The support bundle describes the whole tenant's configuration and
   // operations, so it needs authority over the whole tenant.
   if (kind === 'support_bundle') return [PERMISSIONS.TENANT_MANAGE];
+  if (kind === 'dsar_bundle') return [PERMISSIONS.PRIVACY_MANAGE];
   return [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT];
 }
 
@@ -131,7 +139,7 @@ export async function exportAuthority(
   userId: string,
   kind: ExportKind,
 ): Promise<ExportAuthority> {
-  if (kind === 'audit_log' || kind === 'support_bundle') {
+  if (kind === 'audit_log' || kind === 'support_bundle' || kind === 'dsar_bundle') {
     const allowed = await hasPermission(tx, userId, exportPermissions(kind)[0]!);
     return { allowed, fingerprint: allowed ? 'tenant' : null };
   }
@@ -445,6 +453,8 @@ export async function runExportJob(
       rowCount = await writeAuditLog(tenantId, exportId, row, watermark, write);
     } else if (kind === 'support_bundle') {
       rowCount = await writeSupportBundle(tenantId, row, watermark, write);
+    } else if (kind === 'dsar_bundle') {
+      rowCount = await writeSubjectBundle(tenantId, row.params as unknown as BundleParams, watermark, write);
     } else {
       const params = row.params as { snapshotId?: string; systemId: string; resourceId?: string };
       const result = await governAccessCsv(

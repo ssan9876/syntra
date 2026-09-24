@@ -65,6 +65,8 @@ const GuidedOnboardingPage = page(() => import('./GuidedOnboardingPage.js'), 'Gu
 const LifecycleOperationPage = page(() => import('./LifecycleOperationPage.js'), 'LifecycleOperationPage');
 const LifecycleSimulationPage = page(() => import('./LifecycleSimulationPage.js'), 'LifecycleSimulationPage');
 const LifecyclePolicyPage = page(() => import('./LifecyclePolicyPage.js'), 'LifecyclePolicyPage');
+const PrivacyPage = page(() => import('./PrivacyPage.js'), 'PrivacyPage');
+const PrivacyCasePage = page(() => import('./PrivacyCasePage.js'), 'PrivacyCasePage');
 
 /** Quiet, like the boot screen: most pages arrive before it is noticed. */
 function PageLoading() {
@@ -195,6 +197,8 @@ export function AdminApp() {
             {/* Attention is the audit log filtered, not a second place. */}
             <Route path="activity" element={<ActivityPage />} />
             <Route path="operations" element={<OperationsPage />} />
+            <Route path="privacy" element={<PrivacyPage />} />
+            <Route path="privacy/:id" element={<PrivacyCasePage />} />
             <Route path="audit" element={<Navigate to="/admin/activity?tab=all" replace />} />
             <Route path="exports" element={<Navigate to="/admin/activity?tab=exports" replace />} />
             <Route path="roles" element={<RolesPage />} />

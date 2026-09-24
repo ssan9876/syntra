@@ -25,6 +25,15 @@ export * from './audit/audit-search.js';
 export * from './audit/saved-views.js';
 export * from './exports/export-service.js';
 export * from './exports/support-bundle.js';
+// Privacy: the data inventory (#69) and data-subject request cases (#70).
+// Grepped workspace-wide before adding: none of these names is exported
+// elsewhere in this package.
+export * from './privacy/inventory.js';
+export * from './privacy/inventory-doc.js';
+export * from './privacy/subject-data.js';
+export * from './privacy/erasure.js';
+export * from './privacy/bundle.js';
+export * from './privacy/dsar-service.js';
 export * from './vault/master-key.js';
 export * from './vault/vault-service.js';
 export * from './vault/key-cache.js';

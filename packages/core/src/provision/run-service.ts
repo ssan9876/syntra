@@ -49,6 +49,21 @@ import type {
 const MS_PER_DAY = 86_400_000;
 
 /**
+ * What a processing restriction withholds for the restricted person: every
+ * action that writes their data to a target or widens their access. Disable,
+ * archive, revoke and deactivate are absent on purpose -- a restriction never
+ * keeps access alive.
+ */
+export const RESTRICTION_WITHHELD_ACTIONS: ReadonlySet<string> = new Set([
+  'create_account',
+  'update_account',
+  'enable_account',
+  'rename_account',
+  'grant_entitlement',
+  'reactivate_syntra_user',
+]);
+
+/**
  * Another run for this target is already non-terminal and won the race.
  *
  * The partial unique index makes two concurrent starts a database refusal
@@ -1126,8 +1141,40 @@ export async function previewProvisionRun(
       const refusal = adapter.refusalFor(action.actionType);
       if (refusal !== null) refusalByIndex.set(index, refusal);
     });
-    const actions = plannedActions.filter((_, index) => !refusalByIndex.has(index));
     const capabilityRefusal = summariseRefusals([...refusalByIndex.values()]);
+
+    /**
+     * Processing restriction (a data-subject request, backlog #70). For a
+     * person whose processing is restricted, every action that would WRITE
+     * their data to a target or WIDEN their access is withheld: kept on the
+     * plan as `refused` with the case named, exactly like a capability
+     * refusal, so the preview shows what did not happen and why. Actions that
+     * narrow access -- disable, archive, revoke, deactivate -- still run: a
+     * restriction must never keep a leaver's access alive.
+     *
+     * Kept apart from `refusalByIndex` so the capability counts on the run
+     * still mean what they say.
+     */
+    const restrictedCase = new Map(
+      snapshot.persons
+        .filter((p) => p.processingRestrictedAt !== null)
+        .map((p) => [p.id, p.processingRestrictedCaseId ?? 'unknown']),
+    );
+    const withheldByIndex = new Map<number, string>();
+    if (restrictedCase.size > 0) {
+      plannedActions.forEach((action, index) => {
+        if (refusalByIndex.has(index) || action.personId === null) return;
+        const caseId = restrictedCase.get(action.personId);
+        if (caseId === undefined || !RESTRICTION_WITHHELD_ACTIONS.has(action.actionType)) return;
+        withheldByIndex.set(
+          index,
+          `withheld: processing of this person is restricted by privacy case ${caseId}`,
+        );
+      });
+    }
+    const actions = plannedActions.filter(
+      (_, index) => !refusalByIndex.has(index) && !withheldByIndex.has(index),
+    );
 
     const personsWithActiveContract = snapshot.persons.filter((p) =>
       p.contracts.some(
@@ -1469,7 +1516,9 @@ export async function previewProvisionRun(
           // preview shows it exactly where it would have run.
           ...(refusalByIndex.has(index)
             ? { status: 'refused', message: refusalByIndex.get(index)! }
-            : { message: a.message }),
+            : withheldByIndex.has(index)
+              ? { status: 'refused', message: withheldByIndex.get(index)! }
+              : { message: a.message }),
           // `planActions` already returned these sorted by ACTION_ORDER, and
           // this is what preserves that through the write. `createdAt` cannot:
           // PostgreSQL's `now()` is transaction start time, so every row this

@@ -856,6 +856,28 @@ export async function applyRun(
       // there is no mid-write to stop in.
       const outcome = await withTenant(tenantId, async (tx) => {
         if (await cancellationRequested(runs(tx), runId)) return 'cancel' as const;
+        const restrictedBy = await syncRestriction(tx, run.sourceId, change);
+        if (restrictedBy !== null) {
+          // Skipped, not failed: the next run proposes it again once the
+          // restriction is lifted.
+          await tx.syncChange.update({
+            where: { id: change.id },
+            data: {
+              status: 'skipped',
+              message: `not applied: processing of this person is restricted by privacy case ${restrictedBy}`,
+            },
+          });
+          await recordEvent(tx, {
+            actorUserId: null,
+            action: 'sync.change_withheld',
+            targetType: change.targetType,
+            targetId: change.targetId,
+            outcome: 'success',
+            sourceIp: null,
+            payload: { runId, changeType: change.changeType, privacyCaseId: restrictedBy },
+          });
+          return 'withheld' as const;
+        }
         await applyChange(tx, change, run.sourceId, runId);
         return 'applied' as const;
       });
@@ -863,6 +885,7 @@ export async function applyRun(
         cancelled = true;
         break;
       }
+      if (outcome === 'withheld') continue;
       applied += 1;
     } catch (cause) {
       // A fresh transaction: the one applyChange ran in is already aborted
@@ -934,4 +957,35 @@ export async function listRuns(tx: TenantClient, sourceId?: string) {
     orderBy: { startedAt: 'desc' },
     take: 50,
   });
+}
+
+/**
+ * Changes a processing restriction (a data-subject request) withholds: those
+ * that write the person's account or widen what it reaches. Deactivation and
+ * membership removal still apply, because a restriction must never keep
+ * access alive.
+ */
+const RESTRICTION_WITHHELD_SYNC_CHANGES = new Set(['update_user', 'reactivate_user', 'add_member']);
+
+/** The privacy case restricting the person behind this change's account, or null. */
+async function syncRestriction(
+  tx: TenantClient,
+  sourceId: string,
+  change: { changeType: string; targetId: string | null; after: unknown },
+): Promise<string | null> {
+  if (!RESTRICTION_WITHHELD_SYNC_CHANGES.has(change.changeType)) return null;
+  let user: { personId: string | null } | null = null;
+  if (change.changeType === 'add_member') {
+    const anchor = ((change.after ?? {}) as Record<string, unknown>).memberAnchor;
+    if (typeof anchor !== 'string') return null;
+    user = await tx.user.findFirst({ where: { sourceId, sourceAnchor: anchor }, select: { personId: true } });
+  } else if (change.targetId !== null) {
+    user = await tx.user.findUnique({ where: { id: change.targetId }, select: { personId: true } });
+  }
+  if (user?.personId == null) return null;
+  const person = await tx.person.findUnique({
+    where: { id: user.personId },
+    select: { processingRestrictedAt: true, processingRestrictedCaseId: true },
+  });
+  return person?.processingRestrictedAt ? (person.processingRestrictedCaseId ?? 'unknown') : null;
 }

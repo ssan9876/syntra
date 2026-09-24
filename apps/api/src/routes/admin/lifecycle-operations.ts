@@ -55,14 +55,14 @@ import { pageQuery } from './list-query.js';
 
 export const idParams = z.object({ id: z.string().uuid() });
 export const legalHoldRequest = z.object({
-  subjectType: z.enum(['lifecycle_operation', 'lifecycle_simulation']),
+  subjectType: z.enum(['lifecycle_operation', 'lifecycle_simulation', 'person']),
   subjectId: z.string().uuid(),
   reference: z.string().trim().min(1).max(200),
   reason: z.string().trim().min(1).max(2000),
 }).strict();
 export const legalHoldQuery = z.object({
   active: z.enum(['true', 'false']).default('true'),
-  subjectType: z.enum(['lifecycle_operation', 'lifecycle_simulation']).optional(),
+  subjectType: z.enum(['lifecycle_operation', 'lifecycle_simulation', 'person']).optional(),
   subjectId: z.string().uuid().optional(),
 }).refine((value) => !value.subjectId || value.subjectType, { message: 'subjectType is required with subjectId' });
 const optionalText = z.string().trim().min(1).max(255).optional();

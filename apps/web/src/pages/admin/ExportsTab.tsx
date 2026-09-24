@@ -32,6 +32,7 @@ const KIND: Record<string, string> = {
   audit_log: 'Audit log',
   govern_access: 'Access report',
   support_bundle: 'Support bundle',
+  dsar_bundle: 'Access bundle',
 };
 
 const TONE: Record<ExportRow['status'], 'neutral' | 'active' | 'warning' | 'danger' | 'inactive'> = {
