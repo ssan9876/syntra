@@ -82,7 +82,7 @@ services:
     # LOOPBACK ONLY, and the `127.0.0.1:` is the whole point.
     #
     # docs/install.md tells the operator to put their own TLS in front of
-    # :8080 (Caddy, Traefik, a load balancer). A bare `8080:80` binds every
+    # :8080 (Caddy, Traefik, a load balancer). A bare `8080:8080` binds every
     # interface, so the plaintext origin stayed reachable from the network
     # BESIDE the proxy -- and anything that reached it directly bypassed TLS
     # entirely. For an IAM product that is the session cookie, the SAML POST
@@ -93,7 +93,7 @@ services:
     # on ANOTHER host cannot, which is deliberate: that arrangement needs a
     # published port, and republishing it is a decision to make on purpose --
     # see docker-compose.tls.yml, which does exactly that for Caddy.
-    ports: ['127.0.0.1:8080:80']
+    ports: ['127.0.0.1:8080:8080']
     depends_on:
       api:
         condition: service_healthy
