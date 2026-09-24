@@ -1,0 +1,86 @@
+{{- if .Values.apiRolloutRestart.enabled }}
+{{- $fullname := include "syntra.fullname" . -}}
+{{- $name := printf "%s-rollout-restart" $fullname -}}
+# Monthly rolling restart of the API so that EVERY replica rebuilds its cached
+# OIDC provider after the signing-key rotation (03:00 UTC on the 1st), well
+# inside the seven days the outgoing key stays published. See the README's
+# multi-replica section for why only the rotating replica evicts its cache.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "rollout-restart") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "rollout-restart") | nindent 4 }}
+rules:
+  # Exactly one Deployment, and only what `kubectl rollout restart` needs.
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [{{ $fullname }}-api]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "rollout-restart") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "rollout-restart") | nindent 4 }}
+spec:
+  schedule: {{ .Values.apiRolloutRestart.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            {{- include "syntra.labels" (dict "ctx" $ "component" "rollout-restart") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ $name }}
+          # The one pod in this chart that needs a token, and it gets one
+          # bound to the Role above and nothing else.
+          automountServiceAccountToken: true
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: kubectl
+              image: "{{ .Values.apiRolloutRestart.image.repository }}:{{ .Values.apiRolloutRestart.image.tag }}"
+              imagePullPolicy: {{ .Values.apiRolloutRestart.image.pullPolicy }}
+              # The image's entrypoint is kubectl itself.
+              args: ["rollout", "restart", "deployment/{{ $fullname }}-api"]
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { cpu: 200m, memory: 128Mi }
+{{- end }}

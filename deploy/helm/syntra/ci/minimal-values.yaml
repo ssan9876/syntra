@@ -1,0 +1,4 @@
+# The least an install can set. Rendered by CI to prove the defaults are a
+# working configuration once the two required values are given.
+existingSecret: syntra-runtime
+publicUrl: https://idm.example.com

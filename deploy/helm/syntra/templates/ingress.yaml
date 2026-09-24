@@ -1,0 +1,42 @@
+{{- if .Values.ingress.enabled }}
+{{- $svc := printf "%s-web" (include "syntra.fullname" .) -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "syntra.fullname" . }}
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "web") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- range . }}
+    - secretName: {{ .secretName }}
+      hosts:
+        {{- toYaml .hosts | nindent 8 }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    # Syntra picks the tenant from the Host header, so every tenant hostname
+    # (and every alias a tenant answers on) needs a rule here.
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- end }}

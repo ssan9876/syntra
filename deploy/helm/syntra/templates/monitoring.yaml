@@ -1,0 +1,56 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- if not .Values.secretKeys.metricsToken }}
+{{- fail "metrics.serviceMonitor.enabled needs secretKeys.metricsToken: /metrics is only registered when METRICS_TOKEN is set, and the scrape presents it" }}
+{{- end }}
+# Scrapes each API pod directly (not through nginx), presenting METRICS_TOKEN
+# from the runtime Secret. Gauges derived from the database (lifecycle,
+# provisioning, jobs) report the same value from every replica; per-process
+# series (readiness, scheduler, request durations) differ per pod.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "syntra.fullname" . }}-api
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "syntra.selectorLabels" (dict "ctx" $ "component" "api") | nindent 6 }}
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "syntra.secretName" . }}
+          key: {{ .Values.secretKeys.metricsToken }}
+{{- end }}
+{{- if .Values.metrics.prometheusRule.enabled }}
+---
+# The rules from files/prometheus-alerts.yml -- a byte-for-byte copy of
+# ops/prometheus-alerts.yml, enforced by CI -- so the Operator and a plain
+# Prometheus alert on exactly the same conditions.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "syntra.fullname" . }}
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "api") | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- $rules := .Files.Get "files/prometheus-alerts.yml" | fromYaml }}
+  {{- if not $rules.groups }}
+  {{- fail "files/prometheus-alerts.yml is missing or has no groups" }}
+  {{- end }}
+  groups:
+    {{- toYaml $rules.groups | nindent 4 }}
+{{- end }}
