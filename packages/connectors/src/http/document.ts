@@ -120,7 +120,7 @@ const paging = z.discriminatedUnion('style', [
 const listSpec = z.object({
   path: requestPath,
   /** Fixed query parameters, e.g. `{"$select": "id,displayName"}`. */
-  query: z.record(z.string()).default({}),
+  query: z.record(z.string(), z.string()).default({}),
   /**
    * Where the array of items is. Absent means the body IS the array.
    */
@@ -133,7 +133,7 @@ const writeSpec = (method: z.ZodTypeAny) =>
   z.object({
     method,
     path: requestPath,
-    query: z.record(z.string()).default({}),
+    query: z.record(z.string(), z.string()).default({}),
     /** A templated JSON body. Absent sends none. */
     body: z.unknown().optional(),
     /**
@@ -296,7 +296,7 @@ export const httpConnectorDocument = z
     }),
     auth,
     /** Sent on every request. The credential never goes here. */
-    headers: z.record(z.string()).default({}),
+    headers: z.record(z.string(), z.string()).default({}),
     timeoutMs: z.number().int().positive().max(600_000).default(60_000),
     /** Mirrors `GuardedFetchOptions.allowPrivateAddresses`. */
     allowPrivateAddresses: z.boolean().default(false),
