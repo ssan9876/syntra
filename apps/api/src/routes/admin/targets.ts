@@ -191,13 +191,13 @@ export const nativeEntraMigrationRequest = z.object({ revision: z.string().lengt
  * are the records somebody reads after a canary misbehaved.
  */
 const adapterReason = z.string().trim().min(10).max(2000);
-const adapterSelectionRequest = z.object({
+export const adapterSelectionRequest = z.object({
   channel: z.enum(['stable', 'canary']),
   version: z.string().regex(/^\d+\.\d+\.\d+$/).nullable().default(null),
   reason: adapterReason,
 }).strict();
-const adapterReasonRequest = z.object({ reason: adapterReason }).strict();
-const deprecationOverrideRequest = z.object({
+export const adapterReasonRequest = z.object({ reason: adapterReason }).strict();
+export const deprecationOverrideRequest = z.object({
   reason: adapterReason,
   expiresAt: z.coerce.date(),
 }).strict();

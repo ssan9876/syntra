@@ -91,7 +91,11 @@ import {
   type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
-import { declareGuardPermissions, requirePermission } from '../../plugins/require-permission.js';
+import {
+  declareGuardPermissions,
+  requirePermission,
+  tokenScopeAllows,
+} from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
 
 /**
@@ -108,8 +112,11 @@ import { requireSession } from '../../plugins/require-session.js';
  */
 function requireGovernRead(alsoRequire?: Permission) {
   const guard = async function guard(request: FastifyRequest): Promise<void> {
+    // The token half of the intersection `requirePermission` applies: a token
+    // not scoped to `govern.read` reads nothing here, whatever its account
+    // holds.
     const scope = await request.db((tx) => governReadScope(tx, request.session.userId));
-    if (scope.kind === 'none') {
+    if (scope.kind === 'none' || !tokenScopeAllows(request, PERMISSIONS.GOVERN_READ)) {
       throw new ProblemError(403, 'forbidden', 'Forbidden', 'Requires govern.read');
     }
     // The export route needs `govern.export` AS WELL, and it still needs the
@@ -126,7 +133,7 @@ function requireGovernRead(alsoRequire?: Permission) {
       const held = await request.db((tx) =>
         holdsGovernPermission(tx, request.session.userId, alsoRequire),
       );
-      if (!held) {
+      if (!held || !tokenScopeAllows(request, alsoRequire)) {
         throw new ProblemError(403, 'forbidden', 'Forbidden', `Requires ${alsoRequire}`);
       }
     }

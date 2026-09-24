@@ -3,6 +3,23 @@ import { hasPermission, type Permission } from '@syntra/core';
 import { ProblemError } from './problem-json.js';
 
 /**
+ * Whether a machine token's own scopes admit `permission`. Always true for a
+ * person's session, and for a token minted with an empty scope list.
+ *
+ * Exported because a bespoke guard — Govern's org-unit-scoped read is the one
+ * that exists — must apply the token half of the intersection too. It once
+ * checked only the account's roles, so a token scoped to anything at all read
+ * Govern with its account's full authority.
+ */
+export function tokenScopeAllows(request: FastifyRequest, permission: Permission): boolean {
+  return (
+    !request.session.viaToken ||
+    request.session.tokenScopes.length === 0 ||
+    request.session.tokenScopes.includes(permission)
+  );
+}
+
+/**
  * Requires a permission. Runs after requireSession('admin'), which is what
  * establishes request.session.
  *
@@ -74,12 +91,7 @@ export function requirePermission(permission: Permission) {
     // empty webhook subscription means every event. The console always writes
     // an explicit list, so the permissive reading is reachable only by an
     // integrator who asked for it.
-    const withinScope =
-      !request.session.viaToken ||
-      request.session.tokenScopes.length === 0 ||
-      request.session.tokenScopes.includes(permission);
-
-    if (!allowed || !withinScope) {
+    if (!allowed || !tokenScopeAllows(request, permission)) {
       throw new ProblemError(
         403,
         'forbidden',

@@ -75,6 +75,20 @@ describe('routeRefusesTokens', () => {
   });
 });
 
+describe("Govern's scoped read guard", () => {
+  // It is not `requirePermission`, and it once checked only the account's
+  // roles: a token scoped to something else read Govern with its account's
+  // whole authority.
+  it('refuses a token whose scopes do not name govern.read', async () => {
+    const perms = [PERMISSIONS.GOVERN_READ, PERMISSIONS.DIRECTORY_READ];
+    const narrow = await serviceAccount(perms, [PERMISSIONS.DIRECTORY_READ]);
+    expect((await call('GET', '/api/admin/govern/findings', narrow.token)).statusCode).toBe(403);
+
+    const scoped = await serviceAccount(perms, [PERMISSIONS.GOVERN_READ]);
+    expect((await call('GET', '/api/admin/govern/findings', scoped.token)).statusCode).toBe(200);
+  });
+});
+
 describe('presenting a token', () => {
   it('reaches an admin route with the right permission', async () => {
     const { token } = await serviceAccount([PERMISSIONS.DIRECTORY_READ]);

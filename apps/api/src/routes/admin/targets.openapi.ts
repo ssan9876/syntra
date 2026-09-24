@@ -10,6 +10,9 @@ import {
   updateTargetRequestSchema,
 } from '@syntra/contracts';
 import {
+  adapterReasonRequest,
+  adapterSelectionRequest,
+  deprecationOverrideRequest,
   entitlementSearchQuery,
   nativeEntraMigrationRequest,
   placementParams,
@@ -141,6 +144,34 @@ export const targetsOpenApi = describeAdminRoutes('Target systems', {
     summary: 'Resume external writes tenant-wide',
     description: FOUR_EYES_RESUME,
     body: writeResumeRequest,
+  },
+  'GET /targets/:id/adapter': {
+    summary: 'Read the adapter release a target system runs',
+    description: 'The selected channel or pinned release, what that release is certified for, which writes the configuration refuses, and any deprecation or certification warning.',
+    params: idParam,
+  },
+  'PUT /targets/:id/adapter': {
+    summary: 'Move a target system between rollout channels or pin a certified release',
+    description: 'Refuses an unknown or uncertified release. The release left behind is recorded as the rollback point, and a run previewed under it refuses to apply (409 `adapter-version-changed`).',
+    body: adapterSelectionRequest,
+    params: idParam,
+  },
+  'POST /targets/:id/adapter/rollback': {
+    summary: 'Roll a target system back to its last certified adapter release',
+    description: 'Changes only the release selection; configuration, profile, rules, placements and accounts are untouched.',
+    body: adapterReasonRequest,
+    params: idParam,
+  },
+  'POST /targets/:id/adapter/deprecation-override': {
+    summary: 'Allow writes through a deprecated adapter release for a bounded time',
+    description: 'Bound to one release, with a reason, for at most 30 days.',
+    body: deprecationOverrideRequest,
+    params: idParam,
+  },
+  'POST /targets/:id/adapter/deprecation-override/clear': {
+    summary: 'End a deprecation override early',
+    body: adapterReasonRequest,
+    params: idParam,
   },
   'POST /targets/:id/entitlements/refresh': {
     summary: "Refresh a target system's stored entitlement catalog",

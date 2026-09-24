@@ -34,6 +34,10 @@ const config = loadConfig({
   SESSION_SECRET: 'x'.repeat(32),
   MASTER_KEY: Buffer.alloc(32, 0).toString('base64'),
   SMTP_URL: 'smtp://127.0.0.1:1',
+  // The document route is rate-limited, and the default store counts in
+  // Postgres. There is no Postgres here, and the limiter fails closed, so a
+  // database-backed count would turn the one request this makes into a 500.
+  RATE_LIMIT_STORE: 'memory',
 });
 
 const app = await buildApp(config, { logger: false, transport: memoryTransport() });
