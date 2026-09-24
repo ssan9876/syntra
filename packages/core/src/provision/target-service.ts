@@ -990,11 +990,11 @@ export const accountProfileSchema = z.object({
   // and Provision does not create organizational units in somebody else's
   // domain.
   fallbackContainer: z.string().min(1).max(1024),
-  attributeTemplates: z.record(z.string()).pipe(attributeTemplatesSchema),
+  attributeTemplates: z.record(z.string(), z.string()).pipe(attributeTemplatesSchema),
   // `z.record(z.unknown())` on the way in so a caller holding an open bag —
   // a route body, a JSON column — still typechecks; the strict shape on the
   // way out is what actually decides.
-  initialPasswordPolicy: z.record(z.unknown()).pipe(initialPasswordPolicySchema),
+  initialPasswordPolicy: z.record(z.string(), z.unknown()).pipe(initialPasswordPolicySchema),
   initialPasswordDelivery: z.enum(['manager', 'personalEmail', 'vaultOnly']),
   sensitiveApprovalReason: z.string().trim().min(20).max(1000).optional(),
 }).superRefine((profile, ctx) => {
@@ -1133,7 +1133,7 @@ export const boundedConditionSchema = z.preprocess((raw, ctx) => {
     return z.NEVER;
   }
   return raw;
-}, conditionSchema) as unknown as z.ZodType<Condition, z.ZodTypeDef, Condition>;
+}, conditionSchema) as unknown as z.ZodType<Condition>;
 
 export const businessRuleSchema = z.object({
   id: z.string().uuid().optional(),
