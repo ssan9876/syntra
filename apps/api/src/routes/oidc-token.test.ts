@@ -345,7 +345,7 @@ describe('the oidc-provider model API Control 2 depends on', () => {
     };
     // Named separately from the behaviour cases so an upgrade reads as "the
     // pin moved" rather than as a mysterious behavioural failure.
-    expect(pkg.version, CONTRACT).toBe('9.11.3');
+    expect(pkg.version, CONTRACT).toBe('9.12.2');
   });
 
   it('authenticates a client against the placeholder secret the provider was given', async () => {
