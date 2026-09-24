@@ -13,7 +13,7 @@ These have no default. The API refuses to start without them.
 | `DATABASE_URL` | The Postgres connection string, as the `syntra_app` role. |
 | `PUBLIC_URL` | The origin users type. The session cookie and the WebAuthn relying party are derived from it, so it has to be the address the browser actually sees, not an internal one. |
 | `SESSION_SECRET` | At least 32 characters, and not the `.env.example` placeholder — the API refuses to start on the literal placeholder value so a copied `.env` nobody edited can't run with a secret that's in the repository. |
-| `MASTER_KEY` | 32 random bytes, base64-encoded. Encrypts every stored credential and signs SAML. Losing it means re-entering every secret; back it up. Generate both this and `SESSION_SECRET` with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`, run twice. |
+| `MASTER_KEY` | 32 random bytes, base64-encoded. Encrypts every stored credential and signs SAML. Losing it means re-entering every secret; back it up. Generate both this and `SESSION_SECRET` with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`, run twice. Required with the default `MASTER_KEY_PROVIDER=local`; optional when Vault Transit or AWS KMS holds the master key -- see [Key management](#key-management). |
 | `SMTP_URL` | Where outgoing mail (password resets, MFA-added notifications) is sent. |
 
 The container path (`docker-compose.yml`) additionally requires:
@@ -100,7 +100,9 @@ when bootstrapping; there is no default tenant.
 | `BOOTSTRAP_ADMIN_EMAIL` | The first administrator's email address. |
 | `BOOTSTRAP_ADMIN_PASSWORD` | The first administrator's password. At least 12 characters; bootstrap refuses a shorter one. |
 
-Bootstrap refuses to run without `MASTER_KEY` set, unlike the dev seed which
+Bootstrap refuses to run without a master key -- `MASTER_KEY`, or an external
+provider configured as in [Key management](#key-management), which then seals
+the first signing key -- unlike the dev seed which
 merely warns — a production tenant with a SAML tile and no signing key is a
 deployment an operator has to come back and fix by hand, and refusing up
 front is cheaper than discovering it later as a `409 saml-no-key`.
@@ -137,6 +139,170 @@ registered and the path answers 404 rather than 403 — a route that answered 40
 would confirm its own existence. See
 [Operating Syntra](operate.md#metrics) for what is exposed, and why there are
 no per-tenant labels.
+
+## Key management
+
+Every stored credential (the `Secret` table) is sealed with its own random
+data key, and that data key is sealed -- "wrapped" -- by the **master key**.
+`MASTER_KEY_PROVIDER` chooses what holds the master key. The data keys and the
+secret values never leave the process whichever you choose; only the wrapping
+moves (`packages/core/src/vault/`).
+
+| `MASTER_KEY_PROVIDER` | The master key lives in | Use it for |
+|---|---|---|
+| `local` (default) | `MASTER_KEY`, in the environment | Development, single-node installs, and every install until it moves to a KMS. |
+| `vault-transit` | A HashiCorp Vault or OpenBao Transit key | Self-hosted and hybrid deployments that already run Vault. |
+| `aws-kms` | An AWS KMS symmetric key | Deployments on AWS. |
+
+The configuration is checked at startup: an unknown provider or a missing
+variable stops the API with `Invalid configuration — <VARIABLE>: …`, naming
+every missing variable at once. Whether the provider is *reachable* is a
+different question, answered by the readiness probe (below), because a KMS
+that is briefly down at boot should not stop password sign-in from starting;
+the API logs whether the provider answered, once, at startup.
+
+### Variables
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MASTER_KEY_PROVIDER` | `local` | `local`, `vault-transit` or `aws-kms`. |
+| `MASTER_KEY` | — | 32 random bytes, base64. **Required** with `local`. With an external provider it is optional and **decrypt-only**: it reads data keys not yet moved by `rekey`, and nothing new is ever wrapped with it. Remove it when `pnpm rekey --status` shows no `local` rows; the API logs a warning at every start until you do. |
+| `MASTER_KEY_PREVIOUS` | — | The local key being rotated away from, decrypt-only. See [Secret rotation, Procedure B](runbooks/secret-rotation.md#procedure-b-the-master-key). |
+| `MASTER_KEY_CACHE_TTL_SECONDS` | `300` | How long an unwrapped data key is kept in memory (0–3600; `0` turns the cache off). External providers only; see [Outages and revocation](#outages-and-revocation). |
+| `MASTER_KEY_CACHE_MAX_ENTRIES` | `1000` | How many unwrapped data keys are kept, least recently used evicted first (0–100000). |
+| `MASTER_KEY_PROVIDER_TIMEOUT_MS` | `5000` | Per-request deadline for the external provider. |
+| `VAULT_ADDR` | — | `vault-transit`: the server, e.g. `https://vault.internal:8200`. Trust a private CA with Node's own `NODE_EXTRA_CA_CERTS`. |
+| `VAULT_TRANSIT_KEY` | — | `vault-transit`: the Transit key's name. |
+| `VAULT_TRANSIT_PREVIOUS_KEY` | — | `vault-transit`: a *different* Transit key being moved away from, decrypt-only. Not needed for Transit's own key versions. |
+| `VAULT_TRANSIT_MOUNT` | `transit` | `vault-transit`: where the Transit engine is mounted. |
+| `VAULT_NAMESPACE` | — | `vault-transit`: Vault Enterprise / HCP namespace. |
+| `VAULT_TOKEN` | — | `vault-transit`: a token. Exactly one of this or AppRole. |
+| `VAULT_ROLE_ID`, `VAULT_SECRET_ID` | — | `vault-transit`: AppRole credentials, exchanged for a short-lived token that is renewed by logging in again. The recommended method. |
+| `VAULT_APPROLE_MOUNT` | `approle` | `vault-transit`: where the AppRole auth method is mounted. |
+| `AWS_KMS_KEY_ID` | — | `aws-kms`: key ARN (recommended), key id, alias name or alias ARN. |
+| `AWS_KMS_PREVIOUS_KEY_ID` | — | `aws-kms`: a *different* KMS key being moved away from, decrypt-only. Not needed for KMS automatic rotation. |
+| `AWS_KMS_ENCRYPTION_CONTEXT` | `tenant` | `aws-kms`: `tenant` binds each data key to its tenant id through the KMS encryption context; `none` binds nothing. Each row records which, so changing it never strands existing rows. |
+| `AWS_KMS_ENDPOINT` | — | `aws-kms`: a VPC endpoint, or LocalStack for testing. |
+| `AWS_REGION` and the AWS credential chain | SDK default | `aws-kms`: region and credentials come from the AWS SDK's own chain -- an instance or task role, IRSA / Pod Identity on EKS, or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Prefer a role; a long-lived access key in `.env` is a second master key. |
+
+The container path (`docker-compose.yml`) passes the provider variables
+through (AWS credentials beyond `AWS_REGION` belong in a compose override or,
+better, a role). Under Helm, put them in a Secret or ConfigMap named in
+`api.envFrom`; the `MASTER_KEY` key in `existingSecret` may then be empty.
+
+### What each provider needs
+
+**Vault / OpenBao Transit.** A Transit key of the default type
+(`aes256-gcm96`) and a policy that allows exactly encrypt and decrypt on it --
+not `read`, not `rotate`, not any other key. That least-privilege policy is
+what the integration test runs with:
+
+```hcl
+path "transit/encrypt/syntra" { capabilities = ["update"] }
+path "transit/decrypt/syntra" { capabilities = ["update"] }
+```
+
+```bash
+vault secrets enable transit
+vault write -f transit/keys/syntra
+vault policy write syntra syntra.hcl
+vault auth enable approle
+vault write auth/approle/role/syntra token_policies=syntra token_ttl=1h
+vault read auth/approle/role/syntra/role-id            # VAULT_ROLE_ID
+vault write -f auth/approle/role/syntra/secret-id      # VAULT_SECRET_ID
+```
+
+Each data key is sent with `associated_data` = `syntra-tenant:<tenant id>`,
+so a wrapped key copied into another tenant's row does not decrypt; the
+integration test proves Transit enforces that against a real server. Each
+stored ciphertext carries the key version that sealed it (`vault:v3:…`).
+
+**AWS KMS.** A symmetric encryption key (`SYMMETRIC_DEFAULT`) with automatic
+rotation on, and a key policy or IAM policy granting the API's role exactly
+`kms:Encrypt`, `kms:Decrypt` and `kms:GenerateDataKey` on that key ARN, and
+nothing on `*`. New data keys come from `GenerateDataKey` (one round trip per
+write); reads are `Decrypt`, always naming the configured key so a ciphertext
+sealed under any other key is refused. The encryption context is
+`{"syntra:tenant": "<tenant id>"}`. (The readiness canary is wrapped without
+one, so a policy condition requiring the context must use an `IfExists`
+operator.)
+
+**Azure Key Vault and GCP KMS** are not implemented. `MasterKeyProvider`
+(`packages/core/src/vault/master-key.ts`) is the interface one would
+implement; the rest -- cache, fallback, readiness, rekey -- is shared.
+
+### Readiness
+
+`/health/ready` has a `key-management` probe. It wraps a random canary under
+the provider new keys are written with, unwraps it, compares it and zeroes it
+-- bypassing the cache -- and fails when the provider is unreachable, the
+credential is revoked, or the key is disabled. The detail names only the
+provider and its error, and the unauthenticated wire answer is redacted to
+"this check did not pass" like every other probe. A pass is remembered for 30
+seconds, so an orchestrator polling every few seconds is not a KMS bill; a
+failure is never remembered.
+
+The `vault` probe still unseals a stored signing key, through the cache. The
+two can disagree during an outage, and that is informative: `vault` passing
+with `key-management` failing means cached keys are carrying the deployment
+and the clock is running.
+
+### Outages and revocation
+
+With an external provider the process keeps unwrapped data keys in a bounded
+cache (`MASTER_KEY_CACHE_TTL_SECONDS`, `MASTER_KEY_CACHE_MAX_ENTRIES`), keyed
+by the wrapped bytes *and* the tenant, zeroed on eviction. That defines what a
+KMS outage does:
+
+| During an outage | What happens |
+|---|---|
+| Reading a secret whose data key was unwrapped within the TTL | Works, until that entry expires. |
+| Reading any other secret | Fails at once with the provider's error. SSO signing, connector runs and webhook signing that need it fail, and scheduled work retries on its normal schedule. |
+| Writing any secret (a target credential, a rotated webhook secret, a new signing key, a TOTP enrolment) | Fails at once. Nothing is written half-sealed. |
+| `/health/ready` | `key-management` fails; the deployment reports not-ready and `SyntraNotReady` fires after five minutes. |
+| Password sign-in, sessions, the console, the audit log | Unaffected: none of them needs the master key. |
+
+When the provider answers again everything resumes without a restart.
+
+**Revocation** is the KMS's: disable the key, schedule its deletion, remove
+the role's grant, revoke the Vault token, or raise Transit's
+`min_decryption_version`. It takes effect on the next call to the provider --
+immediately for writes and uncached reads, within one TTL for cached data
+keys. Restart every API replica when that is too long; a restart empties the
+cache. `0` turns the cache off entirely, at the cost of a KMS round trip on
+every secret read.
+
+### Who logs what
+
+**Key access is logged by the KMS, not by Syntra.** Every wrap, unwrap and
+canary is an authenticated call the provider records: CloudTrail logs each
+`Encrypt`, `Decrypt` and `GenerateDataKey` with the calling role and the
+encryption context -- which names the tenant in clear -- and a Vault audit
+device logs each Transit request with the token's accessor (Vault HMACs
+request fields, the tenant AAD included, by default). That is the record for
+"which process used the key, when, and for which tenant". CloudTrail records
+these KMS calls as management events, kept in Event history for 90 days
+without configuration (a trail keeps them longer); a Vault audit device has to
+be enabled, and enabling one is part of adopting Transit.
+
+**Syntra audits the administrative events around the keys**, in its
+hash-chained audit log: `rekey` records one `vault.data_keys_rewrapped` event
+per tenant with the provider it moved to and the before-and-after counts per
+provider and key version, and every credential write already records its own
+event (`notify.webhook_secret_rotated`, target and source updates,
+`mfa.enrolled`, signing-key rotation). Syntra never logs a master key, a data
+key or a canary, and does not duplicate the KMS's per-call log.
+
+### Moving from `MASTER_KEY` to a KMS
+
+In short -- the full procedure, with verification and rollback, is
+[Secret rotation, Procedure B](runbooks/secret-rotation.md#procedure-b-the-master-key):
+
+1. Set `MASTER_KEY_PROVIDER` and the provider's variables, **keep
+   `MASTER_KEY`**, restart. New secrets go to the KMS; old ones still read.
+2. `pnpm rekey --yes` moves every tenant's data keys, one transaction per
+   tenant; it is safe to run again.
+3. `pnpm rekey --status` shows no `local` rows. Remove `MASTER_KEY`, restart.
 
 ## Tenants and hostnames
 

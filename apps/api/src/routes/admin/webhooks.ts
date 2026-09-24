@@ -12,7 +12,7 @@ import {
   createEndpoint,
   deleteEndpoint,
   listEndpoints,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   recordEvent,
   rotateEndpointSecret,
   updateEndpoint,
@@ -23,7 +23,7 @@ import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
 
 export interface WebhookRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   /** From `OUTBOUND_ALLOW_PRIVATE`. See `assertOutboundUrl`. */
   outboundAllowPrivate: boolean;
 }
@@ -42,7 +42,7 @@ export async function registerAdminWebhookRoutes(
   options: WebhookRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
   const guard = { allowPrivateNetworks: options.outboundAllowPrivate };
   const manage = { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) };
 

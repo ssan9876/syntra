@@ -2,8 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { localMasterKeyProvider } from './master-key.js';
-import { getSecret, putSecret, rewrapSecrets } from './vault-service.js';
+import { awsKmsProvider } from './aws-kms.js';
+import { fallbackMasterKeyProvider, localMasterKeyProvider } from './master-key.js';
+import { fakeKms } from './testing/fake-kms.js';
+import { getSecret, putSecret, rewrapSecrets, wrappedKeyInventory } from './vault-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 9));
 let tenantId: string;
@@ -127,6 +129,72 @@ describe('vault', () => {
     expect(await withTenant(other.id, (tx) => getSecret(tx, provider, 'k'))).toBe(
       'other',
     );
+  });
+});
+
+describe('vault with an external master-key provider', () => {
+  function kmsSetup() {
+    const kms = fakeKms();
+    const arn = kms.createKey('alias/syntra');
+    const aws = awsKmsProvider({ keyId: 'alias/syntra', bindTenant: true, timeoutMs: 1000, client: kms });
+    return { kms, arn, aws };
+  }
+
+  it('mints the data key with GenerateDataKey and binds it to the tenant', async () => {
+    const { kms, aws } = kmsSetup();
+    await withTenant(tenantId, (tx) => putSecret(tx, aws, 'k', 'hunter2'));
+    expect(await withTenant(tenantId, (tx) => getSecret(tx, aws, 'k'))).toBe('hunter2');
+    expect(kms.calls.map((c) => [c.command, c.context])).toEqual([
+      ['GenerateDataKeyCommand', { 'syntra:tenant': tenantId }],
+      ['DecryptCommand', { 'syntra:tenant': tenantId }],
+    ]);
+  });
+
+  it("refuses a wrapped key copied into another tenant's row", async () => {
+    const { aws } = kmsSetup();
+    const other = await prisma.tenant.create({ data: { name: 'Other', slug: 'other' } });
+    await withTenant(tenantId, (tx) => putSecret(tx, aws, 'k', 'acme-only'));
+    await withTenant(other.id, (tx) => putSecret(tx, aws, 'k', 'other'));
+    // Somebody with write access to the database swaps the rows' sealed
+    // halves across tenants. Without tenant binding this would hand Other
+    // Acme's secret.
+    const acme = await withTenant(tenantId, (tx) => tx.secret.findFirstOrThrow({ where: { name: 'k' } }));
+    await withTenant(other.id, (tx) =>
+      tx.secret.updateMany({
+        where: { name: 'k' },
+        data: {
+          ciphertext: acme.ciphertext, iv: acme.iv, tag: acme.tag,
+          wrappedDek: acme.wrappedDek, dekIv: acme.dekIv, dekTag: acme.dekTag,
+        },
+      }),
+    );
+    await expect(withTenant(other.id, (tx) => getSecret(tx, aws, 'k'))).rejects.toThrow(/InvalidCiphertextException/);
+  });
+
+  it('migrates local rows to KMS with rewrapSecrets, and the inventory proves it', async () => {
+    const { aws, arn } = kmsSetup();
+    await withTenant(tenantId, async (tx) => {
+      await putSecret(tx, provider, 'a', 'first');
+      await putSecret(tx, provider, 'b', 'second');
+    });
+    // The migration window: new writes go to KMS, old rows still read.
+    const composite = fallbackMasterKeyProvider(aws, [provider]);
+    await withTenant(tenantId, (tx) => putSecret(tx, composite, 'c', 'third'));
+    expect(await withTenant(tenantId, (tx) => wrappedKeyInventory(tx))).toEqual({ local: 2, [`aws-kms:${arn}`]: 1 });
+
+    const moved = await withTenant(tenantId, (tx) => rewrapSecrets(tx, composite, aws));
+    expect(moved).toEqual({ rewrapped: 3 });
+    expect(await withTenant(tenantId, (tx) => wrappedKeyInventory(tx))).toEqual({ [`aws-kms:${arn}`]: 3 });
+
+    // KMS alone now reads everything; the local key reads nothing.
+    for (const [name, value] of [['a', 'first'], ['b', 'second'], ['c', 'third']] as const) {
+      expect(await withTenant(tenantId, (tx) => getSecret(tx, aws, name))).toBe(value);
+    }
+    await expect(withTenant(tenantId, (tx) => getSecret(tx, provider, 'a'))).rejects.toThrow(/not by the local MASTER_KEY/);
+
+    // And running it again is harmless.
+    expect(await withTenant(tenantId, (tx) => rewrapSecrets(tx, composite, aws))).toEqual({ rewrapped: 3 });
+    expect(await withTenant(tenantId, (tx) => getSecret(tx, aws, 'b'))).toBe('second');
   });
 });
 

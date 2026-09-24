@@ -212,6 +212,45 @@ ok "a non-numeric answer is not a restore" \
    "$(yes_no empty_restore_reason 'ERROR' 'ERROR')" no
 ok "no arguments at all is not a restore" "$(yes_no empty_restore_reason)" no
 
+# --- running_fingerprint with an external master-key provider ---------------
+#
+# After a move to Vault Transit or AWS KMS, what decides whether a backup's
+# data keys can be unwrapped is WHICH external key sealed them. Fingerprinting
+# a leftover decrypt-only MASTER_KEY, or recording null, would refuse every
+# post-migration restore as "a different MASTER_KEY".
+
+FP_SAVED_SHARED="$SHARED"
+SHARED=$(mktemp -d)
+cat > "$SHARED/.env" <<'ENV'
+MASTER_KEY_PROVIDER=vault-transit
+VAULT_ADDR=https://vault.internal:8200
+VAULT_TRANSIT_KEY=syntra
+MASTER_KEY=bGVmdG92ZXItZGVjcnlwdC1vbmx5LWtleS0zMmJ5dGVzIQ==
+ENV
+ok "a Transit deployment's reference names address, default mount and key" \
+   "$(external_key_reference vault-transit)" "vault-transit:https://vault.internal:8200:transit:syntra"
+MASTER_KEY=bGVmdG92ZXItZGVjcnlwdC1vbmx5LWtleS0zMmJ5dGVzIQ==
+KEY_REFERENCE=$(external_key_reference vault-transit)
+ok "and it, not the leftover MASTER_KEY, is what is fingerprinted" \
+   "$(running_fingerprint)" "$(fingerprint_of 'vault-transit:https://vault.internal:8200:transit:syntra')"
+printf 'VAULT_TRANSIT_MOUNT=transit\n' >> "$SHARED/.env"
+ok "an explicit default mount fingerprints the same as an absent one" \
+   "$(external_key_reference vault-transit)" "vault-transit:https://vault.internal:8200:transit:syntra"
+
+cat > "$SHARED/.env" <<'ENV'
+MASTER_KEY_PROVIDER=aws-kms
+AWS_KMS_KEY_ID=arn:aws:kms:eu-west-2:111122223333:key/abc
+ENV
+ok "a KMS deployment's reference is the key id" \
+   "$(external_key_reference aws-kms)" "aws-kms:arn:aws:kms:eu-west-2:111122223333:key/abc"
+ok "the local provider has no external reference" "$(external_key_reference local)" ""
+KEY_REFERENCE=""
+ok "and so still fingerprints MASTER_KEY" \
+   "$(running_fingerprint)" "$(fingerprint_of "$MASTER_KEY")"
+rm -rf "$SHARED"
+SHARED="$FP_SAVED_SHARED"
+MASTER_KEY=""
+
 # ---------------------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

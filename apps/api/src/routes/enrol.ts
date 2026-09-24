@@ -12,7 +12,7 @@ import {
   hasTotp,
   finishWebAuthnRegistration,
   findAttempt,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   recordEvent,
   type FactorType,
   type ResolvedAttempt,
@@ -26,7 +26,7 @@ import { qrDataUrl, tellOwnerAFactorWasAdded, webauthnContext } from './mfa.js';
 import { clientFacts } from '../plugins/client-facts.js';
 
 export interface EnrolRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   publicUrl: string;
   /** Attempts per minute, per tenant per address. */
   authRateLimitMax: number;
@@ -55,7 +55,7 @@ export async function registerEnrolRoutes(
   app: FastifyInstance,
   options: EnrolRouteOptions,
 ): Promise<void> {
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
   const LIMIT = {
     config: {
       rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },

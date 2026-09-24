@@ -25,6 +25,8 @@ supported, the page says so.
 - For stored secrets: an administrator session with the permission the route
   requires: `provision.manage` for targets, `sync.manage` for sources,
   `token.manage` for API tokens, `tenant.manage` for webhook endpoints.
+- For the master key: shell access to run `pnpm rekey` with the API's own
+  environment, and, for a KMS, rights to create keys or versions there.
 - A generator for random values:
 
   ```bash
@@ -36,7 +38,7 @@ supported, the page says so.
 | Secret | Where it lives | Rotate by | Effect of rotation |
 |---|---|---|---|
 | `SESSION_SECRET` | environment | new value, restart | Console and portal sessions **survive**; in-flight OIDC interactions fail once |
-| `MASTER_KEY` | environment | **not rotatable in place** | See [Master-key recovery](master-key-recovery.md) |
+| Master key (`MASTER_KEY`, or the Vault Transit / AWS KMS key) | environment, or the KMS | configure old key decrypt-only, `pnpm rekey --yes`, remove old key | None if followed in order: both keys read during the window. See Procedure B |
 | `METRICS_TOKEN` | environment | new value, restart, update scraper | Scrapes 401 until the scraper is updated |
 | `SMTP_URL` credential | environment | new value, restart | Mail queued in the outbox retries under the new credential |
 | `GOVERN_CHECKPOINT_KEY` / `_ID` | environment | new value and new id, restart | See caveat below |
@@ -72,13 +74,113 @@ it is the OIDC provider's interaction cookies (`cookieKeys` in
 There is no dual-key window; `cookieKeys` is a single value. Choose a quiet
 minute.
 
-## Procedure B: `MASTER_KEY`
+## Procedure B: the master key
 
-Do not. There is no tool to re-wrap the vault under a new key, and a new key
-unseals nothing. If the key must change because it was exposed, that is the
-full re-entry procedure in
-[Master-key recovery, "When the original key is genuinely gone"](master-key-recovery.md#when-the-original-key-is-genuinely-gone),
-planned as a change with every secret owner on hand.
+The master key wraps every stored secret's data key
+([Configure, "Key management"](../configure.md#key-management)). Changing it
+is a **rewrap**, not a re-entry: `pnpm rekey --yes` (`packages/db/src/rekey.ts`)
+unwraps each data key with whichever configured key recognises it and wraps it
+again under the provider `MASTER_KEY_PROVIDER` names. Secret values are never
+decrypted; each 32-byte data key is zeroed as soon as it is rewrapped.
+
+Every variant below has the same three-step shape, and the same safety
+property: **between steps the deployment reads both old and new rows.** The
+old key is configured *decrypt-only* -- nothing new is ever wrapped with it --
+so there is no moment where a running API cannot read a row that `rekey` has
+moved, and no moment where it writes a row the old configuration could not
+read back.
+
+| Changing | Step 1: configure, restart | Step 3: remove, restart |
+|---|---|---|
+| Local key to a new local key | `MASTER_KEY=<new>`, `MASTER_KEY_PREVIOUS=<old>` | `MASTER_KEY_PREVIOUS` |
+| Local key to Vault Transit | `MASTER_KEY_PROVIDER=vault-transit` and its variables; keep `MASTER_KEY` | `MASTER_KEY` |
+| Local key to AWS KMS | `MASTER_KEY_PROVIDER=aws-kms` and its variables; keep `MASTER_KEY` | `MASTER_KEY` |
+| One Transit key to another | `VAULT_TRANSIT_KEY=<new>`, `VAULT_TRANSIT_PREVIOUS_KEY=<old>` | `VAULT_TRANSIT_PREVIOUS_KEY` |
+| One KMS key to another | `AWS_KMS_KEY_ID=<new>`, `AWS_KMS_PREVIOUS_KEY_ID=<old>` | `AWS_KMS_PREVIOUS_KEY_ID` |
+| A Transit key's version | `vault write -f transit/keys/<key>/rotate` (no Syntra change) | raise `min_decryption_version` (below) |
+| A KMS key's backing material | KMS automatic rotation; nothing to do | nothing: old material keeps decrypting, and no rekey is needed |
+
+Moving directly between Vault and AWS is not supported: go through a local key
+or re-enter the secrets.
+
+1. **Back up first.** `syntra-backup create`. With a local key, also put the
+   *new* key in the password manager or secret store now -- before it seals
+   anything.
+2. **Check the new provider answers.** For an external provider, configure it
+   and restart as in step 1 of the table, then:
+
+   ```bash
+   curl -s http://127.0.0.1:3000/health/ready     # key-management: pass
+   journalctl -u syntra -n 50 | grep -i 'master-key provider'
+   ```
+
+   The log says which provider wraps, warns about each decrypt-only key still
+   configured, and says whether the provider answered.
+3. **See what there is to move.** Calls no KMS; safe at any time:
+
+   ```bash
+   pnpm rekey --status        # compose: docker compose exec api pnpm rekey --status
+   ```
+
+   ```
+   Configured provider: aws-kms
+     note: MASTER_KEY is still set alongside aws-kms; ...
+   Data keys by provider:
+     acme: local=14, aws-kms:arn:aws:kms:eu-west-2:111122223333:key/…=2
+   ```
+
+4. **Rewrap.**
+
+   ```bash
+   pnpm rekey --yes
+   ```
+
+   It checks the new provider with a canary first and touches nothing if that
+   fails. Then one transaction per tenant: a failure rolls back that tenant
+   only and stops; the tenants before it are done. **It is safe to run
+   again** -- rows already moved are rewrapped under the same provider once
+   more, which changes nothing but their ciphertext. Each tenant gets one
+   `vault.data_keys_rewrapped` audit event with the before-and-after counts.
+5. **Verify** `pnpm rekey --status` shows only the new provider (and, for
+   Transit, only the latest version) for every tenant. `local=` anywhere
+   means a tenant was not finished; run step 4 again and read its error.
+6. **Remove the old key** (step 3 of the table) and restart every replica.
+   Then:
+   - `/health/ready`: `vault` and `key-management` both `pass`;
+   - one SAML and one OIDC sign-in succeed (they unseal signing keys);
+   - **Target systems → a target → Test connection** succeeds.
+7. **Take a fresh backup**, and confirm `syntra-backup list` shows `KEY ok`
+   for it. With an external provider the manifest fingerprints the KMS key
+   reference (Transit address, mount and key name, or the KMS key id), not a
+   leftover `MASTER_KEY`, so backups keep matching after the move; backups
+   from before it show `MISMATCH` because they were sealed under the local
+   key. Keep that local key until those backups expire -- it is the only
+   thing that reads them. Restoring any backup taken under a KMS needs the
+   KMS key to still exist and the API's role to still hold decrypt on it.
+
+**Retiring a Transit version** (after the rotate row above): run steps 3–5 --
+`rekey` with no configuration change moves every row to the latest version --
+then
+
+```bash
+vault write transit/keys/<key>/config min_decryption_version=<latest>
+```
+
+From that moment the old versions decrypt nothing, which is the revocation.
+Backups taken before the rekey hold old-version ciphertext and become
+unreadable with it; lower `min_decryption_version` again to restore one.
+
+**Rollback.** Before step 6, put the previous configuration back and restart:
+rows already moved are unreadable to it, so run `rekey` in the other
+direction first (swap which key is current and which previous). After step 6
+the old key is no longer configured, and rolling back means adding it back
+decrypt-only.
+
+What rotation does *not* protect against: a master key that was **exposed**
+remains able to unwrap every data key it wrapped, in every backup taken before
+the rekey. Rotation stops it reading the live database; the backups expire on
+their own schedule. For an exposure that matters, also re-enter the high-value
+secrets themselves (target credentials, signing keys) after the rekey.
 
 ## Procedure C: `METRICS_TOKEN`
 
@@ -246,7 +348,8 @@ be un-revoked; issue another.
 
 ## What this does not cover
 
-- **Rotating `MASTER_KEY`** (not possible in place).
+- **Recovering a lost master key**; that is [Master-key recovery](master-key-recovery.md).
+- **Moving directly between Vault Transit and AWS KMS**; go through a local key.
 - **Dual-key windows** for `SESSION_SECRET`, `METRICS_TOKEN` or webhook
   secrets; each has one value at a time.
 - **Automatic detection of an expiring Entra client secret.** Nothing reads

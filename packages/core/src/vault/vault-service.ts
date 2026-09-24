@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
-import type { MasterKeyProvider } from './master-key.js';
+import { describeWrappedKey, type MasterKeyProvider, type WrappedKey } from './master-key.js';
 
 /**
  * Seals a value under a fresh data key, then seals that key under the master
@@ -17,7 +17,25 @@ export async function putSecret(
 ): Promise<{ id: string; name: string }> {
   const tenantId = await currentTenant(tx);
 
-  const dek = randomBytes(32);
+  // A provider that can mint a data key (AWS GenerateDataKey) does, in the
+  // same single round trip `wrap` would cost; the rest get a local random key
+  // and wrap it. Either way the key is bound to this tenant: an external
+  // provider uses that as AAD / encryption context, the local one ignores it.
+  const context = { tenantId };
+  let dek: Buffer;
+  let wrapped: WrappedKey;
+  if (provider.generate) {
+    ({ dek, wrapped } = await provider.generate(context));
+  } else {
+    dek = randomBytes(32);
+    try {
+      wrapped = await provider.wrap(dek, context);
+    } catch (cause) {
+      dek.fill(0);
+      throw cause;
+    }
+  }
+
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', dek, iv);
   const ciphertext = Buffer.concat([
@@ -25,8 +43,6 @@ export async function putSecret(
     cipher.final(),
   ]);
   const tag = cipher.getAuthTag();
-
-  const wrapped = await provider.wrap(dek);
   dek.fill(0);
 
   // Prisma types Bytes as Uint8Array<ArrayBuffer>; Node's Buffer is backed by
@@ -69,11 +85,14 @@ export async function getSecret(
   const row = await tx.secret.findFirst({ where: { name } });
   if (!row) return null;
 
-  const dek = await provider.unwrap({
-    ciphertext: Buffer.from(row.wrappedDek),
-    iv: Buffer.from(row.dekIv),
-    tag: Buffer.from(row.dekTag),
-  });
+  const dek = await provider.unwrap(
+    {
+      ciphertext: Buffer.from(row.wrappedDek),
+      iv: Buffer.from(row.dekIv),
+      tag: Buffer.from(row.dekTag),
+    },
+    { tenantId: row.tenantId },
+  );
 
   try {
     const decipher = createDecipheriv('aes-256-gcm', dek, Buffer.from(row.iv));
@@ -100,21 +119,36 @@ export async function deleteSecret(
  * the old master key is still available, verify with `next`, then switch the
  * deployment's configured key. A failure leaves the surrounding transaction
  * to roll back rather than leaving a mixed key set.
+ *
+ * `current` may be -- and in `rekey` is -- the deployment's composite
+ * provider, which reads every format it has a key for. That is what makes a
+ * rekey that died half way SAFE TO RUN AGAIN: rows it already moved are read
+ * by the new provider and rewrapped under it once more, which changes nothing
+ * but the ciphertext. It is also what moves Transit rows to the latest key
+ * version when `current` and `next` are the same Vault key.
+ *
+ * Each data key is bound to the tenant the transaction is bound to, so a KMS
+ * provider's encryption context follows the row.
  */
 export async function rewrapSecrets(
   tx: TenantClient,
   current: MasterKeyProvider,
   next: MasterKeyProvider,
 ): Promise<{ rewrapped: number }> {
+  const tenantId = await currentTenant(tx);
+  const context = { tenantId };
   const rows = await tx.secret.findMany({ select: { id: true, wrappedDek: true, dekIv: true, dekTag: true } });
   for (const row of rows) {
-    const dek = await current.unwrap({
-      ciphertext: Buffer.from(row.wrappedDek),
-      iv: Buffer.from(row.dekIv),
-      tag: Buffer.from(row.dekTag),
-    });
+    const dek = await current.unwrap(
+      {
+        ciphertext: Buffer.from(row.wrappedDek),
+        iv: Buffer.from(row.dekIv),
+        tag: Buffer.from(row.dekTag),
+      },
+      context,
+    );
     try {
-      const wrapped = await next.wrap(dek);
+      const wrapped = await next.wrap(dek, context);
       await tx.secret.update({
         where: { id: row.id },
         data: {
@@ -128,4 +162,25 @@ export async function rewrapSecrets(
     }
   }
   return { rewrapped: rows.length };
+}
+
+/**
+ * How many of this tenant's data keys each provider (and, for Transit, each
+ * key version) wrapped. Reads only the wrapping metadata -- nothing is
+ * unwrapped and no KMS is called -- so it is safe to run at any time, and it
+ * is how an operator knows a migration is finished before removing the old
+ * key: `{ local: 0 }` is the proof.
+ */
+export async function wrappedKeyInventory(tx: TenantClient): Promise<Record<string, number>> {
+  const rows = await tx.secret.findMany({ select: { wrappedDek: true, dekIv: true, dekTag: true } });
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    const label = describeWrappedKey({
+      ciphertext: Buffer.from(row.wrappedDek),
+      iv: Buffer.from(row.dekIv),
+      tag: Buffer.from(row.dekTag),
+    });
+    counts[label] = (counts[label] ?? 0) + 1;
+  }
+  return counts;
 }

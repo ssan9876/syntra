@@ -16,7 +16,7 @@ import {
   isApplicationAssigned,
   listClaimMappings,
   loadActiveKey,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   newBrowserBinding,
   parkAuthnRequest,
   publishedKeys,
@@ -182,7 +182,7 @@ export function signedRedirectQuery(
 
 export interface SamlRouteOptions {
   publicUrl: string;
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   authRateLimitMax: number;
   authRateLimitTenantMax: number;
 }
@@ -411,7 +411,7 @@ export async function registerSamlIdpRoutes(
     // has configured nothing yet and whose administrator is fetching metadata
     // to hand to a vendor. Generation is expensive and must not sit inside a
     // transaction; the service opens its own.
-    await ensureActiveKey(request.tenantId, localMasterKeyProvider(options.masterKey), 'saml', {
+    await ensureActiveKey(request.tenantId, options.keyProvider, 'saml', {
       commonName: identity.acsHost,
     });
     const keys = await publishedKeys(request.tenantId, 'saml');
@@ -906,7 +906,7 @@ export async function registerSamlIdpRoutes(
     // outside one too.
     const key = await loadActiveKey(
       request.tenantId,
-      localMasterKeyProvider(options.masterKey),
+      options.keyProvider,
       'saml',
     );
     if (!key?.certificate) {

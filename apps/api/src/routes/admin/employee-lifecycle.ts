@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { Prisma, type TenantClient } from '@syntra/db';
 import { z } from 'zod';
 import { idParam } from '@syntra/contracts';
-import { PERMISSIONS, approvalDecision, approvalGateOpen, createLifecycleOperation, deactivateDirectoryUser, getLifecyclePolicy, localMasterKeyProvider, notifyLifecycleApprovers, overdueReason, queueTargetWork, recordEvent, sloMinutesFor, transitionLifecycleStep, TARGET_STEP_KEY, type Scheduler } from '@syntra/core';
+import { PERMISSIONS, approvalDecision, approvalGateOpen, createLifecycleOperation, deactivateDirectoryUser, getLifecyclePolicy, type MasterKeyProvider, notifyLifecycleApprovers, overdueReason, queueTargetWork, recordEvent, sloMinutesFor, transitionLifecycleStep, TARGET_STEP_KEY, type Scheduler } from '@syntra/core';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -78,9 +78,9 @@ async function snapshot(tx: TenantClient, id: string) {
   return { person, accounts, targets, revision };
 }
 
-export async function registerEmployeeLifecycleRoutes(app: FastifyInstance, options: { masterKey: Buffer; scheduler?: () => Scheduler | null; publicUrl?: string }) {
+export async function registerEmployeeLifecycleRoutes(app: FastifyInstance, options: { keyProvider: MasterKeyProvider; scheduler?: () => Scheduler | null; publicUrl?: string }) {
   app.addHook('preHandler', requireSession('admin'));
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
   app.get('/persons/:id/offboarding', { preHandler: readPermissions.map(requirePermission) }, async (request) => {
     const { id } = idParam.parse(request.params);
     return request.db(async (tx) => {

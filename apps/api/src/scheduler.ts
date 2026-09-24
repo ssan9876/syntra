@@ -12,7 +12,7 @@ import {
   createScheduler,
   fileAnchorSink,
   governSnapshotSchedule,
-  localMasterKeyProvider,
+  masterKeyProviderFor,
   mailAnchorSink,
   registerKeyRotationJob,
   registerAutomateJobs,
@@ -402,7 +402,7 @@ export async function startSyncScheduler(
   let scheduler: Scheduler | undefined;
   try {
     scheduler = create(config.databaseUrl);
-    const provider = localMasterKeyProvider(config.masterKey);
+    const provider = masterKeyProviderFor(config);
     // Built the same way `buildApp` builds it, and a seam for the same reason:
     // so a test can hand in the memory transport rather than putting mail on
     // the wire. Not optional at the registration below -- an unattended

@@ -53,6 +53,14 @@ helm upgrade --install syntra ./deploy/helm/syntra -n syntra \
 credential and signs SAML, and a database restore does not bring it back. A
 Secret that exists only in etcd is not a backup.
 
+Or keep the master key out of the cluster altogether: with
+`MASTER_KEY_PROVIDER=vault-transit` or `aws-kms` (IRSA / Pod Identity for the
+AWS credentials), put the provider variables in a Secret or ConfigMap named
+in `api.envFrom`, and `MASTER_KEY` in `existingSecret` may be empty. See
+[Key management](../../../docs/configure.md#key-management). The backup
+CronJob still fingerprints `MASTER_KEY` only (`null` once it is empty),
+unlike `syntra-backup`, which fingerprints the external key reference.
+
 `ci/full-values.yaml` is a worked production example with every option
 turned on. `ci/minimal-values.yaml` shows the least an install needs.
 

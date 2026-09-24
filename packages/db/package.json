@@ -10,7 +10,8 @@
     "migrate:dev": "prisma migrate dev",
     "seed": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/seed.ts",
     "bootstrap": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/bootstrap.ts",
-    "reset": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/reset.ts"
+    "reset": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/reset.ts",
+    "rekey": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx src/rekey.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.2.0",

@@ -154,6 +154,15 @@ jobs:
       - name: Start PostgreSQL, OpenLDAP, Samba and MailDev
         run: docker compose -f infra/docker-compose.yml up -d
 
+      # The Vault dev server behind the `kms` profile, which the plain `up -d`
+      # above does not start. Seconds to boot, in-memory, and the only way the
+      # Transit master-key provider's integration test runs anywhere but a
+      # developer's machine. VAULT_TRANSIT_INTEGRATION on the Test step turns
+      # that test's skip-when-unreachable into a failure, so a container that
+      # did not come up cannot pass as a suite that skipped.
+      - name: Start the Vault dev server
+        run: docker compose -f infra/docker-compose.yml --profile kms up -d vault
+
       - name: Write the environment
         # Two files, because Prisma's CLI reads `.env` from its own working
         # directory and pnpm runs `migrate` with the cwd set to packages/db.
@@ -207,8 +216,13 @@ jobs:
       # Neither is retried. A retry would hide the second one, and the second
       # one is the important one.
       # See docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md.
+      - name: Wait for Vault
+        run: pnpm vault:wait
+
       - name: Test
         run: pnpm test
+        env:
+          VAULT_TRANSIT_INTEGRATION: '1'
 
       # THE CONSOLE'S TESTS, which ran in no job at all until this step.
       #

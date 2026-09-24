@@ -5,7 +5,8 @@
  * Care"/`acme.localhost` and three demo people; a real deployment has no use
  * for any of that and should not get it by accident.
  *
- * Refuses to run without MASTER_KEY, unlike the dev seed which merely warns.
+ * Refuses to run without a master key -- MASTER_KEY, or an external provider
+ * configured through MASTER_KEY_PROVIDER -- unlike the dev seed which merely warns.
  * A production tenant with a SAML tile and no signing key is a deployment an
  * operator has to come back and fix by hand; refusing up front is cheaper
  * than a 409 `saml-no-key` discovered later. It also, like the dev seed,

@@ -4,10 +4,12 @@
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing/fake-kms": "./src/vault/testing/fake-kms.ts"
   },
   "license": "Apache-2.0",
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.1139.0",
     "@peculiar/x509": "2.0.0",
     "@simplewebauthn/server": "13.3.2",
     "@syntra/connectors": "workspace:*",

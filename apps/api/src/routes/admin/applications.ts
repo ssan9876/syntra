@@ -19,7 +19,7 @@ import {
   createFromCatalog,
   ensureActiveKey,
   findApplication,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   listCatalog,
   listApplications,
   listAssignments,
@@ -55,7 +55,7 @@ function withoutUndefined<T extends Record<string, unknown>>(
 
 export interface AdminApplicationRouteOptions {
   /** Unseals the tenant's SAML signing key. See the catalog route below. */
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   publicUrl: string;
 }
 
@@ -64,7 +64,7 @@ export async function registerAdminApplicationRoutes(
   options: AdminApplicationRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   app.get(
     '/applications',

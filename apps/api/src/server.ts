@@ -1,5 +1,5 @@
 import { prisma } from '@syntra/db';
-import { loadConfig } from '@syntra/core';
+import { keyManagementWarnings, loadConfig, masterKeyProviderFor } from '@syntra/core';
 import { buildApp } from './app.js';
 import { startSyncScheduler } from './scheduler.js';
 import { shutdownHandler } from './shutdown.js';
@@ -36,3 +36,23 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 void recovery.start();
+
+// The master-key provider, said out loud once at startup: which one wraps,
+// what is still configured decrypt-only, and whether it answers. Reachability
+// is logged rather than fatal, deliberately. A KMS that is down for a minute
+// at boot must not turn into an API that refuses to start -- password sign-in
+// needs no key at all -- and `/health/ready`'s `key-management` probe is the
+// gate that keeps traffic away until it answers. Nothing here logs a key: the
+// check wraps and unwraps a random canary and reports only pass or the cause.
+app.log.info({ provider: config.keyManagement.provider }, 'master-key provider configured');
+for (const warning of keyManagementWarnings(config.keyManagement)) app.log.warn(warning);
+void masterKeyProviderFor(config)
+  .check()
+  .then(
+    () => app.log.info({ provider: config.keyManagement.provider }, 'master-key provider answered'),
+    (err: unknown) =>
+      app.log.error(
+        { provider: config.keyManagement.provider, err: err instanceof Error ? err.message : String(err) },
+        'master-key provider did not answer; readiness will report key-management until it does',
+      ),
+  );

@@ -37,7 +37,7 @@ import {
   createTarget,
   deleteTarget,
   findPlacement,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   moveAccount,
   recordEvent,
   recordReadinessCheck,
@@ -71,7 +71,7 @@ import { requirePermission } from '../../plugins/require-permission.js';
 import { confirmQuery } from './list-query.js';
 
 export interface TargetRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   /**
    * Late-bound, exactly as the source routes take it: the scheduler talks to
    * pg-boss, is started after the app is built, and is allowed to fail to
@@ -226,7 +226,7 @@ export async function registerAdminTargetRoutes(
   options: TargetRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
   const scheduler = () => options.scheduler?.() ?? undefined;
 
   app.get(
