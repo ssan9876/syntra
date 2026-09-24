@@ -705,7 +705,7 @@ describe('testTargetConfiguration', () => {
         config,
         bindPassword: '',
       }),
-    ).rejects.toThrow(/at least 1 character/);
+    ).rejects.toThrow(/(?:at least|>=)1 character/i);
   });
 
   it('refuses a borrow target that is not a uuid', async () => {
@@ -718,7 +718,7 @@ describe('testTargetConfiguration', () => {
         config,
         borrowFromTargetId: 'the head office one',
       }),
-    ).rejects.toThrow(/Invalid uuid/);
+    ).rejects.toThrow(/Invalid UUID/i);
   });
 
   it('refuses when no credential was supplied and none was named', async () => {
@@ -1536,11 +1536,11 @@ describe('the gaps the mutation pass found', () => {
     const { id } = await create();
     await expect(
       updateTarget(tenantId, provider, null, id, { config: { pageSize: 250 } }),
-    ).rejects.toThrow(/Required/);
+    ).rejects.toThrow(/(?:Required|expected string, received undefined)/i);
   });
 
   it('refuses an update that would put the configuration in the clear', async () => {
-    // `Invalid enum value` is Zod's. The CHECK constraint
+    // The invalid-option wording is Zod's. The CHECK constraint
     // `target_system_encrypted_transport` refuses this too, and a bare
     // `toThrow()` cannot tell the schema from the backstop -- which is the
     // difference between a field an editor can highlight and a 500 with a
@@ -1550,7 +1550,7 @@ describe('the gaps the mutation pass found', () => {
       updateTarget(tenantId, provider, null, id, {
         config: { ...config, tlsMode: 'plain', url: 'ldap://dc.acme.test:389' },
       }),
-    ).rejects.toThrow(/Invalid enum value/);
+    ).rejects.toThrow(/Invalid (?:enum value|option)/i);
   });
 });
 
@@ -1648,7 +1648,7 @@ describe('the second gaps the mutation pass found', () => {
       updateTarget(tenantId, provider, null, id, {
         thresholds: { createAccountThresholdPercent: 400 },
       }),
-    ).rejects.toThrow(/less than or equal to 100/);
+    ).rejects.toThrow(/(?:less than or equal to|<=)\s*100/i);
   });
 
   it('refuses a non-uuid paired source as a validation error, not a driver error', async () => {
@@ -1663,11 +1663,11 @@ describe('the second gaps the mutation pass found', () => {
         bindPassword: 'x',
         pairedDirectorySourceId: 'the head office one',
       }),
-    // `Invalid uuid` is Zod's wording. Prisma's is "Error creating UUID,
+    // `Invalid UUID` is Zod's wording. Prisma's is "Error creating UUID,
     // invalid character", so a case-insensitive /uuid/ matches both and the
     // check and its absence stay indistinguishable -- the exact failure this
     // assertion was added to fix, one layer in.
-    ).rejects.toThrow(/Invalid uuid/);
+    ).rejects.toThrow(/Invalid UUID/i);
   });
 
   it('counts only this target’s accounts and rules', async () => {

@@ -464,7 +464,7 @@ describe('Refresh now enqueues somebody else’s job and says whose', () => {
   it('503s rather than reading the source itself when no scheduler is running', async () => {
     await seedAdmin('manager', [PERMISSIONS.GOVERN_MANAGE]);
     const res = await post(
-      '/api/admin/govern/sources/targetSystem/00000000-0000-0000-0000-000000000001/refresh',
+      '/api/admin/govern/sources/targetSystem/00000000-0000-4000-8000-000000000001/refresh',
       await cookieFor('manager'),
     );
     expect(res.statusCode).toBe(503);
