@@ -21,7 +21,11 @@ describe('parseKeyManagement', () => {
   });
 
   it('refuses a provider it does not know, listing the ones it does', () => {
-    expect(() => parseKeyManagement({ MASTER_KEY_PROVIDER: 'gcp-kms' })).toThrow(/MASTER_KEY_PROVIDER.*'local' \| 'vault-transit' \| 'aws-kms'/);
+    // Zod words the enum error differently across majors; what matters is
+    // that it names the variable and every provider it would accept.
+    expect(() => parseKeyManagement({ MASTER_KEY_PROVIDER: 'gcp-kms' })).toThrow(
+      /MASTER_KEY_PROVIDER.*local.*vault-transit.*aws-kms/,
+    );
   });
 
   it('names every missing Vault variable at once', () => {
