@@ -3,7 +3,7 @@ import { upstreamIdpRequest } from '@syntra/contracts';
 import {
   PERMISSIONS,
   listUpstreams,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   recordEvent,
   upsertUpstream,
 } from '@syntra/core';
@@ -12,7 +12,7 @@ import { requireSession } from '../../plugins/require-session.js';
 
 export interface AdminUpstreamRouteOptions {
   /** Wraps the upstream client secret on its way into the vault. */
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
 }
 
 /**
@@ -38,7 +38,7 @@ export async function registerAdminUpstreamRoutes(
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   app.get(
     '/upstreams',

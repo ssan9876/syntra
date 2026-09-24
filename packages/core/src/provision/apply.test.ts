@@ -1092,6 +1092,7 @@ describe('applyProvisionRun', () => {
     // dropped in, and a KMS that is briefly unavailable is exactly the shape
     // of failure being modelled here.
     const sealFails: MasterKeyProvider = {
+      ...provider,
       wrap: () => Promise.reject(new Error('the key service is unavailable')),
       unwrap: (wrapped) => provider.unwrap(wrapped),
     };

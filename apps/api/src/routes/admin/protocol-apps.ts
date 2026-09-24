@@ -24,7 +24,7 @@ import {
   findSamlConfigByEntityId,
   findSamlConfigForApplication,
   listClaimMappings,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   recordEvent,
   upsertOidcClient,
   upsertSamlConfig,
@@ -40,7 +40,7 @@ export interface AdminProtocolRouteOptions {
   /** From `OUTBOUND_ALLOW_PRIVATE`. See Task 2. */
   outboundAllowPrivate: boolean;
   /** Wraps the SAML signing key established when a configuration is written. */
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   /** Where this deployment answers. Never the Host header. */
   publicUrl: string;
 }
@@ -58,7 +58,7 @@ export async function registerAdminProtocolRoutes(
   const manage = { preHandler: requirePermission(PERMISSIONS.ACCESS_MANAGE) };
   const read = { preHandler: requirePermission(PERMISSIONS.ACCESS_READ) };
 
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   /**
    * Makes sure this tenant has a SAML signing key, before the transaction.

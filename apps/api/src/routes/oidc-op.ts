@@ -9,7 +9,7 @@ import {
   ensureActiveKey,
   listClaimMappings,
   listOidcClients,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   publishedKeys,
   readSigningKeyPem,
   resolveClaims,
@@ -20,7 +20,7 @@ import { assertProtocolHost, tenantProtocolIdentity } from './protocol-identity.
 
 export interface OidcRouteOptions {
   publicUrl: string;
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   sessionSecret: string;
   authRateLimitMax: number;
   authRateLimitTenantMax: number;
@@ -146,9 +146,9 @@ export async function oidcProviderFor(
  */
 export function oidcProviderDeps(
   tenantId: string,
-  options: Pick<OidcRouteOptions, 'masterKey' | 'sessionSecret'>,
+  options: Pick<OidcRouteOptions, 'keyProvider' | 'sessionSecret'>,
 ): ProviderDeps {
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   return {
     findAccount: async (accountId, clientId) => {
@@ -270,7 +270,7 @@ export async function registerOidcRoutes(
     assertProtocolHost(request, tenantProtocolIdentity(tenant, options.publicUrl));
 
     await ensureActiveKey(
-      request.tenantId, localMasterKeyProvider(options.masterKey), 'oidc',
+      request.tenantId, options.keyProvider, 'oidc',
     );
     const keys = await publishedKeys(request.tenantId, 'oidc');
     return reply

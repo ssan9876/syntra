@@ -22,7 +22,7 @@ import {
   requestCancelProvisionRun,
   applyProvisionRun,
   enqueuePairedSync,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   provisionJobPayload,
   type Scheduler,
   type Transport,
@@ -33,7 +33,7 @@ import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 
 export interface ProvisionRunRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   scheduler?: () => Scheduler | null;
   /** The app's mail transport, so a created account's password can be delivered. */
   transport: Transport;
@@ -80,7 +80,7 @@ export async function registerAdminProvisionRunRoutes(
   options: ProvisionRunRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   app.post(
     '/targets/:id/runs',

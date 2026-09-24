@@ -7,7 +7,7 @@ import {
   installEmailOtpVerifier,
   installTotpVerifier,
   installWebAuthnVerifier,
-  localMasterKeyProvider,
+  masterKeyProviderFor,
   onSigningKeysChanged,
   readiness,
   redactReport,
@@ -169,6 +169,13 @@ export async function buildApp(
   // Read once, from configuration, and available wherever a cookie is written.
   app.decorate('cookieSecure', config.cookieSecure);
 
+  // THE master-key provider, built once and handed to every route that seals
+  // or unseals: one unwrap cache and one Vault token per process rather than
+  // one per route, and one place that decides which provider wraps
+  // (MASTER_KEY_PROVIDER, see `vault/key-management.ts`). The scheduler asks
+  // for the same config and gets this same instance.
+  const keyProvider = masterKeyProviderFor(config);
+
   await app.register(cookie, { secret: config.sessionSecret });
   // Off by default; applied per route, since a blanket limit would throttle
   // ordinary reads as hard as password attempts.
@@ -232,7 +239,7 @@ export async function buildApp(
     isReady: async () =>
       (
         await readiness({
-          provider: localMasterKeyProvider(config.masterKey),
+          provider: keyProvider,
           webRoot: config.webRoot ?? undefined,
           version: buildInfo().version,
         })
@@ -270,7 +277,7 @@ export async function buildApp(
     },
     async (request, reply) => {
       const report = await readiness({
-        provider: localMasterKeyProvider(config.masterKey),
+        provider: keyProvider,
         webRoot: config.webRoot ?? undefined,
         version: buildInfo().version,
       });
@@ -304,7 +311,7 @@ export async function buildApp(
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
     publicUrl: config.publicUrl,
-    masterKey: config.masterKey,
+    keyProvider,
   });
 
   // Factor verifiers are installed once per process, before any route can ask
@@ -315,7 +322,7 @@ export async function buildApp(
   // None of them takes a relying party. It arrives per request on
   // AuthorizeRequest, which is why there is no ambient store here and why a
   // background job that has no relying party cannot compile.
-  installTotpVerifier(localMasterKeyProvider(config.masterKey));
+  installTotpVerifier(keyProvider);
   // No master key: an email code has no secret to seal. Whether a tenant may
   // offer it at all is `Tenant.emailOtpEnabled`, checked where a tenant is in
   // scope — registering the verifier only says this deployment can.
@@ -344,7 +351,7 @@ export async function buildApp(
 
   await app.register(registerMfaRoutes, {
     prefix: '/api/auth/mfa',
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
@@ -354,7 +361,7 @@ export async function buildApp(
 
   await app.register(registerEnrolRoutes, {
     prefix: '/api/auth/enrol',
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
@@ -378,7 +385,7 @@ export async function buildApp(
   await app.register(registerAdminTenantRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminWebhookRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     outboundAllowPrivate: config.outboundAllowPrivate,
   });
   await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
@@ -388,7 +395,7 @@ export async function buildApp(
   });
   await app.register(registerAdminUserRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
@@ -408,14 +415,14 @@ export async function buildApp(
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
-  // `masterKey`, because deleting a source-owned unit unseals that source's
+  // `keyProvider`, because deleting a source-owned unit unseals that source's
   // bind credential to remove the container from the directory first.
   await app.register(registerAdminOrgUnitRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
   });
   await app.register(registerAdminPersonRoutes, { prefix: '/api/admin' });
-  await app.register(registerEmployeeLifecycleRoutes, { prefix: '/api/admin', masterKey: config.masterKey, publicUrl: config.publicUrl, ...(options.scheduler ? { scheduler: options.scheduler } : {}) });
+  await app.register(registerEmployeeLifecycleRoutes, { prefix: '/api/admin', keyProvider, publicUrl: config.publicUrl, ...(options.scheduler ? { scheduler: options.scheduler } : {}) });
   await app.register(registerAdminPersonReceiptRoutes, {
     prefix: '/api/admin',
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
@@ -435,12 +442,12 @@ export async function buildApp(
   });
   await app.register(registerAdminSourceRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminPersonSourceRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminSyncRunRoutes, { prefix: '/api/admin' });
@@ -449,7 +456,7 @@ export async function buildApp(
     // Both needed by the catalog route, which has to establish the tenant's
     // SAML signing key before it writes a `SamlConfig` — see the comment
     // there.
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
   });
   await app.register(registerAdminPolicyRoutes, {
@@ -463,12 +470,12 @@ export async function buildApp(
   await app.register(registerAdminProtocolRoutes, {
     prefix: '/api/admin',
     outboundAllowPrivate: config.outboundAllowPrivate,
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
   });
   await app.register(registerAdminUpstreamRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
   });
 
   // Provisioning. Registered AFTER `registerAdminPersonRoutes` so
@@ -481,7 +488,7 @@ export async function buildApp(
   // SMTP in production.
   await app.register(registerAdminTargetRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     authRateLimitMax: config.authRateLimitMax,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
@@ -503,7 +510,7 @@ export async function buildApp(
   await app.register(registerAdminRuleRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminProvisionRunRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     transport,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
@@ -547,7 +554,7 @@ export async function buildApp(
   await app.register(registerSamlIdpRoutes, {
     prefix: '/saml',
     publicUrl: config.publicUrl,
-    masterKey: config.masterKey,
+    keyProvider,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   });
@@ -558,7 +565,7 @@ export async function buildApp(
   await app.register(registerFederationRoutes, {
     prefix: '/federation',
     publicUrl: config.publicUrl,
-    masterKey: config.masterKey,
+    keyProvider,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
     outboundAllowPrivate: config.outboundAllowPrivate,
@@ -566,7 +573,7 @@ export async function buildApp(
 
   const oidcOptions = {
     publicUrl: config.publicUrl,
-    masterKey: config.masterKey,
+    keyProvider,
     sessionSecret: config.sessionSecret,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,

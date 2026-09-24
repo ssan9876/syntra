@@ -30,7 +30,7 @@ import {
   findPersonSource,
   listImportRuns,
   listPersonSources,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   personMappingsFor,
   personSourceOwnedCount,
   personSourceWithCredential,
@@ -84,7 +84,7 @@ export const sourceLinkListQuery = z
   .strict();
 
 export interface PersonSourceRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   /** Late-bound, for the reason `SourceRouteOptions` records. */
   scheduler?: () => Scheduler | null;
 }
@@ -93,7 +93,7 @@ export async function registerAdminPersonSourceRoutes(
   app: FastifyInstance,
   options: PersonSourceRouteOptions,
 ): Promise<void> {
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   /**
    * Brings the scheduler into line with a source that just changed.

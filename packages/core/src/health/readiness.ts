@@ -198,6 +198,33 @@ async function probeVault(provider: MasterKeyProvider): Promise<Probe> {
 }
 
 /**
+ * The master-key provider can wrap and unwrap RIGHT NOW.
+ *
+ * Separate from `vault` because the two answer different questions once the
+ * master key is in a KMS. `vault` unseals a stored signing key -- through the
+ * unwrap cache, so during a KMS outage it keeps passing for as long as that
+ * key stays cached, which is the point of the cache. This probe goes past the
+ * cache: it wraps a random canary under the provider new keys are written
+ * with and unwraps it again (`MasterKeyProvider.check`). It fails when the KMS
+ * is unreachable, the credential has been revoked, or the key is disabled --
+ * which is exactly when this process can no longer store a new secret and
+ * will stop reading its old ones as the cache drains.
+ *
+ * The canary is random and zeroed; nothing about any key reaches the detail,
+ * which carries only the provider's name. A passing answer is remembered for
+ * thirty seconds by the cache wrapper so an orchestrator polling every few
+ * seconds does not become a KMS bill; a failing one never is.
+ */
+async function probeKeyManagement(provider: MasterKeyProvider): Promise<Probe> {
+  try {
+    await provider.check();
+    return pass('key-management', `${provider.name} wrapped and unwrapped a canary data key`);
+  } catch (cause) {
+    return fail('key-management', `${provider.name} could not wrap and unwrap a canary: ${reason(cause)}`);
+  }
+}
+
+/**
  * The console was actually built.
  *
  * A release that shipped without `apps/web/dist`, or an update whose bundle
@@ -225,6 +252,7 @@ export async function readiness(deps: ReadinessDeps): Promise<ReadinessReport> {
     await withTimeout('database', ms, probeDatabase),
     await withTimeout('migrations', ms, probeMigrations),
     await withTimeout('vault', ms, () => probeVault(deps.provider)),
+    await withTimeout('key-management', ms, () => probeKeyManagement(deps.provider)),
     probeWeb(deps.webRoot),
   ];
 

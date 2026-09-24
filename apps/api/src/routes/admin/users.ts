@@ -20,7 +20,7 @@ import {
   reactivateDirectoryUser,
   issuePasswordSetup,
   listUsers,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   hasPermission,
   linkUserToPerson,
   matchPersonForAccount,
@@ -39,7 +39,7 @@ import { requirePermission } from '../../plugins/require-permission.js';
 
 export interface AdminUserRouteOptions {
   /** Unseals a directory source's bind credential for a write-back. */
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   /**
    * Composes the setup link, so both password flows land on the one route the
    * reset mail already points at.
@@ -104,7 +104,7 @@ export async function registerAdminUserRoutes(
   options: AdminUserRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   app.get(
     '/users',

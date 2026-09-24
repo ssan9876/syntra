@@ -42,6 +42,10 @@ PG_CONTAINER="${SYNTRA_PG_CONTAINER:-}"
 PG_ROLE="${SYNTRA_PG_ROLE:-}"
 PG_DB="${SYNTRA_PG_DB:-}"
 MASTER_KEY="${SYNTRA_MASTER_KEY:-}"
+# MASTER_KEY_PROVIDER, and the reference to the external key when it is not
+# local. See external_key_reference.
+KEY_PROVIDER="${SYNTRA_MASTER_KEY_PROVIDER:-}"
+KEY_REFERENCE="${SYNTRA_KEY_REFERENCE:-}"
 
 # A fixed, non-secret salt. It exists so a fingerprint cannot be matched
 # against a precomputed table of common or leaked keys. It is not itself a
@@ -219,10 +223,39 @@ resolve_environment() {
   # Absent is not fatal. It makes the fingerprint null, and restore then says
   # it cannot check rather than implying it did.
   [ -n "$MASTER_KEY" ] || MASTER_KEY=$(env_value MASTER_KEY "$SHARED/.env")
+  [ -n "$KEY_PROVIDER" ] || KEY_PROVIDER=$(env_value MASTER_KEY_PROVIDER "$SHARED/.env")
+  [ -n "$KEY_REFERENCE" ] || KEY_REFERENCE=$(external_key_reference "$KEY_PROVIDER")
+}
+
+# Which external key wraps this deployment's data keys, as a string -- or
+# nothing for the local provider.
+#
+# With Vault Transit or AWS KMS the master key is not in `.env` at all, and
+# fingerprinting the decrypt-only MASTER_KEY a migration leaves behind (or
+# recording null) would make every backup taken after the move read as
+# "taken under a different key" -- and push the operator towards
+# --accept-secret-loss for a restore that loses nothing. What decides whether
+# a backup's data keys can be unwrapped is WHICH KMS KEY sealed them, so that
+# is what gets fingerprinted: the address, mount and name of the Transit key,
+# or the KMS key id. Not secret, but hashed the same way, so a manifest does
+# not advertise where the keys live.
+external_key_reference() {
+  local mount
+  case "$1" in
+    vault-transit)
+      # The API's default, so an explicit `transit` and an absent one agree.
+      mount=$(env_value VAULT_TRANSIT_MOUNT "$SHARED/.env")
+      printf 'vault-transit:%s:%s:%s'         "$(env_value VAULT_ADDR "$SHARED/.env")"         "${mount:-transit}"         "$(env_value VAULT_TRANSIT_KEY "$SHARED/.env")" ;;
+    aws-kms)
+      printf 'aws-kms:%s' "$(env_value AWS_KMS_KEY_ID "$SHARED/.env")" ;;
+    *) ;;
+  esac
 }
 
 running_fingerprint() {
-  if [ -n "$MASTER_KEY" ]; then fingerprint_of "$MASTER_KEY"; else printf 'null'; fi
+  if [ -n "$KEY_REFERENCE" ]; then fingerprint_of "$KEY_REFERENCE"
+  elif [ -n "$MASTER_KEY" ]; then fingerprint_of "$MASTER_KEY"
+  else printf 'null'; fi
 }
 
 # The version this deployment is running, or "unknown".

@@ -2,6 +2,7 @@ import { cookiesAreSecure } from './cookie-security.js';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { isIpRangeUsable } from './policy/ip-match.js';
+import { parseKeyManagement, type KeyManagementConfig } from './vault/key-management.js';
 
 const schema = z.object({
   DATABASE_URL: z.string().url(),
@@ -17,12 +18,9 @@ const schema = z.object({
       (v) => !/^change-me/i.test(v),
       'SESSION_SECRET is the placeholder from .env.example; generate one with 32 random bytes, base64 encoded (see .env.example)',
     ),
-  MASTER_KEY: z
-    .string()
-    .refine(
-      (v) => Buffer.from(v, 'base64').length === 32,
-      'MASTER_KEY must be 32 bytes, base64 encoded',
-    ),
+  // MASTER_KEY and every other key-management variable are validated by
+  // `parseKeyManagement` below, because whether MASTER_KEY is required depends
+  // on MASTER_KEY_PROVIDER -- which a flat field here cannot express.
   SMTP_URL: z.string().url(),
   /**
    * A base64 32-byte key that signs audit checkpoints, and the id it is known
@@ -216,7 +214,15 @@ export interface Config {
    */
   cookieSecure: boolean;
   sessionSecret: string;
-  masterKey: Buffer;
+  /**
+   * The local master key, or null when an external provider holds it and no
+   * decrypt-only local key is configured. Read it through
+   * `masterKeyProviderFor(config)`, never directly: which provider wraps is
+   * `keyManagement`'s decision.
+   */
+  masterKey: Buffer | null;
+  /** MASTER_KEY_PROVIDER and its variables; see `vault/key-management.ts`. */
+  keyManagement: KeyManagementConfig;
   smtpUrl: string;
   authRateLimitMax: number;
   authRateLimitTenantMax: number;
@@ -257,6 +263,15 @@ export function loadConfig(
   }
 
   const v = parsed.data;
+  let keyManagement: KeyManagementConfig;
+  try {
+    keyManagement = parseKeyManagement(env);
+  } catch (cause) {
+    throw new Error(
+      `Invalid configuration — ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+  }
   let trustProxy: false | string;
   try {
     trustProxy = parseTrustProxy(v.TRUST_PROXY);
@@ -278,7 +293,8 @@ export function loadConfig(
     publicUrl: v.PUBLIC_URL,
     cookieSecure: cookiesAreSecure(v.PUBLIC_URL),
     sessionSecret: v.SESSION_SECRET,
-    masterKey: Buffer.from(v.MASTER_KEY, 'base64'),
+    masterKey: keyManagement.masterKey,
+    keyManagement,
     smtpUrl: v.SMTP_URL,
     governCheckpointKey:
       v.GOVERN_CHECKPOINT_KEY === undefined

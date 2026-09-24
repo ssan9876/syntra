@@ -191,6 +191,15 @@ is retained; merged code alone is not enough.
 47. **Build — Key-management integration.** Support a selected KMS/HSM or
     external secret provider with envelope encryption, key versioning, access
     logs, and tested revocation.
+    *Built (2026-09-23): `MASTER_KEY_PROVIDER=local|vault-transit|aws-kms`,
+    validated at boot, with tenant-bound data keys, a bounded unwrap cache
+    with documented outage behaviour, a `key-management` readiness probe, and
+    `pnpm rekey` for local-to-KMS migration and rotation. Revocation (token
+    revoke, `min_decryption_version`, disabled KMS key) is tested against a
+    real Vault dev server and an in-memory KMS; access logs are the KMS's own
+    (configure.md, "Who logs what"). Remaining: choosing the organisation's
+    provider, a staging drill against it (#12), a LocalStack/real-AWS test,
+    and Azure Key Vault.*
 48. **Build — Secure export service.** Permission recheck at execution and
     download, asynchronous generation, encryption, watermark, expiry,
     revocation, and full audit history.

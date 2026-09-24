@@ -55,6 +55,32 @@ describe('readiness', () => {
     expect(report.ready).toBe(false);
   });
 
+  it('fails key-management when the provider cannot round-trip a canary, and says only which provider', async () => {
+    const down = {
+      ...provider,
+      name: 'aws-kms',
+      check: () => Promise.reject(new Error('aws-kms: Encrypt failed: AccessDeniedException: not authorized')),
+    };
+    const report = await readiness(deps({ provider: down }));
+    expect(probe(report, 'key-management')).toEqual({
+      name: 'key-management',
+      status: 'fail',
+      detail: 'aws-kms could not wrap and unwrap a canary: aws-kms: Encrypt failed: AccessDeniedException: not authorized',
+    });
+    expect(report.ready).toBe(false);
+    // The redacted wire answer names the probe and nothing else.
+    expect(redactReport(report).probes.find((p) => p.name === 'key-management')!.detail).toBe('this check did not pass');
+  });
+
+  it('passes key-management with a working provider', async () => {
+    const report = await readiness(deps());
+    expect(probe(report, 'key-management')).toEqual({
+      name: 'key-management',
+      status: 'pass',
+      detail: 'local wrapped and unwrapped a canary data key',
+    });
+  });
+
   it('is ready when everything it checks is true', async () => {
     const report = await readiness(deps());
     expect(report.ready).toBe(true);
@@ -339,6 +365,7 @@ describe('a probe that never answers', () => {
         'database',
         'migrations',
         'vault',
+        'key-management',
         'web',
       ]);
     } finally {

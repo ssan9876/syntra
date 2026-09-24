@@ -25,7 +25,7 @@ import { postgresRateLimitCounter } from './plugins/rate-limit-store.js';
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
 
 const MASTER_KEY = Buffer.alloc(32, 7);
-const OPTIONS = { masterKey: MASTER_KEY, sessionSecret: 'x'.repeat(32) };
+const OPTIONS = { keyProvider: localMasterKeyProvider(MASTER_KEY), sessionSecret: 'x'.repeat(32) };
 
 const generation = async (tenantId: string) =>
   (await prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } })).oidcConfigGeneration;

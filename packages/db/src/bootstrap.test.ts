@@ -27,7 +27,8 @@ describe('parseBootstrapConfig', () => {
     if (!parsed.ok) return;
     expect(parsed.config.adminLogin).toBe('admin');
     expect(parsed.config.tenantSlug).toBe('northwind');
-    expect(parsed.config.masterKey.length).toBe(32);
+    expect(parsed.config.keyManagement.masterKey?.length).toBe(32);
+    expect(parsed.config.keyManagement.provider).toBe('local');
   });
 
   it('honours an explicit admin login', () => {
