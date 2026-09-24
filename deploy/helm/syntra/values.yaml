@@ -1,29 +1,413 @@
-api:
-  image: ghcr.io/ssan9876/syntra-api:latest
-  replicas: 1
-  servicePort: 3000
-web:
-  image: ghcr.io/ssan9876/syntra-web:latest
-  replicas: 1
-  servicePort: 80
-migration:
-  enabled: true
+# Syntra Helm chart values.
+#
+# Every default here is chosen to be SAFE rather than complete: the chart
+# renders nothing secret, runs one API replica (see the README's "Running more
+# than one API replica" before raising it), and applies a NetworkPolicy that
+# limits outbound traffic by port. An install must at minimum name a Secret
+# (`existingSecret`) and set `publicUrl`; `helm install` fails with a message
+# saying so otherwise.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The origin users type, e.g. https://idm.example.com. The session cookie and
+# the WebAuthn relying party are derived from it, so it must be the address the
+# browser sees, not an in-cluster one. Not a secret, so it lives here. Required,
+# unless secretKeys.publicUrl names a key in the Secret instead (the chart 0.1
+# layout).
+publicUrl: ""
+
 imagePullSecrets: []
-# Create this Secret outside the chart. Never commit these values in Helm
-# values files: the API container reads the exact keys below.
-existingSecret: syntra-runtime
+
+# -----------------------------------------------------------------------------
+# Secrets. The chart never renders credentials by default.
+#
+# Preferred: create the Secret outside Helm (kubectl, External Secrets,
+# Sealed Secrets, a CSI driver) and name it here. Credentials in a values file
+# end up in Helm's release history, which is itself stored as a Secret that
+# anyone with read access to the namespace's Secrets can decode.
+# -----------------------------------------------------------------------------
+existingSecret: ""
+
+# Escape hatch for disposable environments ONLY. When `create` is true and
+# `existingSecret` is empty, the chart renders a Secret from `data` (keys as in
+# secretKeys below). It is created as a pre-install/pre-upgrade hook so the
+# migration Job can read it, which also means `helm uninstall` leaves it
+# behind -- delete it by hand.
+secret:
+  create: false
+  data: {}
+  #  DATABASE_URL: postgresql://syntra_app:...@postgres:5432/syntra
+  #  SESSION_SECRET: ...
+  #  MASTER_KEY: ...
+  #  SMTP_URL: smtp://mail.example.com:25
+
+# The key names inside the Secret. Required keys: databaseUrl, sessionSecret,
+# masterKey, smtpUrl. The rest are read with `optional: true`, so a Secret
+# that lacks them is not an error -- the feature is simply off.
 secretKeys:
   databaseUrl: DATABASE_URL
-  publicUrl: PUBLIC_URL
   sessionSecret: SESSION_SECRET
   masterKey: MASTER_KEY
   smtpUrl: SMTP_URL
+  # Optional. Unset, /metrics is never registered (404).
   metricsToken: METRICS_TOKEN
-# Conservative defaults; tune from observed usage in the environment values.
-resources:
-  requests:
-    cpu: 100m
-    memory: 256Mi
-  limits:
-    cpu: "1"
-    memory: 1Gi
+  # Optional. Signs Govern audit checkpoints; see docs/configure.md.
+  governCheckpointKey: GOVERN_CHECKPOINT_KEY
+  # Chart 0.1 compatibility: set to PUBLIC_URL to keep reading the origin from
+  # the Secret. Used only when publicUrl above is empty.
+  publicUrl: ""
+  # Optional. A DIRECT (non-transaction-pooled) connection for the migration
+  # Job. Prisma's `migrate deploy` holds a session-level advisory lock, which a
+  # PgBouncer in transaction mode cannot give it. Empty: the Job uses
+  # databaseUrl.
+  migrationDatabaseUrl: ""
+
+# -----------------------------------------------------------------------------
+# API
+# -----------------------------------------------------------------------------
+api:
+  image:
+    repository: ghcr.io/ssan9876/syntra-api
+    # Empty means the chart's appVersion. Pin an exact release in production;
+    # `latest` only ever moves to a numeric release, but it still moves.
+    tag: ""
+    # Takes precedence over tag when set, e.g. sha256:abc...
+    digest: ""
+    pullPolicy: IfNotPresent
+
+  # ONE by default, deliberately. Several replicas work -- pg-boss coordinates
+  # background jobs through Postgres -- but some state is per process; read
+  # the README's "Running more than one API replica" before raising this or
+  # enabling autoscaling.
+  replicas: 1
+
+  # Which proxies the API believes about a client's address (TRUST_PROXY).
+  # Traffic arrives ingress controller -> web (nginx) -> api, so this must
+  # cover the pod CIDR both of those run in, e.g. "10.244.0.0/16". Empty
+  # trusts no proxy: every per-address rate limit then keys on the web pod's
+  # address and collapses into one shared bucket. Never `true`, and never a
+  # hop count -- the API refuses both at startup.
+  trustProxy: ""
+
+  # Per-address and per-tenant authentication attempt ceilings per minute.
+  # These counters are PER PROCESS (see README); with N replicas behind a
+  # round-robin Service the effective ceiling is up to N times these.
+  authRateLimitMax: ""
+  authRateLimitTenantMax: ""
+
+  logLevel: info
+
+  # Extra plain environment variables, as a list of EnvVar objects
+  # (e.g. POLICY_COUNTRY_HEADER, GOVERN_ANCHOR_EMAIL).
+  env: []
+  # Extra envFrom sources (ConfigMaps or Secrets).
+  envFrom: []
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 384Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+  # /health is liveness (constant, never touches the database); /health/ready
+  # is readiness (database, master key, scheduler). /health/ready carries a
+  # 60-per-minute-per-address rate limit, so keep readiness periodSeconds >= 2
+  # per probing kubelet.
+  startupProbe:
+    httpGet: { path: /health, port: http }
+    periodSeconds: 5
+    failureThreshold: 36
+    timeoutSeconds: 3
+  livenessProbe:
+    httpGet: { path: /health, port: http }
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 3
+  readinessProbe:
+    httpGet: { path: /health/ready, port: http }
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 5
+
+  # SIGTERM drains in-flight requests and lets pg-boss finish or release the
+  # job it holds; give a long directory sync time to reach a safe point.
+  terminationGracePeriodSeconds: 60
+
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Empty uses the chart's default: spread across nodes (and zones, softly).
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+  autoscaling:
+    # Read the README's multi-replica section first.
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: ""
+
+  pdb:
+    # Rendered only when more than one replica can exist (replicas > 1 or
+    # autoscaling). A PDB over a single replica would block every node drain.
+    enabled: true
+    maxUnavailable: 1
+
+# -----------------------------------------------------------------------------
+# Web (nginx serving the console and proxying API paths to Service "api")
+# -----------------------------------------------------------------------------
+web:
+  image:
+    repository: ghcr.io/ssan9876/syntra-web
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+
+  # Stateless; two by default so a node drain never takes the console down.
+  replicas: 2
+  servicePort: 80
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+
+  # nginx has no health endpoint of its own, and /health on this server is a
+  # proxy to the API -- probing that would restart healthy nginx pods whenever
+  # the API is down. `/` is served from disk.
+  livenessProbe:
+    httpGet: { path: /, port: http }
+    periodSeconds: 10
+    failureThreshold: 3
+  readinessProbe:
+    httpGet: { path: /, port: http }
+    periodSeconds: 5
+    failureThreshold: 3
+
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+
+# -----------------------------------------------------------------------------
+# Schema migrations: a pre-install/pre-upgrade hook Job running
+# `prisma migrate deploy` from the API image. The API pods themselves do NOT
+# migrate (the chart overrides the image's migrate-then-serve CMD), so a
+# rollout never races several pods through the same migration.
+# -----------------------------------------------------------------------------
+migration:
+  enabled: true
+  backoffLimit: 1
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+
+serviceAccount:
+  create: true
+  # Empty: the chart's full name.
+  name: ""
+  annotations: {}
+
+# Pod- and container-level security. The API image runs as `node` (uid 1000);
+# the web image is nginx-unprivileged (uid 101). Both work with a read-only
+# root filesystem: the chart mounts emptyDirs for /tmp (tsx's compile cache)
+# and nginx's cache.
+podSecurityContext:
+  api:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile: { type: RuntimeDefault }
+  web:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    fsGroup: 101
+    seccompProfile: { type: RuntimeDefault }
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+# -----------------------------------------------------------------------------
+# Ingress. Routes the whole host to the web Service; nginx inside that pod
+# forwards /api, /saml, /oidc, /federation, /scim, /health and /metrics.
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  # The web server accepts 2m bodies (federation metadata aggregates) and
+  # waits 120s for the API (large sync previews); most controllers default to
+  # 1m and 60s. For ingress-nginx:
+  #   nginx.ingress.kubernetes.io/proxy-body-size: 2m
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+  annotations: {}
+  hosts:
+    - host: idm.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: syntra-tls
+  #    hosts: [idm.example.com]
+
+# -----------------------------------------------------------------------------
+# NetworkPolicy. On by default. Kubernetes NetworkPolicy matches addresses and
+# ports, never hostnames, so the connector allow-list below is expressed as
+# CIDRs; for FQDN-based egress use your CNI's own policy (Cilium, Calico) in
+# addition to, or instead of, this.
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+
+  # Who may reach the web pods: your ingress controller. The defaults match
+  # ingress-nginx installed in namespace `ingress-nginx`.
+  ingressFrom:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: ingress-nginx
+    podSelector: {}
+
+  # Who may scrape the API's /metrics directly (only used when
+  # metrics.serviceMonitor.enabled). Defaults to a `monitoring` namespace.
+  metricsFrom:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring
+    podSelector: {}
+
+  dns:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+
+  # The addresses cloud metadata services answer on. Excluded from every
+  # broad egress rule below so a server-side request forgery cannot reach
+  # instance credentials.
+  metadataExcept:
+    - 169.254.169.254/32
+    - fd00:ec2::254/128
+
+  # Postgres (or PgBouncer). Narrow `cidrs` to your database's addresses.
+  postgres:
+    cidrs: [0.0.0.0/0]
+    ports: [5432, 6432]
+
+  smtp:
+    cidrs: [0.0.0.0/0]
+    ports: [25, 465, 587]
+
+  # Outbound integrations: provisioning connectors (LDAP/LDAPS to Active
+  # Directory, SCIM and Microsoft Graph over HTTPS, SFTP HR feeds), upstream
+  # OIDC/SAML federation, webhooks and back-channel logout. Each entry is
+  # {cidrs, ports}. The default allows the standard ports to any public or
+  # private address except the metadata endpoints; narrow it to the systems
+  # you actually connect to.
+  connectorEgress:
+    - cidrs: [0.0.0.0/0]
+      ports: [443, 636, 389, 22]
+
+  # Raw NetworkPolicyEgressRule objects appended to the API policy.
+  extraApiEgress: []
+
+# -----------------------------------------------------------------------------
+# Monitoring (Prometheus Operator CRDs). The scrape presents METRICS_TOKEN from
+# the runtime Secret as a bearer token, so that key must exist in it.
+# -----------------------------------------------------------------------------
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+  prometheusRule:
+    # Rendered from files/prometheus-alerts.yml, a copy of
+    # ops/prometheus-alerts.yml that CI keeps identical.
+    enabled: false
+    labels: {}
+
+# -----------------------------------------------------------------------------
+# Scheduled logical backups. The container path has no backup mechanism of its
+# own (ops/syntra-backup drives `docker exec` on a host); this CronJob applies
+# the same checks -- 0600 files, a PGDMP archive that contains TABLE DATA, an
+# atomic rename from `.partial`, a manifest with the salted master-key
+# fingerprint -- and writes the same directory layout to a PersistentVolume.
+#
+# The dump role MUST bypass row-level security (a superuser, or a role with
+# BYPASSRLS): dumped as syntra_app it is a well-formed archive of no rows,
+# which the job detects and fails on. Supply that URL under a separate key.
+# -----------------------------------------------------------------------------
+backup:
+  enabled: false
+  schedule: "15 2 * * *"
+  keep: 7
+  # Secret key holding the dump role's connection URL (direct, not pooled).
+  databaseUrlKey: BACKUP_DATABASE_URL
+  image:
+    # Must match or exceed the server's major version.
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  persistence:
+    existingClaim: ""
+    size: 20Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+# -----------------------------------------------------------------------------
+# Scheduled rolling restart of the API. OFF by default. Useful only with more
+# than one API replica: the OIDC provider is cached per process and only the
+# process that rotates a signing key evicts its cache (README, multi-replica
+# section). Rotation runs at 03:00 UTC on the 1st and the outgoing key stays
+# published for seven days, so a restart on the 2nd keeps every replica
+# signing with a published key. Creates a Role allowed to patch exactly one
+# Deployment.
+# -----------------------------------------------------------------------------
+apiRolloutRestart:
+  enabled: false
+  schedule: "0 4 2 * *"
+  image:
+    repository: registry.k8s.io/kubectl
+    tag: v1.31.0
+    pullPolicy: IfNotPresent

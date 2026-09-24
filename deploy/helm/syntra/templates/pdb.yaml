@@ -1,0 +1,19 @@
+{{- range $component := list "api" "web" }}
+{{- $cfg := index $.Values $component }}
+{{- if and $cfg.pdb.enabled (or $cfg.autoscaling.enabled (gt (int $cfg.replicas) 1)) }}
+---
+# Only when more than one pod can exist. Over a single replica a PDB either
+# blocks every node drain (minAvailable 1) or promises nothing.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "syntra.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" $component) | nindent 4 }}
+spec:
+  maxUnavailable: {{ $cfg.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "syntra.selectorLabels" (dict "ctx" $ "component" $component) | nindent 6 }}
+{{- end }}
+{{- end }}

@@ -146,9 +146,155 @@ client already do it better than a shell script bolted onto this one would.
 Each backup is a self-contained directory with a stable, sortable name; point
 something at `/opt/syntra/backups` and it will do the right thing.
 
-There is no point-in-time recovery here — that is WAL archiving, a different
-feature with different operational requirements, and `pg_dump` is not a step
-toward it.
+There is no point-in-time recovery here. That needs WAL archiving, which is
+a different feature with different operational requirements, and `pg_dump`
+is not a step toward it.
+
+## Kubernetes and high availability
+
+The Helm chart in [`deploy/helm/syntra`](../deploy/helm/syntra/README.md)
+is the Kubernetes path. It runs the migration as a pre-upgrade hook and the
+pods on read-only root filesystems. Ingress, NetworkPolicy, PodDisruptionBudget,
+autoscaling, a ServiceMonitor and a PrometheusRule are optional. Before you
+run more than one API replica, read the chart README's section
+[Running more than one API replica](../deploy/helm/syntra/README.md#running-more-than-one-api-replica).
+In short:
+
+- pg-boss, sessions, OIDC artefacts, challenges and lockout are shared
+  through Postgres.
+- Each process keeps its own OIDC provider cache, which holds clients,
+  issuer and signing keys.
+- Each process keeps its own rate-limit counters.
+
+Syntra has no state of its own outside Postgres, `MASTER_KEY` and
+`SESSION_SECRET`. Availability therefore depends almost entirely on the
+database.
+
+### Postgres for production
+
+- **Use managed or replicated Postgres** with automatic failover: RDS/Aurora,
+  Cloud SQL, Azure Flexible Server, or an operator such as CloudNativePG,
+  Crunchy PGO or Zalando with synchronous or quorum replication. Syntra
+  needs no extensions and nothing beyond PostgreSQL 16 semantics.
+- **Connect to the primary through its failover endpoint** (the cloud
+  writer endpoint, or the operator's `-rw` Service). **Never point Syntra at
+  a read replica.** Every request writes: sessions, audit and lockout.
+- **Keep the role model.** Syntra connects as a `NOSUPERUSER NOBYPASSRLS`
+  role that owns the tables. That is what makes `FORCE ROW LEVEL SECURITY`
+  bind it. Recreate `infra/initdb/01-app-role.sh`'s grants on the managed
+  instance, including `CREATE` on the database, which pg-boss needs for its
+  own schema. On services that grant new roles extra privileges by default,
+  check the role with `\du`. Many managed "admin" roles carry `BYPASSRLS`,
+  and a connection as one of them silently disables tenant isolation.
+- **Failover behaviour.** During a failover, `/health/ready` returns 503 and
+  Kubernetes stops sending traffic, but liveness (`/health`) keeps passing,
+  so pods are not restarted into a crash loop. Prisma and pg-boss reconnect
+  on their own. An interactive transaction in flight at that moment fails
+  and the client sees a 5xx. A pg-boss job in flight is retried: queues are
+  created with `retryLimit: 3` and backoff.
+
+### PgBouncer and transaction pooling
+
+Transaction pooling works with how Syntra sets tenant context. This was
+checked in the code and against a real PgBouncer:
+
+- `withTenant` (`packages/db/src/with-tenant.ts`) opens a transaction and
+  runs `SELECT set_config('app.current_tenant', $1, true)`. The `true` means
+  *is_local*: the setting lasts only for that transaction, the same as
+  `SET LOCAL`, and never leaks to the next client of a pooled server
+  connection. A session-level `SET` or `set_config(..., false)` would be
+  unsafe under transaction pooling. **Nothing in the codebase does that.**
+  Keep it that way.
+- The lockout and audit-chain locks are `pg_advisory_xact_lock`, which are
+  also transaction-scoped.
+- **Prepared statements are the one real requirement.** Prisma uses named
+  prepared statements. Tested against PgBouncer 1.25.2 in `pool_mode =
+  transaction`:
+  - With `max_prepared_statements = 200` (the protocol-level prepared
+    statement support added in PgBouncer 1.21), sign-in, the RLS-scoped
+    reads, `/health/ready` and the pg-boss scheduler all worked unchanged.
+  - With `max_prepared_statements = 0`, every tenant-scoped query failed
+    with `prepared statement "s1" does not exist`, and `/health/ready`
+    correctly returned 503.
+  - With `max_prepared_statements = 0` and `?pgbouncer=true` added to
+    `DATABASE_URL`, everything worked again. That flag makes Prisma stop
+    using named statements. pg-boss (node-postgres) ignores the parameter
+    and ran normally.
+
+  So: on PgBouncer 1.21 or later, set `max_prepared_statements` above zero.
+  On anything older, or on a pooler you cannot configure, append
+  `pgbouncer=true`.
+- **Migrations and backups must bypass the pooler.** `prisma migrate
+  deploy` holds a session-level advisory lock, and `pg_dump` needs a
+  consistent session snapshot. Put a direct connection URL in the Secret and
+  name it with `secretKeys.migrationDatabaseUrl` (and `BACKUP_DATABASE_URL`
+  for backups).
+- pg-boss polls and claims jobs with `SELECT … FOR UPDATE SKIP LOCKED` inside
+  transactions, so it pools like the application does. pg-boss 12 can also
+  use `LISTEN/NOTIFY`, which would break behind a transaction pooler, but
+  only when `useListenNotify` is set. It defaults to off, and
+  `packages/core/src/jobs/scheduler.ts` does not turn it on. If it is ever
+  enabled, give pg-boss a direct connection.
+
+### Connection-pool sizing
+
+Each API process opens two pools against `DATABASE_URL`:
+
+| Pool | Default size | Set with |
+|---|---|---|
+| Prisma | `physical CPUs × 2 + 1`. The CPUs are the ones the query engine detects, which is usually the **node's** count, not the pod's CPU limit. A pod on a 32-core node can open up to 65 connections. | `?connection_limit=N` in `DATABASE_URL` (and `pool_timeout=S`) |
+| pg-boss | 10 (node-postgres `Pool` default; connections show `application_name = pgboss`) | not configurable today |
+
+Set `connection_limit` explicitly. 10 is a sensible start for a 2-CPU pod.
+Then size the server's `max_connections` (or PgBouncer's
+`default_pool_size`) for the worst case:
+
+```
+(maxReplicas + 1 surge pod) × (connection_limit + 10)
+  + 2 (migration Job) + 1 (backup Job) + monitoring/admin headroom
+```
+
+With 3 replicas and `connection_limit=10`, that is 4 × 20 + 3 = 83, plus
+headroom. Behind PgBouncer those are client connections. The server-side
+count is the pool size you give PgBouncer, and interactive transactions are
+short. Syntra's own budget is under Prisma's 5 s transaction ceiling. More
+than 100 server connections is rarely needed.
+
+### Backups in Kubernetes
+
+`syntra-backup` drives `docker exec` on a host, so it does not run in a
+cluster. Choose one of these:
+
+1. **Managed Postgres PITR** (preferred). Point-in-time recovery with
+   cross-region snapshot copies covers what `pg_dump` cannot. It still does
+   not cover `MASTER_KEY`, so keep that in your secret manager, backed up
+   separately.
+2. **The chart's backup CronJob** (`backup.enabled=true`). It applies the
+   same checks as `syntra-backup create`: `.partial` then atomic rename,
+   `0600`, `PGDMP` plus a non-empty TABLE DATA check, the salted master-key
+   fingerprint, and retention. It writes the same layout to a
+   PersistentVolume. See the chart README. It needs a role that bypasses RLS,
+   supplied as `BACKUP_DATABASE_URL`. As `syntra_app`, `pg_dump` fails with
+   "query would be affected by row-level security policy" and the job fails.
+   Copy the PVC off-cluster yourself.
+
+To restore from a CronJob backup:
+
+1. Scale the API to zero: `kubectl scale deploy/<release>-api --replicas=0`.
+2. Start a pod with the `postgres` image, mounting the backup PVC and the
+   Secret.
+3. Compare the manifest's `masterKeyFingerprint` with the running key, as
+   `syntra-backup restore` does, and stop if they differ.
+4. Drop and recreate `public`. A `pg_restore --clean` alone leaves tables
+   created by newer migrations in place.
+5. Run `pg_restore --no-owner -d "$BACKUP_DATABASE_URL" database.dump`.
+6. Check that rows arrived (`SELECT sum(n_live_tup) FROM pg_stat_user_tables`
+   after `ANALYZE`).
+7. Run `helm upgrade` so the migration hook brings the schema forward, then
+   scale the API back up.
+
+Rehearse this before you need it. `syntra-backup verify` shows the shape of
+a restore into a scratch database.
 
 ## Metrics
 
@@ -323,9 +469,17 @@ timing is in [Configure, "What this slice does not do"](configure.md#what-this-s
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs two jobs on every push and pull request: the
-unit and integration suite against a real PostgreSQL, OpenLDAP and Samba
-domain controller, and the browser suite against a running, seeded stack.
+`.github/workflows/ci.yml` runs on every push and pull request. Its two main
+jobs are the unit and integration suite, against a real PostgreSQL, OpenLDAP
+and Samba domain controller, and the browser suite, against a running, seeded
+stack. Two smaller jobs also run:
+
+- `docker build` builds both images.
+- `helm chart` runs `helm lint --strict` and `helm template` over
+  `deploy/helm/syntra/ci/*.yaml` and validates the output with kubeconform.
+  It also checks that the chart refuses to render without a Secret, that the
+  backup script parses, and that the chart's copy of the alert rules matches
+  `ops/prometheus-alerts.yml`.
 
 Both bring the infrastructure up with `infra/docker-compose.yml` rather than
 GitHub's `services:`. The OpenLDAP container needs its bootstrap LDIF and TLS

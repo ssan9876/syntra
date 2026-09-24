@@ -387,3 +387,80 @@ jobs:
           push: false
           cache-from: type=gha,scope=syntra-web
           cache-to: type=gha,mode=max,scope=syntra-web
+
+  # ---------------------------------------------------------------------------
+  # The Helm chart. Nothing else here renders it, so a template error -- a
+  # bad indent, a value renamed in values.yaml but not in a template -- would
+  # otherwise surface as `helm install` failing on somebody's cluster, which
+  # is the most expensive place to find out.
+  #
+  # Rendered twice, from deploy/helm/syntra/ci/: the least an install can set,
+  # and every optional feature switched on. Both must lint under --strict,
+  # render, and validate against the Kubernetes schemas (and the Prometheus
+  # Operator CRDs, for the ServiceMonitor and PrometheusRule).
+  # ---------------------------------------------------------------------------
+  helm:
+    name: helm chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned, not `latest`: a Helm minor that tightens template parsing
+      # should arrive as a deliberate bump, not as a red build on an
+      # unrelated pull request.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Lint
+        run: |
+          helm lint --strict deploy/helm/syntra -f deploy/helm/syntra/ci/minimal-values.yaml
+          helm lint --strict deploy/helm/syntra -f deploy/helm/syntra/ci/full-values.yaml
+
+      - name: Render
+        run: |
+          mkdir -p "$RUNNER_TEMP/helm"
+          helm template syntra deploy/helm/syntra -n syntra \
+            -f deploy/helm/syntra/ci/minimal-values.yaml > "$RUNNER_TEMP/helm/minimal.yaml"
+          helm template syntra deploy/helm/syntra -n syntra \
+            -f deploy/helm/syntra/ci/full-values.yaml > "$RUNNER_TEMP/helm/full.yaml"
+
+      - name: Refuses to render without a Secret
+        # The chart's one hard safety rule: it never guesses a Secret name
+        # and never renders credentials unless told to. A default that
+        # rendered anyway would install "successfully" and then sit in
+        # CreateContainerConfigError -- or worse, pick up a Secret of the
+        # same name that belongs to something else.
+        run: |
+          if helm template syntra deploy/helm/syntra --set publicUrl=https://idm.example.com \
+               > /dev/null 2> "$RUNNER_TEMP/helm/refusal.txt"; then
+            echo "The chart rendered with no existingSecret; it must refuse." >&2
+            exit 1
+          fi
+          grep -q 'Set existingSecret' "$RUNNER_TEMP/helm/refusal.txt"
+
+      - name: Validate against the Kubernetes schemas
+        run: |
+          docker run --rm -v "$RUNNER_TEMP/helm:/work" ghcr.io/yannh/kubeconform:v0.6.7-alpine \
+            -strict -summary -kubernetes-version 1.31.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            /work/minimal.yaml /work/full.yaml
+
+      - name: The backup CronJob's script parses
+        # It is shell inside YAML inside a template, which is three chances
+        # for an indentation slip to produce a script `sh` rejects -- at 2am,
+        # on the first scheduled run.
+        run: |
+          yq 'select(.kind == "ConfigMap" and .metadata.name == "syntra-backup") | .data["backup.sh"]' \
+            "$RUNNER_TEMP/helm/full.yaml" > "$RUNNER_TEMP/helm/backup.sh"
+          test -s "$RUNNER_TEMP/helm/backup.sh"
+          sh -n "$RUNNER_TEMP/helm/backup.sh"
+
+      - name: The PrometheusRule matches ops/prometheus-alerts.yml
+        # Helm cannot read outside the chart directory, so the chart carries
+        # a copy. Two copies of an alert definition drift; this makes the
+        # drift a failed build rather than an alert that fires in one
+        # deployment shape and not the other.
+        run: diff -u ops/prometheus-alerts.yml deploy/helm/syntra/files/prometheus-alerts.yml
