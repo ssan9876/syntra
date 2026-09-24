@@ -126,7 +126,7 @@ export const submitRequestBody = z.object({
   // before it reached the handler that knew what to do with it.
   subjectPersonId: z.string().uuid().optional(),
   justification: z.string().max(4000).nullable().default(null),
-  formValues: z.record(z.unknown()).default({}),
+  formValues: z.record(z.string(), z.unknown()).default({}),
   requestedDurationDays: z.number().int().positive().max(3650).nullable().default(null),
   replacesGrantId: z.string().uuid().nullable().default(null),
 });
@@ -256,20 +256,20 @@ export const delegatedTaskRequest = z
     name: z.string().trim().min(1).max(120),
     description: z.string().trim().max(500).nullable().default(null),
     actionKey: z.string().trim().min(1).max(64),
-    formSchema: z.array(z.record(z.unknown())).max(40).default([]),
+    formSchema: z.array(z.record(z.string(), z.unknown())).max(40).default([]),
     /**
      * Who may run it. `null` admits NOBODY, which is `audienceAdmits`'s own
      * default — a task nobody finished configuring must not be runnable by
      * everyone.
      */
-    audienceCondition: z.record(z.unknown()).nullable().default(null),
+    audienceCondition: z.record(z.string(), z.unknown()).nullable().default(null),
     enabled: z.boolean().default(true),
   })
   .strict();
 
 export const runTaskRequest = z
   .object({
-    values: z.record(z.unknown()).default({}),
+    values: z.record(z.string(), z.unknown()).default({}),
   })
   .strict();
 
@@ -279,8 +279,8 @@ export const delegatedTaskResponse = z.object({
   description: z.string().nullable(),
   actionKey: z.string(),
   actionLabel: z.string(),
-  formSchema: z.array(z.record(z.unknown())),
-  audienceCondition: z.record(z.unknown()).nullable(),
+  formSchema: z.array(z.record(z.string(), z.unknown())),
+  audienceCondition: z.record(z.string(), z.unknown()).nullable(),
   enabled: z.boolean(),
 });
 

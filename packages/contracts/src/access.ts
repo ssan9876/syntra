@@ -128,7 +128,7 @@ export const catalogCreateRequest = z
      * URLs, which are compared byte for byte at sign-in. The service refuses a
      * blank one — see `fill` — so this only has to stop an oversized body.
      */
-    variables: z.record(z.string().trim().max(512)).default({}),
+    variables: z.record(z.string(), z.string().trim().max(512)).default({}),
     /** Overrides the entry's own name, for a second instance of one. */
     name: z.string().trim().min(1).max(120).optional(),
   })
