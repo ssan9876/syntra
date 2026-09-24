@@ -6,6 +6,9 @@
   hostnames, directory sources, SSO and federation configuration.
 - [Operate](operate.md) — upgrades, backups, deactivate-never-delete, CI,
   tests, troubleshooting.
+- [api/](api/README.md) — the administration API's published OpenAPI 3.1
+  description, and its versioning, deprecation, error, idempotency and
+  rate-limit conventions.
 - [lab/](lab/) — a complete worked build: Syntra over HTTPS, an Active
   Directory domain behind it, sync in both directions, and SAML single
   sign-on to a third-party application.

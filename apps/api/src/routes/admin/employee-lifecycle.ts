@@ -9,10 +9,10 @@ import { requirePermission } from '../../plugins/require-permission.js';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { pageQuery } from './list-query.js';
 
-const endRequest = z.object({ reason: z.string().trim().min(1).max(1000), revision: z.string().length(64), urgent: z.boolean().default(false) }).strict();
+export const endRequest = z.object({ reason: z.string().trim().min(1).max(1000), revision: z.string().length(64), urgent: z.boolean().default(false) }).strict();
 const readPermissions = [PERMISSIONS.IDENTITY_READ, PERMISSIONS.DIRECTORY_READ, PERMISSIONS.PROVISION_READ];
 const writePermissions = [...readPermissions, PERMISSIONS.IDENTITY_WRITE, PERMISSIONS.DIRECTORY_WRITE, PERMISSIONS.PROVISION_MANAGE];
-const employeeWorkQuery = pageQuery.extend({
+export const employeeWorkQuery = pageQuery.extend({
   kind: z.enum(['onboarding', 'offboarding', 'failed']).optional(),
 });
 

@@ -30,6 +30,19 @@ exists.
 
 ## Completed recently
 
+- Publish a versioned OpenAPI 3.1 description of the administration and machine-token API (backlog #99, foundation).
+  - **Coverage.** All 305 `/api/admin` routes are described. That includes the 11 that refuse tokens, which are published as session-only.
+  - **Where it lives.** It is served unauthenticated and tenant-free at `GET /api/openapi.json`, and committed as `docs/api/openapi.json` by `pnpm openapi:generate`.
+  - **Facts derived, not written.** The method, path, required permissions (`x-syntra-permission`), whether a token may call the route (`x-syntra-token-allowed`) and its rate limit all come from the running route table. An `onRoute` catalog reads the guards themselves: `requirePermission` records what it checks, and Govern's scoped guard declares its permissions.
+  - **Per-module descriptions.** Summaries and the contracts Zod schemas each handler already parses with sit beside every route module in `routes/admin/<module>.openapi.ts`. They are converted by a small Zod-3 walker that defers to Zod 4's `z.toJSONSchema` once that upgrade lands.
+  - **Shared shapes.** The document carries the bearer and cookie security schemes, the RFC 9457 problem and validation-problem shapes, and the paging parameters and envelope.
+  - **Guards against drift.**
+    - A test fails on any undescribed or stale route. Its explicit allow-list for deliberate exclusions is commented and empty.
+    - A CI `openapi document` job regenerates the file and fails on any difference.
+    - The six-month deprecation notice is enforced by test and announced with RFC 9745/8594 `Deprecation`/`Sunset` headers.
+  - **Also fixed.** Reusing an onboarding `idempotencyKey` with different input escaped as a bare 500. It is now `409 idempotency-key-reused`, and nothing is written.
+  - **Conventions.** `docs/api/README.md` documents versioning (only additive changes within v1), deprecation, errors, idempotency, rate limits and client generation.
+  - **Verification.** Focused API and core tests (21 files, 458 tests), the full TypeScript build and lint pass.
 - Complete the external-write circuit breaker with a tenant-wide stop and notifications. A tenant-isolated (FORCE RLS) stop row shares the per-target semantics through one guard at the apply boundary: a mandatory reason, an optional expiry of at most 30 days honoured the moment it passes, and resume only by a different administrator. While active, no connector write is attempted for any target; the run stays previewed, a manual account move is refused after its placement is recorded, a scheduled `autoApply` run records a visible skip, and a person receipt is left blocked rather than failed. A once-a-minute sweep closes expired stops at both scopes exactly once with an actor-less audit event. Every pause, resume, and expiry is a security event in the new **Emergency write stops** webhook group, so subscribed endpoints are notified through the existing hash-chained audit fan-out. The target list carries a conspicuous tenant-wide control built from the same panel as the per-target one. Focused core, API, and web tests, the full TypeScript build, and focused lint pass.
 - Production-grade Helm chart and HA deployment guidance (chart 0.2.0).
   - **Security defaults.** The chart never renders secrets by default and fails via `required` if no Secret is named. Pods run non-root with a read-only root, all capabilities dropped, seccomp `RuntimeDefault` and no service-account token.

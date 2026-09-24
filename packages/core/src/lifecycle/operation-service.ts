@@ -129,6 +129,21 @@ export class LifecycleVerificationRequiredError extends Error {
   }
 }
 
+/**
+ * An idempotency key presented again with DIFFERENT input.
+ *
+ * Its own class so the API can answer it as the client's mistake (409) rather
+ * than as a server fault: a plain `Error` here reached the problem handler as
+ * an unhandled 500, which told an integrator retrying a delivery that the
+ * server was broken when it was their key that was wrong.
+ */
+export class IdempotencyKeyReusedError extends Error {
+  constructor() {
+    super('This idempotency key was already used with different input');
+    this.name = 'IdempotencyKeyReusedError';
+  }
+}
+
 export async function createLifecycleOperation(input: CreateLifecycleOperationInput) {
   if (!input.idempotencyKey.trim()) throw new Error('An idempotency key is required');
   if (input.steps.length === 0) throw new Error('At least one lifecycle step is required');
@@ -151,7 +166,7 @@ export async function createLifecycleOperation(input: CreateLifecycleOperationIn
       // it with different data must never quietly resume an operation for the
       // wrong employee or contract.
       if (existing.inputFingerprint !== fingerprint) {
-        throw new Error('This idempotency key was already used with different input');
+        throw new IdempotencyKeyReusedError();
       }
       return existing;
     }

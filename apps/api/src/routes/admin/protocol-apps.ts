@@ -45,6 +45,10 @@ export interface AdminProtocolRouteOptions {
   publicUrl: string;
 }
 
+/** Exported for the OpenAPI description (`protocol-apps.openapi.ts`). */
+export const claimParams = z.object({ id: z.string().uuid(), claimId: z.string().uuid() });
+export const applyClaimSetRequest = z.object({ setId: z.string().uuid() });
+
 export async function registerAdminProtocolRoutes(
   app: FastifyInstance,
   options: AdminProtocolRouteOptions,
@@ -78,8 +82,6 @@ export async function registerAdminProtocolRoutes(
     const identity = tenantProtocolIdentity({ primaryDomain }, options.publicUrl);
     await ensureActiveKey(tenantId, provider, 'saml', { commonName: identity.acsHost });
   };
-
-  const claimParams = z.object({ id: z.string().uuid(), claimId: z.string().uuid() });
 
   const requireApplication = async (
     request: FastifyRequest,
@@ -381,7 +383,7 @@ export async function registerAdminProtocolRoutes(
    */
   app.post('/applications/:id/claims/apply-set', manage, async (request) => {
     const { id } = idParam.parse(request.params);
-    const { setId } = z.object({ setId: z.string().uuid() }).parse(request.body);
+    const { setId } = applyClaimSetRequest.parse(request.body);
 
     return request
       .db((tx) => applyClaimMappingSet(tx, id, setId))

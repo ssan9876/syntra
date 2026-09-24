@@ -335,6 +335,21 @@ is retained; merged code alone is not enough.
 99. **Build — Tenant administration APIs.** Versioned, documented, scoped,
     rate-limited APIs with idempotency, consistent errors, deprecation policy,
     and generated client examples.
+    *Foundation in place:* all 305 `/api/admin` routes are published as a
+    versioned OpenAPI 3.1 description. It is served at `GET /api/openapi.json`
+    and committed as `docs/api/openapi.json`, with a CI freshness check. For
+    every operation the description derives the required permission and
+    whether a machine token may call it from the live guards. A test fails
+    when a route has no description. Deprecation (a six-month minimum, enforced
+    by test) is sent as `Deprecation`/`Sunset` response headers. The
+    versioning, error, idempotency, rate-limit and client-generation
+    conventions are in [docs/api/README.md](api/README.md).
+    *Still open:*
+    - response-body schemas for most operations;
+    - a general `Idempotency-Key` for POSTs, which only onboarding and
+      provision receipts have today;
+    - per-token rate limits on ordinary admin reads and writes;
+    - a distinct problem type for `429`.
 100. **Build — Webhook reliability contract.** Signed payloads, replay
      protection, delivery attempts, ordering semantics, rotation, test event,
      dead-letter handling, and customer-visible status.

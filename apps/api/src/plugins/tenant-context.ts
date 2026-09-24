@@ -25,8 +25,13 @@ declare module 'fastify' {
  * token was ever looked at, so the endpoint documented in operate.md could
  * not be scraped the documented way. Its own route opens the per-tenant
  * transactions it needs.
+ *
+ * `/api/openapi.json` is the published description of the administration
+ * API. It is the same document for every tenant and contains nothing from
+ * any of them, and a client generator is pointed at an address long before
+ * anybody has set up the hostname a tenant resolves from.
  */
-const UNSCOPED_PATHS = new Set(['/health', '/health/ready', '/metrics']);
+const UNSCOPED_PATHS = new Set(['/health', '/health/ready', '/metrics', '/api/openapi.json']);
 
 /**
  * Resolves a tenant from the Host header, in three passes: the exact primary

@@ -446,13 +446,13 @@ export async function registerAdminTenantRoutes(
 
 const DIGEST = z.string().regex(/^[a-f0-9]{64}$/, 'a SHA-256 digest in lowercase hex');
 
-const deletionRequestBody = z.object({
+export const deletionRequestBody = z.object({
   assessmentDigest: DIGEST,
   exportDigest: DIGEST,
   reason: z.string().trim().min(TENANT_DELETION_REASON_MIN_LENGTH).max(2000),
 });
 
-const deletionIdParam = z.object({ id: z.string().uuid() });
+export const deletionIdParam = z.object({ id: z.string().uuid() });
 
 /** The windows the console explains; the server enforces them regardless. */
 const DELETION_POLICY = {

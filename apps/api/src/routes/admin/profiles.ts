@@ -13,7 +13,7 @@ import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 
-const previewRequest = z
+export const previewRequest = z
   .object({
     profile: accountProfileRequestSchema,
     personId: z.string().uuid(),
@@ -28,7 +28,7 @@ const previewRequest = z
  * preview that demanded a complete contract would only appear at the moment it
  * had stopped being useful.
  */
-const containerPreviewRequest = z
+export const containerPreviewRequest = z
   .object({
     givenName: z.string().max(128).default(''),
     familyName: z.string().max(128).default(''),

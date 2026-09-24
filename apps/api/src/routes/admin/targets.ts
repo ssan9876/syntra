@@ -160,19 +160,24 @@ function defined<T extends object>(value: T): Defined<T> {
  * target the search goes to Graph live and an unbounded page is a request
  * Graph refuses anyway.
  */
-const entitlementSearchQuery = z.object({
+export const entitlementSearchQuery = z.object({
   q: z.string().trim().min(1).max(200),
   top: z.coerce.number().int().min(1).max(100).default(25),
 });
-const targetHealthQuery = z.object({ days: z.coerce.number().int().min(1).max(90).default(30) });
-const writeStopRequest = z.object({
+export const targetHealthQuery = z.object({ days: z.coerce.number().int().min(1).max(90).default(30) });
+export const writeStopRequest = z.object({
   reason: z.string().trim().min(1).max(2000),
   expiresAt: z.coerce.date().nullable().default(null),
 }).strict();
-const writeResumeRequest = z.object({ reason: z.string().trim().min(1).max(2000) }).strict();
+export const writeResumeRequest = z.object({ reason: z.string().trim().min(1).max(2000) }).strict();
+/**
+ * The preview revision a native-Entra migration is applied against, so a
+ * target changed since the preview was read refuses as stale.
+ */
+export const nativeEntraMigrationRequest = z.object({ revision: z.string().length(64) }).strict();
 
 /** Both ids, so a route cannot read one and forget to validate the other. */
-const placementParams = z.object({
+export const placementParams = z.object({
   id: z.string().uuid(),
   personId: z.string().uuid(),
 });
@@ -649,7 +654,7 @@ export async function registerAdminTargetRoutes(
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      const body = z.object({ revision: z.string().length(64) }).strict().parse(request.body);
+      const body = nativeEntraMigrationRequest.parse(request.body);
       try {
         return await applyDocumentEntraMigration(
           request.tenantId,

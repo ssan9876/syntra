@@ -45,7 +45,7 @@ export interface ProvisionRunRouteOptions {
  * be the place a looser one creeps in. `@syntra/contracts` carries no
  * two-id schema for this pair yet; when it does, this is the thing to delete.
  */
-const runParams = idParam.extend({ runId: z.string().uuid() });
+export const runParams = idParam.extend({ runId: z.string().uuid() });
 
 /** How many runs, actions and findings one request may return. */
 const RUN_PAGE = 50;
@@ -57,7 +57,7 @@ const DRIFT_PAGE = 500;
  * kinds are checked against core's `DriftKind`; the statuses are the three
  * the schema documents on `DriftFinding.status`.
  */
-const driftListQuery = z
+export const driftListQuery = z
   .object({
     status: z.enum(['open', 'acknowledged', 'resolved']).optional(),
     kind: z

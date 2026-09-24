@@ -68,6 +68,15 @@ import { registerOidcLogoutRoutes } from './routes/oidc-logout.js';
 import { registerFederationRoutes } from './routes/federation.js';
 import { invalidateProvider } from '@syntra/protocols';
 import { serializeRequest } from './request-logging.js';
+import { captureRouteCatalog, type CatalogRoute } from './openapi/route-catalog.js';
+import { registerOpenApiRoute } from './openapi/route.js';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** Every route this app registered. See openapi/route-catalog.ts. */
+    routeCatalog: CatalogRoute[];
+  }
+}
 
 export interface AppOptions {
   logger?: boolean;
@@ -133,6 +142,14 @@ export async function buildApp(
         (req.url.startsWith('/health') || req.url.startsWith('/metrics')),
     }),
   });
+
+  // THE ROUTE TABLE, recorded as it is built. First, before any plugin can
+  // register a route, because an `onRoute` hook only sees routes declared
+  // after it. It is what the published OpenAPI description is derived from
+  // (see openapi/document.ts) and what the coverage test asserts over, so a
+  // route cannot exist without the document at least knowing it does.
+  const routeCatalog = captureRouteCatalog(app);
+  app.decorate('routeCatalog', routeCatalog);
 
   // Read once, from configuration, and available wherever a cookie is written.
   app.decorate('cookieSecure', config.cookieSecure);
@@ -236,6 +253,11 @@ export async function buildApp(
       return reply.status(report.ready ? 200 : 503).send(redactReport(report));
     },
   );
+
+  // The OpenAPI description of the administration API. Unauthenticated and
+  // outside tenant resolution (see UNSCOPED_PATHS): it describes the product,
+  // not any tenant, and an integrator generating a client has no session yet.
+  registerOpenApiRoute(app, routeCatalog);
 
   // Before the auth routes and outside every session guard: this is what the
   // sign-in page reads in order to render itself.

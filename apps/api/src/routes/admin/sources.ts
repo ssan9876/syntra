@@ -49,7 +49,7 @@ import { confirmQuery } from './list-query.js';
  * destructive route reads. `merge` takes the strictness of its argument, so an
  * unknown key is refused here as it is there.
  */
-const deleteQuery = deleteSourceQuery.omit({ confirm: true }).merge(confirmQuery);
+export const deleteQuery = deleteSourceQuery.omit({ confirm: true }).merge(confirmQuery);
 
 export interface SourceRouteOptions {
   masterKey: Buffer;

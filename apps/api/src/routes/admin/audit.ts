@@ -4,7 +4,7 @@ import { PERMISSIONS, listEvents, verifyChain } from '@syntra/core';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 
-const query = z.object({
+export const auditQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   before: z.coerce.number().int().positive().optional(),
   /**
@@ -35,7 +35,7 @@ export async function registerAdminAuditRoutes(
     '/audit',
     { preHandler: requirePermission(PERMISSIONS.AUDIT_READ) },
     async (request) => {
-      const { limit, before, subject } = query.parse(request.query);
+      const { limit, before, subject } = auditQuery.parse(request.query);
 
       return request.db(async (tx) => {
         const events = await listEvents(tx, {
