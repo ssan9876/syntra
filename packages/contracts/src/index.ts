@@ -15,5 +15,6 @@ export * from './protocol-admin.js';
 export * from './provision.js';
 export * from './automate.js';
 export * from './govern.js';
+export * from './exports.js';
 export * from './http.js';
 export * from './rbac.js';

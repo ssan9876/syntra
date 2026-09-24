@@ -88,6 +88,90 @@ export async function getSecret(
 }
 
 
+/**
+ * The vault's envelope, for a value too large to hold as one string.
+ *
+ * The same scheme as `putSecret` -- AES-256-GCM under a fresh 32-byte data key,
+ * the data key wrapped by the master key -- but fed in chunks, so an export
+ * can seal a file batch by batch as it generates it. It does not write a
+ * `Secret` row: an export is not a secret the vault owns, and the `Secret`
+ * table is what rotation and tenant erasure enumerate. The caller stores the
+ * six parts and hands them back to `openEnvelope`.
+ *
+ * `rewrapSecrets` does NOT cover what this seals. That is deliberate for the
+ * one caller: exports live at most 72 hours, and one sealed before a
+ * master-key rotation simply stops being downloadable (docs/operate.md,
+ * "Exports").
+ */
+export interface SealedEnvelope {
+  ciphertext: Buffer;
+  iv: Buffer;
+  tag: Buffer;
+  wrappedDek: Buffer;
+  dekIv: Buffer;
+  dekTag: Buffer;
+}
+
+export interface EnvelopeSealer {
+  update(chunk: Buffer): void;
+  /** Finishes the cipher, wraps the data key, and zeroes it. Call once. */
+  seal(provider: MasterKeyProvider): Promise<SealedEnvelope>;
+  /** Zeroes the data key without sealing, for a generation that failed. */
+  discard(): void;
+}
+
+export function createEnvelopeSealer(): EnvelopeSealer {
+  const dek = randomBytes(32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', dek, iv);
+  const parts: Buffer[] = [];
+  return {
+    update(chunk) {
+      parts.push(cipher.update(chunk));
+    },
+    async seal(provider) {
+      try {
+        parts.push(cipher.final());
+        const tag = cipher.getAuthTag();
+        const wrapped = await provider.wrap(dek);
+        return {
+          ciphertext: Buffer.concat(parts),
+          iv,
+          tag,
+          wrappedDek: wrapped.ciphertext,
+          dekIv: wrapped.iv,
+          dekTag: wrapped.tag,
+        };
+      } finally {
+        dek.fill(0);
+      }
+    },
+    discard() {
+      dek.fill(0);
+      parts.length = 0;
+    },
+  };
+}
+
+/** Opens what `createEnvelopeSealer` sealed. Throws if any part was altered. */
+export async function openEnvelope(
+  provider: MasterKeyProvider,
+  sealed: SealedEnvelope,
+): Promise<Buffer> {
+  const dek = await provider.unwrap({
+    ciphertext: sealed.wrappedDek,
+    iv: sealed.dekIv,
+    tag: sealed.dekTag,
+  });
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', dek, sealed.iv);
+    decipher.setAuthTag(sealed.tag);
+    return Buffer.concat([decipher.update(sealed.ciphertext), decipher.final()]);
+  } finally {
+    dek.fill(0);
+  }
+}
+
 export async function deleteSecret(
   tx: TenantClient,
   name: string,

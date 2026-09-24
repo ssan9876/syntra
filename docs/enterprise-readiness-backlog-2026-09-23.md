@@ -179,7 +179,15 @@ is retained; merged code alone is not enough.
     logs, and tested revocation.
 48. **Build — Secure export service.** Permission recheck at execution and
     download, asynchronous generation, encryption, watermark, expiry,
-    revocation, and full audit history.
+    revocation, and full audit history. *Engineering slice done:* one
+    asynchronous service for the audit log and the Governance access report —
+    authority checked at request, at generation and at download (including a
+    changed Govern scope), batched generation, envelope-sealed storage with a
+    SHA-256 digest, a per-export watermark, a 1–72 hour expiry with a sweep,
+    revocation, and an audit event for every step
+    ([Operate, Exports](operate.md#exports)). Remaining: the security
+    notification group for export creation (#52), an external object store for
+    files beyond 64 MiB, and moving the remaining synchronous reports.
 49. **Operate — Dependency governance.** Automated updates, supported-runtime
     policy, license inventory, vulnerability SLA, exception owner, and expiry.
 50. **Operate — Secure development evidence.** Protected branches, required
@@ -256,6 +264,15 @@ is retained; merged code alone is not enough.
     retention.
 73. **Build — Audit search at scale.** Server-side filters, cursor pagination,
     actor/resource/correlation search, saved views, and bounded export.
+    *Engineering slice done:* server-side actor, action-prefix, target,
+    outcome, time-window and subject filters with keyset pagination on
+    `sequence`, a page cap of 200, supporting indexes whose plans are asserted
+    at 100,000 events, per-administrator saved searches, and "export these
+    results" through the secure export service
+    ([Operate, Audit search](operate.md#audit-search)). The log records no
+    correlation id, so none is searchable. Remaining: per-page chain
+    verification still walks the whole log, and a plan rehearsal at
+    production-sized history.
 74. **Build — Audit schema governance.** Version events, define required
     fields, prohibit secrets, preserve actor and delegation context, and test
     coverage of privileged actions.

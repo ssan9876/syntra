@@ -208,3 +208,86 @@ describe('GET /api/admin/audit', () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+describe('audit search (backlog #73)', () => {
+  const send = (method: 'PUT' | 'DELETE', url: string, cookie: string, payload?: unknown) =>
+    ctx.app.inject({
+      method,
+      url,
+      headers: { host: ctx.host, cookie },
+      ...(payload === undefined ? {} : { payload: payload as object }),
+    });
+
+  it('filters on the server by action prefix, outcome and actor', async () => {
+    const cookie = await adminCookie([PERMISSIONS.AUDIT_READ]);
+    const all = (await get('/api/admin/audit?limit=200', cookie)).json().events as {
+      action: string;
+      outcome: string;
+      actorUserId: string | null;
+    }[];
+
+    const auth = (await get('/api/admin/audit?action=auth.', cookie)).json().events as { action: string }[];
+    expect(auth.length).toBe(all.filter((e) => e.action.startsWith('auth.')).length);
+    expect(auth.every((e) => e.action.startsWith('auth.'))).toBe(true);
+
+    const actorId = all.find((e) => e.actorUserId)!.actorUserId!;
+    const byActor = (await get(`/api/admin/audit?actor=${actorId}&outcome=success`, cookie)).json()
+      .events as { actorUserId: string; outcome: string }[];
+    expect(byActor.length).toBeGreaterThan(0);
+    expect(byActor.every((e) => e.actorUserId === actorId && e.outcome === 'success')).toBe(true);
+  });
+
+  it('pages with a keyset cursor, and says when there is no further page', async () => {
+    const cookie = await adminCookie([PERMISSIONS.AUDIT_READ]);
+    const first = (await get('/api/admin/audit?limit=1', cookie)).json() as {
+      events: { sequence: number }[];
+      nextBefore: number | null;
+    };
+    expect(first.nextBefore).toBe(first.events[0]!.sequence);
+    const second = (await get(`/api/admin/audit?limit=1&before=${first.nextBefore}`, cookie)).json() as {
+      events: { sequence: number }[];
+    };
+    expect(second.events[0]!.sequence).toBeLessThan(first.events[0]!.sequence);
+    const everything = (await get('/api/admin/audit?limit=200', cookie)).json();
+    expect(everything.nextBefore).toBeNull();
+  });
+
+  it('refuses an unbounded page, a reversed window, and an action that is not an action name', async () => {
+    const cookie = await adminCookie([PERMISSIONS.AUDIT_READ]);
+    expect((await get('/api/admin/audit?limit=500', cookie)).statusCode).toBe(400);
+    expect(
+      (await get('/api/admin/audit?from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z', cookie)).statusCode,
+    ).toBe(400);
+    expect((await get('/api/admin/audit?action=auth%25', cookie)).statusCode).toBe(400);
+  });
+
+  it('keeps saved searches per administrator, re-saving one name replaces it', async () => {
+    const cookie = await adminCookie([PERMISSIONS.AUDIT_READ]);
+    const saved = await send('PUT', '/api/admin/audit/views', cookie, {
+      name: 'Failures',
+      filters: { outcome: 'failure' },
+    });
+    expect(saved.statusCode).toBe(200);
+    await send('PUT', '/api/admin/audit/views', cookie, {
+      name: 'Failures',
+      filters: { outcome: 'failure', action: 'auth.' },
+    });
+    const views = (await get('/api/admin/audit/views', cookie)).json().views as {
+      id: string;
+      name: string;
+      filters: unknown;
+    }[];
+    expect(views).toHaveLength(1);
+    expect(views[0]).toMatchObject({ name: 'Failures', filters: { outcome: 'failure', action: 'auth.' } });
+
+    // A misspelt filter is refused rather than silently saved as "everything".
+    const typo = await send('PUT', '/api/admin/audit/views', cookie, {
+      name: 'Typo',
+      filters: { outcom: 'failure' },
+    });
+    expect(typo.statusCode).toBe(400);
+
+    expect((await send('DELETE', `/api/admin/audit/views/${views[0]!.id}`, cookie)).statusCode).toBe(204);
+    expect((await get('/api/admin/audit/views', cookie)).json().views).toEqual([]);
+  });
+});
