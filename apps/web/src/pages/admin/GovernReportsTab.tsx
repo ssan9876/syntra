@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -9,7 +10,61 @@ import {
   SkeletonRows,
   Table,
 } from '@syntra/ui';
+import { ApiError, api } from '../../session/api.js';
+import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
+
+/**
+ * Asks for this report as a CSV. Asynchronous (backlog #48): the request
+ * returns at once, a background job builds the file within the reader's
+ * organizational scope, and the file is followed and downloaded from
+ * Activity → Exports. The status line is a live region so the result is
+ * heard, not only seen.
+ */
+function ExportReportButton({ systemId, snapshotId }: { systemId: string; snapshotId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<{ tone: 'info' | 'danger'; text: string; queued: boolean } | null>(null);
+
+  async function request() {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await api<{ scope: 'tenant' | 'org_units' }>('/api/admin/govern/exports/csv', {
+        method: 'POST',
+        body: JSON.stringify({ systemId, ...(snapshotId === '' ? {} : { snapshotId }) }),
+      });
+      setNotice({
+        tone: 'info',
+        text: res.scope === 'org_units' ? 'Export requested, limited to your organizational scope.' : 'Export requested.',
+        queued: true,
+      });
+    } catch (cause) {
+      setNotice({
+        tone: 'danger',
+        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The export could not be requested.',
+        queued: false,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-4 py-3">
+      <Button size="sm" loading={busy} onClick={() => void request()}>
+        Export as CSV
+      </Button>
+      <div role="status" aria-live="polite">
+        {notice && (
+          <Alert tone={notice.tone}>
+            {notice.text}{' '}
+            {notice.queued && <Link to="/admin/activity?tab=exports">Follow it in Exports</Link>}
+          </Alert>
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface ReportSourceLine {
   sourceKind: string;
@@ -83,6 +138,9 @@ export function GovernReportsTab() {
   const [systemId, setSystemId] = useState('');
   const [snapshotId, setSnapshotId] = useState('');
   const [submitted, setSubmitted] = useState<string | null>(null);
+  // What the report on screen was run for, so the export asks for the same.
+  const [ran, setRan] = useState<{ systemId: string; snapshotId: string } | null>(null);
+  const canExport = useCan()('govern.export');
 
   const { data: snapshotList } = useApiResource<{
     snapshots: { id: string; asOf: string; status: string }[];
@@ -105,8 +163,10 @@ export function GovernReportsTab() {
             const system = systemId.trim();
             if (system === '') {
               setSubmitted(null);
+              setRan(null);
               return;
             }
+            setRan({ systemId: system, snapshotId });
             // WHICH POINT IN TIME, offered rather than assumed.
             //
             // This screen used to carry a "Live" toggle that was wired to
@@ -178,6 +238,7 @@ export function GovernReportsTab() {
 
       {data && (
         <Panel title="Holders">
+          {canExport && ran && <ExportReportButton systemId={ran.systemId} snapshotId={ran.snapshotId} />}
           <p className="border-b border-border-subtle px-4 py-3 text-muted">
             Holders: {renderCount(data.body.holderCount)}
             {typeof data.body.withheldForScope === 'number' && data.body.withheldForScope > 0 && (

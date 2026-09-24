@@ -2,6 +2,7 @@ import { cookiesAreSecure } from './cookie-security.js';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { isIpRangeUsable } from './policy/ip-match.js';
+import { parseKeyManagement, type KeyManagementConfig } from './vault/key-management.js';
 
 const schema = z.object({
   DATABASE_URL: z.string().url(),
@@ -17,12 +18,9 @@ const schema = z.object({
       (v) => !/^change-me/i.test(v),
       'SESSION_SECRET is the placeholder from .env.example; generate one with 32 random bytes, base64 encoded (see .env.example)',
     ),
-  MASTER_KEY: z
-    .string()
-    .refine(
-      (v) => Buffer.from(v, 'base64').length === 32,
-      'MASTER_KEY must be 32 bytes, base64 encoded',
-    ),
+  // MASTER_KEY and every other key-management variable are validated by
+  // `parseKeyManagement` below, because whether MASTER_KEY is required depends
+  // on MASTER_KEY_PROVIDER -- which a flat field here cannot express.
   SMTP_URL: z.string().url(),
   /**
    * A base64 32-byte key that signs audit checkpoints, and the id it is known
@@ -72,6 +70,13 @@ const schema = z.object({
   // gets the other raised with it — an end-to-end suite that needs 200 per
   // address is not also asking to be capped at 10 per tenant.
   AUTH_RATE_LIMIT_TENANT_MAX: z.coerce.number().int().positive().optional(),
+  // Where rate-limit counters live. `postgres`, the default, is one shared
+  // fixed-window counter per key for every API replica, so a limit means the
+  // same thing at one replica or ten. `memory` is the per-process store the
+  // limiter ships with: fine for exactly one replica, and N times the
+  // configured limit at N -- kept for a single-process installation that
+  // wants to avoid the one upsert per limited request.
+  RATE_LIMIT_STORE: z.enum(['postgres', 'memory']).default('postgres'),
   /**
    * Which proxies may be believed about a request's source address.
    *
@@ -209,10 +214,20 @@ export interface Config {
    */
   cookieSecure: boolean;
   sessionSecret: string;
-  masterKey: Buffer;
+  /**
+   * The local master key, or null when an external provider holds it and no
+   * decrypt-only local key is configured. Read it through
+   * `masterKeyProviderFor(config)`, never directly: which provider wraps is
+   * `keyManagement`'s decision.
+   */
+  masterKey: Buffer | null;
+  /** MASTER_KEY_PROVIDER and its variables; see `vault/key-management.ts`. */
+  keyManagement: KeyManagementConfig;
   smtpUrl: string;
   authRateLimitMax: number;
   authRateLimitTenantMax: number;
+  /** See RATE_LIMIT_STORE. */
+  rateLimitStore: 'postgres' | 'memory';
   /** Null when this deployment signs no checkpoints, which is a supported state. */
   governCheckpointKey: Buffer | null;
   governCheckpointKeyId: string;
@@ -248,6 +263,15 @@ export function loadConfig(
   }
 
   const v = parsed.data;
+  let keyManagement: KeyManagementConfig;
+  try {
+    keyManagement = parseKeyManagement(env);
+  } catch (cause) {
+    throw new Error(
+      `Invalid configuration — ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+  }
   let trustProxy: false | string;
   try {
     trustProxy = parseTrustProxy(v.TRUST_PROXY);
@@ -269,7 +293,8 @@ export function loadConfig(
     publicUrl: v.PUBLIC_URL,
     cookieSecure: cookiesAreSecure(v.PUBLIC_URL),
     sessionSecret: v.SESSION_SECRET,
-    masterKey: Buffer.from(v.MASTER_KEY, 'base64'),
+    masterKey: keyManagement.masterKey,
+    keyManagement,
     smtpUrl: v.SMTP_URL,
     governCheckpointKey:
       v.GOVERN_CHECKPOINT_KEY === undefined
@@ -281,6 +306,7 @@ export function loadConfig(
     authRateLimitMax: v.AUTH_RATE_LIMIT_MAX,
     authRateLimitTenantMax:
       v.AUTH_RATE_LIMIT_TENANT_MAX ?? v.AUTH_RATE_LIMIT_MAX * 10,
+    rateLimitStore: v.RATE_LIMIT_STORE,
     trustProxy,
     outboundAllowPrivate: v.OUTBOUND_ALLOW_PRIVATE,
     // Resolved here rather than where it is used, so the value the rest of the

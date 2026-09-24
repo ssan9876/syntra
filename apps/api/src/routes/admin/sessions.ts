@@ -13,7 +13,7 @@ import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
 
-const sessionParams = z.object({
+export const sessionParams = z.object({
   id: z.string().uuid(),
   sessionId: z.string().uuid(),
 });

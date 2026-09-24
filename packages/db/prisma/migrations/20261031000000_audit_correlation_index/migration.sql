@@ -1,0 +1,14 @@
+-- The audit search's correlation-id filter (backlog #55 meeting #73).
+--
+-- `20261029090000_audit_correlation_id` added the column without an index,
+-- reasoning that a correlation lookup is a rare investigation narrowed by a
+-- time window. The server-side audit search that landed beside it takes the
+-- filter on its own, and every other search filter is paired with `sequence`
+-- so a filtered page is an index range read in keyset order rather than a scan
+-- of the tenant's whole log. This gives the correlation filter the same shape.
+--
+-- Plain CREATE INDEX, like the other audit-search indexes: it blocks audited
+-- writes while it builds. On a very large log, build it first with
+-- `CREATE INDEX CONCURRENTLY IF NOT EXISTS` under the same name; see
+-- docs/operate.md, "Audit search".
+CREATE INDEX IF NOT EXISTS "AuditEvent_tenantId_correlationId_sequence_idx" ON "AuditEvent"("tenantId", "correlationId", "sequence" DESC);

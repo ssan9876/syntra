@@ -12,9 +12,9 @@ procedure needs, the runbook says so rather than inventing one.
 | Runbook | Use it when |
 |---|---|
 | [Backup and restore](backup-and-restore.md) | Taking, proving and restoring database backups; rehearsing a restore in isolation; reconciling before and after |
-| [Master-key recovery](master-key-recovery.md) | `MASTER_KEY` is lost, wrong, or a restore refuses over a key mismatch |
+| [Master-key recovery](master-key-recovery.md) | `MASTER_KEY` is lost, wrong, or a restore refuses over a key mismatch; Vault Transit or AWS KMS stops unwrapping |
 | [Database migration](database-migration.md) | Applying schema migrations on the release layout, the compose path or Helm; checking migration state; backing out |
-| [Secret rotation](secret-rotation.md) | Rotating `SESSION_SECRET`, `METRICS_TOKEN`, target credentials (including an Entra client secret), SMTP, API tokens, webhook signing secrets; the `MASTER_KEY` caveat |
+| [Secret rotation](secret-rotation.md) | Rotating `SESSION_SECRET`, `METRICS_TOKEN`, target credentials (including an Entra client secret), SMTP, API tokens, webhook signing secrets; rotating the master key and moving it to Vault Transit or AWS KMS with `pnpm rekey` |
 | [Incident response](incident-response.md) | Anything is wrong and it is not yet clear what; severity, first 15 minutes, evidence, communication |
 | [Target rollback](target-rollback.md) | A provisioning target must be stopped, a run must be reviewed or refused, or a bad mover has to be put back |
 | [Tabletop exercises](tabletop-exercises.md) | Rehearsing four incidents on paper: expired Entra secret, Graph outage, an over-broad mover rule, an urgent leaver during an outage |

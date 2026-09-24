@@ -75,6 +75,22 @@ describe('lifecycle operation routes', () => {
     });
     expect(read.statusCode).toBe(200);
     expect(read.json()).toMatchObject({ kind: 'onboard', status: 'completed' });
+
+    // The same key with DIFFERENT input is the client's mistake, answered as
+    // a 409 with a stable type -- it used to escape as a bare 500 -- and it
+    // creates nothing.
+    const reused = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/admin/lifecycle-operations/onboard',
+      headers: { host: ctx.host, cookie },
+      payload: { ...payload, person: { ...payload.person, givenName: 'Someone else' } },
+    });
+    expect(reused.statusCode).toBe(409);
+    expect(reused.json()).toMatchObject({
+      type: 'https://syntra.dev/problems/idempotency-key-reused',
+    });
+    const operations = await withTenant(ctx.tenantId, (tx) => tx.lifecycleOperation.count());
+    expect(operations).toBe(1);
   });
 
   it('previews and applies a revision-bound mover operation', async () => {

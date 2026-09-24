@@ -142,5 +142,7 @@ export async function buildTestApp(
     transport: mail,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
-  return { app, tenantId: tenant.id, host: TEST_HOST, mail };
+  // `config` too, so a test about running several replicas can build a second
+  // app over the same database without resetting it.
+  return { app, tenantId: tenant.id, host: TEST_HOST, mail, config };
 }

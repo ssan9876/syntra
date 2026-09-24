@@ -6,6 +6,14 @@ import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 
+/**
+ * The body of a person provisioning request. `requestKey` is the caller's
+ * idempotency key: the same key for the same person returns the receipts the
+ * first request created rather than queueing the work again.
+ */
+export const provisionReceiptRequest = z.object({ requestKey: z.string().uuid(), targetIds: z.array(z.string().uuid()).max(100).optional() }).strict();
+export const receiptParams = idParam.extend({ receiptId: z.string().uuid() });
+
 export async function registerAdminPersonReceiptRoutes(app: FastifyInstance, options: { scheduler?: () => Scheduler | null }) {
   app.addHook('preHandler', requireSession('admin'));
   const scheduler = () => {
@@ -19,7 +27,7 @@ export async function registerAdminPersonReceiptRoutes(app: FastifyInstance, opt
   });
   app.post('/persons/:id/provision-receipts', { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) }, async (request, reply) => {
     const { id } = idParam.parse(request.params);
-    const body = z.object({ requestKey: z.string().uuid(), targetIds: z.array(z.string().uuid()).max(100).optional() }).strict().parse(request.body);
+    const body = provisionReceiptRequest.parse(request.body);
     const person = await request.db(tx => tx.person.findUnique({ where: { id }, select: { id: true } }));
     if (!person) throw new ProblemError(404, 'not-found', 'Person not found');
     const receipts = await requestPersonProvision(request.tenantId, id, body.requestKey, scheduler(), body.targetIds);
@@ -35,7 +43,7 @@ export async function registerAdminPersonReceiptRoutes(app: FastifyInstance, opt
     return reply.code(202).send({ receipts });
   });
   app.post('/persons/:id/provision-receipts/:receiptId/retry', { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) }, async (request, reply) => {
-    const { id, receiptId } = idParam.extend({ receiptId: z.string().uuid() }).parse(request.params);
+    const { id, receiptId } = receiptParams.parse(request.params);
     const existing = await request.db(tx => tx.personProvisionReceipt.findFirst({ where: { id: receiptId, personId: id } }));
     if (!existing) throw new ProblemError(404, 'not-found', 'Receipt not found');
     const receipt = await retryPersonProvision(request.tenantId, id, receiptId, scheduler());

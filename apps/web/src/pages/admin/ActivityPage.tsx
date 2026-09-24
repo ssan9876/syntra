@@ -5,6 +5,7 @@ import { StatCard, StatGrid } from '../../components/StatCards.js';
 import { PageHeader } from './PageHeader.js';
 import { IncidentsTab } from './IncidentsTab.js';
 import { AuditTab } from './AuditTab.js';
+import { ExportsTab } from './ExportsTab.js';
 
 interface Incident {
   id: string;
@@ -49,6 +50,9 @@ export function ActivityPage() {
         tabs={[
           { id: 'attention', label: 'Attention', badge: rows.length || undefined, content: <IncidentsTab /> },
           { id: 'all', label: 'All events', content: <AuditTab /> },
+          // Beside the log it most often copies. Every export -- the log's,
+          // a Governance report's -- is followed, downloaded and revoked here.
+          { id: 'exports', label: 'Exports', content: <ExportsTab /> },
         ]}
       />
     </>

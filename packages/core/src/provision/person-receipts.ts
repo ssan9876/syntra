@@ -6,6 +6,7 @@ import { readBackTarget, targetConnectorFor, type TargetConnector } from '@syntr
 import { previewProvisionRun } from './run-service.js';
 import { applyProvisionRun } from './apply.js';
 import { ExternalWritesPausedError } from './target-write-stop.js';
+import { AdapterWritesBlockedError } from './adapter-rollout.js';
 import { enqueuePairedSync } from './syntra-user.js';
 import { targetWithCredential } from './target-service.js';
 import { compareObservedState } from '../lifecycle/verification.js';
@@ -298,6 +299,10 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
     // that is fine.
     if (error instanceof ExternalWritesPausedError) {
       await finish('blocked', `${error.message}. Retry after external writes resume.`);
+      return;
+    }
+    if (error instanceof AdapterWritesBlockedError) {
+      await finish('blocked', error.message);
       return;
     }
     await finish('failed', error instanceof Error ? error.message : 'Provisioning failed');

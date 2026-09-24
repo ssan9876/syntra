@@ -188,6 +188,7 @@ export function AdminApp() {
             {/* Attention is the audit log filtered, not a second place. */}
             <Route path="activity" element={<ActivityPage />} />
             <Route path="audit" element={<Navigate to="/admin/activity?tab=all" replace />} />
+            <Route path="exports" element={<Navigate to="/admin/activity?tab=exports" replace />} />
             <Route path="roles" element={<RolesPage />} />
             <Route path="settings" element={<TenantSettingsPage />} />
             {/* Branding and webhooks are tabs of Settings. Redirected, not

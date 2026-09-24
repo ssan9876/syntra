@@ -22,7 +22,7 @@ import {
   generateRecoveryCodes,
   hasTotp,
   listWebAuthnCredentials,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   recordEvent,
   removeTotp,
   removeWebAuthnCredential,
@@ -40,7 +40,7 @@ import { issueSession, renewReply } from './session-reply.js';
 import { clientFacts } from '../plugins/client-facts.js';
 
 export interface MfaRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   publicUrl: string;
   /** Attempts per minute, per tenant per address. */
   authRateLimitMax: number;
@@ -193,7 +193,7 @@ export async function registerMfaRoutes(
   app: FastifyInstance,
   options: MfaRouteOptions,
 ): Promise<void> {
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
   // Every endpoint below that presents or issues a credential carries it.
   // Guessing a six-digit code or a recovery code is only expensive if the
   // guesses are rationed, and the rate for that is the same one the password
@@ -204,7 +204,7 @@ export async function registerMfaRoutes(
     config: {
       rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' },
     },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'mfa'),
   };
 
   // ---- The step-up half of a sign-in. No session yet, so no session guard.

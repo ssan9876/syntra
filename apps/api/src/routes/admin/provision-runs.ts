@@ -14,13 +14,15 @@ import {
   ProvisionRunNotConfirmableError,
   MaintenanceWindowClosedError,
   ExternalWritesPausedError,
+  AdapterVersionChangedError,
+  AdapterWritesBlockedError,
   RunNotCancellableError,
   RunNotFoundError,
   acknowledgeDriftFinding,
   requestCancelProvisionRun,
   applyProvisionRun,
   enqueuePairedSync,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   provisionJobPayload,
   type Scheduler,
   type Transport,
@@ -31,7 +33,7 @@ import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 
 export interface ProvisionRunRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   scheduler?: () => Scheduler | null;
   /** The app's mail transport, so a created account's password can be delivered. */
   transport: Transport;
@@ -45,7 +47,7 @@ export interface ProvisionRunRouteOptions {
  * be the place a looser one creeps in. `@syntra/contracts` carries no
  * two-id schema for this pair yet; when it does, this is the thing to delete.
  */
-const runParams = idParam.extend({ runId: z.string().uuid() });
+export const runParams = idParam.extend({ runId: z.string().uuid() });
 
 /** How many runs, actions and findings one request may return. */
 const RUN_PAGE = 50;
@@ -57,7 +59,7 @@ const DRIFT_PAGE = 500;
  * kinds are checked against core's `DriftKind`; the statuses are the three
  * the schema documents on `DriftFinding.status`.
  */
-const driftListQuery = z
+export const driftListQuery = z
   .object({
     status: z.enum(['open', 'acknowledged', 'resolved']).optional(),
     kind: z
@@ -78,7 +80,7 @@ export async function registerAdminProvisionRunRoutes(
   options: ProvisionRunRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   app.post(
     '/targets/:id/runs',
@@ -292,6 +294,17 @@ export async function registerAdminProvisionRunRoutes(
             cause.message,
             { scope: cause.scope },
           );
+        }
+        // The adapter gates. Nothing was attempted and the run is left as it
+        // was previewed; the detail says what to do instead.
+        if (cause instanceof AdapterWritesBlockedError) {
+          throw new ProblemError(409, 'adapter-writes-blocked', 'The adapter may not write', cause.message);
+        }
+        if (cause instanceof AdapterVersionChangedError) {
+          throw new ProblemError(409, 'adapter-version-changed', 'The plan is for a different adapter release', cause.message, {
+            plannedVersion: cause.plannedVersion,
+            currentVersion: cause.currentVersion,
+          });
         }
         throw cause;
       }

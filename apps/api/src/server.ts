@@ -1,11 +1,22 @@
 import { prisma } from '@syntra/db';
-import { loadConfig } from '@syntra/core';
+import { buildInfo, keyManagementWarnings, loadConfig, masterKeyProviderFor } from '@syntra/core';
+import { startTelemetry } from './telemetry.js';
 import { buildApp } from './app.js';
 import { startSyncScheduler } from './scheduler.js';
 import { shutdownHandler } from './shutdown.js';
 import { schedulerRecovery } from './scheduler-recovery.js';
 
 const config = loadConfig(process.env);
+
+// Before `buildApp`, because the HTTP hooks decide at registration whether to
+// open spans and Prisma instrumentation must precede the first query. A no-op
+// -- nothing imported, nothing registered -- unless OTEL_EXPORTER_OTLP_ENDPOINT
+// is set. See telemetry.ts.
+const telemetry = await startTelemetry(process.env, {
+  version: buildInfo().version,
+  // The app's logger does not exist yet; this one line goes to stderr.
+  log: (message) => process.stderr.write(`${message}\n`),
+});
 
 // Bound late, and deliberately. The source routes need the scheduler so that
 // creating, changing or deleting a source is reflected there and then rather
@@ -20,6 +31,11 @@ const app = await buildApp(config, { scheduler: () => recovery?.current() ?? nul
 // unscheduled must not keep people from signing in.
 const recovery = schedulerRecovery(() => startSyncScheduler(config, app.log), app.log);
 app.addHook('onClose', async () => { await recovery?.stop(); });
+// Last of the close work in registration order, so the spans of the drain
+// itself are flushed. Failing to flush must not fail the shutdown.
+app.addHook('onClose', async () => {
+  await telemetry.shutdown().catch((err: unknown) => app.log.warn({ err }, 'could not flush traces'));
+});
 
 // Registered BEFORE `listen`, so a container that is killed seconds after it
 // starts still shuts down through this path. Node's default action for either
@@ -36,3 +52,23 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 void recovery.start();
+
+// The master-key provider, said out loud once at startup: which one wraps,
+// what is still configured decrypt-only, and whether it answers. Reachability
+// is logged rather than fatal, deliberately. A KMS that is down for a minute
+// at boot must not turn into an API that refuses to start -- password sign-in
+// needs no key at all -- and `/health/ready`'s `key-management` probe is the
+// gate that keeps traffic away until it answers. Nothing here logs a key: the
+// check wraps and unwraps a random canary and reports only pass or the cause.
+app.log.info({ provider: config.keyManagement.provider }, 'master-key provider configured');
+for (const warning of keyManagementWarnings(config.keyManagement)) app.log.warn(warning);
+void masterKeyProviderFor(config)
+  .check()
+  .then(
+    () => app.log.info({ provider: config.keyManagement.provider }, 'master-key provider answered'),
+    (err: unknown) =>
+      app.log.error(
+        { provider: config.keyManagement.provider, err: err instanceof Error ? err.message : String(err) },
+        'master-key provider did not answer; readiness will report key-management until it does',
+      ),
+  );

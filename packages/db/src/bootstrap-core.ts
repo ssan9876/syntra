@@ -10,8 +10,10 @@
  */
 import {
   ALL_PERMISSIONS,
+  createMasterKeyProvider,
   ensureActiveKey,
-  localMasterKeyProvider,
+  parseKeyManagement,
+  type KeyManagementConfig,
   assignRole,
   createRole,
   createUser,
@@ -29,7 +31,12 @@ export interface BootstrapConfig {
   adminLogin: string;
   adminEmail: string;
   adminPassword: string;
-  masterKey: Buffer;
+  /**
+   * The same master-key configuration the API boots with -- MASTER_KEY, or
+   * MASTER_KEY_PROVIDER and its variables -- so the tenant's first signing
+   * key is sealed under whatever the API will read it with.
+   */
+  keyManagement: KeyManagementConfig;
 }
 
 export type ConfigResult =
@@ -47,7 +54,6 @@ export function parseBootstrapConfig(env: NodeJS.ProcessEnv): ConfigResult {
   const adminLogin = env.BOOTSTRAP_ADMIN_LOGIN ?? 'admin';
   const adminEmail = env.BOOTSTRAP_ADMIN_EMAIL;
   const adminPassword = env.BOOTSTRAP_ADMIN_PASSWORD;
-  const masterKey = env.MASTER_KEY;
 
   if (!tenantName || !tenantSlug || !tenantDomain) {
     return {
@@ -68,8 +74,12 @@ export function parseBootstrapConfig(env: NodeJS.ProcessEnv): ConfigResult {
     };
   }
 
-  if (!masterKey || Buffer.from(masterKey, 'base64').length !== 32) {
-    return { ok: false, reason: 'MASTER_KEY must be set to 32 base64 bytes. Refusing to bootstrap.' };
+  let keyManagement: KeyManagementConfig;
+  try {
+    keyManagement = parseKeyManagement(env);
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return { ok: false, reason: `${detail}. Refusing to bootstrap.` };
   }
 
   return {
@@ -81,7 +91,7 @@ export function parseBootstrapConfig(env: NodeJS.ProcessEnv): ConfigResult {
       adminLogin,
       adminEmail,
       adminPassword,
-      masterKey: Buffer.from(masterKey, 'base64'),
+      keyManagement,
     },
   };
 }
@@ -151,7 +161,7 @@ export async function bootstrapTenant(config: BootstrapConfig): Promise<Bootstra
   // so running bootstrap again is a single read.
   await ensureActiveKey(
     tenant.id,
-    localMasterKeyProvider(config.masterKey),
+    createMasterKeyProvider(config.keyManagement),
     'saml',
     { commonName: tenant.primaryDomain ?? config.tenantSlug },
   );

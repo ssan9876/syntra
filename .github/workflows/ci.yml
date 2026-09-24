@@ -154,6 +154,15 @@ jobs:
       - name: Start PostgreSQL, OpenLDAP, Samba and MailDev
         run: docker compose -f infra/docker-compose.yml up -d
 
+      # The Vault dev server behind the `kms` profile, which the plain `up -d`
+      # above does not start. Seconds to boot, in-memory, and the only way the
+      # Transit master-key provider's integration test runs anywhere but a
+      # developer's machine. VAULT_TRANSIT_INTEGRATION on the Test step turns
+      # that test's skip-when-unreachable into a failure, so a container that
+      # did not come up cannot pass as a suite that skipped.
+      - name: Start the Vault dev server
+        run: docker compose -f infra/docker-compose.yml --profile kms up -d vault
+
       - name: Write the environment
         # Two files, because Prisma's CLI reads `.env` from its own working
         # directory and pnpm runs `migrate` with the cwd set to packages/db.
@@ -207,8 +216,13 @@ jobs:
       # Neither is retried. A retry would hide the second one, and the second
       # one is the important one.
       # See docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md.
+      - name: Wait for Vault
+        run: pnpm vault:wait
+
       - name: Test
         run: pnpm test
+        env:
+          VAULT_TRANSIT_INTEGRATION: '1'
 
       # THE CONSOLE'S TESTS, which ran in no job at all until this step.
       #
@@ -464,3 +478,79 @@ jobs:
         # drift a failed build rather than an alert that fires in one
         # deployment shape and not the other.
         run: diff -u ops/prometheus-alerts.yml deploy/helm/syntra/files/prometheus-alerts.yml
+
+  # ---------------------------------------------------------------------------
+  # The published OpenAPI description (docs/api/openapi.json) matches the code.
+  #
+  # The document is GENERATED -- from the route table the API registers and
+  # the `*.openapi.ts` descriptions beside each route module -- and COMMITTED,
+  # so that a reviewer sees every change to the public contract as a diff in
+  # the pull request that makes it, and an integrator can read it without
+  # running anything. A committed generated file is only worth that if it
+  # cannot go stale, and this job is what stops it: regenerate, and fail on
+  # any difference -- including a document nobody committed at all.
+  #
+  # Whether every admin route HAS a description is a different question, and
+  # it is asked by `apps/api/src/openapi/openapi.test.ts` in the suite above.
+  # This job asks only whether the committed copy is the current one.
+  #
+  # Its own job, and deliberately cheap: no PostgreSQL, no directory
+  # containers. The generator builds the application and asks it for the
+  # document through `inject`, and nothing on that path touches a database,
+  # so a contract change gets its answer in a minute rather than after the
+  # full suite. `db:generate` is still needed, because the API imports the
+  # Prisma client even when it never connects.
+  #
+  # The fix, when this fails, is printed below: run the generator and commit.
+  # ---------------------------------------------------------------------------
+  openapi:
+    name: openapi document
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Same reason as in `test`: the pinned pnpm, or Prisma's build scripts
+      # do not run and the client the API imports does not exist.
+      - run: corepack enable
+
+      - name: Get the pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Write the environment
+        # Placeholders only. The generator hands `loadConfig` a configuration
+        # of its own; these exist so nothing imported on the way trips over an
+        # unset variable and fails for a reason unrelated to the document.
+        run: |
+          cp .env.example .env
+          cp packages/db/.env.example packages/db/.env
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+
+      - name: Generate the document
+        run: pnpm openapi:generate
+
+      - name: The committed document is the generated one
+        # `git diff --exit-code` for a changed document, and `git status
+        # --porcelain` for one that was never added: an untracked file has no
+        # diff, and would otherwise pass.
+        run: |
+          if ! git diff --exit-code -- docs/api/openapi.json \
+             || [ -n "$(git status --porcelain -- docs/api/openapi.json)" ]; then
+            echo "::error file=docs/api/openapi.json::docs/api/openapi.json is out of date. Run 'pnpm openapi:generate' and commit the result."
+            exit 1
+          fi

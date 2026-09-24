@@ -6,6 +6,7 @@ import type { Scheduler } from '../jobs/scheduler.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { applyProvisionRun } from './apply.js';
 import { ExternalWritesPausedError } from './target-write-stop.js';
+import { AdapterWritesBlockedError } from './adapter-rollout.js';
 import { ProvisionRunInFlightError, previewProvisionRun } from './run-service.js';
 import { claimSyntraUsers, enqueuePairedSync } from './syntra-user.js';
 import { PERSON_PROVISION_JOB, runPersonProvision, type PersonProvisionPayload } from './person-receipts.js';
@@ -424,6 +425,13 @@ export async function runProvisionJob(
           runId: run.id,
           stopScope: cause.scope,
         });
+        return;
+      }
+      // A deprecated adapter release refusing new writes is the same kind of
+      // answer: the system declining on purpose, visibly, until somebody moves
+      // the target or records an override.
+      if (cause instanceof AdapterWritesBlockedError) {
+        await recordSkip(payload.tenantId, payload.targetSystemId, cause.message, { runId: run.id });
         return;
       }
       throw cause;

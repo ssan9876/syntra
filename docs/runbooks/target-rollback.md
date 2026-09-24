@@ -262,6 +262,25 @@ by the next run if the plan still wants them; actions left `in_flight` by a
 process that died are resolved by the next run asking the target what
 actually happened (`resolveInFlightActions`).
 
+## Procedure G: a canary adapter release that misbehaves
+
+A target moved to the canary channel (or pinned to a new adapter release)
+writes something unexpected, or its runs start refusing actions.
+
+1. **Stop writes** if anything is still applying (Procedure A).
+2. On the target page, **Adapter release → Rollback**, with a reason, or
+   `POST /api/admin/targets/:id/adapter/rollback` `{ "reason": "…" }`
+   (`provision.manage`). The target is pinned to the last certified release
+   it ran, immediately. Only the adapter selection changes: configuration,
+   account profile, rules, placements and accounts are untouched, and the
+   event `provision.target.adapter.rollback` names both versions.
+3. **Preview again.** A run previewed under the canary refuses to apply
+   (`409 adapter-version-changed`): its capability checks were made against
+   the release you just left.
+4. Resume writes, if you stopped them, once the new preview reads correctly.
+
+See [connector certification and rollout](../connectors/certification-and-rollout.md).
+
 ## Verification
 
 - `GET /api/admin/targets/:id` shows the `enabled`, `schedule` and

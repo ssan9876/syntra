@@ -3,7 +3,8 @@
 ## Purpose
 
 What to do when `MASTER_KEY` is missing, wrong, or does not match the key a
-backup was taken under. Read this whole page before acting: the wrong move
+backup was taken under -- or, when Vault Transit or AWS KMS holds the master
+key, when that provider stops unwrapping. Read this whole page before acting: the wrong move
 here is a restore that reports success and has quietly made every stored
 credential unusable.
 
@@ -16,19 +17,23 @@ credential unusable.
 - It is never stored in the database. The backup manifest records a salted
   SHA-256 fingerprint of it, and nothing else.
 - Every stored secret is a row in the `Secret` table sealed with a per-secret
-  data key, and that data key is wrapped under `MASTER_KEY` with AES-256-GCM
-  (`packages/core/src/vault/master-key.ts`, `vault-service.ts`). GCM
-  authenticates, so a wrong key produces a loud decryption error, not garbage.
-- `rewrapSecrets` performs the safe half of a rotation: it unwraps each data
-  key with the current provider and re-wraps it with the next provider without
-  decrypting secret ciphertext. It is intentionally a core operation, not an
-  unauthenticated HTTP route: run it in a maintenance transaction while both
-  keys are available, verify readiness using the next key, then switch the
-  deployment configuration.
+  data key, and that data key is wrapped by the master-key provider
+  `MASTER_KEY_PROVIDER` names: `local` wraps it under `MASTER_KEY` with
+  AES-256-GCM; `vault-transit` and `aws-kms` send it to Vault Transit or AWS
+  KMS and store what comes back (`packages/core/src/vault/`). Every one of
+  them authenticates, so a wrong key produces a loud error, not garbage.
+- Each row records which provider wrapped it, and `pnpm rekey --status` counts
+  rows per provider and key version per tenant without calling any KMS. It is
+  the first thing to run in any of the procedures below.
+- `pnpm rekey --yes` (`packages/db/src/rekey.ts`, around `rewrapSecrets`)
+  moves every data key to the configured provider, reading each with whichever
+  configured key recognises it. Operator-run, never a web route: see
+  [Secret rotation, Procedure B](secret-rotation.md#procedure-b-the-master-key).
 - Readiness checks the key on every `/health/ready`: the `vault` probe unseals
-  one active signing key per tenant and fails if it cannot
-  (`packages/core/src/health/readiness.ts`). `syntra_readiness` goes to 0 and
-  `SyntraNotReady` fires after five minutes.
+  one active signing key per tenant and fails if it cannot, and the
+  `key-management` probe wraps and unwraps a random canary with the provider,
+  bypassing the unwrap cache (`packages/core/src/health/readiness.ts`).
+  `syntra_readiness` goes to 0 and `SyntraNotReady` fires after five minutes.
 
 ## Which secrets live under the key
 
@@ -63,6 +68,9 @@ The `name` column is the inventory of what has to be re-entered.
 - `syntra-backup list` shows `KEY MISMATCH` or `unknown` beside the backup you need.
 - `/health/ready` reports the `vault` probe failed after a host rebuild, an
   `.env` edit, a Secret rotation under Helm, or a restore.
+- `/health/ready` reports the `key-management` probe failed: the external
+  provider is not answering or not letting Syntra use the key
+  ([Procedure C](#procedure-c-an-external-provider-refuses)).
 - The key file or secret store is known to be lost.
 
 ## Prerequisites
@@ -94,7 +102,9 @@ a Helm Secret recreated with a new value.
    shows `KEY ok` beside any backup taken under the key now running. If every
    recent backup says `MISMATCH`, the running key is the odd one out.
 
-3. **Put the original key back.** Release layout: edit
+3. **Put the original key back.** (With an external provider there is no key
+   in `.env` to be wrong; that is [Procedure C](#procedure-c-an-external-provider-refuses).)
+   Release layout: edit
    `/opt/syntra/shared/.env`, then `systemctl restart syntra`. Compose:
    export the correct `MASTER_KEY` and `docker compose up -d api`. Helm:
    update the `MASTER_KEY` key in the `syntra-runtime` Secret and restart the
@@ -127,6 +137,47 @@ syntra-backup: this backup was taken under a different MASTER_KEY
    `/opt/syntra/backups/<name>/manifest.json`.
 3. Install the matching key (Procedure A, step 3), then restore normally
    with [Backup and restore, Procedure D](backup-and-restore.md#procedure-d-restore-the-live-database).
+
+## Procedure C: an external provider refuses
+
+With `MASTER_KEY_PROVIDER=vault-transit` or `aws-kms`, the key cannot be
+"wrong" in `.env` -- it is not there. What goes wrong is access to it.
+
+1. **Read the cause.** The wire answer is redacted; the journal is not:
+
+   ```bash
+   journalctl -u syntra -n 200 --no-pager | grep -iE 'key-management|master-key provider'
+   ```
+
+   The provider's own error is kept verbatim (never with key material):
+
+   | Error | Means | Fix |
+   |---|---|---|
+   | `vault-transit: … did not answer` | Vault unreachable (network, DNS, TLS) | Restore the path; check `VAULT_ADDR` and `NODE_EXTRA_CA_CERTS` |
+   | `vault-transit: … HTTP 503: Vault is sealed` | Vault sealed after a restart | Unseal Vault |
+   | `vault-transit: … HTTP 403: permission denied` | Token expired or revoked, AppRole secret id expired, or policy changed | Issue a new `VAULT_SECRET_ID` / `VAULT_TOKEN`; restore the policy in [Configure](../configure.md#what-each-provider-needs) |
+   | `vault-transit: … HTTP 400: ciphertext or signature version is disallowed by policy (too old)` | The row's key version was retired (`min_decryption_version` raised past it) | `pnpm rekey --status` shows the versions; lower `min_decryption_version`, rekey, raise it again |
+   | `vault-transit: … HTTP 400: … message authentication failed` | The row is under a different Transit key, or was copied from another tenant | Configure the key `pnpm rekey --status` names as `VAULT_TRANSIT_PREVIOUS_KEY`; a row copied between tenants is tampering -- open an incident |
+   | `aws-kms: … AccessDeniedException` | The role lost `kms:Encrypt`/`Decrypt`/`GenerateDataKey`, or the key policy changed | Restore the grant |
+   | `aws-kms: … DisabledException` | The key was disabled | `aws kms enable-key` |
+   | `aws-kms: … KMSInvalidStateException` | The key is pending deletion | `aws kms cancel-key-deletion`, then enable it -- possible only within the waiting period |
+   | `aws-kms: … IncorrectKeyException` | Rows sealed under a different KMS key than `AWS_KMS_KEY_ID` | `pnpm rekey --status` names it; configure it as `AWS_KMS_PREVIOUS_KEY_ID` |
+   | `aws-kms: … TimeoutError` / `NetworkingError` | KMS endpoint unreachable | Restore the path, or set `AWS_KMS_ENDPOINT` to the VPC endpoint |
+
+2. **Know the clock.** Until access returns, reads of data keys cached in the
+   last `MASTER_KEY_CACHE_TTL_SECONDS` still work, every other secret read and
+   every secret write fails, and password sign-in is unaffected (the full
+   table is in [Configure, "Outages and revocation"](../configure.md#outages-and-revocation)).
+   Nothing needs restarting once the provider answers again.
+3. **Do not switch back to a local key to "get going".** Rows wrapped by the
+   KMS cannot be read by any local key, so `MASTER_KEY_PROVIDER=local` makes
+   things worse, not better.
+4. **Verify** as in [Verification](#verification); `key-management` passes.
+
+A KMS key that has actually been **deleted** (the waiting period passed) is
+"the original key is genuinely gone" below. KMS enforces a 7–30 day waiting
+period precisely so this step can be cancelled; put an alarm on
+`ScheduleKeyDeletion` in CloudTrail.
 
 ## When the original key is genuinely gone
 
@@ -184,11 +235,14 @@ decision.
 
 ## What this does not cover
 
-- **Rotating a working key without an operator-run maintenance wrapper.**
-  `rewrapSecrets` is deliberately not exposed as a web route or release CLI.
-  A deployment-specific change procedure must hold both keys, invoke it in a
-  transaction, verify the next key, and only then replace `MASTER_KEY`.
-- **A KMS-backed provider.** `MasterKeyProvider` is an interface; only the
-  local provider exists.
+- **Rotating a working key, or moving to a KMS.** That is not recovery; it is
+  [Secret rotation, Procedure B](secret-rotation.md#procedure-b-the-master-key),
+  which uses `pnpm rekey`. `rekey` is still deliberately not a web route.
+- **Restoring a backup from before a KMS migration** into a deployment that
+  has moved: its rows are wrapped by the old local key. Configure that key as
+  `MASTER_KEY` alongside the KMS (decrypt-only), restore, then `pnpm rekey
+  --yes` and remove it again.
+- **Azure Key Vault and GCP KMS.** Not implemented; `MasterKeyProvider` is the
+  interface a provider would implement.
 - **`SESSION_SECRET` and `GOVERN_CHECKPOINT_KEY`.** Different keys, different
   consequences; see [Secret rotation](secret-rotation.md).

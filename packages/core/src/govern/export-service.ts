@@ -6,10 +6,12 @@ import { readableSnapshot } from './readable.js';
 import {
   bodyOf,
   headerOf,
+  whoHasAccessToSystem,
   type ReportEnvelope,
   type ReportHeader,
   type SystemAccessRow,
 } from './report-service.js';
+import { personIdsInScope, type GovernScope } from './scope.js';
 
 /**
  * One row per holding, with EVERY HEADER FIELD REPEATED AS LEADING COLUMNS ON
@@ -62,8 +64,20 @@ export function csvCell(value: string): string {
   return /["\n\r,]/.test(body) || dangerous ? `"${body.replace(/"/g, '""')}"` : body;
 }
 
-export function toCsv(header: ReportHeader, rows: readonly Record<string, string>[]): string {
+/**
+ * `leading` is the export service's watermark -- export id, requesting user,
+ * tenant, generation time -- and it goes FIRST and on EVERY ROW, for the
+ * reason the report header does: a CSV is filtered, sorted and pasted
+ * elsewhere, and a watermark that lived only in a first line would not
+ * survive the first paste. Empty for the callers that have no export row.
+ */
+export function toCsv(
+  header: ReportHeader,
+  rows: readonly Record<string, string>[],
+  leading: Readonly<Record<string, string>> = {},
+): string {
   const headerColumns: Record<string, string> = {
+    ...leading,
     snapshot_id: header.snapshotId,
     as_of: header.asOf,
     scope: header.scopeDescription,
@@ -98,6 +112,7 @@ export async function exportReportCsv(
   actorUserId: string,
   e: ReportEnvelope<{ rows: SystemAccessRow[]; holderCount: unknown }>,
   scope: Record<string, unknown>,
+  watermark: Readonly<Record<string, string>> = {},
 ): Promise<string> {
   const header = headerOf(e);
   if (header.live) {
@@ -149,7 +164,7 @@ export async function exportReportCsv(
     })),
   );
 
-  const csv = toCsv(header, rows);
+  const csv = toCsv(header, rows, watermark);
 
   // An export is a bulk read of everybody's access, and the audit log should be
   // able to answer who took a copy of it.
@@ -161,11 +176,75 @@ export async function exportReportCsv(
       targetId: header.snapshotId,
       outcome: 'success',
       sourceIp: null,
-      payload: { format: 'csv', rowCount: rows.length, scope },
+      payload: {
+        format: 'csv',
+        rowCount: rows.length,
+        scope,
+        // Which export row this CSV became, so the report event and the
+        // export's own request/ready/download events join up.
+        ...(watermark['export_id'] === undefined ? {} : { exportId: watermark['export_id'] }),
+      },
     }),
   );
 
   return csv;
+}
+
+/**
+ * "Who has access to this system", filtered to the requester's Govern scope,
+ * as the CSV `exportReportCsv` writes -- the body of a `govern_access` export.
+ *
+ * THE SCOPE IS RESOLVED BY THE CALLER, AT GENERATION TIME, from the
+ * requester's roles as they stand then -- not carried from the request. A lead
+ * whose scope was narrowed between asking and the job running gets the
+ * narrower file, and the export service records which scope it was (the
+ * authority fingerprint) so the download can refuse if it has changed again.
+ *
+ * §21's rule, which the synchronous route used to apply inline: a
+ * department-scoped holder of `govern.export` exports their department, never
+ * the tenant.
+ */
+export async function governAccessCsv(
+  tenantId: string,
+  requesterId: string,
+  scope: GovernScope,
+  query: { snapshotId?: string | undefined; systemId: string; resourceId?: string | undefined },
+  watermark: Readonly<Record<string, string>>,
+): Promise<{ csv: string; rowCount: number }> {
+  const report = await whoHasAccessToSystem(tenantId, query);
+  const admitted =
+    scope.kind === 'tenant' ? 'all' : await withTenant(tenantId, (tx) => personIdsInScope(tx, scope));
+  const scoped =
+    admitted === 'all'
+      ? report
+      : {
+          ...report,
+          body: {
+            ...report.body,
+            rows: report.body.rows.filter(
+              (row) => row.personId !== null && admitted.has(row.personId),
+            ),
+          },
+        };
+  const csv = await exportReportCsv(
+    tenantId,
+    requesterId,
+    scoped,
+    {
+      ...query,
+      // The scope travels onto the audit event, so the row count and the
+      // scope agree in the record. An export of 40 rows against a scope of
+      // 12,000 people and an export of 40 rows against a scope of 40 are
+      // different acts, and the event has to be able to tell them apart.
+      scopeOrgUnitId: scope.kind === 'orgUnits' ? scope.orgUnitIds : null,
+      rowCount: scoped.body.rows.length,
+    },
+    watermark,
+  );
+  return {
+    csv,
+    rowCount: scoped.body.rows.reduce((n, row) => n + row.resources.length, 0),
+  };
 }
 
 export const BUNDLE_LIMITATIONS: readonly string[] = [

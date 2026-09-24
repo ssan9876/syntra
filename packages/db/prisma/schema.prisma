@@ -122,6 +122,20 @@ model Tenant {
   /// bug.
   brandPrimary           String?
   brandAccent            String?
+  /// A counter that goes up whenever anything a tenant's cached OIDC
+  /// `Provider` was built from changes: a client (`OidcClient` insert, update
+  /// or delete), an OIDC signing key (rotation, retirement), or a hostname
+  /// (`primaryDomain`, `additionalDomains` -- they fix the issuer).
+  ///
+  /// Bumped by database triggers (migration `replica_safe_state`), not by the
+  /// services, so it moves in the same transaction as the change on EVERY
+  /// write path -- the admin route, the catalog, a cascade, a pg-boss job in
+  /// another process, and whatever gets written next. Each API replica keeps
+  /// its own Provider cache and compares this number, which it reads with the
+  /// tenant row it already loads per request, before serving from it. That is
+  /// what makes a change made through one replica visible to every other one
+  /// on its very next request, with no broadcast channel to lose a message.
+  oidcConfigGeneration   Int      @default(0)
   createdAt              DateTime @default(now())
 
   orgUnits                  OrgUnit[]
@@ -196,6 +210,8 @@ model Tenant {
   lifecycleLegalHolds       LifecycleLegalHold[]
   externalWriteStop         TenantExternalWriteStop?
   tenantDeletionRequests    TenantDeletionRequest[]
+  dataExports               DataExport[]
+  auditSavedViews           AuditSavedView[]
   lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
@@ -531,9 +547,23 @@ model AuditEvent {
   payload     Json
   prevHash    String
   hash        String
+  /// The request or job this event happened in: the OpenTelemetry trace id when
+  /// tracing is on, otherwise a random id in the same format. A JOIN KEY into
+  /// logs and traces, not evidence -- deliberately outside `hash`, so older
+  /// events verify unchanged and a verifier needs no knowledge of it.
+  correlationId String?
 
   @@unique([tenantId, sequence])
   @@index([tenantId, occurredAt])
+  /// Audit search (migration `20261030120000_data_exports_audit_search`):
+  /// who did it, what it was done to, and the failures, newest first. The
+  /// action-prefix index uses `text_pattern_ops`, which Prisma cannot express
+  /// for a B-tree, so it lives in that migration only, as
+  /// `AuditEvent_tenantId_action_prefix_idx`.
+  @@index([tenantId, actorUserId, sequence(sort: Desc)])
+  @@index([tenantId, correlationId, sequence(sort: Desc)])
+  @@index([tenantId, targetId, sequence(sort: Desc)])
+  @@index([tenantId, outcome, sequence(sort: Desc)])
 }
 
 /// Envelope encryption: the value is sealed under a per-secret data key, which
@@ -1961,6 +1991,28 @@ model TargetSystem {
   maintenanceWindowStartMinute Int?
   maintenanceWindowDurationMinutes Int?
 
+  /// Certification-aware rollout. Which adapter release this target runs:
+  /// 'stable' (the catalog's default) or 'canary' (the newest canary
+  /// release), unless `adapterVersionPin` names an exact release. Changing
+  /// these never touches configuration, profile, rules or accounts -- the
+  /// stored intent -- only which certified code executes it.
+  adapterChannel                  String    @default("stable")
+  adapterVersionPin               String?
+  /// The last certified release this target ran before its selection last
+  /// changed; what a rollback returns to.
+  adapterRollbackVersion          String?
+  adapterSelectionChangedAt       DateTime?
+  adapterSelectionChangedByUserId String?   @db.Uuid
+  adapterSelectionReason          String?
+  /// A time-bounded, audited permission to keep writing through ONE release
+  /// past its deprecation date. Bound to the version so it cannot carry over
+  /// to another; at most 30 days, enforced by the database.
+  deprecationOverrideVersion      String?
+  deprecationOverrideReason       String?
+  deprecationOverrideAt           DateTime?
+  deprecationOverrideExpiresAt    DateTime?
+  deprecationOverrideByUserId     String?   @db.Uuid
+
   /// 'additive' | 'authoritative'. Additive is the default because an engine
   /// that silently strips what it did not grant gets switched off. Drift is
   /// reported under BOTH modes (Ruling P2).
@@ -2742,6 +2794,17 @@ model ProvisionRun {
   cancelRequestedByUserId String?   @db.Uuid
   cancelResolvedAt        DateTime?
 
+  /// The adapter release this plan was computed for. An apply refuses when
+  /// the target has since moved to a different release (a canary promotion or
+  /// a rollback): the plan's capability checks were made against this one.
+  /// Null on runs written before capability enforcement existed.
+  adapterVersion         String?
+  /// Actions the plan contains but refused -- status `refused` -- because the
+  /// exact adapter release is not certified for them or the target's
+  /// configuration does not advertise them, and the operator-readable summary.
+  capabilityRefusedCount Int     @default(0)
+  capabilityRefusal      String?
+
   actions    ProvisionAction[]
   exceptions ProvisionException[]
   drift      DriftFinding[]
@@ -2799,7 +2862,9 @@ model ProvisionAction {
   /// in production.
   sequence             Int          @default(0)
   /// 'proposed' | 'in_flight' | 'applied' | 'skipped' | 'failed'
-  /// | 'pending_retry' | 'conflict' | 'superseded'
+  /// | 'pending_retry' | 'conflict' | 'superseded' | 'refused'
+  /// (`refused`: never attempted, because the adapter release is not
+  /// certified for it or the target does not advertise it; `message` says which)
   status               String       @default("proposed")
   attempts             Int          @default(0)
   nextAttemptAt        DateTime?
@@ -4776,4 +4841,106 @@ model SodException {
   @@index([tenantId, status, endsAt])
   @@index([ruleId])
   @@index([violationId])
+}
+
+/// One fixed-window rate-limit counter, shared by every API replica.
+///
+/// `@fastify/rate-limit`'s default store is an in-process LRU, so N replicas
+/// behind a load balancer each granted the full allowance and the effective
+/// limit was N times the configured one -- the per-tenant credential ceiling
+/// included, which is the limit that is supposed to hold however many
+/// addresses (or replicas) the traffic is spread across. Postgres is the one
+/// store every replica already shares; one upsert per limited request is the
+/// whole cost (`apps/api/src/plugins/rate-limit-store.ts`).
+///
+/// Deliberately NOT tenant-scoped and without row-level security: the key
+/// already names the tenant, only the API process reads or writes it, and it
+/// is consulted before a request has proved anything -- including on routes
+/// that resolve no tenant at all (`unscoped`). Nothing in a row is anybody's
+/// data: a key, a count and a reset time.
+model RateLimitBucket {
+  /// `<route or limiter scope>|<the limiter's own key>`.
+  key     String   @id
+  hits    Int
+  /// When this window ends. A hit at or after it starts a new window.
+  resetAt DateTime
+
+  /// For the periodic sweep of windows nobody has hit since they ended.
+  @@index([resetAt])
+}
+
+/// An asynchronous, permission-checked, watermarked export.
+///
+/// The request is a row; a pg-boss job generates the file in bounded batches,
+/// seals it under a fresh data key wrapped by the deployment's master key (the
+/// vault's envelope scheme), and records the SHA-256 of the plaintext. The
+/// requester's authority is checked when the request is made, again when the
+/// job runs, and again at every download; a different authority at download
+/// than at generation refuses. The artifact expires (`expiresAt`, 1-72 hours
+/// after it is ready), can be revoked, and the ciphertext is erased at either
+/// -- the row itself stays as the history of who took what, beside the audit
+/// events that record each step.
+///
+/// `authorityFingerprint` is what the generation was allowed to see: `tenant`,
+/// or a digest of the Govern org-unit scope that filtered it. The download
+/// recomputes it; any difference is a refusal.
+model DataExport {
+  id                   String    @id @default(uuid()) @db.Uuid
+  tenantId             String    @db.Uuid
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// 'audit_log' | 'govern_access'
+  kind                 String
+  /// 'queued' | 'running' | 'ready' | 'failed' | 'revoked' | 'expired'
+  status               String    @default("queued")
+  /// The validated filters the file was requested with.
+  params               Json
+  /// 'jsonl' | 'csv'
+  format               String
+  requestedByUserId    String    @db.Uuid
+  requestedViaToken    Boolean   @default(false)
+  requestedAt          DateTime  @default(now())
+  ttlHours             Int
+  startedAt            DateTime?
+  completedAt          DateTime?
+  expiresAt            DateTime?
+  authorityFingerprint String?
+  rowCount             Int?
+  byteLength           Int?
+  /// Hex SHA-256 of the PLAINTEXT file, exactly as downloaded.
+  sha256               String?
+  filename             String?
+  contentType          String?
+  error                String?
+  ciphertext           Bytes?
+  iv                   Bytes?
+  tag                  Bytes?
+  wrappedDek           Bytes?
+  dekIv                Bytes?
+  dekTag               Bytes?
+  revokedAt            DateTime?
+  revokedByUserId      String?   @db.Uuid
+  /// When the ciphertext was erased (revocation, expiry, or failure).
+  purgedAt             DateTime?
+  downloadCount        Int       @default(0)
+  lastDownloadedAt     DateTime?
+  updatedAt            DateTime  @updatedAt
+
+  @@index([tenantId, requestedByUserId, requestedAt(sort: Desc)])
+  @@index([tenantId, status, expiresAt])
+}
+
+/// A named set of audit-search filters, private to the administrator who
+/// saved it. Filters only -- never results -- so a saved view re-runs under
+/// the reader's authority at the moment it is opened.
+model AuditSavedView {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String   @db.Uuid
+  name      String
+  filters   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, userId, name])
 }

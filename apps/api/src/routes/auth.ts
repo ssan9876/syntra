@@ -10,7 +10,7 @@ import {
   authorize,
   renewExpiredPassword,
   isAdministrator,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   recordEvent,
   endSessions,
 } from '@syntra/core';
@@ -36,7 +36,7 @@ function passwordRateLimit(app: FastifyInstance, options: AuthRouteOptions) {
         timeWindow: '1 minute',
       },
     },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'password'),
   };
 }
 
@@ -56,7 +56,7 @@ export interface AuthRouteOptions {
    * Needed to unseal a directory source's bind credential, so a password
    * change on a write-back source can reach the directory.
    */
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
 }
 
 export async function registerAuthRoutes(
@@ -64,7 +64,7 @@ export async function registerAuthRoutes(
   options: AuthRouteOptions,
 ): Promise<void> {
   const PASSWORD_RATE_LIMIT = passwordRateLimit(app, options);
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   const relyingPartyFor = async (request: FastifyRequest) => {
     const tenant = await request.db((tx) =>

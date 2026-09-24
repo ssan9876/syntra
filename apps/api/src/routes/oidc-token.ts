@@ -363,7 +363,7 @@ export async function registerOidcTokenRoutes(
       // A token request presents a credential, so both rate-limit dimensions,
       // as at every other credential-presenting route.
       config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+      onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'oidc-token'),
     },
     async (request, reply) => {
       const provider = await oidcProviderFor(request, options);
@@ -442,7 +442,7 @@ export async function registerOidcTokenRoutes(
    */
   const revocationConfig = {
     config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'oidc-revocation'),
   };
 
   app.post('/token/revocation', revocationConfig, async (request, reply) => {

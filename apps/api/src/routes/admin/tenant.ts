@@ -434,6 +434,11 @@ export async function registerAdminTenantRoutes(
       // the provider discards every cached client and re-reads the key set,
       // and this route is saved from for reasons that have nothing to do with
       // the issuer.
+      //
+      // This is the local fast path. Other replicas rebuild because the same
+      // UPDATE bumped `Tenant.oidcConfigGeneration` (a BEFORE trigger on the
+      // hostname columns), and the issuer they compute from the fresh row no
+      // longer matches the one their cached Provider was built with.
       const hostnamesMoved =
         saved.primaryDomain !== hostnamesBefore.primaryDomain ||
         saved.additionalDomains.join(',') !== hostnamesBefore.additionalDomains.join(',');
@@ -446,13 +451,13 @@ export async function registerAdminTenantRoutes(
 
 const DIGEST = z.string().regex(/^[a-f0-9]{64}$/, 'a SHA-256 digest in lowercase hex');
 
-const deletionRequestBody = z.object({
+export const deletionRequestBody = z.object({
   assessmentDigest: DIGEST,
   exportDigest: DIGEST,
   reason: z.string().trim().min(TENANT_DELETION_REASON_MIN_LENGTH).max(2000),
 });
 
-const deletionIdParam = z.object({ id: z.string().uuid() });
+export const deletionIdParam = z.object({ id: z.string().uuid() });
 
 /** The windows the console explains; the server enforces them regardless. */
 const DELETION_POLICY = {

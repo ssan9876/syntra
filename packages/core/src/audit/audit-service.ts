@@ -4,6 +4,12 @@ import { currentTenant } from '../tenant-context.js';
 import { isSecurityEvent, securityProjection } from '../notify/security-events.js';
 import { enqueueWebhooks } from '../notify/webhook-service.js';
 import { countSecurityEvent } from '../health/metrics.js';
+import { currentCorrelationId, isCorrelationId } from '@syntra/connectors';
+
+function auditCorrelationId(): string | null {
+  const id = currentCorrelationId();
+  return isCorrelationId(id) ? id : null;
+}
 
 export const GENESIS_HASH = '0'.repeat(64);
 
@@ -121,12 +127,20 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
 
   const last = await tx.auditEvent.findFirst({
     orderBy: { sequence: 'desc' },
-    select: { sequence: true, hash: true },
+    select: { sequence: true, hash: true, occurredAt: true },
   });
 
   const sequence = (last?.sequence ?? 0) + 1;
   const prevHash = last?.hash ?? GENESIS_HASH;
-  const occurredAt = new Date();
+  // NEVER EARLIER THAN THE EVENT BEFORE IT. Two API replicas whose clocks
+  // disagree by a few milliseconds would otherwise write a chain whose time
+  // runs backwards at the seams, and audit search resolves a time window to a
+  // `sequence` range (`audit-search.ts`) on the strength of time and sequence
+  // moving together. The clock is the application server's either way -- the
+  // evidence bundle says so on its cover -- so holding it at the previous
+  // event's instant claims nothing the unclamped value did not.
+  const now = new Date();
+  const occurredAt = last && last.occurredAt > now ? last.occurredAt : now;
 
   // Hashed AND written, so the digest is taken over exactly the bytes the
   // database ends up holding. Rejecting an awkward value at the door would be
@@ -158,6 +172,11 @@ export async function recordEvent(tx: TenantClient, input: AuditInput) {
       payload: payload as never,
       prevHash,
       hash,
+      // Outside the hash on purpose -- see the column's migration. Null outside
+      // a request or job, and when the id in scope is not well formed (the
+      // database CHECK would refuse it, and an audit write must not fail for
+      // the sake of a telemetry join key).
+      correlationId: auditCorrelationId(),
     },
   });
 
@@ -284,10 +303,13 @@ export async function listEvents(
     limit?: number | undefined;
     before?: number | undefined;
     subjectIds?: string[] | undefined;
+    /** Every event recorded in one request or job -- see `correlationId`. */
+    correlationId?: string | undefined;
   } = {},
 ) {
   const where: Record<string, unknown> = {};
   if (opts.before) where['sequence'] = { lt: opts.before };
+  if (opts.correlationId) where['correlationId'] = opts.correlationId;
   if (opts.subjectIds) {
     where['OR'] = [
       { targetId: { in: opts.subjectIds } },

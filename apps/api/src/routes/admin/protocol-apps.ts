@@ -24,7 +24,7 @@ import {
   findSamlConfigByEntityId,
   findSamlConfigForApplication,
   listClaimMappings,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   recordEvent,
   upsertOidcClient,
   upsertSamlConfig,
@@ -40,10 +40,14 @@ export interface AdminProtocolRouteOptions {
   /** From `OUTBOUND_ALLOW_PRIVATE`. See Task 2. */
   outboundAllowPrivate: boolean;
   /** Wraps the SAML signing key established when a configuration is written. */
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   /** Where this deployment answers. Never the Host header. */
   publicUrl: string;
 }
+
+/** Exported for the OpenAPI description (`protocol-apps.openapi.ts`). */
+export const claimParams = z.object({ id: z.string().uuid(), claimId: z.string().uuid() });
+export const applyClaimSetRequest = z.object({ setId: z.string().uuid() });
 
 export async function registerAdminProtocolRoutes(
   app: FastifyInstance,
@@ -54,7 +58,7 @@ export async function registerAdminProtocolRoutes(
   const manage = { preHandler: requirePermission(PERMISSIONS.ACCESS_MANAGE) };
   const read = { preHandler: requirePermission(PERMISSIONS.ACCESS_READ) };
 
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   /**
    * Makes sure this tenant has a SAML signing key, before the transaction.
@@ -78,8 +82,6 @@ export async function registerAdminProtocolRoutes(
     const identity = tenantProtocolIdentity({ primaryDomain }, options.publicUrl);
     await ensureActiveKey(tenantId, provider, 'saml', { commonName: identity.acsHost });
   };
-
-  const claimParams = z.object({ id: z.string().uuid(), claimId: z.string().uuid() });
 
   const requireApplication = async (
     request: FastifyRequest,
@@ -327,8 +329,10 @@ export async function registerAdminProtocolRoutes(
       return saved;
     });
 
-    // The Provider loaded this tenant's clients once, at construction. Without
-    // this the new redirect URI is invisible until the process restarts.
+    // The Provider loaded this tenant's clients once, at construction. The
+    // write above already bumped `oidcConfigGeneration` (a trigger on
+    // `OidcClient`), which is what every OTHER replica rebuilds on; this only
+    // saves this one the comparison.
     invalidateProvider(request.tenantId);
 
     // The secret is in this response and in no other, ever.
@@ -381,7 +385,7 @@ export async function registerAdminProtocolRoutes(
    */
   app.post('/applications/:id/claims/apply-set', manage, async (request) => {
     const { id } = idParam.parse(request.params);
-    const { setId } = z.object({ setId: z.string().uuid() }).parse(request.body);
+    const { setId } = applyClaimSetRequest.parse(request.body);
 
     return request
       .db((tx) => applyClaimMappingSet(tx, id, setId))

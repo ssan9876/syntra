@@ -8,7 +8,7 @@ import {
   findUpstreamBySlug,
   linkOrProvision,
   loadPolicy,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   mapClaims,
   newBrowserBinding,
   openFederationRequest,
@@ -48,7 +48,7 @@ import { clientFacts } from '../plugins/client-facts.js';
 
 export interface FederationRouteOptions {
   publicUrl: string;
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   authRateLimitMax: number;
   authRateLimitTenantMax: number;
   /** From `OUTBOUND_ALLOW_PRIVATE`. See Task 2. */
@@ -203,9 +203,9 @@ export async function registerFederationRoutes(
 
   const rateLimited = {
     config: { rateLimit: { max: options.authRateLimitMax, timeWindow: '1 minute' } },
-    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax),
+    onRequest: perTenantRateLimit(app, options.authRateLimitTenantMax, 'federation'),
   };
-  const keyProvider = () => localMasterKeyProvider(options.masterKey);
+  const keyProvider = () => options.keyProvider;
 
   /**
    * Syntra's service-provider identity for an upstream.

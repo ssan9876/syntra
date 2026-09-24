@@ -9,6 +9,7 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
     "ipaddr.js": "^2.2.0",
     "ldapts": "^9.0.0",
     "ssh2": "^1.16.0",

@@ -7,7 +7,7 @@ import {
   installEmailOtpVerifier,
   installTotpVerifier,
   installWebAuthnVerifier,
-  localMasterKeyProvider,
+  masterKeyProviderFor,
   onSigningKeysChanged,
   readiness,
   redactReport,
@@ -20,6 +20,11 @@ import { registerProblemJson } from './plugins/problem-json.js';
 import { registerWebApp } from './plugins/web-app.js';
 import { registerSecurityHeaders } from './plugins/security-headers.js';
 import { tenantAndIpKey } from './plugins/rate-limit.js';
+import {
+  postgresRateLimitCounter,
+  sharedRateLimitStore,
+  startRateLimitSweeper,
+} from './plugins/rate-limit-store.js';
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerEnrolRoutes } from './routes/enrol.js';
 import { registerPasswordResetRoutes } from './routes/password-reset.js';
@@ -41,6 +46,7 @@ import { registerEmployeeLifecycleRoutes } from './routes/admin/employee-lifecyc
 import { registerAdminPersonReceiptRoutes } from './routes/admin/person-receipts.js';
 import { registerAdminLifecycleOperationRoutes } from './routes/admin/lifecycle-operations.js';
 import { registerAdminAuditRoutes } from './routes/admin/audit.js';
+import { registerAdminExportRoutes } from './routes/admin/exports.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
@@ -67,7 +73,18 @@ import { registerOidcTokenRoutes } from './routes/oidc-token.js';
 import { registerOidcLogoutRoutes } from './routes/oidc-logout.js';
 import { registerFederationRoutes } from './routes/federation.js';
 import { invalidateProvider } from '@syntra/protocols';
-import { serializeRequest } from './request-logging.js';
+import { captureRouteCatalog, type CatalogRoute } from './openapi/route-catalog.js';
+import { registerOpenApiRoute } from './openapi/route.js';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** Every route this app registered. See openapi/route-catalog.ts. */
+    routeCatalog: CatalogRoute[];
+  }
+}
+
+import { loggerOptions, type LogStream } from './logging.js';
+import { registerTracing } from './plugins/tracing.js';
 
 export interface AppOptions {
   logger?: boolean;
@@ -91,6 +108,11 @@ export interface AppOptions {
    * relying on MailDev happening to be the thing listening on port 1025.
    */
   transport?: Transport;
+  /**
+   * Where log lines are written. Defaults to stdout; the redaction tests pass
+   * a collector so they assert on what the REAL application logger emits.
+   */
+  logStream?: LogStream;
 }
 
 /**
@@ -105,10 +127,9 @@ export async function buildApp(
   options: AppOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: options.logger === false ? false : {
-      level: process.env.LOG_LEVEL ?? 'info',
-      serializers: { req: serializeRequest },
-    },
+    // One logger configuration for the process -- redaction, the error
+    // serializer and the correlation mixin all live in `logging.ts`.
+    logger: options.logger === false ? false : loggerOptions({ stream: options.logStream }),
     // Which proxies may be believed about a request's source address. Off
     // unless TRUST_PROXY says otherwise, and never a bare `true` — see the
     // variable's own documentation in config.ts. request.ip feeds both the
@@ -134,8 +155,27 @@ export async function buildApp(
     }),
   });
 
+  // THE ROUTE TABLE, recorded as it is built. First, before any plugin can
+  // register a route, because an `onRoute` hook only sees routes declared
+  // after it. It is what the published OpenAPI description is derived from
+  // (see openapi/document.ts) and what the coverage test asserts over, so a
+  // route cannot exist without the document at least knowing it does.
+  const routeCatalog = captureRouteCatalog(app);
+  app.decorate('routeCatalog', routeCatalog);
+
+  // First, so every later hook and handler runs with a correlation id and,
+  // when tracing is on, inside the request's span.
+  registerTracing(app);
+
   // Read once, from configuration, and available wherever a cookie is written.
   app.decorate('cookieSecure', config.cookieSecure);
+
+  // THE master-key provider, built once and handed to every route that seals
+  // or unseals: one unwrap cache and one Vault token per process rather than
+  // one per route, and one place that decides which provider wraps
+  // (MASTER_KEY_PROVIDER, see `vault/key-management.ts`). The scheduler asks
+  // for the same config and gets this same instance.
+  const keyProvider = masterKeyProviderFor(config);
 
   await app.register(cookie, { secret: config.sessionSecret });
   // Off by default; applied per route, since a blanket limit would throttle
@@ -146,10 +186,26 @@ export async function buildApp(
   // traffic — or one tenant's attacker — spend everybody else's allowance.
   // The per-tenant ceiling that has to hold across many addresses is a second
   // limit, applied alongside this one at each credential-presenting route.
+  //
+  // Counted in Postgres by default (RATE_LIMIT_STORE), so every replica spends
+  // the same allowance: the in-memory store granted each replica the whole of
+  // it, which made every limit here N times too generous at N replicas. See
+  // `plugins/rate-limit-store.ts`. A store error fails the request rather
+  // than waving it through -- a limiter that cannot count grants nothing --
+  // except where a route opts out (`/health/ready`, below).
   await app.register(rateLimit, {
     global: false,
     keyGenerator: tenantAndIpKey,
+    ...(config.rateLimitStore === 'postgres'
+      ? { store: sharedRateLimitStore(postgresRateLimitCounter) }
+      : {}),
   });
+  if (config.rateLimitStore === 'postgres') {
+    const stopSweeper = startRateLimitSweeper(postgresRateLimitCounter, (error) =>
+      app.log.warn({ err: error }, 'rate-limit sweep failed'),
+    );
+    app.addHook('onClose', async () => stopSweeper());
+  }
 
   // The built application, where one is configured. Registered FIRST, because
   // both of the plugins below take a piece of it: the not-found handler that
@@ -184,7 +240,7 @@ export async function buildApp(
     isReady: async () =>
       (
         await readiness({
-          provider: localMasterKeyProvider(config.masterKey),
+          provider: keyProvider,
           webRoot: config.webRoot ?? undefined,
           version: buildInfo().version,
         })
@@ -213,11 +269,16 @@ export async function buildApp(
       // release and again for the rollback, which can land inside the same
       // one-minute window. Keyed per address, so the updater on loopback and
       // a container orchestrator's probe do not share a bucket with anybody.
-      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+      //
+      // `skipOnError`: the limiter's counters live in Postgres, and this is
+      // the route whose job is to REPORT that Postgres is unreachable -- with
+      // a 503 and the failing probe named. Failing closed here would turn that
+      // into a bare 500 from the limiter and hide the diagnosis.
+      config: { rateLimit: { max: 60, timeWindow: '1 minute', skipOnError: true } },
     },
     async (request, reply) => {
       const report = await readiness({
-        provider: localMasterKeyProvider(config.masterKey),
+        provider: keyProvider,
         webRoot: config.webRoot ?? undefined,
         version: buildInfo().version,
       });
@@ -237,6 +298,11 @@ export async function buildApp(
     },
   );
 
+  // The OpenAPI description of the administration API. Unauthenticated and
+  // outside tenant resolution (see UNSCOPED_PATHS): it describes the product,
+  // not any tenant, and an integrator generating a client has no session yet.
+  registerOpenApiRoute(app, routeCatalog);
+
   // Before the auth routes and outside every session guard: this is what the
   // sign-in page reads in order to render itself.
   await app.register(registerBrandingRoutes, { prefix: '/api/branding' });
@@ -246,7 +312,7 @@ export async function buildApp(
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
     publicUrl: config.publicUrl,
-    masterKey: config.masterKey,
+    keyProvider,
   });
 
   // Factor verifiers are installed once per process, before any route can ask
@@ -257,7 +323,7 @@ export async function buildApp(
   // None of them takes a relying party. It arrives per request on
   // AuthorizeRequest, which is why there is no ambient store here and why a
   // background job that has no relying party cannot compile.
-  installTotpVerifier(localMasterKeyProvider(config.masterKey));
+  installTotpVerifier(keyProvider);
   // No master key: an email code has no secret to seal. Whether a tenant may
   // offer it at all is `Tenant.emailOtpEnabled`, checked where a tenant is in
   // scope — registering the verifier only says this deployment can.
@@ -271,6 +337,12 @@ export async function buildApp(
   // the old key is retired and unpublished, until somebody restarts the
   // process. `@syntra/core` cannot call `invalidateProvider` itself (the
   // package dependency runs the other way), so it announces and this listens.
+  //
+  // That listener only reaches THIS process, and a rotation usually runs in
+  // the worker. What keeps every replica correct is the tenant's
+  // `oidcConfigGeneration`, bumped by a trigger in the rotation's own
+  // transaction and compared on every request (`provider-factory.ts`). The
+  // listener stays as a free local fast path.
   onSigningKeysChanged(invalidateProviderOnKeyChange);
 
   // One transport instance, shared by both routers below: the "a factor was
@@ -280,7 +352,7 @@ export async function buildApp(
 
   await app.register(registerMfaRoutes, {
     prefix: '/api/auth/mfa',
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
@@ -290,7 +362,7 @@ export async function buildApp(
 
   await app.register(registerEnrolRoutes, {
     prefix: '/api/auth/enrol',
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
@@ -314,7 +386,7 @@ export async function buildApp(
   await app.register(registerAdminTenantRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminWebhookRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     outboundAllowPrivate: config.outboundAllowPrivate,
   });
   await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
@@ -324,7 +396,7 @@ export async function buildApp(
   });
   await app.register(registerAdminUserRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
@@ -344,14 +416,14 @@ export async function buildApp(
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   });
   await app.register(registerAdminGroupRoutes, { prefix: '/api/admin' });
-  // `masterKey`, because deleting a source-owned unit unseals that source's
+  // `keyProvider`, because deleting a source-owned unit unseals that source's
   // bind credential to remove the container from the directory first.
   await app.register(registerAdminOrgUnitRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
   });
   await app.register(registerAdminPersonRoutes, { prefix: '/api/admin' });
-  await app.register(registerEmployeeLifecycleRoutes, { prefix: '/api/admin', masterKey: config.masterKey, publicUrl: config.publicUrl, ...(options.scheduler ? { scheduler: options.scheduler } : {}) });
+  await app.register(registerEmployeeLifecycleRoutes, { prefix: '/api/admin', keyProvider, publicUrl: config.publicUrl, ...(options.scheduler ? { scheduler: options.scheduler } : {}) });
   await app.register(registerAdminPersonReceiptRoutes, {
     prefix: '/api/admin',
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
@@ -362,6 +434,13 @@ export async function buildApp(
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminAuditRoutes, { prefix: '/api/admin' });
+  // The export center. The key provider opens what the export job sealed
+  // with it; the scheduler is how a request becomes a background job.
+  await app.register(registerAdminExportRoutes, {
+    prefix: '/api/admin',
+    keyProvider,
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
   await app.register(registerAdminUpdateRoutes, {
     prefix: '/api/admin',
     releaseRepo: config.releaseRepo,
@@ -371,12 +450,12 @@ export async function buildApp(
   });
   await app.register(registerAdminSourceRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminPersonSourceRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminSyncRunRoutes, { prefix: '/api/admin' });
@@ -385,7 +464,7 @@ export async function buildApp(
     // Both needed by the catalog route, which has to establish the tenant's
     // SAML signing key before it writes a `SamlConfig` — see the comment
     // there.
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
   });
   await app.register(registerAdminPolicyRoutes, {
@@ -399,12 +478,12 @@ export async function buildApp(
   await app.register(registerAdminProtocolRoutes, {
     prefix: '/api/admin',
     outboundAllowPrivate: config.outboundAllowPrivate,
-    masterKey: config.masterKey,
+    keyProvider,
     publicUrl: config.publicUrl,
   });
   await app.register(registerAdminUpstreamRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
   });
 
   // Provisioning. Registered AFTER `registerAdminPersonRoutes` so
@@ -417,7 +496,7 @@ export async function buildApp(
   // SMTP in production.
   await app.register(registerAdminTargetRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     authRateLimitMax: config.authRateLimitMax,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
@@ -439,7 +518,7 @@ export async function buildApp(
   await app.register(registerAdminRuleRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminProvisionRunRoutes, {
     prefix: '/api/admin',
-    masterKey: config.masterKey,
+    keyProvider,
     transport,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
@@ -483,7 +562,7 @@ export async function buildApp(
   await app.register(registerSamlIdpRoutes, {
     prefix: '/saml',
     publicUrl: config.publicUrl,
-    masterKey: config.masterKey,
+    keyProvider,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   });
@@ -494,7 +573,7 @@ export async function buildApp(
   await app.register(registerFederationRoutes, {
     prefix: '/federation',
     publicUrl: config.publicUrl,
-    masterKey: config.masterKey,
+    keyProvider,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
     outboundAllowPrivate: config.outboundAllowPrivate,
@@ -502,7 +581,7 @@ export async function buildApp(
 
   const oidcOptions = {
     publicUrl: config.publicUrl,
-    masterKey: config.masterKey,
+    keyProvider,
     sessionSecret: config.sessionSecret,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,

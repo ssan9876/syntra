@@ -13,7 +13,7 @@ import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
 
-const tokenParams = z.object({
+export const tokenParams = z.object({
   id: z.string().uuid(),
   tokenId: z.string().uuid(),
 });

@@ -155,16 +155,26 @@ is not a step toward it.
 The Helm chart in [`deploy/helm/syntra`](../deploy/helm/syntra/README.md)
 is the Kubernetes path. It runs the migration as a pre-upgrade hook and the
 pods on read-only root filesystems. Ingress, NetworkPolicy, PodDisruptionBudget,
-autoscaling, a ServiceMonitor and a PrometheusRule are optional. Before you
-run more than one API replica, read the chart README's section
-[Running more than one API replica](../deploy/helm/syntra/README.md#running-more-than-one-api-replica).
-In short:
+autoscaling, a ServiceMonitor and a PrometheusRule are optional. The chart
+runs two API replicas by default, and any number is correct. The chart
+README's section
+[Running more than one API replica](../deploy/helm/syntra/README.md#running-more-than-one-api-replica)
+has the details. In short:
 
 - pg-boss, sessions, OIDC artefacts, challenges and lockout are shared
   through Postgres.
-- Each process keeps its own OIDC provider cache, which holds clients,
-  issuer and signing keys.
-- Each process keeps its own rate-limit counters.
+- Each process caches its OIDC providers, but checks each one against the
+  tenant's `oidcConfigGeneration` on every request. Database triggers bump
+  that counter in the same transaction as any OIDC client, OIDC signing-key
+  or tenant-hostname change. A change made on one replica, or by the
+  key-rotation job, therefore reaches every replica on its next request. No
+  restart is needed, and it works behind PgBouncer transaction pooling
+  because it does not use `LISTEN/NOTIFY`.
+- Rate-limit counters are shared in Postgres (`RATE_LIMIT_STORE=postgres`,
+  the default). `AUTH_RATE_LIMIT_MAX` and `AUTH_RATE_LIMIT_TENANT_MAX` are
+  deployment-wide limits whatever the replica count.
+  `RATE_LIMIT_STORE=memory` keeps per-process counters and is only correct
+  for a single process.
 
 Syntra has no state of its own outside Postgres, `MASTER_KEY` and
 `SESSION_SECRET`. Availability therefore depends almost entirely on the
@@ -378,6 +388,105 @@ table involved is under row-level security and the application role has no
 They are cached for ten seconds, so a scrape every fifteen seconds pays for
 them once and a misconfigured scraper cannot multiply the load on the database
 it is trying to observe.
+
+## Observability
+
+Three channels leave the process: **logs** (JSON on stdout), **traces**
+(optional OpenTelemetry, see [configuration](configure.md#tracing-opentelemetry))
+and **metrics** (above). One **correlation id** ties them to the audit log.
+
+### Correlation ids
+
+Every HTTP request and every background job runs under a 32-character hex
+correlation id. It is:
+
+- returned on every response as `x-correlation-id` — the thing to ask a user
+  for when they report an error;
+- on every log line written during that request or job, as `correlationId`;
+- on every audit event recorded during it, in the `correlationId` column, and
+  searchable with `GET /api/admin/audit?correlation=<id>`;
+- carried through pg-boss job payloads (under `_syntraTrace`, stripped before
+  a handler sees the payload), so work a request queues — and work *that*
+  job queues — shares the id. An HR import, the provisioning run it causes
+  and the connector calls that run makes are one id end to end.
+
+A job with no originating request (a cron-scheduled sync or import) starts a
+fresh id. With tracing on, the correlation id **is** the trace id, so an id
+from an audit event or a log line pastes straight into the tracing backend.
+
+The audit column is a join key, not evidence: it is outside the hash chain
+(so every chain written before it existed still verifies), immutable after
+insert like the rest of the row, and held to the 32-hex format by a database
+constraint. With tracing on, a caller may choose its own trace id by sending
+`traceparent` — standard behaviour, and harmless for a join key; with tracing
+off the id is always minted by the server.
+
+### Following one import through
+
+1. Take the `x-correlation-id` from the response that started it, or the
+   `correlationId` of its `person_import.*` audit event.
+2. `GET /api/admin/audit?correlation=<id>` lists every audit event of the
+   import, the provisioning run it enqueued and that run's actions.
+3. `grep '"correlationId":"<id>"'` over the logs shows the same work,
+   including errors that were logged but not audited.
+4. With tracing on, search the trace id in the backend: the request span,
+   `job personSource.run`, `job provision.person` or `job provision.run`,
+   `connector.<type>.<method>`
+   and `HTTP POST` spans form one tree.
+
+### What is traced (when enabled)
+
+| Span | Carries |
+|---|---|
+| `METHOD /route/:pattern` (server) | method, route **pattern**, status, tenant id |
+| `job <queue>` (consumer) | queue, job id, retry count, tenant id; parent is whatever enqueued it |
+| `connector.<type>.<method>` (client) | connector family and operation, records read for a streaming read |
+| `HTTP <METHOD>` (client, every `guardedFetch` call) | method, scheme, host, port, status |
+| `prisma:*` (only with `SYNTRA_OTEL_DATABASE=true`) | model, operation, parameterised SQL |
+
+Never on a span: URLs' paths or queries (a SCIM filter or a Graph path names
+the person), headers, bodies, client addresses, user agents, connector
+arguments (configs carry credentials, records carry people), or raw exception
+messages and stacks. A failure is recorded as its type, its code and a
+scrubbed message; `recordException` is not used. `traceparent` is **not**
+forwarded to connector targets — they are third parties, and the span tree
+already provides the correlation. pg-boss's own polling queries and raw `pg`
+calls are not traced.
+
+### What logs never contain
+
+One logger configuration serves the API and every background job
+(`apps/api/src/logging.ts`), and one rule set
+(`packages/connectors/src/observability/redact.ts`) decides what is a secret
+and what is personal, for logs and span attributes alike:
+
+- **Errors** keep type, code, status, a scrubbed message and stack, and the
+  cause chain. The request an HTTP client error carries (`config`,
+  `request`, `response`) is reduced to method, URL without query, and status
+  — so `Authorization`, cookies and request bodies never reach the output.
+- **Secret keys** — passwords, tokens, cookies, authorization headers, client
+  secrets, private keys, SAML assertions, vault plaintext, TOTP secrets,
+  recovery codes — are replaced wherever they appear, whatever the casing.
+- **Personal keys** — email, names, UPN, phone, DN, employee id, account
+  names, whole person records and attribute bags — are replaced too.
+- **Free text** is scrubbed of bearer tokens, JWTs, PEM blocks, SAML XML, URL
+  credentials, query strings, `password=`-style pairs, DN values and email
+  addresses.
+- **Size** is bounded: depth 6, 50 entries per object or array, 1,000
+  characters per string (4,000 for a stack).
+
+Kept deliberately: tenant ids and other UUIDs (an incident cannot be scoped
+without them), hosts and ports, error codes, and the client address on
+request log lines — it is the evidence a credential-stuffing investigation
+starts from, and the audit log records it for the same reason. Log retention
+is therefore the deployment's personal-data retention for client addresses;
+set it accordingly.
+
+Metrics labels carry no redaction pass at all, so their safety is
+structural: a closed set of label names (`method`, `route`, `status`,
+`kind`, `quantile`, `target_type`, `action`, `outcome`, `version`), each
+holding a bounded vocabulary, enforced by a test that fails when a new label
+appears.
 
 ## What a session records about a person
 
@@ -643,6 +752,121 @@ Two operational notes:
   as before; if a cancellation was waiting on one, adoption records it as
   `cancelled` rather than `failed` or `partially_applied`, after resolving any
   `in_flight` actions against the target.
+
+## Exports
+
+Bulk copies of tenant data leave through one service. An export is requested,
+generated by a background job, sealed at rest, watermarked, downloaded by the
+person who asked for it, and then erased. The console shows every export under
+**Activity → Exports** (`/admin/exports` redirects there), and the requests are
+made from the screens that hold the data: **Export these results** on the
+audit search, **Export as CSV** on a Governance access report.
+
+| Kind | What it is | Needs | Format |
+| --- | --- | --- | --- |
+| `audit_log` | The audit log, filtered exactly as the search is. | `audit.read` | JSON Lines |
+| `govern_access` | "Who has access to this system", limited to the requester's Govern org-unit scope. | `govern.read` (any scope) and `govern.export` | CSV |
+
+The API is `POST /api/admin/exports` (`{ kind, params, ttlHours }`, answering
+`202` with the export row), `GET /api/admin/exports` (your own;
+`?scope=all` for `tenant.manage`), `GET /api/admin/exports/:id`,
+`GET /api/admin/exports/:id/download` and `POST /api/admin/exports/:id/revoke`.
+`POST /api/admin/govern/exports/csv` still exists with the same body and
+guard; it now queues a `govern_access` export and answers `202` instead of
+returning the CSV inline. A machine token needs every permission of the kind
+among its own scopes, as on every other route.
+
+What each step checks:
+
+- **Request.** The requester's authority for the kind. A refusal is audited
+  (`export.request`, outcome `failure`); an accepted request is audited with
+  its filters and lifetime.
+- **Generation** (`exports.generate` job). The authority is checked again, as
+  it stands when the job runs, so a role removed while the job waited stops the
+  export (`export.fail`, reason `forbidden`). A `govern_access` export is
+  filtered to the requester's scope at this moment. The audit log is read in
+  keyset batches of 1,000 and stops at the log's head as it stood when
+  generation began. Every file carries a watermark — export id, tenant, the
+  requesting user and the generation time — as the first JSON Lines record, or
+  as the leading columns of every CSV row so it survives sorting and pasting.
+  An audit export ends with a record carrying the event count, so a truncated
+  file is recognisable. The SHA-256 of the plaintext is recorded; the file is
+  sealed with the vault's envelope scheme (a fresh AES-256-GCM data key wrapped
+  by `MASTER_KEY`) and stored in the `DataExport` row. Nothing is written to
+  disk. A file over **64 MiB** fails with a message asking for narrower filters
+  rather than being truncated.
+- **Download.** Only the requester, only while `ready` and unexpired, only if
+  they still hold the permission, and only if their authority is the one the
+  file was generated under — a Govern export made for one department is refused
+  (`403 export-authority-changed`) to somebody whose scope has since changed,
+  either way. The digest is verified after decryption and sent as
+  `x-syntra-export-sha256`, with `cache-control: no-store`. Every download and
+  every refusal is audited (`export.download`).
+- **Expiry.** 24 hours after the file is ready by default; a request may ask
+  for 1–72 hours, and the database refuses anything else. A download past the
+  expiry is refused at once (`410`); the `exports.sweep` job, every 15 minutes
+  per tenant, erases the ciphertext and records `export.expire`. It also fails
+  an export no worker finished within two hours.
+- **Revocation.** The requester, or anybody holding `tenant.manage`, can revoke
+  a queued, running or ready export. The ciphertext is erased in the same
+  transaction and a revoked job never stores what it built (`export.revoke`).
+
+The `DataExport` row outlives its file — with the digest, row count, size,
+download count and who revoked it — as the record of who took what. A database
+constraint refuses a failed, revoked or expired row that still holds
+ciphertext, and a ready row without every part a download needs.
+
+Two operational notes:
+
+- **Master-key rotation** re-wraps the vault's `Secret` rows only. An export
+  sealed before a rotation cannot be opened afterwards; it expires within its
+  72-hour bound. Request it again after rotating.
+- **Kept synchronous, and why.** The tenant offboarding export
+  (`POST /tenant/offboarding/export`) stays inline: it is bound to the
+  deletion flow's data-revision digest and returned once to a `tenant.manage`
+  holder who must keep it outside the system. Evidence bundles
+  (`GET /govern/evidence/:id`) are rebuilt from their recorded range and are
+  the signed artifact itself. `GET /audit` is bounded at 200 events a page.
+
+## Audit search
+
+`GET /api/admin/audit` filters on the server: `actor` (user id), `action`
+(a prefix — `auth.` is every authentication event), `target` (target id),
+`targetType`, `outcome`, `from` (inclusive) and `to` (exclusive), and
+`subject` (repeatable; done by or to any of the ids). Pages are at most 200
+events, newest first, and are keyset-paged on the chain's own `sequence`:
+the response's `nextBefore` is the `before` of the next page, or `null` when
+there is none. There is no total, deliberately — counting a log that grows for
+ever is the cost this avoids. The audit log records no correlation or request
+id, so there is no filter for one; the subject filter follows a person or an
+object through everything done by it and to it.
+
+Saved searches (`GET`/`PUT /api/admin/audit/views`,
+`DELETE /api/admin/audit/views/:id`) are filters only, private to the
+administrator who saved them, at most 50 each; opening one re-runs the search
+under the reader's current authority. **Export these results** hands the same
+filters to an `audit_log` export.
+
+Every filter has an index that leads with the tenant and ends with `sequence`
+(migration `20261030120000_data_exports_audit_search`), and a time window is
+resolved to the sequence range it covers. `recordEvent` now never records an
+event earlier than the one before it, so time and sequence move together even
+across API replicas whose clocks disagree; events recorded before this release
+by such a deployment may sit a few milliseconds out of order at a window's
+edge. The migration builds its four `AuditEvent` indexes with plain
+`CREATE INDEX`, which blocks audited writes while each builds. On a very large
+log, create them first with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` under the
+same names (see the migration file); the migration then skips them.
+
+The query plans at 100,000 events are asserted by
+`packages/core/src/audit/audit-search.test.ts` on every run; see
+[Scale validation](runbooks/scale-validation.md) for the recorded figures.
+
+A known limit: every page still carries a full chain verification
+(`verifyChain`), which reads the tenant's whole log. The search itself is
+bounded; that check is not, and on a log of millions of events it is what a
+page's latency is made of. Moving the page onto the checkpointed, incremental
+verification Govern already runs nightly is the follow-up.
 
 ## Continuous integration
 

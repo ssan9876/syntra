@@ -16,7 +16,7 @@ import {
   listOrgUnits,
   materialiseOrgUnit,
   unmaterialiseOrgUnit,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   reactivateOrgUnit,
   recordEvent,
   wouldCycle,
@@ -27,17 +27,17 @@ import { requirePermission } from '../../plugins/require-permission.js';
 
 export interface AdminOrgUnitRouteOptions {
   /** Unseals a directory source's bind credential for a write-back delete. */
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
 }
 
-const targetParam = z.object({ targetSystemId: z.string().uuid() });
+export const targetParam = z.object({ targetSystemId: z.string().uuid() });
 
 export async function registerAdminOrgUnitRoutes(
   app: FastifyInstance,
   options: AdminOrgUnitRouteOptions,
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   app.get(
     '/org-units',

@@ -84,6 +84,12 @@ is retained; merged code alone is not enough.
     identities.
 18. **Build — Capability enforcement.** Refuse plans that request capabilities
     not certified for the exact adapter version and target configuration.
+    **Implemented:** catalog releases carry a per-version certified-capability
+    list; every planned connector action is checked against it and against the
+    target's advertised capabilities at preview and again at apply. Refused
+    actions stay visible in the plan with status `refused` and a reason, the
+    run records the adapter version and a refusal summary, and nothing refused
+    is attempted. See `docs/connectors/certification-and-rollout.md`.
 19. **Build — Connector health history.** Chart authentication failures,
     throttling, latency, retries, ambiguous writes, and read-back completeness
     per target and adapter version.
@@ -135,6 +141,14 @@ is retained; merged code alone is not enough.
     post-event review.
 33. **Build — Certification-aware rollout.** Canary new connector versions by
     target and support immediate rollback without changing stored intent.
+    **Implemented:** per-target channel (`stable`/`canary`) and exact-version
+    pin, a recorded certified rollback point, and an audited, permission-checked
+    rollback that changes only the adapter selection; a run previewed under a
+    different release refuses to apply. Deprecated or uncertified releases are
+    readiness warnings; past the deprecation date new writes stop unless an
+    audited, version-bound override of at most 30 days is active. Target-page
+    console panel. Only one release per adapter ships today, so a real canary
+    still needs a second implementation registered in the connector registry.
 34. **Build — Credential lifecycle.** Expiry discovery, advance alerts,
     rotation workflow, dual-secret overlap, verification, revocation, and
     evidence for every connector type.
@@ -177,9 +191,26 @@ is retained; merged code alone is not enough.
 47. **Build — Key-management integration.** Support a selected KMS/HSM or
     external secret provider with envelope encryption, key versioning, access
     logs, and tested revocation.
+    *Built (2026-09-23): `MASTER_KEY_PROVIDER=local|vault-transit|aws-kms`,
+    validated at boot, with tenant-bound data keys, a bounded unwrap cache
+    with documented outage behaviour, a `key-management` readiness probe, and
+    `pnpm rekey` for local-to-KMS migration and rotation. Revocation (token
+    revoke, `min_decryption_version`, disabled KMS key) is tested against a
+    real Vault dev server and an in-memory KMS; access logs are the KMS's own
+    (configure.md, "Who logs what"). Remaining: choosing the organisation's
+    provider, a staging drill against it (#12), a LocalStack/real-AWS test,
+    and Azure Key Vault.*
 48. **Build — Secure export service.** Permission recheck at execution and
     download, asynchronous generation, encryption, watermark, expiry,
-    revocation, and full audit history.
+    revocation, and full audit history. *Engineering slice done:* one
+    asynchronous service for the audit log and the Governance access report —
+    authority checked at request, at generation and at download (including a
+    changed Govern scope), batched generation, envelope-sealed storage with a
+    SHA-256 digest, a per-export watermark, a 1–72 hour expiry with a sweep,
+    revocation, and an audit event for every step
+    ([Operate, Exports](operate.md#exports)). Remaining: the security
+    notification group for export creation (#52), an external object store for
+    files beyond 64 MiB, and moving the remaining synchronous reports.
 49. **Operate — Dependency governance.** Automated updates, supported-runtime
     policy, license inventory, vulnerability SLA, exception owner, and expiry.
 50. **Operate — Secure development evidence.** Protected branches, required
@@ -202,9 +233,30 @@ is retained; merged code alone is not enough.
 55. **Build — End-to-end tracing.** Correlate HR event, operation, job,
     connector request, observation, notification, and audit event without
     logging secrets or excess personal data.
+    **Implemented:** every request and job runs under a correlation id that is
+    returned as `x-correlation-id`, stamped on every log line, carried through
+    pg-boss payloads across job hops, and recorded on audit events
+    (`AuditEvent.correlationId`, outside the hash chain, format-constrained,
+    filterable). Optional OpenTelemetry (off unless
+    `OTEL_EXPORTER_OTLP_ENDPOINT` is set; not loaded when off) traces HTTP
+    requests, job execution parented on the enqueuer, connector operations,
+    outbound `guardedFetch` calls and, opt-in, Prisma; span attributes pass
+    the same redaction rules. Remaining: webhook/notification delivery is
+    correlated through its job but has no dedicated span, and raw `pg` and
+    pg-boss polling queries are not traced.
 56. **Build — Structured redaction.** Centralize safe error serialization and
     test logs, traces, metrics labels, exports, and support bundles for secret
     and personal-data leakage.
+    **Implemented for logs, traces and metrics labels:** one rule set and one
+    application logger (safe error serializer, redacting formatter, message
+    scrubbing, pino `redact` paths) with tests that push connector errors
+    carrying `Authorization` headers, LDAP bind errors with DN and password,
+    and person/vault/MFA context through the real logger and a real span
+    exporter and assert nothing sensitive survives; metrics labels are pinned
+    to a closed set. Remaining: exports and support bundles are not yet routed
+    through the shared rules (the offboarding export excludes secrets by
+    construction), and client addresses are deliberately kept on request log
+    lines.
 57. **Build — Queue recovery controls.** Detect orphaned, stuck, duplicated,
     delayed, poisoned, and saturation-deferred jobs; keep repair idempotent.
 58. **Build — Cooperative cancellation.** Add explicit cancellation states and
@@ -256,6 +308,15 @@ is retained; merged code alone is not enough.
     retention.
 73. **Build — Audit search at scale.** Server-side filters, cursor pagination,
     actor/resource/correlation search, saved views, and bounded export.
+    *Engineering slice done:* server-side actor, action-prefix, target,
+    outcome, time-window and subject filters with keyset pagination on
+    `sequence`, a page cap of 200, supporting indexes whose plans are asserted
+    at 100,000 events, per-administrator saved searches, and "export these
+    results" through the secure export service
+    ([Operate, Audit search](operate.md#audit-search)). The log records no
+    correlation id, so none is searchable. Remaining: per-page chain
+    verification still walks the whole log, and a plan rehearsal at
+    production-sized history.
 74. **Build — Audit schema governance.** Version events, define required
     fields, prohibit secrets, preserve actor and delegation context, and test
     coverage of privileged actions.
@@ -335,6 +396,21 @@ is retained; merged code alone is not enough.
 99. **Build — Tenant administration APIs.** Versioned, documented, scoped,
     rate-limited APIs with idempotency, consistent errors, deprecation policy,
     and generated client examples.
+    *Foundation in place:* all 305 `/api/admin` routes are published as a
+    versioned OpenAPI 3.1 description. It is served at `GET /api/openapi.json`
+    and committed as `docs/api/openapi.json`, with a CI freshness check. For
+    every operation the description derives the required permission and
+    whether a machine token may call it from the live guards. A test fails
+    when a route has no description. Deprecation (a six-month minimum, enforced
+    by test) is sent as `Deprecation`/`Sunset` response headers. The
+    versioning, error, idempotency, rate-limit and client-generation
+    conventions are in [docs/api/README.md](api/README.md).
+    *Still open:*
+    - response-body schemas for most operations;
+    - a general `Idempotency-Key` for POSTs, which only onboarding and
+      provision receipts have today;
+    - per-token rate limits on ordinary admin reads and writes;
+    - a distinct problem type for `429`.
 100. **Build — Webhook reliability contract.** Signed payloads, replay
      protection, delivery attempts, ordering semantics, rotation, test event,
      dead-letter handling, and customer-visible status.

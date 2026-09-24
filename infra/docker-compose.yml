@@ -114,6 +114,42 @@ services:
       # rewrites this export between its two runs, so it hit that every time.
       - ./sftp:/home/syntra/export:ro
 
+  # A Vault dev server for the Transit master-key provider's integration test
+  # (packages/core/src/vault/vault-transit.integration.test.ts).
+  #
+  # Behind the `kms` PROFILE, so neither `db:up` nor CI's plain `up -d`
+  # starts it: `pnpm vault:up && pnpm vault:wait`, then run the test. The
+  # test skips when nothing answers on VAULT_ADDR, and FAILS instead when
+  # VAULT_TRANSIT_INTEGRATION=1 says a server was meant to be there -- which
+  # is how CI keeps a silently-skipped suite from reading as a pass.
+  #
+  # Dev mode: in-memory storage, unsealed, one fixed root token. Everything
+  # the test needs beyond that -- the Transit mount, its key, an AppRole and
+  # the policy it holds -- the test creates itself through the API, so the
+  # container needs no bootstrap script and a restart is a clean slate.
+  # NEVER a pattern for a real deployment: see docs/configure.md,
+  # "Key management".
+  #
+  # Pinned to a patch release, verified by `docker pull`. OpenBao
+  # (`openbao/openbao`) speaks the same Transit and AppRole API and can be
+  # swapped in with the same command and environment, BAO_ for VAULT_.
+  vault:
+    image: hashicorp/vault:1.20.4
+    profiles: ['kms']
+    command: ['server', '-dev']
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: syntra-dev-root
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      # Dev mode does not mlock; skipping setcap lets the image start without
+      # IPC_LOCK on hosts that refuse it.
+      SKIP_SETCAP: 'true'
+    ports: ['8200:8200']
+    healthcheck:
+      test: ['CMD', 'vault', 'status', '-address=http://127.0.0.1:8200']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
   maildev:
     image: maildev/maildev:2.1.0
     ports: ['1080:1080', '1025:1025']

@@ -24,7 +24,7 @@ import {
   deleteSource,
   findSource,
   listSources,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   mappingsFor,
   ownedObjectCounts,
   JobNotQueuedError,
@@ -49,10 +49,10 @@ import { confirmQuery } from './list-query.js';
  * destructive route reads. `merge` takes the strictness of its argument, so an
  * unknown key is refused here as it is there.
  */
-const deleteQuery = deleteSourceQuery.omit({ confirm: true }).merge(confirmQuery);
+export const deleteQuery = deleteSourceQuery.omit({ confirm: true }).merge(confirmQuery);
 
 export interface SourceRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   /**
    * Late-bound on purpose. The scheduler talks to pg-boss and is started
    * after the app is built — and it is allowed to fail to start without
@@ -66,7 +66,7 @@ export async function registerAdminSourceRoutes(
   app: FastifyInstance,
   options: SourceRouteOptions,
 ): Promise<void> {
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   /**
    * Brings the scheduler into line with a source that just changed.

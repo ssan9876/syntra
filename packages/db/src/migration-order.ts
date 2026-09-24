@@ -135,6 +135,11 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261024043000_tenant_session_policy',
   '20261025100000_tenant_deletion_execution',
   '20261026004500_run_cooperative_cancellation',
+  '20261027173100_replica_safe_state',
+  '20261028091500_adapter_capability_rollout',
+  '20261029090000_audit_correlation_id',
+  '20261030120000_data_exports_audit_search',
+  '20261031000000_audit_correlation_index',
 ];
 
 /**

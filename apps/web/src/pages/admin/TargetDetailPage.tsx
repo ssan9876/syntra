@@ -15,6 +15,7 @@ import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 import { EntraConnectorFields, HttpConnectorFields } from './TargetConnectorFields.js';
 import { CapabilitiesPanel } from './TargetCapabilitiesPanel.js';
+import { TargetAdapterPanel } from './TargetAdapterPanel.js';
 import { TargetMigrationPanel } from './TargetMigrationPanel.js';
 import { TargetHealthPanel } from './TargetHealthPanel.js';
 import { TargetWriteStopPanel } from './TargetWriteStopPanel.js';
@@ -454,6 +455,7 @@ export function TargetDetailPage() {
         </Panel>
 
         {!isNew && targetId !== null && <CapabilitiesPanel targetId={targetId} />}
+        {!isNew && targetId !== null && <TargetAdapterPanel targetId={targetId} />}
         {!isNew && data && <TargetWriteStopPanel target={data} onChanged={reload} />}
         {!isNew && data && <TargetMaintenancePanel target={data} onChanged={reload} />}
         {!isNew && targetId !== null && <TargetHealthPanel targetId={targetId} />}

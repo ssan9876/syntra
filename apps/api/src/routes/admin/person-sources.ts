@@ -30,7 +30,7 @@ import {
   findPersonSource,
   listImportRuns,
   listPersonSources,
-  localMasterKeyProvider,
+  type MasterKeyProvider,
   personMappingsFor,
   personSourceOwnedCount,
   personSourceWithCredential,
@@ -59,8 +59,32 @@ import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 import { confirmQuery, sourceIdQuery } from './list-query.js';
 
+/**
+ * The request shapes these routes parse that have no home in contracts.
+ *
+ * Module-scope and exported, rather than written inline in each handler, so
+ * the OpenAPI description (`person-sources.openapi.ts`) publishes the schema
+ * the handler actually parses with instead of a second copy of it.
+ */
+export const referenceValueListQuery = z
+  .object({ kind: z.enum(IDENTITY_REFERENCE_KINDS).optional() })
+  .strict();
+export const createReferenceValueRequest = z
+  .object({
+    kind: z.enum(IDENTITY_REFERENCE_KINDS),
+    value: z.string().trim().min(1).max(200),
+  })
+  .strict();
+export const setReferenceValueActiveRequest = z.object({ active: z.boolean() }).strict();
+export const duplicateReviewListQuery = z
+  .object({ status: z.enum(['open', 'resolved']).default('open') })
+  .strict();
+export const sourceLinkListQuery = z
+  .object({ personId: z.string().uuid().optional() })
+  .strict();
+
 export interface PersonSourceRouteOptions {
-  masterKey: Buffer;
+  keyProvider: MasterKeyProvider;
   /** Late-bound, for the reason `SourceRouteOptions` records. */
   scheduler?: () => Scheduler | null;
 }
@@ -69,7 +93,7 @@ export async function registerAdminPersonSourceRoutes(
   app: FastifyInstance,
   options: PersonSourceRouteOptions,
 ): Promise<void> {
-  const provider = localMasterKeyProvider(options.masterKey);
+  const provider = options.keyProvider;
 
   /**
    * Brings the scheduler into line with a source that just changed.
@@ -143,7 +167,7 @@ export async function registerAdminPersonSourceRoutes(
     '/identity-reference-values',
     { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
     async (request) => {
-      const query = z.object({ kind: z.enum(IDENTITY_REFERENCE_KINDS).optional() }).strict().parse(request.query ?? {});
+      const query = referenceValueListQuery.parse(request.query ?? {});
       return { values: await request.db((tx) => listIdentityReferenceValues(tx, query.kind)) };
     },
   );
@@ -152,10 +176,7 @@ export async function registerAdminPersonSourceRoutes(
     '/identity-reference-values',
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request, reply) => {
-      const body = z.object({
-        kind: z.enum(IDENTITY_REFERENCE_KINDS),
-        value: z.string().trim().min(1).max(200),
-      }).strict().parse(request.body);
+      const body = createReferenceValueRequest.parse(request.body);
       const created = await request.db((tx) =>
         createIdentityReferenceValue(tx, request.session.userId, body),
       );
@@ -168,7 +189,7 @@ export async function registerAdminPersonSourceRoutes(
     { preHandler: requirePermission(PERMISSIONS.SYNC_MANAGE) },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      const body = z.object({ active: z.boolean() }).strict().parse(request.body);
+      const body = setReferenceValueActiveRequest.parse(request.body);
       return request.db((tx) =>
         setIdentityReferenceValueActive(tx, request.session.userId, id, body.active),
       );
@@ -179,7 +200,7 @@ export async function registerAdminPersonSourceRoutes(
     '/person-duplicate-reviews',
     { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
     async (request) => {
-      const query = z.object({ status: z.enum(['open', 'resolved']).default('open') }).strict().parse(request.query ?? {});
+      const query = duplicateReviewListQuery.parse(request.query ?? {});
       return { reviews: await listDuplicateReviews(request.tenantId, query.status) };
     },
   );
@@ -205,7 +226,7 @@ export async function registerAdminPersonSourceRoutes(
     '/person-source-links',
     { preHandler: requirePermission(PERMISSIONS.SYNC_READ) },
     async (request) => {
-      const query = z.object({ personId: z.string().uuid().optional() }).strict().parse(request.query ?? {});
+      const query = sourceLinkListQuery.parse(request.query ?? {});
       return { links: await listPersonSourceLinks(request.tenantId, query.personId) };
     },
   );

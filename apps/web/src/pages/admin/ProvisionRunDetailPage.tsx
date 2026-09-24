@@ -66,6 +66,14 @@ interface Run {
   cancelState?: CancelState;
   cancelRequestedAt?: string | null;
   cancelResolvedAt?: string | null;
+  /**
+   * The adapter release the plan was computed for, and the actions it
+   * refused because that release is not certified for them or the target's
+   * configuration does not advertise them. Optional: an older API omits them.
+   */
+  adapterVersion?: string | null;
+  capabilityRefusedCount?: number;
+  capabilityRefusal?: string | null;
   actions: Action[];
   exceptions: Exception[];
 }
@@ -80,7 +88,7 @@ const nameOf = (person: Person | null) =>
 const actionTone = (status: string): 'active' | 'warning' | 'danger' | 'neutral' => {
   if (status === 'applied') return 'active';
   if (status === 'conflict' || status === 'pending_retry') return 'warning';
-  if (status === 'failed') return 'danger';
+  if (status === 'failed' || status === 'refused') return 'danger';
   return 'neutral';
 };
 
@@ -145,6 +153,8 @@ interface ApplyResult {
   pendingRetry: number;
   inFlight: number;
   deferred: number;
+  /** Refused by capability enforcement at apply time; absent from an older API. */
+  refused?: number;
   skipped: number;
 }
 
@@ -159,7 +169,7 @@ const count = (n: number, singular: string, plural: string) =>
  * not the tone a clean apply gets.
  */
 function applyTone(result: ApplyResult): 'info' | 'warning' | 'danger' {
-  if (result.inFlight > 0 || result.failed > 0) return 'danger';
+  if (result.inFlight > 0 || result.failed > 0 || (result.refused ?? 0) > 0) return 'danger';
   if (result.pendingRetry > 0 || result.deferred > 0) return 'warning';
   return 'info';
 }
@@ -169,6 +179,9 @@ function applyTitle(result: ApplyResult): string {
     return `${count(result.inFlight, 'action is', 'actions are')} in flight`;
   }
   if (result.failed > 0) return `${count(result.failed, 'action', 'actions')} failed`;
+  if ((result.refused ?? 0) > 0) {
+    return `${count(result.refused ?? 0, 'action was', 'actions were')} refused`;
+  }
   if (result.deferred > 0) {
     return `${count(result.deferred, 'action was', 'actions were')} deferred`;
   }
@@ -448,6 +461,13 @@ export function ProvisionRunDetailPage() {
                 require an explicit confirmation and this apply was not
                 confirmed
               </li>
+              {outcome.refused !== undefined && (
+                <li>
+                  {count(outcome.refused, 'action', 'actions')} refused — the
+                  adapter release is not certified for it, or the target no
+                  longer advertises it; never attempted
+                </li>
+              )}
             </ul>
             {outcome.skipped > 0 && (
               // Stated as the total it is. `apply.ts` counts every action left
@@ -495,6 +515,28 @@ export function ProvisionRunDetailPage() {
                 refused it.
               </p>
             )}
+          </Alert>
+        )}
+
+        {(run.capabilityRefusedCount ?? 0) > 0 && (
+          <Alert
+            tone="danger"
+            title={`${run.capabilityRefusedCount} action${
+              run.capabilityRefusedCount === 1 ? '' : 's'
+            } refused by capability enforcement`}
+          >
+            {/* Shown, never dropped: a refused action is what the plan would
+                have done, and the reason is what somebody has to fix. */}
+            <ul className="list-disc pl-5">
+              {(run.capabilityRefusal ?? '').split('; ').map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+            <p className="mt-3">
+              Refused actions are never attempted. The rest of the plan is
+              unaffected.
+              {run.adapterVersion ? ` Planned for adapter ${run.adapterVersion}.` : ''}
+            </p>
           </Alert>
         )}
 

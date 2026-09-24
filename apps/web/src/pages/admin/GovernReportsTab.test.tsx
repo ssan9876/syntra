@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { GovernReportsTab } from './GovernReportsTab.js';
+
+const granted = new Set<string>();
+vi.mock('../../session/SessionProvider.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../session/SessionProvider.js')>()),
+  useCan: () => (permission: string) => granted.has(permission),
+}));
 
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), {
@@ -48,7 +54,10 @@ const renderPage = () =>
     </MemoryRouter>,
   );
 
-beforeEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.restoreAllMocks();
+  granted.clear();
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe('the reports screen', () => {
@@ -94,5 +103,32 @@ describe('the reports screen', () => {
       expect(urls.some((u) => u.includes('/govern/reports/system?systemId=sys-1'))).toBe(true),
     );
     expect(urls.some((u) => u.includes('snapshotId='))).toBe(false);
+  });
+
+  /**
+   * The CSV is an asynchronous export now (backlog #48): asking for it returns
+   * at once and the file is followed in Activity → Exports. Offered only to a
+   * holder of `govern.export`, and for exactly the report on screen.
+   */
+  it('requests the report on screen as an export, only for govern.export', async () => {
+    const urls = mockApi();
+    renderPage();
+    await userEvent.type(await screen.findByLabelText('System'), 'sys-1');
+    await userEvent.click(screen.getByRole('button', { name: 'Run the report' }));
+    await screen.findByText(/Nobody holds anything/);
+    expect(screen.queryByRole('button', { name: 'Export as CSV' })).toBeNull();
+
+    granted.add('govern.export');
+    const second = renderPage();
+    await userEvent.type(within(second.container).getByLabelText('System'), 'sys-1');
+    await userEvent.selectOptions(within(second.container).getByLabelText('Point in time'), 's-old');
+    await userEvent.click(within(second.container).getByRole('button', { name: 'Run the report' }));
+    await userEvent.click(await within(second.container).findByRole('button', { name: 'Export as CSV' }));
+    await waitFor(() => expect(urls).toContain('/api/admin/govern/exports/csv'));
+    const post = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([input]) => String(input) === '/api/admin/govern/exports/csv');
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ systemId: 'sys-1', snapshotId: 's-old' });
+    expect(await within(second.container).findByText(/Export requested/)).toBeInTheDocument();
   });
 });

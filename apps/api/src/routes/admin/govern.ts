@@ -66,7 +66,6 @@ import {
   type CheckpointSigner,
   fetchEvidencePack,
   denyProposal,
-  exportReportCsv,
   governReadScope,
   governSettings,
   holdsGovernPermission,
@@ -91,8 +90,13 @@ import {
   type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
-import { requirePermission } from '../../plugins/require-permission.js';
+import {
+  declareGuardPermissions,
+  requirePermission,
+  tokenScopeAllows,
+} from '../../plugins/require-permission.js';
 import { requireSession } from '../../plugins/require-session.js';
+import { queueExportFor, schedulerOr503 } from './exports.js';
 
 /**
  * `govern.read`, respecting an org-unit scope.
@@ -107,9 +111,12 @@ import { requireSession } from '../../plugins/require-session.js';
  * respected on EVERY READ PATH, not only on the list.
  */
 function requireGovernRead(alsoRequire?: Permission) {
-  return async function guard(request: FastifyRequest): Promise<void> {
+  const guard = async function guard(request: FastifyRequest): Promise<void> {
+    // The token half of the intersection `requirePermission` applies: a token
+    // not scoped to `govern.read` reads nothing here, whatever its account
+    // holds.
     const scope = await request.db((tx) => governReadScope(tx, request.session.userId));
-    if (scope.kind === 'none') {
+    if (scope.kind === 'none' || !tokenScopeAllows(request, PERMISSIONS.GOVERN_READ)) {
       throw new ProblemError(403, 'forbidden', 'Forbidden', 'Requires govern.read');
     }
     // The export route needs `govern.export` AS WELL, and it still needs the
@@ -126,12 +133,18 @@ function requireGovernRead(alsoRequire?: Permission) {
       const held = await request.db((tx) =>
         holdsGovernPermission(tx, request.session.userId, alsoRequire),
       );
-      if (!held) {
+      if (!held || !tokenScopeAllows(request, alsoRequire)) {
         throw new ProblemError(403, 'forbidden', 'Forbidden', `Requires ${alsoRequire}`);
       }
     }
     Reflect.set(request, 'governScope', scope);
   };
+  // What the published OpenAPI description reports for these routes. See
+  // `declareGuardPermissions`: this guard is not `requirePermission`, so the
+  // route catalog cannot read it off otherwise.
+  return alsoRequire === undefined
+    ? declareGuardPermissions(guard, PERMISSIONS.GOVERN_READ)
+    : declareGuardPermissions(guard, PERMISSIONS.GOVERN_READ, alsoRequire);
 }
 
 /**
@@ -464,44 +477,30 @@ export async function registerAdminGovernRoutes(
     { preHandler: requireGovernRead(PERMISSIONS.GOVERN_EXPORT) },
     async (request, reply) => {
       const query = exportCsvBody.parse(request.body ?? {});
-      const report = await whoHasAccessToSystem(request.tenantId, query);
 
-      // THE EXPORT IS THE WORST OF THE FOUR. §10 calls it "a copy of
-      // everybody's access leaving the building" and §3 calls a cross-boundary
-      // read of the holding table "the worst single disclosure this platform
-      // could produce". Guarded only by `requirePermission(GOVERN_EXPORT)` and
-      // with no scope filter at all — unlike the GET of the SAME report three
-      // routes above — a department-scoped reader who also holds
-      // `govern.export` walks out with the tenant.
-      const scope = scopeOf(request);
-      const admitted =
-        scope.kind === 'tenant' ? 'all' : await request.db((tx) => personIdsInScope(tx, scope));
-      const scoped =
-        admitted === 'all'
-          ? report
-          : {
-              ...report,
-              body: {
-                ...report.body,
-                rows: report.body.rows.filter(
-                  (row) => row.personId !== null && admitted.has(row.personId),
-                ),
-              },
-            };
-
-      const csv = await exportReportCsv(request.tenantId, request.session.userId, scoped, {
-        ...query,
-        // The scope travels onto the audit event, so the row count and the
-        // scope agree in the record. An export of 40 rows against a scope of
-        // 12,000 people and an export of 40 rows against a scope of 40 are
-        // different acts, and the event has to be able to tell them apart.
-        scopeOrgUnitId: scope.kind === 'orgUnits' ? scope.orgUnitIds : null,
-        rowCount: scoped.body.rows.length,
+      // ASYNCHRONOUS NOW (backlog #48). This used to build the whole CSV
+      // inside the request -- every holding of a system in one response, with
+      // no bound but the snapshot -- and hand it over unsealed and
+      // unwatermarked. It is now a `govern_access` export: a background job
+      // generates it, filtered to the requester's Govern scope AS IT STANDS
+      // WHEN THE JOB RUNS (`governAccessCsv`, the same §21 filter this route
+      // applied inline), seals it, watermarks every row, and the download
+      // re-checks the permission and refuses if the scope has changed since.
+      // `requireGovernRead(GOVERN_EXPORT)` above stays: it is still the door,
+      // and the structural scope test still finds this route through it.
+      const scheduler = schedulerOr503(options.scheduler);
+      const created = await queueExportFor(request, scheduler, {
+        kind: 'govern_access',
+        params: query,
+        ttlHours: 24,
       });
+      // Said back to the caller, so the console can tell a department lead
+      // before the file exists that it will hold their department only. The
+      // filter itself is applied by the job, from the scope as it is then.
+      const scope = scopeOf(request);
       return reply
-        .header('content-type', 'text/csv; charset=utf-8')
-        .header('content-disposition', 'attachment; filename="govern-access.csv"')
-        .send(csv);
+        .status(202)
+        .send({ export: created, scope: scope.kind === 'orgUnits' ? 'org_units' : 'tenant' });
     },
   );
 

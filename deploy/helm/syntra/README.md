@@ -11,9 +11,11 @@ The defaults favour safety over completeness:
   (`existingSecret`). If neither that nor `secret.create` is set, the render
   fails with a message saying what to do. Credentials in a values file end up
   in Helm's release history.
-- **One API replica.** More than one works, but some state lives in each
-  process. Read [Running more than one API replica](#running-more-than-one-api-replica)
-  before you raise `api.replicas` or turn on autoscaling.
+- **Two API replicas.** Every piece of state that has to agree between
+  replicas lives in Postgres, including the OIDC provider cache's validity
+  and the rate-limit counters, so a node drain or a crashed pod does not
+  take sign-in down. See [Running more than one API replica](#running-more-than-one-api-replica)
+  for what is shared and how.
 - **Hardened pods.** Both workloads run as non-root with a read-only root
   filesystem, all capabilities dropped, `allowPrivilegeEscalation: false`,
   seccomp `RuntimeDefault` and no service-account token. Each has
@@ -52,6 +54,14 @@ helm upgrade --install syntra ./deploy/helm/syntra -n syntra \
 **Back up `MASTER_KEY` outside the cluster.** It encrypts every stored
 credential and signs SAML, and a database restore does not bring it back. A
 Secret that exists only in etcd is not a backup.
+
+Or keep the master key out of the cluster altogether: with
+`MASTER_KEY_PROVIDER=vault-transit` or `aws-kms` (IRSA / Pod Identity for the
+AWS credentials), put the provider variables in a Secret or ConfigMap named
+in `api.envFrom`, and `MASTER_KEY` in `existingSecret` may be empty. See
+[Key management](../../../docs/configure.md#key-management). The backup
+CronJob still fingerprints `MASTER_KEY` only (`null` once it is empty),
+unlike `syntra-backup`, which fingerprints the external key reference.
 
 `ci/full-values.yaml` is a worked production example with every option
 turned on. `ci/minimal-values.yaml` shows the least an install needs.
@@ -111,16 +121,22 @@ Web probes deliberately avoid `/health`. On that server, `/health` is a proxy
 to the API, so the probe would restart healthy nginx pods whenever the API is
 down.
 
-`/health/ready` is rate-limited to 60 requests per minute per address, per
-process. The default readiness period of 10 s uses 6 of those. Keep the
-period at 2 s or more.
+`/health/ready` is rate-limited to 60 requests per minute per address. The
+counter is shared by every API replica, and the kubelet probes from its
+node's address, so all API pods on one node share one allowance. The
+default readiness period of 10 s uses 6 per pod per minute, which leaves
+room for 10 API pods on a node. Keep `periodSeconds` at least equal to the
+number of API pods one node can hold. If the limiter's store (Postgres) is
+unreachable, this route still answers, with 503 and the failing probe named,
+rather than failing inside the limiter.
 
 ## Running more than one API replica
 
-This section comes from reading the code at the time of writing, not from
-assumptions. Here is what is safe and what is per-process:
+The chart runs two API replicas by default, and more are safe. This section
+comes from reading the code, not from assumptions. It lists what is shared
+and how, and the little that stays per process.
 
-**Safe across replicas (shared through Postgres):**
+**Shared through Postgres:**
 
 - **Background jobs.** pg-boss keeps queues and cron schedules in Postgres
   and claims jobs with `SKIP LOCKED`, so each job runs on exactly one
@@ -134,50 +150,46 @@ assumptions. Here is what is safe and what is per-process:
   audit hash chain (also with an advisory transaction lock).
 - **Cookies.** Session and OIDC cookies are signed with `SESSION_SECRET`,
   which is the same for every replica.
+- **The OIDC provider cache's validity.** Each process still builds and
+  caches one `oidc-provider` instance per tenant, because the library fixes
+  clients, issuer and signing keys at construction. Each tenant row carries
+  an `oidcConfigGeneration` counter. Database triggers bump it in the same
+  transaction as any change a provider is built from: an OIDC client insert,
+  update or delete (from the admin API, a catalog install or a cascade), an
+  OIDC signing-key rotation or retirement, and a tenant hostname change.
+  Every OIDC request already reads the tenant row, and the cache rebuilds
+  when the row's generation is newer than the one it was built at. A change
+  made through any replica, or by the key-rotation job wherever it runs, is
+  therefore used by every replica **on its next request**, with no staleness
+  window and no extra query. This does not use `LISTEN/NOTIFY`, so it works
+  unchanged behind PgBouncer in transaction pooling mode.
+  (`packages/protocols/src/oidc/provider-factory.ts`,
+  migration `20261027173100_replica_safe_state`.)
+- **Rate limits.** `@fastify/rate-limit` counts in the `RateLimitBucket`
+  table (`RATE_LIMIT_STORE=postgres`, the default). Each count is one
+  upsert per rate-limited request, using the database clock. The
+  per-address limit (`AUTH_RATE_LIMIT_MAX`) and the per-tenant ceiling
+  (`AUTH_RATE_LIMIT_TENANT_MAX`) therefore hold at their configured values
+  for the deployment as a whole, whatever the replica count. Do **not**
+  divide them by the replica count. Ended windows are swept every minute.
+  `RATE_LIMIT_STORE=memory` (`api.rateLimitStore`) restores the old
+  per-process counters. That is only correct with exactly one replica.
 
-**Per process: the consequences you accept with N > 1:**
+**Still per process, and harmless:**
 
-1. **The OIDC provider cache.** Each process builds one `oidc-provider`
-   instance per tenant and caches it (`packages/protocols/src/oidc/provider-factory.ts`).
-   Clients, redirect URIs, token lifetimes, issuer hostnames and the signing
-   JWKS are fixed when the instance is built. The cache is evicted by
-   `invalidateProvider()`, which is **only called in the process that made
-   the change**:
-   - **OIDC application changes** (`routes/admin/protocol-apps.ts`). The
-     other replicas keep the old client list until they restart. A new
-     client can get `invalid_client` on some requests, a deleted client
-     still works there, and a changed redirect URI is enforced
-     inconsistently.
-   - **Tenant hostname changes** (`routes/admin/tenant.ts`). The other
-     replicas keep issuing tokens with the old issuer.
-   - **Signing-key rotation** (`keys.rotate`, a pg-boss job at 03:00 UTC on
-     the 1st of each month). The job runs on one replica, so only that one
-     evicts its cache. The others keep signing with the now-outgoing key.
-     That works for the 7-day overlap while the key is still published.
-     **After that, their tokens fail validation at every relying party**
-     until those replicas restart.
-
-   Mitigations: after changing an OIDC application or a tenant hostname, run
-   `kubectl rollout restart deployment/<release>-api`. For key rotation, set
-   `apiRolloutRestart.enabled=true`. This adds a CronJob on the 2nd of each
-   month and a Role limited to patching that one Deployment. The proper fix
-   is a cross-process invalidation, for example Postgres `LISTEN/NOTIFY` or a
-   version column checked per request. **It has not been built.**
-2. **Rate limits.** `@fastify/rate-limit` is registered with no external
-   store, so counters live in memory in each process. Behind a round-robin
-   Service, the per-address limit (`AUTH_RATE_LIMIT_MAX`, default 10/min)
-   and the per-tenant ceiling (`AUTH_RATE_LIMIT_TENANT_MAX`) are each
-   effectively **up to N times** their configured value. To keep the same
-   protection, divide both by the replica count (`api.authRateLimitMax`,
-   `api.authRateLimitTenantMax`), or pin clients with session affinity at
-   the ingress. Account lockout is stored in the database, so it is
-   unaffected.
-3. **Outbound OAuth token caches.** The Microsoft Graph and HTTP connectors
-   each cache their own access tokens per process. This only costs one extra
+1. **Outbound OAuth token caches.** The Microsoft Graph and HTTP connectors
+   each cache their own access tokens per process. This costs one extra
    token request per replica.
-4. **Metrics.** `/metrics` exposes each process's own readiness, scheduler
+2. **Metrics.** `/metrics` exposes each process's own readiness, scheduler
    state and request histograms. Aggregate across pods. Database-derived
    gauges report the same value from every pod.
+
+**The scheduled API restart is optional.** `apiRolloutRestart.enabled` adds
+a CronJob on the 2nd of each month and a Role limited to patching the API
+Deployment. It was a workaround for replicas that did not hear about a
+signing-key rotation. The generation counter covers that now, so the restart
+is not needed for correctness. Turn it on only if you want a regular restart
+for your own reasons.
 
 Scaling the web tier is always safe, because it is stateless nginx.
 
@@ -236,6 +248,17 @@ data. A PVC is **not off-site**. Copy it out with your own tooling (Velero,
 a snapshot schedule, or object-storage sync), or skip this CronJob and use
 your managed Postgres's PITR. docs/operate.md has the restore procedure and
 the HA Postgres guidance.
+
+## Upgrading from 0.2
+
+- `api.replicas` now defaults to `2`. This is safe only with an API image
+  that includes migration `20261027173100_replica_safe_state`. If you deploy
+  an older image with this chart, set `api.replicas=1`.
+- If you divided `api.authRateLimitMax` / `api.authRateLimitTenantMax` by
+  your replica count, undo that. The counters are now shared, so the values
+  apply to the whole deployment.
+- `apiRolloutRestart` is no longer needed. You can turn it off.
+- New value: `api.rateLimitStore` (empty means `postgres`).
 
 ## Upgrading from 0.1
 

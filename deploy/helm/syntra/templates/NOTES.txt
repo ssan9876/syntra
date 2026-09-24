@@ -22,16 +22,12 @@ WARNING: api.trustProxy is empty. The API sees every request as coming from a
 web pod, so per-address rate limits and IP policy conditions collapse into one
 bucket. Set it to your pod CIDR (e.g. 10.244.0.0/16).
 {{- end }}
-{{- if or .Values.api.autoscaling.enabled (gt (int .Values.api.replicas) 1) }}
+{{- if and (eq (toString .Values.api.rateLimitStore) "memory") (or .Values.api.autoscaling.enabled (gt (int .Values.api.replicas) 1)) }}
 
-WARNING: more than one API replica. Some state is per process: the OIDC
-provider cache (OIDC client, hostname and signing-key changes reach only the
-replica that made them until the others restart) and rate-limit counters.
-Read "Running more than one API replica" in the chart README.
-{{- if not .Values.apiRolloutRestart.enabled }}
-apiRolloutRestart.enabled is false: nothing restarts the other replicas after
-the monthly signing-key rotation.
-{{- end }}
+WARNING: api.rateLimitStore is "memory" with more than one API replica. Each
+replica then keeps its own counters, so every rate limit is effectively
+multiplied by the replica count. Leave it empty (Postgres, shared by every
+replica) unless you run exactly one replica.
 {{- end }}
 {{- if and .Values.networkPolicy.enabled .Values.ingress.enabled }}
 

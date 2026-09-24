@@ -1,20 +1,26 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
+  EXPORT_JOB,
   PERMISSIONS,
   assignRole,
   buildSnapshot,
   createRole,
   createUser,
   hashPassword,
+  localMasterKeyProvider,
+  runExportJob,
   setPasswordHash,
   type Permission,
 } from '@syntra/core';
-import { buildTestApp } from '../../test-support.js';
+import { buildTestApp, createFakeScheduler } from '../../test-support.js';
 import { GOVERN_READ_ROUTES } from './govern.js';
 
 let ctx: Awaited<ReturnType<typeof buildTestApp>>;
+/** The MASTER_KEY `buildTestApp` configures, so a job run here seals what the routes can open. */
+const TEST_MASTER_KEY = localMasterKeyProvider(Buffer.alloc(32, 7));
 const PASSWORD = 'a-long-enough-password';
 const PASSWORD_HASH = await hashPassword(PASSWORD);
 
@@ -384,28 +390,85 @@ describe('the org-unit scope on EVERY read path — §21', () => {
     expect(inside.statusCode).toBe(200);
   });
 
+  /**
+   * The CSV export is asynchronous now (backlog #48): the route answers 202
+   * with an export row and a job does the work. These cases run the job in
+   * place of pg-boss -- with the same master key the test app was built with,
+   * so the download route can open what the job sealed -- and read the file
+   * back through the download route, which is where the scope has to hold.
+   */
+  async function exportAndDownload(cookie: string, body: Record<string, unknown>) {
+    const res = await post('/api/admin/govern/exports/csv', cookie, body);
+    expect(res.statusCode).toBe(202);
+    const id = (res.json() as { export: { id: string } }).export.id;
+    expect(await runExportJob(ctx.tenantId, id, TEST_MASTER_KEY)).toBe('ready');
+    return { id, download: await get(`/api/admin/exports/${id}/download`, cookie) };
+  }
+
+  async function withScheduler() {
+    await ctx.app.close();
+    const scheduler = createFakeScheduler();
+    ctx = await buildTestApp({ scheduler: () => scheduler });
+    return scheduler;
+  }
+
   it('the CSV export withholds rows outside the caller’s scope', async () => {
     // The disclosure this closes: a department-scoped reader who also holds
     // `govern.export` walked out with the tenant.
+    const scheduler = await withScheduler();
     await seedTwoDepartments();
     await seedAdmin('lead', [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT], {
       scopeOrgUnitId: leadOrgUnitId,
     });
-    const res = await post('/api/admin/govern/exports/csv', await cookieFor('lead'), {
+    const lead = await withTenant(ctx.tenantId, (tx) => tx.user.findFirstOrThrow({ where: { login: 'lead' } }));
+    const { id, download } = await exportAndDownload(await cookieFor('lead'), {
       systemId: SYSTEM_ID,
       snapshotId: secondSnapshotId,
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toContain(inScopePersonName);
-    expect(res.body).not.toContain(outOfScopePersonName);
+    expect(scheduler.enqueued).toEqual([{ name: EXPORT_JOB, data: { tenantId: ctx.tenantId, exportId: id } }]);
+    expect(download.statusCode).toBe(200);
+    expect(download.headers['content-type']).toMatch(/^text\/csv/);
+    expect(download.headers['cache-control']).toBe('no-store');
+    expect(download.body).toContain(inScopePersonName);
+    expect(download.body).not.toContain(outOfScopePersonName);
+    // The watermark leads every row: export, tenant, requester, time.
+    const [header, first] = download.body.split('\n');
+    expect(header!.startsWith('export_id,tenant_id,exported_by_user_id,exported_at,')).toBe(true);
+    expect(first!.startsWith(`${id},${ctx.tenantId},${lead.id},`)).toBe(true);
+    expect(download.headers['x-syntra-export-sha256']).toBe(
+      createHash('sha256').update(download.rawPayload).digest('hex'),
+    );
+  });
+
+  it('refuses the download once the requester’s Govern scope has changed', async () => {
+    // Generated under a department scope; the lead then gains a tenant-wide
+    // role. The file is still the department's -- but the authority it was
+    // made under is not the one they hold now, and a download is re-decided.
+    await withScheduler();
+    await seedTwoDepartments();
+    const lead = await seedAdmin('lead', [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT], {
+      scopeOrgUnitId: leadOrgUnitId,
+    });
+    const cookie = await cookieFor('lead');
+    const res = await post('/api/admin/govern/exports/csv', cookie, { systemId: SYSTEM_ID, snapshotId: secondSnapshotId });
+    const id = (res.json() as { export: { id: string } }).export.id;
+    await runExportJob(ctx.tenantId, id, TEST_MASTER_KEY);
+    await withTenant(ctx.tenantId, async (tx) => {
+      const wide = await createRole(tx, 'wide', [PERMISSIONS.GOVERN_READ]);
+      await assignRole(tx, lead.id, wide.id);
+    });
+    const download = await get(`/api/admin/exports/${id}/download`, cookie);
+    expect(download.statusCode).toBe(403);
+    expect(download.json()).toMatchObject({ type: expect.stringMatching(/export-authority-changed$/) });
   });
 
   it('the CSV export’s audit event records the scope AND the row count', async () => {
+    await withScheduler();
     await seedTwoDepartments();
     await seedAdmin('lead', [PERMISSIONS.GOVERN_READ, PERMISSIONS.GOVERN_EXPORT], {
       scopeOrgUnitId: leadOrgUnitId,
     });
-    await post('/api/admin/govern/exports/csv', await cookieFor('lead'), {
+    await exportAndDownload(await cookieFor('lead'), {
       systemId: SYSTEM_ID,
       snapshotId: secondSnapshotId,
     });
