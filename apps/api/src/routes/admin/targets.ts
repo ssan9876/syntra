@@ -57,6 +57,12 @@ import {
   TargetWriteStopNotFoundError,
   TargetWriteStopStateError,
   TargetWriteStopSeparationError,
+  ExternalWritesPausedError,
+  pauseTenantExternalWrites,
+  resumeTenantExternalWrites,
+  tenantExternalWriteStop,
+  TenantWriteStopStateError,
+  TenantWriteStopSeparationError,
   type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -337,6 +343,18 @@ export async function registerAdminTargetRoutes(
         }
         if (cause instanceof NoAccountToMoveError || cause instanceof NoCorrelationKeyError) {
           throw new ProblemError(409, 'nothing-to-move', 'There is no account to move', cause.message);
+        }
+        // A 409 rather than `moved: false`: nothing was attempted, and the
+        // administrator needs to know it was the emergency stop and not the
+        // directory. The placement itself is recorded, as the detail says.
+        if (cause instanceof ExternalWritesPausedError) {
+          throw new ProblemError(
+            409,
+            'external-writes-paused',
+            'External writes are paused',
+            `${cause.message}. The placement is recorded and the next run proposes the move once writes resume.`,
+            { scope: cause.scope },
+          );
         }
         throw cause;
       });
@@ -855,6 +873,52 @@ export async function registerAdminTargetRoutes(
         if (error instanceof TargetWriteStopNotFoundError) throw new ProblemError(404, 'not-found', 'Target not found');
         if (error instanceof TargetWriteStopSeparationError) throw new ProblemError(403, 'four-eyes-required', 'A second administrator must resume writes', error.message);
         if (error instanceof TargetWriteStopStateError) throw new ProblemError(409, 'write-stop-state', 'External-write stop state conflict', error.message);
+        throw error;
+      }
+    },
+  );
+
+  /**
+   * The tenant-wide emergency stop: no connector write for ANY target while it
+   * is active. Same permission, same body, same bounds and the same four-eyes
+   * resume as the per-target routes above, so neither scope is the easier one
+   * to reach for or to lift. The GET is `PROVISION_READ` so everybody who can
+   * see a run can see why it will not apply.
+   */
+  app.get(
+    '/provision/external-write-stop',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => tenantExternalWriteStop(request.tenantId),
+  );
+
+  app.post(
+    '/provision/external-write-stop',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const body = writeStopRequest.parse(request.body);
+      const now = new Date();
+      if (body.expiresAt && body.expiresAt.getTime() > now.getTime() + 30 * 86_400_000) {
+        throw new ProblemError(400, 'invalid-expiry', 'Pause expiry is too far away', 'Emergency stops may expire no more than 30 days from now.');
+      }
+      try {
+        return await pauseTenantExternalWrites(request.tenantId, request.session.userId, body.reason, body.expiresAt, now);
+      } catch (error) {
+        if (error instanceof TenantWriteStopStateError) throw new ProblemError(409, 'write-stop-state', 'External-write stop state conflict', error.message);
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    '/provision/external-write-resume',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { reason } = writeResumeRequest.parse(request.body);
+      try {
+        return await resumeTenantExternalWrites(request.tenantId, request.session.userId, reason);
+      } catch (error) {
+        if (error instanceof TenantWriteStopSeparationError) throw new ProblemError(403, 'four-eyes-required', 'A second administrator must resume writes', error.message);
+        if (error instanceof TenantWriteStopStateError) throw new ProblemError(409, 'write-stop-state', 'External-write stop state conflict', error.message);
         throw error;
       }
     },

@@ -231,6 +231,8 @@ export * from './provision/target-service.js';
 export * from './provision/target-migration.js';
 export * from './provision/target-health.js';
 export * from './provision/target-write-stop.js';
+export * from './provision/tenant-write-stop.js';
+export * from './provision/write-stop-expiry.js';
 export * from './provision/target-maintenance.js';
 export * from './provision/placement-service.js';
 export * from './provision/adoption-service.js';

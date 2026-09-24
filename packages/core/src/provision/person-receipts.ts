@@ -5,6 +5,7 @@ import type { Transport } from '../notify/notification-service.js';
 import { readBackTarget, targetConnectorFor, type TargetConnector } from '@syntra/connectors';
 import { previewProvisionRun } from './run-service.js';
 import { applyProvisionRun } from './apply.js';
+import { ExternalWritesPausedError } from './target-write-stop.js';
 import { enqueuePairedSync } from './syntra-user.js';
 import { targetWithCredential } from './target-service.js';
 import { compareObservedState } from '../lifecycle/verification.js';
@@ -292,6 +293,13 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
     }
     if (observed.some(action => action.status === 'applied')) await enqueuePairedSync(scheduler, tenantId, receipt.targetSystemId);
   } catch (error) {
+    // An emergency stop refused before anything was attempted: the work is
+    // waiting, not broken, and "failed" would send somebody to debug a target
+    // that is fine.
+    if (error instanceof ExternalWritesPausedError) {
+      await finish('blocked', `${error.message}. Retry after external writes resume.`);
+      return;
+    }
     await finish('failed', error instanceof Error ? error.message : 'Provisioning failed');
   }
 }

@@ -112,9 +112,48 @@ every change (`packages/core/src/provision/jobs.ts`).
 A disabled target loses nothing: accounts, entitlements, placements and run
 history stay. Re-enabling restores the schedule that was saved.
 
-There is no single switch that stops every target at once. Stop each one, or
-stop the scheduler by stopping the API (which also stops sync, mail retries
-and everything else).
+### Emergency write stops: one target, or every target at once
+
+The levers above change what runs. An **emergency write stop** changes what a
+run may *do*: while it is active, no connector write is attempted, and every
+apply is refused before the run enters `applying` — the run stays exactly as
+previewed and can be applied unchanged later. Reads, previews, drift, and
+evidence keep working, which is what the people investigating need. A manual
+account move is refused too (its placement is still recorded); a scheduled
+`autoApply` run records a visible skip instead of failing; a person
+provisioning receipt is left `blocked` rather than `failed`.
+
+There are two scopes with identical rules:
+
+| Scope | Console | API (`provision.manage`) |
+|---|---|---|
+| One target | **Target systems → the target → External writes** | `POST /api/admin/targets/:id/external-write-stop` / `external-write-resume` |
+| Every target in the tenant | **Target systems → Tenant-wide external writes** (top of the list) | `POST /api/admin/provision/external-write-stop` / `external-write-resume` |
+
+`GET /api/admin/provision/external-write-stop` (`provision.read`) returns the
+tenant stop's state.
+
+- **Placing** a stop needs a `reason`, and may carry an `expiresAt` no more
+  than 30 days out: `{ "reason": "Bad HR feed", "expiresAt": null }`.
+- **Resuming** early needs a `reason` and a **different administrator** from
+  the one who placed it (403 `four-eyes-required` otherwise), so the person
+  whose judgement or session is in question cannot lift the containment alone.
+- **Expiry** is honoured at the apply boundary the moment it passes. A
+  once-a-minute sweep (`provision.write_stop_expiry`) then closes the stop and
+  records who placed it and why.
+- When both are active the **tenant** stop is the one a refusal names (409
+  `external-writes-paused` with `scope: "tenant"`), because it is the one that
+  has to be lifted first.
+
+Every transition is audited — `provision.{tenant,target}.external_writes.pause`,
+`.resume`, and `.expire` (the last with no actor: the clock lifted it) — and
+each is a security event, so a webhook endpoint subscribed to **Emergency
+write stops** is notified of all six (see
+[Getting them out](../configure.md#getting-them-out)).
+
+Stopping the API still stops everything, including sync and mail retries;
+the tenant stop is the lever that contains writes while leaving everything
+else running.
 
 **Deleting** a target (`DELETE /api/admin/targets/:id?confirm=true`) removes
 Syntra's record of the accounts it manages and never touches the accounts

@@ -188,6 +188,29 @@ export const WEBHOOK_EVENT_GROUPS = {
       'scim.member_removed',
     ],
   },
+  /**
+   * The external-write emergency stops, both scopes, every transition.
+   *
+   * A group of its own rather than more lines in `configuration`, because the
+   * people who need these are not the people who review role changes: a stop
+   * is an incident in progress, and whoever is on call for provisioning
+   * should be able to subscribe to exactly this without the rest. `expire`
+   * is here for the same reason `resume` is -- "writes are flowing again" is
+   * the half of the incident somebody is waiting to hear.
+   */
+  'write-stops': {
+    label: 'Emergency write stops',
+    source: 'audit',
+    description: 'Connector writes were stopped, resumed, or their stop expired.',
+    templates: [
+      'provision.tenant.external_writes.pause',
+      'provision.tenant.external_writes.resume',
+      'provision.tenant.external_writes.expire',
+      'provision.target.external_writes.pause',
+      'provision.target.external_writes.resume',
+      'provision.target.external_writes.expire',
+    ],
+  },
 } as const;
 
 export type WebhookEventGroup = keyof typeof WEBHOOK_EVENT_GROUPS;

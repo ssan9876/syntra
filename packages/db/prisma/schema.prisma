@@ -173,6 +173,7 @@ model Tenant {
   lifecyclePolicies         LifecyclePolicy[]
   lifecycleSimulations      LifecycleSimulation[]
   lifecycleLegalHolds       LifecycleLegalHold[]
+  externalWriteStop         TenantExternalWriteStop?
   lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
@@ -2514,6 +2515,31 @@ model LifecycleLegalHold {
 
   @@index([tenantId, subjectType, subjectId, releasedAt])
   @@index([tenantId, reference])
+}
+
+/// The tenant-wide emergency stop for connector writes: one row per tenant,
+/// created the first time somebody places a stop and kept afterwards so the
+/// last resume stays visible beside the controls.
+///
+/// A row rather than columns on `Tenant`, because `Tenant` is read before any
+/// tenant context exists (host resolution, sign-in) and is deliberately not
+/// under row-level security. The stop is tenant data like any other and gets
+/// the same FORCE RLS isolation as every table an administrator writes.
+///
+/// The column set mirrors `TargetSystem.externalWrites*` exactly, so the two
+/// scopes share one notion of "active" (`pausedAt` set and `expiresAt` null or
+/// in the future) and one resume rule (a different administrator).
+model TenantExternalWriteStop {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @unique @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pausedAt          DateTime?
+  pausedByUserId    String?   @db.Uuid
+  pauseReason       String?
+  pauseExpiresAt    DateTime?
+  resumedAt         DateTime?
+  resumedByUserId   String?   @db.Uuid
+  updatedAt         DateTime  @updatedAt
 }
 
 /// A no-write rehearsal of a hire, move or departure computed by the same

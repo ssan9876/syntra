@@ -973,6 +973,68 @@ describe('POST /api/admin/targets/:id/runs/:runId/apply', () => {
   });
 });
 
+describe('the tenant-wide external-write stop', () => {
+  it('is placed with a reason, refuses every apply, and needs a second administrator to lift', async () => {
+    const first = await manager();
+    await create(first);
+    expect((await get('/api/admin/provision/external-write-stop', first)).json()).toMatchObject({ active: false });
+
+    const paused = await post('/api/admin/provision/external-write-stop', first, {
+      reason: 'Suspected compromised administrator session',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    expect(paused.statusCode).toBe(200);
+    expect(paused.json()).toMatchObject({ active: true, pauseReason: 'Suspected compromised administrator session' });
+    expect((await get('/api/admin/provision/external-write-stop', first)).json().active).toBe(true);
+    // A second stop on top of an active one is a conflict, not a silent reset
+    // of who placed it.
+    expect((await post('/api/admin/provision/external-write-stop', first, { reason: 'Again' })).statusCode).toBe(409);
+
+    const runId = await withTenant(ctx.tenantId, async (tx) =>
+      (await tx.provisionRun.create({ data: { tenantId: ctx.tenantId, targetSystemId: targetId, status: 'previewed' } })).id);
+    const refused = await post(`/api/admin/targets/${targetId}/runs/${runId}/apply`, first, { confirm: true });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ scope: 'tenant' });
+    expect(refused.json().type).toContain('external-writes-paused');
+    const run = await withTenant(ctx.tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: runId } }));
+    expect(run.status).toBe('previewed');
+
+    expect((await post('/api/admin/provision/external-write-resume', first, { reason: 'Self approval' })).statusCode).toBe(403);
+    const second = await adminCookie([PERMISSIONS.PROVISION_MANAGE, PERMISSIONS.PROVISION_READ, PERMISSIONS.IDENTITY_READ]);
+    const resumed = await post('/api/admin/provision/external-write-resume', second, { reason: 'Session revoked and credentials rotated' });
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.json()).toMatchObject({ active: false, pausedAt: null });
+    expect((await post('/api/admin/provision/external-write-resume', second, { reason: 'Twice' })).statusCode).toBe(409);
+
+    const events = await withTenant(ctx.tenantId, (tx) => tx.auditEvent.findMany({
+      where: { action: { startsWith: 'provision.tenant.external_writes.' } }, orderBy: { sequence: 'asc' },
+    }));
+    expect(events.map((event) => event.action)).toEqual([
+      'provision.tenant.external_writes.pause', 'provision.tenant.external_writes.resume',
+    ]);
+  });
+
+  it('requires a reason and bounds the expiry', async () => {
+    const cookie = await manager();
+    expect((await post('/api/admin/provision/external-write-stop', cookie, { reason: '   ' })).statusCode).toBe(400);
+    expect((await post('/api/admin/provision/external-write-stop', cookie, {
+      reason: 'Too long', expiresAt: new Date(Date.now() + 31 * 86_400_000).toISOString(),
+    })).statusCode).toBe(400);
+    expect((await post('/api/admin/provision/external-write-stop', cookie, {
+      reason: 'Already past', expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    })).statusCode).toBe(409);
+  });
+
+  it('lets readers see the stop and only managers change it', async () => {
+    const reader = await adminCookie([PERMISSIONS.PROVISION_READ]);
+    expect((await get('/api/admin/provision/external-write-stop', reader)).statusCode).toBe(200);
+    expect((await post('/api/admin/provision/external-write-stop', reader, { reason: 'Contain' })).statusCode).toBe(403);
+    expect((await post('/api/admin/provision/external-write-resume', reader, { reason: 'Lift' })).statusCode).toBe(403);
+    const outsider = await adminCookie([PERMISSIONS.IDENTITY_READ]);
+    expect((await get('/api/admin/provision/external-write-stop', outsider)).statusCode).toBe(403);
+  });
+});
+
 describe('run detail and drift', () => {
   it('returns the actions in sequence order, each naming its person', async () => {
     const cookie = await manager();

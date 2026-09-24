@@ -54,6 +54,9 @@ access is not confirmed revoked.
 
 3. **Stop the bleeding, not the product.** The controls in
    [Target rollback](target-rollback.md) stop a target without losing state.
+   When you cannot yet say which target is wrong, place the **tenant-wide
+   emergency write stop** (Target systems, top of the list): no connector
+   writes anywhere until a second administrator resumes it or its expiry passes.
    Do not restore a backup, disable a directory source, or rotate a key in
    the first fifteen minutes unless the failure is exactly that.
 
