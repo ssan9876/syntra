@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { prisma, withTenant } from '@syntra/db';
+import { prisma, withTenant, type TenantClient } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { collectTenant, type CollectedTenant } from './collect.js';
 import { buildSnapshot } from './snapshot-service.js';
@@ -447,6 +447,16 @@ describe('the transaction budget — slice 2', () => {
   }
 
   /**
+   * A seed transaction. Setup, not measurement: the mutation cases seed tens
+   * of thousands of rows so the code under test has something to be slow
+   * over, and on a two-vCPU runner one `createMany` of that size can pass
+   * Prisma's 5,000 ms default before the case even starts. Only the work
+   * inside `timedTransactions` is measured, and it keeps the default.
+   */
+  const seedTx = <T>(fn: (tx: TenantClient) => Promise<T>) =>
+    withTenant(tenantId, fn, { timeoutMs: 120_000 });
+
+  /**
    * A campaign over 2,000 holdings, 200 subjects and 50 reviewers.
    *
    * Every row goes in with `createMany`. A seed written row by row inside one
@@ -464,8 +474,7 @@ describe('the transaction budget — slice 2', () => {
     const subjectIds = Array.from({ length: SUBJECTS }, () => randomUUID());
     const entitlementIds = Array.from({ length: perSubject }, () => randomUUID());
 
-    const { targetId, snapshotId: builtSnapshotId, actorId } = await withTenant(
-      tenantId,
+    const { targetId, snapshotId: builtSnapshotId, actorId } = await seedTx(
       async (tx) => {
         const target = await tx.targetSystem.create({
           data: {
@@ -512,7 +521,7 @@ describe('the transaction budget — slice 2', () => {
       },
     );
 
-    await withTenant(tenantId, (tx) =>
+    await seedTx((tx) =>
       tx.person.createMany({
         data: [
           ...reviewerIds.map((id, i) => ({
@@ -531,7 +540,7 @@ describe('the transaction budget — slice 2', () => {
       }),
     );
 
-    await withTenant(tenantId, (tx) =>
+    await seedTx((tx) =>
       tx.contract.createMany({
         data: [
           ...reviewerIds.map((personId, i) => ({
@@ -568,7 +577,7 @@ describe('the transaction budget — slice 2', () => {
     // The reviewers need logins: reviewer resolution drops a person with no
     // active account, and a campaign whose every item fell to the fallback
     // would measure the fallback.
-    await withTenant(tenantId, (tx) =>
+    await seedTx((tx) =>
       tx.user.createMany({
         data: reviewerIds.map((personId, i) => ({
           tenantId,
@@ -580,7 +589,7 @@ describe('the transaction budget — slice 2', () => {
       }),
     );
 
-    await withTenant(tenantId, (tx) =>
+    await seedTx((tx) =>
       tx.entitlement.createMany({
         data: entitlementIds.map((id, i) => ({
           id,
@@ -595,7 +604,7 @@ describe('the transaction budget — slice 2', () => {
 
     // One account per subject: every holding routes to a `RevocationOrder`, and
     // `createRevocationOrder` needs the account it names.
-    await withTenant(tenantId, (tx) =>
+    await seedTx((tx) =>
       tx.targetAccount.createMany({
         data: subjectIds.map((personId, i) => ({
           tenantId,
@@ -609,7 +618,7 @@ describe('the transaction budget — slice 2', () => {
       }),
     );
 
-    await withTenant(tenantId, (tx) =>
+    await seedTx((tx) =>
       tx.holding.createMany({
         data: subjectIds.flatMap((personId) =>
           entitlementIds.map((resourceId, e) => ({
