@@ -67,6 +67,13 @@ describe('routeRefusesTokens', () => {
     expect(routeRefusesTokens('/api/admin/groups')).toBe(false);
   });
 
+  it('refuses a single operation without refusing its path', () => {
+    // Deleting an application needs step-up; reading and editing it do not.
+    expect(routeRefusesTokens('/api/admin/applications/:id', 'DELETE')).toBe(true);
+    expect(routeRefusesTokens('/api/admin/applications/:id', 'PUT')).toBe(false);
+    expect(routeRefusesTokens('/api/admin/applications/:id/assignments/:assignmentId', 'DELETE')).toBe(false);
+  });
+
   it('says no for a request that matched no route at all', () => {
     // A 404 has no pattern. Treating undefined as "refused" would be
     // harmless; treating it as "allowed" is what this asserts, because the

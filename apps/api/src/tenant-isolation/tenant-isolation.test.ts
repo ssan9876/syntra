@@ -819,6 +819,32 @@ describe('tenant isolation: the defects this suite found stay fixed', () => {
   });
 });
 
+describe('tenant isolation: deleting an application', () => {
+  /**
+   * The probe above calls this route with B's id already. Pinned here as
+   * well, with B's application's REAL name typed as the confirmation, because
+   * that is the call that would succeed if the lookup ever stopped being
+   * tenant-scoped -- and a delete is the one route where "it worked" cannot
+   * be undone.
+   */
+  it('answers 404 for another tenant\'s application even when its name is typed correctly', async () => {
+    const name = await withTenant(B.tenantId, (tx) =>
+      tx.application.findUniqueOrThrow({ where: { id: B.ids.application }, select: { name: true } }),
+    );
+    const res = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/admin/applications/${B.ids.application}`,
+      headers: { host: ctx.host, cookie },
+      payload: { confirm: name.name },
+    });
+    expect(res.statusCode).toBe(404);
+    const kept = await withTenant(B.tenantId, (tx) =>
+      tx.application.count({ where: { id: B.ids.application } }),
+    );
+    expect(kept).toBe(1);
+  });
+});
+
 describe('tenant isolation: Govern source refresh names only this tenant\'s sources', () => {
   it.each([
     ['directorySource', () => B.ids.source],

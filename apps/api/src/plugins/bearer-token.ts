@@ -58,9 +58,33 @@ export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/admin/targets/:id/accounts/:personId/send-login-info',
 ];
 
-export function routeRefusesTokens(routePattern: string | undefined): boolean {
+/**
+ * Single OPERATIONS a machine token is refused at: one method on one exact
+ * route pattern, where the prefix list above would be far too wide.
+ *
+ * `/api/admin/applications/:id` is the example that needed it. Deleting an
+ * application demands a freshly stepped-up session, which a token cannot have
+ * -- but listing it above as a prefix would also refuse the token every read
+ * and every edit under `/applications/:id/...`, which integrations use. Exact,
+ * and per method, so `GET` and `PUT` on the same path stay token-callable.
+ *
+ * - DELETING AN APPLICATION -- every user assigned it loses single sign-on
+ *   the moment it commits, and its relying party's tokens die with it. A
+ *   leaked token that could press it would be an outage on demand.
+ */
+export const TOKEN_DENIED_OPERATIONS: readonly { method: string; url: string }[] = [
+  { method: 'DELETE', url: '/api/admin/applications/:id' },
+];
+
+export function routeRefusesTokens(routePattern: string | undefined, method?: string): boolean {
   if (routePattern === undefined) return false;
-  return TOKEN_DENIED_ROUTES.some((denied) => routePattern.startsWith(denied));
+  if (TOKEN_DENIED_ROUTES.some((denied) => routePattern.startsWith(denied))) return true;
+  return (
+    method !== undefined &&
+    TOKEN_DENIED_OPERATIONS.some(
+      (denied) => denied.url === routePattern && denied.method === method.toUpperCase(),
+    )
+  );
 }
 
 /** The value after `Bearer `, when it looks like one of ours. */

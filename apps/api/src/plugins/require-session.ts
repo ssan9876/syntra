@@ -52,7 +52,7 @@ export function requireSession(required: SessionScope) {
     if (!cookie) {
       const principal = await resolveBearerPrincipal(request);
       if (principal !== null) {
-        if (routeRefusesTokens(request.routeOptions?.url)) {
+        if (routeRefusesTokens(request.routeOptions?.url, request.method)) {
           // 403, not 401. The credential was perfectly good; this route is not
           // one a machine may use, and answering 401 would send an integrator
           // to check a token that is fine.
