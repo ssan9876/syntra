@@ -41,79 +41,96 @@ const renderPanel = () =>
 
 beforeEach(() => vi.restoreAllMocks());
 
-describe('ContainersPanel', () => {
-  it('suggests a DN built from the chosen target base', async () => {
-    // The preview IS the explanation. A control that needs a paragraph beside
-    // it to be usable is a control that needs redesigning.
+/** Every labelled button in the order a reader meets it (the DN's copy icon has no text). */
+const buttonNames = () =>
+  screen
+    .getAllByRole('button')
+    .map((b) => b.textContent ?? '')
+    .filter((name) => name !== '');
+
+describe('ContainersPanel on a target that places accounts in OUs but does not mirror', () => {
+  it('recommends turning mirroring on first, linked to the target’s Org units section', async () => {
     mockRoutes({
       '/api/admin/targets': () => json(targets),
       '/api/admin/org-units/ou-1/containers': () => json({ containers: [] }),
     });
     renderPanel();
 
-    // The trigger and the submit share their label: RecordPanel renders one
-    // button when closed and the same wording on the panel's submit.
-    await userEvent.click(
-      await screen.findByRole('button', { name: /create container/i }),
+    const row = await screen.findByTestId('unplaced-t-1');
+    const link = screen.getByRole('link', { name: /turn on mirroring for this target \(recommended\)/i });
+    expect(link).toHaveAttribute('href', '/admin/targets/t-1#org-units');
+    // The recommendation comes before the manual path, in reading order.
+    const text = row.textContent ?? '';
+    expect(text.indexOf('Turn on mirroring for this target (recommended)')).toBeGreaterThan(-1);
+    expect(text.indexOf('Set a DN by hand')).toBeGreaterThan(
+      text.indexOf('Turn on mirroring for this target (recommended)'),
     );
-    await userEvent.selectOptions(await screen.findByLabelText(/target/i), 't-1');
+    expect(screen.queryByRole('button', { name: /create container/i })).not.toBeInTheDocument();
+  });
 
-    await waitFor(() =>
-      expect(screen.getByLabelText(/container/i)).toHaveValue(`OU=Sales,${BASE_DN}`),
+  it('offers no placement on a target with no OUs', async () => {
+    mockRoutes({
+      '/api/admin/targets': () =>
+        json({ targets: [{ id: 't-2', name: 'Entra', config: {}, placesAccountsInContainers: false }] }),
+      '/api/admin/org-units/ou-1/containers': () => json({ containers: [] }),
+    });
+    renderPanel();
+    expect(await screen.findByText('Not in any directory yet')).toBeInTheDocument();
+    expect(screen.queryByTestId('unplaced-t-2')).not.toBeInTheDocument();
+  });
+
+  it('suggests a DN built from the target base when set by hand', async () => {
+    mockRoutes({
+      '/api/admin/targets': () => json(targets),
+      '/api/admin/org-units/ou-1/containers': () => json({ containers: [] }),
+    });
+    renderPanel();
+
+    await userEvent.click(await screen.findByRole('button', { name: /^set a dn by hand$/i }));
+
+    expect(screen.getByLabelText(/container/i)).toHaveValue(`OU=Sales,${BASE_DN}`);
+    expect(screen.getByTestId('hand-typed-precedence')).toHaveTextContent(
+      /takes precedence over the mirror if mirroring is turned on later/i,
     );
   });
 
-  it('posts the container to the materialise endpoint', async () => {
+  it('posts the typed DN to the materialise endpoint', async () => {
     let posted: string | undefined;
     mockRoutes({
       '/api/admin/targets': () => json(targets),
       '/api/admin/org-units/ou-1/containers': (init) => {
         if (init?.method === 'POST') {
           posted = String(init.body);
-          return json(
-            { targetSystemId: 't-1', dn: `OU=Sales,${BASE_DN}`, state: 'desired' },
-            201,
-          );
+          return json({ targetSystemId: 't-1', dn: `OU=Sales,${BASE_DN}`, state: 'desired' }, 201);
         }
         return json({ containers: [] });
       },
     });
     renderPanel();
 
-    await userEvent.click(
-      await screen.findByRole('button', { name: /create container/i }),
-    );
-    await userEvent.selectOptions(await screen.findByLabelText(/target/i), 't-1');
-    await userEvent.click(screen.getByRole('button', { name: /create container/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /^set a dn by hand$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save typed dn/i }));
 
     await waitFor(() => expect(posted).toBeDefined());
-    expect(JSON.parse(posted!)).toEqual({
-      targetSystemId: 't-1',
-      dn: `OU=Sales,${BASE_DN}`,
-    });
+    expect(JSON.parse(posted!)).toEqual({ targetSystemId: 't-1', dn: `OU=Sales,${BASE_DN}` });
   });
 
-  it('shows an existing materialisation and its state', async () => {
+  it('shows an existing typed placement and its state', async () => {
     mockRoutes({
       '/api/admin/targets': () => json(targets),
       '/api/admin/org-units/ou-1/containers': () =>
         json({
           containers: [
-            {
-              targetSystemId: 't-1',
-              targetName: 'Acme AD',
-              dn: `OU=Sales,${BASE_DN}`,
-              state: 'desired',
-            },
+            { targetSystemId: 't-1', targetName: 'Acme AD', dn: `OU=Sales,${BASE_DN}`, state: 'desired' },
           ],
         }),
     });
     renderPanel();
 
     expect(await screen.findByText(`OU=Sales,${BASE_DN}`)).toBeInTheDocument();
-    // 'desired' is an ordinary state before the next run, not a fault, and it
-    // has to be visible so nobody reads a pending container as a broken one.
+    // 'desired' is an ordinary state before the next run, not a fault.
     expect(screen.getByText('Awaiting the next run')).toBeInTheDocument();
+    expect(screen.getByTestId('container-t-1')).toHaveTextContent('Typed by hand');
   });
 
   it('surfaces an out-of-base refusal on the field', async () => {
@@ -125,12 +142,7 @@ describe('ContainersPanel', () => {
               {
                 title: "CN=Users,DC=acme,DC=test is not below the target's base",
                 reason: 'outside_base',
-                errors: [
-                  {
-                    path: 'dn',
-                    message: "CN=Users,DC=acme,DC=test is not below the target's base",
-                  },
-                ],
+                errors: [{ path: 'dn', message: "CN=Users,DC=acme,DC=test is not below the target's base" }],
               },
               400,
             )
@@ -138,20 +150,13 @@ describe('ContainersPanel', () => {
     });
     renderPanel();
 
-    await userEvent.click(
-      await screen.findByRole('button', { name: /create container/i }),
-    );
-    await userEvent.selectOptions(await screen.findByLabelText(/target/i), 't-1');
+    await userEvent.click(await screen.findByRole('button', { name: /^set a dn by hand$/i }));
     await userEvent.clear(screen.getByLabelText(/container/i));
     await userEvent.type(screen.getByLabelText(/container/i), 'CN=Users,DC=acme,DC=test');
-    await userEvent.click(screen.getByRole('button', { name: /create container/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save typed dn/i }));
 
-    // Against the field itself. (The same words also head the form's error
-    // summary, so the text alone is no longer unique on the page.)
     const container = screen.getByLabelText(/container/i);
-    await waitFor(() =>
-      expect(container).toHaveAccessibleDescription(/not below the target/i),
-    );
+    await waitFor(() => expect(container).toHaveAccessibleDescription(/not below the target/i));
   });
 });
 
@@ -170,21 +175,39 @@ describe('ContainersPanel on a mirroring target', () => {
     ...over,
   });
 
-  it('shows the derived DN, marked Mirrored, before any run has made it', async () => {
+  it('shows the derived DN as "Mirrored automatically", with no action needed', async () => {
     mockRoutes({
       '/api/admin/targets': () => json(targets),
       '/api/admin/org-units/ou-1/containers': () => json({ containers: [view({})] }),
     });
     renderPanel();
     const row = await screen.findByTestId('container-t-1');
-    expect(row).toHaveTextContent('Mirrored');
+    expect(row).toHaveTextContent('Mirrored automatically');
     expect(row).toHaveTextContent(`OU=Sales,${BASE_DN}`);
     expect(row).toHaveTextContent('The next run creates it');
-    // A derived placement can still be overridden by hand.
-    expect(screen.getByRole('button', { name: /create container/i })).toBeInTheDocument();
+    expect(row).toHaveTextContent(/no action needed: the next run records this placement/i);
+    // Automatic first: no recommendation to turn on what is already on, and the
+    // typed DN is only the secondary override.
+    expect(screen.queryByRole('link', { name: /turn on mirroring/i })).not.toBeInTheDocument();
+    expect(buttonNames()).toEqual(['Set a DN by hand (overrides the mirror)']);
   });
 
-  it('offers "Switch to mirrored" on a manual row and posts it', async () => {
+  it('spells out the precedence when a DN is typed over the mirror', async () => {
+    mockRoutes({
+      '/api/admin/targets': () => json(targets),
+      '/api/admin/org-units/ou-1/containers': () => json({ containers: [view({})] }),
+    });
+    renderPanel();
+    await userEvent.click(
+      await screen.findByRole('button', { name: /set a dn by hand \(overrides the mirror\)/i }),
+    );
+    expect(screen.getByText(/set a dn by hand on acme ad \(overrides the mirror\)/i)).toBeInTheDocument();
+    expect(screen.getByTestId('hand-typed-precedence')).toHaveTextContent(
+      /a typed dn takes precedence over the mirror/i,
+    );
+  });
+
+  it('leads a typed row with "Switch to mirrored", and posts it', async () => {
     let switched = false;
     mockRoutes({
       '/api/admin/targets': () => json(targets),
@@ -199,8 +222,10 @@ describe('ContainersPanel on a mirroring target', () => {
     });
     renderPanel();
     const row = await screen.findByTestId('container-t-1');
-    expect(row).toHaveTextContent('Materialised');
+    expect(row).toHaveTextContent('Typed by hand (overrides the mirror)');
+    expect(row).toHaveTextContent('a typed DN always takes precedence over the mirror');
     expect(row).toHaveTextContent(`Mirrored, it would be OU=Sales,${BASE_DN}`);
+    expect(buttonNames()[0]).toBe('Switch to mirrored');
     await userEvent.click(screen.getByRole('button', { name: /switch to mirrored/i }));
     await waitFor(() => expect(switched).toBe(true));
   });
@@ -219,24 +244,28 @@ describe('ContainersPanel on a mirroring target', () => {
     expect(row).toHaveTextContent('the next run derives it again');
   });
 
-  it('pre-fills the Materialise box under the parent’s container on that target', async () => {
+  it('pre-fills the typed DN under the parent’s container on that target', async () => {
+    let parentRead = false;
     mockRoutes({
       '/api/admin/targets': () => json(targets),
       '/api/admin/org-units/ou-1/containers': () => json({ containers: [] }),
-      '/api/admin/org-units/ou-parent/containers': () =>
-        json({ containers: [view({ dn: `OU=West\\, Region,${BASE_DN}`, state: 'live', source: 'manual', mirroring: false })] }),
+      '/api/admin/org-units/ou-parent/containers': () => {
+        parentRead = true;
+        return json({ containers: [view({ dn: `OU=West\\, Region,${BASE_DN}`, state: 'live', source: 'manual', mirroring: false })] });
+      },
     });
     render(
       <MemoryRouter>
         <ContainersPanel unit={{ id: 'ou-1', name: 'Sales, Inside', parentId: 'ou-parent' }} />
       </MemoryRouter>,
     );
-    await userEvent.click(await screen.findByRole('button', { name: /create container/i }));
-    await userEvent.selectOptions(await screen.findByLabelText(/target/i), 't-1');
+    // Wait for the parent's containers before opening, as a person would see
+    // the page settle before clicking.
+    await screen.findByTestId('unplaced-t-1');
+    await waitFor(() => expect(parentRead).toBe(true));
+    await userEvent.click(await screen.findByRole('button', { name: /^set a dn by hand$/i }));
     await waitFor(() =>
-      expect(screen.getByLabelText(/container/i)).toHaveValue(
-        `OU=Sales\\, Inside,OU=West\\, Region,${BASE_DN}`,
-      ),
+      expect(screen.getByLabelText(/container/i)).toHaveValue(`OU=Sales\\, Inside,OU=West\\, Region,${BASE_DN}`),
     );
   });
 });

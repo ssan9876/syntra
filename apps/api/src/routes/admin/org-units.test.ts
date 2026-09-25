@@ -334,6 +334,179 @@ describe('a target mirroring org units as OUs', () => {
   });
 });
 
+describe('switching every hand-typed unit on a target to mirrored', () => {
+  // The live case: every unit was materialised by hand before mirroring
+  // existed, mirroring was turned on, and nothing moved -- because a typed DN
+  // always wins. The bulk switch is that one button pressed for each unit.
+  const url = (targetSystemId: string) => `/api/admin/targets/${targetSystemId}/org-units/switch-to-mirrored`;
+
+  /** Corp > IT, plus an inactive Old unit, all typed by hand on a mirroring target. */
+  async function seedHandTypedTree() {
+    return withTenant(ctx.tenantId, async (tx) => {
+      const target = await tx.targetSystem.create({
+        data: { tenantId: ctx.tenantId, name: 'Acme AD', config, secretName: 'target/ad/bind', mirrorOrgUnits: true },
+      });
+      const other = await tx.targetSystem.create({
+        data: { tenantId: ctx.tenantId, name: 'Other AD', config, secretName: 'target/ad/bind2', mirrorOrgUnits: true },
+      });
+      // Created child first, so "parents first" cannot pass by insertion order.
+      const corp = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'Corp' } });
+      const it = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'IT', parentId: corp.id } });
+      const old = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'Old', status: 'inactive' } });
+      const row = (orgUnitId: string, targetSystemId: string, dn: string) =>
+        tx.orgUnitContainer.create({
+          data: { tenantId: ctx.tenantId, orgUnitId, targetSystemId, dn, state: 'live', source: 'manual' },
+        });
+      await row(it.id, target.id, `OU=IT,${BASE_DN}`);
+      await row(corp.id, target.id, `OU=Corp,${BASE_DN}`);
+      await row(old.id, target.id, `OU=Old,${BASE_DN}`);
+      await row(corp.id, other.id, `OU=Corp,${BASE_DN}`);
+      return { targetId: target.id, otherId: other.id, corpId: corp.id, itId: it.id, oldId: old.id };
+    });
+  }
+
+  it('converts only manual rows of active units on that target, parents first, auditing each', async () => {
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const seeded = await seedHandTypedTree();
+
+    const res = await post(url(seeded.targetId), cookie, {});
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.switched.map((s: { unitName: string }) => s.unitName)).toEqual(['Corp', 'IT']);
+    expect(body.switched[1]).toEqual({
+      orgUnitId: seeded.itId,
+      unitName: 'IT',
+      from: `OU=IT,${BASE_DN}`,
+      dn: `OU=IT,OU=Corp,${BASE_DN}`,
+      pendingMoveFrom: `OU=IT,${BASE_DN}`,
+    });
+    expect(body.skipped).toEqual([]);
+
+    const rows = await withTenant(ctx.tenantId, (tx) =>
+      tx.orgUnitContainer.findMany({ select: { orgUnitId: true, targetSystemId: true, source: true } }),
+    );
+    const sourceOf = (orgUnitId: string, targetSystemId: string) =>
+      rows.find((r) => r.orgUnitId === orgUnitId && r.targetSystemId === targetSystemId)?.source;
+    expect(sourceOf(seeded.corpId, seeded.targetId)).toBe('mirrored');
+    expect(sourceOf(seeded.itId, seeded.targetId)).toBe('mirrored');
+    // A deactivated unit is not mirrored at all: its typed row still says
+    // where its OU is, and stays.
+    expect(sourceOf(seeded.oldId, seeded.targetId)).toBe('manual');
+    // Another target's typed row is that target's business.
+    expect(sourceOf(seeded.corpId, seeded.otherId)).toBe('manual');
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({
+        where: { action: 'orgUnit.container.switch_to_mirrored' },
+        orderBy: { sequence: 'asc' },
+      }),
+    );
+    expect(events.map((e) => e.targetId)).toEqual([seeded.corpId, seeded.itId]);
+  });
+
+  it('is idempotent: a second press converts nothing and audits nothing', async () => {
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const seeded = await seedHandTypedTree();
+
+    await post(url(seeded.targetId), cookie, {});
+    const again = await post(url(seeded.targetId), cookie, {});
+
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toEqual({ targetSystemId: seeded.targetId, switched: [], skipped: [] });
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.count({ where: { action: 'orgUnit.container.switch_to_mirrored' } }),
+    );
+    expect(events).toBe(2);
+  });
+
+  it('names a unit it cannot convert and leaves its typed DN in force', async () => {
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const seeded = await seedHandTypedTree();
+    // A mirrored row of another unit already holds IT's derived DN.
+    await withTenant(ctx.tenantId, async (tx) => {
+      const squatter = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'Squatter' } });
+      await tx.orgUnitContainer.create({
+        data: {
+          tenantId: ctx.tenantId,
+          orgUnitId: squatter.id,
+          targetSystemId: seeded.targetId,
+          dn: `OU=IT,OU=Corp,${BASE_DN}`,
+          state: 'live',
+          source: 'mirrored',
+        },
+      });
+    });
+
+    const res = await post(url(seeded.targetId), cookie, {});
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().switched.map((s: { unitName: string }) => s.unitName)).toEqual(['Corp']);
+    expect(res.json().skipped).toEqual([
+      expect.objectContaining({ orgUnitId: seeded.itId, unitName: 'IT', dn: `OU=IT,${BASE_DN}`, reason: 'dn_taken' }),
+    ]);
+  });
+
+  it('refuses a target that does not mirror, converting nothing', async () => {
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const seeded = await seedHandTypedTree();
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.targetSystem.update({ where: { id: seeded.targetId }, data: { mirrorOrgUnits: false } }),
+    );
+
+    const res = await post(url(seeded.targetId), cookie, {});
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toMatch(/not-mirroring/);
+    const manual = await withTenant(ctx.tenantId, (tx) =>
+      tx.orgUnitContainer.count({ where: { targetSystemId: seeded.targetId, source: 'manual' } }),
+    );
+    expect(manual).toBe(3);
+  });
+
+  it('answers 404 for an unknown target', async () => {
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const res = await post(url('00000000-0000-4000-8000-000000000000'), cookie, {});
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('needs provision.manage, as the single switch does', async () => {
+    await seedAdmin(ALL.filter((p) => p !== PERMISSIONS.PROVISION_MANAGE));
+    const cookie = await adminCookie();
+    const seeded = await seedHandTypedTree();
+
+    const res = await post(url(seeded.targetId), cookie, {});
+
+    expect(res.statusCode).toBe(403);
+    const manual = await withTenant(ctx.tenantId, (tx) =>
+      tx.orgUnitContainer.count({ where: { targetSystemId: seeded.targetId, source: 'manual' } }),
+    );
+    expect(manual).toBe(3);
+  });
+
+  it('needs an elevated (administrative) session, as the single switch does', async () => {
+    await seedAdmin(ALL);
+    const login = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { host: ctx.host },
+      payload: { login: 'admin', password: PASSWORD },
+    });
+    const plain = `syntra_session=${login.cookies.find((c) => c.name === 'syntra_session')!.value}`;
+    const seeded = await seedHandTypedTree();
+
+    const res = await post(url(seeded.targetId), plain, {});
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().type).toMatch(/admin-session-required/);
+  });
+});
+
 describe('deleting a unit people are assigned to', () => {
   it('refuses, and names the people', async () => {
     // `Person.orgUnitId` is ON DELETE SET NULL, so this delete would SUCCEED

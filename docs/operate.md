@@ -1055,19 +1055,28 @@ A person's account is placed, on a target that has containers (Active
 Directory), by the first of: a manual **Move** of that account, the
 **container of their org unit** on that target, the account profile's
 container template, and its fallback container. An org unit gets a container
-on a target in one of two ways, shown on the unit's page under **Containers**:
+on a target in one of two ways, shown on the unit's page under **Containers**
+— the automatic one first, because it is the recommended one:
 
-- **Materialised** — somebody typed a DN for that unit on that target. The
-  Materialise box pre-fills `OU=<unit>,<parent's container>` when the parent
-  already has a container there, and `OU=<unit>,<base DN>` otherwise. A typed
-  DN always wins.
-- **Mirrored** — the target has **Mirror org units as OUs** on (target page,
-  *Org units*). Every **active** unit is then placed at a DN derived from its
-  place in Syntra's tree, `OU=<unit>,OU=<parent>,…,<root>`, the top-level unit
-  nearest the root. The root is the *Org-unit root* (blank: the target's base
-  DN); it must sit below the base DN. The section previews, from the real org
-  units and before anything is saved, which DN every unit would get and why a
-  unit cannot be mirrored.
+- **Mirrored automatically** — the target has **Mirror org units as OUs** on
+  (target page, *Org units*). Every **active** unit is then placed at a DN
+  derived from its place in Syntra's tree, `OU=<unit>,OU=<parent>,…,<root>`,
+  the top-level unit nearest the root. The root is the *Org-unit root* (blank:
+  the target's base DN); it must sit below the base DN. The section previews,
+  from the real org units and before anything is saved, which DN every unit
+  would get and why a unit cannot be mirrored. A unit with no row yet shows
+  *Mirrored automatically* with its derived DN: nothing to do — the next run
+  writes the row and creates the OU if it is missing.
+- **Typed by hand** — an override. *Set a DN by hand* on the unit's
+  Containers panel types a DN for that unit on that target, pre-filled
+  `OU=<unit>,<parent's container>` when the parent already has a container
+  there, and `OU=<unit>,<base DN>` otherwise. **A typed DN always takes
+  precedence over the mirror**, so on a mirroring target the unit stops
+  following the tree until it is switched back. On a target that places
+  accounts in OUs but does not mirror, the panel first recommends turning
+  mirroring on (a link to the target's *Org units* section, where the switch
+  and its preview are); typing a DN stays available below it. Targets with no
+  OUs (Entra ID, SCIM) are not offered.
 
 Names are escaped per RFC 4514 (`Sales, West` becomes `OU=Sales\, West`).
 A name over Active Directory's 64-character OU limit is never truncated: that
@@ -1104,7 +1113,26 @@ plans against them, under the guard:
 the row takes the derived DN, and when the target had confirmed the typed DN
 the next run proposes moving that OU — the flat `OU=IT,OU=Syntra,…` becoming
 `OU=IT,OU=ssander.local,OU=Syntra,…` — and a person confirms it. Audited as
-`orgUnit.container.switch_to_mirrored`; the setting itself is audited on
+`orgUnit.container.switch_to_mirrored`.
+
+**Turned mirroring on and nothing moved?** Units materialised by hand before
+mirroring was on keep their typed DNs, because a typed DN always wins. The
+target's *Org units* section then warns *Mirroring is on, but N org units use
+a DN typed by hand*, listing each unit with its typed DN and the DN mirroring
+would give it. **Switch all to mirrored**
+(`POST /api/admin/targets/:id/org-units/switch-to-mirrored`,
+`provision.manage`, administrative session) converts every active unit's
+typed row on that target, parents first, in one transaction, through the same
+code and with the same `orgUnit.container.switch_to_mirrored` event per unit
+as the single switch; a unit that cannot be converted (its name cannot be
+mirrored, or another unit holds its DN) keeps its typed DN and is named in the
+answer. Pressing it again converts nothing. Per-unit *Switch* buttons sit
+beside each listed unit for keeping some typed DNs on purpose. Nothing moves
+in the directory until a run is confirmed: the next run proposes the OU moves,
+and a container move always holds the run. Save the *Org units* settings
+before switching — the switch uses the saved root.
+
+The setting itself is audited on
 `provision.target.update` as `mirrorOrgUnits` and `orgUnitRootDn`
 `{ from, to }`. Mirroring is refused on a target that does not place accounts
 in containers (Entra ID, SCIM, HTTP), and the target page says why.

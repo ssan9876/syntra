@@ -49,6 +49,12 @@ export const targetsOpenApi = describeAdminRoutes('Target systems', {
     params: idParam,
     query: orgUnitMirrorPreviewQuery,
   },
+  'POST /targets/:id/org-units/switch-to-mirrored': {
+    summary: "Hand every org unit's hand-typed container on this target over to the org-unit mirror",
+    description:
+      'Converts every active unit whose container on this target was typed by hand to the DN the mirror derives, parents first, in one transaction, with one `orgUnit.container.switch_to_mirrored` audit event per unit. Units that cannot be converted (no derivable DN, or the DN held by another unit) are left as they are and listed in `skipped`. Idempotent. Nothing is written to the directory: the next provisioning run proposes moving the OUs, and a container move holds the run for a person. 409 when the target does not mirror.',
+    params: idParam,
+  },
   'GET /targets/:id/placements/:personId': {
     summary: "Read a person's manual account placement on a target system",
     description: '`placement` is null when the person follows the placement rule.',

@@ -26322,6 +26322,68 @@
         }
       }
     },
+    "/api/admin/targets/{id}/org-units/switch-to-mirrored": {
+      "post": {
+        "operationId": "postTargetsByIdOrgUnitsSwitchToMirrored",
+        "tags": [
+          "Target systems"
+        ],
+        "summary": "Hand every org unit's hand-typed container on this target over to the org-unit mirror",
+        "description": "Converts every active unit whose container on this target was typed by hand to the DN the mirror derives, parents first, in one transaction, with one `orgUnit.container.switch_to_mirrored` audit event per unit. Units that cannot be converted (no derivable DN, or the DN held by another unit) are left as they are and listed in `skipped`. Idempotent. Nothing is written to the directory: the next provisioning run proposes moving the OUs, and a container move holds the run for a person. 409 when the target does not mirror.\n\nRequires `provision.manage`.",
+        "x-syntra-permission": [
+          "provision.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/targets/{id}/placements/{personId}": {
       "get": {
         "operationId": "getTargetsByIdPlacementsByPersonId",

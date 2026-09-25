@@ -7,6 +7,14 @@
  * to test) with no hooks or JSX in the way.
  */
 
+/**
+ * The anchor of the Org units section on the target's edit form. An org
+ * unit's Containers panel links to it when it recommends turning mirroring on
+ * -- a link rather than a button there, because the switch is per TARGET and
+ * places every unit, and this section is where its preview is.
+ */
+export const ORG_UNITS_ANCHOR = 'org-units';
+
 export type TlsMode = 'ldaps' | 'starttls';
 export type EnforcementMode = 'additive' | 'authoritative';
 export type TargetType = 'activeDirectory' | 'scim2' | 'httpJson' | 'entraId';
