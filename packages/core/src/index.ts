@@ -178,6 +178,7 @@ export * from './person-source/reference-data.js';
 export * from './identity/field-classification.js';
 export * from './access/application-service.js';
 export * from './access/application-icon.js';
+export * from './access/application-delete.js';
 export * from './access/catalog/index.js';
 export * from './access/assignment-service.js';
 export * from './access/resolve.js';

@@ -2162,7 +2162,7 @@ Not personal data: `tenantId`.
 
 - **Purpose.** How the tenant is set up. Not personal data, except columns naming the administrator who changed something or a person given a role in the configuration (classified `identity`).
 - **Source.** Administrators.
-- **Retention.** For as long as the tenant exists.
+- **Retention.** For as long as the tenant exists, or until an administrator deletes what it configures (an application with its SAML/OIDC configuration and claim mappings, a target).
 - **Legal basis.** PLACEHOLDER -- to be confirmed by the controller. Only the administrator references are personal data; typically legitimate interests (6(1)(f)).
 - **Access.** The permission of the owning module.
 

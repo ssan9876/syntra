@@ -6,6 +6,8 @@ import {
   catalogCreateRequest,
   catalogCreateResponse,
   createApplicationRequest,
+  deleteApplicationRequest,
+  deleteApplicationResponse,
   idParam,
   updateApplicationRequest,
 } from '@syntra/contracts';
@@ -14,13 +16,16 @@ import {
   CatalogVariableMissingError,
   EntityIdTakenError,
   PERMISSIONS,
+  STEP_UP_MAX_AGE_MS,
   UnknownCatalogEntryError,
   assignApplication,
   catalogEntry,
   createApplication,
   createFromCatalog,
+  deleteApplication,
   ensureActiveKey,
   findApplication,
+  isRecentElevation,
   type MasterKeyProvider,
   listCatalog,
   listApplications,
@@ -262,6 +267,129 @@ export async function registerAdminApplicationRoutes(
           payload: { slug: updated.slug, status: updated.status },
         });
         return toApplicationView(updated);
+      });
+    },
+  );
+
+  /**
+   * Deleting an application, permanently. See `access/application-delete.ts`
+   * for what goes, what stays and why; this handler is the gate in front of it.
+   *
+   * The strictest gate any delete here has, because it is the one whose effect
+   * lands on people who are not in the room: every user assigned the
+   * application loses single sign-on to it the moment this commits, and the
+   * tokens its relying party holds stop working. So, as for the tenant-wide
+   * session revoke and sending login info:
+   *
+   *  - `access.manage`, the permission that created it;
+   *  - a console session elevated within `STEP_UP_MAX_AGE_MS` -- a stolen
+   *    console session that could press this is an outage for one application
+   *    on demand, and the freshly re-run password and factors are the proof it
+   *    is the administrator;
+   *  - never a machine token (`TOKEN_DENIED_OPERATIONS`), which cannot elevate;
+   *  - the application's NAME typed back (`deleteApplicationRequest`).
+   *
+   * `status: 'inactive'` (Retire) is the reversible option and stays the one
+   * the console offers first. This is for the case retiring cannot solve: an
+   * entity ID, client_id or slug that must be freed to register it again.
+   *
+   * Refusals that concern a real application of this tenant are audited as
+   * failures. A missing or foreign id is not: there is nothing of this tenant's
+   * to attribute it to, and recording another tenant's id would be writing it
+   * into this tenant's log.
+   */
+  app.delete(
+    '/applications/:id',
+    { preHandler: requirePermission(PERMISSIONS.ACCESS_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = deleteApplicationRequest.parse(request.body ?? {});
+
+      // Belt to `TOKEN_DENIED_OPERATIONS`' braces: a principal that got here by
+      // a token has no elevation to be recent.
+      if (request.session.viaToken || !isRecentElevation(request.session)) {
+        await request.db(async (tx) => {
+          const existing = await findApplication(tx, id);
+          if (!existing) return;
+          await recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: 'application.deleted',
+            targetType: 'Application',
+            targetId: id,
+            outcome: 'failure',
+            sourceIp: request.ip,
+            payload: { reason: 'step_up_required', name: existing.name },
+          });
+        });
+        throw new ProblemError(
+          403,
+          'step-up-required',
+          'Confirm it is you first',
+          `Deleting an application needs a console session started in the last ${STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then retry.`,
+        );
+      }
+
+      const outcome = await request.db(async (tx) => {
+        const result = await deleteApplication(tx, {
+          applicationId: id,
+          confirm: body.confirm,
+          actorUserId: request.session.userId,
+          sourceIp: request.ip,
+        });
+        if (!result.ok && result.reason !== 'not_found') {
+          await recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: 'application.deleted',
+            targetType: 'Application',
+            targetId: id,
+            outcome: 'failure',
+            sourceIp: request.ip,
+            // Never the text that was typed: it is not evidence of anything,
+            // and a mistyped name can be somebody's password pasted into the
+            // wrong box.
+            payload:
+              result.reason === 'in_use'
+                ? { reason: 'in_use', products: result.products, liveGrants: result.liveGrants }
+                : { reason: result.reason },
+          });
+        }
+        return result;
+      });
+
+      if (!outcome.ok) {
+        switch (outcome.reason) {
+          case 'not_found':
+            // A second delete lands here too: the first one removed the row.
+            throw new ProblemError(404, 'not-found', 'Application not found');
+          case 'confirm_mismatch':
+            throw new ProblemError(
+              400,
+              'confirm-mismatch',
+              'The name does not match',
+              "Type the application's name exactly as it is shown to delete it.",
+              { errors: [{ path: 'confirm', message: "Type the application's name exactly as it is shown" }] },
+            );
+          case 'in_use': {
+            const products = outcome.products.map((p) => `"${p}"`).join(', ');
+            const parts = [
+              outcome.products.length > 0 ? `catalog products grant it (${products})` : null,
+              outcome.liveGrants > 0
+                ? `${outcome.liveGrants} live access grant${outcome.liveGrants === 1 ? '' : 's'} still hold it`
+                : null,
+            ].filter((part): part is string => part !== null);
+            throw new ProblemError(
+              409,
+              'application-in-use',
+              'This application is still granted through Automate',
+              `Not deleted: ${parts.join(', and ')}. Remove it from those products and end those grants first, or retire the application instead.`,
+              { products: outcome.products, liveGrants: outcome.liveGrants },
+            );
+          }
+        }
+      }
+
+      return deleteApplicationResponse.parse({
+        deleted: { id, name: outcome.summary.name, assignments: outcome.summary.assignments },
       });
     },
   );

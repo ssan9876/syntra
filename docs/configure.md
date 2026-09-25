@@ -962,6 +962,65 @@ is bounded by four things:
 If you are auditing this deployment, `oidc.client_credentials_authorized` is
 the event to read, and `clientCredentialsEnabled` is the column to list.
 
+### Retiring and deleting an application
+
+The application page ends with a **Danger zone** (shown to holders of
+`access.manage`) holding the two ways to take an application away, in the
+order to reach for them.
+
+**Retire** sets `status: inactive` (`PUT /api/admin/applications/:id`). The
+tile leaves the portal and sign-in stops, because resolution only considers
+active applications; the SAML/OIDC configuration, claim mappings and
+assignments are all kept, and **Reactivate** brings it back as it was. The
+list labels it *Retired*.
+
+**Delete application** is permanent, and exists for what retiring cannot do:
+free the application's SAML entity ID, OIDC `client_id` and slug so the same
+application can be registered again. (An entity ID is unique per tenant, so
+re-registering a retired one is refused with `409 entity-id-taken`.) A dialog
+says what will happen and asks for the application's name typed back, exactly
+and case-sensitively; the server compares it too.
+
+`DELETE /api/admin/applications/:id` with `{ "confirm": "<name>" }`:
+
+- needs `access.manage` **and** a console session elevated within the step-up
+  window (`403 step-up-required`; the console offers to elevate). API tokens
+  are refused (`403 token-not-accepted`) — only this operation; reading and
+  editing applications stay open to tokens;
+- `400 confirm-mismatch` when the name does not match; `404` for an
+  application that is not there, including a second delete;
+- `409 application-in-use` while a catalog **product grants** the application
+  or a **live access grant** (scheduled, pending or active) holds it. Take it
+  out of the product and end those grants first: a product granting a missing
+  application would fail at fulfilment, after somebody approved it.
+
+In one transaction it removes the application with its SAML configuration, its
+OIDC client (the client secret is only ever stored as a hash on that row, so
+it goes with it; queued back-channel logout deliveries for the client go too),
+claim mappings, assignments and logo. It **revokes what was issued to it**:
+OIDC access and refresh tokens, codes and grants (deleted, so the provider
+no longer finds them), Syntra refresh tokens for the client (kept, revoked),
+unspent authorization decisions, SAML single-logout sessions, parked SAML
+requests, and sign-ins still in flight towards it (second factor or upstream).
+Resource owners, delegations, privileged-resource classifications and
+business-function (separation of duties) entries naming the application are
+removed. **Users lose single sign-on to it immediately.** A service provider's
+own session, established before the delete, lasts until that provider ends it;
+Syntra sends no logout to a provider it no longer knows.
+
+It does **not** touch the tenant's signing keys, users, groups or org units,
+Govern snapshots, reviews and decisions (they record that people held the
+application), or authentication policy rules. A rule's `applicationIds`
+keeps the deleted id on purpose: an empty list means *every* application, so
+removing the only id would widen a "deny for this app" rule to all of them;
+a dangling id matches nothing. The audit event counts such rules.
+
+Audited as `application.deleted` with the name, slug, protocol, entity ID and
+client ID, catalog entry, assignment and claim-mapping counts, and what was
+revoked — never a secret. Refusals for a real application (step-up, name
+mismatch, in use) are audited as `application.deleted` with `outcome: failure`
+and the reason; the typed text is not recorded.
+
 ### Audit events
 
 The names are `<area>.<past-tense event>`; the source of truth is every
@@ -999,6 +1058,7 @@ list. This slice adds:
 | `federation.assertion_refused` | An upstream assertion failed verification |
 | `federation.exchange_refused` | An upstream token exchange failed, including an `id_token` whose signature could not be verified against the provider's published keys |
 | `access.saml_configured` / `access.saml_metadata_imported` / `access.oidc_configured` | An application's protocol configuration changed, carrying the allowlist that changed with it |
+| `application.deleted` | An application was deleted, or a delete was refused (`outcome: failure`, with the reason). Carries its name, protocol, entity ID / client ID, assignment count and what was revoked — never a secret. See [Retiring and deleting an application](#retiring-and-deleting-an-application) |
 | `access.claim_mapping_changed` | A claim or attribute released to an application was added or removed |
 | `access.upstream_configured` | An upstream identity provider was registered or changed. **Never the client secret, and never its vault name** |
 | `policy.rule_added` / `policy.rule_updated` / `policy.rule_deleted` / `policy.rules_reordered` / `policy.default_set` | The policy changed, and who changed it |

@@ -591,6 +591,15 @@ And one deliberate exception to the rule itself:
   and it is built to be hard to reach — see [Tenant deletion](#tenant-deletion).
   Nothing inside a tenant that is staying gains a Delete from it.
 
+An **application** is not a directory object, and can be deleted: it is
+configuration an administrator registered, and deleting it is the only way to
+free a SAML entity ID or OIDC client ID for re-registration. Retire it first
+(reversible, keeps everything); delete only to register it again or to remove
+a mistake. Deletion needs a fresh step-up and the name typed back, is refused
+while Automate still grants the application, revokes what was issued to it,
+and never touches users, groups or the signing keys — see
+[Configure, "Retiring and deleting an application"](configure.md#retiring-and-deleting-an-application).
+
 A data-subject erasure is *not* a second exception. It rewrites one person's
 identifying fields in place and leaves every directory row standing — see
 [Data-subject requests](#data-subject-requests). The only rows it deletes

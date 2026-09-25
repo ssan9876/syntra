@@ -217,7 +217,10 @@ export const INVENTORY_PROFILES = {
     title: 'Configuration',
     purpose: 'How the tenant is set up. Not personal data, except columns naming the administrator who changed something or a person given a role in the configuration (classified `identity`).',
     source: 'Administrators.',
-    retention: 'For as long as the tenant exists.',
+    // Not "for as long as the tenant exists" without qualification: an
+    // application (with its SAML/OIDC configuration and claim mappings) and a
+    // target are removed by an administrator's delete, not only with the tenant.
+    retention: 'For as long as the tenant exists, or until an administrator deletes what it configures (an application with its SAML/OIDC configuration and claim mappings, a target).',
     legalBasis: `${PLACEHOLDER} Only the administrator references are personal data; typically legitimate interests (6(1)(f)).`,
     access: 'The permission of the owning module.',
   },

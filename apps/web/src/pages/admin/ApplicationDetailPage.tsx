@@ -7,6 +7,7 @@ import { PickerNote } from './PickerNote.js';
 import { PageHeader } from './PageHeader.js';
 import { ApplicationSso } from './ApplicationSso.js';
 import { AppLogoPicker } from './AppLogoPicker.js';
+import { ApplicationDangerZone } from './ApplicationDangerZone.js';
 import type { ApplicationIconView } from '@syntra/contracts';
 
 type SubjectType = 'user' | 'group' | 'orgUnit';
@@ -52,8 +53,14 @@ export function ApplicationDetailPage() {
   // The application itself, for its name and logo. There is no single-record
   // read; the list carries both, and a catalog is tens of rows, not
   // thousands.
-  const { data: applicationsData } = useApiResource<{
-    applications: { id: string; name: string; icon?: ApplicationIconView }[];
+  const { data: applicationsData, reload: reloadApplications } = useApiResource<{
+    applications: {
+      id: string;
+      name: string;
+      status?: string;
+      type?: string;
+      icon?: ApplicationIconView;
+    }[];
   }>('/api/admin/applications');
   const application = applicationsData?.applications?.find((row) => row.id === id) ?? null;
   const [savedIcon, setSavedIcon] = useState<ApplicationIconView | undefined>(undefined);
@@ -233,6 +240,25 @@ export function ApplicationDetailPage() {
       {id && (
         <div className="mt-4 space-y-4">
           <ApplicationSso applicationId={id} />
+        </div>
+      )}
+
+      {/*
+        Last on the page, where nobody arrives by scrolling past it on the way
+        to something else.
+      */}
+      {application && (
+        <div className="mt-8">
+          <ApplicationDangerZone
+            application={{
+              id: application.id,
+              name: application.name,
+              status: application.status ?? 'active',
+              type: application.type ?? 'bookmark',
+            }}
+            assignmentCount={assignments ? assignments.length : null}
+            onRetired={reloadApplications}
+          />
         </div>
       )}
     </>

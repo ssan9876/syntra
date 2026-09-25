@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { loadConfig, memoryTransport } from '@syntra/core';
 import { buildApp } from '../app.js';
-import { TOKEN_DENIED_ROUTES } from '../plugins/bearer-token.js';
+import { routeRefusesTokens } from '../plugins/bearer-token.js';
 import { pageQuery } from '../routes/admin/list-query.js';
 import { ADMIN_ROUTE_DESCRIPTIONS, PUBLIC_ROUTE_DESCRIPTIONS, ROUTE_DESCRIPTIONS } from './descriptions.js';
 import { deprecationHeaders, honoursNoticePeriod, registerDeprecationHeaders } from './deprecation.js';
@@ -185,7 +185,7 @@ describe('the document', () => {
     for (const route of app.routeCatalog.filter((r) => r.url.startsWith('/api/admin/'))) {
       const operation = document.paths[toOpenApiPath(route.url)]?.[route.method.toLowerCase()];
       if (operation === undefined) continue;
-      const refused = TOKEN_DENIED_ROUTES.some((denied) => route.url.startsWith(denied));
+      const refused = routeRefusesTokens(route.url, route.method);
       expect(operation['x-syntra-token-allowed'], key(route)).toBe(!refused);
       expect(operation.security, key(route)).toEqual(
         refused ? [{ sessionCookie: [] }] : [{ bearerToken: [] }, { sessionCookie: [] }],
@@ -195,6 +195,10 @@ describe('the document', () => {
     expect(
       document.paths['/api/admin/users/{id}/tokens']!.post!['x-syntra-token-allowed'],
     ).toBe(false);
+    // So is deleting an application -- and ONLY deleting it: reading and
+    // editing the same path stay open to an integration.
+    expect(document.paths['/api/admin/applications/{id}']!.delete!['x-syntra-token-allowed']).toBe(false);
+    expect(document.paths['/api/admin/applications/{id}']!.put!['x-syntra-token-allowed']).toBe(true);
     // So is sending somebody's one-time password link.
     expect(
       document.paths['/api/admin/targets/{id}/accounts/{personId}/send-login-info']!.post![

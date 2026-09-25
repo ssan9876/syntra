@@ -63,7 +63,7 @@ export function captureRouteCatalog(app: FastifyInstance): CatalogRoute[] {
         method,
         url,
         permissions,
-        tokenAllowed: !routeRefusesTokens(url),
+        tokenAllowed: !routeRefusesTokens(url, method),
         rateLimit:
           limit && limit.max !== undefined
             ? { max: limit.max, timeWindow: limit.timeWindow ?? '1 minute' }

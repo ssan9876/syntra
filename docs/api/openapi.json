@@ -413,6 +413,112 @@
             "$ref": "#/components/responses/Problem"
           }
         }
+      },
+      "delete": {
+        "operationId": "deleteApplicationsById",
+        "tags": [
+          "Applications"
+        ],
+        "summary": "Delete an application",
+        "description": "Permanent. Removes the application with its SAML and OIDC configuration (freeing the entity ID, client_id and slug for reuse), claim mappings, assignments and logo, and revokes what was issued to it: OIDC access and refresh tokens, codes and grants, single-logout sessions and sign-ins in flight. Users lose single sign-on to it immediately. The tenant's signing keys, users and groups are not touched. `confirm` must be the application's name (`400 confirm-mismatch` otherwise). Needs a console session elevated within the step-up window (`403 step-up-required` otherwise); API tokens are refused. Answers `409 application-in-use` while a catalog product grants it or a live access grant holds it. A second delete is `404`. Setting `status: inactive` (retire) is the reversible alternative.\n\nRequires `access.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "access.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "confirm"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "assignments": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "assignments"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/api/admin/applications/{id}/assignments": {

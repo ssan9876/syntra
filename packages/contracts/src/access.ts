@@ -81,6 +81,29 @@ export const updateApplicationRequest = applicationFields
   .extend({ status: z.enum(['active', 'inactive']).optional() });
 export type UpdateApplicationRequest = z.input<typeof updateApplicationRequest>;
 
+/**
+ * Deleting an application: the administrator types its name.
+ *
+ * A body rather than `?confirm=true` (the target and source deletes' shape)
+ * because what is being confirmed is not "yes" but WHICH application: two
+ * tabs, two applications called nearly the same thing, and a boolean confirms
+ * whichever one the URL happens to name. The server compares this against the
+ * stored name, so a console bug cannot confirm on the reader's behalf.
+ */
+export const deleteApplicationRequest = z.object({
+  confirm: z.string().max(256),
+});
+export type DeleteApplicationRequest = z.infer<typeof deleteApplicationRequest>;
+
+export const deleteApplicationResponse = z.object({
+  deleted: z.object({
+    id: z.string().uuid(),
+    name: z.string(),
+    assignments: z.number().int(),
+  }),
+});
+export type DeleteApplicationResponse = z.infer<typeof deleteApplicationResponse>;
+
 export const assignApplicationRequest = z.discriminatedUnion('type', [
   z.object({ type: z.literal('user'), id: z.string().uuid() }),
   z.object({ type: z.literal('group'), id: z.string().uuid() }),
