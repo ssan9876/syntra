@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from './config.js';
+import { loadConfig, parseMailbox } from './config.js';
 
 const valid = {
   DATABASE_URL: 'postgresql://syntra:syntra@localhost:5432/syntra',
@@ -257,5 +257,33 @@ describe('loadConfig — mail', () => {
     expect(() =>
       loadConfig({ ...valid, ...graph, MAIL_GRAPH_CLIENT_SECRET: secret, MAIL_GRAPH_SENDER: 'bad' }),
     ).toThrow(expect.objectContaining({ message: expect.not.stringContaining(secret) }));
+  });
+});
+
+describe('parseMailbox', () => {
+  it('splits a named mailbox and accepts a bare address', () => {
+    expect(parseMailbox('Syntra <no-reply@example.com>')).toEqual({
+      name: 'Syntra',
+      address: 'no-reply@example.com',
+    });
+    expect(parseMailbox('"IT Desk" <it@example.com>')).toEqual({ name: 'IT Desk', address: 'it@example.com' });
+    expect(parseMailbox('<it@example.com>')).toEqual({ name: null, address: 'it@example.com' });
+    expect(parseMailbox('it@example.com')).toEqual({ name: null, address: 'it@example.com' });
+  });
+
+  it('refuses what is not one plain address', () => {
+    for (const bad of ['', 'it', 'it@', '@example.com', 'it@example', 'it@.com', 'it@example.', 'a@b@c.com', 'it @example.com', 'A <B> <it@example.com>', 'it@example.com>']) {
+      expect(parseMailbox(bad), bad).toBeNull();
+    }
+  });
+
+  // The inputs CodeQL's js/polynomial-redos named: long runs of spaces, and
+  // `!@!.` followed by many `!.`. Linear now, so each answers at once.
+  it('answers quickly on the inputs that made the old patterns backtrack', () => {
+    const started = Date.now();
+    parseMailbox(`${' '.repeat(50_000)}x`);
+    parseMailbox(`!@!.${'!.'.repeat(50_000)}`);
+    parseMailbox(`<!@!.${'!.'.repeat(50_000)}`);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });

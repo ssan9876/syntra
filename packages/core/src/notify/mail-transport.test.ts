@@ -100,7 +100,7 @@ describe('graphTransport', () => {
     clock = 56 * 60 * 1000;
     await graph.send(message);
 
-    const tokenRequests = calls.filter((c) => c.url.includes('login.microsoftonline.com'));
+    const tokenRequests = calls.filter((c) => new URL(c.url).host === 'login.microsoftonline.com');
     expect(tokenRequests).toHaveLength(2);
     expect((calls[4]!.init.headers as Record<string, string>).authorization).toBe('Bearer second');
   });
@@ -187,7 +187,7 @@ describe('mailTransport', () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(tokenResponse()());
     try {
       await mailTransport(config).verify!();
-      expect(String(fetch.mock.calls[0]![0])).toContain('login.microsoftonline.com');
+      expect(new URL(String(fetch.mock.calls[0]![0])).host).toBe('login.microsoftonline.com');
     } finally {
       fetch.mockRestore();
     }

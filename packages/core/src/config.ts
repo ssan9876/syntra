@@ -251,7 +251,7 @@ const schema = z.object({
       message: 'MAIL_GRAPH_CLIENT_ID must be the application (client) id, a GUID',
     });
   }
-  if (v.MAIL_GRAPH_SENDER !== undefined && !BARE_ADDRESS.test(v.MAIL_GRAPH_SENDER)) {
+  if (v.MAIL_GRAPH_SENDER !== undefined && !isBareAddress(v.MAIL_GRAPH_SENDER)) {
     ctx.addIssue({
       code: 'custom',
       path: ['MAIL_GRAPH_SENDER'],
@@ -262,7 +262,21 @@ const schema = z.object({
 });
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const BARE_ADDRESS = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
+/**
+ * `local@domain.tld`: one `@`, neither side of it empty, a dot inside the
+ * domain, and no whitespace, quotes or angle brackets anywhere. Checked by
+ * hand rather than with one regular expression, because the obvious pattern
+ * backtracks polynomially on a long run of dots (CodeQL js/polynomial-redos).
+ * Only an operator types this, but a configuration check should never be the
+ * slow part of a start.
+ */
+function isBareAddress(value: string): boolean {
+  if (value.length === 0 || value.length > 320 || /[\s<>"]/.test(value)) return false;
+  const at = value.indexOf('@');
+  if (at <= 0 || at !== value.lastIndexOf('@')) return false;
+  // A dot in the domain with at least one character before and after it.
+  return value.slice(at + 2, -1).includes('.');
+}
 /** A tenant GUID or a domain name; the token endpoint accepts either. */
 const GRAPH_TENANT =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9-]+(?:\.[a-z0-9-]+)+)$/i;
@@ -280,14 +294,19 @@ export const DEFAULT_MAIL_FROM = 'Syntra <no-reply@syntra.local>';
  */
 export function parseMailbox(value: string): { name: string | null; address: string } | null {
   const trimmed = value.trim();
-  const angled = /^(?:"?([^"<>]*?)"?\s*)?<([^<>\s]+)>$/.exec(trimmed);
-  if (angled) {
-    const address = angled[2]!;
-    if (!BARE_ADDRESS.test(address)) return null;
-    const name = (angled[1] ?? '').trim();
-    return { name: name === '' ? null : name, address };
+  if (!trimmed.endsWith('>')) {
+    return isBareAddress(trimmed) ? { name: null, address: trimmed } : null;
   }
-  return BARE_ADDRESS.test(trimmed) ? { name: null, address: trimmed } : null;
+  // `Name <address>`, split on the last `<` by index rather than by pattern,
+  // for the reason isBareAddress gives.
+  const open = trimmed.lastIndexOf('<');
+  if (open < 0) return null;
+  const address = trimmed.slice(open + 1, -1);
+  if (!isBareAddress(address)) return null;
+  let name = trimmed.slice(0, open).trim();
+  if (name.length >= 2 && name.startsWith('"') && name.endsWith('"')) name = name.slice(1, -1).trim();
+  if (/[<>"]/.test(name)) return null;
+  return { name: name === '' ? null : name, address };
 }
 
 /**
