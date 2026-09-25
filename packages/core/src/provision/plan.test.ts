@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ACTION_ORDER, addDays, planActions } from './plan.js';
+import { movesContainer } from './guard.js';
 import type { ActualState, ContractFacts, DesiredState, LadderSettings } from './types.js';
 
 const NOW = new Date('2026-06-15T00:00:00Z');
@@ -2232,5 +2233,31 @@ describe('planActions — create_container', () => {
 
   it('proposes nothing when reconciliation asked for nothing', () => {
     expect(plan().some((a) => a.actionType === 'create_container')).toBe(false);
+  });
+});
+
+describe('planActions — a flat target (Entra ID, SCIM)', () => {
+  it('proposes an attribute update that names no container, so the guard counts no move', () => {
+    // An adopted Entra account: the target reports its dn as the UPN and holds
+    // no container; the profile still carries a container value, which a flat
+    // target never uses. Only the attributes differ.
+    const actions = plan({
+      placesAccountsInContainers: false,
+      desired: [
+        desired({
+          account: {
+            required: true,
+            attributes: { displayName: ['Anna Novak'], usageLocation: ['US'] },
+            container: 'Entra',
+            enabledNow: true,
+            correlationKey: 'anna.novak',
+          },
+        }),
+      ],
+      actual: new Map([['person-1', actual({ dn: 'anna.novak@contoso.com' })]]),
+    });
+    expect(types(actions)).toEqual(['update_account']);
+    expect(actions[0]!.after).toMatchObject({ container: null });
+    expect(movesContainer(actions[0]!.before as Record<string, unknown>, actions[0]!.after as Record<string, unknown>)).toBe(false);
   });
 });

@@ -399,11 +399,17 @@ export function planActions(input: PlanInput): PlannedAction[] {
           // The complete managed set, never a delta. A container change is a
           // modifyDN at the connector; the anchor is unchanged, which is the
           // whole point of anchoring on objectGUID.
+          // A flat target (Entra ID, SCIM) has no containers, so the update
+          // names none. Carrying the profile's container value here made the
+          // guard's `movesContainer` read "no container -> <value>" as a move
+          // and hold every attribute update on an adopted account behind the
+          // move threshold.
+          const flat = input.placesAccountsInContainers === false;
           push('update_account', {
-            before: { attributes: current.attributes, container: containerOf(current) },
+            before: { attributes: current.attributes, container: flat ? null : containerOf(current) },
             after: {
               attributes: state.account.attributes,
-              container: state.account.container,
+              container: flat ? null : state.account.container,
             },
           });
         }
