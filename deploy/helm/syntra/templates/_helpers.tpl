@@ -77,7 +77,7 @@ configured: a Deployment pointing at a Secret that does not exist installs
 {{- else if .Values.secret.create -}}
 {{- printf "%s-runtime" (include "syntra.fullname" .) -}}
 {{- else -}}
-{{- required "Set existingSecret to the name of a Secret holding DATABASE_URL, SESSION_SECRET, MASTER_KEY and SMTP_URL (see the chart README), or set secret.create=true for a disposable environment." .Values.existingSecret -}}
+{{- required "Set existingSecret to the name of a Secret holding DATABASE_URL, SESSION_SECRET, MASTER_KEY and SMTP_URL (or MAIL_GRAPH_CLIENT_SECRET with mail.transport=graph; see the chart README), or set secret.create=true for a disposable environment." .Values.existingSecret -}}
 {{- end -}}
 {{- end -}}
 
@@ -92,8 +92,17 @@ configured: a Deployment pointing at a Secret that does not exist installs
 {{- if and .Values.api.trustProxy (or (eq (lower (toString .Values.api.trustProxy)) "true") (regexMatch "^[0-9]+$" (toString .Values.api.trustProxy))) -}}
 {{- fail "api.trustProxy must be addresses or CIDRs (e.g. 10.244.0.0/16), never `true` or a hop count; the API refuses both at startup" -}}
 {{- end -}}
+{{- if not (has .Values.mail.transport (list "smtp" "graph")) -}}
+{{- fail "mail.transport must be smtp or graph" -}}
+{{- end -}}
+{{- if eq .Values.mail.transport "graph" -}}
+{{- if or (not .Values.mail.graph.tenantId) (not .Values.mail.graph.clientId) (not .Values.mail.graph.sender) -}}
+{{- fail "mail.transport is graph: set mail.graph.tenantId, mail.graph.clientId and mail.graph.sender, and put the client secret in the Secret under secretKeys.mailGraphClientSecret (see docs/configure.md, Sending through Microsoft 365)" -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.secret.create (not .Values.existingSecret) -}}
-{{- range $k := list .Values.secretKeys.databaseUrl .Values.secretKeys.sessionSecret .Values.secretKeys.masterKey .Values.secretKeys.smtpUrl -}}
+{{- $mailKey := ternary .Values.secretKeys.mailGraphClientSecret .Values.secretKeys.smtpUrl (eq .Values.mail.transport "graph") -}}
+{{- range $k := list .Values.secretKeys.databaseUrl .Values.secretKeys.sessionSecret .Values.secretKeys.masterKey $mailKey -}}
 {{- if not (hasKey $.Values.secret.data $k) -}}
 {{- fail (printf "secret.create is true but secret.data has no %s" $k) -}}
 {{- end -}}

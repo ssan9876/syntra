@@ -43,13 +43,18 @@ secret:
   #  SMTP_URL: smtp://mail.example.com:25
 
 # The key names inside the Secret. Required keys: databaseUrl, sessionSecret,
-# masterKey, smtpUrl. The rest are read with `optional: true`, so a Secret
-# that lacks them is not an error -- the feature is simply off.
+# masterKey, and smtpUrl -- or, with mail.transport=graph,
+# mailGraphClientSecret instead of smtpUrl. The rest are read with
+# `optional: true`, so a Secret that lacks them is not an error -- the feature
+# is simply off.
 secretKeys:
   databaseUrl: DATABASE_URL
   sessionSecret: SESSION_SECRET
   masterKey: MASTER_KEY
   smtpUrl: SMTP_URL
+  # Required when mail.transport is graph: the app registration's client
+  # secret. From the Secret only, never from values -- see mail below.
+  mailGraphClientSecret: MAIL_GRAPH_CLIENT_SECRET
   # Optional. Unset, /metrics is never registered (404).
   metricsToken: METRICS_TOKEN
   # Optional. Signs Govern audit checkpoints; see docs/configure.md.
@@ -62,6 +67,33 @@ secretKeys:
   # PgBouncer in transaction mode cannot give it. Empty: the Job uses
   # databaseUrl.
   migrationDatabaseUrl: ""
+
+# -----------------------------------------------------------------------------
+# Outgoing mail. Password-reset links, sign-in links for new accounts, review
+# and approval notices.
+#
+# `smtp` (the default) reads SMTP_URL from the Secret. `graph` sends through
+# Microsoft 365 with Microsoft Graph's sendMail: the three identifiers below
+# are not secret and live here, the client secret is read from the Secret
+# (secretKeys.mailGraphClientSecret) and never from values. The application
+# needs no Graph API permission of its own; docs/configure.md, "Sending
+# through Microsoft 365", shows how to let it send as one mailbox and nothing
+# else. Graph is reached over 443, which networkPolicy.connectorEgress must
+# allow to login.microsoftonline.com and graph.microsoft.com.
+# -----------------------------------------------------------------------------
+mail:
+  # smtp | graph
+  transport: smtp
+  # The From header, "Name <address>" or an address. Empty: SMTP sends as
+  # "Syntra <no-reply@syntra.local>", Graph as the sender mailbox itself.
+  from: ""
+  graph:
+    # Directory (tenant) id, or a verified domain.
+    tenantId: ""
+    # Application (client) id of the app registration.
+    clientId: ""
+    # The mailbox mail is sent as, e.g. syntra@example.com.
+    sender: ""
 
 # -----------------------------------------------------------------------------
 # API

@@ -119,6 +119,7 @@ export * from './policy/policy-service.js';
 export * from './policy/context.js';
 export * from './policy/impact.js';
 export * from './notify/notification-service.js';
+export * from './notify/mail-transport.js';
 export * from './notify/delivery.js';
 export * from './notify/templates/index.js';
 export * from './notify/webhook-event.js';
@@ -294,6 +295,7 @@ export * from './provision/syntra-user.js';
 // modules choosing the SAME name, and under TS2308 the barrel then exports
 // neither.
 export * from './provision/apply.js';
+export * from './provision/credential-pickup.js';
 // Grepped workspace-wide before adding, as the five lines above were: none of
 // `PROVISION_JOB`, `ProvisionJobPayload`, `provisionJobPayload`,
 // `provisionScheduleKey`, `SchedulableTarget`, `applyTargetSchedule`,

@@ -52,6 +52,10 @@ export const TOKEN_DENIED_ROUTES: readonly string[] = [
   '/api/admin/break-glass',
   // Erasing a person is decided by two people, each signed in (backlog #70).
   '/api/admin/privacy/cases/:id/erasure',
+  // Sending a created account's one-time password link to an address the
+  // caller chooses is the password routes' authority, and needs a step-up a
+  // token cannot perform.
+  '/api/admin/targets/:id/accounts/:personId/send-login-info',
 ];
 
 export function routeRefusesTokens(routePattern: string | undefined): boolean {

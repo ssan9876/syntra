@@ -54,7 +54,16 @@ services:
       AWS_KMS_KEY_ID: ${AWS_KMS_KEY_ID:-}
       AWS_KMS_PREVIOUS_KEY_ID: ${AWS_KMS_PREVIOUS_KEY_ID:-}
       AWS_REGION: ${AWS_REGION:-}
-      SMTP_URL: ${SMTP_URL:?set SMTP_URL}
+      # Required unless MAIL_TRANSPORT=graph; the API refuses to start on a
+      # missing one and names it, for the same reason MASTER_KEY's check moved
+      # there -- only the API knows which transport was chosen.
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-smtp}
+      MAIL_FROM: ${MAIL_FROM:-}
+      MAIL_GRAPH_TENANT_ID: ${MAIL_GRAPH_TENANT_ID:-}
+      MAIL_GRAPH_CLIENT_ID: ${MAIL_GRAPH_CLIENT_ID:-}
+      MAIL_GRAPH_CLIENT_SECRET: ${MAIL_GRAPH_CLIENT_SECRET:-}
+      MAIL_GRAPH_SENDER: ${MAIL_GRAPH_SENDER:-}
       NODE_ENV: production
       # This deployment IS the proxy: nginx (the `web` service) is the only
       # thing a client ever reaches, and it terminates every connection to

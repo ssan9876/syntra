@@ -161,6 +161,33 @@ export function encodeUnicodePwd(password: string): Buffer {
   return Buffer.from(`"${password}"`, 'utf16le');
 }
 
+/**
+ * The one modify that sets a created account's password: `unicodePwd`, then
+ * `pwdLastSet = 0` when the profile asks for a change at first sign-in.
+ *
+ * Zero is the only value a client may write to `pwdLastSet`, and it means
+ * "must change before use"; the directory stamps the real time when the person
+ * picks their own. Setting a password resets `pwdLastSet` to now, so the order
+ * inside the request matters -- a zero written first would be overwritten by
+ * the password change beside it.
+ *
+ * One request rather than two, because the two facts belong together: a
+ * password that landed without its must-change flag is an initial password a
+ * manager has seen that nobody will ever be asked to replace, and a separate
+ * second write that fails is exactly how that state is reached.
+ *
+ * Exported so the shape can be asserted without a domain controller.
+ */
+export function initialPasswordChanges(op: {
+  initialPassword: string;
+  requirePasswordChange?: boolean | undefined;
+}): Change[] {
+  return [
+    change('replace', 'unicodePwd', [encodeUnicodePwd(op.initialPassword)]),
+    ...(op.requirePasswordChange === true ? [change('replace', 'pwdLastSet', ['0'])] : []),
+  ];
+}
+
 
 /**
  * Both moved to `../ldap/dn.js` so that `@syntra/connectors/testing`'s
@@ -522,10 +549,10 @@ async function createAccount(
     // nothing carries it back out, so it can never be sealed into the vault or
     // delivered, and no account Provision creates is usable by the person it
     // was created for. The caller owns it (Task 14).
-    await client.modify(
-      dn,
-      change('replace', 'unicodePwd', [encodeUnicodePwd(op.initialPassword)]),
-    );
+    //
+    // `pwdLastSet = 0` rides in the same modify when the profile asks for a
+    // change at first sign-in; `initialPasswordChanges` says why together.
+    await client.modify(dn, initialPasswordChanges(op));
   } catch (cause) {
     // The account exists and is unusable and disabled, which is the right way
     // round to fail. The next run sees an account carrying this action's

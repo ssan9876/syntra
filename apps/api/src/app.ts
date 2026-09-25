@@ -11,7 +11,7 @@ import {
   onSigningKeysChanged,
   readiness,
   redactReport,
-  smtpTransport,
+  mailTransport,
   type Config,
   type Scheduler,
   type Transport,
@@ -28,6 +28,7 @@ import {
 import { registerMfaRoutes } from './routes/mfa.js';
 import { registerEnrolRoutes } from './routes/enrol.js';
 import { registerPasswordResetRoutes } from './routes/password-reset.js';
+import { registerCredentialPickupRoutes } from './routes/credential-pickup.js';
 import { registerTenantContext } from './plugins/tenant-context.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerBrandingRoutes } from './routes/branding.js';
@@ -66,6 +67,7 @@ import { registerAdminTargetRoutes } from './routes/admin/targets.js';
 import { registerAdminProfileRoutes } from './routes/admin/profiles.js';
 import { registerAdminRuleRoutes } from './routes/admin/rules.js';
 import { registerAdminProvisionRunRoutes } from './routes/admin/provision-runs.js';
+import { registerAdminCredentialPickupRoutes } from './routes/admin/credential-pickups.js';
 import { registerAdminGovernRoutes } from './routes/admin/govern.js';
 import { configuredCheckpointSigner } from './govern-signer.js';
 import { registerPortalRoutes } from './routes/portal.js';
@@ -105,10 +107,10 @@ export interface AppOptions {
    */
   scheduler?: () => Scheduler | null;
   /**
-   * How outbound mail leaves the process. Defaults to SMTP from `SMTP_URL`.
+   * How outbound mail leaves the process. Defaults to `mailTransport(config)`:
+   * SMTP from `SMTP_URL`, or Microsoft Graph when MAIL_TRANSPORT=graph.
    *
-   * A seam rather than a hard-wired `smtpTransport` call so the test suite can
-   * hand in `memoryTransport()` — no test run may put mail on the wire, and a
+   * A seam rather than a hard-wired transport so the test suite can hand in `memoryTransport()` — no test run may put mail on the wire, and a
    * transport that is a parameter is the only way to guarantee that without
    * relying on MailDev happening to be the thing listening on port 1025.
    */
@@ -313,7 +315,7 @@ export async function buildApp(
   await app.register(registerBrandingRoutes, { prefix: '/api/branding' });
 
   // The one mail transport every route and job in this process shares.
-  const transport = options.transport ?? smtpTransport(config.smtpUrl);
+  const transport = options.transport ?? mailTransport(config);
 
   await app.register(registerAuthRoutes, {
     prefix: '/api/auth',
@@ -387,6 +389,17 @@ export async function buildApp(
     prefix: '/api/auth/password-reset',
     transport,
     publicUrl: config.publicUrl,
+    authRateLimitMax: config.authRateLimitMax,
+    authRateLimitTenantMax: config.authRateLimitTenantMax,
+  });
+
+  // A created account's one-time sign-in link. Unauthenticated for the same
+  // reason as the reset above -- the person holding the link cannot sign in
+  // yet -- and rate-limited like it. The key provider is what opens the
+  // sealed initial password on the one reveal the link allows.
+  await app.register(registerCredentialPickupRoutes, {
+    prefix: '/api/credential-pickup',
+    keyProvider,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,
   });
@@ -563,7 +576,15 @@ export async function buildApp(
     prefix: '/api/admin',
     keyProvider,
     transport,
+    publicUrl: config.publicUrl,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  });
+  // "Send login info" on an account, and the history of the links sent for
+  // it. The same transport and public URL a create's own link uses.
+  await app.register(registerAdminCredentialPickupRoutes, {
+    prefix: '/api/admin',
+    transport,
+    publicUrl: config.publicUrl,
   });
 
   await app.register(registerAdminAutomateRoutes, {

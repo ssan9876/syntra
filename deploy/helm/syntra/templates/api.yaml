@@ -112,7 +112,18 @@ spec:
             {{- include "syntra.secretEnv" (dict "name" "DATABASE_URL" "secret" $secret "key" .Values.secretKeys.databaseUrl) | nindent 12 }}
             {{- include "syntra.secretEnv" (dict "name" "SESSION_SECRET" "secret" $secret "key" .Values.secretKeys.sessionSecret) | nindent 12 }}
             {{- include "syntra.secretEnv" (dict "name" "MASTER_KEY" "secret" $secret "key" .Values.secretKeys.masterKey) | nindent 12 }}
+            - { name: MAIL_TRANSPORT, value: {{ .Values.mail.transport | quote }} }
+            {{- with .Values.mail.from }}
+            - { name: MAIL_FROM, value: {{ . | quote }} }
+            {{- end }}
+            {{- if eq .Values.mail.transport "graph" }}
+            - { name: MAIL_GRAPH_TENANT_ID, value: {{ .Values.mail.graph.tenantId | quote }} }
+            - { name: MAIL_GRAPH_CLIENT_ID, value: {{ .Values.mail.graph.clientId | quote }} }
+            - { name: MAIL_GRAPH_SENDER, value: {{ .Values.mail.graph.sender | quote }} }
+            {{- include "syntra.secretEnv" (dict "name" "MAIL_GRAPH_CLIENT_SECRET" "secret" $secret "key" .Values.secretKeys.mailGraphClientSecret) | nindent 12 }}
+            {{- else }}
             {{- include "syntra.secretEnv" (dict "name" "SMTP_URL" "secret" $secret "key" .Values.secretKeys.smtpUrl) | nindent 12 }}
+            {{- end }}
             {{- with .Values.secretKeys.metricsToken }}
             {{- include "syntra.secretEnv" (dict "name" "METRICS_TOKEN" "secret" $secret "key" . "optional" true) | nindent 12 }}
             {{- end }}

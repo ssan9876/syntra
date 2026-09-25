@@ -4,6 +4,7 @@ import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 import { Adoption } from './PersonAccessAdoption.js';
 import { Placement } from './PersonAccessPlacement.js';
+import { LoginInfo } from './PersonAccessLoginInfo.js';
 import {
   HoldingsTable,
   accountStatus,
@@ -98,6 +99,11 @@ export function PersonAccessPage() {
                   correlationKey={account.correlationKey}
                 />
               )}
+              {/*
+                The account's sign-in link: what was sent, and a way to send
+                another. Renders nothing for somebody who may not read it.
+              */}
+              <LoginInfo personId={id!} targetSystemId={account.targetSystemId} />
               {account.entitlements.length === 0 ? (
                 <div className="p-4 text-muted">
                   This account holds nothing Syntra can see.

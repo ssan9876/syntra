@@ -5,6 +5,18 @@ publicUrl: https://idm.example.com
 
 secretKeys:
   migrationDatabaseUrl: MIGRATION_DATABASE_URL
+  # With mail.transport=graph the Secret holds this instead of SMTP_URL.
+  mailGraphClientSecret: MAIL_GRAPH_CLIENT_SECRET
+
+# Mail through Microsoft 365. The client secret comes from the Secret above;
+# only the identifiers are values.
+mail:
+  transport: graph
+  from: "IT Service Desk <syntra@example.com>"
+  graph:
+    tenantId: 00000000-0000-0000-0000-000000000000
+    clientId: 11111111-1111-1111-1111-111111111111
+    sender: syntra@example.com
 
 api:
   image:

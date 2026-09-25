@@ -379,6 +379,7 @@ describe('startSyncScheduler', () => {
     databaseUrl: process.env.DATABASE_URL ?? '',
     masterKey: Buffer.alloc(32, 7),
     smtpUrl: 'smtp://localhost:1025',
+    mail: { transport: 'smtp', smtpUrl: 'smtp://localhost:1025', from: 'Syntra <no-reply@syntra.local>' },
     publicUrl: 'https://syntra.example.test',
     governCheckpointKey: null,
     governCheckpointKeyId: 'govern-checkpoint-1',

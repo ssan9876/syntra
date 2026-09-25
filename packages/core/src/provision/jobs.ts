@@ -201,6 +201,12 @@ export interface RunProvisionJobOptions {
    * `finish`, which is where the message is queued.
    */
   transport?: Transport;
+  /**
+   * PUBLIC_URL, which the one-time pickup link in that message is built on.
+   * Carried beside the transport for the same reason: without it an
+   * unattended create has no link to send, and says so in the audit trail.
+   */
+  publicUrl?: string;
   /** Injected only by tests. The default is the real function. */
   preview?: typeof previewProvisionRun;
   /** Injected only by tests. The default is the real function. */
@@ -427,6 +433,7 @@ export async function runProvisionJob(
       result = await apply(payload.tenantId, provider, run.id, {
         ...connectorOption,
         ...(options.transport === undefined ? {} : { transport: options.transport }),
+        ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
       });
     } catch (cause) {
       // An emergency stop is the system working, not a job failure. Retrying
@@ -497,8 +504,8 @@ export async function runProvisionJob(
  * `seams` exists so a test can prove what this registration passes actually
  * arrives at the callee — the defect this programme has now seen three times
  * is a registration that wires one option and drops it at the next hop.
- * Production passes nothing here, so the real connector and the real preview
- * and apply are used.
+ * Production passes only `publicUrl` here, so the real connector and the real
+ * preview and apply are used.
  */
 export function registerProvisionJobs(
   scheduler: Scheduler,
@@ -507,7 +514,11 @@ export function registerProvisionJobs(
   seams: Omit<RunProvisionJobOptions, 'transport'> = {},
 ): void {
   scheduler.register<PersonProvisionPayload>(PERSON_PROVISION_JOB, payload =>
-    runPersonProvision(scheduler, provider, payload, { transport, ...(seams.connector ? { connector: seams.connector } : {}) }),
+    runPersonProvision(scheduler, provider, payload, {
+      transport,
+      ...(seams.publicUrl === undefined ? {} : { publicUrl: seams.publicUrl }),
+      ...(seams.connector ? { connector: seams.connector } : {}),
+    }),
   );
   scheduler.register<ProvisionJobPayload>(PROVISION_JOB, (payload) =>
     runProvisionJob(scheduler, provider, payload, { ...seams, transport }),

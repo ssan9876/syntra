@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { DEFAULT_MAIL_FROM } from '../config.js';
 import { TEMPLATES, type TemplateName } from './templates/index.js';
 
 export interface OutboundMessage {
@@ -18,12 +19,17 @@ export interface Transport {
   verify?(): Promise<void>;
 }
 
-export function smtpTransport(smtpUrl: string): Transport {
+/**
+ * Mail through an SMTP relay. `from` is MAIL_FROM, already validated by
+ * `loadConfig`; build this through `mailTransport(config)` rather than
+ * directly, so the transport a deployment chose is the one it gets.
+ */
+export function smtpTransport(smtpUrl: string, from: string = DEFAULT_MAIL_FROM): Transport {
   const mailer = nodemailer.createTransport(smtpUrl);
   return {
     async send(message) {
       await mailer.sendMail({
-        from: 'Syntra <no-reply@syntra.local>',
+        from,
         to: message.to,
         subject: message.subject,
         text: message.text,

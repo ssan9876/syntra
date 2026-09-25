@@ -4,7 +4,7 @@
     "title": "Syntra administration API",
     "version": "1.0.0",
     "summary": "Tenant administration and machine-token API for Syntra.",
-    "description": "The API the Syntra administration console itself uses, published so that\nintegrations can call it with a machine token.\n\nEvery operation names the permission it requires in `x-syntra-permission`\n(every listed permission is required) and says in `x-syntra-token-allowed`\nwhether an API token may call it at all. A token is always the\nINTERSECTION of its own scopes and its service account's roles.\n\nErrors are RFC 9457 problem details (`application/problem+json`). See\ndocs/api/README.md for versioning, deprecation, idempotency and rate limits.",
+    "description": "The API the Syntra administration console itself uses, published so that\nintegrations can call it with a machine token.\n\nEvery operation names the permission it requires in `x-syntra-permission`\n(every listed permission is required) and says in `x-syntra-token-allowed`\nwhether an API token may call it at all. A token is always the\nINTERSECTION of its own scopes and its service account's roles.\n\nThe few unauthenticated routes a person reaches from a link in an email\nare described too, marked `x-syntra-public` and with no security\nrequirement.\n\nErrors are RFC 9457 problem details (`application/problem+json`). See\ndocs/api/README.md for versioning, deprecation, idempotency and rate limits.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -46,6 +46,9 @@
     },
     {
       "name": "Change control"
+    },
+    {
+      "name": "Credential pickup"
     },
     {
       "name": "Credentials"
@@ -24637,6 +24640,283 @@
         }
       }
     },
+    "/api/admin/targets/{id}/accounts/{personId}/credential-pickups": {
+      "get": {
+        "operationId": "getTargetsByIdAccountsByPersonIdCredentialPickups",
+        "tags": [
+          "Target systems"
+        ],
+        "summary": "List the one-time sign-in links sent for a person's account",
+        "description": "Newest first, at most 50. Each row says who it was sent to (`personalEmail`, `manager` or `admin`, never an address) and whether it was viewed, revoked or has expired. `hasInitialSecret` says whether there is an initial password to send another link to. No token is ever returned: only its hash is stored.\n\nRequires `provision.read`.",
+        "x-syntra-permission": [
+          "provision.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "personId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "hasInitialSecret": {
+                      "type": "boolean"
+                    },
+                    "pickups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "recipientKind": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "string"
+                          },
+                          "viewedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "revokedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdByUserId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "ready",
+                              "used",
+                              "expired",
+                              "revoked"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "recipientKind",
+                          "createdAt",
+                          "expiresAt",
+                          "viewedAt",
+                          "revokedAt",
+                          "createdByUserId",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "hasInitialSecret",
+                    "pickups"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/targets/{id}/accounts/{personId}/send-login-info": {
+      "post": {
+        "operationId": "postTargetsByIdAccountsByPersonIdSendLoginInfo",
+        "tags": [
+          "Target systems"
+        ],
+        "summary": "Send a new one-time sign-in link for a person's account",
+        "description": "Revokes every unviewed link for the account, mints a new one (72 hours) and mails it to the chosen recipient: the account profile's configured one, the person's personal email, their manager, or the calling administrator. The message holds a link, never the password. Needs a console session elevated within the step-up window (`403 step-up-required` otherwise). Answers `409 no-initial-secret` when Syntra holds no initial password for the account and `409 no-delivery-address` when the recipient has no address. `delivered` is false when the mail transport refused the message; the link exists either way.\n\nRequires `provision.manage`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "provision.manage"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "personId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "recipient": {
+                    "type": "string",
+                    "enum": [
+                      "profile",
+                      "personalEmail",
+                      "manager",
+                      "admin"
+                    ]
+                  }
+                },
+                "required": [
+                  "recipient"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pickupId": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "recipientKind": {
+                      "type": "string",
+                      "enum": [
+                        "personalEmail",
+                        "manager",
+                        "admin"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    },
+                    "revoked": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "delivered": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "pickupId",
+                    "recipientKind",
+                    "expiresAt",
+                    "revoked",
+                    "delivered"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/targets/{id}/adapter": {
       "get": {
         "operationId": "getTargetsByIdAdapter",
@@ -26316,6 +26596,9 @@
                       "vaultOnly"
                     ]
                   },
+                  "requirePasswordChangeAtFirstSignIn": {
+                    "type": "boolean"
+                  },
                   "sensitiveApprovalReason": {
                     "type": "string",
                     "minLength": 20,
@@ -26448,6 +26731,9 @@
                           "personalEmail",
                           "vaultOnly"
                         ]
+                      },
+                      "requirePasswordChangeAtFirstSignIn": {
+                        "type": "boolean"
                       },
                       "sensitiveApprovalReason": {
                         "type": "string",
@@ -31300,6 +31586,156 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/credential-pickup/{token}": {
+      "get": {
+        "operationId": "getApiCredentialPickupByToken",
+        "tags": [
+          "Credential pickup"
+        ],
+        "summary": "Read the state of a one-time sign-in link",
+        "description": "What the pickup page renders before anybody presses anything: `ready`, `used`, `expired` or `revoked`, with the system and username. Never the password, and free of side effects -- mail scanners fetch every link in a message, and this must not spend it. `404 credential-link-unknown` for a token that matches nothing. Answers carry `Cache-Control: no-store`.\n\nUnauthenticated; the tenant is the hostname the request is sent to.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "x-syntra-public": true,
+        "x-syntra-rate-limit": {
+          "max": 10,
+          "window": "1 minute"
+        },
+        "security": [],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{20,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "used",
+                        "expired",
+                        "revoked"
+                      ]
+                    },
+                    "systemName": {
+                      "type": "string"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "systemName",
+                    "username",
+                    "expiresAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/credential-pickup/{token}/reveal": {
+      "post": {
+        "operationId": "postApiCredentialPickupByTokenReveal",
+        "tags": [
+          "Credential pickup"
+        ],
+        "summary": "Reveal the password behind a one-time sign-in link, once",
+        "description": "Marks the link used and returns the username and password, exactly once: two concurrent calls produce one password and one refusal. Every refusal -- used, expired, revoked, unknown -- is the same `410 credential-link-unusable`. Answers carry `Cache-Control: no-store`.\n\nUnauthenticated; the tenant is the hostname the request is sent to.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "x-syntra-public": true,
+        "x-syntra-rate-limit": {
+          "max": 10,
+          "window": "1 minute"
+        },
+        "security": [],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{20,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "password": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "password"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"

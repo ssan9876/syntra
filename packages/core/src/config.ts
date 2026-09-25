@@ -4,6 +4,18 @@ import { z } from 'zod';
 import { isIpRangeUsable } from './policy/ip-match.js';
 import { parseKeyManagement, type KeyManagementConfig } from './vault/key-management.js';
 
+/**
+ * An empty variable is an unset one, for the mail settings.
+ *
+ * docker-compose passes every optional variable as `${NAME:-}`, which is an
+ * EMPTY string when the operator set nothing -- and an empty SMTP_URL failing
+ * URL validation on a Graph deployment, or an empty MAIL_FROM failing address
+ * validation, would be a refusal to start over a setting nobody made.
+ */
+const blankToUndefined = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+const blankIsUnset = <T extends z.ZodType>(inner: T) => z.preprocess(blankToUndefined, inner.optional());
+
 const schema = z.object({
   DATABASE_URL: z.string().url(),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -21,7 +33,42 @@ const schema = z.object({
   // MASTER_KEY and every other key-management variable are validated by
   // `parseKeyManagement` below, because whether MASTER_KEY is required depends
   // on MASTER_KEY_PROVIDER -- which a flat field here cannot express.
-  SMTP_URL: z.string().url(),
+  //
+  // SMTP_URL is required only for the SMTP transport, which is the default --
+  // see the refinement at the bottom of this schema. A deployment that sends
+  // through Microsoft Graph has no SMTP server to name, and demanding a
+  // placeholder for one would be a setting nothing reads.
+  SMTP_URL: blankIsUnset(z.string().url()),
+  /**
+   * How outbound mail leaves the process: `smtp` (the default, `SMTP_URL`) or
+   * `graph` (Microsoft 365, through Graph's `sendMail` with an application
+   * credential). One transport per deployment -- every route and job shares
+   * the instance `mailTransport(config)` builds.
+   */
+  MAIL_TRANSPORT: z.preprocess(blankToUndefined, z.enum(['smtp', 'graph']).default('smtp')),
+  /**
+   * The From header, `Name <address>` or a bare address. Optional: SMTP falls
+   * back to `DEFAULT_MAIL_FROM`, and Graph sends as `MAIL_GRAPH_SENDER` unless
+   * this names something that mailbox may send as.
+   */
+  MAIL_FROM: blankIsUnset(
+    z
+      .string()
+      .trim()
+      .refine((v) => parseMailbox(v) !== null, 'MAIL_FROM must be an address, or "Name <address>"'),
+  ),
+  /**
+   * The Graph transport's application credential and the mailbox it sends as.
+   * All four are required when MAIL_TRANSPORT is `graph` and ignored
+   * otherwise. The secret is deployment-wide, like the password inside
+   * SMTP_URL, and belongs in the environment rather than the tenant vault for
+   * the reason RELEASE_TOKEN's comment gives: no one tenant's keyring should be
+   * the thing the whole installation's mail depends on.
+   */
+  MAIL_GRAPH_TENANT_ID: blankIsUnset(z.string().trim()),
+  MAIL_GRAPH_CLIENT_ID: blankIsUnset(z.string().trim()),
+  MAIL_GRAPH_CLIENT_SECRET: blankIsUnset(z.string().trim()),
+  MAIL_GRAPH_SENDER: blankIsUnset(z.string().trim()),
   /**
    * A base64 32-byte key that signs audit checkpoints, and the id it is known
    * by. Optional, and deliberately so: a deployment that has not configured one
@@ -158,7 +205,128 @@ const schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+}).superRefine((v, ctx) => {
+  // Which variables are required depends on which transport was chosen, so it
+  // is checked here rather than per field -- and every missing one is named at
+  // once, because an operator fixing a Graph configuration one restart at a
+  // time is four restarts for one mistake.
+  if (v.MAIL_TRANSPORT === 'smtp') {
+    if (v.SMTP_URL === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMTP_URL'],
+        message:
+          'SMTP_URL is required when MAIL_TRANSPORT is smtp (the default). Set it, or set MAIL_TRANSPORT=graph to send through Microsoft 365.',
+      });
+    }
+    return;
+  }
+  const required = [
+    'MAIL_GRAPH_TENANT_ID',
+    'MAIL_GRAPH_CLIENT_ID',
+    'MAIL_GRAPH_CLIENT_SECRET',
+    'MAIL_GRAPH_SENDER',
+  ] as const;
+  for (const name of required) {
+    if (v[name] === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [name],
+        message: `${name} is required when MAIL_TRANSPORT is graph`,
+      });
+    }
+  }
+  if (v.MAIL_GRAPH_TENANT_ID !== undefined && !GRAPH_TENANT.test(v.MAIL_GRAPH_TENANT_ID)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['MAIL_GRAPH_TENANT_ID'],
+      message:
+        'MAIL_GRAPH_TENANT_ID must be the directory (tenant) id, a GUID, or a verified domain such as contoso.onmicrosoft.com',
+    });
+  }
+  if (v.MAIL_GRAPH_CLIENT_ID !== undefined && !GUID.test(v.MAIL_GRAPH_CLIENT_ID)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['MAIL_GRAPH_CLIENT_ID'],
+      message: 'MAIL_GRAPH_CLIENT_ID must be the application (client) id, a GUID',
+    });
+  }
+  if (v.MAIL_GRAPH_SENDER !== undefined && !isBareAddress(v.MAIL_GRAPH_SENDER)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['MAIL_GRAPH_SENDER'],
+      message:
+        "MAIL_GRAPH_SENDER must be the sending mailbox's address (its UPN or primary SMTP address), such as syntra@contoso.com",
+    });
+  }
 });
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * `local@domain.tld`: one `@`, neither side of it empty, a dot inside the
+ * domain, and no whitespace, quotes or angle brackets anywhere. Checked by
+ * hand rather than with one regular expression, because the obvious pattern
+ * backtracks polynomially on a long run of dots (CodeQL js/polynomial-redos).
+ * Only an operator types this, but a configuration check should never be the
+ * slow part of a start.
+ */
+function isBareAddress(value: string): boolean {
+  if (value.length === 0 || value.length > 320 || /[\s<>"]/.test(value)) return false;
+  const at = value.indexOf('@');
+  if (at <= 0 || at !== value.lastIndexOf('@')) return false;
+  // A dot in the domain with at least one character before and after it.
+  return value.slice(at + 2, -1).includes('.');
+}
+/** A tenant GUID or a domain name; the token endpoint accepts either. */
+const GRAPH_TENANT =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9-]+(?:\.[a-z0-9-]+)+)$/i;
+
+/** What SMTP sends as when MAIL_FROM is not set. */
+export const DEFAULT_MAIL_FROM = 'Syntra <no-reply@syntra.local>';
+
+/**
+ * `Name <address>` or a bare address, split. Null for anything else.
+ *
+ * Deliberately small. A full RFC 5322 mailbox parser accepts comments, quoted
+ * local parts and group syntax that nobody means to type into an environment
+ * variable, and each of them is a way for the From header to come out
+ * different from what the configuration appeared to say.
+ */
+export function parseMailbox(value: string): { name: string | null; address: string } | null {
+  const trimmed = value.trim();
+  if (!trimmed.endsWith('>')) {
+    return isBareAddress(trimmed) ? { name: null, address: trimmed } : null;
+  }
+  // `Name <address>`, split on the last `<` by index rather than by pattern,
+  // for the reason isBareAddress gives.
+  const open = trimmed.lastIndexOf('<');
+  if (open < 0) return null;
+  const address = trimmed.slice(open + 1, -1);
+  if (!isBareAddress(address)) return null;
+  let name = trimmed.slice(0, open).trim();
+  if (name.length >= 2 && name.startsWith('"') && name.endsWith('"')) name = name.slice(1, -1).trim();
+  if (/[<>"]/.test(name)) return null;
+  return { name: name === '' ? null : name, address };
+}
+
+/**
+ * The outbound mail transport, as configured. A union so that a Graph
+ * transport without its credential, or an SMTP one without its URL, cannot be
+ * constructed: `loadConfig` has refused either before one of these exists.
+ */
+export type MailConfig =
+  | { transport: 'smtp'; smtpUrl: string; from: string }
+  | {
+      transport: 'graph';
+      tenantId: string;
+      clientId: string;
+      /** Never logged, never audited, never returned by any route. */
+      clientSecret: string;
+      /** The mailbox `sendMail` is called on. */
+      sender: string;
+      /** MAIL_FROM when set; null sends as `sender` itself. */
+      from: string | null;
+    };
 
 /**
  * Turns TRUST_PROXY into what Fastify wants: `false`, or a list of trusted
@@ -223,7 +391,10 @@ export interface Config {
   masterKey: Buffer | null;
   /** MASTER_KEY_PROVIDER and its variables; see `vault/key-management.ts`. */
   keyManagement: KeyManagementConfig;
-  smtpUrl: string;
+  /** Null when MAIL_TRANSPORT is `graph`. Read `mail` for how mail is sent. */
+  smtpUrl: string | null;
+  /** How outbound mail leaves the process; `mailTransport(config)` builds it. */
+  mail: MailConfig;
   authRateLimitMax: number;
   authRateLimitTenantMax: number;
   /** See RATE_LIMIT_STORE. */
@@ -295,7 +466,20 @@ export function loadConfig(
     sessionSecret: v.SESSION_SECRET,
     masterKey: keyManagement.masterKey,
     keyManagement,
-    smtpUrl: v.SMTP_URL,
+    smtpUrl: v.SMTP_URL ?? null,
+    mail:
+      v.MAIL_TRANSPORT === 'graph'
+        ? {
+            transport: 'graph',
+            // Present: the refinement above refused a graph configuration
+            // missing any of them.
+            tenantId: v.MAIL_GRAPH_TENANT_ID!,
+            clientId: v.MAIL_GRAPH_CLIENT_ID!,
+            clientSecret: v.MAIL_GRAPH_CLIENT_SECRET!,
+            sender: v.MAIL_GRAPH_SENDER!,
+            from: v.MAIL_FROM ?? null,
+          }
+        : { transport: 'smtp', smtpUrl: v.SMTP_URL!, from: v.MAIL_FROM ?? DEFAULT_MAIL_FROM },
     governCheckpointKey:
       v.GOVERN_CHECKPOINT_KEY === undefined
         ? null

@@ -103,7 +103,12 @@ export async function retryPersonProvision(tenantId: string, personId: string, r
   return withTenant(tenantId, tx => tx.personProvisionReceipt.findFirstOrThrow({ where: { id: receiptId, personId } }));
 }
 
-export interface PersonProvisionOptions { connector?: TargetConnector<never>; transport?: Transport }
+export interface PersonProvisionOptions {
+  connector?: TargetConnector<never>;
+  transport?: Transport;
+  /** PUBLIC_URL, which a created account's pickup link is built on. */
+  publicUrl?: string;
+}
 
 /**
  * Receipts are the target-level source of truth, but a lifecycle operation is

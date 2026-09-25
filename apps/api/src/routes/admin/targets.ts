@@ -14,6 +14,7 @@ import {
   BUILTIN_CONNECTOR_DOCUMENTS,
   ENTRA_CAPABILITY_MATRIX,
   capabilitiesForTarget,
+  firstSignInPasswordChange,
   connectorLifecycleMetadata,
   entraTargetConnector,
   targetConnectorFor,
@@ -697,6 +698,9 @@ export async function registerAdminTargetRoutes(
         metadata: connectorLifecycleMetadata(target.type),
         matrix: target.type === 'entraId' ? ENTRA_CAPABILITY_MATRIX : null,
         capabilities: capabilitiesForTarget(target.type, target.config),
+        // Whether an account profile's "require a password change at first
+        // sign-in" means anything on this target. See the function.
+        firstSignInPasswordChange: firstSignInPasswordChange(target.type),
       };
     },
   );

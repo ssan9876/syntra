@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from './config.js';
+import { loadConfig, parseMailbox } from './config.js';
 
 const valid = {
   DATABASE_URL: 'postgresql://syntra:syntra@localhost:5432/syntra',
@@ -162,5 +162,128 @@ describe('WEB_ROOT', () => {
     // `WEB_ROOT=` in an env file is a variable somebody meant to set. Resolved,
     // it becomes the repository root and the server serves the source tree.
     expect(() => loadConfig({ ...valid, WEB_ROOT: '   ' })).toThrow(/WEB_ROOT/);
+  });
+});
+
+describe('loadConfig — mail', () => {
+  const graph = {
+    MAIL_TRANSPORT: 'graph',
+    MAIL_GRAPH_TENANT_ID: '11111111-2222-4333-8444-555555555555',
+    MAIL_GRAPH_CLIENT_ID: '66666666-7777-4888-8999-aaaaaaaaaaaa',
+    MAIL_GRAPH_CLIENT_SECRET: 'a-client-secret',
+    MAIL_GRAPH_SENDER: 'syntra@acme.test',
+  };
+
+  it('defaults to SMTP with the stock From address', () => {
+    expect(loadConfig(valid).mail).toEqual({
+      transport: 'smtp',
+      smtpUrl: 'smtp://localhost:1025',
+      from: 'Syntra <no-reply@syntra.local>',
+    });
+  });
+
+  it('takes MAIL_FROM for SMTP, and refuses one that is not an address', () => {
+    expect(loadConfig({ ...valid, MAIL_FROM: 'IT <it@acme.test>' }).mail).toMatchObject({
+      from: 'IT <it@acme.test>',
+    });
+    expect(() => loadConfig({ ...valid, MAIL_FROM: 'not an address' })).toThrow(/MAIL_FROM/);
+  });
+
+  it('still requires SMTP_URL for the default transport', () => {
+    const { SMTP_URL, ...rest } = valid;
+    expect(() => loadConfig(rest)).toThrow(/SMTP_URL is required when MAIL_TRANSPORT is smtp/);
+  });
+
+  it('accepts a complete Graph configuration without SMTP_URL', () => {
+    const { SMTP_URL, ...rest } = valid;
+    const config = loadConfig({ ...rest, ...graph });
+    expect(config.smtpUrl).toBeNull();
+    expect(config.mail).toEqual({
+      transport: 'graph',
+      tenantId: graph.MAIL_GRAPH_TENANT_ID,
+      clientId: graph.MAIL_GRAPH_CLIENT_ID,
+      clientSecret: 'a-client-secret',
+      sender: 'syntra@acme.test',
+      from: null,
+    });
+  });
+
+  it('names every missing Graph variable at once', () => {
+    let message = '';
+    try {
+      loadConfig({ ...valid, MAIL_TRANSPORT: 'graph' });
+    } catch (cause) {
+      message = (cause as Error).message;
+    }
+    for (const name of ['MAIL_GRAPH_TENANT_ID', 'MAIL_GRAPH_CLIENT_ID', 'MAIL_GRAPH_CLIENT_SECRET', 'MAIL_GRAPH_SENDER']) {
+      expect(message).toContain(`${name} is required when MAIL_TRANSPORT is graph`);
+    }
+  });
+
+  it('refuses a malformed tenant, client id or sender, and an unknown transport', () => {
+    expect(() => loadConfig({ ...valid, ...graph, MAIL_GRAPH_TENANT_ID: 'not a tenant' })).toThrow(
+      /MAIL_GRAPH_TENANT_ID must be/,
+    );
+    expect(() => loadConfig({ ...valid, ...graph, MAIL_GRAPH_CLIENT_ID: 'syntra-app' })).toThrow(
+      /MAIL_GRAPH_CLIENT_ID must be/,
+    );
+    expect(() => loadConfig({ ...valid, ...graph, MAIL_GRAPH_SENDER: 'Syntra' })).toThrow(
+      /MAIL_GRAPH_SENDER must be/,
+    );
+    expect(() => loadConfig({ ...valid, MAIL_TRANSPORT: 'sendgrid' })).toThrow(/MAIL_TRANSPORT/);
+    // A domain is as good as the GUID at the token endpoint.
+    expect(loadConfig({ ...valid, ...graph, MAIL_GRAPH_TENANT_ID: 'acme.onmicrosoft.com' }).mail).toMatchObject({
+      tenantId: 'acme.onmicrosoft.com',
+    });
+  });
+
+  it("reads compose's empty `${NAME:-}` values as unset", () => {
+    const config = loadConfig({
+      ...valid,
+      ...graph,
+      SMTP_URL: '',
+      MAIL_FROM: '',
+    });
+    expect(config.smtpUrl).toBeNull();
+    expect(config.mail).toMatchObject({ transport: 'graph', from: null });
+    expect(loadConfig({ ...valid, MAIL_TRANSPORT: '', MAIL_FROM: '  ' }).mail).toMatchObject({
+      transport: 'smtp',
+      from: 'Syntra <no-reply@syntra.local>',
+    });
+  });
+
+  it('never puts the Graph secret in a validation error', () => {
+    const secret = 'super-secret-graph-value';
+    expect(() =>
+      loadConfig({ ...valid, ...graph, MAIL_GRAPH_CLIENT_SECRET: secret, MAIL_GRAPH_SENDER: 'bad' }),
+    ).toThrow(expect.objectContaining({ message: expect.not.stringContaining(secret) }));
+  });
+});
+
+describe('parseMailbox', () => {
+  it('splits a named mailbox and accepts a bare address', () => {
+    expect(parseMailbox('Syntra <no-reply@example.com>')).toEqual({
+      name: 'Syntra',
+      address: 'no-reply@example.com',
+    });
+    expect(parseMailbox('"IT Desk" <it@example.com>')).toEqual({ name: 'IT Desk', address: 'it@example.com' });
+    expect(parseMailbox('<it@example.com>')).toEqual({ name: null, address: 'it@example.com' });
+    expect(parseMailbox('it@example.com')).toEqual({ name: null, address: 'it@example.com' });
+  });
+
+  it('refuses what is not one plain address', () => {
+    for (const bad of ['', 'it', 'it@', '@example.com', 'it@example', 'it@.com', 'it@example.', 'a@b@c.com', 'it @example.com', 'A <B> <it@example.com>', 'it@example.com>']) {
+      expect(parseMailbox(bad), bad).toBeNull();
+    }
+  });
+
+  // The inputs CodeQL's js/polynomial-redos named: long runs of spaces, and
+  // `!@!.` followed by many `!.`. Linear now, so each answers at once.
+  it('answers quickly on the inputs that made the old patterns backtrack', () => {
+    const started = Date.now();
+    parseMailbox(`${' '.repeat(50_000)}x`);
+    parseMailbox(`!@!.${'!.'.repeat(50_000)}`);
+    parseMailbox(`<!@!.${'!.'.repeat(50_000)}`);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });

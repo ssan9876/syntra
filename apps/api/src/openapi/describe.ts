@@ -66,6 +66,33 @@ export interface DescribedRoute extends RouteDescription {
   /** The full Fastify pattern, prefix included: `/api/admin/roles/:id`. */
   url: string;
   tag: string;
+  /**
+   * An unauthenticated route: no session, no token, the tenant resolved from
+   * the hostname. Published with no security requirement, so a client
+   * generator does not attach credentials to a call that must not carry them.
+   */
+  public?: true;
+}
+
+/**
+ * The same, for routes OUTSIDE `/api/admin` that anybody may call -- the
+ * handful an integrator or a person with a link reaches without signing in.
+ * Keyed by the full path, because there is no shared prefix to hang them on.
+ */
+export function describePublicRoutes(
+  tag: string,
+  routes: Record<string, RouteDescription>,
+): DescribedRoute[] {
+  return Object.entries(routes).map(([key, description]) => {
+    const space = key.indexOf(' ');
+    return {
+      ...description,
+      method: key.slice(0, space),
+      url: key.slice(space + 1),
+      tag,
+      public: true as const,
+    };
+  });
 }
 
 /**

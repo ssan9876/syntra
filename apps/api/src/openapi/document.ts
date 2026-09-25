@@ -106,6 +106,10 @@ const INFO_DESCRIPTION = [
   'whether an API token may call it at all. A token is always the',
   'INTERSECTION of its own scopes and its service account\'s roles.',
   '',
+  'The few unauthenticated routes a person reaches from a link in an email',
+  'are described too, marked `x-syntra-public` and with no security',
+  'requirement.',
+  '',
   'Errors are RFC 9457 problem details (`application/problem+json`). See',
   'docs/api/README.md for versioning, deprecation, idempotency and rate limits.',
 ].join('\n');
@@ -193,8 +197,12 @@ function operation(route: CatalogRoute, described: DescribedRoute): Record<strin
   const responses: Record<string, unknown> = {
     [String(status)]: success,
     '400': { $ref: '#/components/responses/BadRequest' },
-    '401': { $ref: '#/components/responses/Unauthenticated' },
-    '403': { $ref: '#/components/responses/Forbidden' },
+    ...(described.public
+      ? {}
+      : {
+          '401': { $ref: '#/components/responses/Unauthenticated' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+        }),
   };
   if (pathParamNames(route.url).length > 0) {
     responses['404'] = { $ref: '#/components/responses/NotFound' };
@@ -205,11 +213,12 @@ function operation(route: CatalogRoute, described: DescribedRoute): Record<strin
   responses['503'] = { $ref: '#/components/responses/Unavailable' };
   responses.default = { $ref: '#/components/responses/Problem' };
 
-  const permissionLine =
-    route.permissions.length === 0
+  const permissionLine = described.public
+    ? 'Unauthenticated; the tenant is the hostname the request is sent to.'
+    : route.permissions.length === 0
       ? 'Requires an administrative session; no further permission.'
       : `Requires ${route.permissions.map((permission) => `\`${permission}\``).join(' and ')}.`;
-  const tokenLine = route.tokenAllowed
+  const tokenLine = route.tokenAllowed || described.public
     ? ''
     : ' API tokens are refused here (`403 token-not-accepted`); sign in as a person.';
 
@@ -230,11 +239,16 @@ function operation(route: CatalogRoute, described: DescribedRoute): Record<strin
       : {}),
     'x-syntra-permission': route.permissions,
     'x-syntra-token-allowed': route.tokenAllowed,
+    ...(described.public ? { 'x-syntra-public': true } : {}),
     ...(paginated ? { 'x-syntra-paginated': true } : {}),
     ...(route.rateLimit !== null && typeof route.rateLimit.max === 'number'
       ? { 'x-syntra-rate-limit': { max: route.rateLimit.max, window: String(route.rateLimit.timeWindow) } }
       : {}),
-    security: route.tokenAllowed ? [{ bearerToken: [] }, { sessionCookie: [] }] : [{ sessionCookie: [] }],
+    security: described.public
+      ? []
+      : route.tokenAllowed
+        ? [{ bearerToken: [] }, { sessionCookie: [] }]
+        : [{ sessionCookie: [] }],
     ...(parameters.length > 0 ? { parameters } : {}),
     ...(described.body
       ? {

@@ -1003,6 +1003,11 @@ export const accountProfileSchema = z.object({
   // way out is what actually decides.
   initialPasswordPolicy: z.record(z.string(), z.unknown()).pipe(initialPasswordPolicySchema),
   initialPasswordDelivery: z.enum(['manager', 'personalEmail', 'vaultOnly']),
+  // Honoured where the target can express it (`firstSignInPasswordChange` in
+  // @syntra/connectors). Default ON: an initial password somebody else was
+  // sent -- a manager, a personal inbox -- is one that should not outlive the
+  // first sign-in.
+  requirePasswordChangeAtFirstSignIn: z.boolean().default(true),
   sensitiveApprovalReason: z.string().trim().min(20).max(1000).optional(),
 }).superRefine((profile, ctx) => {
   if (
@@ -1082,6 +1087,7 @@ export async function upsertAccountProfile(
         correlationKeyTemplate: profile.correlationKeyTemplate,
         containerTemplate: profile.containerTemplate,
         initialPasswordDelivery: profile.initialPasswordDelivery,
+        requirePasswordChangeAtFirstSignIn: profile.requirePasswordChangeAtFirstSignIn,
         sensitiveMappings,
         sensitiveApprovalReason: sensitiveMappings.length > 0 ? sensitiveApprovalReason : null,
       },
