@@ -26,6 +26,7 @@ import { TargetMigrationPanel } from './TargetMigrationPanel.js';
 import { TargetHealthPanel } from './TargetHealthPanel.js';
 import { TargetWriteStopPanel } from './TargetWriteStopPanel.js';
 import { TargetMaintenancePanel } from './TargetMaintenancePanel.js';
+import { OrgUnitMirrorPreview } from './OrgUnitMirrorPreview.js';
 import { TestReport, type TestResult } from './TargetTestReport.js';
 import { StaleBadge, draftKey, draftStatus, summaryOf } from './DraftState.js';
 import { SAFETY_THRESHOLDS_ANCHOR } from './threshold-hints.js';
@@ -82,6 +83,7 @@ const CONNECTION_FIELDS = new Set([
   'correlationField', 'document',
 ]);
 const ENFORCEMENT_FIELDS = new Set(['schedule', 'enforcementMode', 'maxAttempts']);
+const MIRROR_FIELDS = new Set(['mirrorOrgUnits', 'orgUnitRootDn']);
 const LADDER_FIELDS = new Set([
   'preHireDays', 'entitlementRevocationDelayDays', 'disableGraceDays',
   'archiveAfterDays', 'reenableWithoutConfirmationDays',
@@ -227,6 +229,80 @@ function AutoConfirmRenames({
           This target cannot rename accounts, so there is nothing to apply: {support.reason}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * "Mirror org units as OUs", with what it would build shown beneath it.
+ *
+ * Its own section rather than a line under Schedule and enforcement: it is
+ * the one setting on this page that decides the SHAPE of the directory, and
+ * the tree preview under it is too big to sit between two checkboxes.
+ *
+ * Offered only where the connector places accounts in containers. Everywhere
+ * else it is explained rather than hidden, because a missing control reads as
+ * a missing feature and this is a property of the target.
+ */
+function OrgUnitsSection({
+  targetId,
+  placesAccounts,
+  baseDn,
+  mirror,
+  rootDn,
+  onMirror,
+  onRootDn,
+  rootError,
+}: {
+  targetId: string;
+  placesAccounts: boolean | undefined;
+  baseDn: string;
+  mirror: boolean;
+  rootDn: string;
+  onMirror: (value: boolean) => void;
+  onRootDn: (value: string) => void;
+  rootError: string | undefined;
+}) {
+  if (placesAccounts === false) {
+    return (
+      <p className="text-sm text-muted sm:col-span-2" data-testid="mirror-unsupported">
+        This target does not place accounts in containers — its accounts live in one
+        flat directory — so there is no tree of OUs to mirror org units into. Org
+        units still decide who is provisioned through business rules.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3 sm:col-span-2" data-testid="mirror-org-units">
+      <Check
+        name="mirrorOrgUnits"
+        checked={mirror}
+        onChange={onMirror}
+        label="Mirror org units as OUs"
+      />
+      <p className="pl-6 text-sm text-muted">
+        Each active org unit is placed at an OU derived from its place in the tree —{' '}
+        <code>OU=&lt;unit&gt;,OU=&lt;parent&gt;,…,&lt;root&gt;</code> — with no DN to
+        type per unit. Runs create the missing OUs parent first, and move an OU, with
+        every account in it, when its unit is renamed or moved. A unit materialised by
+        hand keeps the DN that was typed. Turning this on writes nothing by itself: the
+        next run shows which OUs it would create and which accounts would move, and a
+        container move always waits for a person to confirm it. OUs are never deleted;
+        a deactivated or deleted unit&apos;s OU stays where it is.
+      </p>
+      <Field
+        label="Org-unit root"
+        name="orgUnitRootDn"
+        value={rootDn}
+        onChange={onRootDn}
+        placeholder={baseDn === '' ? 'The base DN' : baseDn}
+        {...(rootError === undefined ? {} : { error: rootError })}
+      />
+      <p className="text-sm text-muted">
+        Where the tree hangs, below the base DN. Blank uses the base DN itself. A root
+        that does not exist yet is created by the first run, like any missing parent.
+      </p>
+      <OrgUnitMirrorPreview targetId={targetId} rootDn={rootDn} />
     </div>
   );
 }
@@ -443,6 +519,14 @@ export function TargetDetailPage() {
           schedule: form.schedule.trim() === '' ? null : form.schedule.trim(),
           autoApply: form.autoApply,
           autoConfirmRenames: form.autoConfirmRenames,
+          // Sent only where there are OUs to mirror into: the server refuses
+          // `true` anywhere else, and a flat target has nothing to say here.
+          ...(data?.placesAccountsInContainers === false
+            ? {}
+            : {
+                mirrorOrgUnits: form.mirrorOrgUnits,
+                orgUnitRootDn: form.orgUnitRootDn.trim() === '' ? null : form.orgUnitRootDn.trim(),
+              }),
           enabled: form.enabled,
           enforcementMode: form.enforcementMode,
           preHireDays: n.preHireDays,
@@ -891,6 +975,21 @@ export function TargetDetailPage() {
               {...mark('maxAttempts')}
             />
           </FormSection>
+
+          {!isNew && targetId !== null && (
+            <FormSection title="Org units" status={refusedIn(MIRROR_FIELDS)}>
+              <OrgUnitsSection
+                targetId={targetId}
+                placesAccounts={data?.placesAccountsInContainers}
+                baseDn={form.baseDn}
+                mirror={form.mirrorOrgUnits}
+                rootDn={form.orgUnitRootDn}
+                onMirror={(v) => set('mirrorOrgUnits', v)}
+                onRootDn={(v) => set('orgUnitRootDn', v)}
+                rootError={mark('orgUnitRootDn').error ?? mark('mirrorOrgUnits').error}
+              />
+            </FormSection>
+          )}
 
           <FormSection title="Lifecycle timings" status={refusedIn(LADDER_FIELDS)}>
             <Field

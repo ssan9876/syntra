@@ -1,3 +1,4 @@
+import { orgUnitPlacementDn } from './org-unit-mirror.js';
 import { withTenant } from '@syntra/db';
 import { personDisplayName } from './desired.js';
 import { renderContainer, type TemplateContext } from './templates.js';
@@ -65,7 +66,7 @@ export async function previewContainerForFacts(
   return withTenant(tenantId, async (tx) => {
     const target = await tx.targetSystem.findUnique({
       where: { id: targetSystemId },
-      select: { id: true, config: true },
+      select: { id: true, type: true, config: true, mirrorOrgUnits: true, orgUnitRootDn: true },
     });
     if (!target) return null;
 
@@ -122,12 +123,10 @@ export async function previewContainerForFacts(
      * the implicit creation Ruling P9 forbids.
      */
     if (orgUnitId !== null) {
-      const row = await tx.orgUnitContainer.findFirst({
-        where: { orgUnitId, targetSystemId },
-        select: { dn: true },
-      });
-      if (row !== null && row.dn.trim() !== '') {
-        return { container: row.dn, fallbackUsed: false, missing: [] };
+      // The row, or the DN a mirroring target will derive for the unit.
+      const dn = await orgUnitPlacementDn(tx, target, orgUnitId);
+      if (dn !== null && dn.trim() !== '') {
+        return { container: dn, fallbackUsed: false, missing: [] };
       }
     }
 

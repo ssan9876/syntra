@@ -2236,6 +2236,103 @@ describe('planActions — create_container', () => {
   });
 });
 
+describe('planActions — a mirrored org-unit tree', () => {
+  const ROOT = 'OU=Syntra,OU=Users,DC=acme,DC=test';
+  const LOCAL = `OU=ssander.local,${ROOT}`;
+  const IT = `OU=IT,${LOCAL}`;
+
+  it('creates a two-level missing tree parent first, whatever order it arrived in', () => {
+    const actions = plan({
+      actual: new Map(),
+      // The row-backed creates arrive deepest first, and the missing root as
+      // an intermediate: the sort, not the caller, puts the root first.
+      containersToCreate: new Map([
+        ['ouc-it', IT],
+        ['ouc-local', LOCAL],
+      ]),
+      intermediateContainers: [ROOT],
+    });
+    const containers = actions.filter((a) => a.actionType === 'create_container');
+    expect(containers.map((a) => (a.after as { dn: string }).dn)).toEqual([ROOT, LOCAL, IT]);
+    expect(containers[0]!.after).toEqual({ dn: ROOT, orgUnitContainerId: null, intermediate: true });
+    expect(actions.findIndex((a) => a.actionType === 'create_container')).toBe(0);
+  });
+
+  it('orders a move after the create of the parent it moves under, and before a child created beneath it', () => {
+    const TECH = `OU=Tech,${LOCAL}`;
+    const actions = plan({
+      actual: new Map(),
+      containersToCreate: new Map([
+        ['ouc-help', `OU=Help,${TECH}`],
+        ['ouc-local', LOCAL],
+      ]),
+      containersToMove: [
+        { orgUnitContainerId: 'ouc-it', fromDn: `OU=IT,${ROOT}`, toDn: TECH, riderIds: [], accounts: [] },
+      ],
+    });
+    expect(
+      actions
+        .filter((a) => a.actionType === 'create_container' || a.actionType === 'move_container')
+        .map((a) => a.actionType),
+    ).toEqual(['create_container', 'move_container', 'create_container']);
+  });
+
+  it('names every account a container move carries, and holds nothing per action', () => {
+    const [move] = plan({
+      containersToMove: [
+        {
+          orgUnitContainerId: 'ouc-it',
+          fromDn: `OU=IT,${ROOT}`,
+          toDn: IT,
+          riderIds: ['ouc-help'],
+          accounts: ['anna.novak', 'bo.lind'],
+        },
+      ],
+      desired: [],
+      actual: new Map(),
+    });
+    expect(move).toMatchObject({
+      actionType: 'move_container',
+      personId: null,
+      // Confirmed at the RUN, by the guard -- a per-action confirmation is
+      // unreachable on an auto-apply target.
+      requiresConfirmation: false,
+      before: { dn: `OU=IT,${ROOT}` },
+      after: {
+        dn: IT,
+        fromDn: `OU=IT,${ROOT}`,
+        orgUnitContainerId: 'ouc-it',
+        riderIds: ['ouc-help'],
+        accounts: ['anna.novak', 'bo.lind'],
+      },
+    });
+    expect(move!.message).toContain('anna.novak, bo.lind');
+  });
+
+  it('gives an account inside a moving OU no move of its own', () => {
+    const actions = plan({
+      desired: [desired({ account: { ...desired().account!, container: IT } })],
+      actual: new Map([['person-1', actual({ dn: `CN=anna.novak,OU=IT,${ROOT}` })]]),
+      containersToMove: [
+        { orgUnitContainerId: 'ouc-it', fromDn: `OU=IT,${ROOT}`, toDn: IT, riderIds: [], accounts: ['anna.novak'] },
+      ],
+    });
+    expect(types(actions)).toEqual(['move_container']);
+  });
+
+  it('still moves an account the container moves do not carry to its container', () => {
+    const actions = plan({
+      desired: [desired({ account: { ...desired().account!, container: IT } })],
+      actual: new Map([['person-1', actual({ dn: 'CN=anna.novak,OU=Users,DC=acme,DC=test' })]]),
+      containersToMove: [
+        { orgUnitContainerId: 'ouc-it', fromDn: `OU=IT,${ROOT}`, toDn: IT, riderIds: [], accounts: [] },
+      ],
+    });
+    const update = actions.find((a) => a.actionType === 'update_account')!;
+    expect(movesContainer(update.before as Record<string, unknown>, update.after as Record<string, unknown>)).toBe(true);
+  });
+});
+
 describe('planActions — a flat target (Entra ID, SCIM)', () => {
   it('proposes an attribute update that names no container, so the guard counts no move', () => {
     // An adopted Entra account: the target reports its dn as the UPN and holds

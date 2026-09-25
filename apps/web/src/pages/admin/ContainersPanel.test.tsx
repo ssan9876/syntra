@@ -154,3 +154,89 @@ describe('ContainersPanel', () => {
     );
   });
 });
+
+describe('ContainersPanel on a mirroring target', () => {
+  const view = (over: Record<string, unknown>) => ({
+    targetSystemId: 't-1',
+    targetName: 'Acme AD',
+    dn: `OU=Sales,${BASE_DN}`,
+    state: 'derived',
+    source: 'mirrored',
+    previousDn: null,
+    mirroring: true,
+    mirrored: true,
+    derivedDn: `OU=Sales,${BASE_DN}`,
+    problem: null,
+    ...over,
+  });
+
+  it('shows the derived DN, marked Mirrored, before any run has made it', async () => {
+    mockRoutes({
+      '/api/admin/targets': () => json(targets),
+      '/api/admin/org-units/ou-1/containers': () => json({ containers: [view({})] }),
+    });
+    renderPanel();
+    const row = await screen.findByTestId('container-t-1');
+    expect(row).toHaveTextContent('Mirrored');
+    expect(row).toHaveTextContent(`OU=Sales,${BASE_DN}`);
+    expect(row).toHaveTextContent('The next run creates it');
+    // A derived placement can still be overridden by hand.
+    expect(screen.getByRole('button', { name: /create container/i })).toBeInTheDocument();
+  });
+
+  it('offers "Switch to mirrored" on a manual row and posts it', async () => {
+    let switched = false;
+    mockRoutes({
+      '/api/admin/targets': () => json(targets),
+      '/api/admin/org-units/ou-1/containers': () =>
+        json({
+          containers: [view({ dn: `OU=Flat,${BASE_DN}`, state: 'live', source: 'manual', mirrored: false })],
+        }),
+      '/api/admin/org-units/ou-1/containers/t-1/switch-to-mirrored': (init) => {
+        switched = init?.method === 'POST';
+        return json({ targetSystemId: 't-1', dn: `OU=Sales,${BASE_DN}`, pendingMoveFrom: `OU=Flat,${BASE_DN}` });
+      },
+    });
+    renderPanel();
+    const row = await screen.findByTestId('container-t-1');
+    expect(row).toHaveTextContent('Materialised');
+    expect(row).toHaveTextContent(`Mirrored, it would be OU=Sales,${BASE_DN}`);
+    await userEvent.click(screen.getByRole('button', { name: /switch to mirrored/i }));
+    await waitFor(() => expect(switched).toBe(true));
+  });
+
+  it('says a pending move out loud, and what stopping tracking a mirrored row does', async () => {
+    mockRoutes({
+      '/api/admin/targets': () => json(targets),
+      '/api/admin/org-units/ou-1/containers': () =>
+        json({ containers: [view({ state: 'live', previousDn: `OU=Old,${BASE_DN}` })] }),
+    });
+    renderPanel();
+    const row = await screen.findByTestId('container-t-1');
+    expect(row).toHaveTextContent('The next run moves it');
+    expect(row).toHaveTextContent(`Currently at OU=Old,${BASE_DN}`);
+    expect(screen.getByRole('button', { name: /stop tracking/i })).toBeInTheDocument();
+    expect(row).toHaveTextContent('the next run derives it again');
+  });
+
+  it('pre-fills the Materialise box under the parent’s container on that target', async () => {
+    mockRoutes({
+      '/api/admin/targets': () => json(targets),
+      '/api/admin/org-units/ou-1/containers': () => json({ containers: [] }),
+      '/api/admin/org-units/ou-parent/containers': () =>
+        json({ containers: [view({ dn: `OU=West\\, Region,${BASE_DN}`, state: 'live', source: 'manual', mirroring: false })] }),
+    });
+    render(
+      <MemoryRouter>
+        <ContainersPanel unit={{ id: 'ou-1', name: 'Sales, Inside', parentId: 'ou-parent' }} />
+      </MemoryRouter>,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: /create container/i }));
+    await userEvent.selectOptions(await screen.findByLabelText(/target/i), 't-1');
+    await waitFor(() =>
+      expect(screen.getByLabelText(/container/i)).toHaveValue(
+        `OU=Sales\\, Inside,OU=West\\, Region,${BASE_DN}`,
+      ),
+    );
+  });
+});

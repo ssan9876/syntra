@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { TargetDetailPage } from './TargetDetailPage.js';
@@ -1086,5 +1086,75 @@ describe('TargetDetailPage: Apply renames automatically', () => {
       expect(screen.getByRole('checkbox', { name: /apply renames automatically/i })).toBeDisabled(),
     );
     expect(screen.getByTestId('auto-confirm-renames')).toHaveTextContent(/cannot rename accounts/);
+  });
+});
+
+describe('TargetDetailPage: Mirror org units as OUs', () => {
+  const PREVIEW = {
+    mirrorOrgUnits: false,
+    placesAccountsInContainers: true,
+    baseDn: 'DC=ssander,DC=local',
+    rootDn: 'OU=Syntra,DC=ssander,DC=local',
+    rootProblem: null,
+    units: [
+      {
+        id: 'u-it', name: 'IT', parentId: 'u-local', status: 'active', depth: 1,
+        derivedDn: 'OU=IT,OU=ssander.local,OU=Syntra,DC=ssander,DC=local', row: null,
+        effectiveDn: null, placement: 'unplaced', problem: null, note: null,
+      },
+      {
+        id: 'u-local', name: 'ssander.local', parentId: null, status: 'active', depth: 0,
+        derivedDn: 'OU=ssander.local,OU=Syntra,DC=ssander,DC=local', row: null,
+        effectiveDn: null, placement: 'unplaced', problem: null, note: null,
+      },
+    ],
+  };
+
+  const mockTarget = (overrides: Record<string, unknown>) =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'PATCH') return Promise.resolve(new Response(null, { status: 204 }) as never);
+      if (String(input).includes('/org-unit-mirror')) return Promise.resolve(json(PREVIEW));
+      return Promise.resolve(json(target(overrides)));
+    });
+
+  it('explains the setting and previews the tree -> DN mapping, parent first', async () => {
+    mockTarget({ type: 'activeDirectory', placesAccountsInContainers: true });
+    renderExisting();
+    const box = await screen.findByRole('checkbox', { name: /mirror org units as ous/i });
+    expect(box).not.toBeChecked();
+    expect(screen.getByTestId('mirror-org-units')).toHaveTextContent(/Turning this on writes nothing by itself/);
+    const preview = await screen.findByTestId('org-unit-mirror-preview');
+    const rows = within(preview).getAllByRole('listitem');
+    expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual(['mirror-unit-u-local', 'mirror-unit-u-it']);
+    expect(rows[1]).toHaveTextContent('OU=IT,OU=ssander.local,OU=Syntra,DC=ssander,DC=local');
+  });
+
+  it('saves the setting and the root with the rest of the target', async () => {
+    const fetchMock = mockTarget({ type: 'activeDirectory', placesAccountsInContainers: true });
+    renderExisting();
+    await userEvent.click(await screen.findByRole('checkbox', { name: /mirror org units as ous/i }));
+    await userEvent.type(screen.getByLabelText(/org-unit root/i), 'OU=Syntra,DC=ssander,DC=local');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
+    );
+    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
+    expect(JSON.parse(String(patch[1]!.body))).toMatchObject({
+      mirrorOrgUnits: true,
+      orgUnitRootDn: 'OU=Syntra,DC=ssander,DC=local',
+    });
+  });
+
+  it('is not offered on a target that places no accounts in containers, and says why', async () => {
+    const fetchMock = mockTarget({ type: 'activeDirectory', placesAccountsInContainers: false });
+    renderExisting();
+    expect(await screen.findByTestId('mirror-unsupported')).toHaveTextContent(/does not place accounts in containers/);
+    expect(screen.queryByRole('checkbox', { name: /mirror org units as ous/i })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
+    );
+    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
+    expect(JSON.parse(String(patch[1]!.body))).not.toHaveProperty('mirrorOrgUnits');
   });
 });

@@ -1,3 +1,4 @@
+import { orgUnitPlacementDn } from './org-unit-mirror.js';
 import { withTenant } from '@syntra/db';
 import { entraUserPrincipalName, targetConnectorFor } from '@syntra/connectors';
 import { sodImpact, type PersonHolding } from '../govern/sod.js';
@@ -907,20 +908,16 @@ export async function previewAccountProfile(
       where: { personId, targetSystemId },
       select: { container: true },
     });
-    const orgUnitRow =
-      person.orgUnitId === null
-        ? null
-        : await tx.orgUnitContainer.findFirst({
-            where: { orgUnitId: person.orgUnitId, targetSystemId },
-            select: { dn: true },
-          });
+    // The row, or the DN a mirroring target will derive for the unit.
+    const orgUnitDn =
+      person.orgUnitId === null ? null : await orgUnitPlacementDn(tx, target, person.orgUnitId);
 
     const override =
       placement !== null && placement.container.trim() !== ''
         ? placement.container
         : null;
     const orgUnitContainer =
-      orgUnitRow !== null && orgUnitRow.dn.trim() !== '' ? orgUnitRow.dn : null;
+      orgUnitDn !== null && orgUnitDn.trim() !== '' ? orgUnitDn : null;
 
     const containerSource: ProfilePreview['containerSource'] =
       override !== null

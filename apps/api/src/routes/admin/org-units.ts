@@ -10,6 +10,7 @@ import {
 import {
   PERMISSIONS,
   containersForOrgUnit,
+  switchToMirrored,
   createOrgUnit,
   deactivateOrgUnit,
   deleteDirectoryOrgUnit,
@@ -252,6 +253,42 @@ export async function registerAdminOrgUnitRoutes(
    * accounts. Removing one is `DELETE /org-units/:id`'s business, and only
    * once it is empty.
    */
+  /**
+   * "Switch to mirrored": hand a manually materialised unit to the target's
+   * mirror.
+   *
+   * Rewrites the row to the DN derived from the tree and, where the target had
+   * confirmed the typed DN, records it as the place the OU is to be moved
+   * FROM. Nothing is written to the directory here: the next run proposes the
+   * move -- with every account riding along named in the plan -- and a person
+   * confirms it.
+   */
+  app.post(
+    '/org-units/:id/containers/:targetSystemId/switch-to-mirrored',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { targetSystemId } = targetParam.parse(request.params);
+      const outcome = await switchToMirrored(request.tenantId, {
+        orgUnitId: id,
+        targetSystemId,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
+      });
+      if (!outcome.ok) {
+        switch (outcome.reason) {
+          case 'no_such_row':
+            throw new ProblemError(404, 'not-found', 'This org unit is not materialised on that target');
+          case 'dn_taken':
+            throw new ProblemError(409, 'dn-taken', 'That container belongs to another unit', outcome.message);
+          default:
+            throw new ProblemError(409, outcome.reason.replaceAll('_', '-'), 'Cannot switch to mirrored', outcome.message);
+        }
+      }
+      return { targetSystemId, dn: outcome.dn, pendingMoveFrom: outcome.pendingMoveFrom };
+    },
+  );
+
   app.delete(
     '/org-units/:id/containers/:targetSystemId',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },

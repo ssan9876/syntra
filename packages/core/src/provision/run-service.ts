@@ -21,6 +21,7 @@ import { loadRevocationOrders } from '../govern/revocation-service.js';
 import { sodImpact, type PersonHolding } from '../govern/sod.js';
 import { loadSodFactsIfEvaluable } from '../govern/sod-service.js';
 import { planActions } from './plan.js';
+import { baseDnOf, syncMirroredContainers } from './org-unit-mirror.js';
 import { reconcile, unprocessableScope } from './reconcile.js';
 import { conditionSchema } from './condition.js';
 import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
@@ -781,6 +782,34 @@ export async function previewProvisionRun(
     }
 
     /**
+     * Phase 4b. A mirroring target's `OrgUnitContainer` rows, brought into
+     * step with the org-unit tree.
+     *
+     * Here, between reading the target's containers (phase 4) and reading the
+     * rows (phase 5), and nowhere else on the run path: the rows are the
+     * ladder's org-unit rung, so re-deriving them from the tree this run is
+     * about to act on is what makes a unit renamed, re-parented or created
+     * since the last run -- by the console, the API or Directory Sync -- land
+     * in this plan rather than the next. The containers just read let it
+     * settle what the target has confirmed since: a desired row whose OU now
+     * exists is adopted, a pending move that landed is cleared.
+     *
+     * Its own short transaction, like 5a below: it writes, and its failure
+     * meaning is its own. Writes rows and one audit event, never the directory.
+     * A target that does not mirror returns at once and writes nothing.
+     */
+    if (prepared.target.mirrorOrgUnits && placesAccountsInContainers) {
+      await withTenant(tenantId, (tx) =>
+        syncMirroredContainers(tx, {
+          tenantId,
+          target: prepared.target,
+          existingContainers,
+          actorUserId: null,
+        }),
+      );
+    }
+
+    /**
      * Phase 5. One short transaction for the whole database-side snapshot.
      *
      * **A known limit, recorded rather than hidden.** This loads every
@@ -871,7 +900,14 @@ export async function previewProvisionRun(
       // would disagree with the console that ordered it.
       const orgUnitContainers = await tx.orgUnitContainer.findMany({
         where: { targetSystemId },
-        select: { id: true, orgUnitId: true, dn: true, state: true },
+        select: {
+          id: true,
+          orgUnitId: true,
+          dn: true,
+          state: true,
+          source: true,
+          previousDn: true,
+        },
       });
       return {
         persons,
@@ -1005,7 +1041,13 @@ export async function previewProvisionRun(
         // The DN in the case the administrator wrote it, not the lowercased
         // key: it is what a `create_container` action carries and what the
         // directory is asked for.
-        { id: c.id, state: c.state, dn: c.dn },
+        {
+          id: c.id,
+          state: c.state,
+          dn: c.dn,
+          source: c.source,
+          previousDn: c.previousDn,
+        },
       ]),
     );
 
@@ -1135,6 +1177,8 @@ export async function previewProvisionRun(
           .map((d) => [d.personId, d.account!.container]),
       ),
       desiredContainerRows: containerRowsByDn,
+      // Below which a mirrored container's missing ancestors may be created.
+      containerBaseDn: baseDnOf(config),
       enforcementMode: prepared.target.enforcementMode as 'additive' | 'authoritative',
     });
 
@@ -1173,6 +1217,8 @@ export async function previewProvisionRun(
       desired,
       actual: reconciled.actual,
       containersToCreate: reconciled.containersToCreate,
+      intermediateContainers: reconciled.intermediateContainers,
+      containersToMove: reconciled.containersToMove,
       placesAccountsInContainers,
       contractsByPerson,
       departureOverrideByPerson,

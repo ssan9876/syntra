@@ -55,6 +55,7 @@ const SOURCE_LABEL = {
 
 const CAPABILITY_LABEL: Record<string, string> = {
   create_container: 'Create containers',
+  move_container: 'Move containers',
   create_account: 'Create accounts',
   update_account: 'Update accounts',
   rename_account: 'Rename accounts',

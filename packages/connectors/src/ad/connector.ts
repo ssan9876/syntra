@@ -15,7 +15,7 @@ import {
   withProvenanceNote,
 } from './provenance.js';
 import { objectSidRid } from './sid.js';
-import { escapeDnValue, escapeFilterValue, splitDn } from '../ldap/dn.js';
+import { escapeDnValue, escapeFilterValue, splitDn, unescapeDnValue } from '../ldap/dn.js';
 
 // Re-exported so moving this next to `escapeDnValue` -- where its own comment
 // argues it belongs -- does not change the package's public surface.
@@ -396,10 +396,12 @@ function anchorOf(config: Resolved, entry: Record<string, unknown>): string {
  * Creates ONE organizational unit, and never its parents.
  *
  * Reached only from an `OrgUnitContainer` row an administrator materialised
- * (Ruling P9, revised). Building the tree above a container would be the
- * implicit creation that ruling forbids, and is how a single typo in a DN
- * becomes three containers nobody asked for -- so a missing parent comes back
- * `not_found` and stays that way.
+ * (Ruling P9, revised), or from a target mirroring its org-unit tree, whose
+ * run proposes each missing ancestor as an action of its own, parent first.
+ * Building the tree above a container HERE would be the implicit creation
+ * that ruling forbids, and is how a single typo in a DN becomes three
+ * containers nobody asked for -- so a missing parent comes back `not_found`
+ * and stays that way. Every OU this creates is one a plan named.
  *
  * The anchor is read back rather than assumed: an LDAP add response does not
  * carry the new object's `objectGUID`, and a container recorded without its
@@ -412,7 +414,10 @@ async function createContainer(
 ): Promise<WriteResult> {
   const { rdn } = splitDn(dn);
   const separator = rdn.indexOf('=');
-  const name = separator === -1 ? '' : rdn.slice(separator + 1);
+  // The DN carries the ESCAPED value; the `ou` attribute must carry the value
+  // itself. `OU=Sales\, West` written with `ou: Sales\, West` does not match
+  // its own RDN, and the directory refuses it as a naming violation.
+  const name = separator === -1 ? '' : unescapeDnValue(rdn.slice(separator + 1));
   if (name.trim() === '') {
     return {
       ok: false,
@@ -451,6 +456,81 @@ async function createContainer(
   } catch {
     return { ok: true, message: `created ${dn}` };
   }
+}
+
+/**
+ * Renames or re-parents ONE organizational unit, and everything in it, with a
+ * single LDAP modifyDN.
+ *
+ * The directory moves the subtree atomically, which is the whole point: every
+ * account, child OU, group policy link and delegation inside the OU goes with
+ * it, and nothing is left behind half-moved. The anchor is unchanged by a
+ * move, so the caller's row keeps following the same object.
+ *
+ * Idempotent in the way a retry needs. The source already gone and the
+ * destination present is our own earlier attempt having landed: success, with
+ * the anchor read back. Both present is somebody else's OU at the destination,
+ * and moving onto it is not ours to decide: `conflict`, never a merge.
+ */
+async function moveContainer(
+  client: Client,
+  config: Resolved,
+  fromDn: string,
+  toDn: string,
+): Promise<WriteResult> {
+  if (fromDn.trim() === '' || toDn.trim() === '') {
+    return { ok: false, message: 'a container move needs both a source and a destination', failure: 'rejected' };
+  }
+  const readAnchor = async (dn: string): Promise<string | null> => {
+    try {
+      const { searchEntries } = await client.search(dn, {
+        scope: 'base',
+        filter: '(objectClass=organizationalUnit)',
+        attributes: [config.anchorAttribute],
+      });
+      const entry = searchEntries[0] as unknown as Record<string, unknown> | undefined;
+      return entry === undefined ? null : anchorOf(config, entry);
+    } catch (cause) {
+      if (classifyLdapError(cause) === 'not_found') return null;
+      throw cause;
+    }
+  };
+
+  const [source, destination] = [await readAnchor(fromDn), await readAnchor(toDn)];
+  if (source === null && destination !== null) {
+    return {
+      ok: true,
+      message: `${toDn} is already where ${fromDn} was to be moved`,
+      ...(destination === '' ? {} : { anchor: destination }),
+    };
+  }
+  if (source === null) {
+    return { ok: false, message: `no container at ${fromDn} to move`, failure: 'not_found' };
+  }
+  if (destination !== null) {
+    return {
+      ok: false,
+      message: `${toDn} already exists, so ${fromDn} cannot be moved onto it`,
+      failure: 'conflict',
+    };
+  }
+
+  try {
+    // The complete new DN as the second argument; see the note at the
+    // account move in `write` about ldapts's signature.
+    await client.modifyDN(fromDn, toDn);
+  } catch (cause) {
+    return {
+      ok: false,
+      message: cause instanceof Error ? cause.message : String(cause),
+      failure: classifyLdapError(cause),
+    };
+  }
+  return {
+    ok: true,
+    message: `moved ${fromDn} to ${toDn}`,
+    ...(source === '' ? {} : { anchor: source }),
+  };
 }
 
 async function createAccount(
@@ -1171,6 +1251,9 @@ export const adTargetConnector: TargetConnector<Config> = {
       // Before `findByAnchor`, like `create_account`: there is no anchor yet.
       if (op.op === 'create_container') {
         return await createContainer(client, config, op.dn);
+      }
+      if (op.op === 'move_container') {
+        return await moveContainer(client, config, op.fromDn, op.toDn);
       }
 
       const found = await findByAnchor(client, config, op.anchor);

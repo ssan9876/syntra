@@ -230,6 +230,12 @@ describe('materialising an org unit against a target', () => {
         targetName: 'Acme AD',
         dn: `OU=Sales,${BASE_DN}`,
         state: 'desired',
+        source: 'manual',
+        previousDn: null,
+        mirroring: false,
+        mirrored: false,
+        derivedDn: null,
+        problem: null,
       },
     ]);
 
@@ -269,6 +275,62 @@ describe('materialising an org unit against a target', () => {
     // endpoint can reach the directory at all.
     const units = await get('/api/admin/org-units', cookie);
     expect(units.json().orgUnits).toHaveLength(1);
+  });
+});
+
+describe('a target mirroring org units as OUs', () => {
+  const mirroring = async (targetSystemId: string) =>
+    withTenant(ctx.tenantId, (tx) =>
+      tx.targetSystem.update({ where: { id: targetSystemId }, data: { mirrorOrgUnits: true } }),
+    );
+
+  it('shows the derived DN, marked mirrored, before any run has made it', async () => {
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const { orgUnitId, targetSystemId } = await seedUnitAndTarget();
+    await mirroring(targetSystemId);
+
+    const res = await get(`/api/admin/org-units/${orgUnitId}/containers`, cookie);
+
+    expect(res.json().containers).toEqual([
+      expect.objectContaining({
+        targetSystemId,
+        dn: `OU=Sales,${BASE_DN}`,
+        state: 'derived',
+        source: 'mirrored',
+        mirrored: true,
+      }),
+    ]);
+  });
+
+  it('switches a manual row to mirrored, recording the move it implies', async () => {
+    await seedAdmin(ALL);
+    const cookie = await adminCookie();
+    const { orgUnitId, targetSystemId } = await seedUnitAndTarget();
+    await withTenant(ctx.tenantId, (tx) =>
+      tx.orgUnitContainer.create({
+        data: { tenantId: ctx.tenantId, orgUnitId, targetSystemId, dn: `OU=Flat,${BASE_DN}`, state: 'live', source: 'manual' },
+      }),
+    );
+    const refused = await post(
+      `/api/admin/org-units/${orgUnitId}/containers/${targetSystemId}/switch-to-mirrored`,
+      cookie,
+      {},
+    );
+    expect(refused.statusCode).toBe(409);
+
+    await mirroring(targetSystemId);
+    const res = await post(
+      `/api/admin/org-units/${orgUnitId}/containers/${targetSystemId}/switch-to-mirrored`,
+      cookie,
+      {},
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ targetSystemId, dn: `OU=Sales,${BASE_DN}`, pendingMoveFrom: `OU=Flat,${BASE_DN}` });
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'orgUnit.container.switch_to_mirrored' } }),
+    );
+    expect(events).toHaveLength(1);
   });
 });
 

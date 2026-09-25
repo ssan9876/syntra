@@ -17,6 +17,7 @@ import { PageFacts, PageHeader } from './PageHeader.js';
 import { ActionState, RunState } from './run-states.js';
 import { SAFETY_THRESHOLDS_ANCHOR, isFirstRunHold, thresholdHints } from './threshold-hints.js';
 import { HeldActionApprovals, type HeldActionView } from './HeldActionApprovals.js';
+import { StructureChanges } from './StructureChanges.js';
 import {
   CancelRunButton,
   CancellationStatus,
@@ -642,6 +643,8 @@ export function ProvisionRunDetailPage() {
             onChanged={reload}
           />
         )}
+
+        <StructureChanges actions={run.actions} />
 
         <nav className="flex flex-wrap gap-1 border-b border-border-subtle">
           {tabs.map(([name, label]) => (

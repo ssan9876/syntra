@@ -326,6 +326,39 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
         };
       }
 
+      case 'move_container': {
+        // A subtree move, as modifyDN performs one: the container, every
+        // container below it and every object below it are renamed together.
+        const lower = (dn: string) => dn.toLowerCase();
+        const has = (dn: string) => this.containers.some((c) => lower(c) === lower(dn));
+        const from = lower(op.fromDn);
+        if (!has(op.fromDn)) {
+          return has(op.toDn)
+            ? { ok: true, message: `${op.toDn} is already where ${op.fromDn} was to be moved` }
+            : { ok: false, message: `no container at ${op.fromDn} to move`, failure: 'not_found' };
+        }
+        if (has(op.toDn)) {
+          return { ok: false, message: `${op.toDn} already exists`, failure: 'conflict' };
+        }
+        const separator = indexOfUnescapedComma(op.toDn);
+        const parent = separator === -1 ? '' : op.toDn.slice(separator + 1);
+        if (parent === '' || !has(parent)) {
+          return { ok: false, message: `the parent of ${op.toDn} does not exist`, failure: 'not_found' };
+        }
+        const rebase = (dn: string): string => {
+          if (lower(dn) === from) return op.toDn;
+          if (lower(dn).endsWith(`,${from}`)) {
+            return `${dn.slice(0, dn.length - op.fromDn.length)}${op.toDn}`;
+          }
+          return dn;
+        };
+        for (let index = 0; index < this.containers.length; index += 1) {
+          this.containers[index] = rebase(this.containers[index]!);
+        }
+        for (const object of this.objects.values()) object.dn = rebase(object.dn);
+        return { ok: true, message: `moved ${op.fromDn} to ${op.toDn}` };
+      }
+
       case 'create_account': {
         const existing = [...this.objects.values()].find(
           (o) => foldKey(o.correlationKey) === foldKey(op.correlationKey),

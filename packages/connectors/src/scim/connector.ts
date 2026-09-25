@@ -318,6 +318,8 @@ export const scimTargetConnector: TargetConnector<Config> = {
           }
           return { ok: true, message: 'archived' };
         }
+        // Moved exactly as it is created: not at all, there being no containers.
+        case 'move_container':
         case 'create_container':
           // SCIM has no container concept at all -- there is no resource type
           // to create and no DN to create it at. Refused explicitly rather

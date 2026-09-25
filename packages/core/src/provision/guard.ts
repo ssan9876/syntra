@@ -216,6 +216,9 @@ export const GUARDED_ACTION_TYPES: readonly ProvisionActionType[] = POPULATIONS.
  */
 export const ABSOLUTE_CAP_ACTION_TYPES: readonly ProvisionActionType[] = [
   'create_container',
+  // A cap of ZERO: every container move holds the run for a person. See the
+  // container-move check in `evaluateProvisionGuard`.
+  'move_container',
 ];
 
 const THRESHOLD_KEYS = [
@@ -425,6 +428,33 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
   if (containerCreates > input.thresholds.maxContainerCreatesPerRun) {
     tripped.push(
       `would create ${containerCreates} containers, above the limit of ${input.thresholds.maxContainerCreatesPerRun} per run (maxContainerCreatesPerRun — an absolute count, not a percentage)`,
+    );
+  }
+
+  /**
+   * Container moves: an absolute cap of zero, so ANY move holds the run.
+   *
+   * A `move_container` is one modifyDN that carries every account, child OU,
+   * group policy link and delegation inside the OU with it. It is walked back
+   * the same way, which is why it is allowed at all -- but a unit renamed in
+   * Syntra is not obviously a request to re-home a subtree of the directory,
+   * and the person who renamed it may not be the person who owns the
+   * directory. So the plan says which OUs move and which accounts ride along,
+   * and a person confirms it.
+   *
+   * At the RUN, not per action (`requiresConfirmation` on the action). A
+   * per-action confirmation on an `autoApply` target is unreachable: the
+   * unattended apply confirms nothing, a finished run cannot be applied
+   * again, and a held-action approval is keyed on an account a container move
+   * does not have. A held run is confirmable from its own page whatever the
+   * target's settings -- the precedent the container-create cap set.
+   */
+  const containerMoves = input.actions.filter(
+    (a) => a.actionType === 'move_container',
+  ).length;
+  if (containerMoves > 0) {
+    tripped.push(
+      `would move ${containerMoves} container${containerMoves === 1 ? '' : 's'} and every account inside ${containerMoves === 1 ? 'it' : 'them'}; a container move is always confirmed by a person`,
     );
   }
 

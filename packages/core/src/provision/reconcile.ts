@@ -1,3 +1,8 @@
+import {
+  planContainerStructure,
+  type ContainerMove,
+  type ContainerRowFacts,
+} from './container-structure.js';
 import type {
   AccountStatus,
   ActualState,
@@ -58,10 +63,14 @@ export interface ReconcileInput {
    * Keyed by DN rather than by org unit because that second question arrives
    * holding a container, not a unit id.
    */
-  desiredContainerRows: ReadonlyMap<
-    string,
-    { id: string; state: string; dn: string }
-  >;
+  desiredContainerRows: ReadonlyMap<string, ContainerRowFacts>;
+  /**
+   * The target's base DN, below which a MIRRORED container's missing
+   * ancestors may be created (`planContainerStructure`). Absent or empty
+   * means none are, which is every non-mirroring caller's behaviour
+   * unchanged.
+   */
+  containerBaseDn?: string;
   enforcementMode: EnforcementMode;
 }
 
@@ -81,6 +90,18 @@ export interface ReconcileOutput {
    * is missing; it does not build actions, and this keeps that boundary.
    */
   containersToCreate: Map<string, string>;
+  /**
+   * Containers to create with no row of their own: the missing ancestors of
+   * a mirrored container. `planActions` orders every container action by
+   * depth, so these land before the containers beneath them.
+   */
+  intermediateContainers: string[];
+  /**
+   * Containers to MOVE -- a row whose DN changed after the target confirmed
+   * it -- each with the accounts that ride along, by correlation key, so the
+   * plan can say who moves before anybody confirms it.
+   */
+  containersToMove: (ContainerMove & { accounts: string[] })[];
 }
 
 /**
@@ -253,13 +274,31 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
    * with the person loop which has the context to report it.
    */
   const placesAccounts = input.placesAccountsInContainers !== false;
-  for (const row of input.desiredContainerRows.values()) {
-    // A flat target has nowhere to create a container, whatever a row says.
-    if (!placesAccounts) break;
-    if (row.state !== 'desired') continue;
-    if (input.existingContainers.has(row.dn.trim().toLowerCase())) continue;
-    containersToCreate.set(row.id, row.dn);
-  }
+  // A flat target has nowhere to create or move a container, whatever a row
+  // says, so it asks nothing of the structure at all.
+  const structure = placesAccounts
+    ? planContainerStructure({
+        rows: [...input.desiredContainerRows.values()],
+        existing: input.existingContainers,
+        baseDn: input.containerBaseDn ?? '',
+      })
+    : null;
+  for (const [id, dn] of structure?.creates ?? []) containersToCreate.set(id, dn);
+  const intermediateContainers = structure?.intermediates ?? [];
+  /**
+   * The DNs this run brings into existence. A person whose container is one
+   * of them stays in the run -- it is coming -- which is what state 'desired'
+   * alone used to answer before a container could also arrive by a move.
+   */
+  const incoming = structure?.incoming ?? new Set<string>();
+  const containersToMove = (structure?.moves ?? []).map((move) => {
+    const from = move.fromDn.trim().toLowerCase();
+    const accounts = input.objects
+      .filter((object) => object.dn.trim().toLowerCase().endsWith(`,${from}`))
+      .map((object) => object.correlationKey)
+      .sort((a, b) => a.localeCompare(b));
+    return { ...move, accounts };
+  });
 
   const knownByPerson = new Map(input.known.map((a) => [a.personId, a]));
   const objectByAnchor = new Map(input.objects.map((o) => [o.anchor, o]));
@@ -364,7 +403,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
       ) {
         const row = input.desiredContainerRows.get(container.trim().toLowerCase());
 
-        if (row !== undefined && row.state === 'desired') {
+        if (incoming.has(container.trim().toLowerCase())) {
           // Ruling P9 (revised). An administrator explicitly materialised this
           // unit against this target, so the container is coming — the pass
           // over the materialisations above has already asked for it — and
@@ -374,6 +413,11 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
           // created; the row is. A template that rendered this same DN carries
           // no row and falls to the else below, which is what makes the
           // narrowing structural rather than a matter of remembering to check.
+          //
+          // "Coming" also covers a container arriving by a MOVE (a mirrored
+          // unit renamed, its row's DN re-derived) and a mirrored tree's
+          // missing ancestor. Both are in `incoming` only because a row asked
+          // for them, never because a template rendered them.
         } else {
           if (row !== undefined && !vanishedReported.has(row.id)) {
             // The row says the target confirmed this container and the target
@@ -385,7 +429,9 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
             // should come back is not a question a scheduler can answer.
             vanishedReported.add(row.id);
             record('container_vanished', null, null, {
-              dn: container,
+              // The DN the target last confirmed, when the row has moved on
+              // since: that is the container somebody removed.
+              dn: row.previousDn ?? container,
               state: row.state,
               orgUnitContainerId: row.id,
               reason:
@@ -579,5 +625,12 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
     );
   }
 
-  return { actual, findings, extraUnprocessable, containersToCreate };
+  return {
+    actual,
+    findings,
+    extraUnprocessable,
+    containersToCreate,
+    intermediateContainers,
+    containersToMove,
+  };
 }
