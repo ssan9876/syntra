@@ -3,7 +3,7 @@ import { targetConnectorFor, type TargetConnector } from '@syntra/connectors';
 import { recordEvent } from '../audit/audit-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { targetWithCredential } from './target-service.js';
-import { valuesOf } from './apply.js';
+import { observedCorrelationKey } from './observed-key.js';
 
 /**
  * Binding a conflicted account to the object that caused the collision.
@@ -58,17 +58,43 @@ export class AnchorAlreadyBoundError extends Error {
 }
 
 export class CandidateNotVisibleError extends Error {
+  /**
+   * `baseDn` is null for a FLAT target -- Entra ID, SCIM, a document with no
+   * containers -- where "move it into the managed subtree, or widen the base
+   * DN" is advice about a thing that does not exist.
+   */
   constructor(
     readonly correlationKey: string,
-    readonly baseDn: string,
+    readonly baseDn: string | null,
   ) {
     super(
-      `the account ${correlationKey} was refused as already existing, and no object with that name is inside ${baseDn}. ` +
-        'Either it is elsewhere in the domain where this target cannot see it — move it into the managed subtree, ' +
-        "or widen the target's base DN — or it has since been deleted, in which case the account can be created again.",
+      baseDn === null
+        ? `the account ${correlationKey} was refused as already existing, and no account named ${correlationKey} is visible in the target. ` +
+            'Either it has since been deleted, in which case the account can be created again, or the name that collided is not ' +
+            'one this target reads as that key -- a user in a different domain, for example -- and it is not adopted by name.'
+        : `the account ${correlationKey} was refused as already existing, and no object with that name is inside ${baseDn}. ` +
+            'Either it is elsewhere in the domain where this target cannot see it — move it into the managed subtree, ' +
+            "or widen the target's base DN — or it has since been deleted, in which case the account can be created again.",
     );
     this.name = 'CandidateNotVisibleError';
   }
+}
+
+/**
+ * The scope the candidate search covers, for the refusal to name: the base DN
+ * of a target that places accounts in containers, null for a flat one.
+ * A config the connector cannot read is treated as placing accounts, which
+ * keeps the message it always had.
+ */
+function searchedScope(type: string, config: unknown): string | null {
+  let places: boolean;
+  try {
+    places = targetConnectorFor(type).placesAccountsInContainers(config as never);
+  } catch {
+    places = true;
+  }
+  if (!places) return null;
+  return (config as { baseDn?: string } | null)?.baseDn ?? '(no base DN configured)';
 }
 
 export interface AdoptAccountInput {
@@ -140,6 +166,11 @@ async function conflictedAccount(
  * Directory, so an object stored as `Anna.Novak` is the account Syntra tried
  * to create as `anna.novak` — and a case-sensitive compare would report it
  * absent, sending the administrator to move an object that has not moved.
+ *
+ * The object's key is read through `observedCorrelationKey`, not as
+ * `sAMAccountName`: on Entra ID it is the local part of a UPN in the domain
+ * Syntra would create it in (`ssander@contoso.com` is `ssander`), and a UPN
+ * in any other domain never matches.
  */
 async function findCandidate(
   tenantId: string,
@@ -158,7 +189,7 @@ async function findCandidate(
 
   const wanted = correlationKey.trim().toLowerCase();
   for await (const record of connector.read(config as never)) {
-    const key = (valuesOf(record, 'sAMAccountName')[0] ?? '').trim().toLowerCase();
+    const key = observedCorrelationKey(type, config, record).trim().toLowerCase();
     if (key !== wanted) continue;
     return { anchor: record.anchor, dn: record.dn, attributes: record.attributes };
   }
@@ -191,7 +222,7 @@ export async function adoptionCandidate(
   if (candidate === null) {
     throw new CandidateNotVisibleError(
       account.correlationKey,
-      (target.config as { baseDn?: string } | null)?.baseDn ?? '(no base DN configured)',
+      searchedScope(target.type, target.config),
     );
   }
   return candidate;
@@ -218,8 +249,7 @@ export async function adoptAccount(
   );
 
   if (candidate === null) {
-    const baseDn =
-      (target.config as { baseDn?: string } | null)?.baseDn ?? '(no base DN configured)';
+    const baseDn = searchedScope(target.type, target.config);
     if ((input.ifNoCandidate ?? 'refuse') === 'refuse') {
       throw new CandidateNotVisibleError(account.correlationKey, baseDn);
     }

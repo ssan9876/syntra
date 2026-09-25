@@ -18,6 +18,11 @@ import { createTarget, upsertAccountProfile, upsertBusinessRule } from './target
 import { previewProvisionRun } from './run-service.js';
 import { applyProvisionRun } from './apply.js';
 import { previewAccountProfile } from './explain.js';
+import {
+  CandidateNotVisibleError,
+  adoptAccount,
+  adoptionCandidate,
+} from './adoption-service.js';
 
 /**
  * Flat targets through a REAL run: the registry's connector, a real config,
@@ -224,6 +229,180 @@ describe('an Entra ID target with a GUID tenantId and a userPrincipalDomain', ()
     expect(preview.userPrincipalName).toBe('anna.novak@contoso.com');
   });
 
+  const accountOf = (personId: string) =>
+    withTenant(tenantId, (tx) => tx.targetAccount.findFirstOrThrow({ where: { personId } }));
+
+  /** A user somebody made in the tenant by hand: no provenance marker. */
+  const seedUnmanaged = (id: string, userPrincipalName: string) =>
+    graph.users.set(id, {
+      id,
+      userPrincipalName,
+      displayName: 'Anna Novak',
+      accountEnabled: true,
+      givenName: 'Anna',
+      surname: 'Novak',
+      employeeId: null,
+    });
+
+  /** The row a create refused as already existing leaves behind. */
+  const seedConflicted = (targetId: string, personId: string, correlationKey: string) =>
+    withTenant(tenantId, (tx) =>
+      tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          personId,
+          correlationKey,
+          status: 'conflict',
+          statusReason: 'userPrincipalName is taken',
+        },
+      }),
+    );
+
+  const writesTo = (id: string) =>
+    graph.requests.filter((r) => r.method !== 'GET' && r.url.includes(id));
+
+  it('reads an in-domain user as holding its key, so a run never creates over it or binds it', async () => {
+    // Every observed Entra object used to carry an empty key, so the generator
+    // handed out `anna.novak` while `anna.novak@contoso.com` existed and Graph
+    // refused the create. The name now reserves the key -- the same thing a
+    // hand-made `anna.novak` does in Active Directory -- and reconcile binds
+    // on the anchor alone, so the existing account is left exactly as it was.
+    const { id: targetId } = await createEntraTarget('contoso.com');
+    await profileAndRule(targetId);
+    const personId = await seedAnna();
+    seedUnmanaged('hand-made', 'anna.novak@contoso.com');
+
+    const { actions, result } = await previewAndApply(targetId, entra());
+
+    const creates = actions.filter((a) => a.actionType === 'create_account');
+    expect(creates).toHaveLength(1);
+    expect((creates[0]!.after as { correlationKey?: string }).correlationKey).toBe('anna.novak2');
+    expect(result.failed).toBe(0);
+    const account = await accountOf(personId);
+    expect(account.anchor).not.toBe('hand-made');
+    expect(account.correlationKey).toBe('anna.novak2');
+    expect(writesTo('hand-made')).toEqual([]);
+  });
+
+  it('a user in another domain does not reserve the key', async () => {
+    const { id: targetId } = await createEntraTarget('contoso.com');
+    await profileAndRule(targetId);
+    await seedAnna();
+    seedUnmanaged('partner', 'anna.novak@partner.example');
+
+    const { actions } = await previewAndApply(targetId, entra());
+
+    const creates = actions.filter((a) => a.actionType === 'create_account');
+    expect((creates[0]!.after as { correlationKey?: string }).correlationKey).toBe('anna.novak');
+    expect([...graph.users.values()].map((u) => u.userPrincipalName).sort()).toEqual([
+      'anna.novak@contoso.com',
+      'anna.novak@partner.example',
+    ]);
+  });
+
+  it('a collision is a conflict, never a takeover, and is adopted by a named human', async () => {
+    const { id: targetId } = await createEntraTarget('contoso.com');
+    await profileAndRule(targetId);
+    const personId = await seedAnna();
+    const connector = entra();
+
+    // Planned against an empty tenant; the user appears before the apply --
+    // made by hand, or synced in from elsewhere.
+    const run = await previewProvisionRun(tenantId, provider, targetId, { now: NOW, connector });
+    expect((await actionsOf(run.id)).map((a) => a.actionType)).toContain('create_account');
+    seedUnmanaged('hand-made', 'anna.novak@contoso.com');
+    const confirmedByUserId = await seedConfirmingUser();
+    await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId,
+      connector,
+      now: NOW,
+      sleep: noSleep,
+    });
+
+    const conflicted = await accountOf(personId);
+    expect(conflicted.status).toBe('conflict');
+    expect(conflicted.anchor).toBeNull();
+    expect(writesTo('hand-made')).toEqual([]);
+
+    // The next run does not bind it either: the person stays unprocessable.
+    const second = await previewProvisionRun(tenantId, provider, targetId, { now: NOW, connector });
+    expect((await actionsOf(second.id)).filter((a) => a.personId === personId)).toEqual([]);
+    expect((await accountOf(personId)).anchor).toBeNull();
+
+    // The administrator looks at the specific object, then adopts it.
+    const candidate = await adoptionCandidate(tenantId, provider, personId, targetId, connector);
+    expect(candidate.anchor).toBe('hand-made');
+    expect(candidate.dn).toBe('anna.novak@contoso.com');
+    const adopted = await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'her existing cloud account',
+      actorUserId: confirmedByUserId,
+      sourceIp: null,
+      connector,
+    });
+    expect(adopted).toEqual({ adopted: true, anchor: 'hand-made', dn: 'anna.novak@contoso.com' });
+    const bound = await accountOf(personId);
+    expect(bound.status).toBe('active');
+    expect(bound.anchor).toBe('hand-made');
+
+    // And from then on it is her account: no create of any name.
+    const third = await previewProvisionRun(tenantId, provider, targetId, { now: NOW, connector });
+    const creates = (await actionsOf(third.id)).filter((a) => a.actionType === 'create_account');
+    expect(creates).toEqual([]);
+    expect(graph.users.size).toBe(1);
+  });
+
+  it('adoption finds a conflicted key by the UPN local part (GUID tenantId)', async () => {
+    // The live report: GUID tenantId, a conflict row left by a create Graph
+    // refused, and a candidate search that looked only at sAMAccountName.
+    const { id: targetId } = await createEntraTarget('ssander.xyz');
+    const personId = await seedAnna();
+    await seedConflicted(targetId, personId, 'ssander');
+    seedUnmanaged('seth', 'SSander@ssander.xyz');
+
+    const candidate = await adoptionCandidate(tenantId, provider, personId, targetId, entra());
+    expect(candidate.anchor).toBe('seth');
+
+    const result = await adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'his existing account',
+      actorUserId: null,
+      sourceIp: null,
+      connector: entra(),
+    });
+    expect(result.anchor).toBe('seth');
+    expect((await accountOf(personId)).anchor).toBe('seth');
+  });
+
+  it('never matches a user in another domain, and says so without base-DN advice', async () => {
+    const { id: targetId } = await createEntraTarget('contoso.com');
+    const personId = await seedAnna();
+    await seedConflicted(targetId, personId, 'anna.novak');
+    seedUnmanaged('partner', 'anna.novak@partner.example');
+
+    const refused = await adoptionCandidate(tenantId, provider, personId, targetId, entra()).catch(
+      (e: unknown) => e,
+    );
+    expect(refused).toBeInstanceOf(CandidateNotVisibleError);
+    expect((refused as Error).message).toMatch(/no account named anna\.novak is visible in the target/);
+    expect((refused as Error).message).not.toMatch(/base DN/);
+    await expect(
+      adoptAccount(tenantId, provider, {
+        personId,
+        targetSystemId: targetId,
+        reason: 'not hers',
+        actorUserId: null,
+        sourceIp: null,
+        connector: entra(),
+      }),
+    ).rejects.toBeInstanceOf(CandidateNotVisibleError);
+    expect((await accountOf(personId)).anchor).toBeNull();
+  });
+
   it('the profile preview names the missing domain before anything is applied', async () => {
     const { id: targetId } = await createEntraTarget();
     const personId = await seedAnna();
@@ -268,5 +447,35 @@ describe('a SCIM 2.0 target', () => {
     expect(actions.map((a) => a.actionType)).not.toContain('create_container');
     expect(result.failed).toBe(0);
     expect([...scim.users.values()].map((u) => u.userName)).toEqual(['anna.novak']);
+  });
+
+  it('reads userName as the observed key: a hand-made anna.novak reserves it', async () => {
+    await scim.close();
+    scim = await startFakeScimServer({
+      bearerToken: 'scim-token',
+      groups: [],
+      users: [{ id: 'hand-made', userName: 'anna.novak', externalId: null, active: true }],
+    });
+    const { id: targetId } = await createTarget(tenantId, provider, null, {
+      type: 'scim2',
+      name: 'Acme SCIM',
+      config: { baseUrl: 'https://scim.fake.test', allowPrivateAddresses: true },
+      bindPassword: 'scim-token',
+    });
+    await profileAndRule(targetId);
+    await seedAnna();
+
+    const { actions, result } = await previewAndApply(
+      targetId,
+      pointedAt(scimTargetConnector, (config) => ({ ...config, baseUrl: scim.baseUrl })),
+    );
+
+    const creates = actions.filter((a) => a.actionType === 'create_account');
+    expect((creates[0]!.after as { correlationKey?: string }).correlationKey).toBe('anna.novak2');
+    expect(result.failed).toBe(0);
+    expect([...scim.users.values()].map((u) => u.userName).sort()).toEqual([
+      'anna.novak',
+      'anna.novak2',
+    ]);
   });
 });

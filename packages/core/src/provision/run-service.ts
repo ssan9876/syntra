@@ -14,6 +14,7 @@ import { recordEvent } from '../audit/audit-service.js';
 import { storableCause } from '../storable-text.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { resolveInFlightActions, valuesOf } from './apply.js';
+import { observedCorrelationKey } from './observed-key.js';
 import { desiredState } from './desired.js';
 import { evaluateProvisionGuard, type GuardVerdict } from './guard.js';
 import { loadRevocationOrders } from '../govern/revocation-service.js';
@@ -692,7 +693,13 @@ export async function previewProvisionRun(
 
       objects.push({
         anchor: record.anchor,
-        correlationKey: first(record, 'sAMAccountName') ?? '',
+        // The target's own name for the object, in the form a Syntra key
+        // takes: `sAMAccountName` on AD, the local part of an in-domain UPN on
+        // Entra, `userName` on SCIM. It reserves the name against generation
+        // and is reported; it never BINDS an object to a person -- reconcile
+        // matches on the anchor alone, so an unmanaged account whose name a
+        // person would generate is skipped by the generator, not taken over.
+        correlationKey: observedCorrelationKey(prepared.target.type, config, record),
         dn: record.dn,
         enabled,
         provenance: first(record, provenanceAttribute) ?? null,

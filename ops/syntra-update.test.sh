@@ -454,6 +454,29 @@ ok "no answer at all is not a restore" "$(yes_no empty_restore_reason '' '')" no
 ok "a non-numeric answer is not a restore" \
   "$(yes_no empty_restore_reason ERROR ERROR)" no
 
+# --- do_update: a version that is not newer ---------------------------------
+#
+# Refused before anything starts, so update.status -- what the console shows --
+# keeps the record of the update that succeeded. It used to be overwritten
+# with `failed`. In a subshell: refuse() exits.
+
+NN_ROOT="$(mktemp -d)"
+mkdir -p "$NN_ROOT/current" "$NN_ROOT/var"
+printf '{"version": "1.4.2"}' > "$NN_ROOT/current/RELEASE.json"
+printf 'x\tsucceeded\tnow running v1.4.2\n' > "$NN_ROOT/var/update.status"
+NN_OUT="$(
+  CURRENT="$NN_ROOT/current" VAR="$NN_ROOT/var" STATUS="$NN_ROOT/var/update.status" \
+    RELEASES="$NN_ROOT/releases"
+  do_update 1.4.2 '' 2>&1
+)" && NN_CODE=0 || NN_CODE=$?
+ok "updating to the running version exits non-zero" "$([ "$NN_CODE" -ne 0 ] && echo yes || echo no)" yes
+ok "and says why" \
+  "$(printf '%s' "$NN_OUT" | grep -c 'REFUSED: 1.4.2 is not newer than the running 1.4.2')" 1
+ok "and leaves the previous success in update.status" \
+  "$(cut -f2 "$NN_ROOT/var/update.status")" succeeded
+ok "and downloads nothing" "$([ -d "$NN_ROOT/releases" ] && echo yes || echo no)" no
+rm -rf "$NN_ROOT"
+
 # --- report -----------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
